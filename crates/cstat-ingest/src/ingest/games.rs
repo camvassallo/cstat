@@ -508,6 +508,160 @@ fn get_i32(v: &Value, keys: &[&str]) -> Option<i32> {
     None
 }
 
+/// Ingest team performances (team-level box scores) for a specific team and season.
+pub async fn ingest_team_performances(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    team_code: &str,
+) -> Result<u64, NatStatError> {
+    let range = format!("{},{}", season, team_code);
+    let pages = client
+        .get_all_pages("teamperfs", Some(&range), None)
+        .await?;
+
+    let mut count = 0u64;
+    for page in &pages {
+        let perfs = extract_results(page);
+        for perf in perfs {
+            if upsert_team_game_stats(perf, pool, season).await? {
+                count += 1;
+            }
+        }
+    }
+
+    info!(count, season, team_code, "team performances ingested");
+    Ok(count)
+}
+
+async fn upsert_team_game_stats(
+    perf: &Value,
+    pool: &PgPool,
+    season: i32,
+) -> Result<bool, NatStatError> {
+    let team_code = perf
+        .get("team-code")
+        .or_else(|| perf.get("team").and_then(|t| t.get("code")))
+        .and_then(|c| c.as_str());
+
+    let game_natstat_id = perf
+        .get("game")
+        .and_then(|g| g.get("id"))
+        .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
+        .map(|s| s.trim_matches('"').to_string());
+
+    let Some(game_id_str) = game_natstat_id else {
+        return Ok(false);
+    };
+
+    let team_id = resolve_team_id(pool, team_code, season).await?;
+    let Some(team_id) = team_id else {
+        return Ok(false);
+    };
+
+    let game_row: Option<(Uuid, NaiveDate)> =
+        sqlx::query_as("SELECT id, game_date FROM games WHERE natstat_id = $1")
+            .bind(&game_id_str)
+            .fetch_optional(pool)
+            .await?;
+
+    let Some((game_id, game_date)) = game_row else {
+        return Ok(false);
+    };
+
+    let opponent_code = perf
+        .get("opponent")
+        .and_then(|o| o.get("code"))
+        .and_then(|c| c.as_str());
+    let opponent_id = resolve_team_id(pool, opponent_code, season).await?;
+
+    let is_home = perf
+        .get("game")
+        .and_then(|g| g.get("location"))
+        .and_then(|l| l.as_str())
+        .map(|l| l == "H");
+
+    let win = perf
+        .get("game")
+        .and_then(|g| g.get("winorloss"))
+        .and_then(|w| w.as_str())
+        .map(|w| w == "W");
+
+    let league = perf.get("league").and_then(|l| l.as_str());
+
+    let stats = perf.get("stats").unwrap_or(perf);
+
+    let minutes = get_i32(stats, &["min"]);
+    let points = get_i32(stats, &["pts"]);
+    let fgm = get_i32(stats, &["fgm"]);
+    let fga = get_i32(stats, &["fga"]);
+    let tpm = get_i32(stats, &["threefm"]);
+    let tpa = get_i32(stats, &["threefa"]);
+    let ftm = get_i32(stats, &["ftm"]);
+    let fta = get_i32(stats, &["fta"]);
+    let off_rebounds = get_i32(stats, &["oreb"]);
+    let total_rebounds = get_i32(stats, &["reb"]);
+    let assists = get_i32(stats, &["ast"]);
+    let steals = get_i32(stats, &["stl"]);
+    let blocks = get_i32(stats, &["blk"]);
+    let turnovers = get_i32(stats, &["to"]);
+    let fouls = get_i32(stats, &["f", "pf"]);
+
+    sqlx::query(
+        "INSERT INTO team_game_stats (
+            id, team_id, game_id, season, game_date, opponent_id, is_home, win, league,
+            minutes, points, fgm, fga, tpm, tpa, ftm, fta,
+            off_rebounds, total_rebounds, assists, steals, blocks, turnovers, fouls
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+        ON CONFLICT (team_id, game_id) DO UPDATE
+        SET points = COALESCE(EXCLUDED.points, team_game_stats.points),
+            fgm = COALESCE(EXCLUDED.fgm, team_game_stats.fgm),
+            fga = COALESCE(EXCLUDED.fga, team_game_stats.fga),
+            tpm = COALESCE(EXCLUDED.tpm, team_game_stats.tpm),
+            tpa = COALESCE(EXCLUDED.tpa, team_game_stats.tpa),
+            ftm = COALESCE(EXCLUDED.ftm, team_game_stats.ftm),
+            fta = COALESCE(EXCLUDED.fta, team_game_stats.fta),
+            off_rebounds = COALESCE(EXCLUDED.off_rebounds, team_game_stats.off_rebounds),
+            total_rebounds = COALESCE(EXCLUDED.total_rebounds, team_game_stats.total_rebounds),
+            assists = COALESCE(EXCLUDED.assists, team_game_stats.assists),
+            steals = COALESCE(EXCLUDED.steals, team_game_stats.steals),
+            blocks = COALESCE(EXCLUDED.blocks, team_game_stats.blocks),
+            turnovers = COALESCE(EXCLUDED.turnovers, team_game_stats.turnovers),
+            fouls = COALESCE(EXCLUDED.fouls, team_game_stats.fouls),
+            is_home = COALESCE(EXCLUDED.is_home, team_game_stats.is_home),
+            win = COALESCE(EXCLUDED.win, team_game_stats.win)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(team_id)
+    .bind(game_id)
+    .bind(season)
+    .bind(game_date)
+    .bind(opponent_id)
+    .bind(is_home)
+    .bind(win)
+    .bind(league)
+    .bind(minutes)
+    .bind(points)
+    .bind(fgm)
+    .bind(fga)
+    .bind(tpm)
+    .bind(tpa)
+    .bind(ftm)
+    .bind(fta)
+    .bind(off_rebounds)
+    .bind(total_rebounds)
+    .bind(assists)
+    .bind(steals)
+    .bind(blocks)
+    .bind(turnovers)
+    .bind(fouls)
+    .execute(pool)
+    .await?;
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

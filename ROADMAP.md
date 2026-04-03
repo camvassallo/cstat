@@ -31,16 +31,24 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ---
 
-## Phase 1: Foundation & Data Ingestion ← CURRENT
+## Phase 1: Foundation & Data Ingestion ✓
 > Capture 2025-2026 season data with a solid foundation
 
 - [x] Project roadmap
 - [x] Cargo workspace scaffold (cstat-core, cstat-ingest, cstat-api)
 - [x] PostgreSQL schema: players, teams, games, player_game_stats, schedules, api_cache
 - [x] NatStat API client with rate limiting (500 calls/hr) and response caching
-- [ ] Data ingestion pipeline for 2025-2026 season
+- [x] Data ingestion pipeline for 2025-2026 season
+  - [x] Fixed NatStat v4 response parsing (endpoint-specific keys, not `results`)
+  - [x] Teams: 367 teams from teamcodes + per-team TCR/ELO details
+  - [x] Players: per-team roster ingestion with height, weight, hometown, nationality
+  - [x] Games: 6,277 games with scores, team IDs, venue
+  - [x] Player performances: box scores + advanced metrics (efficiency, usage, presence rate, perf score)
+  - [x] CLI commands: `team` (single team), `explore` (raw API inspection)
+  - [x] Migration 002: enriched schema (player demographics, advanced game stats, TCR fields)
+- [x] Docker Compose for local Postgres 17
 - [x] GitHub Actions CI/CD (build, test, clippy, fmt)
-- [x] Unit + integration test scaffolding
+- [x] Unit + integration test scaffolding (25 tests)
 
 ### NatStat Data Targets
 - Player box scores and advanced stats
@@ -59,16 +67,34 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ---
 
-## Phase 2: Player Metrics Engine
+## Phase 2: Player Metrics Engine ← CURRENT
 > Compute per-player advanced metrics from raw data
 
-- [ ] Derived stats: offensive/defensive ratings, BPM, usage rate, true shooting, etc.
+- [x] **Compute layer**: derive stats from raw box score data already in DB
+  - [x] `player_season_stats`: aggregate box scores → per-game avgs, shooting splits (FG%, 3P%, FT%, eFG%, TS%), usage, TOV%
+  - [x] `team_season_stats`: four factors (eFG%, TOV%, ORB%, FT rate), offensive/defensive efficiency, tempo
+  - [x] `schedules`: derive home/away perspectives from games table
+  - [x] Backfill `def_rebounds`, `game_score` (Hollinger), `ast_to_ratio`
+  - [x] `player_percentiles`: PERCENT_RANK across D-I players (≥10 GP, ≥10 MPG)
+  - [x] Team game stats ingestion (`teamperfs` endpoint → `team_game_stats` table)
+- [ ] **Ingest remaining season data**: scale `team` command across all 367 teams (~2,500 API calls)
+- [ ] **Opponent-adjusted efficiency** (KenPom-style): iterative regression to adjust off/def efficiency for opponent quality. All raw data available — pure computation.
+- [ ] **Tempo-free adjusted stats**: normalize counting stats to per-possession rather than per-game
 - [ ] Per-player strength of schedule based on opponents actually faced
 - [ ] Rolling averages (last N games) and season aggregates
-- [ ] Percentile rankings across all D-I players
-- [ ] Lineup-based net ratings (if NatStat lineup data supports it)
 - [ ] Pace-adjusted and opponent-adjusted metrics
 - [ ] Store all computed metrics back to Postgres
+
+### Compute Gaps (data available, need algorithms)
+These are the key gaps between our current metrics and what KenPom/Torvik/EvanMiya produce. **All can be computed from data we already collect** — no new API calls needed:
+- **Opponent-adjusted efficiency**: Iterative regression (KenPom's core). Adjust raw off/def efficiency by opponent quality until ratings converge.
+- **Player-level adjusted ratings**: Weight individual stats by opponent defensive quality (e.g., opponent-adjusted eFG%).
+- **BPM (Box Plus/Minus)**: Currently using game_score as proxy. Real BPM uses regression coefficients fit to RAPM.
+- **Defensive metrics**: Individual defensive impact is hard from box scores alone. Play-by-play would unlock this.
+
+### Future Data Sources (not yet ingested)
+- **NatStat play-by-play**: Would unlock lineup-based net ratings, clutch metrics, transition vs half-court splits, shot charts, and better defensive metrics. Expensive to consume and keep updated — worth exploring once core model is solid.
+- **247Sports recruiting rankings**: EvanMiya uses these as Bayesian priors for freshman/early-season projections. Separate data source, lower priority.
 
 ---
 

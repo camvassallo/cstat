@@ -1,3 +1,4 @@
+pub mod compute;
 pub mod db;
 pub mod models;
 
