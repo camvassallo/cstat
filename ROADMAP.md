@@ -35,12 +35,12 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 > Capture 2025-2026 season data with a solid foundation
 
 - [x] Project roadmap
-- [ ] Cargo workspace scaffold (cstat-core, cstat-ingest, cstat-api)
-- [ ] PostgreSQL schema: players, teams, games, player_game_stats, schedules, api_cache
-- [ ] NatStat API client with rate limiting (500 calls/hr) and response caching
+- [x] Cargo workspace scaffold (cstat-core, cstat-ingest, cstat-api)
+- [x] PostgreSQL schema: players, teams, games, player_game_stats, schedules, api_cache
+- [x] NatStat API client with rate limiting (500 calls/hr) and response caching
 - [ ] Data ingestion pipeline for 2025-2026 season
-- [ ] GitHub Actions CI/CD (build, test, clippy, fmt)
-- [ ] Unit + integration test scaffolding
+- [x] GitHub Actions CI/CD (build, test, clippy, fmt)
+- [x] Unit + integration test scaffolding
 
 ### NatStat Data Targets
 - Player box scores and advanced stats
