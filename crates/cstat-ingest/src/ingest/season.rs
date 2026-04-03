@@ -37,7 +37,7 @@ impl<'a> SeasonIngester<'a> {
         // Step 2: Players
         info!("step 2/5: ingesting players");
         report.players =
-            super::players::ingest_players(self.client, self.pool, self.season).await?;
+            super::players::ingest_all_rosters(self.client, self.pool, self.season).await?;
 
         // Step 3: Games
         info!("step 3/5: ingesting games");
