@@ -84,6 +84,12 @@ enum Commands {
         to: String,
     },
 
+    /// Run compute pipeline: derive season stats, schedules, percentiles from raw data.
+    Compute {
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+    },
+
     /// Show rate limit status.
     Status,
 
@@ -173,6 +179,13 @@ async fn main() -> Result<()> {
             .await?;
             println!("  Player performances: {perfs} box scores");
 
+            // 4. Team performances (team-level box scores)
+            let team_perfs = cstat_ingest::ingest::games::ingest_team_performances(
+                &client, &db.pool, year, &code,
+            )
+            .await?;
+            println!("  Team performances: {team_perfs} game stats");
+
             println!("Done! {code} fully ingested.");
         }
 
@@ -203,6 +216,11 @@ async fn main() -> Result<()> {
                 }
             };
             println!("Ingested {count} player performances for {year}");
+        }
+
+        Commands::Compute { year } => {
+            let report = cstat_core::compute::compute_all(&db.pool, year).await?;
+            println!("{report}");
         }
 
         Commands::Update { year, from, to } => {
