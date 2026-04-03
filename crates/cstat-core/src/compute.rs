@@ -268,6 +268,7 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
                 SUM(tgs.fta) as fta,
                 SUM(tgs.ftm) as ftm,
                 SUM(tgs.off_rebounds) as oreb,
+                SUM(COALESCE(tgs.total_rebounds, 0) - COALESCE(tgs.off_rebounds, 0)) as dreb,
                 SUM(tgs.turnovers) as tov,
                 SUM(tgs.points) as pts,
                 COUNT(*) as games,
@@ -287,6 +288,7 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
                 SUM(tgs.fta) as opp_fta,
                 SUM(tgs.ftm) as opp_ftm,
                 SUM(tgs.off_rebounds) as opp_oreb,
+                SUM(COALESCE(tgs.total_rebounds, 0) - COALESCE(tgs.off_rebounds, 0)) as opp_dreb,
                 SUM(tgs.turnovers) as opp_tov,
                 SUM(tgs.points) as opp_pts,
                 SUM(tgs.fga) - SUM(tgs.off_rebounds) + SUM(tgs.turnovers) + 0.44 * SUM(tgs.fta) as opp_poss
@@ -307,12 +309,14 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
             -- Offensive four factors
             effective_fg_pct = ROUND(((t.fgm + 0.5 * t.tpm)::float / NULLIF(t.fga, 0))::numeric, 3),
             turnover_pct = ROUND((t.tov::float / NULLIF(t.poss, 0))::numeric, 3),
-            off_rebound_pct = ROUND((t.oreb::float / NULLIF(t.oreb + COALESCE(o.opp_oreb, 0), 0))::numeric, 3),
+            off_rebound_pct = ROUND((t.oreb::float / NULLIF(t.oreb + COALESCE(o.opp_dreb, 0), 0))::numeric, 3),
             ft_rate = ROUND((t.fta::float / NULLIF(t.fga, 0))::numeric, 3),
             -- Defensive four factors
             opp_effective_fg_pct = ROUND(((o.opp_fgm + 0.5 * o.opp_tpm)::float / NULLIF(o.opp_fga, 0))::numeric, 3),
             opp_turnover_pct = ROUND((o.opp_tov::float / NULLIF(o.opp_poss, 0))::numeric, 3),
             opp_ft_rate = ROUND((o.opp_fta::float / NULLIF(o.opp_fga, 0))::numeric, 3),
+            -- DRB% = team_DREB / (team_DREB + opp_OREB)
+            def_rebound_pct = ROUND((t.dreb::float / NULLIF(t.dreb + COALESCE(o.opp_oreb, 0), 0))::numeric, 3),
             updated_at = now()
         FROM team_agg t
         LEFT JOIN opp_agg o ON t.team_id = o.team_id
