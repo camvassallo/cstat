@@ -70,19 +70,31 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 ## Phase 2: Player Metrics Engine ← CURRENT
 > Compute per-player advanced metrics from raw data
 
-- [ ] **Compute layer**: derive stats from raw box score data already in DB
-  - [ ] `player_season_stats`: aggregate box scores → per-game avgs, shooting splits, advanced metrics
-  - [ ] `team_season_stats`: four factors, tempo from teamperfs data
-  - [ ] `schedules`: derive from games table
-  - [ ] Backfill `def_rebounds` (= reb - oreb), `game_score`, `ast_to_ratio`
-  - [ ] `player_percentiles`: rank across all D-I players
-- [ ] **Ingest remaining season data**: scale `team` command across all 367 teams
-- [ ] Derived stats: offensive/defensive ratings, BPM, true shooting, eFG%, etc.
+- [x] **Compute layer**: derive stats from raw box score data already in DB
+  - [x] `player_season_stats`: aggregate box scores → per-game avgs, shooting splits (FG%, 3P%, FT%, eFG%, TS%), usage, TOV%
+  - [x] `team_season_stats`: four factors (eFG%, TOV%, ORB%, FT rate), offensive/defensive efficiency, tempo
+  - [x] `schedules`: derive home/away perspectives from games table
+  - [x] Backfill `def_rebounds`, `game_score` (Hollinger), `ast_to_ratio`
+  - [x] `player_percentiles`: PERCENT_RANK across D-I players (≥10 GP, ≥10 MPG)
+  - [x] Team game stats ingestion (`teamperfs` endpoint → `team_game_stats` table)
+- [ ] **Ingest remaining season data**: scale `team` command across all 367 teams (~2,500 API calls)
+- [ ] **Opponent-adjusted efficiency** (KenPom-style): iterative regression to adjust off/def efficiency for opponent quality. All raw data available — pure computation.
+- [ ] **Tempo-free adjusted stats**: normalize counting stats to per-possession rather than per-game
 - [ ] Per-player strength of schedule based on opponents actually faced
 - [ ] Rolling averages (last N games) and season aggregates
-- [ ] Lineup-based net ratings (if NatStat lineup data supports it)
 - [ ] Pace-adjusted and opponent-adjusted metrics
 - [ ] Store all computed metrics back to Postgres
+
+### Compute Gaps (data available, need algorithms)
+These are the key gaps between our current metrics and what KenPom/Torvik/EvanMiya produce. **All can be computed from data we already collect** — no new API calls needed:
+- **Opponent-adjusted efficiency**: Iterative regression (KenPom's core). Adjust raw off/def efficiency by opponent quality until ratings converge.
+- **Player-level adjusted ratings**: Weight individual stats by opponent defensive quality (e.g., opponent-adjusted eFG%).
+- **BPM (Box Plus/Minus)**: Currently using game_score as proxy. Real BPM uses regression coefficients fit to RAPM.
+- **Defensive metrics**: Individual defensive impact is hard from box scores alone. Play-by-play would unlock this.
+
+### Future Data Sources (not yet ingested)
+- **NatStat play-by-play**: Would unlock lineup-based net ratings, clutch metrics, transition vs half-court splits, shot charts, and better defensive metrics. Expensive to consume and keep updated — worth exploring once core model is solid.
+- **247Sports recruiting rankings**: EvanMiya uses these as Bayesian priors for freshman/early-season projections. Separate data source, lower priority.
 
 ---
 
