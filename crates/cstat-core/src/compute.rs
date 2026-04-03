@@ -140,7 +140,10 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
     .execute(pool)
     .await?;
 
-    info!(count = result.rows_affected(), season, "computed player season stats");
+    info!(
+        count = result.rows_affected(),
+        season, "computed player season stats"
+    );
     Ok(result.rows_affected())
 }
 
@@ -242,7 +245,10 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
     .execute(pool)
     .await?;
 
-    info!(count = result.rows_affected(), season, "computed player percentiles");
+    info!(
+        count = result.rows_affected(),
+        season, "computed player percentiles"
+    );
     Ok(result.rows_affected())
 }
 
@@ -326,7 +332,10 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
     .execute(pool)
     .await?;
 
-    info!(count = result.rows_affected(), season, "computed team four factors");
+    info!(
+        count = result.rows_affected(),
+        season, "computed team four factors"
+    );
     Ok(result.rows_affected())
 }
 
@@ -369,7 +378,11 @@ impl std::fmt::Display for ComputeReport {
         write!(
             f,
             "Computed: {} backfilled fields, {} player season stats, {} team four factors, {} schedule entries, {} percentile rankings",
-            self.backfilled, self.player_season_stats, self.team_four_factors, self.schedules, self.percentiles
+            self.backfilled,
+            self.player_season_stats,
+            self.team_four_factors,
+            self.schedules,
+            self.percentiles
         )
     }
 }
