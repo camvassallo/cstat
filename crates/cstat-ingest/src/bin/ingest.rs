@@ -33,6 +33,15 @@ enum Commands {
         year: i32,
     },
 
+    /// Ingest everything for a single team: roster, details (TCR), and player performances.
+    Team {
+        /// Team code (e.g., DUKE, UNC, KU)
+        code: String,
+
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+    },
+
     /// Ingest games (and optionally box scores) for a date range.
     Games {
         #[arg(short, long, default_value = "2026")]
@@ -80,6 +89,16 @@ enum Commands {
 
     /// Clean up expired cache entries.
     CleanCache,
+
+    /// Fetch a raw API endpoint and dump the JSON (for exploration).
+    Explore {
+        /// Endpoint (e.g., "teams", "players", "playerperfs")
+        endpoint: String,
+
+        /// Range params (e.g., "2026,DUKE")
+        #[arg(short, long)]
+        range: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -118,8 +137,43 @@ async fn main() -> Result<()> {
 
         Commands::Players { year } => {
             let count =
-                cstat_ingest::ingest::players::ingest_players(&client, &db.pool, year).await?;
+                cstat_ingest::ingest::players::ingest_all_rosters(&client, &db.pool, year).await?;
             println!("Ingested {count} players for {year}");
+        }
+
+        Commands::Team { code, year } => {
+            let code = code.to_uppercase();
+            println!("Ingesting full data for {code} ({year})...");
+
+            // 1. Team roster (players with metadata)
+            let roster =
+                cstat_ingest::ingest::players::ingest_team_roster(&client, &db.pool, year, &code)
+                    .await?;
+            println!("  Roster: {roster} players");
+
+            // 2. Team details (TCR, ELO, W/L)
+            let team_row: Option<(uuid::Uuid,)> =
+                sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
+                    .bind(&code)
+                    .bind(year)
+                    .fetch_optional(&db.pool)
+                    .await?;
+            if let Some((team_id,)) = team_row {
+                cstat_ingest::ingest::teams::ingest_single_team_details(
+                    &client, &db.pool, year, &team_id, &code,
+                )
+                .await?;
+                println!("  Team details: OK");
+            }
+
+            // 3. Player performances (box scores)
+            let perfs = cstat_ingest::ingest::games::ingest_player_performances_by_team(
+                &client, &db.pool, year, &code,
+            )
+            .await?;
+            println!("  Player performances: {perfs} box scores");
+
+            println!("Done! {code} fully ingested.");
         }
 
         Commands::Games { year, from, to } => {
@@ -165,6 +219,11 @@ async fn main() -> Result<()> {
         Commands::CleanCache => {
             let removed = client.cleanup_cache().await?;
             println!("Removed {removed} expired cache entries");
+        }
+
+        Commands::Explore { endpoint, range } => {
+            let response = client.get(&endpoint, range.as_deref(), None, None).await?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
     }
 

@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: cstat-postgres
+    environment:
+      POSTGRES_USER: cstat
+      POSTGRES_PASSWORD: cstat
+      POSTGRES_DB: cstat
+    ports:
+      - "5432:5432"
+    volumes:
+      - cstat-pgdata:/var/lib/postgresql/data
+
+volumes:
+  cstat-pgdata:
