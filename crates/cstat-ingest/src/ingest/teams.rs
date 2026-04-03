@@ -1,5 +1,6 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
+use crate::extract_results;
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -219,21 +220,4 @@ fn get_f64_from(parent: Option<&Value>, key: &str) -> Option<f64> {
         v.as_f64()
             .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
     })
-}
-
-fn extract_results(page: &Value) -> Vec<&Value> {
-    const META_KEYS: &[&str] = &["meta", "user", "query", "success", "error", "warnings"];
-    if let Some(obj) = page.as_object() {
-        for (key, value) in obj {
-            if META_KEYS.contains(&key.as_str()) {
-                continue;
-            }
-            return match value {
-                Value::Array(arr) => arr.iter().collect(),
-                Value::Object(inner) => inner.values().collect(),
-                _ => vec![],
-            };
-        }
-    }
-    vec![]
 }

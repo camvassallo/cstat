@@ -1,5 +1,6 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
+use crate::extract_results;
 use chrono::NaiveDate;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -505,23 +506,6 @@ fn get_i32(v: &Value, keys: &[&str]) -> Option<i32> {
         }
     }
     None
-}
-
-fn extract_results(page: &Value) -> Vec<&Value> {
-    const META_KEYS: &[&str] = &["meta", "user", "query", "success", "error", "warnings"];
-    if let Some(obj) = page.as_object() {
-        for (key, value) in obj {
-            if META_KEYS.contains(&key.as_str()) {
-                continue;
-            }
-            return match value {
-                Value::Array(arr) => arr.iter().collect(),
-                Value::Object(inner) => inner.values().collect(),
-                _ => vec![],
-            };
-        }
-    }
-    vec![]
 }
 
 #[cfg(test)]
