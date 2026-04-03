@@ -1,0 +1,470 @@
+use crate::NatStatClient;
+use crate::client::NatStatError;
+use chrono::NaiveDate;
+use serde_json::Value;
+use sqlx::PgPool;
+use tracing::{info, warn};
+use uuid::Uuid;
+
+/// Ingest all MBB games for a season, including player box scores via hydration.
+///
+/// Uses `games;boxscores` hydration to get game results + box scores in fewer API calls.
+pub async fn ingest_games(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+) -> Result<u64, NatStatError> {
+    let pages = client
+        .get_all_pages("games", Some(&season.to_string()), None)
+        .await?;
+
+    let mut count = 0u64;
+    for page in &pages {
+        let games = extract_results(page);
+        for game in games {
+            if upsert_game(game, pool, season).await? {
+                count += 1;
+            }
+        }
+    }
+
+    info!(count, season, "games ingested");
+    Ok(count)
+}
+
+/// Ingest games for a specific date range.
+pub async fn ingest_games_by_date_range(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    start: &str,
+    end: &str,
+) -> Result<u64, NatStatError> {
+    let range = format!("{},{}", start, end);
+    let pages = client.get_all_pages("games", Some(&range), None).await?;
+
+    let mut count = 0u64;
+    for page in &pages {
+        let games = extract_results(page);
+        for game in games {
+            if upsert_game(game, pool, season).await? {
+                count += 1;
+            }
+        }
+    }
+
+    info!(count, season, start, end, "games ingested for date range");
+    Ok(count)
+}
+
+/// Ingest player performances (box scores) for all games in a season.
+///
+/// Uses the `playerperfs` endpoint filtered by season.
+pub async fn ingest_player_performances(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+) -> Result<u64, NatStatError> {
+    let pages = client
+        .get_all_pages("playerperfs", Some(&season.to_string()), None)
+        .await?;
+
+    let mut count = 0u64;
+    for page in &pages {
+        let perfs = extract_results(page);
+        for perf in perfs {
+            if upsert_player_game_stats(perf, pool, season).await? {
+                count += 1;
+            }
+        }
+    }
+
+    info!(count, season, "player performances ingested");
+    Ok(count)
+}
+
+/// Ingest player performances for a specific date range.
+pub async fn ingest_player_performances_by_date_range(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    start: &str,
+    end: &str,
+) -> Result<u64, NatStatError> {
+    let range = format!("{},{}", start, end);
+    let pages = client
+        .get_all_pages("playerperfs", Some(&range), None)
+        .await?;
+
+    let mut count = 0u64;
+    for page in &pages {
+        let perfs = extract_results(page);
+        for perf in perfs {
+            if upsert_player_game_stats(perf, pool, season).await? {
+                count += 1;
+            }
+        }
+    }
+
+    info!(
+        count,
+        season, start, end, "player performances ingested for date range"
+    );
+    Ok(count)
+}
+
+async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, NatStatError> {
+    let natstat_id = match game
+        .get("code")
+        .or_else(|| game.get("id"))
+        .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
+    {
+        Some(id) => id.trim_matches('"').to_string(),
+        None => return Ok(false),
+    };
+
+    let game_date = match game
+        .get("date")
+        .or_else(|| game.get("game_date"))
+        .and_then(|d| d.as_str())
+        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+    {
+        Some(d) => d,
+        None => {
+            warn!(natstat_id, "game missing date, skipping");
+            return Ok(false);
+        }
+    };
+
+    // Resolve home/away team IDs
+    let home_code = game
+        .get("home")
+        .or_else(|| game.get("home_team"))
+        .and_then(|t| t.get("code").or(Some(t)))
+        .and_then(|c| c.as_str());
+    let away_code = game
+        .get("away")
+        .or_else(|| game.get("away_team"))
+        .and_then(|t| t.get("code").or(Some(t)))
+        .and_then(|c| c.as_str());
+
+    let home_team_id = resolve_team_id(pool, home_code, season).await?;
+    let away_team_id = resolve_team_id(pool, away_code, season).await?;
+
+    let home_score = game
+        .get("home")
+        .and_then(|h| h.get("score"))
+        .or_else(|| game.get("home_score"))
+        .and_then(|s| {
+            s.as_i64()
+                .or_else(|| s.as_str().and_then(|v| v.parse().ok()))
+        })
+        .map(|s| s as i32);
+
+    let away_score = game
+        .get("away")
+        .and_then(|a| a.get("score"))
+        .or_else(|| game.get("away_score"))
+        .and_then(|s| {
+            s.as_i64()
+                .or_else(|| s.as_str().and_then(|v| v.parse().ok()))
+        })
+        .map(|s| s as i32);
+
+    let is_neutral = game
+        .get("neutral")
+        .or_else(|| game.get("is_neutral"))
+        .and_then(|n| n.as_bool().or_else(|| n.as_i64().map(|i| i != 0)))
+        .unwrap_or(false);
+
+    let is_conference = game
+        .get("conference")
+        .or_else(|| game.get("is_conference"))
+        .and_then(|c| c.as_bool().or_else(|| c.as_i64().map(|i| i != 0)));
+
+    let is_postseason = game
+        .get("postseason")
+        .or_else(|| game.get("is_postseason"))
+        .and_then(|p| p.as_bool().or_else(|| p.as_i64().map(|i| i != 0)));
+
+    let venue = game
+        .get("venue")
+        .and_then(|v| v.get("name").or(Some(v)))
+        .and_then(|v| v.as_str());
+
+    sqlx::query(
+        "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id,
+         home_score, away_score, is_neutral_site, is_conference, is_postseason, venue)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT (natstat_id) DO UPDATE
+         SET home_score = COALESCE(EXCLUDED.home_score, games.home_score),
+             away_score = COALESCE(EXCLUDED.away_score, games.away_score),
+             home_team_id = COALESCE(EXCLUDED.home_team_id, games.home_team_id),
+             away_team_id = COALESCE(EXCLUDED.away_team_id, games.away_team_id),
+             is_neutral_site = EXCLUDED.is_neutral_site,
+             venue = COALESCE(EXCLUDED.venue, games.venue),
+             updated_at = now()",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&natstat_id)
+    .bind(season)
+    .bind(game_date)
+    .bind(home_team_id)
+    .bind(away_team_id)
+    .bind(home_score)
+    .bind(away_score)
+    .bind(is_neutral)
+    .bind(is_conference)
+    .bind(is_postseason)
+    .bind(venue)
+    .execute(pool)
+    .await?;
+
+    Ok(true)
+}
+
+async fn upsert_player_game_stats(
+    perf: &Value,
+    pool: &PgPool,
+    season: i32,
+) -> Result<bool, NatStatError> {
+    // Get player code
+    let player_natstat_id = match perf
+        .get("player")
+        .or_else(|| perf.get("player_code"))
+        .and_then(|p| {
+            p.get("code")
+                .or(Some(p))
+                .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
+        }) {
+        Some(id) => id.trim_matches('"').to_string(),
+        None => return Ok(false),
+    };
+
+    // Get game code
+    let game_natstat_id = match perf
+        .get("game")
+        .or_else(|| perf.get("game_code"))
+        .and_then(|g| {
+            g.get("code")
+                .or(Some(g))
+                .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
+        }) {
+        Some(id) => id.trim_matches('"').to_string(),
+        None => return Ok(false),
+    };
+
+    // Resolve IDs
+    let player_id: Option<Uuid> =
+        sqlx::query_as("SELECT id FROM players WHERE natstat_id = $1 AND season = $2")
+            .bind(&player_natstat_id)
+            .bind(season)
+            .fetch_optional(pool)
+            .await?
+            .map(|(id,): (Uuid,)| id);
+
+    let game_row: Option<(Uuid, NaiveDate)> =
+        sqlx::query_as("SELECT id, game_date FROM games WHERE natstat_id = $1")
+            .bind(&game_natstat_id)
+            .fetch_optional(pool)
+            .await?;
+
+    let (Some(player_id), Some((game_id, game_date))) = (player_id, game_row) else {
+        return Ok(false);
+    };
+
+    // Resolve team
+    let team_code = perf
+        .get("team")
+        .or_else(|| perf.get("team_code"))
+        .and_then(|t| t.get("code").or(Some(t)))
+        .and_then(|c| c.as_str());
+    let team_id = resolve_team_id(pool, team_code, season)
+        .await?
+        .unwrap_or(Uuid::nil());
+
+    // Parse stats — NatStat uses various field names
+    let minutes = get_f64(perf, &["min", "minutes", "mp"]);
+    let points = get_i32(perf, &["pts", "points"]);
+    let fgm = get_i32(perf, &["fgm", "fg"]);
+    let fga = get_i32(perf, &["fga"]);
+    let fg_pct = get_f64(perf, &["fg_pct", "fgp"]);
+    let tpm = get_i32(perf, &["tpm", "3pm", "fg3m", "threepm"]);
+    let tpa = get_i32(perf, &["tpa", "3pa", "fg3a", "threepa"]);
+    let tp_pct = get_f64(perf, &["tp_pct", "3p_pct", "fg3p"]);
+    let ftm = get_i32(perf, &["ftm", "ft"]);
+    let fta = get_i32(perf, &["fta"]);
+    let ft_pct = get_f64(perf, &["ft_pct", "ftp"]);
+    let off_rebounds = get_i32(perf, &["orb", "oreb", "off_rebounds"]);
+    let def_rebounds = get_i32(perf, &["drb", "dreb", "def_rebounds"]);
+    let total_rebounds = get_i32(perf, &["reb", "trb", "rebounds", "total_rebounds"]);
+    let assists = get_i32(perf, &["ast", "assists"]);
+    let turnovers = get_i32(perf, &["tov", "to", "turnovers"]);
+    let steals = get_i32(perf, &["stl", "steals"]);
+    let blocks = get_i32(perf, &["blk", "blocks"]);
+    let fouls = get_i32(perf, &["pf", "fouls"]);
+    let plus_minus = get_i32(perf, &["plus_minus", "pm"]);
+
+    // Determine home/away/neutral from the game
+    let opponent_code = perf
+        .get("opponent")
+        .or_else(|| perf.get("opp"))
+        .and_then(|o| o.get("code").or(Some(o)))
+        .and_then(|c| c.as_str());
+    let opponent_id = resolve_team_id(pool, opponent_code, season).await?;
+
+    sqlx::query(
+        "INSERT INTO player_game_stats (
+            id, player_id, game_id, team_id, season, game_date, opponent_id,
+            minutes, points, fgm, fga, fg_pct, tpm, tpa, tp_pct,
+            ftm, fta, ft_pct, off_rebounds, def_rebounds, total_rebounds,
+            assists, turnovers, steals, blocks, fouls, plus_minus
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+         ON CONFLICT (player_id, game_id) DO UPDATE
+         SET minutes = COALESCE(EXCLUDED.minutes, player_game_stats.minutes),
+             points = COALESCE(EXCLUDED.points, player_game_stats.points),
+             fgm = COALESCE(EXCLUDED.fgm, player_game_stats.fgm),
+             fga = COALESCE(EXCLUDED.fga, player_game_stats.fga),
+             fg_pct = COALESCE(EXCLUDED.fg_pct, player_game_stats.fg_pct),
+             tpm = COALESCE(EXCLUDED.tpm, player_game_stats.tpm),
+             tpa = COALESCE(EXCLUDED.tpa, player_game_stats.tpa),
+             tp_pct = COALESCE(EXCLUDED.tp_pct, player_game_stats.tp_pct),
+             ftm = COALESCE(EXCLUDED.ftm, player_game_stats.ftm),
+             fta = COALESCE(EXCLUDED.fta, player_game_stats.fta),
+             ft_pct = COALESCE(EXCLUDED.ft_pct, player_game_stats.ft_pct),
+             off_rebounds = COALESCE(EXCLUDED.off_rebounds, player_game_stats.off_rebounds),
+             def_rebounds = COALESCE(EXCLUDED.def_rebounds, player_game_stats.def_rebounds),
+             total_rebounds = COALESCE(EXCLUDED.total_rebounds, player_game_stats.total_rebounds),
+             assists = COALESCE(EXCLUDED.assists, player_game_stats.assists),
+             turnovers = COALESCE(EXCLUDED.turnovers, player_game_stats.turnovers),
+             steals = COALESCE(EXCLUDED.steals, player_game_stats.steals),
+             blocks = COALESCE(EXCLUDED.blocks, player_game_stats.blocks),
+             fouls = COALESCE(EXCLUDED.fouls, player_game_stats.fouls),
+             plus_minus = COALESCE(EXCLUDED.plus_minus, player_game_stats.plus_minus)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(player_id)
+    .bind(game_id)
+    .bind(team_id)
+    .bind(season)
+    .bind(game_date)
+    .bind(opponent_id)
+    .bind(minutes)
+    .bind(points)
+    .bind(fgm)
+    .bind(fga)
+    .bind(fg_pct)
+    .bind(tpm)
+    .bind(tpa)
+    .bind(tp_pct)
+    .bind(ftm)
+    .bind(fta)
+    .bind(ft_pct)
+    .bind(off_rebounds)
+    .bind(def_rebounds)
+    .bind(total_rebounds)
+    .bind(assists)
+    .bind(turnovers)
+    .bind(steals)
+    .bind(blocks)
+    .bind(fouls)
+    .bind(plus_minus)
+    .execute(pool)
+    .await?;
+
+    Ok(true)
+}
+
+async fn resolve_team_id(
+    pool: &PgPool,
+    code: Option<&str>,
+    season: i32,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let Some(code) = code else { return Ok(None) };
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
+            .bind(code)
+            .bind(season)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(id,)| id))
+}
+
+/// Extract a float from a JSON value, trying multiple field names.
+fn get_f64(v: &Value, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        if let Some(val) = v.get(*key) {
+            if let Some(f) = val.as_f64() {
+                return Some(f);
+            }
+            if let Some(s) = val.as_str()
+                && let Ok(f) = s.parse::<f64>()
+            {
+                return Some(f);
+            }
+        }
+    }
+    None
+}
+
+/// Extract an int from a JSON value, trying multiple field names.
+fn get_i32(v: &Value, keys: &[&str]) -> Option<i32> {
+    for key in keys {
+        if let Some(val) = v.get(*key) {
+            if let Some(i) = val.as_i64() {
+                return Some(i as i32);
+            }
+            if let Some(s) = val.as_str()
+                && let Ok(i) = s.parse::<i32>()
+            {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+fn extract_results(page: &Value) -> Vec<&Value> {
+    match page.get("results") {
+        Some(Value::Array(arr)) => arr.iter().collect(),
+        Some(Value::Object(obj)) => obj.values().collect(),
+        _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_f64_from_number() {
+        let v = json!({"min": 32.5});
+        assert_eq!(get_f64(&v, &["min"]), Some(32.5));
+    }
+
+    #[test]
+    fn test_get_f64_from_string() {
+        let v = json!({"min": "32.5"});
+        assert_eq!(get_f64(&v, &["min"]), Some(32.5));
+    }
+
+    #[test]
+    fn test_get_f64_fallback_key() {
+        let v = json!({"mp": 28.0});
+        assert_eq!(get_f64(&v, &["min", "minutes", "mp"]), Some(28.0));
+    }
+
+    #[test]
+    fn test_get_i32_from_number() {
+        let v = json!({"pts": 25});
+        assert_eq!(get_i32(&v, &["pts"]), Some(25));
+    }
+
+    #[test]
+    fn test_get_i32_from_string() {
+        let v = json!({"pts": "25"});
+        assert_eq!(get_i32(&v, &["pts"]), Some(25));
+    }
+}

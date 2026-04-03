@@ -37,15 +37,8 @@ async fn main() -> Result<()> {
     info!("migrations complete");
 
     // Create NatStat client
-    let natstat_base_url =
-        std::env::var("NATSTAT_BASE_URL").unwrap_or_else(|_| "https://natstat.com".into());
-    let natstat_api_key = std::env::var("NATSTAT_API_KEY").ok();
-    let natstat = NatStatClient::new(
-        db.pool.clone(),
-        natstat_base_url,
-        natstat_api_key,
-        500, // 500 calls/hour
-    );
+    let natstat_api_key = std::env::var("NATSTAT_API_KEY").expect("NATSTAT_API_KEY must be set");
+    let natstat = NatStatClient::new(db.pool.clone(), natstat_api_key, 500);
 
     let state = Arc::new(AppState { db, natstat });
 

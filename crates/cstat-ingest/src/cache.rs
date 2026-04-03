@@ -7,16 +7,25 @@ use uuid::Uuid;
 /// PostgreSQL-backed API response cache.
 #[derive(Debug, Clone)]
 pub struct ApiCache {
-    pool: PgPool,
+    pool: Option<PgPool>,
 }
 
 impl ApiCache {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool: Some(pool) }
+    }
+
+    /// Create a no-op cache for testing (no database connection).
+    #[cfg(test)]
+    pub fn new_noop() -> Self {
+        Self { pool: None }
     }
 
     /// Look up a cached response. Returns None if not found or expired.
     pub async fn get(&self, endpoint: &str, params: &str) -> Result<Option<Value>, sqlx::Error> {
+        let Some(pool) = &self.pool else {
+            return Ok(None);
+        };
         let params_hash = Self::hash_params(params);
         let row: Option<(serde_json::Value,)> = sqlx::query_as(
             "SELECT response_body FROM api_cache
@@ -24,7 +33,7 @@ impl ApiCache {
         )
         .bind(endpoint)
         .bind(&params_hash)
-        .fetch_optional(&self.pool)
+        .fetch_optional(pool)
         .await?;
 
         Ok(row.map(|(body,)| body))
@@ -38,6 +47,9 @@ impl ApiCache {
         response: &Value,
         ttl_seconds: i64,
     ) -> Result<(), sqlx::Error> {
+        let Some(pool) = &self.pool else {
+            return Ok(());
+        };
         let params_hash = Self::hash_params(params);
         sqlx::query(
             "INSERT INTO api_cache (id, endpoint, params_hash, response_body, fetched_at, expires_at)
@@ -45,14 +57,14 @@ impl ApiCache {
              ON CONFLICT (endpoint, params_hash) DO UPDATE
              SET response_body = EXCLUDED.response_body,
                  fetched_at = EXCLUDED.fetched_at,
-                 expires_at = EXCLUDED.expires_at"
+                 expires_at = EXCLUDED.expires_at",
         )
         .bind(Uuid::new_v4())
         .bind(endpoint)
         .bind(&params_hash)
         .bind(response)
         .bind(ttl_seconds as f64)
-        .execute(&self.pool)
+        .execute(pool)
         .await?;
 
         Ok(())
@@ -60,8 +72,11 @@ impl ApiCache {
 
     /// Remove all expired entries.
     pub async fn cleanup_expired(&self) -> Result<u64, sqlx::Error> {
+        let Some(pool) = &self.pool else {
+            return Ok(0);
+        };
         let result = sqlx::query("DELETE FROM api_cache WHERE expires_at < now()")
-            .execute(&self.pool)
+            .execute(pool)
             .await?;
         Ok(result.rows_affected())
     }

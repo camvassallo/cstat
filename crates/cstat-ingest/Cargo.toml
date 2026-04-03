@@ -19,5 +19,13 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 
+clap = { version = "4", features = ["derive"] }
+dotenvy = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[bin]]
+name = "cstat-ingest"
+path = "src/bin/ingest.rs"
+
 [dev-dependencies]
 tokio-test = { workspace = true }
