@@ -316,9 +316,9 @@ async fn upsert_player_game_stats(
         .or_else(|| perf.get("team_code"))
         .or_else(|| perf.get("team").and_then(|t| t.get("code")))
         .and_then(|c| c.as_str());
-    let team_id = resolve_team_id(pool, team_code, season)
-        .await?
-        .unwrap_or(Uuid::nil());
+    let Some(team_id) = resolve_team_id(pool, team_code, season).await? else {
+        return Ok(false);
+    };
 
     // playerperfs returns stats flat on the perf object (not nested under "stats")
     let minutes = get_f64(perf, &["min", "minutes", "mp"]);
@@ -506,6 +506,39 @@ fn get_i32(v: &Value, keys: &[&str]) -> Option<i32> {
         }
     }
     None
+}
+
+/// Ingest team performances for all teams in a season.
+pub async fn ingest_all_team_performances(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+) -> Result<u64, NatStatError> {
+    let teams: Vec<(String,)> =
+        sqlx::query_as("SELECT natstat_id FROM teams WHERE season = $1 ORDER BY natstat_id")
+            .bind(season)
+            .fetch_all(pool)
+            .await?;
+
+    let total_teams = teams.len();
+    let mut total = 0u64;
+    for (i, (team_code,)) in teams.iter().enumerate() {
+        if (i + 1) % 25 == 0 || i + 1 == total_teams {
+            info!(
+                progress = format!("{}/{}", i + 1, total_teams),
+                "ingesting team performances"
+            );
+        }
+        match ingest_team_performances(client, pool, season, team_code).await {
+            Ok(count) => total += count,
+            Err(e) => {
+                tracing::warn!(team_code, error = %e, "failed to ingest team performances, skipping")
+            }
+        }
+    }
+
+    info!(total, season, "all team performances ingested");
+    Ok(total)
 }
 
 /// Ingest team performances (team-level box scores) for a specific team and season.
