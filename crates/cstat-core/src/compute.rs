@@ -355,17 +355,19 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
 ///    b. Adjusted efficiency = raw_efficiency * (league_avg / opponent_rating)
 ///    c. Average across all games for each team
 /// 4. Repeat until max change between iterations < threshold
+type GameRow = (
+    Uuid,
+    Option<Uuid>,
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+);
+
 pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
-    // Fetch all team game stats: team_id, opponent_id, points, possessions (estimated)
-    let games: Vec<(
-        Uuid,
-        Option<Uuid>,
-        Option<i32>,
-        Option<i32>,
-        Option<i32>,
-        Option<i32>,
-        Option<i32>,
-    )> = sqlx::query_as(
+    // Fetch all team game stats: team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
+    let games: Vec<GameRow> = sqlx::query_as(
         "SELECT team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
              FROM team_game_stats
              WHERE season = $1 AND points IS NOT NULL AND fga IS NOT NULL",
@@ -387,9 +389,6 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     }
 
     let mut game_data: Vec<GameEff> = Vec::new();
-    // Also collect opponent points/possessions for defensive efficiency
-    // We need to pair games: team A vs team B appears twice (once per team)
-    // Group by (team_id, opponent_id) pairs
 
     for (team_id, opponent_id, points, fga, oreb, tov, fta) in &games {
         let Some(opp_id) = opponent_id else { continue };
@@ -623,8 +622,6 @@ pub async fn compute_player_sos(pool: &PgPool, season: i32) -> Result<u64, sqlx:
                     COALESCE(tss.adj_efficiency_margin, 0) * COALESCE(pgs.minutes, 1)
                 ) / NULLIF(SUM(COALESCE(pgs.minutes, 1)), 0) as weighted_opp_em
             FROM player_game_stats pgs
-            JOIN games g ON g.id = pgs.game_id
-            LEFT JOIN teams opp ON opp.id = pgs.opponent_id AND opp.season = $1
             LEFT JOIN team_season_stats tss ON tss.team_id = pgs.opponent_id AND tss.season = $1
             WHERE pgs.season = $1
               AND pgs.minutes IS NOT NULL
@@ -661,11 +658,11 @@ pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64,
                 AVG(pgs.total_rebounds) OVER w as rolling_rpg,
                 AVG(pgs.assists) OVER w as rolling_apg,
                 CASE WHEN SUM(pgs.fga) OVER w > 0
-                    THEN SUM(pgs.fgm) OVER w::float / SUM(pgs.fga) OVER w
+                    THEN (SUM(pgs.fgm) OVER w)::float / (SUM(pgs.fga) OVER w)
                     ELSE NULL END as rolling_fg_pct,
-                CASE WHEN (SUM(pgs.fga) OVER w + 0.44 * SUM(COALESCE(pgs.fta, 0)) OVER w) > 0
-                    THEN SUM(pgs.points) OVER w::float /
-                        (2.0 * (SUM(pgs.fga) OVER w + 0.44 * SUM(COALESCE(pgs.fta, 0)) OVER w))
+                CASE WHEN ((SUM(pgs.fga) OVER w) + 0.44 * (SUM(COALESCE(pgs.fta, 0)) OVER w)) > 0
+                    THEN (SUM(pgs.points) OVER w)::float /
+                        (2.0 * ((SUM(pgs.fga) OVER w) + 0.44 * (SUM(COALESCE(pgs.fta, 0)) OVER w)))
                     ELSE NULL END as rolling_ts_pct,
                 AVG(pgs.game_score) OVER w as rolling_game_score
             FROM player_game_stats pgs
