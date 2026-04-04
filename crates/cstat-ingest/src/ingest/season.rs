@@ -25,33 +25,39 @@ impl<'a> SeasonIngester<'a> {
     /// 3. Games (results, needs team IDs)
     /// 4. Player performances (box scores, needs player_id + game_id)
     /// 5. Team details (ELO, advanced stats)
+    /// 6. Team performances (team-level box scores for four factors)
     pub async fn ingest_full_season(&self) -> Result<IngestReport, NatStatError> {
         let mut report = IngestReport::default();
 
         info!(season = self.season, "starting full season ingestion");
 
         // Step 1: Teams
-        info!("step 1/5: ingesting teams");
+        info!("step 1/6: ingesting teams");
         report.teams = super::teams::ingest_teams(self.client, self.pool, self.season).await?;
 
         // Step 2: Players
-        info!("step 2/5: ingesting players");
+        info!("step 2/6: ingesting players");
         report.players =
             super::players::ingest_all_rosters(self.client, self.pool, self.season).await?;
 
         // Step 3: Games
-        info!("step 3/5: ingesting games");
+        info!("step 3/6: ingesting games");
         report.games = super::games::ingest_games(self.client, self.pool, self.season).await?;
 
         // Step 4: Player performances
-        info!("step 4/5: ingesting player performances");
+        info!("step 4/6: ingesting player performances");
         report.player_performances =
             super::games::ingest_player_performances(self.client, self.pool, self.season).await?;
 
         // Step 5: Team details (ELO, etc.)
-        info!("step 5/5: ingesting team details");
+        info!("step 5/6: ingesting team details");
         report.team_details =
             super::teams::ingest_team_details(self.client, self.pool, self.season).await?;
+
+        // Step 6: Team performances (box scores per game)
+        info!("step 6/6: ingesting team performances");
+        report.team_performances =
+            super::games::ingest_all_team_performances(self.client, self.pool, self.season).await?;
 
         info!(
             season = self.season,
@@ -60,6 +66,7 @@ impl<'a> SeasonIngester<'a> {
             games = report.games,
             player_performances = report.player_performances,
             team_details = report.team_details,
+            team_performances = report.team_performances,
             "season ingestion complete"
         );
 
@@ -118,14 +125,20 @@ pub struct IngestReport {
     pub games: u64,
     pub player_performances: u64,
     pub team_details: u64,
+    pub team_performances: u64,
 }
 
 impl std::fmt::Display for IngestReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Ingested: {} teams, {} players, {} games, {} player performances, {} team details",
-            self.teams, self.players, self.games, self.player_performances, self.team_details
+            "Ingested: {} teams, {} players, {} games, {} player performances, {} team details, {} team performances",
+            self.teams,
+            self.players,
+            self.games,
+            self.player_performances,
+            self.team_details,
+            self.team_performances
         )
     }
 }
