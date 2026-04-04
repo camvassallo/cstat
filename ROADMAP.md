@@ -82,9 +82,9 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
   - [x] Fixed FK constraint for non-D1 exhibition opponents (skip instead of nil UUID)
   - [x] Fixed player_season_stats unique constraint for mid-season transfers (include team_id)
 - [x] **Opponent-adjusted efficiency** (KenPom-style): iterative regression adjusts off/def efficiency by opponent quality until convergence, plus SOS and SOS rank
-- [ ] **Player strength of schedule**: weight individual stats by opponent quality
-- [ ] Rolling averages (last N games) and trend detection
-- [ ] Store all computed metrics back to Postgres
+- [x] **Player strength of schedule**: minutes-weighted avg opponent adj efficiency margin, plus SOS percentile
+- [x] **Rolling averages**: last 5 games PPG, RPG, APG, FG%, TS%, game score on every player_game_stats row (102K rows)
+- [x] Store all computed metrics back to Postgres
 
 ### Compute Gaps (data available, need algorithms)
 These are the key gaps between our current metrics and what KenPom/Torvik/EvanMiya produce. **All can be computed from data we already collect** — no new API calls needed:

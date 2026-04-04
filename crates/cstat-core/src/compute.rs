@@ -209,7 +209,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             id, player_id, season,
             ppg_pct, rpg_pct, apg_pct, spg_pct, bpg_pct,
             fg_pct_pct, tp_pct_pct, ft_pct_pct, true_shooting_pct_pct,
-            usage_rate_pct, bpm_pct
+            usage_rate_pct, bpm_pct, player_sos_pct
         )
         SELECT
             gen_random_uuid(),
@@ -225,7 +225,8 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY pss.ft_pct),
             PERCENT_RANK() OVER (ORDER BY pss.true_shooting_pct),
             PERCENT_RANK() OVER (ORDER BY pss.usage_rate),
-            PERCENT_RANK() OVER (ORDER BY pss.bpm)
+            PERCENT_RANK() OVER (ORDER BY pss.bpm),
+            PERCENT_RANK() OVER (ORDER BY pss.player_sos)
         FROM player_season_stats pss
         WHERE pss.season = $1
           AND pss.games_played >= 10
@@ -241,7 +242,8 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             ft_pct_pct = EXCLUDED.ft_pct_pct,
             true_shooting_pct_pct = EXCLUDED.true_shooting_pct_pct,
             usage_rate_pct = EXCLUDED.usage_rate_pct,
-            bpm_pct = EXCLUDED.bpm_pct",
+            bpm_pct = EXCLUDED.bpm_pct,
+            player_sos_pct = EXCLUDED.player_sos_pct",
     )
     .bind(season)
     .execute(pool)
@@ -608,28 +610,124 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     Ok(updated)
 }
 
+/// Compute per-player strength of schedule.
+/// Player SOS = average adjusted efficiency margin of opponents the player actually faced,
+/// weighted by minutes played in each game.
+pub async fn compute_player_sos(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "WITH player_opp_strength AS (
+            SELECT
+                pgs.player_id,
+                pgs.team_id,
+                SUM(
+                    COALESCE(tss.adj_efficiency_margin, 0) * COALESCE(pgs.minutes, 1)
+                ) / NULLIF(SUM(COALESCE(pgs.minutes, 1)), 0) as weighted_opp_em
+            FROM player_game_stats pgs
+            JOIN games g ON g.id = pgs.game_id
+            LEFT JOIN teams opp ON opp.id = pgs.opponent_id AND opp.season = $1
+            LEFT JOIN team_season_stats tss ON tss.team_id = pgs.opponent_id AND tss.season = $1
+            WHERE pgs.season = $1
+              AND pgs.minutes IS NOT NULL
+              AND pgs.minutes > 0
+            GROUP BY pgs.player_id, pgs.team_id
+        )
+        UPDATE player_season_stats pss SET
+            player_sos = ROUND(pos.weighted_opp_em::numeric, 1),
+            updated_at = now()
+        FROM player_opp_strength pos
+        WHERE pss.player_id = pos.player_id
+          AND pss.team_id = pos.team_id
+          AND pss.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    info!(
+        count = result.rows_affected(),
+        season, "computed player SOS"
+    );
+    Ok(result.rows_affected())
+}
+
+/// Compute rolling averages (last 5 games) for each player game.
+/// Uses window functions to look at the previous 5 games by date.
+pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "WITH rolling AS (
+            SELECT
+                pgs.id,
+                AVG(pgs.points) OVER w as rolling_ppg,
+                AVG(pgs.total_rebounds) OVER w as rolling_rpg,
+                AVG(pgs.assists) OVER w as rolling_apg,
+                CASE WHEN SUM(pgs.fga) OVER w > 0
+                    THEN SUM(pgs.fgm) OVER w::float / SUM(pgs.fga) OVER w
+                    ELSE NULL END as rolling_fg_pct,
+                CASE WHEN (SUM(pgs.fga) OVER w + 0.44 * SUM(COALESCE(pgs.fta, 0)) OVER w) > 0
+                    THEN SUM(pgs.points) OVER w::float /
+                        (2.0 * (SUM(pgs.fga) OVER w + 0.44 * SUM(COALESCE(pgs.fta, 0)) OVER w))
+                    ELSE NULL END as rolling_ts_pct,
+                AVG(pgs.game_score) OVER w as rolling_game_score
+            FROM player_game_stats pgs
+            WHERE pgs.season = $1
+              AND pgs.minutes IS NOT NULL
+              AND pgs.minutes > 0
+            WINDOW w AS (
+                PARTITION BY pgs.player_id, pgs.team_id
+                ORDER BY pgs.game_date
+                ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
+            )
+        )
+        UPDATE player_game_stats pgs SET
+            rolling_ppg = ROUND(r.rolling_ppg::numeric, 1),
+            rolling_rpg = ROUND(r.rolling_rpg::numeric, 1),
+            rolling_apg = ROUND(r.rolling_apg::numeric, 1),
+            rolling_fg_pct = ROUND(r.rolling_fg_pct::numeric, 3),
+            rolling_ts_pct = ROUND(r.rolling_ts_pct::numeric, 3),
+            rolling_game_score = ROUND(r.rolling_game_score::numeric, 1)
+        FROM rolling r
+        WHERE pgs.id = r.id
+          AND r.rolling_ppg IS NOT NULL",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    info!(
+        count = result.rows_affected(),
+        season, "computed rolling averages"
+    );
+    Ok(result.rows_affected())
+}
+
 /// Run all compute steps in order.
 pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {
     let mut report = ComputeReport::default();
 
     info!(season, "starting compute pipeline");
 
-    info!("step 1/6: backfilling derived game stats");
+    info!("step 1/8: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 2/6: computing player season stats");
+    info!("step 2/8: computing player season stats");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
-    info!("step 3/6: computing team four factors");
+    info!("step 3/8: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 4/6: computing adjusted efficiency (KenPom-style)");
+    info!("step 4/8: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 5/6: computing schedules");
+    info!("step 5/8: computing player SOS");
+    report.player_sos = compute_player_sos(pool, season).await?;
+
+    info!("step 6/8: computing rolling averages");
+    report.rolling_averages = compute_rolling_averages(pool, season).await?;
+
+    info!("step 7/8: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 6/6: computing player percentiles");
+    info!("step 8/8: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -642,6 +740,8 @@ pub struct ComputeReport {
     pub player_season_stats: u64,
     pub team_four_factors: u64,
     pub adjusted_efficiency: u64,
+    pub player_sos: u64,
+    pub rolling_averages: u64,
     pub schedules: u64,
     pub percentiles: u64,
 }
@@ -650,11 +750,13 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} backfilled, {} player stats, {} four factors, {} adj efficiency, {} schedules, {} percentiles",
+            "Computed: {} backfilled, {} player stats, {} four factors, {} adj eff, {} player SOS, {} rolling avgs, {} schedules, {} percentiles",
             self.backfilled,
             self.player_season_stats,
             self.team_four_factors,
             self.adjusted_efficiency,
+            self.player_sos,
+            self.rolling_averages,
             self.schedules,
             self.percentiles
         )
