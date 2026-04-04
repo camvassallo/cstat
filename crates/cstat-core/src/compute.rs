@@ -1,5 +1,7 @@
 use sqlx::PgPool;
+use std::collections::HashMap;
 use tracing::info;
+use uuid::Uuid;
 
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
@@ -339,25 +341,295 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
     Ok(result.rows_affected())
 }
 
+/// KenPom-style opponent-adjusted efficiency ratings.
+/// Iteratively adjusts each team's offensive and defensive efficiency
+/// by the quality of opponents faced until ratings converge.
+///
+/// Algorithm:
+/// 1. Compute raw per-game efficiency for each team (pts / possessions * 100)
+/// 2. Initialize each team's adjusted off/def to their raw averages
+/// 3. For each iteration:
+///    a. For each game, compute expected efficiency = league_avg * (opponent_rating / league_avg)
+///    b. Adjusted efficiency = raw_efficiency * (league_avg / opponent_rating)
+///    c. Average across all games for each team
+/// 4. Repeat until max change between iterations < threshold
+pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Fetch all team game stats: team_id, opponent_id, points, possessions (estimated)
+    let games: Vec<(
+        Uuid,
+        Option<Uuid>,
+        Option<i32>,
+        Option<i32>,
+        Option<i32>,
+        Option<i32>,
+        Option<i32>,
+    )> = sqlx::query_as(
+        "SELECT team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
+             FROM team_game_stats
+             WHERE season = $1 AND points IS NOT NULL AND fga IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    if games.is_empty() {
+        return Ok(0);
+    }
+
+    // Build per-game data: (team_id, opponent_id, off_efficiency, def_efficiency)
+    struct GameEff {
+        team_id: Uuid,
+        opponent_id: Uuid,
+        points: f64,
+        possessions: f64,
+    }
+
+    let mut game_data: Vec<GameEff> = Vec::new();
+    // Also collect opponent points/possessions for defensive efficiency
+    // We need to pair games: team A vs team B appears twice (once per team)
+    // Group by (team_id, opponent_id) pairs
+
+    for (team_id, opponent_id, points, fga, oreb, tov, fta) in &games {
+        let Some(opp_id) = opponent_id else { continue };
+        let pts = *points.as_ref().unwrap_or(&0) as f64;
+        let fga = *fga.as_ref().unwrap_or(&0) as f64;
+        let oreb = *oreb.as_ref().unwrap_or(&0) as f64;
+        let tov = *tov.as_ref().unwrap_or(&0) as f64;
+        let fta = *fta.as_ref().unwrap_or(&0) as f64;
+        let poss = fga - oreb + tov + 0.44 * fta;
+        if poss <= 0.0 {
+            continue;
+        }
+
+        game_data.push(GameEff {
+            team_id: *team_id,
+            opponent_id: *opp_id,
+            points: pts,
+            possessions: poss,
+        });
+    }
+
+    // Compute raw season averages per team
+    struct TeamRaw {
+        total_off_pts: f64,
+        total_off_poss: f64,
+        total_def_pts: f64,
+        total_def_poss: f64,
+    }
+
+    let mut raw: HashMap<Uuid, TeamRaw> = HashMap::new();
+    for g in &game_data {
+        let entry = raw.entry(g.team_id).or_insert(TeamRaw {
+            total_off_pts: 0.0,
+            total_off_poss: 0.0,
+            total_def_pts: 0.0,
+            total_def_poss: 0.0,
+        });
+        entry.total_off_pts += g.points;
+        entry.total_off_poss += g.possessions;
+    }
+    // Defensive: what opponents scored against this team
+    for g in &game_data {
+        if let Some(entry) = raw.get_mut(&g.opponent_id) {
+            entry.total_def_pts += g.points;
+            entry.total_def_poss += g.possessions;
+        }
+    }
+
+    // League average efficiency
+    let total_pts: f64 = raw.values().map(|r| r.total_off_pts).sum();
+    let total_poss: f64 = raw.values().map(|r| r.total_off_poss).sum();
+    let league_avg = if total_poss > 0.0 {
+        total_pts / total_poss * 100.0
+    } else {
+        100.0
+    };
+
+    // Initialize adjusted ratings to raw
+    let mut adj_off: HashMap<Uuid, f64> = HashMap::new();
+    let mut adj_def: HashMap<Uuid, f64> = HashMap::new();
+    for (team_id, r) in &raw {
+        let off = if r.total_off_poss > 0.0 {
+            r.total_off_pts / r.total_off_poss * 100.0
+        } else {
+            league_avg
+        };
+        let def = if r.total_def_poss > 0.0 {
+            r.total_def_pts / r.total_def_poss * 100.0
+        } else {
+            league_avg
+        };
+        adj_off.insert(*team_id, off);
+        adj_def.insert(*team_id, def);
+    }
+
+    // Iterative adjustment
+    let max_iterations = 50;
+    let convergence_threshold = 0.01;
+
+    for iteration in 0..max_iterations {
+        // For each team, compute adjusted efficiency as:
+        //   adj_off = raw_off * (league_avg / avg_opponent_adj_def)
+        //   adj_def = raw_def * (league_avg / avg_opponent_adj_off)
+        // where avg_opponent_adj_* is the possession-weighted average of opponents faced.
+        //
+        // This is equivalent to: "what would this team's efficiency be if they
+        // played an average schedule?"
+
+        // For each team, compute avg opponent adj_def (for offense adjustment)
+        // and avg opponent adj_off (for defense adjustment).
+        // Both keyed by the team whose rating we're adjusting.
+        let mut opp_def_sum: HashMap<Uuid, (f64, f64)> = HashMap::new();
+        let mut opp_off_sum: HashMap<Uuid, (f64, f64)> = HashMap::new();
+
+        for g in &game_data {
+            let opp_def = adj_def.get(&g.opponent_id).copied().unwrap_or(league_avg);
+
+            // team_id's offense faced opponent_id's defense
+            let e = opp_def_sum.entry(g.team_id).or_insert((0.0, 0.0));
+            e.0 += opp_def * g.possessions;
+            e.1 += g.possessions;
+
+            // opponent_id's defense faced team_id's offense
+            // So for opponent_id's defensive adjustment, accumulate team_id's adj_off
+            let team_off = adj_off.get(&g.team_id).copied().unwrap_or(league_avg);
+            let e = opp_off_sum.entry(g.opponent_id).or_insert((0.0, 0.0));
+            e.0 += team_off * g.possessions;
+            e.1 += g.possessions;
+        }
+
+        let mut max_change: f64 = 0.0;
+
+        // Update offensive ratings
+        for (team_id, r) in &raw {
+            if r.total_off_poss <= 0.0 {
+                continue;
+            }
+            let raw_off = r.total_off_pts / r.total_off_poss * 100.0;
+            let avg_opp_def = match opp_def_sum.get(team_id) {
+                Some((s, p)) if *p > 0.0 => s / p,
+                _ => league_avg,
+            };
+            // Scale: if opponents' defense is tougher than avg, boost our rating
+            let new_val = raw_off * (league_avg / avg_opp_def);
+            let old_val = adj_off.get(team_id).copied().unwrap_or(league_avg);
+            max_change = max_change.max((new_val - old_val).abs());
+            adj_off.insert(*team_id, new_val);
+        }
+
+        // Update defensive ratings
+        for (team_id, r) in &raw {
+            if r.total_def_poss <= 0.0 {
+                continue;
+            }
+            let raw_def = r.total_def_pts / r.total_def_poss * 100.0;
+            let avg_opp_off = match opp_off_sum.get(team_id) {
+                Some((s, p)) if *p > 0.0 => s / p,
+                _ => league_avg,
+            };
+            // Scale: if opponents' offense is weaker than avg, boost (worsen) our def rating
+            let new_val = raw_def * (league_avg / avg_opp_off);
+            let old_val = adj_def.get(team_id).copied().unwrap_or(league_avg);
+            max_change = max_change.max((new_val - old_val).abs());
+            adj_def.insert(*team_id, new_val);
+        }
+
+        if max_change < convergence_threshold {
+            info!(
+                iteration = iteration + 1,
+                max_change, "adjusted efficiency converged"
+            );
+            break;
+        }
+    }
+
+    // Compute SOS: average of opponents' adjusted efficiency margin
+    let mut sos: HashMap<Uuid, f64> = HashMap::new();
+    let mut opp_counts: HashMap<Uuid, (f64, u32)> = HashMap::new();
+    for g in &game_data {
+        let opp_margin = adj_off.get(&g.opponent_id).copied().unwrap_or(league_avg)
+            - adj_def.get(&g.opponent_id).copied().unwrap_or(league_avg);
+        let entry = opp_counts.entry(g.team_id).or_insert((0.0, 0));
+        entry.0 += opp_margin;
+        entry.1 += 1;
+    }
+    for (team_id, (total, count)) in &opp_counts {
+        if *count > 0 {
+            sos.insert(*team_id, total / *count as f64);
+        }
+    }
+
+    // Rank SOS
+    let mut sos_vec: Vec<(Uuid, f64)> = sos.iter().map(|(k, v)| (*k, *v)).collect();
+    sos_vec.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let sos_ranks: HashMap<Uuid, i32> = sos_vec
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, (i + 1) as i32))
+        .collect();
+
+    // Write to DB
+    let mut updated = 0u64;
+    for (team_id, off) in &adj_off {
+        let def = adj_def.get(team_id).copied().unwrap_or(league_avg);
+        let margin = off - def;
+        let team_sos = sos.get(team_id).copied();
+        let team_sos_rank = sos_ranks.get(team_id).copied();
+
+        let result = sqlx::query(
+            "UPDATE team_season_stats SET
+                adj_offense = ROUND($1::numeric, 1),
+                adj_defense = ROUND($2::numeric, 1),
+                adj_efficiency_margin = ROUND($3::numeric, 1),
+                sos = ROUND($4::numeric, 1),
+                sos_rank = $5,
+                updated_at = now()
+             WHERE team_id = $6 AND season = $7",
+        )
+        .bind(*off)
+        .bind(def)
+        .bind(margin)
+        .bind(team_sos)
+        .bind(team_sos_rank)
+        .bind(team_id)
+        .bind(season)
+        .execute(pool)
+        .await?;
+
+        updated += result.rows_affected();
+    }
+
+    info!(
+        updated,
+        league_avg = format!("{:.1}", league_avg),
+        season,
+        "computed adjusted efficiency"
+    );
+    Ok(updated)
+}
+
 /// Run all compute steps in order.
 pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {
     let mut report = ComputeReport::default();
 
     info!(season, "starting compute pipeline");
 
-    info!("step 1/5: backfilling derived game stats");
+    info!("step 1/6: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 2/5: computing player season stats");
+    info!("step 2/6: computing player season stats");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
-    info!("step 3/5: computing team four factors");
+    info!("step 3/6: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 4/5: computing schedules");
+    info!("step 4/6: computing adjusted efficiency (KenPom-style)");
+    report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
+
+    info!("step 5/6: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 5/5: computing player percentiles");
+    info!("step 6/6: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -369,6 +641,7 @@ pub struct ComputeReport {
     pub backfilled: u64,
     pub player_season_stats: u64,
     pub team_four_factors: u64,
+    pub adjusted_efficiency: u64,
     pub schedules: u64,
     pub percentiles: u64,
 }
@@ -377,10 +650,11 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} backfilled fields, {} player season stats, {} team four factors, {} schedule entries, {} percentile rankings",
+            "Computed: {} backfilled, {} player stats, {} four factors, {} adj efficiency, {} schedules, {} percentiles",
             self.backfilled,
             self.player_season_stats,
             self.team_four_factors,
+            self.adjusted_efficiency,
             self.schedules,
             self.percentiles
         )
