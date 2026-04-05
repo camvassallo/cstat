@@ -67,7 +67,7 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ---
 
-## Phase 2: Player Metrics Engine ← CURRENT
+## Phase 2: Player Metrics Engine ✓
 > Compute per-player advanced metrics from raw data
 
 - [x] **Compute layer**: derive stats from raw box score data already in DB
@@ -84,14 +84,16 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 - [x] **Opponent-adjusted efficiency** (KenPom-style): iterative regression adjusts off/def efficiency by opponent quality until convergence, plus SOS and SOS rank
 - [x] **Player strength of schedule**: minutes-weighted avg opponent adj efficiency margin, plus SOS percentile
 - [x] **Rolling averages**: last 5 games PPG, RPG, APG, FG%, TS%, game score on every player_game_stats row (102K rows)
-- [x] Store all computed metrics back to Postgres
+- [x] **Player rate stats**: AST% (from team FGM context), ORB%, DRB%, STL%, BLK% (per-40 proxies)
+- [x] **Individual ORTG/DRTG**: box-score approximation using team adjusted efficiency as base, plus net rating
+- [x] **BPM splits**: OBPM/DBPM derived from offensive/defensive game_score components
+- [x] **Pipeline gap fill**: captured `team_fga`/`team_fta`/`team_turnovers` from NatStat playerperfs; `overtime`, `attendance`, `half scores`, `venue_code` from games; `is_conference` derived from team conferences; `is_postseason` from dates; `point_diff` from team_game_stats
+- [x] Store all computed metrics back to Postgres (10-step compute pipeline)
 
-### Compute Gaps (data available, need algorithms)
-These are the key gaps between our current metrics and what KenPom/Torvik/EvanMiya produce. **All can be computed from data we already collect** — no new API calls needed:
-- **Opponent-adjusted efficiency**: Iterative regression (KenPom's core). Adjust raw off/def efficiency by opponent quality until ratings converge.
-- **Player-level adjusted ratings**: Weight individual stats by opponent defensive quality (e.g., opponent-adjusted eFG%).
-- **BPM (Box Plus/Minus)**: Currently using game_score as proxy. Real BPM uses regression coefficients fit to RAPM.
-- **Defensive metrics**: Individual defensive impact is hard from box scores alone. Play-by-play would unlock this.
+### Known Limitations
+- **Player position/class_year**: NatStat does not provide these fields in any endpoint
+- **Plus/minus**: Not available from NatStat box scores
+- **True lineup-based ORTG/DRTG**: Would require play-by-play data; current implementation is a box-score approximation
 
 ### Future Data Sources (not yet ingested)
 - **NatStat play-by-play**: Would unlock lineup-based net ratings, clutch metrics, transition vs half-court splits, shot charts, and better defensive metrics. Expensive to consume and keep updated — worth exploring once core model is solid.
