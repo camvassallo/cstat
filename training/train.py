@@ -245,13 +245,17 @@ def main():
     print(f"{'='*50}")
 
     final_margin = lgb.LGBMRegressor(
-        objective="regression", num_leaves=31, learning_rate=0.05,
+        objective="regression", num_leaves=24, learning_rate=0.03,
+        feature_fraction=0.7, bagging_fraction=0.7, bagging_freq=5,
+        min_child_samples=30, lambda_l1=0.1, lambda_l2=1.0,
         n_estimators=margin_model.best_iteration_ or 300, verbose=-1,
     )
     final_margin.fit(X, y_margin)
 
     final_win = lgb.LGBMClassifier(
-        objective="binary", num_leaves=31, learning_rate=0.05,
+        objective="binary", num_leaves=24, learning_rate=0.03,
+        feature_fraction=0.7, bagging_fraction=0.7, bagging_freq=5,
+        min_child_samples=30, lambda_l1=0.1, lambda_l2=1.0,
         n_estimators=win_model.best_iteration_ or 300, verbose=-1,
     )
     final_win.fit(X, y_win)
