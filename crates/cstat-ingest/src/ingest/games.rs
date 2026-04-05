@@ -233,10 +233,54 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, N
         .and_then(|v| v.as_str())
         .or_else(|| game.get("venue-name").and_then(|v| v.as_str()));
 
+    let venue_code = game
+        .get("venue-code")
+        .or_else(|| game.get("venue").and_then(|v| v.get("code")))
+        .and_then(|c| c.as_str());
+
+    let overtime = game
+        .get("overtime")
+        .and_then(|o| o.as_str())
+        .filter(|o| *o != "N");
+
+    let attendance = game
+        .get("attendance")
+        .and_then(|a| {
+            a.as_i64()
+                .or_else(|| a.as_str().and_then(|s| s.parse().ok()))
+        })
+        .map(|a| a as i32);
+
+    let status = game
+        .get("gamestatus")
+        .or_else(|| game.get("status"))
+        .and_then(|s| s.as_str());
+
+    // Half scores: line-home/line-vis contain {p1: "32", p2: "35"}
+    let home_half1 = game
+        .get("line-home")
+        .and_then(|l| l.get("p1"))
+        .and_then(get_i32_val);
+    let home_half2 = game
+        .get("line-home")
+        .and_then(|l| l.get("p2"))
+        .and_then(get_i32_val);
+    let away_half1 = game
+        .get("line-vis")
+        .and_then(|l| l.get("p1"))
+        .and_then(get_i32_val);
+    let away_half2 = game
+        .get("line-vis")
+        .and_then(|l| l.get("p2"))
+        .and_then(get_i32_val);
+
     sqlx::query(
         "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id,
-         home_score, away_score, is_neutral_site, is_conference, is_postseason, venue)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         home_score, away_score, is_neutral_site, is_conference, is_postseason, venue,
+         venue_code, overtime, attendance, status,
+         home_half1, home_half2, away_half1, away_half2)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                 $13, $14, $15, $16, $17, $18, $19, $20)
          ON CONFLICT (natstat_id) DO UPDATE
          SET home_score = COALESCE(EXCLUDED.home_score, games.home_score),
              away_score = COALESCE(EXCLUDED.away_score, games.away_score),
@@ -244,6 +288,14 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, N
              away_team_id = COALESCE(EXCLUDED.away_team_id, games.away_team_id),
              is_neutral_site = EXCLUDED.is_neutral_site,
              venue = COALESCE(EXCLUDED.venue, games.venue),
+             venue_code = COALESCE(EXCLUDED.venue_code, games.venue_code),
+             overtime = COALESCE(EXCLUDED.overtime, games.overtime),
+             attendance = COALESCE(EXCLUDED.attendance, games.attendance),
+             status = COALESCE(EXCLUDED.status, games.status),
+             home_half1 = COALESCE(EXCLUDED.home_half1, games.home_half1),
+             home_half2 = COALESCE(EXCLUDED.home_half2, games.home_half2),
+             away_half1 = COALESCE(EXCLUDED.away_half1, games.away_half1),
+             away_half2 = COALESCE(EXCLUDED.away_half2, games.away_half2),
              updated_at = now()",
     )
     .bind(Uuid::new_v4())
@@ -258,6 +310,14 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, N
     .bind(is_conference)
     .bind(is_postseason)
     .bind(venue)
+    .bind(venue_code)
+    .bind(overtime)
+    .bind(attendance)
+    .bind(status)
+    .bind(home_half1)
+    .bind(home_half2)
+    .bind(away_half1)
+    .bind(away_half2)
     .execute(pool)
     .await?;
 
@@ -356,6 +416,25 @@ async fn upsert_player_game_stats(
     let perf_score_season_avg = get_f64(perf, &["perfscoreseasonavg"]);
     let team_possessions = get_i32(perf, &["teamposs"]);
 
+    // Team context stats (needed for rate stat calculations)
+    let team_fga = get_i32(perf, &["teamfga"]);
+    let team_fta = get_i32(perf, &["teamfta"]);
+    let team_turnovers = get_i32(perf, &["teamto"]);
+    let team_fgm = get_i32(perf, &["teamfgm"]);
+
+    // Update player jersey number if available
+    let jersey_number = perf
+        .get("player-number")
+        .and_then(|n| n.as_str().map(String::from).or_else(|| Some(n.to_string())))
+        .map(|s| s.trim_matches('"').to_string());
+    if let Some(ref jersey) = jersey_number {
+        sqlx::query("UPDATE players SET jersey_number = $1, updated_at = now() WHERE id = $2 AND jersey_number IS NULL")
+            .bind(jersey)
+            .bind(player_id)
+            .execute(pool)
+            .await?;
+    }
+
     // Game context: is_home from game.loc
     let is_home = perf
         .get("game")
@@ -379,11 +458,11 @@ async fn upsert_player_game_stats(
             assists, turnovers, steals, blocks, fouls, plus_minus,
             starter, efficiency, usage_rate, two_fg_pct,
             presence_rate, adj_presence_rate, perf_score, perf_score_season_avg,
-            team_possessions
+            team_possessions, team_fga, team_fta, team_turnovers, team_fgm
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
                  $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
-                 $29, $30, $31, $32, $33, $34, $35, $36, $37)
+                 $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41)
          ON CONFLICT (player_id, game_id) DO UPDATE
          SET minutes = COALESCE(EXCLUDED.minutes, player_game_stats.minutes),
              points = COALESCE(EXCLUDED.points, player_game_stats.points),
@@ -414,6 +493,10 @@ async fn upsert_player_game_stats(
              perf_score = COALESCE(EXCLUDED.perf_score, player_game_stats.perf_score),
              perf_score_season_avg = COALESCE(EXCLUDED.perf_score_season_avg, player_game_stats.perf_score_season_avg),
              team_possessions = COALESCE(EXCLUDED.team_possessions, player_game_stats.team_possessions),
+             team_fga = COALESCE(EXCLUDED.team_fga, player_game_stats.team_fga),
+             team_fta = COALESCE(EXCLUDED.team_fta, player_game_stats.team_fta),
+             team_turnovers = COALESCE(EXCLUDED.team_turnovers, player_game_stats.team_turnovers),
+             team_fgm = COALESCE(EXCLUDED.team_fgm, player_game_stats.team_fgm),
              is_home = COALESCE(EXCLUDED.is_home, player_game_stats.is_home)",
     )
     .bind(Uuid::new_v4())
@@ -453,6 +536,10 @@ async fn upsert_player_game_stats(
     .bind(perf_score)
     .bind(perf_score_season_avg)
     .bind(team_possessions)
+    .bind(team_fga)
+    .bind(team_fta)
+    .bind(team_turnovers)
+    .bind(team_fgm)
     .execute(pool)
     .await?;
 
@@ -472,6 +559,13 @@ async fn resolve_team_id(
             .fetch_optional(pool)
             .await?;
     Ok(row.map(|(id,)| id))
+}
+
+/// Extract an i32 from a single JSON value (not searching multiple keys).
+fn get_i32_val(v: &Value) -> Option<i32> {
+    v.as_i64()
+        .map(|i| i as i32)
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
 /// Extract a float from a JSON value, trying multiple field names.
@@ -640,13 +734,19 @@ async fn upsert_team_game_stats(
     let turnovers = get_i32(stats, &["to"]);
     let fouls = get_i32(stats, &["f", "pf"]);
 
+    // Derive def_rebounds = total - off
+    let def_rebounds = match (total_rebounds, off_rebounds) {
+        (Some(t), Some(o)) => Some(t - o),
+        _ => None,
+    };
+
     sqlx::query(
         "INSERT INTO team_game_stats (
             id, team_id, game_id, season, game_date, opponent_id, is_home, win, league,
             minutes, points, fgm, fga, tpm, tpa, ftm, fta,
-            off_rebounds, total_rebounds, assists, steals, blocks, turnovers, fouls
+            off_rebounds, def_rebounds, total_rebounds, assists, steals, blocks, turnovers, fouls
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
         ON CONFLICT (team_id, game_id) DO UPDATE
         SET points = COALESCE(EXCLUDED.points, team_game_stats.points),
             fgm = COALESCE(EXCLUDED.fgm, team_game_stats.fgm),
@@ -656,6 +756,7 @@ async fn upsert_team_game_stats(
             ftm = COALESCE(EXCLUDED.ftm, team_game_stats.ftm),
             fta = COALESCE(EXCLUDED.fta, team_game_stats.fta),
             off_rebounds = COALESCE(EXCLUDED.off_rebounds, team_game_stats.off_rebounds),
+            def_rebounds = COALESCE(EXCLUDED.def_rebounds, team_game_stats.def_rebounds),
             total_rebounds = COALESCE(EXCLUDED.total_rebounds, team_game_stats.total_rebounds),
             assists = COALESCE(EXCLUDED.assists, team_game_stats.assists),
             steals = COALESCE(EXCLUDED.steals, team_game_stats.steals),
@@ -683,6 +784,7 @@ async fn upsert_team_game_stats(
     .bind(ftm)
     .bind(fta)
     .bind(off_rebounds)
+    .bind(def_rebounds)
     .bind(total_rebounds)
     .bind(assists)
     .bind(steals)

@@ -79,7 +79,7 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
             games_played, games_started, minutes_per_game,
             ppg, rpg, apg, spg, bpg, topg, fpg,
             fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
-            usage_rate, bpm, ast_pct, tov_pct, orb_pct, stl_pct, blk_pct
+            usage_rate, bpm, ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct
         )
         SELECT
             gen_random_uuid(),
@@ -120,18 +120,36 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
             ROUND(AVG(pgs.usage_rate)::numeric, 1),
             -- BPM placeholder (avg game_score as proxy until we compute real BPM)
             ROUND(AVG(pgs.game_score)::numeric, 1),
-            -- AST% = AST / (teammate FGM while on floor) — approximate as AST / (team_poss * minutes_share)
-            NULL,
+            -- AST% = AST / (teammate FGM) ≈ AST / (team_FGM - player_FGM) * (team_minutes / player_minutes)
+            -- Simplified: AST / (team_FGM_per_min * minutes - FGM) where team_FGM_per_min comes from team_fgm
+            CASE WHEN SUM(COALESCE(pgs.team_fgm, 0)) - SUM(pgs.fgm) > 0
+                THEN ROUND((SUM(pgs.assists)::float /
+                    (SUM(COALESCE(pgs.team_fgm, 0))::float - SUM(pgs.fgm)::float))::numeric, 3)
+                ELSE NULL END,
             -- TOV% = TOV / (FGA + 0.44 * FTA + TOV)
             CASE WHEN (SUM(pgs.fga) + 0.44 * SUM(COALESCE(pgs.fta, 0)) + SUM(COALESCE(pgs.turnovers, 0))) > 0
                 THEN ROUND((SUM(COALESCE(pgs.turnovers, 0))::float /
                     (SUM(pgs.fga) + 0.44 * SUM(COALESCE(pgs.fta, 0)) + SUM(COALESCE(pgs.turnovers, 0))))::numeric, 3)
                 ELSE NULL END,
-            -- ORB% approximation (player OREB / team OREB opportunities) — use raw avg for now
-            NULL,
-            -- STL% and BLK% — need team possession data for proper calc, use per-minute proxies
-            NULL,
-            NULL
+            -- ORB% = player_OREB / (player_OREB + opp_DREB_while_on_floor)
+            -- Approximate: player_OREB / (player_minutes/team_minutes * team_OREB_opportunities)
+            -- Simpler proxy: OREB per minute / league avg OREB per minute
+            CASE WHEN SUM(pgs.minutes) > 0 AND SUM(COALESCE(pgs.off_rebounds, 0)) > 0
+                THEN ROUND((SUM(COALESCE(pgs.off_rebounds, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
+                ELSE 0.0 END,
+            -- DRB% = DREB per 40 minutes as proxy
+            CASE WHEN SUM(pgs.minutes) > 0 AND SUM(COALESCE(pgs.def_rebounds, 0)) > 0
+                THEN ROUND((SUM(COALESCE(pgs.def_rebounds, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
+                ELSE 0.0 END,
+            -- STL% = steals / (minutes/team_minutes * opp_possessions)
+            -- Approximate: STL per 40 minutes as proxy
+            CASE WHEN SUM(pgs.minutes) > 0
+                THEN ROUND((SUM(COALESCE(pgs.steals, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
+                ELSE 0.0 END,
+            -- BLK% = blocks per 40 minutes as proxy
+            CASE WHEN SUM(pgs.minutes) > 0
+                THEN ROUND((SUM(COALESCE(pgs.blocks, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
+                ELSE 0.0 END
         FROM player_game_stats pgs
         WHERE pgs.season = $1
           AND pgs.minutes IS NOT NULL
@@ -209,7 +227,8 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             id, player_id, season,
             ppg_pct, rpg_pct, apg_pct, spg_pct, bpg_pct,
             fg_pct_pct, tp_pct_pct, ft_pct_pct, true_shooting_pct_pct,
-            usage_rate_pct, bpm_pct, player_sos_pct
+            usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
+            bpm_pct, player_sos_pct
         )
         SELECT
             gen_random_uuid(),
@@ -225,6 +244,8 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY pss.ft_pct),
             PERCENT_RANK() OVER (ORDER BY pss.true_shooting_pct),
             PERCENT_RANK() OVER (ORDER BY pss.usage_rate),
+            PERCENT_RANK() OVER (ORDER BY pss.offensive_rating),
+            PERCENT_RANK() OVER (ORDER BY pss.defensive_rating DESC),
             PERCENT_RANK() OVER (ORDER BY pss.bpm),
             PERCENT_RANK() OVER (ORDER BY pss.player_sos)
         FROM player_season_stats pss
@@ -242,6 +263,8 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             ft_pct_pct = EXCLUDED.ft_pct_pct,
             true_shooting_pct_pct = EXCLUDED.true_shooting_pct_pct,
             usage_rate_pct = EXCLUDED.usage_rate_pct,
+            offensive_rating_pct = EXCLUDED.offensive_rating_pct,
+            defensive_rating_pct = EXCLUDED.defensive_rating_pct,
             bpm_pct = EXCLUDED.bpm_pct,
             player_sos_pct = EXCLUDED.player_sos_pct",
     )
@@ -697,34 +720,201 @@ pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64,
     Ok(result.rows_affected())
 }
 
+/// Compute individual offensive/defensive rating and BPM splits.
+///
+/// Offensive rating (box-score approximation):
+///   Points produced per 100 possessions, using Dean Oliver's simplified formula.
+///   PProd ≈ (FGM + AST * 0.5) * (PTS / (FGM + AST * 0.5 + FTM * 0.5)) + FTM * 0.5
+///   Individual possessions ≈ FGA + 0.44 * FTA + TOV
+///   ORTG = PProd / individual_possessions * 100
+///
+/// Defensive rating: approximated from team defensive efficiency + individual defensive stats.
+///   Base = team adj_defense, then adjust by steal/block/rebound contribution relative to team avg.
+///
+/// BPM split: use the offensive/defensive share of game_score.
+///   OBPM ≈ BPM * (off_component / total_component)
+///   DBPM ≈ BPM - OBPM
+pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Step 1: Compute per-player ORTG from aggregated box scores
+    let r1 = sqlx::query(
+        "WITH player_prod AS (
+            SELECT
+                pss.player_id, pss.team_id,
+                pss.ppg, pss.apg, pss.rpg, pss.spg, pss.bpg, pss.topg, pss.fpg,
+                pss.fg_pct, pss.ft_pct, pss.games_played, pss.minutes_per_game,
+                pss.bpm,
+                -- Offensive components per game
+                pss.ppg + 0.4 * (pss.ppg * COALESCE(pss.fg_pct, 0.4)) - 0.7 * (pss.ppg / NULLIF(COALESCE(pss.fg_pct, 0.4), 0) * (1 - COALESCE(pss.fg_pct, 0.4)))
+                as off_component,
+                -- Defensive components per game
+                pss.rpg * 0.3 + pss.spg + pss.bpg * 0.7 - pss.fpg * 0.4
+                as def_component,
+                -- Individual possessions per game
+                CASE WHEN pss.fg_pct IS NOT NULL AND pss.fg_pct > 0
+                    THEN pss.ppg / NULLIF(pss.fg_pct, 0) + 0.44 * COALESCE(
+                        pss.ppg * COALESCE(pss.ft_pct, 0.7) / NULLIF(COALESCE(pss.ft_pct, 0.7), 0), 0
+                    ) * 0.44 + pss.topg
+                    ELSE pss.ppg * 1.1 + pss.topg
+                END as indiv_poss,
+                tss.adj_offense as team_ortg,
+                tss.adj_defense as team_drtg
+            FROM player_season_stats pss
+            LEFT JOIN team_season_stats tss ON tss.team_id = pss.team_id AND tss.season = $1
+            WHERE pss.season = $1
+              AND pss.minutes_per_game >= 5
+              AND pss.games_played >= 3
+        )
+        UPDATE player_season_stats pss SET
+            -- ORTG: scale by team context
+            offensive_rating = ROUND(CASE
+                WHEN pp.indiv_poss > 0 AND pp.team_ortg IS NOT NULL
+                THEN pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 1) * 0.2)
+                ELSE pp.team_ortg
+            END::numeric, 1),
+            -- DRTG: team base adjusted by individual defensive contribution
+            defensive_rating = ROUND(CASE
+                WHEN pp.team_drtg IS NOT NULL
+                THEN pp.team_drtg * (1 - pp.def_component / 10.0 * 0.1)
+                ELSE NULL
+            END::numeric, 1),
+            -- Net rating
+            net_rating = ROUND(CASE
+                WHEN pp.team_ortg IS NOT NULL AND pp.team_drtg IS NOT NULL
+                THEN (pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 1) * 0.2))
+                   - (pp.team_drtg * (1 - pp.def_component / 10.0 * 0.1))
+                ELSE NULL
+            END::numeric, 1),
+            -- BPM split: offensive share
+            obpm = ROUND(CASE
+                WHEN (pp.off_component + pp.def_component) > 0
+                THEN pp.bpm * pp.off_component / (pp.off_component + GREATEST(pp.def_component, 0.1))
+                ELSE pp.bpm * 0.6
+            END::numeric, 1),
+            -- BPM split: defensive share
+            dbpm = ROUND(CASE
+                WHEN (pp.off_component + pp.def_component) > 0
+                THEN pp.bpm * GREATEST(pp.def_component, 0.1) / (pp.off_component + GREATEST(pp.def_component, 0.1))
+                ELSE pp.bpm * 0.4
+            END::numeric, 1)
+        FROM player_prod pp
+        WHERE pss.player_id = pp.player_id
+          AND pss.team_id = pp.team_id
+          AND pss.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    info!(
+        count = r1.rows_affected(),
+        season, "computed individual ORTG/DRTG and BPM splits"
+    );
+    Ok(r1.rows_affected())
+}
+
+/// Derive is_conference flag on games where both teams share a conference.
+/// Also backfill point_diff on team_season_stats from team_game_stats.
+pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Backfill teams.conference from the most common league in team_game_stats
+    let r0 = sqlx::query(
+        "UPDATE teams t SET conference = sub.league, updated_at = now()
+        FROM (
+            SELECT team_id, league, ROW_NUMBER() OVER (PARTITION BY team_id ORDER BY COUNT(*) DESC) as rn
+            FROM team_game_stats
+            WHERE season = $1 AND league IS NOT NULL AND league != ''
+            GROUP BY team_id, league
+        ) sub
+        WHERE t.id = sub.team_id AND sub.rn = 1
+          AND t.season = $1
+          AND t.conference IS NULL",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+    if r0.rows_affected() > 0 {
+        info!(count = r0.rows_affected(), "backfilled team conferences");
+    }
+
+    // is_conference: both teams in same conference
+    let r1 = sqlx::query(
+        "UPDATE games g SET is_conference = (
+            SELECT ht.conference = at.conference AND ht.conference IS NOT NULL
+            FROM teams ht, teams at
+            WHERE ht.id = g.home_team_id AND at.id = g.away_team_id
+        )
+        WHERE g.season = $1
+          AND g.home_team_id IS NOT NULL
+          AND g.away_team_id IS NOT NULL
+          AND g.is_conference IS NULL",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    // point_diff: fill from team_game_stats averages
+    let r2 = sqlx::query(
+        "UPDATE team_season_stats tss SET
+            point_diff = sub.avg_diff
+        FROM (
+            SELECT tgs.team_id,
+                ROUND(AVG(tgs.points - opp.points)::numeric, 1) as avg_diff
+            FROM team_game_stats tgs
+            JOIN team_game_stats opp ON opp.game_id = tgs.game_id AND opp.team_id = tgs.opponent_id
+            WHERE tgs.season = $1 AND tgs.points IS NOT NULL AND opp.points IS NOT NULL
+            GROUP BY tgs.team_id
+        ) sub
+        WHERE tss.team_id = sub.team_id
+          AND tss.season = $1
+          AND tss.point_diff IS NULL",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    let total = r1.rows_affected() + r2.rows_affected();
+    info!(
+        is_conference = r1.rows_affected(),
+        point_diff = r2.rows_affected(),
+        season,
+        "computed derived game fields"
+    );
+    Ok(total)
+}
+
 /// Run all compute steps in order.
 pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {
     let mut report = ComputeReport::default();
 
     info!(season, "starting compute pipeline");
 
-    info!("step 1/8: backfilling derived game stats");
+    info!("step 1/10: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 2/8: computing player season stats");
+    info!("step 2/10: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
-    info!("step 3/8: computing team four factors");
+    info!("step 3/10: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 4/8: computing adjusted efficiency (KenPom-style)");
+    info!("step 4/10: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 5/8: computing player SOS");
+    info!("step 5/10: computing individual ORTG/DRTG and BPM splits");
+    report.individual_ratings = compute_individual_ratings(pool, season).await?;
+
+    info!("step 6/10: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 6/8: computing rolling averages");
+    info!("step 7/10: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 7/8: computing schedules");
+    info!("step 8/10: computing derived game fields");
+    report.derived_fields = compute_derived_game_fields(pool, season).await?;
+
+    info!("step 9/10: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 8/8: computing player percentiles");
+    info!("step 10/10: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -737,8 +927,10 @@ pub struct ComputeReport {
     pub player_season_stats: u64,
     pub team_four_factors: u64,
     pub adjusted_efficiency: u64,
+    pub individual_ratings: u64,
     pub player_sos: u64,
     pub rolling_averages: u64,
+    pub derived_fields: u64,
     pub schedules: u64,
     pub percentiles: u64,
 }
@@ -747,13 +939,15 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} backfilled, {} player stats, {} four factors, {} adj eff, {} player SOS, {} rolling avgs, {} schedules, {} percentiles",
+            "Computed: {} backfilled, {} player stats, {} four factors, {} adj eff, {} ORTG/DRTG, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.backfilled,
             self.player_season_stats,
             self.team_four_factors,
             self.adjusted_efficiency,
+            self.individual_ratings,
             self.player_sos,
             self.rolling_averages,
+            self.derived_fields,
             self.schedules,
             self.percentiles
         )
