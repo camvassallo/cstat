@@ -39,14 +39,17 @@ def train_margin_model(X_train, y_train, X_test, y_test, feature_cols):
     params = {
         "objective": "regression",
         "metric": "mae",
-        "num_leaves": 31,
-        "learning_rate": 0.05,
-        "feature_fraction": 0.8,
-        "bagging_fraction": 0.8,
+        "num_leaves": 24,
+        "learning_rate": 0.03,
+        "feature_fraction": 0.7,
+        "bagging_fraction": 0.7,
         "bagging_freq": 5,
+        "min_child_samples": 30,
+        "lambda_l1": 0.1,
+        "lambda_l2": 1.0,
         "verbose": -1,
-        "n_estimators": 500,
-        "early_stopping_rounds": 50,
+        "n_estimators": 1000,
+        "early_stopping_rounds": 80,
     }
 
     model = lgb.LGBMRegressor(**params)
@@ -84,14 +87,17 @@ def train_win_model(X_train, y_train, X_test, y_test, feature_cols):
     params = {
         "objective": "binary",
         "metric": "binary_logloss",
-        "num_leaves": 31,
-        "learning_rate": 0.05,
-        "feature_fraction": 0.8,
-        "bagging_fraction": 0.8,
+        "num_leaves": 24,
+        "learning_rate": 0.03,
+        "feature_fraction": 0.7,
+        "bagging_fraction": 0.7,
         "bagging_freq": 5,
+        "min_child_samples": 30,
+        "lambda_l1": 0.1,
+        "lambda_l2": 1.0,
         "verbose": -1,
-        "n_estimators": 500,
-        "early_stopping_rounds": 50,
+        "n_estimators": 1000,
+        "early_stopping_rounds": 80,
     }
 
     model = lgb.LGBMClassifier(**params)
@@ -131,8 +137,10 @@ def cross_validate(X, y_margin, y_win, feature_cols, n_splits=5):
 
         # Margin model
         m_model = lgb.LGBMRegressor(
-            objective="regression", num_leaves=31, learning_rate=0.05,
-            n_estimators=300, verbose=-1,
+            objective="regression", num_leaves=24, learning_rate=0.03,
+            feature_fraction=0.7, bagging_fraction=0.7, bagging_freq=5,
+            min_child_samples=30, lambda_l1=0.1, lambda_l2=1.0,
+            n_estimators=500, verbose=-1,
         )
         m_model.fit(X_tr, y_margin.iloc[train_idx])
         m_preds = m_model.predict(X_te)
@@ -144,8 +152,10 @@ def cross_validate(X, y_margin, y_win, feature_cols, n_splits=5):
 
         # Win model
         w_model = lgb.LGBMClassifier(
-            objective="binary", num_leaves=31, learning_rate=0.05,
-            n_estimators=300, verbose=-1,
+            objective="binary", num_leaves=24, learning_rate=0.03,
+            feature_fraction=0.7, bagging_fraction=0.7, bagging_freq=5,
+            min_child_samples=30, lambda_l1=0.1, lambda_l2=1.0,
+            n_estimators=500, verbose=-1,
         )
         w_model.fit(X_tr, y_win.iloc[train_idx])
         w_probs = w_model.predict_proba(X_te)[:, 1]

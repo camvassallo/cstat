@@ -23,7 +23,14 @@ Thumbs.db
 node_modules/
 dist/
 
-# ML models (future)
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# ML models
 *.onnx
+*.lgb
 *.pkl
 *.joblib
+training/models/

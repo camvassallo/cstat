@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 
 import lightgbm as lgb
+import numpy as np
 import onnxmltools
-from onnxconverter_common import FloatTensorType
+from onnxmltools.convert.common.data_types import FloatTensorType
 
 MODEL_DIR = Path(__file__).parent / "models"
 
@@ -17,10 +18,13 @@ def export_model(lgb_path: str, onnx_path: str, n_features: int, is_classifier: 
     booster = lgb.Booster(model_file=lgb_path)
 
     if is_classifier:
-        model = lgb.LGBMClassifier()
+        # Fit on tiny dummy data to initialize all internal attributes,
+        # then swap in the real booster
+        model = lgb.LGBMClassifier(n_estimators=2, verbose=-1)
+        dummy_X = np.zeros((4, n_features))
+        dummy_y = np.array([0, 1, 0, 1])
+        model.fit(dummy_X, dummy_y)
         model._Booster = booster
-        model._n_classes = 2
-        model.fitted_ = True
         model._n_features = n_features
     else:
         model = lgb.LGBMRegressor()
