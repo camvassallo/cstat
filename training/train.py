@@ -12,7 +12,6 @@ Evaluation:
 """
 
 import json
-import sys
 from pathlib import Path
 
 import lightgbm as lgb

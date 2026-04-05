@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 
 import lightgbm as lgb
-import numpy as np
 import onnxmltools
-from onnxmltools.convert.lightgbm.operator_converters.LightGbm import convert_lightgbm
 from onnxconverter_common import FloatTensorType
 
 MODEL_DIR = Path(__file__).parent / "models"
