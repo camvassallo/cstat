@@ -101,17 +101,31 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ---
 
-## Phase 3: ML — Player Impact & Game Prediction
+## Phase 3: ML — Player Impact & Game Prediction ← CURRENT
 > Train player-level models, compose into game predictions
 
-- [ ] Python training pipeline for player impact model
-- [ ] Feature engineering: player stats + SOS + opponent quality → impact score
-- [ ] Game outcome model: compose roster impacts + home/away/neutral → predicted score & win probability
-- [ ] Spread prediction model
-- [ ] Export trained models to ONNX format
+- [x] Python training pipeline (LightGBM, scikit-learn, ONNX export)
+- [x] Feature engineering: 49 diff features from team efficiency, roster aggregates, rolling form, power metrics
+  - Team-level: adj offense/defense/margin, four factors, ELO, point diff, pythagorean win%, road win%, SOS
+  - Roster-level: minutes-weighted PPG, RPG, APG, BPM, OBPM/DBPM, ORTG/DRTG, rate stats (AST%, TOV%, STL%, BLK%)
+  - Form: rolling game score, rolling TS%, PPG trend, game score trend
+  - Context: venue, conference matchup, win percentage diff
+- [x] Game outcome model: margin regression + win probability classification
+- [x] Backtest against 2025-2026 results (chronological 80/20 split)
+  - Margin MAE: 8.48 pts | Win accuracy: 70.5%
+  - Win model accuracy: 71.6% | AUC: 0.772
+- [x] 5-fold cross-validation: margin MAE 8.71, win accuracy 74.1%, AUC 0.808
+- [x] Export trained models to ONNX format (31 → 49 features)
+- [x] Tuned hyperparameters: lower learning rate, L1/L2 regularization, fewer leaves
+- [ ] **Point-in-time features**: fix data leakage — current model uses full-season stats to predict mid-season games
 - [ ] Rust inference engine via `ort` crate
-- [ ] Backtest against 2025-2026 results
 - [ ] Model accuracy tracking and evaluation framework
+
+### Known Model Limitations
+- **Data leakage**: Features use full-season aggregates (`team_season_stats`, `player_season_stats`) to predict games that occurred during the season. Next step is point-in-time features computed from prior games only.
+- **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
+- **Single season**: Only 5,220 games from 2025-2026. More seasons would improve generalization.
+- **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach
 Each player gets:
