@@ -105,17 +105,144 @@ impl Predictor {
         drop(margin_outputs);
         drop(margin_session);
 
-        // Win model: outputs [label, probabilities]
+        // Win model: outputs [label (int64), probabilities (float32, shape [1, 2])]
         let win_input = TensorRef::from_array_view((shape, features.as_slice()))?;
         let mut win_session = self.win_session.lock().unwrap();
         let win_outputs = win_session.run(ort::inputs![win_input])?;
-        let (_, probs) = win_outputs[1].try_extract_tensor::<f64>()?;
+        let (_, probs) = win_outputs[1].try_extract_tensor::<f32>()?;
         // Index 1 = probability of class 1 (home win)
-        let home_win_probability = if probs.len() >= 2 { probs[1] } else { probs[0] };
+        let home_win_probability = if probs.len() >= 2 {
+            probs[1] as f64
+        } else {
+            probs[0] as f64
+        };
 
         Ok(Prediction {
             predicted_margin,
             home_win_probability,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn model_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../training/models")
+    }
+
+    #[test]
+    fn feature_names_match_model_meta() {
+        let meta_path = model_dir().join("model_meta.json");
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+
+        let meta_features: Vec<String> = meta["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        assert_eq!(meta_features.len(), NUM_FEATURES);
+        for (i, (expected, actual)) in meta_features.iter().zip(FEATURE_NAMES.iter()).enumerate() {
+            assert_eq!(expected, actual, "feature mismatch at index {i}");
+        }
+    }
+
+    #[test]
+    fn load_margin_model_and_predict_zeros() {
+        let dir = model_dir();
+        let path = dir.join("margin_model.onnx");
+        if !path.exists() {
+            eprintln!("skipping: ONNX model not found at {}", path.display());
+            return;
+        }
+
+        let mut session = Session::builder()
+            .unwrap()
+            .with_intra_threads(1)
+            .unwrap()
+            .commit_from_file(&path)
+            .unwrap();
+
+        let features = [0.0_f32; NUM_FEATURES];
+        let shape = [1_usize, NUM_FEATURES];
+        let input = ort::value::TensorRef::from_array_view((shape, features.as_slice())).unwrap();
+        let outputs = session.run(ort::inputs![input]).unwrap();
+        let (_, data) = outputs[0].try_extract_tensor::<f32>().unwrap();
+        let margin = data[0];
+
+        eprintln!("margin model zero-feature prediction: {margin}");
+        assert!(
+            margin.abs() < 20.0,
+            "margin {margin} unreasonably large for zero features"
+        );
+    }
+
+    #[test]
+    fn load_models_and_predict_zeros() {
+        let dir = model_dir();
+        if !dir.join("margin_model.onnx").exists() {
+            eprintln!("skipping: ONNX models not found at {}", dir.display());
+            return;
+        }
+
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        let features = [0.0_f32; NUM_FEATURES];
+        let pred = predictor.predict(&features).expect("prediction failed");
+
+        // With all-zero features (neutral matchup), margin should be near zero
+        // and win probability near 0.5
+        assert!(
+            pred.predicted_margin.abs() < 20.0,
+            "margin {} is unreasonably large for zero features",
+            pred.predicted_margin
+        );
+        assert!(
+            (0.0..=1.0).contains(&pred.home_win_probability),
+            "win probability {} out of range",
+            pred.home_win_probability
+        );
+    }
+
+    #[test]
+    fn predict_responds_to_feature_direction() {
+        let dir = model_dir();
+        if !dir.join("margin_model.onnx").exists() {
+            return;
+        }
+
+        let predictor = Predictor::load(&dir).unwrap();
+
+        // Strong home team: positive efficiency margin, high ELO diff
+        let mut home_favored = [0.0_f32; NUM_FEATURES];
+        home_favored[0] = 1.0; // venue = home
+        home_favored[5] = 15.0; // diff_adj_efficiency_margin
+        home_favored[16] = 100.0; // diff_elo
+
+        // Strong away team: flip the signs
+        let mut away_favored = [0.0_f32; NUM_FEATURES];
+        away_favored[0] = 1.0;
+        away_favored[5] = -15.0;
+        away_favored[16] = -100.0;
+
+        let pred_home = predictor.predict(&home_favored).unwrap();
+        let pred_away = predictor.predict(&away_favored).unwrap();
+
+        assert!(
+            pred_home.predicted_margin > pred_away.predicted_margin,
+            "home-favored margin ({}) should exceed away-favored ({})",
+            pred_home.predicted_margin,
+            pred_away.predicted_margin
+        );
+        assert!(
+            pred_home.home_win_probability > pred_away.home_win_probability,
+            "home-favored win prob ({}) should exceed away-favored ({})",
+            pred_home.home_win_probability,
+            pred_away.home_win_probability
+        );
     }
 }
