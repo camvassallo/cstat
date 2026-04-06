@@ -1,0 +1,319 @@
+{
+  "timestamp": "20260406_182321",
+  "seasons": [
+    2025,
+    2026
+  ],
+  "n_features": 47,
+  "features": [
+    "venue",
+    "is_conference_game",
+    "diff_win_pct",
+    "diff_adj_offense",
+    "diff_adj_defense",
+    "diff_adj_efficiency_margin",
+    "diff_effective_fg_pct",
+    "diff_turnover_pct",
+    "diff_off_rebound_pct",
+    "diff_ft_rate",
+    "diff_opp_effective_fg_pct",
+    "diff_opp_turnover_pct",
+    "diff_def_rebound_pct",
+    "diff_opp_ft_rate",
+    "diff_adj_tempo",
+    "diff_sos",
+    "diff_elo",
+    "diff_point_diff",
+    "diff_pythag_win_pct",
+    "diff_road_win_pct",
+    "diff_roster_size",
+    "diff_w_ppg",
+    "diff_w_rpg",
+    "diff_w_apg",
+    "diff_w_spg",
+    "diff_w_bpg",
+    "diff_w_topg",
+    "diff_w_ts_pct",
+    "diff_w_efg_pct",
+    "diff_w_usage",
+    "diff_w_bpm",
+    "diff_w_player_sos",
+    "diff_w_obpm",
+    "diff_w_dbpm",
+    "diff_w_ortg",
+    "diff_w_ast_pct",
+    "diff_w_tov_pct",
+    "diff_w_stl_pct",
+    "diff_w_blk_pct",
+    "diff_star_ppg",
+    "diff_star_bpm",
+    "diff_star_ortg",
+    "diff_minutes_stddev",
+    "diff_w_rolling_gs",
+    "diff_w_rolling_ts",
+    "diff_w_ppg_trend",
+    "diff_w_gs_trend"
+  ],
+  "metrics": {
+    "margin_mae": 8.984977507845816,
+    "margin_rmse": 11.34153107353303,
+    "margin_r2": 0.2593619890361558,
+    "margin_median_ae": 7.396427193882214,
+    "margin_p75_ae": 12.702029173377005,
+    "margin_p90_ae": 18.40888685772833,
+    "margin_p95_ae": 22.004049722732685,
+    "margin_win_accuracy": 0.6804320203303685,
+    "win_accuracy": 0.6855146124523507,
+    "win_log_loss": 0.5810334061587985,
+    "win_auc": 0.7359073359073358,
+    "train_games": 6294,
+    "test_games": 1574,
+    "train_date_range": [
+      "2024-11-17",
+      "2026-02-09"
+    ],
+    "test_date_range": [
+      "2026-02-09",
+      "2026-04-02"
+    ],
+    "margin_best_iter": 104,
+    "win_best_iter": 138,
+    "calibration_ece": 0.0338
+  },
+  "calibration": {
+    "bins": [
+      {
+        "bin": "0.0-0.1",
+        "count": 55,
+        "mean_predicted": 0.1308,
+        "actual_win_rate": 0.1636,
+        "abs_error": 0.0328
+      },
+      {
+        "bin": "0.1-0.2",
+        "count": 80,
+        "mean_predicted": 0.2125,
+        "actual_win_rate": 0.1875,
+        "abs_error": 0.025
+      },
+      {
+        "bin": "0.2-0.3",
+        "count": 72,
+        "mean_predicted": 0.3,
+        "actual_win_rate": 0.3333,
+        "abs_error": 0.0333
+      },
+      {
+        "bin": "0.3-0.4",
+        "count": 90,
+        "mean_predicted": 0.3904,
+        "actual_win_rate": 0.4,
+        "abs_error": 0.0096
+      },
+      {
+        "bin": "0.4-0.5",
+        "count": 142,
+        "mean_predicted": 0.4914,
+        "actual_win_rate": 0.4507,
+        "abs_error": 0.0406
+      },
+      {
+        "bin": "0.5-0.6",
+        "count": 285,
+        "mean_predicted": 0.5766,
+        "actual_win_rate": 0.5825,
+        "abs_error": 0.0058
+      },
+      {
+        "bin": "0.6-0.7",
+        "count": 272,
+        "mean_predicted": 0.6595,
+        "actual_win_rate": 0.6397,
+        "abs_error": 0.0198
+      },
+      {
+        "bin": "0.7-0.8",
+        "count": 218,
+        "mean_predicted": 0.7545,
+        "actual_win_rate": 0.6606,
+        "abs_error": 0.0939
+      },
+      {
+        "bin": "0.8-0.9",
+        "count": 224,
+        "mean_predicted": 0.8432,
+        "actual_win_rate": 0.808,
+        "abs_error": 0.0352
+      },
+      {
+        "bin": "0.9-1.0",
+        "count": 136,
+        "mean_predicted": 0.9337,
+        "actual_win_rate": 0.9706,
+        "abs_error": 0.0368
+      }
+    ],
+    "ece": 0.0338
+  },
+  "segments": {
+    "venue_home": {
+      "count": 1231,
+      "margin_mae": 9.06,
+      "win_accuracy": 0.69,
+      "margin_win_accuracy": 0.683,
+      "win_auc": 0.745
+    },
+    "venue_neutral": {
+      "count": 343,
+      "margin_mae": 8.72,
+      "win_accuracy": 0.671,
+      "margin_win_accuracy": 0.671,
+      "win_auc": 0.7
+    },
+    "matchup_conference": {
+      "count": 1436,
+      "margin_mae": 8.98,
+      "win_accuracy": 0.682,
+      "margin_win_accuracy": 0.678,
+      "win_auc": 0.727
+    },
+    "matchup_non_conference": {
+      "count": 138,
+      "margin_mae": 9.08,
+      "win_accuracy": 0.717,
+      "margin_win_accuracy": 0.71,
+      "win_auc": 0.838
+    },
+    "spread_big_favorite_10pt": {
+      "count": 273,
+      "margin_mae": 9.42,
+      "win_accuracy": 0.89,
+      "margin_win_accuracy": 0.89,
+      "win_auc": 0.904
+    },
+    "spread_lean_under5pt": {
+      "count": 812,
+      "margin_mae": 9.08,
+      "win_accuracy": 0.585,
+      "margin_win_accuracy": 0.575,
+      "win_auc": 0.599
+    },
+    "spread_moderate_5_10pt": {
+      "count": 489,
+      "margin_mae": 8.59,
+      "win_accuracy": 0.738,
+      "margin_win_accuracy": 0.738,
+      "win_auc": 0.745
+    },
+    "actual_blowout_15pt": {
+      "count": 409,
+      "margin_mae": 15.88,
+      "win_accuracy": 0.829,
+      "margin_win_accuracy": 0.829,
+      "win_auc": 0.889
+    },
+    "actual_close_5pt": {
+      "count": 501,
+      "margin_mae": 5.33,
+      "win_accuracy": 0.557,
+      "margin_win_accuracy": 0.545,
+      "win_auc": 0.59
+    },
+    "season_first_half": {
+      "count": 820,
+      "margin_mae": 8.76,
+      "win_accuracy": 0.69,
+      "margin_win_accuracy": 0.678,
+      "win_auc": 0.739
+    },
+    "season_second_half": {
+      "count": 754,
+      "margin_mae": 9.23,
+      "win_accuracy": 0.68,
+      "margin_win_accuracy": 0.683,
+      "win_auc": 0.734
+    }
+  },
+  "feature_importance": [
+    {
+      "feature": "diff_adj_efficiency_margin",
+      "importance": 267
+    },
+    {
+      "feature": "diff_elo",
+      "importance": 137
+    },
+    {
+      "feature": "diff_def_rebound_pct",
+      "importance": 86
+    },
+    {
+      "feature": "diff_adj_offense",
+      "importance": 84
+    },
+    {
+      "feature": "diff_opp_turnover_pct",
+      "importance": 79
+    },
+    {
+      "feature": "diff_star_ortg",
+      "importance": 76
+    },
+    {
+      "feature": "diff_adj_defense",
+      "importance": 75
+    },
+    {
+      "feature": "diff_off_rebound_pct",
+      "importance": 73
+    },
+    {
+      "feature": "diff_w_ppg_trend",
+      "importance": 71
+    },
+    {
+      "feature": "diff_w_topg",
+      "importance": 63
+    },
+    {
+      "feature": "diff_minutes_stddev",
+      "importance": 60
+    },
+    {
+      "feature": "diff_win_pct",
+      "importance": 59
+    },
+    {
+      "feature": "diff_turnover_pct",
+      "importance": 55
+    },
+    {
+      "feature": "diff_w_apg",
+      "importance": 52
+    },
+    {
+      "feature": "diff_opp_ft_rate",
+      "importance": 50
+    },
+    {
+      "feature": "diff_w_tov_pct",
+      "importance": 50
+    },
+    {
+      "feature": "diff_w_stl_pct",
+      "importance": 50
+    },
+    {
+      "feature": "diff_effective_fg_pct",
+      "importance": 49
+    },
+    {
+      "feature": "diff_road_win_pct",
+      "importance": 45
+    },
+    {
+      "feature": "diff_w_player_sos",
+      "importance": 45
+    }
+  ]
+}
