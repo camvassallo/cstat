@@ -101,17 +101,50 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ---
 
-## Phase 3: ML — Player Impact & Game Prediction
+## Phase 3: ML — Player Impact & Game Prediction ← CURRENT
 > Train player-level models, compose into game predictions
 
-- [ ] Python training pipeline for player impact model
-- [ ] Feature engineering: player stats + SOS + opponent quality → impact score
-- [ ] Game outcome model: compose roster impacts + home/away/neutral → predicted score & win probability
-- [ ] Spread prediction model
-- [ ] Export trained models to ONNX format
+- [x] Python training pipeline (LightGBM, scikit-learn, ONNX export)
+- [x] Feature engineering: 47 diff features from team efficiency, roster aggregates, rolling form, power metrics
+  - Team-level: adj offense/defense/margin, four factors, ELO, point diff, pythagorean win%, road win%, SOS
+  - Roster-level: minutes-weighted PPG, RPG, APG, BPM, OBPM/DBPM, ORTG, usage, rate stats (AST%, TOV%, STL%, BLK%)
+  - Form: rolling game score, rolling TS%, PPG trend, game score trend
+  - Context: venue, conference matchup, win percentage diff
+- [x] Game outcome model: margin regression + win probability classification
+- [x] Backtest against 2025-2026 results (chronological 80/20 split)
+  - Pre-PIT (leaked): margin MAE 8.48 pts, win accuracy 70.5%, AUC 0.772
+  - Post-PIT (honest): margin MAE 9.18 pts, win accuracy 68.3%, AUC 0.709
+- [x] 5-fold cross-validation
+  - Pre-PIT (leaked): margin MAE 8.71, win accuracy 74.1%, AUC 0.808
+  - Post-PIT (honest): margin MAE 9.46, win accuracy 69.2%, AUC 0.736
+- [x] Export trained models to ONNX format (31 → 49 features)
+- [x] Tuned hyperparameters: lower learning rate, L1/L2 regularization, fewer leaves
+- [x] **Point-in-time features**: eliminated data leakage — all features now computed using only prior-game data
+  - KenPom-style adjusted efficiency recomputed per game-date snapshot (iterative regression on all prior games)
+  - Incremental ELO with margin-of-victory multiplier (FiveThirtyEight style), updated game-by-game
+  - Expanding-window cumulative averages for team four factors, roster aggregates, and player advanced stats
+  - Point-in-time SOS derived from adjusted efficiency snapshots
+  - Rolling form from per-game rolling columns (shifted to exclude current game)
+  - Early-season games with insufficient data naturally excluded via NaN filtering
+- [x] Retrained models with point-in-time features (honest backtest, no leakage)
+  - 4,331 games with complete features (865 early-season games dropped due to insufficient prior data)
+  - Backtest (chronological 80/20): margin MAE 9.18 pts, win accuracy 68.3%, AUC 0.709
+  - 5-fold CV: margin MAE 9.46, win accuracy 69.2%, AUC 0.736
+  - Top features: adj_efficiency_margin (dominant), ELO, minutes_stddev (depth), def_rebound_pct, adj_defense
+  - Model early-stops at 49-66 iterations — data-starved with single season
 - [ ] Rust inference engine via `ort` crate
-- [ ] Backtest against 2025-2026 results
 - [ ] Model accuracy tracking and evaluation framework
+
+### Model Improvement Ideas
+- **Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available
+- **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
+- **Add `games_played` feature**: lets model know how much data it has on a team (early-season uncertainty)
+- **Conference strength feature**: average adj_efficiency_margin of conference, captures tier gaps beyond SOS
+
+### Known Model Limitations
+- **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
+- **Single season**: Only 4,331 usable games from 2025-2026 (after early-season NaN filtering). More seasons would improve generalization significantly — model early-stops due to limited data.
+- **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach
 Each player gets:
