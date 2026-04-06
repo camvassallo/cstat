@@ -154,7 +154,12 @@ impl NatStatClient {
 
             if status.as_u16() == 429 || status.is_server_error() {
                 let body = response.text().await.unwrap_or_default();
-                warn!(endpoint, attempt, status = status.as_u16(), "retryable HTTP error");
+                warn!(
+                    endpoint,
+                    attempt,
+                    status = status.as_u16(),
+                    "retryable HTTP error"
+                );
                 last_err = Some(NatStatError::HttpStatus {
                     status: status.as_u16(),
                     body,
