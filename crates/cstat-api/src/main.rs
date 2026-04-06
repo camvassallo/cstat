@@ -6,6 +6,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use chrono::Datelike;
 use cstat_core::{Database, Predictor};
 use cstat_ingest::NatStatClient;
 use serde::Deserialize;
@@ -111,7 +112,16 @@ async fn predict(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PredictParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let season = params.season.unwrap_or(2026);
+    // College basketball season spans two calendar years; games from Nov–Apr
+    // belong to the season named after the later year (e.g. Nov 2025 → season 2026).
+    let current_year = chrono::Utc::now().naive_utc().date().year();
+    let current_month = chrono::Utc::now().naive_utc().date().month();
+    let default_season = if current_month >= 11 {
+        current_year + 1
+    } else {
+        current_year
+    };
+    let season = params.season.unwrap_or(default_season);
 
     // Look up teams by name (case-insensitive) or UUID
     let home_team = find_team(&state.db.pool, &params.home, season)
@@ -211,9 +221,9 @@ async fn find_team(
         return Ok(team);
     }
 
-    // Prefix match (e.g. "Michigan" -> "Michigan Wolverines")
+    // Prefix match, preferring the shortest name (e.g. "Kansas" -> "Kansas Jayhawks" not "Kansas State Wildcats")
     sqlx::query_as::<_, TeamLookup>(
-        "SELECT id, name, conference FROM teams WHERE LOWER(name) LIKE LOWER($1) || '%' AND season = $2 LIMIT 1",
+        "SELECT id, name, conference FROM teams WHERE LOWER(name) LIKE LOWER($1) || '%' AND season = $2 ORDER BY LENGTH(name) LIMIT 1",
     )
     .bind(query)
     .bind(season)

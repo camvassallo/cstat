@@ -40,7 +40,7 @@ Three-crate Rust workspace:
 
 - **cstat-core** — Shared types, DB models (`models/`), query layer (`db.rs`), and compute pipeline (`compute.rs`). The `Database` struct wraps `PgPool` and handles migrations via SQLx.
 - **cstat-ingest** — NatStat API client (`client.rs`), response cache (`cache.rs`), token-bucket rate limiter (`rate_limiter.rs`), and ingestion pipeline (`ingest/`). CLI binary at `src/bin/ingest.rs` with subcommands: `season`, `teams`, `players`, `games`, `perfs`, `update`, `compute`, `status`, `clean-cache`, `explore`.
-- **cstat-api** — Axum HTTP server. `AppState` holds `Database` + `NatStatClient`. Routes under `/api/`.
+- **cstat-api** — Axum HTTP server. `AppState` holds `Database` + `NatStatClient` + `Predictor`. Routes under `/api/`.
 
 Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) → cstat-api → frontend/ML**
 
@@ -59,13 +59,20 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 Postgres with SQLx. Migrations in `/migrations/` (6 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `api_cache`.
 
+## ML Inference
+
+ONNX models are loaded at API startup via the `ort` crate (ONNX Runtime):
+- `Predictor` in `cstat-core/src/inference.rs` — loads `margin_model.onnx` + `win_model.onnx`, runs inference
+- `features.rs` — builds 47-feature diff vector from DB (team stats, roster aggregates, rolling form)
+- `GET /api/predict?home=Duke+Blue+Devils&away=North+Carolina+Tar+Heels&neutral=false` — returns predicted margin and win probability
+- Models live in `training/models/`; set `MODEL_DIR` env var to override path
+
 ## ML Training
 
 Python pipeline in `/training/`:
 - LightGBM models for margin prediction (regression) and win probability (classification)
 - 47 point-in-time diff-features from team/roster/form/context (`features.py`)
-- Exports to ONNX format in `training/models/` (target_opset=15)
-- Rust inference via `ort` crate is planned but not yet implemented
+- Exports to ONNX format in `training/models/` (target_opset=15); `export_onnx.py` removes ZipMap for ort compatibility
 
 ## NatStat API
 
