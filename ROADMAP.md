@@ -105,9 +105,10 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 > Train player-level models, compose into game predictions
 
 - [x] Python training pipeline (LightGBM, scikit-learn, ONNX export)
-- [x] Feature engineering: 47 diff features from team efficiency, roster aggregates, rolling form, power metrics
+<<<<<<< HEAD
+- [x] Feature engineering: 49 diff features from team efficiency, roster aggregates, rolling form, power metrics
   - Team-level: adj offense/defense/margin, four factors, ELO, point diff, pythagorean win%, road win%, SOS
-  - Roster-level: minutes-weighted PPG, RPG, APG, BPM, OBPM/DBPM, ORTG, usage, rate stats (AST%, TOV%, STL%, BLK%)
+  - Roster-level: minutes-weighted PPG, RPG, APG, BPM, OBPM/DBPM, ORTG/DRTG, rate stats (AST%, TOV%, STL%, BLK%)
   - Form: rolling game score, rolling TS%, PPG trend, game score trend
   - Context: venue, conference matchup, win percentage diff
 - [x] Game outcome model: margin regression + win probability classification
