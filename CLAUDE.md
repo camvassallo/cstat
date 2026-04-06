@@ -63,7 +63,7 @@ Postgres with SQLx. Migrations in `/migrations/` (6 files). Key tables: `teams`,
 
 Python pipeline in `/training/`:
 - LightGBM models for margin prediction (regression) and win probability (classification)
-- 49 diff-features from team/roster/form/context (`features.py`)
+- 47 point-in-time diff-features from team/roster/form/context (`features.py`)
 - Exports to ONNX format in `training/models/` (target_opset=15)
 - Rust inference via `ort` crate is planned but not yet implemented
 
