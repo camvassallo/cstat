@@ -170,7 +170,7 @@ async fn predict(
     Ok(Json(json!({
         "home_team": home_team.name,
         "away_team": away_team.name,
-        "predicted_margin": (prediction.predicted_margin * 10.0).round() / 10.0,
+        "predicted_margin": (prediction.predicted_margin as f64 * 10.0).round() / 10.0,
         "home_win_probability": (prediction.home_win_probability * 1000.0).round() / 1000.0,
         "predicted_winner": predicted_winner,
     })))
@@ -199,9 +199,21 @@ async fn find_team(
         .await;
     }
 
-    // Case-insensitive name match
-    sqlx::query_as::<_, TeamLookup>(
+    // Case-insensitive exact match first, then prefix match
+    if let Ok(team) = sqlx::query_as::<_, TeamLookup>(
         "SELECT id, name, conference FROM teams WHERE LOWER(name) = LOWER($1) AND season = $2",
+    )
+    .bind(query)
+    .bind(season)
+    .fetch_one(pool)
+    .await
+    {
+        return Ok(team);
+    }
+
+    // Prefix match (e.g. "Michigan" -> "Michigan Wolverines")
+    sqlx::query_as::<_, TeamLookup>(
+        "SELECT id, name, conference FROM teams WHERE LOWER(name) LIKE LOWER($1) || '%' AND season = $2 LIMIT 1",
     )
     .bind(query)
     .bind(season)
