@@ -3,6 +3,7 @@ use crate::rate_limiter::RateLimiter;
 use reqwest::Client;
 use serde_json::Value;
 use sqlx::PgPool;
+use std::time::Duration;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -98,8 +99,12 @@ impl NatStatClient {
         )
     }
 
+    /// Maximum number of retries for transient errors (429, 5xx).
+    const MAX_RETRIES: u32 = 5;
+
     /// Make a single cached, rate-limited GET request to NatStat.
     ///
+    /// Retries with exponential backoff on 429 (rate limit) and 5xx (server) errors.
     /// Returns the full JSON response body.
     pub async fn get(
         &self,
@@ -116,49 +121,91 @@ impl NatStatClient {
             return Ok(cached);
         }
 
-        // Rate limit + concurrency control
-        let available = self.rate_limiter.available().await;
-        if available < 50 {
-            warn!(available, "rate limit tokens running low");
-        }
-        self.rate_limiter.acquire().await;
-
         let url = self.build_url(endpoint, range, offset);
-        info!(endpoint, "fetching from NatStat API");
 
-        let response = self.http.get(&url).send().await?;
-        let status = response.status();
+        let mut last_err = None;
+        for attempt in 0..=Self::MAX_RETRIES {
+            // Rate limit + concurrency control
+            let available = self.rate_limiter.available().await;
+            if available < 50 {
+                warn!(available, "rate limit tokens running low");
+            }
+            self.rate_limiter.acquire().await;
 
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(NatStatError::HttpStatus {
-                status: status.as_u16(),
-                body,
-            });
+            if attempt > 0 {
+                info!(endpoint, attempt, "retrying request");
+            } else {
+                info!(endpoint, "fetching from NatStat API");
+            }
+
+            let response = match self.http.get(&url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    // Network errors are retryable
+                    warn!(endpoint, attempt, error = %e, "request failed");
+                    last_err = Some(NatStatError::Http(e));
+                    let backoff = Duration::from_secs(2u64.pow(attempt));
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+            };
+
+            let status = response.status();
+
+            if status.as_u16() == 429 || status.is_server_error() {
+                let body = response.text().await.unwrap_or_default();
+                warn!(
+                    endpoint,
+                    attempt,
+                    status = status.as_u16(),
+                    "retryable HTTP error"
+                );
+                last_err = Some(NatStatError::HttpStatus {
+                    status: status.as_u16(),
+                    body,
+                });
+                let backoff = Duration::from_secs(2u64.pow(attempt));
+                tokio::time::sleep(backoff).await;
+                continue;
+            }
+
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(NatStatError::HttpStatus {
+                    status: status.as_u16(),
+                    body,
+                });
+            }
+
+            let body: Value = response.json().await?;
+
+            // Check for API-level errors in response
+            if let Some(error) = body.get("error").and_then(|e| e.as_str())
+                && !error.is_empty()
+            {
+                return Err(NatStatError::ApiError {
+                    code: error.to_string(),
+                    message: body
+                        .get("meta")
+                        .and_then(|m| m.get("description"))
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                });
+            }
+
+            // Cache the successful response
+            let ttl = ttl.unwrap_or(self.default_ttl);
+            self.cache.set(&cache_key, &cache_key, &body, ttl).await?;
+
+            return Ok(body);
         }
 
-        let body: Value = response.json().await?;
-
-        // Check for API-level errors in response
-        if let Some(error) = body.get("error").and_then(|e| e.as_str())
-            && !error.is_empty()
-        {
-            return Err(NatStatError::ApiError {
-                code: error.to_string(),
-                message: body
-                    .get("meta")
-                    .and_then(|m| m.get("description"))
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            });
-        }
-
-        // Cache the successful response
-        let ttl = ttl.unwrap_or(self.default_ttl);
-        self.cache.set(&cache_key, &cache_key, &body, ttl).await?;
-
-        Ok(body)
+        // All retries exhausted
+        Err(last_err.unwrap_or(NatStatError::HttpStatus {
+            status: 0,
+            body: "all retries exhausted".to_string(),
+        }))
     }
 
     /// Fetch all pages for an endpoint, returning collected results.

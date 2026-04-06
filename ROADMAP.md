@@ -105,9 +105,9 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 > Train player-level models, compose into game predictions
 
 - [x] Python training pipeline (LightGBM, scikit-learn, ONNX export)
-- [x] Feature engineering: 47 diff features from team efficiency, roster aggregates, rolling form, power metrics
+- [x] Feature engineering: 47 point-in-time diff features from team efficiency, roster aggregates, rolling form, power metrics
   - Team-level: adj offense/defense/margin, four factors, ELO, point diff, pythagorean win%, road win%, SOS
-  - Roster-level: minutes-weighted PPG, RPG, APG, BPM, OBPM/DBPM, ORTG, usage, rate stats (AST%, TOV%, STL%, BLK%)
+  - Roster-level: minutes-weighted PPG, RPG, APG, BPM, OBPM/DBPM, ORTG, rate stats (AST%, TOV%, STL%, BLK%)
   - Form: rolling game score, rolling TS%, PPG trend, game score trend
   - Context: venue, conference matchup, win percentage diff
 - [x] Game outcome model: margin regression + win probability classification
@@ -136,14 +136,14 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 - [ ] Model accuracy tracking and evaluation framework
 
 ### Model Improvement Ideas
-- **Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available
+- ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
 - **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
 - **Add `games_played` feature**: lets model know how much data it has on a team (early-season uncertainty)
 - **Conference strength feature**: average adj_efficiency_margin of conference, captures tier gaps beyond SOS
 
 ### Known Model Limitations
 - **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
-- **Single season**: Only 4,331 usable games from 2025-2026 (after early-season NaN filtering). More seasons would improve generalization significantly — model early-stops due to limited data.
+- **Limited data**: Training on 2025+2026 seasons. More historical seasons would further improve generalization.
 - **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach

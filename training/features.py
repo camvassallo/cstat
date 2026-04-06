@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from db import get_engine
 
-SEASON = 2026
+SEASONS = [2025, 2026]
 
 # ELO parameters
 ELO_K = 20.0
@@ -30,16 +30,17 @@ ELO_INIT = 1500.0
 # Data loaders — pull raw game-level data
 # ---------------------------------------------------------------------------
 
-def load_games(engine) -> pd.DataFrame:
+def load_games(engine, seasons=None) -> pd.DataFrame:
     """Load all completed games with scores and team IDs."""
+    seasons = seasons or SEASONS
     return pd.read_sql(
         """
-        SELECT g.id as game_id, g.game_date,
+        SELECT g.id as game_id, g.game_date, g.season,
                g.home_team_id, g.away_team_id,
                g.home_score, g.away_score,
                g.is_neutral_site, g.is_conference
         FROM games g
-        WHERE g.season = %(season)s
+        WHERE g.season = ANY(%(seasons)s)
           AND g.home_score IS NOT NULL
           AND g.away_score IS NOT NULL
           AND g.home_team_id IS NOT NULL
@@ -47,12 +48,13 @@ def load_games(engine) -> pd.DataFrame:
         ORDER BY g.game_date, g.id
         """,
         engine,
-        params={"season": SEASON},
+        params={"seasons": seasons},
     )
 
 
-def load_team_game_stats(engine) -> pd.DataFrame:
+def load_team_game_stats(engine, seasons=None) -> pd.DataFrame:
     """Load per-team per-game box scores."""
+    seasons = seasons or SEASONS
     return pd.read_sql(
         """
         SELECT tgs.team_id, tgs.game_id, tgs.game_date, tgs.opponent_id,
@@ -62,18 +64,19 @@ def load_team_game_stats(engine) -> pd.DataFrame:
                tgs.off_rebounds, tgs.def_rebounds, tgs.total_rebounds,
                tgs.assists, tgs.steals, tgs.blocks, tgs.turnovers, tgs.fouls
         FROM team_game_stats tgs
-        WHERE tgs.season = %(season)s
+        WHERE tgs.season = ANY(%(seasons)s)
           AND tgs.points IS NOT NULL
           AND tgs.fga IS NOT NULL
         ORDER BY tgs.game_date, tgs.game_id
         """,
         engine,
-        params={"season": SEASON},
+        params={"seasons": seasons},
     )
 
 
-def load_player_game_stats(engine) -> pd.DataFrame:
+def load_player_game_stats(engine, seasons=None) -> pd.DataFrame:
     """Load per-player per-game box scores with rolling averages."""
+    seasons = seasons or SEASONS
     return pd.read_sql(
         """
         SELECT pgs.player_id, pgs.team_id, pgs.game_id, pgs.game_date,
@@ -86,26 +89,27 @@ def load_player_game_stats(engine) -> pd.DataFrame:
                pgs.rolling_ppg, pgs.rolling_rpg, pgs.rolling_apg,
                pgs.rolling_fg_pct, pgs.rolling_ts_pct, pgs.rolling_game_score
         FROM player_game_stats pgs
-        WHERE pgs.season = %(season)s
+        WHERE pgs.season = ANY(%(seasons)s)
           AND pgs.minutes IS NOT NULL
           AND pgs.minutes > 0
         ORDER BY pgs.game_date, pgs.game_id
         """,
         engine,
-        params={"season": SEASON},
+        params={"seasons": seasons},
     )
 
 
-def load_team_conferences(engine) -> pd.DataFrame:
+def load_team_conferences(engine, seasons=None) -> pd.DataFrame:
     """Load team conferences."""
+    seasons = seasons or SEASONS
     return pd.read_sql(
         """
         SELECT id as team_id, conference
         FROM teams
-        WHERE season = %(season)s
+        WHERE season = ANY(%(seasons)s)
         """,
         engine,
-        params={"season": SEASON},
+        params={"seasons": seasons},
     )
 
 
@@ -605,23 +609,7 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
     # at that game's date (or the most recent snapshot before it)
     sorted_dates = sorted(adj_eff_snapshots.keys())
 
-    def get_opp_margin(game_date, opponent_id):
-        """Get opponent's adjusted margin from the most recent snapshot <= game_date."""
-        # Find the latest snapshot date <= game_date
-        snap_date = None
-        for d in sorted_dates:
-            if d <= game_date:
-                snap_date = d
-            else:
-                break
-        if snap_date is None:
-            return 0.0
-        snap = adj_eff_snapshots.get(snap_date, {})
-        opp = snap.get(opponent_id, {})
-        return opp.get("adj_efficiency_margin", 0.0)
-
-    # This is slow with iterrows; let's vectorize with a lookup dict
-    # Flatten snapshots to (date, team_id) -> margin
+    # Flatten snapshots to (date, team_id) -> margin for fast lookup
     flat_snap = {}
     for d in sorted_dates:
         for tid, vals in adj_eff_snapshots[d].items():
@@ -681,18 +669,19 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
 # Main feature matrix builder
 # ---------------------------------------------------------------------------
 
-def build_feature_matrix(engine) -> tuple[pd.DataFrame, list[str]]:
+def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]:
     """
     Build the full feature matrix with point-in-time features.
 
     Each row = one game. Features are differences (home - away) of team/roster stats,
     plus a venue indicator. All features use only data from before the game date.
     """
-    print("Loading raw data...")
-    games = load_games(engine)
-    tgs = load_team_game_stats(engine)
-    pgs = load_player_game_stats(engine)
-    conferences = load_team_conferences(engine)
+    seasons = seasons or SEASONS
+    print(f"Loading raw data for seasons {seasons}...")
+    games = load_games(engine, seasons)
+    tgs = load_team_game_stats(engine, seasons)
+    pgs = load_player_game_stats(engine, seasons)
+    conferences = load_team_conferences(engine, seasons)
 
     print(f"  {len(games)} games, {len(tgs)} team-game rows, {len(pgs)} player-game rows")
 

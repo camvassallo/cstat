@@ -127,7 +127,7 @@ async fn main() -> Result<()> {
     db.migrate().await?;
     info!("connected to database");
 
-    let client = NatStatClient::new(db.pool.clone(), api_key, 500);
+    let client = NatStatClient::new(db.pool.clone(), api_key, 1500);
 
     match cli.command {
         Commands::Season { year } => {
@@ -231,7 +231,7 @@ async fn main() -> Result<()> {
 
         Commands::Status => {
             let remaining = client.rate_limit_remaining().await;
-            println!("Local rate limit tokens: {remaining}/500");
+            println!("Local rate limit tokens: {remaining}/1500");
         }
 
         Commands::CleanCache => {
