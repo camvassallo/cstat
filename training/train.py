@@ -28,7 +28,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import KFold
 
 from db import get_engine
-from features import build_feature_matrix
+from features import SEASONS, build_feature_matrix
 
 MODEL_DIR = Path(__file__).parent / "models"
 MODEL_DIR.mkdir(exist_ok=True)
@@ -266,7 +266,7 @@ def main():
 
     # Save feature list and metrics
     meta = {
-        "season": 2026,
+        "seasons": SEASONS,
         "n_games": len(df),
         "n_features": len(feature_cols),
         "features": feature_cols,

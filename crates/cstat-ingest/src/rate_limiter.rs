@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 
-/// Token-bucket rate limiter for NatStat API (500 calls/hour).
+/// Token-bucket rate limiter for NatStat API.
 #[derive(Debug, Clone)]
 pub struct RateLimiter {
     inner: Arc<Mutex<RateLimiterInner>>,
