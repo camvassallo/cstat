@@ -768,7 +768,7 @@ pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u6
             -- ORTG: scale by team context
             offensive_rating = ROUND(CASE
                 WHEN pp.indiv_poss > 0 AND pp.team_ortg IS NOT NULL
-                THEN pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 1) * 0.2)
+                THEN pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 0) * 0.2)
                 ELSE pp.team_ortg
             END::numeric, 1),
             -- DRTG: team base adjusted by individual defensive contribution
@@ -780,20 +780,20 @@ pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u6
             -- Net rating
             net_rating = ROUND(CASE
                 WHEN pp.team_ortg IS NOT NULL AND pp.team_drtg IS NOT NULL
-                THEN (pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 1) * 0.2))
+                THEN (pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 0) * 0.2))
                    - (pp.team_drtg * (1 - pp.def_component / 10.0 * 0.1))
                 ELSE NULL
             END::numeric, 1),
             -- BPM split: offensive share
             obpm = ROUND(CASE
                 WHEN (pp.off_component + pp.def_component) > 0
-                THEN pp.bpm * pp.off_component / (pp.off_component + GREATEST(pp.def_component, 0.1))
+                THEN pp.bpm * pp.off_component / NULLIF(pp.off_component + GREATEST(pp.def_component, 0.1), 0)
                 ELSE pp.bpm * 0.6
             END::numeric, 1),
             -- BPM split: defensive share
             dbpm = ROUND(CASE
                 WHEN (pp.off_component + pp.def_component) > 0
-                THEN pp.bpm * GREATEST(pp.def_component, 0.1) / (pp.off_component + GREATEST(pp.def_component, 0.1))
+                THEN pp.bpm * GREATEST(pp.def_component, 0.1) / NULLIF(pp.off_component + GREATEST(pp.def_component, 0.1), 0)
                 ELSE pp.bpm * 0.4
             END::numeric, 1)
         FROM player_prod pp
