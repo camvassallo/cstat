@@ -605,23 +605,7 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
     # at that game's date (or the most recent snapshot before it)
     sorted_dates = sorted(adj_eff_snapshots.keys())
 
-    def get_opp_margin(game_date, opponent_id):
-        """Get opponent's adjusted margin from the most recent snapshot <= game_date."""
-        # Find the latest snapshot date <= game_date
-        snap_date = None
-        for d in sorted_dates:
-            if d <= game_date:
-                snap_date = d
-            else:
-                break
-        if snap_date is None:
-            return 0.0
-        snap = adj_eff_snapshots.get(snap_date, {})
-        opp = snap.get(opponent_id, {})
-        return opp.get("adj_efficiency_margin", 0.0)
-
-    # This is slow with iterrows; let's vectorize with a lookup dict
-    # Flatten snapshots to (date, team_id) -> margin
+    # Flatten snapshots to (date, team_id) -> margin for fast lookup
     flat_snap = {}
     for d in sorted_dates:
         for tid, vals in adj_eff_snapshots[d].items():
