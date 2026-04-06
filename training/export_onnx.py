@@ -7,10 +7,50 @@ from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
+import onnx
 import onnxmltools
 from onnxmltools.convert.common.data_types import FloatTensorType
 
 MODEL_DIR = Path(__file__).parent / "models"
+
+
+def _remove_zipmap(onnx_model):
+    """
+    Replace the ZipMap node (sequence-of-maps) with a direct tensor output.
+
+    onnxmltools wraps classifier probabilities in a ZipMap → sequence(map),
+    but ONNX Runtime's Rust bindings (ort) don't support that output type.
+    This rewires the graph to output the raw probability tensor instead.
+    """
+    graph = onnx_model.graph
+
+    # Find ZipMap node
+    zipmap_node = None
+    for node in graph.node:
+        if node.op_type == "ZipMap":
+            zipmap_node = node
+            break
+
+    if zipmap_node is None:
+        return
+
+    # The ZipMap's input is the probability tensor we want
+    prob_tensor_name = zipmap_node.input[0]
+
+    # Find the "probabilities" output and rewrite it as a float tensor
+    for output in graph.output:
+        if output.name == zipmap_node.output[0]:
+            output.name = prob_tensor_name
+            # Clear the old sequence(map) type and set to float tensor
+            output.type.CopyFrom(
+                onnx.helper.make_tensor_type_proto(
+                    onnx.TensorProto.FLOAT, shape=[None, 2]
+                )
+            )
+            break
+
+    # Remove the ZipMap node
+    graph.node.remove(zipmap_node)
 
 
 def export_model(lgb_path: str, onnx_path: str, n_features: int, is_classifier: bool):
@@ -38,6 +78,11 @@ def export_model(lgb_path: str, onnx_path: str, n_features: int, is_classifier: 
         initial_types=initial_type,
         target_opset=15,
     )
+
+    if is_classifier:
+        # Remove ZipMap operator so probabilities output as a plain tensor
+        # instead of sequence(map), which ort doesn't support.
+        _remove_zipmap(onnx_model)
 
     onnxmltools.utils.save_model(onnx_model, onnx_path)
     print(f"Exported: {onnx_path}")

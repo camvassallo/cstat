@@ -44,5 +44,8 @@ anyhow = "1"
 # Config
 dotenvy = "0.15"
 
+# ONNX inference
+ort = "2.0.0-rc.12"
+
 # Testing
 tokio-test = "0.4"
