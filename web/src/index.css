@@ -1,0 +1,37 @@
+@import "tailwindcss";
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-quartz.css";
+
+body {
+  margin: 0;
+  background: #111827;
+  color: #e5e7eb;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* AG Grid — use quartz-dark base with slate tones for a data-dense look */
+.ag-theme-quartz-dark {
+  --ag-background-color: #1f2937;
+  --ag-header-background-color: #111827;
+  --ag-odd-row-background-color: #1a2233;
+  --ag-row-hover-color: #374151;
+  --ag-border-color: #374151;
+  --ag-font-size: 13px;
+  --ag-foreground-color: #e5e7eb;
+  --ag-header-foreground-color: #9ca3af;
+  --ag-secondary-foreground-color: #9ca3af;
+  --ag-row-border-color: #273244;
+  --ag-selected-row-background-color: #1e3a5f;
+  --ag-range-selection-background-color: #1e3a5f33;
+}
+
+.ag-theme-quartz-dark .ag-header-cell-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+.ag-theme-quartz-dark .ag-row {
+  cursor: pointer;
+}

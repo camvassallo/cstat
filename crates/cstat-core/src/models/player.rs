@@ -70,6 +70,14 @@ pub struct PlayerGameStats {
     pub game_score: Option<f64>,
     pub plus_minus: Option<i32>,
 
+    // Rolling averages (last 5 games, migration 005)
+    pub rolling_ppg: Option<f64>,
+    pub rolling_rpg: Option<f64>,
+    pub rolling_apg: Option<f64>,
+    pub rolling_fg_pct: Option<f64>,
+    pub rolling_ts_pct: Option<f64>,
+    pub rolling_game_score: Option<f64>,
+
     pub created_at: chrono::NaiveDateTime,
 }
 
