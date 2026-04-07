@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
+import { gridTheme } from '../theme';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -56,8 +57,9 @@ export default function Rankings() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">Team Rankings</h1>
-      <div className="ag-theme-quartz-dark" style={{ height: 'calc(100vh - 160px)', width: '100%' }}>
+      <div style={{ height: 'calc(100vh - 160px)', width: '100%' }}>
         <AgGridReact<TeamRanking>
+          theme={gridTheme}
           rowData={teams}
           columnDefs={columns}
           loading={loading}

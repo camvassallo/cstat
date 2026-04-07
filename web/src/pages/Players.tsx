@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
 import { fetchPlayers, type PlayerRow } from '../api/client';
+import { gridTheme } from '../theme';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -59,15 +60,16 @@ export default function Players() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search players..."
-            className="bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            className="bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
           />
           <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1.5 rounded">
             Search
           </button>
         </form>
       </div>
-      <div className="ag-theme-quartz-dark" style={{ height: 'calc(100vh - 160px)', width: '100%' }}>
+      <div style={{ height: 'calc(100vh - 160px)', width: '100%' }}>
         <AgGridReact<PlayerRow>
+          theme={gridTheme}
           rowData={players}
           columnDefs={columns}
           loading={loading}
