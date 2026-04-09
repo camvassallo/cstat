@@ -184,7 +184,19 @@ This naturally enables:
 - [ ] Score ticker / recent results
 - [ ] Mobile-responsive design
 
-### 4c: Deployment
+### 4c: Data Quality (Pre-Reingestion)
+- [x] Fix USG% ingestion (divide NatStat `usgpct` by 100)
+- [x] Fix rebound mapping (`reb` = defensive rebounds, not total)
+- [x] Fix ORB%/DRB% computation (game-level self-join with NULL guards)
+- [x] Force-overwrite rebounds/usage on re-ingestion (no COALESCE)
+- [x] Label ELO as "ELO Rk" (rank, not rating)
+- [x] Make team names clickable on Rankings page
+- [ ] Player deduplication merge pass (989 duplicate pairs)
+- [ ] Fix player rate stats to use possession-based formulas
+- [ ] Full 2026 season re-ingestion + recompute after all fixes
+- [ ] Retrain ML models after data quality fixes
+
+### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
 - [x] Serve React build from cstat-api (static file fallback)
 
@@ -212,6 +224,36 @@ This naturally enables:
 - [ ] Model accuracy dashboard with calibration tracking
 - [ ] Automated daily data refresh during season
 - [ ] Conference/team/player trend analysis over time
+
+---
+
+## Known Bugs / Data Quality Issues
+
+### Duplicate Player Records (P1)
+NatStat's `/playercodes` endpoint returns different codes for the same physical player across seasons (e.g., `57987927` and `87832246` both map to Caleb Foster on Duke). This creates two `players` rows per affected player — one with most games, one with 1-2 games. **~989 duplicate pairs** exist in the 2026 season data.
+
+**Impact**: Player season stats are split across two records, deflating per-game averages for the primary record and showing misleading 1-game entries on rosters. No double-counting occurs (the two codes never appear in the same game box score).
+
+**Fix**: Add a post-ingestion deduplication pass that merges records sharing the same `(name, team_id, season)`. Reassign `player_game_stats` rows from the duplicate to the primary (higher GP) player, then delete the duplicate player + season stats.
+
+### NatStat `reb` Field is Defensive Rebounds, Not Total (P1 — Mitigated)
+NatStat's `reb` field in `playerperfs` and `teamperfs` represents **defensive rebounds**, not total rebounds. Additionally, ~69% of team game records return `reb=0` even when `oreb > 0`, which is missing data rather than actual zero defensive rebounds.
+
+**Current handling**: Ingestion maps `reb` → `def_rebounds`, guards `reb=0 + oreb>0` as NULL, computes `total_rebounds = oreb + dreb`. Force-overwrites these columns on re-ingestion. The compute pipeline then **estimates missing DREB** from the box score: `DREB ≈ opponent_missed_FGA - opponent_OREB` (validated: r=0.840, MAE=2.38 rebounds across 3,178 games). This gives ORB%/DRB% full coverage with a median ORB% of 27.9% and DRB% of 72.2% — matching KenPom ranges.
+
+### ELO Shows Rank, Not Rating (P2 — Labeled)
+NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. We try `elo.rating`/`elo.value`/`elo.elo` first (future-proofing) and fall back to rank. Frontend labels it "ELO Rk".
+
+### Player Rate Stats Are Per-40-Min Proxies (P2)
+`compute_player_rates` computes AST%, ORB%, DRB%, STL%, BLK% as per-40-minute rates, not true possession-based percentages. Reasonable proxies but differ from standard definitions (e.g., Basketball Reference).
+
+**Fix**: Implement proper possession-based formulas using team pace and possession estimates.
+
+### USG% Was Ingested as Whole Numbers (Fixed)
+NatStat returns `usgpct` as whole numbers (e.g., 19.5 for 19.5%). Frontend `pct()` multiplied by 100 again → 1950%. **Fixed**: divide by 100 at ingestion time.
+
+### COALESCE on Upsert Preserving Stale Data (Partially Fixed)
+Upsert `ON CONFLICT` used `COALESCE(EXCLUDED.x, old.x)`, so NULL new values wouldn't overwrite old corrupt data. **Fixed** for rebounds and usage_rate. Other columns still use COALESCE — acceptable for fields where NULL means "not provided this time" but could mask issues elsewhere.
 
 ---
 

@@ -12,7 +12,15 @@ const pct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
 
 const columns: ColDef<TeamRanking>[] = [
   { field: 'rank', headerName: 'Rk', width: 60, pinned: 'left' },
-  { field: 'name', headerName: 'Team', width: 200, pinned: 'left' },
+  {
+    field: 'name',
+    headerName: 'Team',
+    width: 200,
+    pinned: 'left',
+    cellRenderer: (p: { value: string }) => (
+      <span className="text-blue-400 hover:underline cursor-pointer">{p.value}</span>
+    ),
+  },
   { field: 'conference', headerName: 'Conf', width: 100 },
   {
     headerName: 'Record',
@@ -34,7 +42,7 @@ const columns: ColDef<TeamRanking>[] = [
   { field: 'adj_defense', headerName: 'AdjD', width: 80, valueFormatter: (p) => fmt(p.value) },
   { field: 'adj_tempo', headerName: 'Tempo', width: 80, valueFormatter: (p) => fmt(p.value) },
   { field: 'sos', headerName: 'SOS', width: 75, valueFormatter: (p) => fmt(p.value, 2) },
-  { field: 'elo', headerName: 'ELO', width: 75, valueFormatter: (p) => fmt(p.value, 0) },
+  { field: 'elo', headerName: 'ELO Rk', width: 80, valueFormatter: (p) => fmt(p.value, 0) },
   { field: 'effective_fg_pct', headerName: 'eFG%', width: 80, valueFormatter: (p) => pct(p.value) },
   { field: 'turnover_pct', headerName: 'TOV%', width: 80, valueFormatter: (p) => pct(p.value) },
   { field: 'off_rebound_pct', headerName: 'ORB%', width: 80, valueFormatter: (p) => pct(p.value) },

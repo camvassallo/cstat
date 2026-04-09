@@ -393,8 +393,14 @@ async fn upsert_player_game_stats(
     let fta = get_i32(perf, &["fta"]);
     let ft_pct = get_f64(perf, &["ftpct", "ft_pct", "ftp"]);
     let off_rebounds = get_i32(perf, &["oreb", "orb"]);
-    let def_rebounds = get_i32(perf, &["dreb", "drb"]);
-    let total_rebounds = get_i32(perf, &["reb", "trb"]);
+    // NatStat playerperfs "reb" is defensive rebounds (not total).
+    // When reb=0 but oreb>0, treat as missing data (NULL), not zero defensive rebounds.
+    let reb_raw = get_i32(perf, &["reb", "dreb", "drb"]);
+    let def_rebounds = match (reb_raw, off_rebounds) {
+        (Some(0), Some(o)) if o > 0 => None,
+        (r, _) => r,
+    };
+    let total_rebounds = off_rebounds.zip(def_rebounds).map(|(o, d)| o + d);
     let assists = get_i32(perf, &["ast", "assists"]);
     let turnovers = get_i32(perf, &["to", "tov"]);
     let steals = get_i32(perf, &["stl", "steals"]);
@@ -408,7 +414,7 @@ async fn upsert_player_game_stats(
         .and_then(|s| s.as_str())
         .map(|s| s == "Y");
     let efficiency = get_f64(perf, &["eff", "efficiency"]);
-    let usage_rate = get_f64(perf, &["usgpct", "usage_rate"]);
+    let usage_rate = get_f64(perf, &["usgpct", "usage_rate"]).map(|v| v / 100.0);
     let two_fg_pct = get_f64(perf, &["twofgpct"]);
     let presence_rate = get_f64(perf, &["presencerate"]);
     let adj_presence_rate = get_f64(perf, &["adjpresencerate"]);
@@ -475,9 +481,9 @@ async fn upsert_player_game_stats(
              ftm = COALESCE(EXCLUDED.ftm, player_game_stats.ftm),
              fta = COALESCE(EXCLUDED.fta, player_game_stats.fta),
              ft_pct = COALESCE(EXCLUDED.ft_pct, player_game_stats.ft_pct),
-             off_rebounds = COALESCE(EXCLUDED.off_rebounds, player_game_stats.off_rebounds),
-             def_rebounds = COALESCE(EXCLUDED.def_rebounds, player_game_stats.def_rebounds),
-             total_rebounds = COALESCE(EXCLUDED.total_rebounds, player_game_stats.total_rebounds),
+             off_rebounds = EXCLUDED.off_rebounds,
+             def_rebounds = EXCLUDED.def_rebounds,
+             total_rebounds = EXCLUDED.total_rebounds,
              assists = COALESCE(EXCLUDED.assists, player_game_stats.assists),
              turnovers = COALESCE(EXCLUDED.turnovers, player_game_stats.turnovers),
              steals = COALESCE(EXCLUDED.steals, player_game_stats.steals),
@@ -486,7 +492,7 @@ async fn upsert_player_game_stats(
              plus_minus = COALESCE(EXCLUDED.plus_minus, player_game_stats.plus_minus),
              starter = COALESCE(EXCLUDED.starter, player_game_stats.starter),
              efficiency = COALESCE(EXCLUDED.efficiency, player_game_stats.efficiency),
-             usage_rate = COALESCE(EXCLUDED.usage_rate, player_game_stats.usage_rate),
+             usage_rate = EXCLUDED.usage_rate,
              two_fg_pct = COALESCE(EXCLUDED.two_fg_pct, player_game_stats.two_fg_pct),
              presence_rate = COALESCE(EXCLUDED.presence_rate, player_game_stats.presence_rate),
              adj_presence_rate = COALESCE(EXCLUDED.adj_presence_rate, player_game_stats.adj_presence_rate),
@@ -727,18 +733,19 @@ async fn upsert_team_game_stats(
     let ftm = get_i32(stats, &["ftm"]);
     let fta = get_i32(stats, &["fta"]);
     let off_rebounds = get_i32(stats, &["oreb"]);
-    let total_rebounds = get_i32(stats, &["reb"]);
+    // NatStat teamperfs "reb" is defensive rebounds (not total) — same as playerperfs.
+    // When reb=0 but oreb>0, treat as missing data (NULL), not zero defensive rebounds.
+    let reb_raw = get_i32(stats, &["reb", "dreb", "drb"]);
+    let def_rebounds = match (reb_raw, off_rebounds) {
+        (Some(0), Some(o)) if o > 0 => None,
+        (r, _) => r,
+    };
+    let total_rebounds = off_rebounds.zip(def_rebounds).map(|(o, d)| o + d);
     let assists = get_i32(stats, &["ast"]);
     let steals = get_i32(stats, &["stl"]);
     let blocks = get_i32(stats, &["blk"]);
     let turnovers = get_i32(stats, &["to"]);
     let fouls = get_i32(stats, &["f", "pf"]);
-
-    // Derive def_rebounds = total - off
-    let def_rebounds = match (total_rebounds, off_rebounds) {
-        (Some(t), Some(o)) => Some(t - o),
-        _ => None,
-    };
 
     sqlx::query(
         "INSERT INTO team_game_stats (
@@ -755,9 +762,9 @@ async fn upsert_team_game_stats(
             tpa = COALESCE(EXCLUDED.tpa, team_game_stats.tpa),
             ftm = COALESCE(EXCLUDED.ftm, team_game_stats.ftm),
             fta = COALESCE(EXCLUDED.fta, team_game_stats.fta),
-            off_rebounds = COALESCE(EXCLUDED.off_rebounds, team_game_stats.off_rebounds),
-            def_rebounds = COALESCE(EXCLUDED.def_rebounds, team_game_stats.def_rebounds),
-            total_rebounds = COALESCE(EXCLUDED.total_rebounds, team_game_stats.total_rebounds),
+            off_rebounds = EXCLUDED.off_rebounds,
+            def_rebounds = EXCLUDED.def_rebounds,
+            total_rebounds = EXCLUDED.total_rebounds,
             assists = COALESCE(EXCLUDED.assists, team_game_stats.assists),
             steals = COALESCE(EXCLUDED.steals, team_game_stats.steals),
             blocks = COALESCE(EXCLUDED.blocks, team_game_stats.blocks),
