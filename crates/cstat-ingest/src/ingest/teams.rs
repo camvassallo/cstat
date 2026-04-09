@@ -117,8 +117,16 @@ pub async fn ingest_single_team_details(
     // We also check for elo.rating in case NatStat adds it in the future.
     let elo_rating = team
         .get("elo")
-        .and_then(|e| e.get("rating").or_else(|| e.get("value")).or_else(|| e.get("elo")))
-        .and_then(|r| r.as_str().and_then(|s| s.parse::<f64>().ok()).or(r.as_f64()));
+        .and_then(|e| {
+            e.get("rating")
+                .or_else(|| e.get("value"))
+                .or_else(|| e.get("elo"))
+        })
+        .and_then(|r| {
+            r.as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .or(r.as_f64())
+        });
     let elo_rank = team.get("elo").and_then(|e| e.get("rank")).and_then(|r| {
         r.as_str()
             .and_then(|s| s.parse::<f64>().ok())

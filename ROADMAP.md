@@ -192,7 +192,6 @@ This naturally enables:
 - [x] Label ELO as "ELO Rk" (rank, not rating)
 - [x] Make team names clickable on Rankings page
 - [ ] Player deduplication merge pass (989 duplicate pairs)
-- [ ] Center AdjO/AdjD at D1 average (~100) instead of 0
 - [ ] Fix player rate stats to use possession-based formulas
 - [ ] Full 2026 season re-ingestion + recompute after all fixes
 - [ ] Retrain ML models after data quality fixes
@@ -249,9 +248,6 @@ NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the ac
 `compute_player_rates` computes AST%, ORB%, DRB%, STL%, BLK% as per-40-minute rates, not true possession-based percentages. Reasonable proxies but differ from standard definitions (e.g., Basketball Reference).
 
 **Fix**: Implement proper possession-based formulas using team pace and possession estimates.
-
-### AdjO/AdjD Centered at 0 Instead of ~100 (P2)
-KenPom and BartTorvik center adjusted offense/defense at the D1 average (~100 pts/100 possessions). Our current implementation centers at 0 (just the adjustment delta). Need to add the league-average raw efficiency back to produce familiar-scale numbers.
 
 ### USG% Was Ingested as Whole Numbers (Fixed)
 NatStat returns `usgpct` as whole numbers (e.g., 19.5 for 19.5%). Frontend `pct()` multiplied by 100 again → 1950%. **Fixed**: divide by 100 at ingestion time.
