@@ -5,8 +5,7 @@ Runs a comprehensive evaluation of the trained models and saves timestamped
 results to training/eval_history/ for tracking improvement across runs.
 
 Usage:
-    python evaluate.py              # full evaluation with DB feature rebuild
-    python evaluate.py --quick      # skip feature rebuild, use saved models only
+    python evaluate.py
 
 Evaluation includes:
   - Chronological backtest (train 80% → predict 20%)
@@ -19,7 +18,6 @@ Evaluation includes:
 """
 
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -208,7 +206,6 @@ def segment_analysis(df):
 
 def _segment_stats(sub):
     """Compute summary stats for a segment."""
-    margin_errors = (sub["pred_margin"] - sub["margin"]).abs()
     pred_winner = (sub["pred_margin"] > 0).astype(int)
     stats = {
         "count": len(sub),
