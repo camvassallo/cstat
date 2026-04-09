@@ -74,8 +74,8 @@ async fn main() -> Result<()> {
 
     // Static file serving for React SPA
     let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
-    let spa = ServeDir::new(&spa_dir)
-        .not_found_service(ServeFile::new(format!("{spa_dir}/index.html")));
+    let spa =
+        ServeDir::new(&spa_dir).not_found_service(ServeFile::new(format!("{spa_dir}/index.html")));
 
     let app = Router::new()
         .route("/api/health", get(health_check))
