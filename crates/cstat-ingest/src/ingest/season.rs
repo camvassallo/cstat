@@ -24,40 +24,52 @@ impl<'a> SeasonIngester<'a> {
     /// 2. Players (reference data, needs team_id)
     /// 3. Games (results, needs team IDs)
     /// 4. Player performances (box scores, needs player_id + game_id)
-    /// 5. Team details (ELO, advanced stats)
+    /// 5. Team details (TCR, record, conference)
     /// 6. Team performances (team-level box scores for four factors)
+    /// 7. ELO ratings (real ratings from /elo endpoint)
+    /// 8. Game forecasts (per-game ELO snapshots, win exp, betting lines from /forecasts)
     pub async fn ingest_full_season(&self) -> Result<IngestReport, NatStatError> {
         let mut report = IngestReport::default();
 
         info!(season = self.season, "starting full season ingestion");
 
         // Step 1: Teams
-        info!("step 1/6: ingesting teams");
+        info!("step 1/8: ingesting teams");
         report.teams = super::teams::ingest_teams(self.client, self.pool, self.season).await?;
 
         // Step 2: Players
-        info!("step 2/6: ingesting players");
+        info!("step 2/8: ingesting players");
         report.players =
             super::players::ingest_all_rosters(self.client, self.pool, self.season).await?;
 
         // Step 3: Games
-        info!("step 3/6: ingesting games");
+        info!("step 3/8: ingesting games");
         report.games = super::games::ingest_games(self.client, self.pool, self.season).await?;
 
         // Step 4: Player performances
-        info!("step 4/6: ingesting player performances");
+        info!("step 4/8: ingesting player performances");
         report.player_performances =
             super::games::ingest_player_performances(self.client, self.pool, self.season).await?;
 
-        // Step 5: Team details (ELO, etc.)
-        info!("step 5/6: ingesting team details");
+        // Step 5: Team details (TCR, record, conference)
+        info!("step 5/8: ingesting team details");
         report.team_details =
             super::teams::ingest_team_details(self.client, self.pool, self.season).await?;
 
         // Step 6: Team performances (box scores per game)
-        info!("step 6/6: ingesting team performances");
+        info!("step 6/8: ingesting team performances");
         report.team_performances =
             super::games::ingest_all_team_performances(self.client, self.pool, self.season).await?;
+
+        // Step 7: ELO ratings (real ratings from /elo endpoint)
+        info!("step 7/8: ingesting ELO ratings");
+        report.elo_ratings =
+            super::elo::ingest_elo_ratings(self.client, self.pool, self.season).await?;
+
+        // Step 8: Game forecasts (per-game ELO, win exp, betting lines)
+        info!("step 8/8: ingesting game forecasts");
+        report.game_forecasts =
+            super::elo::ingest_game_forecasts(self.client, self.pool, self.season).await?;
 
         info!(
             season = self.season,
@@ -67,6 +79,8 @@ impl<'a> SeasonIngester<'a> {
             player_performances = report.player_performances,
             team_details = report.team_details,
             team_performances = report.team_performances,
+            elo_ratings = report.elo_ratings,
+            game_forecasts = report.game_forecasts,
             "season ingestion complete"
         );
 
@@ -126,19 +140,23 @@ pub struct IngestReport {
     pub player_performances: u64,
     pub team_details: u64,
     pub team_performances: u64,
+    pub elo_ratings: u64,
+    pub game_forecasts: u64,
 }
 
 impl std::fmt::Display for IngestReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Ingested: {} teams, {} players, {} games, {} player performances, {} team details, {} team performances",
+            "Ingested: {} teams, {} players, {} games, {} player perfs, {} team details, {} team perfs, {} ELO ratings, {} game forecasts",
             self.teams,
             self.players,
             self.games,
             self.player_performances,
             self.team_details,
-            self.team_performances
+            self.team_performances,
+            self.elo_ratings,
+            self.game_forecasts
         )
     }
 }

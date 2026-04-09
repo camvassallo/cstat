@@ -6,7 +6,7 @@ BEFORE that game's date. This eliminates data leakage from full-season aggregate
 
 Feature groups:
   - Adjusted efficiency (KenPom-style iterative, recomputed per game-date snapshot)
-  - Incremental ELO (updated game-by-game)
+  - ELO (NatStat pre-game ELO where available, computed incremental as fallback)
   - Cumulative team four factors and box score stats (expanding window)
   - Cumulative roster aggregates (minutes-weighted player averages)
   - Rolling form (last-5-game rolling averages from player_game_stats)
@@ -93,6 +93,29 @@ def load_player_game_stats(engine, seasons=None) -> pd.DataFrame:
           AND pgs.minutes IS NOT NULL
           AND pgs.minutes > 0
         ORDER BY pgs.game_date, pgs.game_id
+        """,
+        engine,
+        params={"seasons": seasons},
+    )
+
+
+def load_game_forecasts(engine, seasons=None) -> pd.DataFrame:
+    """Load pre-game ELO from NatStat forecasts.
+
+    Only loads elo_before (pre-game) to avoid data leakage.
+    win_exp is loaded separately for benchmarking — NOT as a training feature.
+    """
+    seasons = seasons or SEASONS
+    return pd.read_sql(
+        """
+        SELECT gf.game_id,
+               gf.home_team_id, gf.away_team_id,
+               gf.home_elo_before, gf.away_elo_before,
+               gf.home_win_exp, gf.away_win_exp
+        FROM game_forecasts gf
+        WHERE gf.season = ANY(%(seasons)s)
+          AND gf.home_elo_before IS NOT NULL
+        ORDER BY gf.game_date
         """,
         engine,
         params={"seasons": seasons},
@@ -683,11 +706,34 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
     pgs = load_player_game_stats(engine, seasons)
     conferences = load_team_conferences(engine, seasons)
 
-    print(f"  {len(games)} games, {len(tgs)} team-game rows, {len(pgs)} player-game rows")
+    forecasts = load_game_forecasts(engine, seasons)
+    print(f"  {len(games)} games, {len(tgs)} team-game rows, {len(pgs)} player-game rows, {len(forecasts)} forecasts")
 
-    # 1. ELO (incremental, game-by-game)
+    # 1. ELO — prefer NatStat pre-game ELO, fall back to computed incremental ELO
     print("Computing ELO ratings...")
     elo_snapshots = compute_elo_series(games)
+
+    # Index NatStat pre-game ELO by game_id for fast lookup
+    natstat_elo = {}
+    for _, row in forecasts.iterrows():
+        gid = row["game_id"]
+        natstat_elo[(row["home_team_id"], gid)] = row["home_elo_before"]
+        natstat_elo[(row["away_team_id"], gid)] = row["away_elo_before"]
+
+    # Merge: NatStat where available, computed as fallback
+    merged_elo = {}
+    for key, computed_val in elo_snapshots.items():
+        merged_elo[key] = natstat_elo.get(key, computed_val)
+    # Include any NatStat entries not in computed (shouldn't happen, but safe)
+    for key, ns_val in natstat_elo.items():
+        if key not in merged_elo:
+            merged_elo[key] = ns_val
+    elo_snapshots = merged_elo
+
+    # Store NatStat win_exp for benchmarking (NOT a training feature)
+    natstat_win_exp = {}
+    for _, row in forecasts.iterrows():
+        natstat_win_exp[row["game_id"]] = row["home_win_exp"]
 
     # 2. Adjusted efficiency snapshots (per unique game date)
     print("Computing adjusted efficiency snapshots...")
@@ -905,6 +951,9 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
     df["margin"] = df["home_score"] - df["away_score"]
     df["home_win"] = (df["margin"] > 0).astype(int)
 
+    # NatStat win expectancy for benchmarking only (NOT a training feature)
+    df["natstat_home_win_exp"] = df["game_id"].map(natstat_win_exp)
+
     # Select feature columns
     feature_cols = (
         ["venue", "is_conference_game", "diff_win_pct"]
@@ -925,3 +974,12 @@ if __name__ == "__main__":
     print(f"\nFeature columns:\n{feature_cols}")
     print(f"\nNull counts:\n{df[feature_cols].isnull().sum().to_string()}")
     print(f"\nSample:\n{df[feature_cols + ['margin', 'home_win']].head()}")
+
+    # NatStat win_exp benchmark
+    has_exp = df["natstat_home_win_exp"].notna()
+    if has_exp.any():
+        bench = df[has_exp].copy()
+        ns_pred = (bench["natstat_home_win_exp"] > 0.5).astype(int)
+        ns_acc = (ns_pred == bench["home_win"]).mean()
+        print(f"\nNatStat win_exp benchmark ({has_exp.sum()} games):")
+        print(f"  Accuracy: {ns_acc:.3f}")

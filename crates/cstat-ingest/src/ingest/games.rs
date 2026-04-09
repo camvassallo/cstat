@@ -393,14 +393,21 @@ async fn upsert_player_game_stats(
     let fta = get_i32(perf, &["fta"]);
     let ft_pct = get_f64(perf, &["ftpct", "ft_pct", "ftp"]);
     let off_rebounds = get_i32(perf, &["oreb", "orb"]);
-    // NatStat playerperfs "reb" is defensive rebounds (not total).
-    // When reb=0 but oreb>0, treat as missing data (NULL), not zero defensive rebounds.
-    let reb_raw = get_i32(perf, &["reb", "dreb", "drb"]);
-    let def_rebounds = match (reb_raw, off_rebounds) {
-        (Some(0), Some(o)) if o > 0 => None,
+    // NatStat playerperfs: "reb" = total rebounds, "dreb" = defensive rebounds (when available).
+    // ~68% of games have reb=0 (missing data) — NatStat simply doesn't have it for those games.
+    // When reb=0 but oreb>0, treat as missing (NULL). Use "dreb" directly when present.
+    let reb_raw = get_i32(perf, &["reb"]);
+    let total_rebounds = match (reb_raw, off_rebounds) {
+        (Some(0), Some(o)) if o > 0 => None, // missing data at source
         (r, _) => r,
     };
-    let total_rebounds = off_rebounds.zip(def_rebounds).map(|(o, d)| o + d);
+    let dreb_direct = get_i32(perf, &["dreb", "drb"]);
+    let def_rebounds = dreb_direct.or_else(|| {
+        total_rebounds
+            .zip(off_rebounds)
+            .map(|(t, o)| t - o)
+            .filter(|&d| d >= 0)
+    });
     let assists = get_i32(perf, &["ast", "assists"]);
     let turnovers = get_i32(perf, &["to", "tov"]);
     let steals = get_i32(perf, &["stl", "steals"]);
@@ -733,14 +740,17 @@ async fn upsert_team_game_stats(
     let ftm = get_i32(stats, &["ftm"]);
     let fta = get_i32(stats, &["fta"]);
     let off_rebounds = get_i32(stats, &["oreb"]);
-    // NatStat teamperfs "reb" is defensive rebounds (not total) — same as playerperfs.
-    // When reb=0 but oreb>0, treat as missing data (NULL), not zero defensive rebounds.
-    let reb_raw = get_i32(stats, &["reb", "dreb", "drb"]);
-    let def_rebounds = match (reb_raw, off_rebounds) {
-        (Some(0), Some(o)) if o > 0 => None,
+    // NatStat teamperfs: "reb" = total rebounds. No "dreb" field at team level (unlike playerperfs).
+    // ~68% of games have reb=0 (missing at source). When reb=0 but oreb>0, treat as NULL.
+    let reb_raw = get_i32(stats, &["reb"]);
+    let total_rebounds = match (reb_raw, off_rebounds) {
+        (Some(0), Some(o)) if o > 0 => None, // missing data
         (r, _) => r,
     };
-    let total_rebounds = off_rebounds.zip(def_rebounds).map(|(o, d)| o + d);
+    let def_rebounds = total_rebounds
+        .zip(off_rebounds)
+        .map(|(t, o)| t - o)
+        .filter(|&d| d >= 0);
     let assists = get_i32(stats, &["ast"]);
     let steals = get_i32(stats, &["stl"]);
     let blocks = get_i32(stats, &["blk"]);

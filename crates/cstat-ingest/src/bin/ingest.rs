@@ -8,6 +8,10 @@ use tracing::info;
 #[derive(Parser)]
 #[command(name = "cstat-ingest", about = "NatStat data ingestion CLI for cstat")]
 struct Cli {
+    /// Clear all cached API responses before running (forces fresh fetches).
+    #[arg(long, global = true)]
+    no_cache: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -84,6 +88,18 @@ enum Commands {
         to: String,
     },
 
+    /// Ingest ELO ratings from /elo endpoint.
+    Elo {
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+    },
+
+    /// Ingest per-game forecasts (ELO snapshots, win exp, betting lines) from /forecasts.
+    Forecasts {
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+    },
+
     /// Run compute pipeline: derive season stats, schedules, percentiles from raw data.
     Compute {
         #[arg(short, long, default_value = "2026")]
@@ -128,6 +144,12 @@ async fn main() -> Result<()> {
     info!("connected to database");
 
     let client = NatStatClient::new(db.pool.clone(), api_key, 1500);
+
+    if cli.no_cache {
+        let cleared = client.clear_all_cache().await?;
+        info!(cleared, "cleared API cache");
+        println!("Cleared {cleared} cached API responses");
+    }
 
     match cli.command {
         Commands::Season { year } => {
@@ -216,6 +238,18 @@ async fn main() -> Result<()> {
                 }
             };
             println!("Ingested {count} player performances for {year}");
+        }
+
+        Commands::Elo { year } => {
+            let count =
+                cstat_ingest::ingest::elo::ingest_elo_ratings(&client, &db.pool, year).await?;
+            println!("Ingested {count} ELO ratings for {year}");
+        }
+
+        Commands::Forecasts { year } => {
+            let count =
+                cstat_ingest::ingest::elo::ingest_game_forecasts(&client, &db.pool, year).await?;
+            println!("Ingested {count} game forecasts for {year}");
         }
 
         Commands::Compute { year } => {

@@ -3,9 +3,10 @@ use crate::rate_limiter::RateLimiter;
 use reqwest::Client;
 use serde_json::Value;
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Error)]
 pub enum NatStatError {
@@ -38,6 +39,9 @@ pub struct NatStatClient {
     cache: ApiCache,
     /// Default cache TTL in seconds (default: 6 hours).
     pub default_ttl: i64,
+    /// When true, use v3 base URL instead of v4. Flipped on first v4 504 to
+    /// work around v4 outages (e.g., the /players endpoint).
+    use_v3: AtomicBool,
 }
 
 /// Parsed metadata from NatStat API responses.
@@ -50,7 +54,8 @@ pub struct ResponseMeta {
     pub page_next: Option<String>,
 }
 
-const BASE_URL: &str = "https://api4.natst.at";
+const BASE_URL_V4: &str = "https://api4.natst.at";
+const BASE_URL_V3: &str = "https://api3.natst.at";
 const SERVICE: &str = "mbb";
 
 impl NatStatClient {
@@ -69,6 +74,23 @@ impl NatStatClient {
             rate_limiter: RateLimiter::new(max_per_hour),
             cache: ApiCache::new(pool),
             default_ttl: 6 * 3600, // 6 hours
+            use_v3: AtomicBool::new(false),
+        }
+    }
+
+    /// Current base URL — v3 if the fallback flag is set, otherwise v4.
+    fn base_url(&self) -> &'static str {
+        if self.use_v3.load(Ordering::Relaxed) {
+            BASE_URL_V3
+        } else {
+            BASE_URL_V4
+        }
+    }
+
+    /// Flip to v3 mode for the rest of this client's lifetime.
+    fn switch_to_v3(&self) {
+        if !self.use_v3.swap(true, Ordering::Relaxed) {
+            warn!("v4 endpoint persistently failing — falling back to v3 for remainder of run");
         }
     }
 
@@ -78,7 +100,13 @@ impl NatStatClient {
     /// - `range`: optional comma-separated range params (season, date, team code, etc.)
     /// - `offset`: optional pagination offset
     fn build_url(&self, endpoint: &str, range: Option<&str>, offset: Option<u64>) -> String {
-        let mut url = format!("{}/{}/{}/{}", BASE_URL, self.api_key, endpoint, SERVICE);
+        let mut url = format!(
+            "{}/{}/{}/{}",
+            self.base_url(),
+            self.api_key,
+            endpoint,
+            SERVICE
+        );
         match (range, offset) {
             (Some(r), Some(o)) => url = format!("{}/{}/{}", url, r, o),
             (Some(r), None) => url = format!("{}/{}", url, r),
@@ -121,10 +149,14 @@ impl NatStatClient {
             return Ok(cached);
         }
 
-        let url = self.build_url(endpoint, range, offset);
+        let mut url = self.build_url(endpoint, range, offset);
+
+        let range_str = range.unwrap_or("_");
+        let offset_val = offset.unwrap_or(0);
 
         let mut last_err = None;
-        for attempt in 0..=Self::MAX_RETRIES {
+        let mut attempt: u32 = 0;
+        while attempt <= Self::MAX_RETRIES {
             // Rate limit + concurrency control
             let available = self.rate_limiter.available().await;
             if available < 50 {
@@ -133,19 +165,50 @@ impl NatStatClient {
             self.rate_limiter.acquire().await;
 
             if attempt > 0 {
-                info!(endpoint, attempt, "retrying request");
+                let backoff_secs = 2u64.pow(attempt);
+                info!(
+                    endpoint,
+                    range = range_str,
+                    offset = offset_val,
+                    attempt,
+                    backoff_secs,
+                    "retrying request"
+                );
             } else {
-                info!(endpoint, "fetching from NatStat API");
+                info!(
+                    endpoint,
+                    range = range_str,
+                    offset = offset_val,
+                    "fetching from NatStat API"
+                );
             }
 
             let response = match self.http.get(&url).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     // Network errors are retryable
-                    warn!(endpoint, attempt, error = %e, "request failed");
+                    warn!(
+                        endpoint,
+                        range = range_str,
+                        offset = offset_val,
+                        attempt,
+                        error = %e,
+                        "network error"
+                    );
+                    let is_timeout = e.is_timeout() || e.is_connect();
                     last_err = Some(NatStatError::Http(e));
+
+                    // Timeouts on v4 → switch to v3 immediately and retry without
+                    // counting this against the retry budget.
+                    if is_timeout && !self.use_v3.load(Ordering::Relaxed) {
+                        self.switch_to_v3();
+                        url = self.build_url(endpoint, range, offset);
+                        continue;
+                    }
+
                     let backoff = Duration::from_secs(2u64.pow(attempt));
                     tokio::time::sleep(backoff).await;
+                    attempt += 1;
                     continue;
                 }
             };
@@ -154,18 +217,33 @@ impl NatStatClient {
 
             if status.as_u16() == 429 || status.is_server_error() {
                 let body = response.text().await.unwrap_or_default();
+                let backoff_secs = 2u64.pow(attempt);
                 warn!(
                     endpoint,
+                    range = range_str,
+                    offset = offset_val,
                     attempt,
                     status = status.as_u16(),
-                    "retryable HTTP error"
+                    backoff_secs,
+                    "retryable HTTP error — backing off"
                 );
                 last_err = Some(NatStatError::HttpStatus {
                     status: status.as_u16(),
                     body,
                 });
-                let backoff = Duration::from_secs(2u64.pow(attempt));
+
+                // 5xx on v4 → switch to v3 immediately and retry without
+                // counting this against the retry budget. (429 still backs off
+                // normally since both APIs share the same rate limit.)
+                if status.is_server_error() && !self.use_v3.load(Ordering::Relaxed) {
+                    self.switch_to_v3();
+                    url = self.build_url(endpoint, range, offset);
+                    continue;
+                }
+
+                let backoff = Duration::from_secs(backoff_secs);
                 tokio::time::sleep(backoff).await;
+                attempt += 1;
                 continue;
             }
 
@@ -179,19 +257,48 @@ impl NatStatClient {
 
             let body: Value = response.json().await?;
 
-            // Check for API-level errors in response
-            if let Some(error) = body.get("error").and_then(|e| e.as_str())
-                && !error.is_empty()
-            {
-                return Err(NatStatError::ApiError {
-                    code: error.to_string(),
-                    message: body
-                        .get("meta")
-                        .and_then(|m| m.get("description"))
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                });
+            // Check for API-level errors. NatStat error responses come in two
+            // shapes:
+            //   1. `error: "SOME_CODE"` (string)
+            //   2. `error: {"message": "OUT_OF_CALLS", "detail": "..."}` (object)
+            // Additionally, `success: "0"` (string) signals failure.
+            let success_flag = body.get("success").and_then(|v| {
+                v.as_str()
+                    .map(String::from)
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+            });
+            let error_node = body.get("error");
+            let error_code = match error_node {
+                Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+                Some(Value::Object(obj)) => obj
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .map(String::from),
+                _ => None,
+            };
+            let success_failed = matches!(success_flag.as_deref(), Some("0") | Some("false"));
+
+            if error_code.is_some() || success_failed {
+                let code = error_code.unwrap_or_else(|| "API_ERROR".to_string());
+                let message = error_node
+                    .and_then(|e| e.get("detail"))
+                    .and_then(|d| d.as_str())
+                    .map(String::from)
+                    .or_else(|| {
+                        body.get("meta")
+                            .and_then(|m| m.get("description"))
+                            .and_then(|d| d.as_str())
+                            .map(String::from)
+                    })
+                    .unwrap_or_default();
+                error!(
+                    endpoint,
+                    range = range_str,
+                    offset = offset_val,
+                    code = %code,
+                    "API error response (not caching)"
+                );
+                return Err(NatStatError::ApiError { code, message });
             }
 
             // Cache the successful response
@@ -202,16 +309,65 @@ impl NatStatClient {
         }
 
         // All retries exhausted
+        error!(
+            endpoint,
+            range = range_str,
+            offset = offset_val,
+            max_retries = Self::MAX_RETRIES,
+            "all retries exhausted"
+        );
         Err(last_err.unwrap_or(NatStatError::HttpStatus {
             status: 0,
-            body: "all retries exhausted".to_string(),
+            body: format!(
+                "all {} retries exhausted for {endpoint} range={range_str} offset={offset_val}",
+                Self::MAX_RETRIES
+            ),
         }))
+    }
+
+    /// Top-level keys in NatStat responses that are NOT data payloads.
+    const META_KEYS: &'static [&'static str] =
+        &["meta", "user", "error", "query", "success", "credits"];
+
+    /// Hard cap on pagination iterations, as a safety net against runaway
+    /// loops if the API misbehaves badly. 500 pages × 100 results/page = 50k
+    /// records, larger than any single NatStat endpoint we use.
+    const MAX_PAGES: u64 = 500;
+
+    /// Inspect a NatStat response and report whether the data payload is
+    /// empty. Identifies the "data" key as the first top-level key that isn't
+    /// part of the standard meta envelope, then checks whether it's an empty
+    /// object/array (or missing entirely).
+    fn response_is_empty(response: &Value) -> bool {
+        let Some(obj) = response.as_object() else {
+            return true;
+        };
+        for (key, val) in obj {
+            if Self::META_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            let size = match val {
+                Value::Object(o) => o.len(),
+                Value::Array(a) => a.len(),
+                Value::Null => 0,
+                _ => 1,
+            };
+            if size > 0 {
+                return false;
+            }
+        }
+        // Either there were no data keys, or every data key was empty.
+        true
     }
 
     /// Fetch all pages for an endpoint, returning collected results.
     ///
     /// NatStat paginates with offset (increments of max results per page, usually 100).
-    /// This method follows `page-next` until all pages are fetched.
+    /// We deliberately do NOT trust `page-next` or `pages-total` from the
+    /// metadata — both v3 and v4 misreport them on at least the `/elo`
+    /// endpoint (e.g., `pages-total: 2` while real data extends through
+    /// page 4). The only reliable stop signal is "the response payload is
+    /// empty", with `MAX_PAGES` as a safety cap.
     pub async fn get_all_pages(
         &self,
         endpoint: &str,
@@ -220,50 +376,91 @@ impl NatStatClient {
     ) -> Result<Vec<Value>, NatStatError> {
         let mut all_results = Vec::new();
         let mut offset: Option<u64> = None;
+        let mut page_num: u64 = 1;
+        let mut results_max: u64 = 100;
 
         loop {
-            let response = self.get(endpoint, range, offset, ttl).await?;
-            all_results.push(response.clone());
+            let response = match self.get(endpoint, range, offset, ttl).await {
+                Ok(r) => r,
+                // NO_DATA is NatStat's normal "no more results" signal — treat
+                // it as the end of pagination, not a hard failure.
+                Err(NatStatError::ApiError { code, .. }) if code == "NO_DATA" => {
+                    info!(
+                        endpoint,
+                        range = range.unwrap_or("_"),
+                        page = page_num,
+                        "pagination complete (NO_DATA response)"
+                    );
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
 
-            // Check if there are more pages
-            let has_next = response
-                .get("meta")
-                .and_then(|m| m.get("page-next"))
-                .and_then(|p| p.as_str())
-                .is_some();
+            let meta = Self::parse_meta(&response);
+            if let Some(m) = meta.results_max {
+                results_max = m;
+            }
+            let is_empty = Self::response_is_empty(&response);
 
-            if !has_next {
+            info!(
+                endpoint,
+                range = range.unwrap_or("_"),
+                page = page_num,
+                pages_total_reported = meta.pages_total.unwrap_or(0),
+                results_total_reported = meta.results_total.unwrap_or(0),
+                is_empty,
+                "fetched page"
+            );
+
+            if is_empty {
+                // Don't include empty pages in the results — they're just the
+                // signal that we're done.
                 break;
             }
 
-            // Extract current page info to compute next offset
-            let results_max = response
-                .get("meta")
-                .and_then(|m| m.get("results-max"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(100);
+            all_results.push(response);
+
+            if page_num >= Self::MAX_PAGES {
+                warn!(
+                    endpoint,
+                    range = range.unwrap_or("_"),
+                    page = page_num,
+                    "stopping pagination: hit MAX_PAGES safety cap"
+                );
+                break;
+            }
 
             let current_offset = offset.unwrap_or(0);
             offset = Some(current_offset + results_max);
+            page_num += 1;
         }
 
+        info!(
+            endpoint,
+            range = range.unwrap_or("_"),
+            pages = all_results.len(),
+            "finished fetching all pages"
+        );
+
         Ok(all_results)
+    }
+
+    /// Parse a JSON value as u64, accepting both numeric and string-encoded
+    /// integers. NatStat v3 returns meta fields as strings; v4 returns numbers.
+    fn value_as_u64(v: &Value) -> Option<u64> {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
     }
 
     /// Parse the `meta` node from a NatStat response.
     pub fn parse_meta(response: &Value) -> ResponseMeta {
         let meta = response.get("meta");
+        let field = |key: &str| meta.and_then(|m| m.get(key)).and_then(Self::value_as_u64);
         ResponseMeta {
-            results_total: meta
-                .and_then(|m| m.get("results-total"))
-                .and_then(|v| v.as_u64()),
-            results_max: meta
-                .and_then(|m| m.get("results-max"))
-                .and_then(|v| v.as_u64()),
-            page: meta.and_then(|m| m.get("page")).and_then(|v| v.as_u64()),
-            pages_total: meta
-                .and_then(|m| m.get("pages-total"))
-                .and_then(|v| v.as_u64()),
+            results_total: field("results-total"),
+            results_max: field("results-max"),
+            page: field("page"),
+            pages_total: field("pages-total"),
             page_next: meta
                 .and_then(|m| m.get("page-next"))
                 .and_then(|v| v.as_str())
@@ -274,8 +471,8 @@ impl NatStatClient {
     /// Parse the rate limit info from a response's `user` node.
     pub fn parse_rate_limit(response: &Value) -> Option<(u64, u64)> {
         let user = response.get("user")?;
-        let limit = user.get("ratelimit")?.as_u64()?;
-        let remaining = user.get("ratelimit-remaining")?.as_u64()?;
+        let limit = Self::value_as_u64(user.get("ratelimit")?)?;
+        let remaining = Self::value_as_u64(user.get("ratelimit-remaining")?)?;
         Some((limit, remaining))
     }
 
@@ -287,6 +484,11 @@ impl NatStatClient {
     /// Purge expired cache entries.
     pub async fn cleanup_cache(&self) -> Result<u64, NatStatError> {
         Ok(self.cache.cleanup_expired().await?)
+    }
+
+    /// Clear all cache entries (forces fresh API fetches).
+    pub async fn clear_all_cache(&self) -> Result<u64, NatStatError> {
+        Ok(self.cache.clear_all().await?)
     }
 }
 
@@ -302,6 +504,7 @@ mod tests {
             rate_limiter: RateLimiter::new(500),
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
+            use_v3: AtomicBool::new(false),
         };
         let url = client.build_url("teams", None, None);
         assert_eq!(url, "https://api4.natst.at/test-key123/teams/mbb");
@@ -315,6 +518,7 @@ mod tests {
             rate_limiter: RateLimiter::new(500),
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
+            use_v3: AtomicBool::new(false),
         };
         let url = client.build_url("games", Some("2026,DUKE"), None);
         assert_eq!(url, "https://api4.natst.at/test-key123/games/mbb/2026,DUKE");
@@ -328,6 +532,7 @@ mod tests {
             rate_limiter: RateLimiter::new(500),
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
+            use_v3: AtomicBool::new(false),
         };
         let url = client.build_url("players", None, Some(100));
         assert_eq!(url, "https://api4.natst.at/test-key123/players/mbb/_/100");
@@ -341,6 +546,7 @@ mod tests {
             rate_limiter: RateLimiter::new(500),
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
+            use_v3: AtomicBool::new(false),
         };
         let url = client.build_url("games", Some("2026"), Some(200));
         assert_eq!(url, "https://api4.natst.at/test-key123/games/mbb/2026/200");
@@ -354,6 +560,7 @@ mod tests {
             rate_limiter: RateLimiter::new(500),
             cache: ApiCache::new_noop(),
             default_ttl: 3600,
+            use_v3: AtomicBool::new(false),
         };
         let url = client.build_url("games;playbyplay,lineups", Some("2026-03-15"), None);
         assert_eq!(
@@ -407,5 +614,82 @@ mod tests {
             message: "Rate limit exceeded".into(),
         };
         assert!(err.to_string().contains("OUT_OF_CALLS"));
+    }
+
+    #[test]
+    fn test_parse_meta_v3_string_encoded() {
+        // v3 returns meta fields as JSON strings, not numbers. Both shapes
+        // must parse identically — this is the bug that made our pagination
+        // logic blind to all v3 metadata.
+        let response = serde_json::json!({
+            "meta": {
+                "results-total": "121350",
+                "results-max": "100",
+                "page": "1061",
+                "pages-total": "1214",
+                "page-next": "https://api3.natst.at/xxxx/playerperfs/mbb/2026/106100"
+            }
+        });
+        let meta = NatStatClient::parse_meta(&response);
+        assert_eq!(meta.results_total, Some(121350));
+        assert_eq!(meta.results_max, Some(100));
+        assert_eq!(meta.page, Some(1061));
+        assert_eq!(meta.pages_total, Some(1214));
+        assert!(meta.page_next.is_some());
+    }
+
+    #[test]
+    fn test_parse_rate_limit_string_encoded() {
+        let response = serde_json::json!({
+            "user": {
+                "ratelimit": "500",
+                "ratelimit-remaining": "423",
+            }
+        });
+        let (limit, remaining) = NatStatClient::parse_rate_limit(&response).unwrap();
+        assert_eq!(limit, 500);
+        assert_eq!(remaining, 423);
+    }
+
+    #[test]
+    fn test_response_is_empty_no_data_key() {
+        // Only meta envelope keys present — no payload at all.
+        let response = serde_json::json!({
+            "meta": {"page": 1},
+            "user": {},
+            "success": "1",
+            "query": {}
+        });
+        assert!(NatStatClient::response_is_empty(&response));
+    }
+
+    #[test]
+    fn test_response_is_empty_empty_data_object() {
+        let response = serde_json::json!({
+            "meta": {"page": 5},
+            "elo": {},
+            "success": "1"
+        });
+        assert!(NatStatClient::response_is_empty(&response));
+    }
+
+    #[test]
+    fn test_response_is_empty_empty_data_array() {
+        let response = serde_json::json!({
+            "meta": {"page": 5},
+            "performances": [],
+            "success": "1"
+        });
+        assert!(NatStatClient::response_is_empty(&response));
+    }
+
+    #[test]
+    fn test_response_is_not_empty_with_data() {
+        let response = serde_json::json!({
+            "meta": {"page": 1},
+            "elo": {"elo_team_1": {"team": "Duke"}},
+            "success": "1"
+        });
+        assert!(!NatStatClient::response_is_empty(&response));
     }
 }

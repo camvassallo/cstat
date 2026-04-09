@@ -137,13 +137,19 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ### Model Improvement Ideas
 - ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
+- **Use NatStat ELO as feature**: Replace computed incremental ELO with NatStat's pre-game ELO from `/forecasts` endpoint. Uses only `elo_before` (pre-game) to avoid leakage. NatStat's ELO is computed across their full historical database (back to 2007), so it's richer than our 2-season approximation. Fall back to computed ELO for games without forecast data.
+- **Benchmark against NatStat win probability**: `/forecasts` provides ELO-based `winexp` per game. Compare our model's predictions against theirs to identify where we add value.
+- **Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.
 - **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
 - **Add `games_played` feature**: lets model know how much data it has on a team (early-season uncertainty)
 - **Conference strength feature**: average adj_efficiency_margin of conference, captures tier gaps beyond SOS
 
+### Data Leakage Precautions for NatStat ELO
+NatStat's `/forecasts` provides both `elo_before` (pre-game) and `elo_after` (post-game) for each team. Only `elo_before` may be used as an ML feature — it represents the rating at prediction time. `elo_after` and current `/elo` rankings reflect end-of-season state and must NOT be used as game-level features. The `win_exp` (NatStat's predicted win probability) must also be excluded from training features — it's a competing prediction, not an input. It should only be used as a benchmark comparison.
+
 ### Known Model Limitations
 - **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
-- **Limited data**: Training on 2025+2026 seasons. More historical seasons would further improve generalization.
+- **Limited data**: Training on 2025+2026 seasons. More historical seasons would further improve generalization. NatStat has data back to 2007.
 - **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach
@@ -189,12 +195,16 @@ This naturally enables:
 - [x] Fix rebound mapping (`reb` = defensive rebounds, not total)
 - [x] Fix ORB%/DRB% computation (game-level self-join with NULL guards)
 - [x] Force-overwrite rebounds/usage on re-ingestion (no COALESCE)
-- [x] Label ELO as "ELO Rk" (rank, not rating)
+- [x] ~Label ELO as "ELO Rk" (rank, not rating)~ → replaced with real ELO rating from `/elo` endpoint
 - [x] Make team names clickable on Rankings page
-- [ ] Player deduplication merge pass (989 duplicate pairs)
+- [x] Player deduplication merge pass (989 duplicate pairs)
+- [ ] Ingest real ELO ratings from `/elo` endpoint (4 API calls/season)
+- [ ] Ingest per-game forecasts from `/forecasts` endpoint (pre/post ELO, win exp, spread, moneyline — 57 calls/season)
+- [ ] Update ML to use NatStat pre-game ELO (elo_before only — no leakage)
+- [ ] Benchmark model against NatStat win probability
 - [ ] Fix player rate stats to use possession-based formulas
 - [ ] Full 2026 season re-ingestion + recompute after all fixes
-- [ ] Retrain ML models after data quality fixes
+- [ ] Retrain ML models after data quality + ELO fixes
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
@@ -217,7 +227,7 @@ This naturally enables:
 ## Phase 6: Expansion & Refinement
 > Historical depth, brackets, continuous improvement
 
-- [ ] Ingest historical seasons (NatStat data back to 2006)
+- [ ] Ingest historical seasons (NatStat perfs back to 2007, PBP from 2012+, per `/seasons` endpoint)
 - [ ] Backtest models across multiple seasons
 - [ ] Tournament bracket simulator (Monte Carlo, inspired by gravity project)
 - [ ] Season simulation engine
@@ -229,17 +239,21 @@ This naturally enables:
 
 ## Known Bugs / Data Quality Issues
 
-### Duplicate Player Records (P1)
-NatStat's `/playercodes` endpoint returns different codes for the same physical player across seasons (e.g., `57987927` and `87832246` both map to Caleb Foster on Duke). This creates two `players` rows per affected player — one with most games, one with 1-2 games. **~989 duplicate pairs** exist in the 2026 season data.
+### Duplicate Player Records (P1 — Fixed)
+NatStat's `/playercodes` endpoint returns different codes for the same physical player across seasons (e.g., `57987927` and `87832246` both map to Caleb Foster on Duke). This creates two `players` rows per affected player — one with most games, one with 1-2 games. **~989 duplicate pairs** exist in the 2026 season data. 241 have overlapping games with identical stats (concentrated on opening night Nov 3).
 
-**Impact**: Player season stats are split across two records, deflating per-game averages for the primary record and showing misleading 1-game entries on rosters. No double-counting occurs (the two codes never appear in the same game box score).
+**Impact**: Player season stats are split across two records, deflating per-game averages for the primary record and showing misleading 1-game entries on rosters.
 
-**Fix**: Add a post-ingestion deduplication pass that merges records sharing the same `(name, team_id, season)`. Reassign `player_game_stats` rows from the duplicate to the primary (higher GP) player, then delete the duplicate player + season stats.
+**Fix**: Implemented `deduplicate_players()` as step 1/12 in the compute pipeline. For each `(name, team_id, season)` duplicate group: picks the primary (highest game count), deletes overlapping identical game stats, reassigns non-overlapping game stats to primary, removes duplicate player + season stats + percentiles records.
 
-### NatStat `reb` Field is Defensive Rebounds, Not Total (P1 — Mitigated)
-NatStat's `reb` field in `playerperfs` and `teamperfs` represents **defensive rebounds**, not total rebounds. Additionally, ~69% of team game records return `reb=0` even when `oreb > 0`, which is missing data rather than actual zero defensive rebounds.
+### NatStat `reb` Field is Total Rebounds, Not Defensive (P1 — Fixed)
+NatStat's `reb` field in both `playerperfs` and `teamperfs` represents **total rebounds**, not defensive rebounds. This was initially misidentified as defensive rebounds, causing inflated totals (e.g., Tobe Awaka showed 26 total vs actual 18). Additionally, ~69% of records return `reb=0` even when `oreb > 0`, which is missing data.
 
-**Current handling**: Ingestion maps `reb` → `def_rebounds`, guards `reb=0 + oreb>0` as NULL, computes `total_rebounds = oreb + dreb`. Force-overwrites these columns on re-ingestion. The compute pipeline then **estimates missing DREB** from the box score: `DREB ≈ opponent_missed_FGA - opponent_OREB` (validated: r=0.840, MAE=2.38 rebounds across 3,178 games). This gives ORB%/DRB% full coverage with a median ORB% of 27.9% and DRB% of 72.2% — matching KenPom ranges.
+**Verification**: Cross-referenced Tobe Awaka vs Utah Tech (NatStat `reb=18, oreb=8` → 18 total, 10 defensive, matching ESPN). Confirmed team-level `reb` sums match player-level `reb` sums, and both are total (not defensive).
+
+**Verified via live API curl**: NatStat genuinely doesn't have total/defensive rebounds for ~68% of games — it's missing at the source, not an ingestion bug. The missing data is all-or-nothing per game (no mixed games). When `reb` is populated, `playerperfs` also includes a `dreb` field; `teamperfs` never has `dreb`.
+
+**Fix**: Ingestion now correctly maps `reb` → `total_rebounds`, uses `dreb` directly when present (playerperfs only), otherwise derives `def_rebounds = total - oreb`. Guards `reb=0 + oreb>0` as NULL. Force-overwrites on upsert. The compute pipeline estimates missing team DREB from box score (`DREB ≈ opponent_missed_FGA - opponent_OREB`, r=0.840) for the ~68% of games where `reb=0`.
 
 ### ELO Shows Rank, Not Rating (P2 — Labeled)
 NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. We try `elo.rating`/`elo.value`/`elo.elo` first (future-proofing) and fall back to rank. Frontend labels it "ELO Rk".

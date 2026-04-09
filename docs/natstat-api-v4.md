@@ -1,14 +1,22 @@
 # NatStat API v4 — MBB Reference
 
-> Extracted from natstat.com/api-v4/docs and natstat.com/api-v4/endpoints (login required).
-> API Version: v4 BETA 1 (released March 2026)
+> Extracted from natstat.com/api-v4/docs, natstat.com/api-v4/endpoints (login required), and api_doc.txt.
+> API Version: v4 BETA 1 (2025.12.10). Scheduled for full release March 2026.
+
+## Differences From v3
+
+- **Hierarchical endpoints**: Three primary (`teams`, `games`, `players`), 22 secondary, 6 reference
+- **Stackable endpoints**: Hydrate primary endpoints with secondary data via semicolons (e.g., `games;playbyplay,lineups`)
+- **Reference endpoints**: `datastatus` (metadata + known data issues), `seasons`, `teamcodes`, `gamecodes`, `playercodes`, `glossary`
+- **New endpoint**: `text` — generated game previews/summaries from Interstat Pressroom
+- **Backward-compatible** from v3, but may return less data. Adjust queries for v4's more flexible methods
 
 ## General
 
 - **Base URL:** `https://api4.natst.at/`
 - **Method:** GET (all requests)
 - **Service code:** `mbb` (NCAA Men's Division I Basketball, case-insensitive)
-- **Full data back to:** 2008 season
+- **Full data back to:** 2007 season (159K games, 2.2M performances, 3.4M play-by-play records per `/datastatus`)
 
 ## Authentication
 
@@ -44,6 +52,29 @@ https://api4.natst.at/{apikey}/{endpoint}/{service}/{range}/{offset}
   - `ratelimit-remaining` — calls remaining
   - `ratelimit-timeframe` — "hour" or "day"
   - `ratelimit-reset` — datetime of next reset
+  - `throttle-level` — seconds of automatic throttle (0 = none). System may throttle to protect service.
+
+### Multiple IP Policy
+
+Each API key is allowed access from up to **4 IP blocks** (`X.X.-.-`) within 24 hours (`ip-last24` in meta node). Accessing from more than 6 IP blocks triggers an automatic 24-hour suspension.
+
+### API Abuse Policy
+
+Three-strike system:
+1. Written warning + manual key reset
+2. Key revoked, access suspended (can cancel with refund)
+3. Permanent termination, no refund
+
+Triggers: excessive concurrent requests, >4 queries/sec, improperly written code affecting other users, replicating NatStat's services.
+
+### NatStat API+
+
+Annual or non-expiring upgrade add-on (requires existing NatStat subscription):
+- 100,000 API calls/day (resets 12:01 AM ET)
+- No IP or concurrency restrictions (enables cloud/rotating IP use)
+- Early access to new features and closed beta endpoints
+- If underlying subscription lapses, API+ is suspended; expires 365 days after purchase
+- Still subject to abuse policy regarding excessive concurrency affecting service availability
 
 ## Response Format
 
@@ -356,17 +387,83 @@ List of league codes for use in other queries.
 **Range params:** `dataformat`, `season`, `leaguecode`, `search`
 
 #### /datastatus
-Metadata about service database status and known data issues. Alias: `status`.
+Metadata about service database status and known data issues. Alias: `status`. Works on both v3 and v4.
 
 **Range params:** `dataformat`, `season`
+
+Returns: `status` (current season, season day, qualifier criteria), `totals` (games, performances, play-by-play, news, transactions, tweets, videos, data-back-to year), `user` (account tier, rate limits).
+
+```
+/datastatus/mbb/    # MBB data status
+```
+
+As of 2026-04-09 for MBB: 159,537 games, 2.2M performances, 3.4M play-by-play, data back to 2007.
+
+---
+
+## Field Mapping Quirks
+
+These are non-obvious behaviors discovered through data validation:
+
+### `reb` = Total Rebounds (NOT Defensive)
+Per the official `/glossary/mbb` endpoint: `reb` (code `reb`, abbrev `REB`) = **"Total Rebounds"**. This applies to both `playerperfs` and `teamperfs`. Defensive rebounds must be derived: `dreb = reb - oreb`. Verified by cross-referencing against ESPN box scores (e.g., Tobe Awaka vs Utah Tech: NatStat `reb=18, oreb=8` → 18 total, 10 def).
+
+Related glossary entries:
+| Code | Abbrev | Name | Type |
+|------|--------|------|------|
+| `reb` | REB | Total Rebounds | player |
+| `oreb` | OREB | Offensive Rebounds | player |
+| `dreb` | DREB | Defensive Rebounds | player |
+| `reb-d` | REB-D | Total Rebounds (Defense) | team |
+| `oreb-d` | OREB-D | Offensive Rebounds (Defense) | team |
+| `dreb-d` | DREB-D | Defensive Rebounds (Defense) | team |
+| `orbpct` | ORB% | Offensive Rebound % | team |
+| `drbpct` | DRB% | Defensive Rebound % | team |
+| `rebpct` | REB% | Rebound % | player |
+
+### `dreb` Field (Player Only, Conditional)
+When `reb` is populated, `playerperfs` also includes a `dreb` (defensive rebounds) field. When `reb=0` (missing), the `dreb` key is entirely absent. `teamperfs` never includes a `dreb` field — defensive rebounds must be derived from `reb - oreb`.
+
+### ~68% of Games Have No Rebound Data
+Both `playerperfs` and `teamperfs` return `reb=0` for ~68% of games even when `oreb > 0`. This is **missing data at the source**, not zero total rebounds — confirmed via live API curl (2026-04-09). The missing data is per-game (all-or-nothing): within a game, either all players have `reb` or none do. 4,248 games missing vs 2,025 present in 2026 season. No team/conference/date pattern — scattered across the entire season.
+
+### `usgpct` = Whole Number Percentage
+NatStat returns `usgpct` as whole numbers (e.g., `19.5` for 19.5%). Divide by 100 before storing as a decimal.
+
+### `/playercodes` Returns Different Codes Across Seasons
+The same physical player can have different `player-code` values in different seasons (e.g., Caleb Foster on Duke: `57987927` in 2025, `87832246` in 2026). This creates duplicate player records. ~989 duplicate pairs observed in 2026 data, mostly from opening-week games. Deduplication by `(name, team_id, season)` is required post-ingestion.
+
+### `teamperfs` Stats Are Nested Under `stats`
+Unlike `playerperfs` where stats are flat on the performance object, `teamperfs` nests all stat fields under a `stats` key.
+
+### ELO: Only Rank Available
+The `/teams` endpoint's `elo` object only provides `.rank` (ordinal 1-364), not the actual ELO rating value.
+
+---
+
+## API Version History
+
+| Version | Date | Base URL | Notes |
+|---------|------|----------|-------|
+| v4 BETA 1 | Dec 2025 | `api4.natst.at` | Hierarchical endpoints, stackable hydration, `text` endpoint |
+| v3.5 | May 2025 | `api3.natst.at` | Added `events`, `projline` endpoints; search improvements |
+| v3.0 | May 2024 | `api3.natst.at` | Simplified query structure; deprecated `rpi`, `social`, `tweets`; `id` → `code` terminology |
+| v2 | May 2022 | — | Removed CSV/TSV/Excel export; added `max_results` param |
+| v1 | Mar 2018 | — | Original API. Taken offline Dec 31, 2024 |
+
+Key v2→v3 change: `code` now means "use with another endpoint" (e.g., team code `DUKE`), while `id` means unique record identifier. All returned parameters lowercase in v3+.
 
 ---
 
 ## Key Notes
 
-1. Each API call deducts 1 credit. Hydration currently does not charge extra (may change).
-2. Stats and rankings re-tabulate nightly at ~3 AM ET.
+1. Each API call deducts 1 credit. Hydration currently does not charge extra (may change). Future: may transition to credit-based transactions charging extra for stacked secondary endpoints.
+2. Stats and rankings re-tabulate nightly at ~3 AM ET during season.
 3. `/events` only holds the last 24 hours.
-4. `/projline` only returns today's games.
+4. `/projline` only returns today's games. Use Interstat API for other days.
 5. Betting data (moneyline, pointspread, overunder) from Betsson — not available for every game.
 6. The `credits` field in meta is experimental/illustrative only.
+7. Auto-populated nodes may change during v4 beta — check changelog.
+8. Hydrating with contextually wrong secondary endpoints (e.g., `players;teamperfs`) returns a warning, not an error.
+9. API key can be reset at **Analysis Tools > NatStat API > Query Builder** on any subscribed subsite.
+10. NatStat has been operating since 2007; covers 30 competition levels across 5 sports.
