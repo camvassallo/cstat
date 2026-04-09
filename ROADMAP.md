@@ -132,8 +132,8 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
   - 5-fold CV: margin MAE 9.46, win accuracy 69.2%, AUC 0.736
   - Top features: adj_efficiency_margin (dominant), ELO, minutes_stddev (depth), def_rebound_pct, adj_defense
   - Model early-stops at 49-66 iterations — data-starved with single season
-- [ ] Rust inference engine via `ort` crate
-- [ ] Model accuracy tracking and evaluation framework
+- [x] Rust inference engine via `ort` crate
+- [x] Model accuracy tracking and evaluation framework
 
 ### Model Improvement Ideas
 - ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
