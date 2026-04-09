@@ -19,9 +19,10 @@ debug/
 .DS_Store
 Thumbs.db
 
-# Frontend (future)
+# Frontend
 node_modules/
 dist/
+.vite/
 
 # Python
 .venv/
@@ -34,3 +35,6 @@ __pycache__/
 *.pkl
 *.joblib
 training/models/
+
+# Logs
+/logs/
