@@ -101,7 +101,7 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ---
 
-## Phase 3: ML — Player Impact & Game Prediction ← CURRENT
+## Phase 3: ML — Player Impact & Game Prediction ✓
 > Train player-level models, compose into game predictions
 
 - [x] Python training pipeline (LightGBM, scikit-learn, ONNX export)
@@ -162,7 +162,35 @@ This naturally enables:
 
 ---
 
-## Phase 4: Transfer Portal & Roster Composition Tool
+## Phase 4: Frontend — Rankings, Stats & Predictions ← CURRENT
+> React web UI on top of the existing data/compute/ML layers (KenPom/Barttorvik-style)
+
+### 4a: API Endpoints (cstat-api)
+- [x] `GET /api/teams/rankings` — team rankings sortable by adj efficiency, ELO, SOS, etc.
+- [x] `GET /api/teams/:id` — team profile: season stats, four factors, schedule/results
+- [x] `GET /api/players?search=&team=&season=` — player search/filter
+- [x] `GET /api/players/:id` — player profile: season stats, percentiles, rolling form
+- [ ] `GET /api/players/compare?ids=` — side-by-side player comparison
+- [x] `GET /api/games?date=&team=` — game results
+
+### 4b: React Frontend (Vite + AG Grid + Recharts)
+- [x] Project scaffold (Vite, React, TypeScript, Tailwind CSS)
+- [x] Team rankings table (sortable/filterable, AG Grid)
+- [x] Team detail page (four factors, schedule, roster)
+- [x] Player stats table (sortable, with search)
+- [x] Player detail page (season stats, rolling form charts, percentile spider/radar)
+- [ ] Player comparison view (side-by-side stats + visualizations)
+- [x] Game prediction interface (pick two teams → predicted margin + win prob)
+- [ ] Score ticker / recent results
+- [ ] Mobile-responsive design
+
+### 4c: Deployment
+- [ ] Deploy to domain with Nginx reverse proxy
+- [x] Serve React build from cstat-api (static file fallback)
+
+---
+
+## Phase 5: Transfer Portal & Roster Composition Tool
 > "What if" roster analysis for the offseason
 
 - [ ] Player search and comparison across all teams
@@ -170,19 +198,7 @@ This naturally enables:
 - [ ] Roster fit scoring (complementary skills, redundancy detection)
 - [ ] Portal player rankings by projected impact at destination
 - [ ] API endpoints for all composition queries
-
----
-
-## Phase 5: Frontend & Deployment
-> React site on your domain
-
-- [ ] Team rankings dashboard (composed from player metrics)
-- [ ] Player comparison tool with percentile visualizations
-- [ ] Game prediction interface (pick two teams → predicted outcome)
-- [ ] Transfer portal sandbox
-- [ ] Scatter plots, rolling trend charts, shot charts (if PBP supports)
-- [ ] Deploy to domain with Nginx reverse proxy
-- [ ] Mobile-responsive design
+- [ ] Transfer portal sandbox UI
 
 ---
 
@@ -210,8 +226,8 @@ Given the 500 API calls/hour NatStat limit:
 ---
 
 ## Timeline
-- **Phase 1**: Now — capture 2025-2026 season data
-- **Phase 2-3**: Offseason — build metrics engine and train models
-- **Phase 4**: Transfer portal season — evaluate portal players
-- **Phase 5**: Summer — deploy frontend
-- **Phase 6**: Ongoing — ready for 2026-2027 season
+- **Phase 1**: ✓ Capture 2025-2026 season data
+- **Phase 2-3**: ✓ Metrics engine, ML training, inference
+- **Phase 4**: Now — frontend + API to surface data (KenPom/Barttorvik-style)
+- **Phase 5**: Transfer portal season — roster composition tool
+- **Phase 6**: Ongoing — historical depth, brackets, ready for 2026-2027
