@@ -323,10 +323,51 @@ impl NatStatClient {
         }))
     }
 
+    /// Top-level keys in NatStat responses that are NOT data payloads.
+    const META_KEYS: &'static [&'static str] =
+        &["meta", "user", "error", "query", "success", "credits"];
+
+    /// Hard cap on pagination iterations, as a safety net against runaway
+    /// loops if the API misbehaves badly. 500 pages × 100 results/page = 50k
+    /// records, larger than any single NatStat endpoint we use.
+    const MAX_PAGES: u64 = 500;
+
+    /// Inspect a NatStat response and report whether the data payload is
+    /// empty. Identifies the "data" key as the first top-level key that isn't
+    /// part of the standard meta envelope, then checks whether it's an empty
+    /// object/array (or missing entirely).
+    fn response_is_empty(response: &Value) -> bool {
+        let Some(obj) = response.as_object() else {
+            return true;
+        };
+        let mut found_data_key = false;
+        for (key, val) in obj {
+            if Self::META_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            found_data_key = true;
+            let size = match val {
+                Value::Object(o) => o.len(),
+                Value::Array(a) => a.len(),
+                Value::Null => 0,
+                _ => 1,
+            };
+            if size > 0 {
+                return false;
+            }
+        }
+        // If there were no non-meta keys at all, treat as empty.
+        !found_data_key
+    }
+
     /// Fetch all pages for an endpoint, returning collected results.
     ///
     /// NatStat paginates with offset (increments of max results per page, usually 100).
-    /// This method follows `page-next` until all pages are fetched.
+    /// We deliberately do NOT trust `page-next` or `pages-total` from the
+    /// metadata — both v3 and v4 misreport them on at least the `/elo`
+    /// endpoint (e.g., `pages-total: 2` while real data extends through
+    /// page 4). The only reliable stop signal is "the response payload is
+    /// empty", with `MAX_PAGES` as a safety cap.
     pub async fn get_all_pages(
         &self,
         endpoint: &str,
@@ -336,54 +377,59 @@ impl NatStatClient {
         let mut all_results = Vec::new();
         let mut offset: Option<u64> = None;
         let mut page_num: u64 = 1;
+        let mut results_max: u64 = 100;
 
         loop {
-            let response = self.get(endpoint, range, offset, ttl).await?;
+            let response = match self.get(endpoint, range, offset, ttl).await {
+                Ok(r) => r,
+                // NO_DATA is NatStat's normal "no more results" signal — treat
+                // it as the end of pagination, not a hard failure.
+                Err(NatStatError::ApiError { code, .. }) if code == "NO_DATA" => {
+                    info!(
+                        endpoint,
+                        range = range.unwrap_or("_"),
+                        page = page_num,
+                        "pagination complete (NO_DATA response)"
+                    );
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
 
             let meta = Self::parse_meta(&response);
-            let results_total = meta.results_total.unwrap_or(0);
-            let pages_total = meta.pages_total.unwrap_or(1);
+            if let Some(m) = meta.results_max {
+                results_max = m;
+            }
+            let is_empty = Self::response_is_empty(&response);
 
             info!(
                 endpoint,
                 range = range.unwrap_or("_"),
                 page = page_num,
-                pages_total,
-                results_total,
+                pages_total_reported = meta.pages_total.unwrap_or(0),
+                results_total_reported = meta.results_total.unwrap_or(0),
+                is_empty,
                 "fetched page"
             );
 
+            if is_empty {
+                // Don't include empty pages in the results — they're just the
+                // signal that we're done.
+                break;
+            }
+
             all_results.push(response);
 
-            // Stop conditions, in priority order:
-            //   1. No `page-next` link.
-            //   2. `pages-total` known and we've reached it (defends against
-            //      v3 endpoints that hand out infinite empty `page-next` links).
-            //   3. `results-total` is 0 — nothing to paginate through.
-            if meta.page_next.is_none() {
-                break;
-            }
-            if meta.pages_total.is_some() && page_num >= pages_total {
+            if page_num >= Self::MAX_PAGES {
                 warn!(
                     endpoint,
                     range = range.unwrap_or("_"),
                     page = page_num,
-                    pages_total,
-                    "stopping pagination: reached pages_total despite page-next being set"
-                );
-                break;
-            }
-            if meta.results_total == Some(0) {
-                warn!(
-                    endpoint,
-                    range = range.unwrap_or("_"),
-                    page = page_num,
-                    "stopping pagination: results_total is 0"
+                    "stopping pagination: hit MAX_PAGES safety cap"
                 );
                 break;
             }
 
-            let results_max = meta.results_max.unwrap_or(100);
             let current_offset = offset.unwrap_or(0);
             offset = Some(current_offset + results_max);
             page_num += 1;
@@ -399,20 +445,21 @@ impl NatStatClient {
         Ok(all_results)
     }
 
+    /// Parse a JSON value as u64, accepting both numeric and string-encoded
+    /// integers. NatStat v3 returns meta fields as strings; v4 returns numbers.
+    fn value_as_u64(v: &Value) -> Option<u64> {
+        v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    }
+
     /// Parse the `meta` node from a NatStat response.
     pub fn parse_meta(response: &Value) -> ResponseMeta {
         let meta = response.get("meta");
+        let field = |key: &str| meta.and_then(|m| m.get(key)).and_then(Self::value_as_u64);
         ResponseMeta {
-            results_total: meta
-                .and_then(|m| m.get("results-total"))
-                .and_then(|v| v.as_u64()),
-            results_max: meta
-                .and_then(|m| m.get("results-max"))
-                .and_then(|v| v.as_u64()),
-            page: meta.and_then(|m| m.get("page")).and_then(|v| v.as_u64()),
-            pages_total: meta
-                .and_then(|m| m.get("pages-total"))
-                .and_then(|v| v.as_u64()),
+            results_total: field("results-total"),
+            results_max: field("results-max"),
+            page: field("page"),
+            pages_total: field("pages-total"),
             page_next: meta
                 .and_then(|m| m.get("page-next"))
                 .and_then(|v| v.as_str())
@@ -423,8 +470,8 @@ impl NatStatClient {
     /// Parse the rate limit info from a response's `user` node.
     pub fn parse_rate_limit(response: &Value) -> Option<(u64, u64)> {
         let user = response.get("user")?;
-        let limit = user.get("ratelimit")?.as_u64()?;
-        let remaining = user.get("ratelimit-remaining")?.as_u64()?;
+        let limit = Self::value_as_u64(user.get("ratelimit")?)?;
+        let remaining = Self::value_as_u64(user.get("ratelimit-remaining")?)?;
         Some((limit, remaining))
     }
 
