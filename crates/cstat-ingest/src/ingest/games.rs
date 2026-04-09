@@ -393,8 +393,10 @@ async fn upsert_player_game_stats(
     let fta = get_i32(perf, &["fta"]);
     let ft_pct = get_f64(perf, &["ftpct", "ft_pct", "ftp"]);
     let off_rebounds = get_i32(perf, &["oreb", "orb"]);
-    let def_rebounds = get_i32(perf, &["dreb", "drb"]);
-    let total_rebounds = get_i32(perf, &["reb", "trb"]);
+    // NatStat playerperfs returns "reb" as defensive rebounds (not total),
+    // despite the label — confirmed by observing OREB>0 with REB=0.
+    let def_rebounds = get_i32(perf, &["reb", "dreb", "drb"]);
+    let total_rebounds = off_rebounds.zip(def_rebounds).map(|(o, d)| o + d);
     let assists = get_i32(perf, &["ast", "assists"]);
     let turnovers = get_i32(perf, &["to", "tov"]);
     let steals = get_i32(perf, &["stl", "steals"]);
@@ -727,18 +729,14 @@ async fn upsert_team_game_stats(
     let ftm = get_i32(stats, &["ftm"]);
     let fta = get_i32(stats, &["fta"]);
     let off_rebounds = get_i32(stats, &["oreb"]);
-    let total_rebounds = get_i32(stats, &["reb"]);
+    // NatStat teamperfs "reb" is defensive rebounds (not total) — same as playerperfs
+    let def_rebounds = get_i32(stats, &["reb", "dreb", "drb"]);
+    let total_rebounds = off_rebounds.zip(def_rebounds).map(|(o, d)| o + d);
     let assists = get_i32(stats, &["ast"]);
     let steals = get_i32(stats, &["stl"]);
     let blocks = get_i32(stats, &["blk"]);
     let turnovers = get_i32(stats, &["to"]);
     let fouls = get_i32(stats, &["f", "pf"]);
-
-    // Derive def_rebounds = total - off
-    let def_rebounds = match (total_rebounds, off_rebounds) {
-        (Some(t), Some(o)) => Some(t - o),
-        _ => None,
-    };
 
     sqlx::query(
         "INSERT INTO team_game_stats (

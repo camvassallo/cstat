@@ -5,12 +5,15 @@ use uuid::Uuid;
 
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
-    // def_rebounds = total_rebounds - off_rebounds
+    // def_rebounds = total_rebounds - off_rebounds (only when total > off, i.e. data is valid;
+    // NatStat "reb" is actually dreb so after re-ingestion this backfill is only needed
+    // for rows ingested before the fix)
     let r1 = sqlx::query(
         "UPDATE player_game_stats
          SET def_rebounds = total_rebounds - off_rebounds
          WHERE total_rebounds IS NOT NULL
            AND off_rebounds IS NOT NULL
+           AND total_rebounds >= off_rebounds
            AND def_rebounds IS NULL",
     )
     .execute(pool)
@@ -301,7 +304,7 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
                 SUM(tgs.fta) as fta,
                 SUM(tgs.ftm) as ftm,
                 SUM(tgs.off_rebounds) as oreb,
-                SUM(COALESCE(tgs.total_rebounds, 0) - COALESCE(tgs.off_rebounds, 0)) as dreb,
+                SUM(tgs.def_rebounds) as dreb,
                 SUM(tgs.turnovers) as tov,
                 SUM(tgs.points) as pts,
                 COUNT(*) as games,
@@ -321,7 +324,7 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
                 SUM(tgs.fta) as opp_fta,
                 SUM(tgs.ftm) as opp_ftm,
                 SUM(tgs.off_rebounds) as opp_oreb,
-                SUM(COALESCE(tgs.total_rebounds, 0) - COALESCE(tgs.off_rebounds, 0)) as opp_dreb,
+                SUM(tgs.def_rebounds) as opp_dreb,
                 SUM(tgs.turnovers) as opp_tov,
                 SUM(tgs.points) as opp_pts,
                 SUM(tgs.fga) - SUM(tgs.off_rebounds) + SUM(tgs.turnovers) + 0.44 * SUM(tgs.fta) as opp_poss
@@ -329,6 +332,23 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
             WHERE tgs.season = $1
               AND tgs.opponent_id IS NOT NULL
             GROUP BY tgs.opponent_id
+        ),
+        reb_agg AS (
+            -- Rebound rates via game-level self-join on team_game_stats.
+            -- ORB% = team_OREB / (team_OREB + opp_DREB)
+            -- DRB% = team_DREB / (team_DREB + opp_OREB)
+            SELECT
+                tgs.team_id,
+                ROUND((SUM(tgs.off_rebounds)::float /
+                    NULLIF(SUM(tgs.off_rebounds) + SUM(opp.def_rebounds), 0))::numeric, 3) as off_rebound_pct,
+                ROUND((SUM(tgs.def_rebounds)::float /
+                    NULLIF(SUM(tgs.def_rebounds) + SUM(opp.off_rebounds), 0))::numeric, 3) as def_rebound_pct
+            FROM team_game_stats tgs
+            JOIN team_game_stats opp ON opp.game_id = tgs.game_id AND opp.team_id = tgs.opponent_id
+            WHERE tgs.season = $1
+              AND tgs.off_rebounds IS NOT NULL AND tgs.def_rebounds IS NOT NULL
+              AND opp.off_rebounds IS NOT NULL AND opp.def_rebounds IS NOT NULL
+            GROUP BY tgs.team_id
         )
         UPDATE team_season_stats tss SET
             -- Offensive efficiency = pts / poss * 100
@@ -342,17 +362,17 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
             -- Offensive four factors
             effective_fg_pct = ROUND(((t.fgm + 0.5 * t.tpm)::float / NULLIF(t.fga, 0))::numeric, 3),
             turnover_pct = ROUND((t.tov::float / NULLIF(t.poss, 0))::numeric, 3),
-            off_rebound_pct = ROUND((t.oreb::float / NULLIF(t.oreb + COALESCE(o.opp_dreb, 0), 0))::numeric, 3),
+            off_rebound_pct = r.off_rebound_pct,
             ft_rate = ROUND((t.fta::float / NULLIF(t.fga, 0))::numeric, 3),
             -- Defensive four factors
             opp_effective_fg_pct = ROUND(((o.opp_fgm + 0.5 * o.opp_tpm)::float / NULLIF(o.opp_fga, 0))::numeric, 3),
             opp_turnover_pct = ROUND((o.opp_tov::float / NULLIF(o.opp_poss, 0))::numeric, 3),
             opp_ft_rate = ROUND((o.opp_fta::float / NULLIF(o.opp_fga, 0))::numeric, 3),
-            -- DRB% = team_DREB / (team_DREB + opp_OREB)
-            def_rebound_pct = ROUND((t.dreb::float / NULLIF(t.dreb + COALESCE(o.opp_oreb, 0), 0))::numeric, 3),
+            def_rebound_pct = r.def_rebound_pct,
             updated_at = now()
         FROM team_agg t
         LEFT JOIN opp_agg o ON t.team_id = o.team_id
+        LEFT JOIN reb_agg r ON t.team_id = r.team_id
         WHERE tss.team_id = t.team_id AND tss.season = $1",
     )
     .bind(season)
