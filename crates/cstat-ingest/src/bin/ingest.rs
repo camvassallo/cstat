@@ -84,6 +84,18 @@ enum Commands {
         to: String,
     },
 
+    /// Ingest ELO ratings from /elo endpoint.
+    Elo {
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+    },
+
+    /// Ingest per-game forecasts (ELO snapshots, win exp, betting lines) from /forecasts.
+    Forecasts {
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+    },
+
     /// Run compute pipeline: derive season stats, schedules, percentiles from raw data.
     Compute {
         #[arg(short, long, default_value = "2026")]
@@ -216,6 +228,18 @@ async fn main() -> Result<()> {
                 }
             };
             println!("Ingested {count} player performances for {year}");
+        }
+
+        Commands::Elo { year } => {
+            let count =
+                cstat_ingest::ingest::elo::ingest_elo_ratings(&client, &db.pool, year).await?;
+            println!("Ingested {count} ELO ratings for {year}");
+        }
+
+        Commands::Forecasts { year } => {
+            let count =
+                cstat_ingest::ingest::elo::ingest_game_forecasts(&client, &db.pool, year).await?;
+            println!("Ingested {count} game forecasts for {year}");
         }
 
         Commands::Compute { year } => {

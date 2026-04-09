@@ -137,13 +137,19 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ### Model Improvement Ideas
 - ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
+- **Use NatStat ELO as feature**: Replace computed incremental ELO with NatStat's pre-game ELO from `/forecasts` endpoint. Uses only `elo_before` (pre-game) to avoid leakage. NatStat's ELO is computed across their full historical database (back to 2007), so it's richer than our 2-season approximation. Fall back to computed ELO for games without forecast data.
+- **Benchmark against NatStat win probability**: `/forecasts` provides ELO-based `winexp` per game. Compare our model's predictions against theirs to identify where we add value.
+- **Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.
 - **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
 - **Add `games_played` feature**: lets model know how much data it has on a team (early-season uncertainty)
 - **Conference strength feature**: average adj_efficiency_margin of conference, captures tier gaps beyond SOS
 
+### Data Leakage Precautions for NatStat ELO
+NatStat's `/forecasts` provides both `elo_before` (pre-game) and `elo_after` (post-game) for each team. Only `elo_before` may be used as an ML feature — it represents the rating at prediction time. `elo_after` and current `/elo` rankings reflect end-of-season state and must NOT be used as game-level features. The `win_exp` (NatStat's predicted win probability) must also be excluded from training features — it's a competing prediction, not an input. It should only be used as a benchmark comparison.
+
 ### Known Model Limitations
 - **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
-- **Limited data**: Training on 2025+2026 seasons. More historical seasons would further improve generalization.
+- **Limited data**: Training on 2025+2026 seasons. More historical seasons would further improve generalization. NatStat has data back to 2007.
 - **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach
@@ -189,12 +195,16 @@ This naturally enables:
 - [x] Fix rebound mapping (`reb` = defensive rebounds, not total)
 - [x] Fix ORB%/DRB% computation (game-level self-join with NULL guards)
 - [x] Force-overwrite rebounds/usage on re-ingestion (no COALESCE)
-- [x] Label ELO as "ELO Rk" (rank, not rating)
+- [x] ~Label ELO as "ELO Rk" (rank, not rating)~ → replaced with real ELO rating from `/elo` endpoint
 - [x] Make team names clickable on Rankings page
 - [x] Player deduplication merge pass (989 duplicate pairs)
+- [ ] Ingest real ELO ratings from `/elo` endpoint (4 API calls/season)
+- [ ] Ingest per-game forecasts from `/forecasts` endpoint (pre/post ELO, win exp, spread, moneyline — 57 calls/season)
+- [ ] Update ML to use NatStat pre-game ELO (elo_before only — no leakage)
+- [ ] Benchmark model against NatStat win probability
 - [ ] Fix player rate stats to use possession-based formulas
 - [ ] Full 2026 season re-ingestion + recompute after all fixes
-- [ ] Retrain ML models after data quality fixes
+- [ ] Retrain ML models after data quality + ELO fixes
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
@@ -217,7 +227,7 @@ This naturally enables:
 ## Phase 6: Expansion & Refinement
 > Historical depth, brackets, continuous improvement
 
-- [ ] Ingest historical seasons (NatStat data back to 2006)
+- [ ] Ingest historical seasons (NatStat perfs back to 2007, PBP from 2012+, per `/seasons` endpoint)
 - [ ] Backtest models across multiple seasons
 - [ ] Tournament bracket simulator (Monte Carlo, inspired by gravity project)
 - [ ] Season simulation engine
