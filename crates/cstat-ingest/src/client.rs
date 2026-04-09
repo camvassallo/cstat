@@ -262,9 +262,11 @@ impl NatStatClient {
             //   1. `error: "SOME_CODE"` (string)
             //   2. `error: {"message": "OUT_OF_CALLS", "detail": "..."}` (object)
             // Additionally, `success: "0"` (string) signals failure.
-            let success_flag = body
-                .get("success")
-                .and_then(|v| v.as_str().map(String::from).or_else(|| v.as_u64().map(|n| n.to_string())));
+            let success_flag = body.get("success").and_then(|v| {
+                v.as_str()
+                    .map(String::from)
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+            });
             let error_node = body.get("error");
             let error_code = match error_node {
                 Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
@@ -340,12 +342,10 @@ impl NatStatClient {
         let Some(obj) = response.as_object() else {
             return true;
         };
-        let mut found_data_key = false;
         for (key, val) in obj {
             if Self::META_KEYS.contains(&key.as_str()) {
                 continue;
             }
-            found_data_key = true;
             let size = match val {
                 Value::Object(o) => o.len(),
                 Value::Array(a) => a.len(),
@@ -356,8 +356,8 @@ impl NatStatClient {
                 return false;
             }
         }
-        // If there were no non-meta keys at all, treat as empty.
-        !found_data_key
+        // Either there were no data keys, or every data key was empty.
+        true
     }
 
     /// Fetch all pages for an endpoint, returning collected results.
@@ -448,7 +448,8 @@ impl NatStatClient {
     /// Parse a JSON value as u64, accepting both numeric and string-encoded
     /// integers. NatStat v3 returns meta fields as strings; v4 returns numbers.
     fn value_as_u64(v: &Value) -> Option<u64> {
-        v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
     }
 
     /// Parse the `meta` node from a NatStat response.
@@ -613,5 +614,82 @@ mod tests {
             message: "Rate limit exceeded".into(),
         };
         assert!(err.to_string().contains("OUT_OF_CALLS"));
+    }
+
+    #[test]
+    fn test_parse_meta_v3_string_encoded() {
+        // v3 returns meta fields as JSON strings, not numbers. Both shapes
+        // must parse identically — this is the bug that made our pagination
+        // logic blind to all v3 metadata.
+        let response = serde_json::json!({
+            "meta": {
+                "results-total": "121350",
+                "results-max": "100",
+                "page": "1061",
+                "pages-total": "1214",
+                "page-next": "https://api3.natst.at/xxxx/playerperfs/mbb/2026/106100"
+            }
+        });
+        let meta = NatStatClient::parse_meta(&response);
+        assert_eq!(meta.results_total, Some(121350));
+        assert_eq!(meta.results_max, Some(100));
+        assert_eq!(meta.page, Some(1061));
+        assert_eq!(meta.pages_total, Some(1214));
+        assert!(meta.page_next.is_some());
+    }
+
+    #[test]
+    fn test_parse_rate_limit_string_encoded() {
+        let response = serde_json::json!({
+            "user": {
+                "ratelimit": "500",
+                "ratelimit-remaining": "423",
+            }
+        });
+        let (limit, remaining) = NatStatClient::parse_rate_limit(&response).unwrap();
+        assert_eq!(limit, 500);
+        assert_eq!(remaining, 423);
+    }
+
+    #[test]
+    fn test_response_is_empty_no_data_key() {
+        // Only meta envelope keys present — no payload at all.
+        let response = serde_json::json!({
+            "meta": {"page": 1},
+            "user": {},
+            "success": "1",
+            "query": {}
+        });
+        assert!(NatStatClient::response_is_empty(&response));
+    }
+
+    #[test]
+    fn test_response_is_empty_empty_data_object() {
+        let response = serde_json::json!({
+            "meta": {"page": 5},
+            "elo": {},
+            "success": "1"
+        });
+        assert!(NatStatClient::response_is_empty(&response));
+    }
+
+    #[test]
+    fn test_response_is_empty_empty_data_array() {
+        let response = serde_json::json!({
+            "meta": {"page": 5},
+            "performances": [],
+            "success": "1"
+        });
+        assert!(NatStatClient::response_is_empty(&response));
+    }
+
+    #[test]
+    fn test_response_is_not_empty_with_data() {
+        let response = serde_json::json!({
+            "meta": {"page": 1},
+            "elo": {"elo_team_1": {"team": "Duke"}},
+            "success": "1"
+        });
+        assert!(!NatStatClient::response_is_empty(&response));
     }
 }

@@ -75,9 +75,7 @@ impl ApiCache {
         let Some(pool) = &self.pool else {
             return Ok(0);
         };
-        let result = sqlx::query("DELETE FROM api_cache")
-            .execute(pool)
-            .await?;
+        let result = sqlx::query("DELETE FROM api_cache").execute(pool).await?;
         Ok(result.rows_affected())
     }
 

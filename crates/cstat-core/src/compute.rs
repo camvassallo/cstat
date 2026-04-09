@@ -198,8 +198,7 @@ pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
     .execute(pool)
     .await?;
 
-    let total =
-        r0.rows_affected() + r1.rows_affected() + r2.rows_affected() + r3.rows_affected();
+    let total = r0.rows_affected() + r1.rows_affected() + r2.rows_affected() + r3.rows_affected();
     info!(
         scrubbed_fake_reb_zeros = r0.rows_affected(),
         def_rebounds = r1.rows_affected(),
