@@ -34,3 +34,6 @@ __pycache__/
 *.pkl
 *.joblib
 training/models/
+
+# Logs
+/logs/
