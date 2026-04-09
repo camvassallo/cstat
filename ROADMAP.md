@@ -191,7 +191,7 @@ This naturally enables:
 - [x] Force-overwrite rebounds/usage on re-ingestion (no COALESCE)
 - [x] Label ELO as "ELO Rk" (rank, not rating)
 - [x] Make team names clickable on Rankings page
-- [ ] Player deduplication merge pass (989 duplicate pairs)
+- [x] Player deduplication merge pass (989 duplicate pairs)
 - [ ] Fix player rate stats to use possession-based formulas
 - [ ] Full 2026 season re-ingestion + recompute after all fixes
 - [ ] Retrain ML models after data quality fixes
@@ -229,17 +229,21 @@ This naturally enables:
 
 ## Known Bugs / Data Quality Issues
 
-### Duplicate Player Records (P1)
-NatStat's `/playercodes` endpoint returns different codes for the same physical player across seasons (e.g., `57987927` and `87832246` both map to Caleb Foster on Duke). This creates two `players` rows per affected player — one with most games, one with 1-2 games. **~989 duplicate pairs** exist in the 2026 season data.
+### Duplicate Player Records (P1 — Fixed)
+NatStat's `/playercodes` endpoint returns different codes for the same physical player across seasons (e.g., `57987927` and `87832246` both map to Caleb Foster on Duke). This creates two `players` rows per affected player — one with most games, one with 1-2 games. **~989 duplicate pairs** exist in the 2026 season data. 241 have overlapping games with identical stats (concentrated on opening night Nov 3).
 
-**Impact**: Player season stats are split across two records, deflating per-game averages for the primary record and showing misleading 1-game entries on rosters. No double-counting occurs (the two codes never appear in the same game box score).
+**Impact**: Player season stats are split across two records, deflating per-game averages for the primary record and showing misleading 1-game entries on rosters.
 
-**Fix**: Add a post-ingestion deduplication pass that merges records sharing the same `(name, team_id, season)`. Reassign `player_game_stats` rows from the duplicate to the primary (higher GP) player, then delete the duplicate player + season stats.
+**Fix**: Implemented `deduplicate_players()` as step 1/12 in the compute pipeline. For each `(name, team_id, season)` duplicate group: picks the primary (highest game count), deletes overlapping identical game stats, reassigns non-overlapping game stats to primary, removes duplicate player + season stats + percentiles records.
 
-### NatStat `reb` Field is Defensive Rebounds, Not Total (P1 — Mitigated)
-NatStat's `reb` field in `playerperfs` and `teamperfs` represents **defensive rebounds**, not total rebounds. Additionally, ~69% of team game records return `reb=0` even when `oreb > 0`, which is missing data rather than actual zero defensive rebounds.
+### NatStat `reb` Field is Total Rebounds, Not Defensive (P1 — Fixed)
+NatStat's `reb` field in both `playerperfs` and `teamperfs` represents **total rebounds**, not defensive rebounds. This was initially misidentified as defensive rebounds, causing inflated totals (e.g., Tobe Awaka showed 26 total vs actual 18). Additionally, ~69% of records return `reb=0` even when `oreb > 0`, which is missing data.
 
-**Current handling**: Ingestion maps `reb` → `def_rebounds`, guards `reb=0 + oreb>0` as NULL, computes `total_rebounds = oreb + dreb`. Force-overwrites these columns on re-ingestion. The compute pipeline then **estimates missing DREB** from the box score: `DREB ≈ opponent_missed_FGA - opponent_OREB` (validated: r=0.840, MAE=2.38 rebounds across 3,178 games). This gives ORB%/DRB% full coverage with a median ORB% of 27.9% and DRB% of 72.2% — matching KenPom ranges.
+**Verification**: Cross-referenced Tobe Awaka vs Utah Tech (NatStat `reb=18, oreb=8` → 18 total, 10 defensive, matching ESPN). Confirmed team-level `reb` sums match player-level `reb` sums, and both are total (not defensive).
+
+**Verified via live API curl**: NatStat genuinely doesn't have total/defensive rebounds for ~68% of games — it's missing at the source, not an ingestion bug. The missing data is all-or-nothing per game (no mixed games). When `reb` is populated, `playerperfs` also includes a `dreb` field; `teamperfs` never has `dreb`.
+
+**Fix**: Ingestion now correctly maps `reb` → `total_rebounds`, uses `dreb` directly when present (playerperfs only), otherwise derives `def_rebounds = total - oreb`. Guards `reb=0 + oreb>0` as NULL. Force-overwrites on upsert. The compute pipeline estimates missing team DREB from box score (`DREB ≈ opponent_missed_FGA - opponent_OREB`, r=0.840) for the ~68% of games where `reb=0`.
 
 ### ELO Shows Rank, Not Rating (P2 — Labeled)
 NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. We try `elo.rating`/`elo.value`/`elo.elo` first (future-proofing) and fall back to rank. Frontend labels it "ELO Rk".

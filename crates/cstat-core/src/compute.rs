@@ -3,11 +3,127 @@ use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
 
+/// Deduplicate player records that share the same (name, team_id, season).
+/// NatStat assigns different player codes across seasons, creating duplicate entries.
+/// For each pair: keep the primary (most games), delete overlapping game stats,
+/// reassign non-overlapping game stats, then remove the duplicate player record.
+pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Find duplicate groups: same (name, team_id, season) with >1 player
+    let dupes: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT p.name, p.team_id
+         FROM players p
+         WHERE p.season = $1 AND p.team_id IS NOT NULL
+         GROUP BY p.name, p.team_id
+         HAVING COUNT(*) > 1",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    if dupes.is_empty() {
+        info!(season, "no duplicate players found");
+        return Ok(0);
+    }
+
+    info!(pairs = dupes.len(), season, "found duplicate player groups");
+
+    let mut merged = 0u64;
+
+    for (name, team_id) in &dupes {
+        // Get all player IDs for this (name, team_id, season), ordered by game count desc
+        let players: Vec<(Uuid, i64)> = sqlx::query_as(
+            "SELECT p.id, COUNT(pgs.id) as game_count
+             FROM players p
+             LEFT JOIN player_game_stats pgs ON pgs.player_id = p.id
+             WHERE p.name = $1 AND p.team_id = $2 AND p.season = $3
+             GROUP BY p.id
+             ORDER BY game_count DESC",
+        )
+        .bind(name)
+        .bind(team_id)
+        .bind(season)
+        .fetch_all(pool)
+        .await?;
+
+        if players.len() < 2 {
+            continue;
+        }
+
+        let primary_id = players[0].0;
+
+        for &(dup_id, _) in &players[1..] {
+            // Step 1: Delete duplicate game_stats for overlapping games
+            // (both player codes appear in the same game — identical stats)
+            let r1 = sqlx::query(
+                "DELETE FROM player_game_stats
+                 WHERE player_id = $1
+                   AND game_id IN (
+                       SELECT game_id FROM player_game_stats WHERE player_id = $2
+                   )",
+            )
+            .bind(dup_id)
+            .bind(primary_id)
+            .execute(pool)
+            .await?;
+
+            // Step 2: Reassign non-overlapping game_stats from dup → primary
+            let r2 =
+                sqlx::query("UPDATE player_game_stats SET player_id = $1 WHERE player_id = $2")
+                    .bind(primary_id)
+                    .bind(dup_id)
+                    .execute(pool)
+                    .await?;
+
+            // Step 3: Delete dup's season stats and percentiles
+            sqlx::query("DELETE FROM player_season_stats WHERE player_id = $1")
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
+
+            sqlx::query("DELETE FROM player_percentiles WHERE player_id = $1")
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
+
+            // Step 4: Delete the duplicate player record
+            sqlx::query("DELETE FROM players WHERE id = $1")
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
+
+            info!(
+                primary = %primary_id,
+                duplicate = %dup_id,
+                name = %name,
+                overlapping_deleted = r1.rows_affected(),
+                reassigned = r2.rows_affected(),
+                "merged duplicate player"
+            );
+            merged += 1;
+        }
+    }
+
+    // Delete stale season stats for affected primaries so recompute picks them up fresh
+    // (We'll recompute in the next pipeline step anyway)
+    sqlx::query(
+        "DELETE FROM player_season_stats WHERE player_id IN (
+            SELECT p.id FROM players p
+            WHERE p.season = $1
+        ) AND season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    info!(merged, season, "player deduplication complete");
+    Ok(merged)
+}
+
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
-    // def_rebounds = total_rebounds - off_rebounds (only when total > off, i.e. data is valid;
-    // NatStat "reb" is actually dreb so after re-ingestion this backfill is only needed
-    // for rows ingested before the fix)
+    // def_rebounds = total_rebounds - off_rebounds (NatStat "reb" = total rebounds;
+    // ingestion now maps reb → total_rebounds and derives def_rebounds = total - oreb.
+    // This backfill catches any rows where def_rebounds is NULL but can be derived.)
     let r1 = sqlx::query(
         "UPDATE player_game_stats
          SET def_rebounds = total_rebounds - off_rebounds
@@ -946,37 +1062,40 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
 
     info!(season, "starting compute pipeline");
 
-    info!("step 1/11: backfilling derived game stats");
+    info!("step 1/12: deduplicating players");
+    report.deduplicated_players = deduplicate_players(pool, season).await?;
+
+    info!("step 2/12: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 2/11: estimating missing team defensive rebounds");
+    info!("step 3/12: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 3/11: computing player season stats (with rate stats)");
+    info!("step 4/12: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
-    info!("step 4/11: computing team four factors");
+    info!("step 5/12: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 5/11: computing adjusted efficiency (KenPom-style)");
+    info!("step 6/12: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 6/11: computing individual ORTG/DRTG and BPM splits");
+    info!("step 7/12: computing individual ORTG/DRTG and BPM splits");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 7/11: computing player SOS");
+    info!("step 8/12: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 8/11: computing rolling averages");
+    info!("step 9/12: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 9/11: computing derived game fields");
+    info!("step 10/12: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 10/11: computing schedules");
+    info!("step 11/12: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 11/11: computing player percentiles");
+    info!("step 12/12: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -985,6 +1104,7 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
 
 #[derive(Debug, Default)]
 pub struct ComputeReport {
+    pub deduplicated_players: u64,
     pub backfilled: u64,
     pub estimated_rebounds: u64,
     pub player_season_stats: u64,
@@ -1002,7 +1122,8 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} backfilled, {} est rebounds, {} player stats, {} four factors, {} adj eff, {} ORTG/DRTG, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} four factors, {} adj eff, {} ORTG/DRTG, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            self.deduplicated_players,
             self.backfilled,
             self.estimated_rebounds,
             self.player_season_stats,
