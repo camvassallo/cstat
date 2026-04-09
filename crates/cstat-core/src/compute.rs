@@ -121,6 +121,30 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
 
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    // Scrub fake rebound zeros. NatStat omits rebound data for ~68% of games
+    // by returning `reb=0` for every player record. Per the docs, this is
+    // all-or-nothing per game. The ingest layer correctly nulls
+    // `total_rebounds` when `reb=0` BUT `oreb>0` (which is impossible), but
+    // it leaves `total_rebounds=0` on the same game's players whose `oreb=0`,
+    // creating fake zeros that pollute season aggregates and ML features.
+    //
+    // Here we identify any game containing at least one such impossible row,
+    // then null `total_rebounds` and `def_rebounds` for ALL players in those
+    // games — restoring the correct "missing data" semantics.
+    let r0 = sqlx::query(
+        "UPDATE player_game_stats pgs
+         SET total_rebounds = NULL,
+             def_rebounds = NULL
+         WHERE pgs.game_id IN (
+             SELECT DISTINCT game_id
+             FROM player_game_stats
+             WHERE total_rebounds IS NULL AND off_rebounds > 0
+         )
+         AND (pgs.total_rebounds IS NOT NULL OR pgs.def_rebounds IS NOT NULL)",
+    )
+    .execute(pool)
+    .await?;
+
     // def_rebounds = total_rebounds - off_rebounds (NatStat "reb" = total rebounds;
     // ingestion now maps reb → total_rebounds and derives def_rebounds = total - oreb.
     // This backfill catches any rows where def_rebounds is NULL but can be derived.)
@@ -174,8 +198,10 @@ pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
     .execute(pool)
     .await?;
 
-    let total = r1.rows_affected() + r2.rows_affected() + r3.rows_affected();
+    let total =
+        r0.rows_affected() + r1.rows_affected() + r2.rows_affected() + r3.rows_affected();
     info!(
+        scrubbed_fake_reb_zeros = r0.rows_affected(),
         def_rebounds = r1.rows_affected(),
         ast_to_ratio = r2.rows_affected(),
         game_score = r3.rows_affected(),
