@@ -70,6 +70,17 @@ impl ApiCache {
         Ok(())
     }
 
+    /// Remove all cache entries.
+    pub async fn clear_all(&self) -> Result<u64, sqlx::Error> {
+        let Some(pool) = &self.pool else {
+            return Ok(0);
+        };
+        let result = sqlx::query("DELETE FROM api_cache")
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Remove all expired entries.
     pub async fn cleanup_expired(&self) -> Result<u64, sqlx::Error> {
         let Some(pool) = &self.pool else {

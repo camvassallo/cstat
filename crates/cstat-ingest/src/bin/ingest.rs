@@ -8,6 +8,10 @@ use tracing::info;
 #[derive(Parser)]
 #[command(name = "cstat-ingest", about = "NatStat data ingestion CLI for cstat")]
 struct Cli {
+    /// Clear all cached API responses before running (forces fresh fetches).
+    #[arg(long, global = true)]
+    no_cache: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -140,6 +144,12 @@ async fn main() -> Result<()> {
     info!("connected to database");
 
     let client = NatStatClient::new(db.pool.clone(), api_key, 1500);
+
+    if cli.no_cache {
+        let cleared = client.clear_all_cache().await?;
+        info!(cleared, "cleared API cache");
+        println!("Cleared {cleared} cached API responses");
+    }
 
     match cli.command {
         Commands::Season { year } => {
