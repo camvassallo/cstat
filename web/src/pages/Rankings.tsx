@@ -12,7 +12,15 @@ const pct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
 
 const columns: ColDef<TeamRanking>[] = [
   { field: 'rank', headerName: 'Rk', width: 60, pinned: 'left' },
-  { field: 'name', headerName: 'Team', width: 200, pinned: 'left' },
+  {
+    field: 'name',
+    headerName: 'Team',
+    width: 200,
+    pinned: 'left',
+    cellRenderer: (p: { value: string }) => (
+      <span className="text-blue-400 hover:underline cursor-pointer">{p.value}</span>
+    ),
+  },
   { field: 'conference', headerName: 'Conf', width: 100 },
   {
     headerName: 'Record',
