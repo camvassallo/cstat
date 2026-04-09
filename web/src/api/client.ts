@@ -29,7 +29,8 @@ export interface TeamRanking {
   adj_tempo: number | null;
   sos: number | null;
   sos_rank: number | null;
-  elo: number | null;
+  elo_rating: number | null;
+  elo_rank: number | null;
   point_diff: number | null;
   effective_fg_pct: number | null;
   turnover_pct: number | null;
@@ -93,7 +94,8 @@ export interface TeamProfile {
   adj_tempo: number | null;
   sos: number | null;
   sos_rank: number | null;
-  elo: number | null;
+  elo_rating: number | null;
+  elo_rank: number | null;
   point_diff: number | null;
   effective_fg_pct: number | null;
   turnover_pct: number | null;

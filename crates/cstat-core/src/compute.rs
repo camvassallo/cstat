@@ -275,9 +275,9 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
                 THEN ROUND((SUM(pgs.points)::float / (2.0 * (SUM(pgs.fga) + 0.44 * SUM(COALESCE(pgs.fta, 0)))))::numeric, 3)
                 ELSE NULL END,
             -- Usage rate (avg of per-game NatStat usage)
-            ROUND(AVG(pgs.usage_rate)::numeric, 1),
+            ROUND(AVG(pgs.usage_rate)::numeric, 3),
             -- BPM placeholder (avg game_score as proxy until we compute real BPM)
-            ROUND(AVG(pgs.game_score)::numeric, 1),
+            ROUND(AVG(pgs.game_score)::numeric, 2),
             -- AST% = AST / (teammate FGM) ≈ AST / (team_FGM - player_FGM) * (team_minutes / player_minutes)
             -- Simplified: AST / (team_FGM_per_min * minutes - FGM) where team_FGM_per_min comes from team_fgm
             CASE WHEN SUM(COALESCE(pgs.team_fgm, 0)) - SUM(pgs.fgm) > 0

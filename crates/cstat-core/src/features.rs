@@ -21,7 +21,7 @@ struct TeamStats {
     opp_ft_rate: Option<f64>,
     adj_tempo: Option<f64>,
     sos: Option<f64>,
-    elo: Option<f64>,
+    elo_rating: Option<f64>,
     point_diff: Option<f64>,
     pythag_win_pct: Option<f64>,
     road_win_pct: Option<f64>,
@@ -86,7 +86,7 @@ async fn get_team_stats(
                adj_offense, adj_defense, adj_efficiency_margin,
                effective_fg_pct, turnover_pct, off_rebound_pct, ft_rate,
                opp_effective_fg_pct, opp_turnover_pct, def_rebound_pct, opp_ft_rate,
-               adj_tempo, sos, elo,
+               adj_tempo, sos, elo_rating,
                point_diff, pythag_win_pct, road_win_pct
         FROM team_season_stats
         WHERE team_id = $1 AND season = $2
@@ -260,7 +260,7 @@ pub async fn build_game_features(
         // Tempo & power
         d(home_ts.adj_tempo, away_ts.adj_tempo),
         d(home_ts.sos, away_ts.sos),
-        d(home_ts.elo, away_ts.elo),
+        d(home_ts.elo_rating, away_ts.elo_rating),
         d(home_ts.point_diff, away_ts.point_diff),
         d(home_ts.pythag_win_pct, away_ts.pythag_win_pct),
         d(home_ts.road_win_pct, away_ts.road_win_pct),

@@ -80,7 +80,7 @@ export default function TeamDetail() {
         <StatCard label="AdjD" value={fmt(team.adj_defense)} />
         <StatCard label="Tempo" value={fmt(team.adj_tempo)} />
         <StatCard label="SOS" value={fmt(team.sos, 2)} rank={team.sos_rank ? `#${team.sos_rank}` : undefined} />
-        <StatCard label="ELO Rk" value={fmt(team.elo, 0)} />
+        <StatCard label="ELO" value={fmt(team.elo_rating, 0)} rank={team.elo_rank ? `#${team.elo_rank}` : undefined} />
       </div>
 
       {/* Four Factors */}
