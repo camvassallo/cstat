@@ -355,7 +355,31 @@ impl NatStatClient {
 
             all_results.push(response);
 
+            // Stop conditions, in priority order:
+            //   1. No `page-next` link.
+            //   2. `pages-total` known and we've reached it (defends against
+            //      v3 endpoints that hand out infinite empty `page-next` links).
+            //   3. `results-total` is 0 — nothing to paginate through.
             if meta.page_next.is_none() {
+                break;
+            }
+            if meta.pages_total.is_some() && page_num >= pages_total {
+                warn!(
+                    endpoint,
+                    range = range.unwrap_or("_"),
+                    page = page_num,
+                    pages_total,
+                    "stopping pagination: reached pages_total despite page-next being set"
+                );
+                break;
+            }
+            if meta.results_total == Some(0) {
+                warn!(
+                    endpoint,
+                    range = range.unwrap_or("_"),
+                    page = page_num,
+                    "stopping pagination: results_total is 0"
+                );
                 break;
             }
 
