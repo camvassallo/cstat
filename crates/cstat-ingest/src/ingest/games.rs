@@ -408,7 +408,7 @@ async fn upsert_player_game_stats(
         .and_then(|s| s.as_str())
         .map(|s| s == "Y");
     let efficiency = get_f64(perf, &["eff", "efficiency"]);
-    let usage_rate = get_f64(perf, &["usgpct", "usage_rate"]);
+    let usage_rate = get_f64(perf, &["usgpct", "usage_rate"]).map(|v| v / 100.0);
     let two_fg_pct = get_f64(perf, &["twofgpct"]);
     let presence_rate = get_f64(perf, &["presencerate"]);
     let adj_presence_rate = get_f64(perf, &["adjpresencerate"]);
