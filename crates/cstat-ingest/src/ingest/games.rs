@@ -396,7 +396,7 @@ async fn upsert_player_game_stats(
                 })
                 .unwrap_or("Unknown");
             let new_id = Uuid::new_v4();
-            sqlx::query(
+            let (id,): (Uuid,) = sqlx::query_as(
                 "INSERT INTO players (id, natstat_id, name, team_id, season)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (natstat_id, season) DO UPDATE
@@ -409,17 +409,9 @@ async fn upsert_player_game_stats(
             .bind(name)
             .bind(team_id)
             .bind(season)
-            .execute(pool)
-            .await?;
-            // Re-read to get the canonical id (in case ON CONFLICT took the existing row)
-            sqlx::query_as::<_, (Uuid,)>(
-                "SELECT id FROM players WHERE natstat_id = $1 AND season = $2",
-            )
-            .bind(&player_natstat_id)
-            .bind(season)
             .fetch_one(pool)
-            .await?
-            .0
+            .await?;
+            id
         }
     };
 

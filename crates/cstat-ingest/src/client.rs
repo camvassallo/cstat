@@ -349,9 +349,6 @@ impl NatStatClient {
     const META_KEYS: &'static [&'static str] =
         &["meta", "user", "error", "query", "success", "credits"];
 
-    /// Hard cap on pagination iterations, as a safety net against runaway
-    /// loops if the API misbehaves badly. 500 pages × 100 results/page = 50k
-    /// records, larger than any single NatStat endpoint we use.
     /// Safety cap on pagination loops. A full season of `playerperfs` can reach
     /// ~1,300 pages (127k rows / 100 per page), so 2000 leaves headroom while
     /// still catching the runaway-loop bug we hit in early ingests.
