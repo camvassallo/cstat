@@ -351,22 +351,13 @@ async fn upsert_player_game_stats(
         None => return Ok(false),
     };
 
-    // Resolve IDs
-    let player_id: Option<Uuid> =
-        sqlx::query_as("SELECT id FROM players WHERE natstat_id = $1 AND season = $2")
-            .bind(&player_natstat_id)
-            .bind(season)
-            .fetch_optional(pool)
-            .await?
-            .map(|(id,): (Uuid,)| id);
-
+    // Resolve game first — if game is missing we can't store anything.
     let game_row: Option<(Uuid, NaiveDate)> =
         sqlx::query_as("SELECT id, game_date FROM games WHERE natstat_id = $1")
             .bind(&game_natstat_id)
             .fetch_optional(pool)
             .await?;
-
-    let (Some(player_id), Some((game_id, game_date))) = (player_id, game_row) else {
+    let Some((game_id, game_date)) = game_row else {
         return Ok(false);
     };
 
@@ -378,6 +369,58 @@ async fn upsert_player_game_stats(
         .and_then(|c| c.as_str());
     let Some(team_id) = resolve_team_id(pool, team_code, season).await? else {
         return Ok(false);
+    };
+
+    // Resolve player — auto-create a minimal record if we've never seen them before.
+    // The NatStat /players endpoint can't give us historical rosters (it returns
+    // current season only), so box scores are the authoritative source for who
+    // played in a given season. The perf payload carries enough to stub out the
+    // row; richer metadata can backfill later from other endpoints.
+    let player_id: Uuid = match sqlx::query_as::<_, (Uuid,)>(
+        "SELECT id FROM players WHERE natstat_id = $1 AND season = $2",
+    )
+    .bind(&player_natstat_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await?
+    {
+        Some((id,)) => id,
+        None => {
+            let name = perf
+                .get("player")
+                .and_then(|n| n.as_str())
+                .or_else(|| {
+                    perf.get("player-name")
+                        .or_else(|| perf.get("player_name"))
+                        .and_then(|n| n.as_str())
+                })
+                .unwrap_or("Unknown");
+            let new_id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO players (id, natstat_id, name, team_id, season)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (natstat_id, season) DO UPDATE
+                 SET team_id = COALESCE(EXCLUDED.team_id, players.team_id),
+                     updated_at = now()
+                 RETURNING id",
+            )
+            .bind(new_id)
+            .bind(&player_natstat_id)
+            .bind(name)
+            .bind(team_id)
+            .bind(season)
+            .execute(pool)
+            .await?;
+            // Re-read to get the canonical id (in case ON CONFLICT took the existing row)
+            sqlx::query_as::<_, (Uuid,)>(
+                "SELECT id FROM players WHERE natstat_id = $1 AND season = $2",
+            )
+            .bind(&player_natstat_id)
+            .bind(season)
+            .fetch_one(pool)
+            .await?
+            .0
+        }
     };
 
     // playerperfs returns stats flat on the perf object (not nested under "stats")
