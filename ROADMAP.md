@@ -137,7 +137,7 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 
 ### Model Improvement Ideas
 - ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
-- **Use NatStat ELO as feature**: Replace computed incremental ELO with NatStat's pre-game ELO from `/forecasts` endpoint. Uses only `elo_before` (pre-game) to avoid leakage. NatStat's ELO is computed across their full historical database (back to 2007), so it's richer than our 2-season approximation. Fall back to computed ELO for games without forecast data.
+- ~**Use NatStat ELO as feature**: Replace computed incremental ELO with NatStat's pre-game ELO from `/forecasts` endpoint. Uses only `elo_before` (pre-game) to avoid leakage.~ *(done — `features.py` now uses NatStat pre-game ELO from `game_forecasts`, falling back to computed ELO for games without forecast data)*
 - **Benchmark against NatStat win probability**: `/forecasts` provides ELO-based `winexp` per game. Compare our model's predictions against theirs to identify where we add value.
 - **Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.
 - **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
@@ -190,7 +190,7 @@ This naturally enables:
 - [ ] Score ticker / recent results
 - [ ] Mobile-responsive design
 
-### 4c: Data Quality (Pre-Reingestion)
+### 4c: Data Quality & Ingestion Hardening
 - [x] Fix USG% ingestion (divide NatStat `usgpct` by 100)
 - [x] Fix rebound mapping (`reb` = defensive rebounds, not total)
 - [x] Fix ORB%/DRB% computation (game-level self-join with NULL guards)
@@ -198,13 +198,24 @@ This naturally enables:
 - [x] ~Label ELO as "ELO Rk" (rank, not rating)~ → replaced with real ELO rating from `/elo` endpoint
 - [x] Make team names clickable on Rankings page
 - [x] Player deduplication merge pass (989 duplicate pairs)
-- [ ] Ingest real ELO ratings from `/elo` endpoint (4 API calls/season)
-- [ ] Ingest per-game forecasts from `/forecasts` endpoint (pre/post ELO, win exp, spread, moneyline — 57 calls/season)
-- [ ] Update ML to use NatStat pre-game ELO (elo_before only — no leakage)
+- [x] Ingest real ELO ratings from `/elo` endpoint (4 API calls/season)
+- [x] Fix ELO rank: NatStat `elorank` resets per-page — now recomputed globally via `DENSE_RANK()`
+- [x] Ingest per-game forecasts from `/forecasts` endpoint (pre/post ELO, win exp, spread, moneyline — 57 calls/season)
+- [x] Fix cache poisoning: error responses (string + object shapes, `success: "0"`) no longer cached; 740 poisoned entries purged
+- [x] Fix pagination runaway: abandoned unreliable `pages-total`/`page-next` metadata, uses payload-empty detection + `MAX_PAGES=2000` safety cap
+- [x] Fix v3 string-encoded meta: `value_as_u64` helper handles both `"1214"` and `1214` for all numeric meta fields
+- [x] Fix body decode crashes: chunked-encoding EOF / malformed JSON now retried instead of aborting pagination
+- [x] Auto-create player records from box scores: `upsert_player_game_stats` inserts minimal player row on first perf encounter — removes dependency on broken `/players` roster endpoint
+- [x] Remove dead `players` step from `SeasonIngester` (was ~365 wasted API calls per season)
+- [x] Scrub fake-rebound-zeros: game-level NULL propagation when any player in a game has contradictory `reb=0 + oreb>0`
+- [x] Update ML to use NatStat pre-game ELO (elo_before only — no leakage)
+- [x] 2026 season re-ingestion + recompute after all fixes
+- [x] 2025 season full re-ingestion (113k player perfs, 100% rebound coverage)
+- [x] Retrain ML models on 2026 (MAE 8.98, win acc 67.7%, AUC 0.725)
+- [ ] Retrain on 2025+2026 combined once 2025 ingestion fully complete
 - [ ] Benchmark model against NatStat win probability
 - [ ] Fix player rate stats to use possession-based formulas
-- [ ] Full 2026 season re-ingestion + recompute after all fixes
-- [ ] Retrain ML models after data quality + ELO fixes
+- [ ] Explore Barttorvik as secondary data source for rebound backfill (2026 NatStat has 32% rebound coverage; Torvik has full box scores via single gzip download per season)
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
@@ -255,8 +266,8 @@ NatStat's `reb` field in both `playerperfs` and `teamperfs` represents **total r
 
 **Fix**: Ingestion now correctly maps `reb` → `total_rebounds`, uses `dreb` directly when present (playerperfs only), otherwise derives `def_rebounds = total - oreb`. Guards `reb=0 + oreb>0` as NULL. Force-overwrites on upsert. The compute pipeline estimates missing team DREB from box score (`DREB ≈ opponent_missed_FGA - opponent_OREB`, r=0.840) for the ~68% of games where `reb=0`.
 
-### ELO Shows Rank, Not Rating (P2 — Labeled)
-NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. We try `elo.rating`/`elo.value`/`elo.elo` first (future-proofing) and fall back to rank. Frontend labels it "ELO Rk".
+### ELO Shows Rank, Not Rating (P2 — Fixed)
+NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. **Fixed**: Real ELO ratings now ingested from dedicated `/elo` endpoint (364 teams for 2025, 365 for 2026). Ranks recomputed globally via `DENSE_RANK()` to avoid NatStat's per-page rank collision bug.
 
 ### Player Rate Stats Are Per-40-Min Proxies (P2)
 `compute_player_rates` computes AST%, ORB%, DRB%, STL%, BLK% as per-40-minute rates, not true possession-based percentages. Reasonable proxies but differ from standard definitions (e.g., Basketball Reference).

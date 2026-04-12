@@ -255,7 +255,27 @@ impl NatStatClient {
                 });
             }
 
-            let body: Value = response.json().await?;
+            // Body decode errors (chunked-encoding EOF, partial reads, malformed
+            // JSON from server-side flakes) are transient — retry rather than
+            // bombing out the whole pagination loop.
+            let body: Value = match response.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        endpoint,
+                        range = range_str,
+                        offset = offset_val,
+                        attempt,
+                        error = %e,
+                        "body decode error — retrying"
+                    );
+                    last_err = Some(NatStatError::Http(e));
+                    let backoff = Duration::from_secs(2u64.pow(attempt));
+                    tokio::time::sleep(backoff).await;
+                    attempt += 1;
+                    continue;
+                }
+            };
 
             // Check for API-level errors. NatStat error responses come in two
             // shapes:
@@ -329,10 +349,10 @@ impl NatStatClient {
     const META_KEYS: &'static [&'static str] =
         &["meta", "user", "error", "query", "success", "credits"];
 
-    /// Hard cap on pagination iterations, as a safety net against runaway
-    /// loops if the API misbehaves badly. 500 pages × 100 results/page = 50k
-    /// records, larger than any single NatStat endpoint we use.
-    const MAX_PAGES: u64 = 500;
+    /// Safety cap on pagination loops. A full season of `playerperfs` can reach
+    /// ~1,300 pages (127k rows / 100 per page), so 2000 leaves headroom while
+    /// still catching the runaway-loop bug we hit in early ingests.
+    const MAX_PAGES: u64 = 2000;
 
     /// Inspect a NatStat response and report whether the data payload is
     /// empty. Identifies the "data" key as the first top-level key that isn't

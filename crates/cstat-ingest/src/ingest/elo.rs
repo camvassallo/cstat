@@ -76,7 +76,30 @@ pub async fn ingest_elo_ratings(
         }
     }
 
-    info!(count, season, "ingested ELO ratings from /elo endpoint");
+    // NatStat's `elorank` field is paginated (resets to 1 on each page of 100),
+    // so per-row ranks collide. Recompute a single global ranking from elo_rating.
+    let reranked = sqlx::query(
+        "WITH ranked AS (
+             SELECT team_id,
+                    DENSE_RANK() OVER (ORDER BY elo_rating DESC) AS rk
+             FROM team_season_stats
+             WHERE season = $1 AND elo_rating IS NOT NULL
+         )
+         UPDATE team_season_stats t
+         SET elo_rank = ranked.rk, updated_at = now()
+         FROM ranked
+         WHERE t.team_id = ranked.team_id AND t.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    info!(
+        count,
+        reranked = reranked.rows_affected(),
+        season,
+        "ingested ELO ratings from /elo endpoint"
+    );
     Ok(count)
 }
 
