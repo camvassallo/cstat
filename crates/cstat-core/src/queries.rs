@@ -769,17 +769,11 @@ pub async fn get_league_averages(
     sqlx::query_as::<_, LeagueAverages>(
         r#"
         SELECT
-            AVG(pss.ppg) AS avg_ppg,
-            AVG(pgs_avg.avg_game_score) AS avg_game_score
-        FROM player_season_stats pss
-        LEFT JOIN LATERAL (
-            SELECT AVG(game_score) AS avg_game_score
-            FROM player_game_stats
-            WHERE player_id = pss.player_id AND season = pss.season
-        ) pgs_avg ON true
-        WHERE pss.season = $1
-          AND pss.games_played >= 10
-          AND pss.minutes_per_game >= 10
+            (SELECT AVG(ppg) FROM player_season_stats
+             WHERE season = $1 AND games_played >= 10 AND minutes_per_game >= 10) AS avg_ppg,
+            (SELECT AVG(game_score) FROM player_game_stats pgs
+             JOIN player_season_stats pss ON pss.player_id = pgs.player_id AND pss.season = pgs.season
+             WHERE pgs.season = $1 AND pss.games_played >= 10 AND pss.minutes_per_game >= 10) AS avg_game_score
         "#,
     )
     .bind(season)
