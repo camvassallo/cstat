@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from db import get_engine
 
-SEASONS = [2026]
+SEASONS = [2025, 2026]
 
 # ELO parameters
 ELO_K = 20.0

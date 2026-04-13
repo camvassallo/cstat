@@ -149,7 +149,7 @@ NatStat's `/forecasts` provides both `elo_before` (pre-game) and `elo_after` (po
 
 ### Known Model Limitations
 - **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
-- **Limited data**: Training on 2025+2026 seasons. More historical seasons would further improve generalization. NatStat has data back to 2007.
+- **Limited data**: Training on 2025+2026 seasons (9,147 games). More historical seasons would further improve generalization. NatStat has data back to 2007.
 - **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach
@@ -212,7 +212,7 @@ This naturally enables:
 - [x] 2026 season re-ingestion + recompute after all fixes
 - [x] 2025 season full re-ingestion (113k player perfs, 100% rebound coverage)
 - [x] Retrain ML models on 2026 (MAE 8.98, win acc 67.7%, AUC 0.725)
-- [ ] Retrain on 2025+2026 combined once 2025 ingestion fully complete
+- [x] Retrain on 2025+2026 combined (9,147 games; backtest MAE 8.86, win acc 68.6%, AUC 0.735; model trains 2x deeper)
 - [ ] Benchmark model against NatStat win probability
 - [ ] Fix player rate stats to use possession-based formulas
 - [ ] Explore Barttorvik as secondary data source for rebound backfill (2026 NatStat has 32% rebound coverage; Torvik has full box scores via single gzip download per season)

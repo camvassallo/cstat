@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { fetchPlayerDetail, type PlayerProfile, type PlayerSeasonStats, type Percentiles, type GameLogEntry } from '../api/client';
+import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
+import { fetchPlayerDetail, type PlayerProfile, type PlayerSeasonStats, type Percentiles, type GameLogEntry, type LeagueAverages } from '../api/client';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -33,6 +33,7 @@ export default function PlayerDetail() {
   const [stats, setStats] = useState<PlayerSeasonStats | null>(null);
   const [percentiles, setPercentiles] = useState<Percentiles | null>(null);
   const [gameLog, setGameLog] = useState<GameLogEntry[]>([]);
+  const [leagueAvg, setLeagueAvg] = useState<LeagueAverages | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -43,6 +44,7 @@ export default function PlayerDetail() {
         setStats(r.season_stats);
         setPercentiles(r.percentiles);
         setGameLog(r.game_log);
+        setLeagueAvg(r.league_averages);
       })
       .finally(() => setLoading(false));
   }, [id]);
@@ -70,6 +72,9 @@ export default function PlayerDetail() {
       gameScore: g.rolling_game_score,
       ppg: g.rolling_ppg,
     }));
+
+  const d1AvgGameScore = leagueAvg?.avg_game_score ?? null;
+  const d1AvgPpg = leagueAvg?.avg_ppg ?? null;
 
   return (
     <div className="space-y-6">
@@ -139,6 +144,12 @@ export default function PlayerDetail() {
               <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} />
               <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
               <Tooltip contentStyle={{ background: '#1e293b', border: '1px solid #475569', borderRadius: '0.5rem' }} />
+              {d1AvgGameScore != null && (
+                <ReferenceLine y={d1AvgGameScore} stroke="#3b82f6" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: `D1 Avg GmSc: ${d1AvgGameScore.toFixed(1)}`, fill: '#3b82f6', fontSize: 11, position: 'insideTopLeft' }} />
+              )}
+              {d1AvgPpg != null && (
+                <ReferenceLine y={d1AvgPpg} stroke="#22c55e" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: `D1 Avg PPG: ${d1AvgPpg.toFixed(1)}`, fill: '#22c55e', fontSize: 11, position: 'insideBottomLeft' }} />
+              )}
               <Line type="monotone" dataKey="gameScore" name="Game Score" stroke="#3b82f6" dot={false} strokeWidth={2} />
               <Line type="monotone" dataKey="ppg" name="PPG" stroke="#22c55e" dot={false} strokeWidth={2} />
             </LineChart>
