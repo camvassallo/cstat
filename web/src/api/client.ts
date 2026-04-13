@@ -24,21 +24,30 @@ export interface TeamRanking {
   wins: number;
   losses: number;
   adj_offense: number | null;
+  adj_offense_rank: number | null;
   adj_defense: number | null;
+  adj_defense_rank: number | null;
   adj_efficiency_margin: number | null;
   adj_tempo: number | null;
+  adj_tempo_rank: number | null;
   sos: number | null;
   sos_rank: number | null;
   elo_rating: number | null;
   elo_rank: number | null;
   point_diff: number | null;
   effective_fg_pct: number | null;
+  effective_fg_pct_rank: number | null;
   turnover_pct: number | null;
+  turnover_pct_rank: number | null;
   off_rebound_pct: number | null;
+  off_rebound_pct_rank: number | null;
   ft_rate: number | null;
+  ft_rate_rank: number | null;
   opp_effective_fg_pct: number | null;
+  opp_effective_fg_pct_rank: number | null;
   opp_turnover_pct: number | null;
   def_rebound_pct: number | null;
+  def_rebound_pct_rank: number | null;
   opp_ft_rate: number | null;
 }
 
@@ -89,22 +98,34 @@ export interface TeamProfile {
   wins: number | null;
   losses: number | null;
   adj_offense: number | null;
+  adj_offense_rank: number | null;
   adj_defense: number | null;
+  adj_defense_rank: number | null;
   adj_efficiency_margin: number | null;
+  adj_efficiency_margin_rank: number | null;
   adj_tempo: number | null;
+  adj_tempo_rank: number | null;
   sos: number | null;
   sos_rank: number | null;
   elo_rating: number | null;
   elo_rank: number | null;
   point_diff: number | null;
   effective_fg_pct: number | null;
+  effective_fg_pct_rank: number | null;
   turnover_pct: number | null;
+  turnover_pct_rank: number | null;
   off_rebound_pct: number | null;
+  off_rebound_pct_rank: number | null;
   ft_rate: number | null;
+  ft_rate_rank: number | null;
   opp_effective_fg_pct: number | null;
+  opp_effective_fg_pct_rank: number | null;
   opp_turnover_pct: number | null;
+  opp_turnover_pct_rank: number | null;
   def_rebound_pct: number | null;
+  def_rebound_pct_rank: number | null;
   opp_ft_rate: number | null;
+  opp_ft_rate_rank: number | null;
 }
 
 export function fetchTeamRankings(season?: number) {
@@ -259,12 +280,18 @@ export function fetchPlayers(params: {
   );
 }
 
+export interface LeagueAverages {
+  avg_ppg: number | null;
+  avg_game_score: number | null;
+}
+
 export function fetchPlayerDetail(id: string, season?: number) {
   return fetchJson<{
     player: PlayerProfile;
     season_stats: PlayerSeasonStats | null;
     percentiles: Percentiles | null;
     game_log: GameLogEntry[];
+    league_averages: LeagueAverages | null;
   }>(`/players/${id}`, { season: season?.toString() });
 }
 

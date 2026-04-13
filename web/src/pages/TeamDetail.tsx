@@ -4,6 +4,7 @@ import { fetchTeamDetail, type TeamProfile, type ScheduleEntry, type RosterEntry
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
+const rkStr = (v: number | null | undefined) => (v != null ? `#${v}` : undefined);
 
 function StatCard({ label, value, rank }: { label: string; value: string; rank?: string }) {
   return (
@@ -17,26 +18,31 @@ function StatCard({ label, value, rank }: { label: string; value: string; rank?:
 
 function FourFactors({ team, label }: { team: TeamProfile; label: string }) {
   const isOffense = label === 'Offense';
+  const items = isOffense
+    ? [
+        { label: 'eFG%', value: pct(team.effective_fg_pct), rank: rkStr(team.effective_fg_pct_rank) },
+        { label: 'TOV%', value: pct(team.turnover_pct), rank: rkStr(team.turnover_pct_rank) },
+        { label: 'ORB%', value: pct(team.off_rebound_pct), rank: rkStr(team.off_rebound_pct_rank) },
+        { label: 'FT Rate', value: fmt(team.ft_rate, 2), rank: rkStr(team.ft_rate_rank) },
+      ]
+    : [
+        { label: 'eFG%', value: pct(team.opp_effective_fg_pct), rank: rkStr(team.opp_effective_fg_pct_rank) },
+        { label: 'TOV%', value: pct(team.opp_turnover_pct), rank: rkStr(team.opp_turnover_pct_rank) },
+        { label: 'DRB%', value: pct(team.def_rebound_pct), rank: rkStr(team.def_rebound_pct_rank) },
+        { label: 'FT Rate', value: fmt(team.opp_ft_rate, 2), rank: rkStr(team.opp_ft_rate_rank) },
+      ];
+
   return (
     <div className="bg-gray-800 rounded-lg p-4">
       <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">{label} Four Factors</h3>
       <div className="grid grid-cols-4 gap-3 text-center">
-        <div>
-          <div className="text-xs text-gray-500">eFG%</div>
-          <div className="font-semibold">{pct(isOffense ? team.effective_fg_pct : team.opp_effective_fg_pct)}</div>
-        </div>
-        <div>
-          <div className="text-xs text-gray-500">TOV%</div>
-          <div className="font-semibold">{pct(isOffense ? team.turnover_pct : team.opp_turnover_pct)}</div>
-        </div>
-        <div>
-          <div className="text-xs text-gray-500">{isOffense ? 'ORB%' : 'DRB%'}</div>
-          <div className="font-semibold">{pct(isOffense ? team.off_rebound_pct : team.def_rebound_pct)}</div>
-        </div>
-        <div>
-          <div className="text-xs text-gray-500">FT Rate</div>
-          <div className="font-semibold">{fmt(isOffense ? team.ft_rate : team.opp_ft_rate, 2)}</div>
-        </div>
+        {items.map((item) => (
+          <div key={item.label}>
+            <div className="text-xs text-gray-500">{item.label}</div>
+            <div className="font-semibold">{item.value}</div>
+            {item.rank && <div className="text-[10px] text-gray-500">{item.rank}</div>}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -75,10 +81,10 @@ export default function TeamDetail() {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard label="AdjEM" value={fmt(team.adj_efficiency_margin)} />
-        <StatCard label="AdjO" value={fmt(team.adj_offense)} />
-        <StatCard label="AdjD" value={fmt(team.adj_defense)} />
-        <StatCard label="Tempo" value={fmt(team.adj_tempo)} />
+        <StatCard label="AdjEM" value={fmt(team.adj_efficiency_margin)} rank={rkStr(team.adj_efficiency_margin_rank)} />
+        <StatCard label="AdjO" value={fmt(team.adj_offense)} rank={rkStr(team.adj_offense_rank)} />
+        <StatCard label="AdjD" value={fmt(team.adj_defense)} rank={rkStr(team.adj_defense_rank)} />
+        <StatCard label="Tempo" value={fmt(team.adj_tempo)} rank={rkStr(team.adj_tempo_rank)} />
         <StatCard label="SOS" value={fmt(team.sos, 2)} rank={team.sos_rank ? `#${team.sos_rank}` : undefined} />
         <StatCard label="ELO" value={fmt(team.elo_rating, 0)} rank={team.elo_rank ? `#${team.elo_rank}` : undefined} />
       </div>

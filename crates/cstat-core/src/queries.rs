@@ -102,9 +102,12 @@ pub struct TeamRanking {
     pub wins: i32,
     pub losses: i32,
     pub adj_offense: Option<f64>,
+    pub adj_offense_rank: Option<i64>,
     pub adj_defense: Option<f64>,
+    pub adj_defense_rank: Option<i64>,
     pub adj_efficiency_margin: Option<f64>,
     pub adj_tempo: Option<f64>,
+    pub adj_tempo_rank: Option<i64>,
     pub sos: Option<f64>,
     pub sos_rank: Option<i32>,
     pub elo_rating: Option<f64>,
@@ -114,13 +117,19 @@ pub struct TeamRanking {
     pub road_win_pct: Option<f64>,
     // Four factors (offense)
     pub effective_fg_pct: Option<f64>,
+    pub effective_fg_pct_rank: Option<i64>,
     pub turnover_pct: Option<f64>,
+    pub turnover_pct_rank: Option<i64>,
     pub off_rebound_pct: Option<f64>,
+    pub off_rebound_pct_rank: Option<i64>,
     pub ft_rate: Option<f64>,
+    pub ft_rate_rank: Option<i64>,
     // Four factors (defense)
     pub opp_effective_fg_pct: Option<f64>,
+    pub opp_effective_fg_pct_rank: Option<i64>,
     pub opp_turnover_pct: Option<f64>,
     pub def_rebound_pct: Option<f64>,
+    pub def_rebound_pct_rank: Option<i64>,
     pub opp_ft_rate: Option<f64>,
 }
 
@@ -136,9 +145,13 @@ pub struct TeamProfile {
     pub wins: Option<i32>,
     pub losses: Option<i32>,
     pub adj_offense: Option<f64>,
+    pub adj_offense_rank: Option<i64>,
     pub adj_defense: Option<f64>,
+    pub adj_defense_rank: Option<i64>,
     pub adj_efficiency_margin: Option<f64>,
+    pub adj_efficiency_margin_rank: Option<i64>,
     pub adj_tempo: Option<f64>,
+    pub adj_tempo_rank: Option<i64>,
     pub sos: Option<f64>,
     pub sos_rank: Option<i32>,
     pub elo_rating: Option<f64>,
@@ -147,13 +160,21 @@ pub struct TeamProfile {
     pub pythag_win_pct: Option<f64>,
     pub road_win_pct: Option<f64>,
     pub effective_fg_pct: Option<f64>,
+    pub effective_fg_pct_rank: Option<i64>,
     pub turnover_pct: Option<f64>,
+    pub turnover_pct_rank: Option<i64>,
     pub off_rebound_pct: Option<f64>,
+    pub off_rebound_pct_rank: Option<i64>,
     pub ft_rate: Option<f64>,
+    pub ft_rate_rank: Option<i64>,
     pub opp_effective_fg_pct: Option<f64>,
+    pub opp_effective_fg_pct_rank: Option<i64>,
     pub opp_turnover_pct: Option<f64>,
+    pub opp_turnover_pct_rank: Option<i64>,
     pub def_rebound_pct: Option<f64>,
+    pub def_rebound_pct_rank: Option<i64>,
     pub opp_ft_rate: Option<f64>,
+    pub opp_ft_rate_rank: Option<i64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -367,9 +388,12 @@ pub async fn get_team_rankings(
             tss.wins,
             tss.losses,
             tss.adj_offense,
+            RANK() OVER (ORDER BY tss.adj_offense DESC NULLS LAST) AS adj_offense_rank,
             tss.adj_defense,
+            RANK() OVER (ORDER BY tss.adj_defense ASC NULLS LAST) AS adj_defense_rank,
             tss.adj_efficiency_margin,
             tss.adj_tempo,
+            RANK() OVER (ORDER BY tss.adj_tempo DESC NULLS LAST) AS adj_tempo_rank,
             tss.sos,
             tss.sos_rank,
             tss.elo_rating,
@@ -378,12 +402,18 @@ pub async fn get_team_rankings(
             tss.pythag_win_pct,
             tss.road_win_pct,
             tss.effective_fg_pct,
+            RANK() OVER (ORDER BY tss.effective_fg_pct DESC NULLS LAST) AS effective_fg_pct_rank,
             tss.turnover_pct,
+            RANK() OVER (ORDER BY tss.turnover_pct ASC NULLS LAST) AS turnover_pct_rank,
             tss.off_rebound_pct,
+            RANK() OVER (ORDER BY tss.off_rebound_pct DESC NULLS LAST) AS off_rebound_pct_rank,
             tss.ft_rate,
+            RANK() OVER (ORDER BY tss.ft_rate DESC NULLS LAST) AS ft_rate_rank,
             tss.opp_effective_fg_pct,
+            RANK() OVER (ORDER BY tss.opp_effective_fg_pct ASC NULLS LAST) AS opp_effective_fg_pct_rank,
             tss.opp_turnover_pct,
             tss.def_rebound_pct,
+            RANK() OVER (ORDER BY tss.def_rebound_pct DESC NULLS LAST) AS def_rebound_pct_rank,
             tss.opp_ft_rate
         FROM teams t
         JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
@@ -408,16 +438,58 @@ pub async fn get_team_by_id(
 ) -> Result<Option<TeamProfile>, sqlx::Error> {
     sqlx::query_as::<_, TeamProfile>(
         r#"
+        WITH ranked AS (
+            SELECT
+                tss.team_id,
+                tss.wins, tss.losses,
+                tss.adj_offense,
+                RANK() OVER (ORDER BY tss.adj_offense DESC NULLS LAST) AS adj_offense_rank,
+                tss.adj_defense,
+                RANK() OVER (ORDER BY tss.adj_defense ASC NULLS LAST) AS adj_defense_rank,
+                tss.adj_efficiency_margin,
+                RANK() OVER (ORDER BY tss.adj_efficiency_margin DESC NULLS LAST) AS adj_efficiency_margin_rank,
+                tss.adj_tempo,
+                RANK() OVER (ORDER BY tss.adj_tempo DESC NULLS LAST) AS adj_tempo_rank,
+                tss.sos, tss.sos_rank, tss.elo_rating, tss.elo_rank,
+                tss.point_diff, tss.pythag_win_pct, tss.road_win_pct,
+                tss.effective_fg_pct,
+                RANK() OVER (ORDER BY tss.effective_fg_pct DESC NULLS LAST) AS effective_fg_pct_rank,
+                tss.turnover_pct,
+                RANK() OVER (ORDER BY tss.turnover_pct ASC NULLS LAST) AS turnover_pct_rank,
+                tss.off_rebound_pct,
+                RANK() OVER (ORDER BY tss.off_rebound_pct DESC NULLS LAST) AS off_rebound_pct_rank,
+                tss.ft_rate,
+                RANK() OVER (ORDER BY tss.ft_rate DESC NULLS LAST) AS ft_rate_rank,
+                tss.opp_effective_fg_pct,
+                RANK() OVER (ORDER BY tss.opp_effective_fg_pct ASC NULLS LAST) AS opp_effective_fg_pct_rank,
+                tss.opp_turnover_pct,
+                RANK() OVER (ORDER BY tss.opp_turnover_pct DESC NULLS LAST) AS opp_turnover_pct_rank,
+                tss.def_rebound_pct,
+                RANK() OVER (ORDER BY tss.def_rebound_pct DESC NULLS LAST) AS def_rebound_pct_rank,
+                tss.opp_ft_rate,
+                RANK() OVER (ORDER BY tss.opp_ft_rate ASC NULLS LAST) AS opp_ft_rate_rank
+            FROM team_season_stats tss
+            WHERE tss.season = $2
+        )
         SELECT
             t.id, t.name, t.short_name, t.conference, t.division, t.season,
-            tss.wins, tss.losses,
-            tss.adj_offense, tss.adj_defense, tss.adj_efficiency_margin,
-            tss.adj_tempo, tss.sos, tss.sos_rank, tss.elo_rating, tss.elo_rank,
-            tss.point_diff, tss.pythag_win_pct, tss.road_win_pct,
-            tss.effective_fg_pct, tss.turnover_pct, tss.off_rebound_pct, tss.ft_rate,
-            tss.opp_effective_fg_pct, tss.opp_turnover_pct, tss.def_rebound_pct, tss.opp_ft_rate
+            r.wins, r.losses,
+            r.adj_offense, r.adj_offense_rank,
+            r.adj_defense, r.adj_defense_rank,
+            r.adj_efficiency_margin, r.adj_efficiency_margin_rank,
+            r.adj_tempo, r.adj_tempo_rank,
+            r.sos, r.sos_rank, r.elo_rating, r.elo_rank,
+            r.point_diff, r.pythag_win_pct, r.road_win_pct,
+            r.effective_fg_pct, r.effective_fg_pct_rank,
+            r.turnover_pct, r.turnover_pct_rank,
+            r.off_rebound_pct, r.off_rebound_pct_rank,
+            r.ft_rate, r.ft_rate_rank,
+            r.opp_effective_fg_pct, r.opp_effective_fg_pct_rank,
+            r.opp_turnover_pct, r.opp_turnover_pct_rank,
+            r.def_rebound_pct, r.def_rebound_pct_rank,
+            r.opp_ft_rate, r.opp_ft_rate_rank
         FROM teams t
-        LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
+        LEFT JOIN ranked r ON r.team_id = t.id
         WHERE t.id = $1 AND t.season = $2
         "#,
     )
@@ -677,6 +749,41 @@ pub async fn get_player_game_log(
     .bind(player_id)
     .bind(season)
     .fetch_all(pool)
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// League averages
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct LeagueAverages {
+    pub avg_ppg: Option<f64>,
+    pub avg_game_score: Option<f64>,
+}
+
+pub async fn get_league_averages(
+    pool: &PgPool,
+    season: i32,
+) -> Result<LeagueAverages, sqlx::Error> {
+    sqlx::query_as::<_, LeagueAverages>(
+        r#"
+        SELECT
+            AVG(pss.ppg) AS avg_ppg,
+            AVG(pgs_avg.avg_game_score) AS avg_game_score
+        FROM player_season_stats pss
+        LEFT JOIN LATERAL (
+            SELECT AVG(game_score) AS avg_game_score
+            FROM player_game_stats
+            WHERE player_id = pss.player_id AND season = pss.season
+        ) pgs_avg ON true
+        WHERE pss.season = $1
+          AND pss.games_played >= 10
+          AND pss.minutes_per_game >= 10
+        "#,
+    )
+    .bind(season)
+    .fetch_one(pool)
     .await
 }
 
