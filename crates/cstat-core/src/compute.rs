@@ -413,28 +413,37 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct
         )
+        WITH best AS (
+            SELECT DISTINCT ON (player_id)
+                player_id, season, ppg, rpg, apg, spg, bpg,
+                fg_pct, tp_pct, ft_pct, true_shooting_pct,
+                usage_rate, offensive_rating, defensive_rating,
+                bpm, player_sos
+            FROM player_season_stats
+            WHERE season = $1
+              AND games_played >= 10
+              AND minutes_per_game >= 10
+            ORDER BY player_id, games_played DESC
+        )
         SELECT
             gen_random_uuid(),
-            pss.player_id,
-            pss.season,
-            PERCENT_RANK() OVER (ORDER BY pss.ppg),
-            PERCENT_RANK() OVER (ORDER BY pss.rpg),
-            PERCENT_RANK() OVER (ORDER BY pss.apg),
-            PERCENT_RANK() OVER (ORDER BY pss.spg),
-            PERCENT_RANK() OVER (ORDER BY pss.bpg),
-            PERCENT_RANK() OVER (ORDER BY pss.fg_pct),
-            PERCENT_RANK() OVER (ORDER BY pss.tp_pct),
-            PERCENT_RANK() OVER (ORDER BY pss.ft_pct),
-            PERCENT_RANK() OVER (ORDER BY pss.true_shooting_pct),
-            PERCENT_RANK() OVER (ORDER BY pss.usage_rate),
-            PERCENT_RANK() OVER (ORDER BY pss.offensive_rating),
-            PERCENT_RANK() OVER (ORDER BY pss.defensive_rating DESC),
-            PERCENT_RANK() OVER (ORDER BY pss.bpm),
-            PERCENT_RANK() OVER (ORDER BY pss.player_sos)
-        FROM player_season_stats pss
-        WHERE pss.season = $1
-          AND pss.games_played >= 10
-          AND pss.minutes_per_game >= 10
+            b.player_id,
+            b.season,
+            PERCENT_RANK() OVER (ORDER BY b.ppg),
+            PERCENT_RANK() OVER (ORDER BY b.rpg),
+            PERCENT_RANK() OVER (ORDER BY b.apg),
+            PERCENT_RANK() OVER (ORDER BY b.spg),
+            PERCENT_RANK() OVER (ORDER BY b.bpg),
+            PERCENT_RANK() OVER (ORDER BY b.fg_pct),
+            PERCENT_RANK() OVER (ORDER BY b.tp_pct),
+            PERCENT_RANK() OVER (ORDER BY b.ft_pct),
+            PERCENT_RANK() OVER (ORDER BY b.true_shooting_pct),
+            PERCENT_RANK() OVER (ORDER BY b.usage_rate),
+            PERCENT_RANK() OVER (ORDER BY b.offensive_rating),
+            PERCENT_RANK() OVER (ORDER BY b.defensive_rating DESC),
+            PERCENT_RANK() OVER (ORDER BY b.bpm),
+            PERCENT_RANK() OVER (ORDER BY b.player_sos)
+        FROM best b
         ON CONFLICT (player_id, season) DO UPDATE
         SET ppg_pct = EXCLUDED.ppg_pct,
             rpg_pct = EXCLUDED.rpg_pct,
