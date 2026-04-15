@@ -213,7 +213,7 @@ This naturally enables:
 - [x] 2025 season full re-ingestion (113k player perfs, 100% rebound coverage)
 - [x] Retrain ML models on 2026 (MAE 8.98, win acc 67.7%, AUC 0.725)
 - [x] Retrain on 2025+2026 combined (9,147 games; backtest MAE 8.86, win acc 68.6%, AUC 0.735; model trains 2x deeper)
-- [ ] Benchmark model against NatStat win probability
+- [x] Benchmark model against NatStat win probability (cstat wins every metric: +2.1pp accuracy, +0.014 AUC, 3x better calibration; wins 59.8% of disagreements)
 - [ ] Fix player rate stats to use possession-based formulas
 - [ ] Explore Barttorvik as secondary data source for rebound backfill (2026 NatStat has 32% rebound coverage; Torvik has full box scores via single gzip download per season)
 
