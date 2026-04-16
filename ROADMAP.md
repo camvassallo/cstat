@@ -140,11 +140,12 @@ Barttorvik   ↗                                    ↓
 ### Model Improvement Ideas
 - ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
 - ~**Use NatStat ELO as feature**: Replace computed incremental ELO with NatStat's pre-game ELO from `/forecasts` endpoint. Uses only `elo_before` (pre-game) to avoid leakage.~ *(done — `features.py` now uses NatStat pre-game ELO from `game_forecasts`, falling back to computed ELO for games without forecast data)*
-- **Benchmark against NatStat win probability**: `/forecasts` provides ELO-based `winexp` per game. Compare our model's predictions against theirs to identify where we add value.
+- ~**Benchmark against NatStat win probability**: `/forecasts` provides ELO-based `winexp` per game. Compare our model's predictions against theirs to identify where we add value.~ *(done — cstat wins every metric: +2.1pp accuracy, +0.014 AUC, 3x better calibration)*
 - **Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.
 - **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
 - **Add `games_played` feature**: lets model know how much data it has on a team (early-season uncertainty)
 - **Conference strength feature**: average adj_efficiency_margin of conference, captures tier gaps beyond SOS
+- **Use recruiting rank as early-season prior**: Team-avg recruiting rank (22% of players have ranks from Torvik) could serve as a Bayesian prior for the first ~3 weeks when the model drops games due to insufficient game data. Would require imputation strategy for unranked players.
 
 ### Data Leakage Precautions for NatStat ELO
 NatStat's `/forecasts` provides both `elo_before` (pre-game) and `elo_after` (post-game) for each team. Only `elo_before` may be used as an ML feature — it represents the rating at prediction time. `elo_after` and current `/elo` rankings reflect end-of-season state and must NOT be used as game-level features. The `win_exp` (NatStat's predicted win probability) must also be excluded from training features — it's a competing prediction, not an input. It should only be used as a benchmark comparison.
@@ -215,6 +216,7 @@ This naturally enables:
 - [x] 2025 season full re-ingestion (113k player perfs, 100% rebound coverage)
 - [x] Retrain ML models on 2026 (MAE 8.98, win acc 67.7%, AUC 0.725)
 - [x] Retrain on 2025+2026 combined (9,147 games; backtest MAE 8.86, win acc 68.6%, AUC 0.735; model trains 2x deeper)
+  - [x] Added Torvik GBPM features (w_gbpm, star_gbpm — 47→49 features; backtest MAE 8.68, win acc 70.0%, AUC 0.764; GBPM is #1 feature by importance)
 - [x] Benchmark model against NatStat win probability (cstat wins every metric: +2.1pp accuracy, +0.014 AUC, 3x better calibration; wins 59.8% of disagreements)
 - [ ] Fix player rate stats to use possession-based formulas
 - [x] Barttorvik integration as secondary data source (player-centric focus)
@@ -225,8 +227,9 @@ This naturally enables:
   - [x] Backfill class_year and height_inches on player records from Torvik bio data
   - [x] Rebound backfill from Torvik game-level data (76,385 game rows updated — NatStat had 32% coverage)
   - [x] CLI subcommand: `torvik --year 2026 [--rebounds]`
-  - [ ] Surface Torvik advanced metrics (GBPM, shot zones, recruiting rank) in player detail API/UI
-  - [ ] Use Torvik data as ML features (GBPM as player impact, recruiting rank as prior)
+  - [x] Surface Torvik advanced metrics (GBPM, shot zones, recruiting rank) in player detail API/UI
+  - [x] Use Torvik data as ML features (GBPM as roster aggregate and star-player feature)
+  - [ ] Use recruiting rank as early-season prior (team-avg recruit rank for first ~3 weeks when model lacks game data)
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy

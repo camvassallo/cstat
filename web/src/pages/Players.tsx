@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
@@ -36,14 +36,18 @@ export default function Players() {
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
 
-  const load = useCallback((q?: string) => {
+  const load = (q?: string) => {
     setLoading(true);
     fetchPlayers({ search: q || undefined, limit: 200 })
       .then((r) => setPlayers(r.players))
       .finally(() => setLoading(false));
-  }, []);
+  };
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    fetchPlayers({ limit: 200 })
+      .then((r) => setPlayers(r.players))
+      .finally(() => setLoading(false));
+  }, []);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();

@@ -1,0 +1,321 @@
+{
+  "timestamp": "20260415_222939",
+  "seasons": [
+    2025,
+    2026
+  ],
+  "n_features": 49,
+  "features": [
+    "venue",
+    "is_conference_game",
+    "diff_win_pct",
+    "diff_adj_offense",
+    "diff_adj_defense",
+    "diff_adj_efficiency_margin",
+    "diff_effective_fg_pct",
+    "diff_turnover_pct",
+    "diff_off_rebound_pct",
+    "diff_ft_rate",
+    "diff_opp_effective_fg_pct",
+    "diff_opp_turnover_pct",
+    "diff_def_rebound_pct",
+    "diff_opp_ft_rate",
+    "diff_adj_tempo",
+    "diff_sos",
+    "diff_elo",
+    "diff_point_diff",
+    "diff_pythag_win_pct",
+    "diff_road_win_pct",
+    "diff_roster_size",
+    "diff_w_ppg",
+    "diff_w_rpg",
+    "diff_w_apg",
+    "diff_w_spg",
+    "diff_w_bpg",
+    "diff_w_topg",
+    "diff_w_ts_pct",
+    "diff_w_efg_pct",
+    "diff_w_usage",
+    "diff_w_bpm",
+    "diff_w_player_sos",
+    "diff_w_obpm",
+    "diff_w_dbpm",
+    "diff_w_ortg",
+    "diff_w_ast_pct",
+    "diff_w_tov_pct",
+    "diff_w_stl_pct",
+    "diff_w_blk_pct",
+    "diff_w_gbpm",
+    "diff_star_ppg",
+    "diff_star_bpm",
+    "diff_star_gbpm",
+    "diff_star_ortg",
+    "diff_minutes_stddev",
+    "diff_w_rolling_gs",
+    "diff_w_rolling_ts",
+    "diff_w_ppg_trend",
+    "diff_w_gs_trend"
+  ],
+  "metrics": {
+    "margin_mae": 8.681994104093725,
+    "margin_rmse": 11.156404851946577,
+    "margin_r2": 0.29976368159418176,
+    "margin_median_ae": 7.071533761183451,
+    "margin_p75_ae": 12.493601603881352,
+    "margin_p90_ae": 18.653324926397723,
+    "margin_p95_ae": 21.853131689992207,
+    "margin_win_accuracy": 0.6995133819951338,
+    "win_accuracy": 0.6995133819951338,
+    "win_log_loss": 0.5575422903414119,
+    "win_auc": 0.7636186525892408,
+    "train_games": 3285,
+    "test_games": 822,
+    "train_date_range": [
+      "2025-11-18",
+      "2026-02-21"
+    ],
+    "test_date_range": [
+      "2026-02-21",
+      "2026-04-06"
+    ],
+    "margin_best_iter": 52,
+    "win_best_iter": 127,
+    "calibration_ece": 0.0488
+  },
+  "calibration": {
+    "bins": [
+      {
+        "bin": "0.0-0.1",
+        "count": 26,
+        "mean_predicted": 0.122,
+        "actual_win_rate": 0.0769,
+        "abs_error": 0.0451
+      },
+      {
+        "bin": "0.1-0.2",
+        "count": 37,
+        "mean_predicted": 0.2148,
+        "actual_win_rate": 0.2432,
+        "abs_error": 0.0284
+      },
+      {
+        "bin": "0.2-0.3",
+        "count": 47,
+        "mean_predicted": 0.3005,
+        "actual_win_rate": 0.383,
+        "abs_error": 0.0825
+      },
+      {
+        "bin": "0.3-0.4",
+        "count": 47,
+        "mean_predicted": 0.3969,
+        "actual_win_rate": 0.3617,
+        "abs_error": 0.0352
+      },
+      {
+        "bin": "0.4-0.5",
+        "count": 48,
+        "mean_predicted": 0.4826,
+        "actual_win_rate": 0.5208,
+        "abs_error": 0.0382
+      },
+      {
+        "bin": "0.5-0.6",
+        "count": 86,
+        "mean_predicted": 0.5788,
+        "actual_win_rate": 0.4186,
+        "abs_error": 0.1602
+      },
+      {
+        "bin": "0.6-0.7",
+        "count": 138,
+        "mean_predicted": 0.6681,
+        "actual_win_rate": 0.6159,
+        "abs_error": 0.0521
+      },
+      {
+        "bin": "0.7-0.8",
+        "count": 168,
+        "mean_predicted": 0.7601,
+        "actual_win_rate": 0.7381,
+        "abs_error": 0.022
+      },
+      {
+        "bin": "0.8-0.9",
+        "count": 133,
+        "mean_predicted": 0.8425,
+        "actual_win_rate": 0.812,
+        "abs_error": 0.0305
+      },
+      {
+        "bin": "0.9-1.0",
+        "count": 92,
+        "mean_predicted": 0.9544,
+        "actual_win_rate": 0.9348,
+        "abs_error": 0.0196
+      }
+    ],
+    "ece": 0.0488
+  },
+  "segments": {
+    "venue_home": {
+      "count": 517,
+      "margin_mae": 8.78,
+      "win_accuracy": 0.72,
+      "margin_win_accuracy": 0.716,
+      "win_auc": 0.776
+    },
+    "venue_neutral": {
+      "count": 305,
+      "margin_mae": 8.52,
+      "win_accuracy": 0.666,
+      "margin_win_accuracy": 0.672,
+      "win_auc": 0.745
+    },
+    "matchup_conference": {
+      "count": 711,
+      "margin_mae": 8.55,
+      "win_accuracy": 0.696,
+      "margin_win_accuracy": 0.696,
+      "win_auc": 0.757
+    },
+    "matchup_non_conference": {
+      "count": 111,
+      "margin_mae": 9.51,
+      "win_accuracy": 0.721,
+      "margin_win_accuracy": 0.721,
+      "win_auc": 0.822
+    },
+    "spread_big_favorite_10pt": {
+      "count": 129,
+      "margin_mae": 8.62,
+      "win_accuracy": 0.922,
+      "margin_win_accuracy": 0.922,
+      "win_auc": 0.859
+    },
+    "spread_lean_under5pt": {
+      "count": 381,
+      "margin_mae": 8.91,
+      "win_accuracy": 0.583,
+      "margin_win_accuracy": 0.583,
+      "win_auc": 0.648
+    },
+    "spread_moderate_5_10pt": {
+      "count": 312,
+      "margin_mae": 8.43,
+      "win_accuracy": 0.75,
+      "margin_win_accuracy": 0.75,
+      "win_auc": 0.693
+    },
+    "actual_blowout_15pt": {
+      "count": 222,
+      "margin_mae": 15.34,
+      "win_accuracy": 0.847,
+      "margin_win_accuracy": 0.847,
+      "win_auc": 0.921
+    },
+    "actual_close_5pt": {
+      "count": 257,
+      "margin_mae": 4.95,
+      "win_accuracy": 0.568,
+      "margin_win_accuracy": 0.568,
+      "win_auc": 0.604
+    },
+    "season_first_half": {
+      "count": 428,
+      "margin_mae": 8.88,
+      "win_accuracy": 0.71,
+      "margin_win_accuracy": 0.708,
+      "win_auc": 0.765
+    },
+    "season_second_half": {
+      "count": 394,
+      "margin_mae": 8.47,
+      "win_accuracy": 0.688,
+      "margin_win_accuracy": 0.69,
+      "win_auc": 0.769
+    }
+  },
+  "feature_importance": [
+    {
+      "feature": "diff_w_gbpm",
+      "importance": 227
+    },
+    {
+      "feature": "diff_adj_efficiency_margin",
+      "importance": 60
+    },
+    {
+      "feature": "diff_elo",
+      "importance": 40
+    },
+    {
+      "feature": "diff_win_pct",
+      "importance": 39
+    },
+    {
+      "feature": "diff_star_gbpm",
+      "importance": 38
+    },
+    {
+      "feature": "diff_ft_rate",
+      "importance": 36
+    },
+    {
+      "feature": "diff_def_rebound_pct",
+      "importance": 36
+    },
+    {
+      "feature": "diff_w_tov_pct",
+      "importance": 35
+    },
+    {
+      "feature": "diff_w_dbpm",
+      "importance": 34
+    },
+    {
+      "feature": "diff_minutes_stddev",
+      "importance": 34
+    },
+    {
+      "feature": "diff_star_ppg",
+      "importance": 33
+    },
+    {
+      "feature": "diff_opp_effective_fg_pct",
+      "importance": 32
+    },
+    {
+      "feature": "diff_w_rpg",
+      "importance": 28
+    },
+    {
+      "feature": "diff_adj_defense",
+      "importance": 27
+    },
+    {
+      "feature": "diff_w_usage",
+      "importance": 24
+    },
+    {
+      "feature": "diff_sos",
+      "importance": 23
+    },
+    {
+      "feature": "diff_w_obpm",
+      "importance": 22
+    },
+    {
+      "feature": "diff_star_ortg",
+      "importance": 22
+    },
+    {
+      "feature": "diff_w_ppg_trend",
+      "importance": 22
+    },
+    {
+      "feature": "diff_w_topg",
+      "importance": 21
+    }
+  ]
+}

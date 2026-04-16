@@ -285,6 +285,36 @@ export interface LeagueAverages {
   avg_game_score: number | null;
 }
 
+export interface TorkvikStats {
+  // Impact metrics
+  gbpm: number | null;
+  ogbpm: number | null;
+  dgbpm: number | null;
+  porpag: number | null;
+  dporpag: number | null;
+  stops: number | null;
+  // Efficiency
+  adj_oe: number | null;
+  adj_de: number | null;
+  o_rtg: number | null;
+  d_rtg: number | null;
+  // Shot zones
+  rim_pct: number | null;
+  rim_made: number | null;
+  rim_attempted: number | null;
+  mid_pct: number | null;
+  mid_made: number | null;
+  mid_attempted: number | null;
+  dunk_pct: number | null;
+  dunks_made: number | null;
+  dunks_attempted: number | null;
+  two_p_pct: number | null;
+  tp_pct: number | null;
+  // Context
+  recruiting_rank: number | null;
+  player_type: string | null;
+}
+
 export function fetchPlayerDetail(id: string, season?: number) {
   return fetchJson<{
     player: PlayerProfile;
@@ -292,6 +322,7 @@ export function fetchPlayerDetail(id: string, season?: number) {
     percentiles: Percentiles | null;
     game_log: GameLogEntry[];
     league_averages: LeagueAverages | null;
+    torvik_stats: TorkvikStats | null;
   }>(`/players/${id}`, { season: season?.toString() });
 }
 
