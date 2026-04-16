@@ -6,17 +6,6 @@ import { fetchPlayerDetail, type PlayerProfile, type PlayerSeasonStats, type Per
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
 
-// Color based on percentile rank (0-1): red → orange → yellow → blue → green
-const pctileColor = (pctile: number | null) => {
-  if (pctile == null) return '#374151'; // gray-700
-  const p = pctile * 100;
-  if (p >= 80) return '#22c55e'; // green-500
-  if (p >= 60) return '#3b82f6'; // blue-500
-  if (p >= 40) return '#eab308'; // yellow-500
-  if (p >= 20) return '#f97316'; // orange-500
-  return '#ef4444'; // red-500
-};
-
 // Saturated red → yellow → green gradient for shot efficiency (percentile 0-1)
 const efficiencyColor = (pctile: number | null) => {
   if (pctile == null) return '#4b5563';
