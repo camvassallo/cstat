@@ -17,6 +17,26 @@ const pctileColor = (pctile: number | null) => {
   return '#ef4444'; // red-500
 };
 
+// Saturated red → yellow → green gradient for shot efficiency (percentile 0-1)
+const efficiencyColor = (pctile: number | null) => {
+  if (pctile == null) return '#4b5563';
+  const p = Math.max(0, Math.min(1, pctile));
+  if (p <= 0.5) {
+    // bright red (239,68,68) → vivid yellow (250,204,21)
+    const t = p / 0.5;
+    const r = Math.round(239 + (250 - 239) * t);
+    const g = Math.round(68 + (204 - 68) * t);
+    const b = Math.round(68 + (21 - 68) * t);
+    return `rgb(${r},${g},${b})`;
+  }
+  // vivid yellow (250,204,21) → bright green (34,211,103)
+  const t = (p - 0.5) / 0.5;
+  const r = Math.round(250 + (34 - 250) * t);
+  const g = Math.round(204 + (211 - 204) * t);
+  const b = Math.round(21 + (103 - 21) * t);
+  return `rgb(${r},${g},${b})`;
+};
+
 function PercentileBar({ label, value, pctile }: { label: string; value: string; pctile: number | null }) {
   const p = pctile != null ? Math.round(pctile * 100) : null;
   const color = p == null ? 'bg-gray-600' : p >= 80 ? 'bg-green-500' : p >= 60 ? 'bg-blue-500' : p >= 40 ? 'bg-yellow-500' : p >= 20 ? 'bg-orange-500' : 'bg-red-500';
@@ -167,154 +187,153 @@ export default function PlayerDetail() {
             <div className="border-t border-gray-700 my-2" />
             <PercentileBar label="FT Rate" value={torvik.ft_rate != null ? `${fmt(torvik.ft_rate)}%` : '—'} pctile={torvik.ft_rate_pct} />
             <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
-          </div>
 
-          {/* Shot Diet */}
-          <div className="bg-gray-800 rounded-lg p-5">
-            <h2 className="text-lg font-bold mb-3">Shot Diet</h2>
-            {(() => {
-              // Convert 0-1 decimals to 0-100 for display and color scaling
-              const rimPct = torvik.rim_pct != null ? torvik.rim_pct * 100 : null;
-              const midPct = torvik.mid_pct != null ? torvik.mid_pct * 100 : null;
-              const tpPctVal = torvik.tp_pct != null ? torvik.tp_pct * 100 : null;
-              const ftPct = (torvik.ftm != null && torvik.fta != null && torvik.fta > 0)
-                ? (torvik.ftm / torvik.fta) * 100 : null;
-
-              // SVG half-court: broadcast view — baseline at top, half-court at bottom
-              const cx = 150, hoopY = 14;
-
-              return (
-                <div className="flex flex-col items-center">
-                  <svg viewBox="0 0 300 200" className="w-full max-w-xs" style={{ filter: 'drop-shadow(0 0 8px rgba(0,0,0,0.3))' }}>
-                    {/* Dark background */}
-                    <rect x="0" y="0" width="300" height="200" rx="4" fill="#1f2937" />
-                    {/* Court fill = 3PT zone color (clipped to court boundary) */}
-                    <rect x="10" y="0" width="280" height="200" fill={pctileColor(torvik.tp_pct_pct)} opacity="0.6" />
-
-                    {/* Arc interior = mid-range color (inside arc, paint will cover its portion) */}
-                    <path
-                      d={`M 22 0 L 22 72 A 138 138 0 0 0 278 72 L 278 0 Z`}
-                      fill={pctileColor(torvik.mid_pct_pct)}
-                      opacity="0.7"
-                    />
-
-                    {/* Paint = rim zone */}
-                    <rect x="105" y="0" width="90" height="108" fill={pctileColor(torvik.rim_pct_pct)} opacity="0.7" />
-
-                    {/* FT semicircle — bottom half, diameter = paint width (90) */}
-                    <path d={`M 105 108 A 45 45 0 0 0 195 108`} fill={pctileColor(ftPct != null ? Math.min(Math.max((ftPct - 55) / 35, 0), 1) : null)} opacity="0.75" />
-
-                    {/* Court lines */}
-                    {/* Outer boundary */}
-                    <rect x="10" y="0" width="280" height="200" fill="none" stroke="#6b7280" strokeWidth="1.5" />
-                    {/* Baseline (top) */}
-                    <line x1="10" y1="0" x2="290" y2="0" stroke="#6b7280" strokeWidth="2" />
-                    {/* Paint */}
-                    <rect x="105" y="0" width="90" height="108" fill="none" stroke="#6b7280" strokeWidth="1" />
-                    {/* FT semicircle (bottom half, diameter = paint width) */}
-                    <path d="M 105 108 A 45 45 0 0 0 195 108" fill="none" stroke="#6b7280" strokeWidth="1" />
-                    {/* 3PT arc — straight down from baseline then arc across */}
-                    <path d={`M 22 0 L 22 72 A 138 138 0 0 0 278 72 L 278 0`} fill="none" stroke="#6b7280" strokeWidth="1.5" />
-                    {/* Restricted area arc */}
-                    <path d={`M ${cx - 20} ${hoopY} A 20 20 0 0 0 ${cx + 20} ${hoopY}`} fill="none" stroke="#6b7280" strokeWidth="1" />
-                    {/* Hoop */}
-                    <circle cx={cx} cy={hoopY} r="5" fill="none" stroke="#f97316" strokeWidth="1.5" />
-                    {/* Backboard */}
-                    <line x1={cx - 15} y1={hoopY - 6} x2={cx + 15} y2={hoopY - 6} stroke="#6b7280" strokeWidth="2" />
-
-                    {/* Zone labels */}
-                    {/* Rim — centered in paint */}
-                    <text x={cx} y="48" textAnchor="middle" fill="white" fontSize="11" fontWeight="600">Rim</text>
-                    <text x={cx} y="62" textAnchor="middle" fill="white" fontSize="10" opacity="0.8">
-                      {rimPct != null ? `${rimPct.toFixed(1)}%` : '—'}
-                    </text>
-                    <text x={cx} y="74" textAnchor="middle" fill="#9ca3af" fontSize="8">
-                      {torvik.rim_made ?? 0}-{torvik.rim_attempted ?? 0}
-                    </text>
-
-                    {/* FT — in the bottom semicircle */}
-                    <text x={cx} y="124" textAnchor="middle" fill="white" fontSize="10" fontWeight="600">FT</text>
-                    <text x={cx} y="135" textAnchor="middle" fill="white" fontSize="9" opacity="0.8">
-                      {ftPct != null ? `${ftPct.toFixed(1)}%` : '—'}
-                    </text>
-                    <text x={cx} y="145" textAnchor="middle" fill="#9ca3af" fontSize="8">
-                      {torvik.ftm ?? 0}-{torvik.fta ?? 0}
-                    </text>
-
-                    {/* Mid-range — right wing */}
-                    <text x="232" y="55" textAnchor="middle" fill="white" fontSize="11" fontWeight="600">Mid</text>
-                    <text x="232" y="68" textAnchor="middle" fill="white" fontSize="10" opacity="0.8">
-                      {midPct != null ? `${midPct.toFixed(1)}%` : '—'}
-                    </text>
-                    <text x="232" y="78" textAnchor="middle" fill="#9ca3af" fontSize="8">
-                      {torvik.mid_made ?? 0}-{torvik.mid_attempted ?? 0}
-                    </text>
-
-                    {/* 3PT — left corner */}
-                    <text x="50" y="155" textAnchor="middle" fill="white" fontSize="11" fontWeight="600">3PT</text>
-                    <text x="50" y="168" textAnchor="middle" fill="white" fontSize="10" opacity="0.8">
-                      {tpPctVal != null ? `${tpPctVal.toFixed(1)}%` : '—'}
-                    </text>
-                    <text x="50" y="180" textAnchor="middle" fill="#9ca3af" fontSize="8">
-                      {torvik.tpm ?? 0}-{torvik.tpa ?? 0}
-                    </text>
-                  </svg>
-
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      )}
-
-      {/* Advanced Metrics + Shot Distribution */}
-      {torvik && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-gray-800 rounded-lg p-5">
-            <h2 className="text-lg font-bold mb-3">Advanced Metrics</h2>
+            <h2 className="text-lg font-bold mt-5 mb-3">Advanced Metrics</h2>
             <PercentileBar label="BPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
             <PercentileBar label="OBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
             <PercentileBar label="DBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
             <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
             <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
           </div>
-          {(() => {
-            const rimAtt = torvik.rim_attempted ?? 0;
-            const midAtt = torvik.mid_attempted ?? 0;
-            const tpAtt = torvik.tpa ?? 0;
-            const totalAtt = rimAtt + midAtt + tpAtt;
-            if (totalAtt === 0) return null;
-            const rimW = (rimAtt / totalAtt) * 100;
-            const midW = (midAtt / totalAtt) * 100;
-            const tpW = (tpAtt / totalAtt) * 100;
-            return (
-              <div className="bg-gray-800 rounded-lg p-5">
-                <h2 className="text-lg font-bold mb-3">Shot Distribution</h2>
-                <div className="flex rounded-full h-6 overflow-hidden text-[10px] font-medium gap-[2px]">
-                  {rimW > 0 && (
-                    <div className="flex items-center justify-center first:rounded-l-full" style={{ width: `${rimW}%`, backgroundColor: pctileColor(torvik.rim_pct_pct) }}>
-                      {rimW >= 12 ? `Rim ${rimAtt}` : ''}
-                    </div>
-                  )}
-                  {midW > 0 && (
-                    <div className="flex items-center justify-center" style={{ width: `${midW}%`, backgroundColor: pctileColor(torvik.mid_pct_pct) }}>
-                      {midW >= 12 ? `Mid ${midAtt}` : ''}
-                    </div>
-                  )}
-                  {tpW > 0 && (
-                    <div className="flex items-center justify-center last:rounded-r-full" style={{ width: `${tpW}%`, backgroundColor: pctileColor(torvik.tp_pct_pct) }}>
-                      {tpW >= 12 ? `3PT ${tpAtt}` : ''}
-                    </div>
-                  )}
+
+          {/* Shot Diet */}
+          <div className="bg-gray-800 rounded-lg p-5">
+            <h2 className="text-lg font-bold mb-3">Shot Diet</h2>
+            {(() => {
+              // Convert 0-1 decimals to 0-100 for display
+              const rimPct = torvik.rim_pct != null ? torvik.rim_pct * 100 : null;
+              const midPct = torvik.mid_pct != null ? torvik.mid_pct * 100 : null;
+              const tpPctVal = torvik.tp_pct != null ? torvik.tp_pct * 100 : null;
+              const ftPct = (torvik.ftm != null && torvik.fta != null && torvik.fta > 0)
+                ? (torvik.ftm / torvik.fta) * 100 : null;
+
+              // Shot volume distribution — drives opacity
+              const rimAtt = torvik.rim_attempted ?? 0;
+              const midAtt = torvik.mid_attempted ?? 0;
+              const tpAtt = torvik.tpa ?? 0;
+              const totalAtt = rimAtt + midAtt + tpAtt;
+              // Opacity: more volume → more vivid. Floor 0.4 so every zone is visible
+              const volOpacity = (att: number) => totalAtt > 0 ? Math.min(0.4 + (att / totalAtt) * 1.2, 0.95) : 0.4;
+
+              const cx = 150, hoopY = 14;
+
+              return (
+                <div className="flex flex-col items-center">
+                  <svg viewBox="0 0 300 200" className="w-full max-w-lg">
+                    <defs>
+                      {/* Glow filter for zone fills */}
+                      <filter id="zone-glow" x="-20%" y="-20%" width="140%" height="140%">
+                        <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+                        <feMerge>
+                          <feMergeNode in="blur" />
+                          <feMergeNode in="SourceGraphic" />
+                        </feMerge>
+                      </filter>
+                    </defs>
+
+                    {/* Background matching card */}
+                    <rect x="0" y="0" width="300" height="200" rx="6" fill="#1f2937" />
+
+                    {/* Zone fills: color = efficiency (red→yellow→green), opacity = volume */}
+                    <g filter="url(#zone-glow)">
+                      {/* 3PT zone */}
+                      <rect x="10" y="0" width="280" height="200" fill={efficiencyColor(torvik.tp_pct_pct)} opacity={volOpacity(tpAtt)} />
+                      {/* Mid-range */}
+                      <path d="M 22 0 L 22 72 A 138 138 0 0 0 278 72 L 278 0 Z" fill={efficiencyColor(torvik.mid_pct_pct)} opacity={volOpacity(midAtt)} />
+                      {/* Rim */}
+                      <rect x="105" y="0" width="90" height="108" fill={efficiencyColor(torvik.rim_pct_pct)} opacity={volOpacity(rimAtt)} />
+                      {/* FT semicircle */}
+                      <path d="M 105 108 A 45 45 0 0 0 195 108" fill={efficiencyColor(ftPct != null ? Math.min(Math.max((ftPct - 55) / 35, 0), 1) : null)} opacity="0.65" />
+                    </g>
+
+                    {/* Court lines — white, thin */}
+                    <rect x="10" y="0" width="280" height="200" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
+                    <line x1="10" y1="0" x2="290" y2="0" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" />
+                    <rect x="105" y="0" width="90" height="108" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="0.75" />
+                    <path d="M 105 108 A 45 45 0 0 0 195 108" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="0.75" />
+                    <path d={`M 22 0 L 22 72 A 138 138 0 0 0 278 72 L 278 0`} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
+                    <path d={`M ${cx - 20} ${hoopY} A 20 20 0 0 0 ${cx + 20} ${hoopY}`} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="0.75" />
+                    <circle cx={cx} cy={hoopY} r="5" fill="none" stroke="#f97316" strokeWidth="1.5" />
+                    <line x1={cx - 15} y1={hoopY - 6} x2={cx + 15} y2={hoopY - 6} stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" />
+
+                    {/* === Zone labels (with drop shadow for readability) === */}
+                    <g style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.8))' }}>
+                    {/* Rim */}
+                    <text x={cx} y="48" textAnchor="middle" fill="white" fontSize="11" fontWeight="600">Rim</text>
+                    <text x={cx} y="62" textAnchor="middle" fill="white" fontSize="10" opacity="0.9">
+                      {rimPct != null ? `${rimPct.toFixed(1)}%` : '—'}
+                    </text>
+                    <text x={cx} y="74" textAnchor="middle" fill="white" fontSize="8" opacity="0.7">
+                      {torvik.rim_made ?? 0}-{torvik.rim_attempted ?? 0}
+                    </text>
+
+                    {/* FT */}
+                    <text x={cx} y="123" textAnchor="middle" fill="white" fontSize="10" fontWeight="600">FT</text>
+                    <text x={cx} y="134" textAnchor="middle" fill="white" fontSize="9" opacity="0.9">
+                      {ftPct != null ? `${ftPct.toFixed(1)}%` : '—'}
+                    </text>
+                    <text x={cx} y="144" textAnchor="middle" fill="white" fontSize="8" opacity="0.7">
+                      {torvik.ftm ?? 0}-{torvik.fta ?? 0}
+                    </text>
+
+                    {/* Mid-range */}
+                    <text x="232" y="55" textAnchor="middle" fill="white" fontSize="11" fontWeight="600">Mid</text>
+                    <text x="232" y="68" textAnchor="middle" fill="white" fontSize="10" opacity="0.9">
+                      {midPct != null ? `${midPct.toFixed(1)}%` : '—'}
+                    </text>
+                    <text x="232" y="78" textAnchor="middle" fill="white" fontSize="8" opacity="0.7">
+                      {torvik.mid_made ?? 0}-{torvik.mid_attempted ?? 0}
+                    </text>
+
+                    {/* 3PT */}
+                    <text x="50" y="155" textAnchor="middle" fill="white" fontSize="11" fontWeight="600">3PT</text>
+                    <text x="50" y="168" textAnchor="middle" fill="white" fontSize="10" opacity="0.9">
+                      {tpPctVal != null ? `${tpPctVal.toFixed(1)}%` : '—'}
+                    </text>
+                    <text x="50" y="180" textAnchor="middle" fill="white" fontSize="8" opacity="0.7">
+                      {torvik.tpm ?? 0}-{torvik.tpa ?? 0}
+                    </text>
+                    </g>
+                  </svg>
+
                 </div>
-                <div className="flex justify-between text-[10px] text-gray-400 mt-1.5">
-                  <span>Rim {rimW.toFixed(0)}%</span>
-                  <span>Mid {midW.toFixed(0)}%</span>
-                  <span>3PT {tpW.toFixed(0)}%</span>
+              );
+            })()}
+
+            {/* Shot Distribution gauge */}
+            {(() => {
+              const rimAtt = torvik.rim_attempted ?? 0;
+              const midAtt = torvik.mid_attempted ?? 0;
+              const tpAtt = torvik.tpa ?? 0;
+              const totalAtt = rimAtt + midAtt + tpAtt;
+              if (totalAtt === 0) return null;
+              const rimW = (rimAtt / totalAtt) * 100;
+              const midW = (midAtt / totalAtt) * 100;
+              const tpW = (tpAtt / totalAtt) * 100;
+              return (
+                <div className="mt-6">
+                  <h2 className="text-lg font-bold mb-3">Shot Distribution</h2>
+                  <div className="flex rounded-full h-7 overflow-hidden text-xs font-medium gap-[2px]">
+                    {rimW > 0 && (
+                      <div className="flex items-center justify-center first:rounded-l-full" style={{ width: `${rimW}%`, backgroundColor: efficiencyColor(torvik.rim_pct_pct) }}>
+                        {rimW >= 15 ? `Rim ${rimW.toFixed(0)}%` : ''}
+                      </div>
+                    )}
+                    {midW > 0 && (
+                      <div className="flex items-center justify-center" style={{ width: `${midW}%`, backgroundColor: efficiencyColor(torvik.mid_pct_pct) }}>
+                        {midW >= 15 ? `Mid ${midW.toFixed(0)}%` : ''}
+                      </div>
+                    )}
+                    {tpW > 0 && (
+                      <div className="flex items-center justify-center last:rounded-r-full" style={{ width: `${tpW}%`, backgroundColor: efficiencyColor(torvik.tp_pct_pct) }}>
+                        {tpW >= 15 ? `3PT ${tpW.toFixed(0)}%` : ''}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })()}
+              );
+            })()}
+          </div>
         </div>
       )}
 
