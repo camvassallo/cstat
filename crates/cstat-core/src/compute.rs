@@ -3,6 +3,78 @@ use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
 
+// ---------------------------------------------------------------------------
+// Pure stat formulas (no DB required)
+// ---------------------------------------------------------------------------
+
+/// Estimate possessions from box score components.
+/// Standard formula: Poss ≈ FGA − OREB + TOV + 0.44 × FTA
+pub fn possessions(fga: f64, oreb: f64, tov: f64, fta: f64) -> f64 {
+    fga - oreb + tov + 0.44 * fta
+}
+
+/// Box score line for game score calculation.
+pub struct BoxScore {
+    pub pts: f64,
+    pub fgm: f64,
+    pub fga: f64,
+    pub ftm: f64,
+    pub fta: f64,
+    pub oreb: f64,
+    pub dreb: f64,
+    pub stl: f64,
+    pub ast: f64,
+    pub blk: f64,
+    pub pf: f64,
+    pub tov: f64,
+}
+
+/// Hollinger game score:
+/// GmSc = PTS + 0.4×FGM − 0.7×FGA − 0.4×(FTA−FTM) + 0.7×OREB + 0.3×DREB
+///        + STL + 0.7×AST + 0.7×BLK − 0.4×PF − TOV
+pub fn game_score(b: &BoxScore) -> f64 {
+    b.pts + 0.4 * b.fgm - 0.7 * b.fga - 0.4 * (b.fta - b.ftm)
+        + 0.7 * b.oreb
+        + 0.3 * b.dreb
+        + b.stl
+        + 0.7 * b.ast
+        + 0.7 * b.blk
+        - 0.4 * b.pf
+        - b.tov
+}
+
+/// Effective field goal percentage: eFG% = (FGM + 0.5 × 3PM) / FGA
+pub fn effective_fg_pct(fgm: f64, tpm: f64, fga: f64) -> Option<f64> {
+    if fga > 0.0 {
+        Some((fgm + 0.5 * tpm) / fga)
+    } else {
+        None
+    }
+}
+
+/// True shooting percentage: TS% = PTS / (2 × (FGA + 0.44 × FTA))
+pub fn true_shooting_pct(pts: f64, fga: f64, fta: f64) -> Option<f64> {
+    let denom = 2.0 * (fga + 0.44 * fta);
+    if denom > 0.0 { Some(pts / denom) } else { None }
+}
+
+/// Turnover percentage: TOV% = TOV / (FGA + 0.44 × FTA + TOV)
+pub fn turnover_pct(tov: f64, fga: f64, fta: f64) -> Option<f64> {
+    let denom = fga + 0.44 * fta + tov;
+    if denom > 0.0 { Some(tov / denom) } else { None }
+}
+
+/// Assist-to-turnover ratio with safe division.
+pub fn ast_to_ratio(ast: f64, tov: f64) -> f64 {
+    if tov > 0.0 {
+        ast / tov
+    } else if ast > 0.0 {
+        ast
+    } else {
+        0.0
+    }
+}
+
 /// Deduplicate player records that share the same (name, team_id, season).
 /// NatStat assigns different player codes across seasons, creating duplicate entries.
 /// For each pair: keep the primary (most games), delete overlapping game stats,
@@ -1168,5 +1240,198 @@ impl std::fmt::Display for ComputeReport {
             self.schedules,
             self.percentiles
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx(a: f64, b: f64, eps: f64) -> bool {
+        (a - b).abs() < eps
+    }
+
+    // -- Possessions --------------------------------------------------------
+
+    #[test]
+    fn possessions_typical_game() {
+        // Duke: 60 FGA, 10 OREB, 12 TOV, 20 FTA
+        // Expected: 60 - 10 + 12 + 0.44*20 = 70.8
+        assert!(approx(possessions(60.0, 10.0, 12.0, 20.0), 70.8, 0.01));
+    }
+
+    #[test]
+    fn possessions_zero_free_throws() {
+        // No free throws: 55 FGA, 8 OREB, 10 TOV, 0 FTA
+        assert!(approx(possessions(55.0, 8.0, 10.0, 0.0), 57.0, 0.01));
+    }
+
+    #[test]
+    fn possessions_all_zeros() {
+        assert!(approx(possessions(0.0, 0.0, 0.0, 0.0), 0.0, 0.01));
+    }
+
+    // -- Game Score (Hollinger) ---------------------------------------------
+
+    #[test]
+    fn game_score_typical_line() {
+        // ~20 pts, 8-15 FG, 2-4 FT, 2 OREB, 5 DREB, 1 STL, 5 AST, 1 BLK, 2 PF, 3 TOV
+        // GmSc = 20 + 3.2 - 10.5 - 0.8 + 1.4 + 1.5 + 1 + 3.5 + 0.7 - 0.8 - 3 = 16.2
+        let gs = game_score(&BoxScore {
+            pts: 20.0,
+            fgm: 8.0,
+            fga: 15.0,
+            ftm: 2.0,
+            fta: 4.0,
+            oreb: 2.0,
+            dreb: 5.0,
+            stl: 1.0,
+            ast: 5.0,
+            blk: 1.0,
+            pf: 2.0,
+            tov: 3.0,
+        });
+        assert!(approx(gs, 16.2, 0.01));
+    }
+
+    #[test]
+    fn game_score_zero_stat_line() {
+        let gs = game_score(&BoxScore {
+            pts: 0.0,
+            fgm: 0.0,
+            fga: 0.0,
+            ftm: 0.0,
+            fta: 0.0,
+            oreb: 0.0,
+            dreb: 0.0,
+            stl: 0.0,
+            ast: 0.0,
+            blk: 0.0,
+            pf: 0.0,
+            tov: 0.0,
+        });
+        assert!(approx(gs, 0.0, 0.01));
+    }
+
+    #[test]
+    fn game_score_bad_game() {
+        // 0 pts, 0-5 FG, 0-0 FT, 0 OREB, 1 DREB, 0 STL, 0 AST, 0 BLK, 4 PF, 4 TOV
+        // GmSc = 0 + 0 - 3.5 - 0 + 0 + 0.3 + 0 + 0 + 0 - 1.6 - 4 = -8.8
+        let gs = game_score(&BoxScore {
+            pts: 0.0,
+            fgm: 0.0,
+            fga: 5.0,
+            ftm: 0.0,
+            fta: 0.0,
+            oreb: 0.0,
+            dreb: 1.0,
+            stl: 0.0,
+            ast: 0.0,
+            blk: 0.0,
+            pf: 4.0,
+            tov: 4.0,
+        });
+        assert!(approx(gs, -8.8, 0.01));
+    }
+
+    // -- Effective FG% ------------------------------------------------------
+
+    #[test]
+    fn efg_typical() {
+        // 8 FGM, 2 3PM, 15 FGA → (8 + 1) / 15 = 0.6
+        assert!(approx(
+            effective_fg_pct(8.0, 2.0, 15.0).unwrap(),
+            0.6,
+            0.001
+        ));
+    }
+
+    #[test]
+    fn efg_no_threes() {
+        // 8 FGM, 0 3PM, 15 FGA → 8/15 = 0.533
+        assert!(approx(
+            effective_fg_pct(8.0, 0.0, 15.0).unwrap(),
+            0.5333,
+            0.001
+        ));
+    }
+
+    #[test]
+    fn efg_zero_fga() {
+        assert!(effective_fg_pct(0.0, 0.0, 0.0).is_none());
+    }
+
+    // -- True Shooting % ----------------------------------------------------
+
+    #[test]
+    fn ts_typical() {
+        // 20 pts, 15 FGA, 4 FTA → 20 / (2 * (15 + 0.44*4)) = 20 / (2 * 16.76) = 20/33.52 = 0.5966
+        assert!(approx(
+            true_shooting_pct(20.0, 15.0, 4.0).unwrap(),
+            0.5966,
+            0.001
+        ));
+    }
+
+    #[test]
+    fn ts_zero_attempts() {
+        assert!(true_shooting_pct(0.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn ts_pure_free_throw_scorer() {
+        // 10 pts, 0 FGA, 10 FTA → 10 / (2 * (0 + 4.4)) = 10/8.8 = 1.136
+        // TS% > 1 is possible with pure FT scoring (theoretical edge case)
+        assert!(approx(
+            true_shooting_pct(10.0, 0.0, 10.0).unwrap(),
+            1.1364,
+            0.001
+        ));
+    }
+
+    // -- Turnover % ---------------------------------------------------------
+
+    #[test]
+    fn tov_pct_typical() {
+        // 3 TOV, 15 FGA, 4 FTA → 3 / (15 + 0.44*4 + 3) = 3 / 19.76 = 0.1518
+        assert!(approx(turnover_pct(3.0, 15.0, 4.0).unwrap(), 0.1518, 0.001));
+    }
+
+    #[test]
+    fn tov_pct_zero_usage() {
+        assert!(turnover_pct(0.0, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn tov_pct_all_turnovers() {
+        // Degenerate: 5 TOV, 0 FGA, 0 FTA → 5/5 = 1.0
+        assert!(approx(turnover_pct(5.0, 0.0, 0.0).unwrap(), 1.0, 0.001));
+    }
+
+    // -- Assist-to-Turnover Ratio -------------------------------------------
+
+    #[test]
+    fn atr_typical() {
+        assert!(approx(ast_to_ratio(6.0, 3.0), 2.0, 0.001));
+    }
+
+    #[test]
+    fn atr_zero_turnovers_with_assists() {
+        assert!(approx(ast_to_ratio(5.0, 0.0), 5.0, 0.001));
+    }
+
+    #[test]
+    fn atr_zero_both() {
+        assert!(approx(ast_to_ratio(0.0, 0.0), 0.0, 0.001));
+    }
+
+    // -- ComputeReport Display ----------------------------------------------
+
+    #[test]
+    fn compute_report_display() {
+        let report = ComputeReport::default();
+        let s = format!("{report}");
+        assert!(s.contains("0 deduped"));
+        assert!(s.contains("0 percentiles"));
     }
 }

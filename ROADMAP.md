@@ -47,7 +47,8 @@ Barttorvik   ↗                                    ↓
   - [x] CLI commands: `team` (single team), `explore` (raw API inspection)
   - [x] Migration 002: enriched schema (player demographics, advanced game stats, TCR fields)
 - [x] Docker Compose for local Postgres 17
-- [x] GitHub Actions CI/CD (build, test, clippy, fmt)
+- [x] GitHub Actions CI (build, test, clippy, fmt)
+  - [x] Revamped: concurrency groups, frontend lint/typecheck/build jobs, Postgres 17, artifact upload on main
 - [x] Unit + integration test scaffolding (25 tests)
 
 ### NatStat Data Targets

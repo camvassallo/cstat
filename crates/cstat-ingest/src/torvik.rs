@@ -365,3 +365,210 @@ fn val_i32(row: &[Value], idx: usize) -> Option<i32> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // -- CSV parsing --------------------------------------------------------
+
+    #[test]
+    fn parse_csv_valid_row() {
+        // Build a 64-column CSV row
+        let mut cols = vec![""; 64];
+        cols[0] = "Cooper Flagg";
+        cols[1] = "Duke";
+        cols[2] = "ACC";
+        cols[3] = "35"; // gp
+        cols[4] = "32.5"; // min_per
+        cols[5] = "118.2"; // o_rtg
+        cols[6] = "28.1"; // usage
+        cols[25] = "Fr"; // class_year
+        cols[26] = "6-9"; // height
+        cols[53] = "8.7"; // gbpm
+        cols[63] = "18.4"; // ppg
+        let csv_line = cols.join(",");
+
+        let players = parse_player_csv(&csv_line).unwrap();
+        assert_eq!(players.len(), 1);
+        let p = &players[0];
+        assert_eq!(p.player_name, "Cooper Flagg");
+        assert_eq!(p.team, "Duke");
+        assert_eq!(p.conf, "ACC");
+        assert_eq!(p.gp, Some(35));
+        assert_eq!(p.min_per, Some(32.5));
+        assert_eq!(p.o_rtg, Some(118.2));
+        assert_eq!(p.usage, Some(28.1));
+        assert_eq!(p.class_year.as_deref(), Some("Fr"));
+        assert_eq!(p.height.as_deref(), Some("6-9"));
+        assert_eq!(p.gbpm, Some(8.7));
+        assert_eq!(p.ppg, Some(18.4));
+    }
+
+    #[test]
+    fn parse_csv_skips_short_rows() {
+        let csv = "a,b,c\n"; // only 3 columns
+        let players = parse_player_csv(csv).unwrap();
+        assert!(players.is_empty());
+    }
+
+    #[test]
+    fn parse_csv_handles_empty_optional_fields() {
+        let mut cols = vec![""; 64];
+        cols[0] = "Test Player";
+        cols[1] = "Team";
+        cols[2] = "Conf";
+        // All numeric fields left empty
+        let csv_line = cols.join(",");
+        let players = parse_player_csv(&csv_line).unwrap();
+        assert_eq!(players.len(), 1);
+        assert!(players[0].gp.is_none());
+        assert!(players[0].ppg.is_none());
+        assert!(players[0].class_year.is_none());
+    }
+
+    // -- JSON game row parsing ----------------------------------------------
+
+    fn make_game_row() -> Vec<Value> {
+        let mut row = vec![json!(null); 53];
+        row[0] = json!("2026-01-15"); // date
+        row[5] = json!("North Carolina"); // opponent
+        row[6] = json!("20260115-duke-unc"); // game_uid
+        row[8] = json!(78.5); // minutes_pct
+        row[9] = json!(120.3); // o_rtg
+        row[10] = json!(28.5); // usage
+        row[17] = json!(2); // dunks_made
+        row[18] = json!(3); // dunks_attempted
+        row[19] = json!(4); // rim_made
+        row[20] = json!(7); // rim_attempted
+        row[21] = json!(1); // mid_made
+        row[22] = json!(3); // mid_attempted
+        row[23] = json!(6); // two_pm
+        row[24] = json!(10); // two_pa
+        row[25] = json!(3); // tpm
+        row[26] = json!(7); // tpa
+        row[27] = json!(4); // ftm
+        row[28] = json!(5); // fta
+        row[30] = json!(3.2); // obpm
+        row[31] = json!(1.1); // dbpm
+        row[33] = json!(22.0); // pts
+        row[34] = json!(2.0); // oreb
+        row[35] = json!(6.0); // dreb
+        row[36] = json!(5.0); // ast
+        row[37] = json!(3.0); // tov
+        row[38] = json!(1.0); // stl
+        row[39] = json!(2.0); // blk
+        row[42] = json!(2.0); // pf
+        row[43] = json!(65.0); // possessions
+        row[44] = json!(4.5); // bpm
+        row[46] = json!("H"); // location
+        row[47] = json!("Duke"); // team
+        row[48] = json!("Cooper Flagg"); // player_name
+        row[49] = json!(81); // height_inches
+        row[50] = json!("Fr"); // class_year
+        row[51] = json!(12345); // pid
+        row[52] = json!(2026); // year
+        row
+    }
+
+    #[test]
+    fn parse_game_row_valid() {
+        let row = make_game_row();
+        let g = parse_game_row(&row).unwrap();
+        assert_eq!(g.date_str, "2026-01-15");
+        assert_eq!(g.team, "Duke");
+        assert_eq!(g.player_name, "Cooper Flagg");
+        assert_eq!(g.opponent, "North Carolina");
+        assert_eq!(g.pts, Some(22.0));
+        assert_eq!(g.oreb, Some(2.0));
+        assert_eq!(g.dreb, Some(6.0));
+        assert_eq!(g.ast, Some(5.0));
+        assert_eq!(g.tpm, Some(3));
+        assert_eq!(g.tpa, Some(7));
+        assert_eq!(g.ftm, Some(4));
+        assert_eq!(g.fta, Some(5));
+        assert_eq!(g.bpm, Some(4.5));
+        assert_eq!(g.possessions, Some(65.0));
+        assert_eq!(g.height_inches, Some(81));
+        assert_eq!(g.class_year.as_deref(), Some("Fr"));
+        assert_eq!(g.location.as_deref(), Some("H"));
+        assert_eq!(g.pid, Some(12345));
+        assert_eq!(g.year, Some(2026));
+    }
+
+    #[test]
+    fn parse_game_row_too_short() {
+        let row = vec![json!(null); 10];
+        assert!(parse_game_row(&row).is_none());
+    }
+
+    #[test]
+    fn parse_game_row_missing_required_string() {
+        let mut row = make_game_row();
+        row[0] = json!(null); // date is required
+        assert!(parse_game_row(&row).is_none());
+    }
+
+    // -- Value helpers ------------------------------------------------------
+
+    #[test]
+    fn val_str_from_string() {
+        let row = vec![json!("hello")];
+        assert_eq!(val_str(&row, 0), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn val_str_from_number() {
+        let row = vec![json!(42)];
+        assert_eq!(val_str(&row, 0), Some("42".to_string()));
+    }
+
+    #[test]
+    fn val_str_from_null() {
+        let row = vec![json!(null)];
+        assert_eq!(val_str(&row, 0), None);
+    }
+
+    #[test]
+    fn val_str_from_empty_string() {
+        let row = vec![json!("")];
+        assert_eq!(val_str(&row, 0), None);
+    }
+
+    #[test]
+    fn val_f64_from_number() {
+        let row = vec![json!(12.5)];
+        assert_eq!(val_f64(&row, 0), Some(12.5));
+    }
+
+    #[test]
+    fn val_f64_from_string_number() {
+        let row = vec![json!("7.25")];
+        assert_eq!(val_f64(&row, 0), Some(7.25));
+    }
+
+    #[test]
+    fn val_f64_from_null() {
+        let row = vec![json!(null)];
+        assert_eq!(val_f64(&row, 0), None);
+    }
+
+    #[test]
+    fn val_i32_from_number() {
+        let row = vec![json!(42)];
+        assert_eq!(val_i32(&row, 0), Some(42));
+    }
+
+    #[test]
+    fn val_i32_from_float() {
+        let row = vec![json!(3.9)];
+        assert_eq!(val_i32(&row, 0), Some(3)); // truncates
+    }
+
+    #[test]
+    fn val_i32_from_string() {
+        let row = vec![json!("7")];
+        assert_eq!(val_i32(&row, 0), Some(7));
+    }
+}
