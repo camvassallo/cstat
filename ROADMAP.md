@@ -228,7 +228,7 @@ This naturally enables:
   - [x] Rebound backfill from Torvik game-level data (76,385 game rows updated — NatStat had 32% coverage)
   - [x] CLI subcommand: `torvik --year 2026 [--rebounds]`
   - [x] Surface Torvik advanced metrics (GBPM, shot zones, recruiting rank) in player detail API
-  - [ ] Polish Torvik data display on player detail page (shot zone visualization, GBPM context/percentiles)
+  - [x] Polish Torvik data display on player detail page (shot zone visualization, GBPM context/percentiles)
   - [x] Use Torvik data as ML features (GBPM as roster aggregate and star-player feature)
   - [ ] Use recruiting rank as early-season prior (team-avg recruit rank for first ~3 weeks when model lacks game data)
 
