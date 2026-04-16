@@ -13,11 +13,12 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 usage() {
-  echo "Usage: $0 {start|stop|logs|status}"
+  echo "Usage: $0 {start|stop|restart|logs|status}"
   echo ""
   echo "Commands:"
   echo "  start       Start Postgres, API server, and web frontend"
   echo "  stop        Stop all running services"
+  echo "  restart     Stop then start all services"
   echo "  logs [svc]  Tail logs (all, or: api, web, postgres)"
   echo "  status      Show status of each service"
   exit 1
@@ -158,9 +159,10 @@ do_logs() {
 [[ $# -lt 1 ]] && usage
 
 case "$1" in
-  start)  do_start ;;
-  stop)   do_stop ;;
-  status) do_status ;;
-  logs)   do_logs "${2:-all}" ;;
-  *)      usage ;;
+  start)   do_start ;;
+  stop)    do_stop ;;
+  restart) do_stop; do_start ;;
+  status)  do_status ;;
+  logs)    do_logs "${2:-all}" ;;
+  *)       usage ;;
 esac
