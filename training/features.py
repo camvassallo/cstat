@@ -79,7 +79,7 @@ def load_player_game_stats(engine, seasons=None) -> pd.DataFrame:
     seasons = seasons or SEASONS
     return pd.read_sql(
         """
-        SELECT pgs.player_id, pgs.team_id, pgs.game_id, pgs.game_date,
+        SELECT pgs.player_id, pgs.team_id, pgs.game_id, pgs.game_date, pgs.season,
                pgs.minutes, pgs.points, pgs.fgm, pgs.fga, pgs.tpm, pgs.tpa,
                pgs.ftm, pgs.fta,
                pgs.off_rebounds, pgs.def_rebounds, pgs.total_rebounds,
@@ -130,6 +130,21 @@ def load_team_conferences(engine, seasons=None) -> pd.DataFrame:
         SELECT id as team_id, conference
         FROM teams
         WHERE season = ANY(%(seasons)s)
+        """,
+        engine,
+        params={"seasons": seasons},
+    )
+
+
+def load_torvik_stats(engine, seasons=None) -> pd.DataFrame:
+    """Load Torvik GBPM per player for roster aggregation."""
+    seasons = seasons or SEASONS
+    return pd.read_sql(
+        """
+        SELECT player_id, season, gbpm
+        FROM torvik_player_stats
+        WHERE player_id IS NOT NULL
+          AND season = ANY(%(seasons)s)
         """,
         engine,
         params={"seasons": seasons},
@@ -445,7 +460,8 @@ def compute_cumulative_team_stats(tgs: pd.DataFrame, games_df: pd.DataFrame):
 # Cumulative roster aggregates — expanding player averages
 # ---------------------------------------------------------------------------
 
-def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame):
+def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
+                                    torvik_df=None):
     """
     For each (team_id, game_date), compute minutes-weighted roster averages
     using only player game stats from BEFORE that date.
@@ -503,7 +519,7 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame):
     player_cum = []
     for player_id, pdf in pgs.groupby("player_id"):
         pdf = pdf.sort_values("game_date").reset_index(drop=True)
-        entry = pdf[["player_id", "team_id", "game_id", "game_date", "minutes"]].copy()
+        entry = pdf[["player_id", "team_id", "game_id", "game_date", "season", "minutes"]].copy()
 
         for col in stat_cols:
             entry[f"cum_{col}"] = pdf[col].expanding().mean().shift(1)
@@ -520,6 +536,17 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame):
         player_cum.append(entry)
 
     player_cum_df = pd.concat(player_cum, ignore_index=True)
+
+    # Merge Torvik GBPM (season-level metric) onto per-player entries
+    if torvik_df is not None and not torvik_df.empty:
+        player_cum_df = player_cum_df.merge(
+            torvik_df[["player_id", "season", "gbpm"]].rename(columns={"gbpm": "torvik_gbpm"}),
+            left_on=["player_id", "season"],
+            right_on=["player_id", "season"],
+            how="left",
+        )
+    else:
+        player_cum_df["torvik_gbpm"] = np.nan
 
     # Now aggregate per (team_id, game_date): minutes-weighted averages
     # across qualified players (>= 5 prior games, >= 10 cum_minutes)
@@ -551,6 +578,7 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame):
         "cum_tov_pct_g": "w_tov_pct",
         "cum_stl_pct_g": "w_stl_pct",
         "cum_blk_pct_g": "w_blk_pct",
+        "torvik_gbpm": "w_gbpm",
     }
 
     # Rolling form columns
@@ -601,6 +629,7 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame):
         row["star_ppg"] = group.loc[top_idx, "cum_points"] if pd.notna(group.loc[top_idx, "cum_points"]) else np.nan
         row["star_bpm"] = group.loc[top_idx, "cum_game_score"] if pd.notna(group.loc[top_idx, "cum_game_score"]) else np.nan
         row["star_ortg"] = group.loc[top_idx, "cum_ortg_g"] if pd.notna(group.loc[top_idx, "cum_ortg_g"]) else np.nan
+        row["star_gbpm"] = group.loc[top_idx, "torvik_gbpm"] if pd.notna(group.loc[top_idx, "torvik_gbpm"]) else np.nan
 
         # Minutes stddev (depth indicator)
         row["minutes_stddev"] = group["cum_minutes"].std()
@@ -705,9 +734,10 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
     tgs = load_team_game_stats(engine, seasons)
     pgs = load_player_game_stats(engine, seasons)
     conferences = load_team_conferences(engine, seasons)
+    torvik = load_torvik_stats(engine, seasons)
 
     forecasts = load_game_forecasts(engine, seasons)
-    print(f"  {len(games)} games, {len(tgs)} team-game rows, {len(pgs)} player-game rows, {len(forecasts)} forecasts")
+    print(f"  {len(games)} games, {len(tgs)} team-game rows, {len(pgs)} player-game rows, {len(forecasts)} forecasts, {len(torvik)} torvik")
 
     # 1. ELO — prefer NatStat pre-game ELO, fall back to computed incremental ELO
     print("Computing ELO ratings...")
@@ -758,7 +788,7 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
 
     # 4. Cumulative roster aggregates + rolling form
     print("Computing cumulative roster aggregates...")
-    cum_roster = compute_cumulative_roster_stats(pgs, games)
+    cum_roster = compute_cumulative_roster_stats(pgs, games, torvik)
 
     # 5. Player SOS
     print("Computing player SOS...")
@@ -923,9 +953,12 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
         "w_tov_pct": "w_tov_pct",
         "w_stl_pct": "w_stl_pct",
         "w_blk_pct": "w_blk_pct",
+        # Torvik
+        "w_gbpm": "w_gbpm",
         # Star power
         "star_ppg": "star_ppg",
         "star_bpm": "star_bpm",
+        "star_gbpm": "star_gbpm",
         "star_ortg": "star_ortg",
         # Depth
         "minutes_stddev": "minutes_stddev",

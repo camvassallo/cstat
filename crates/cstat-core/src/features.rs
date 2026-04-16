@@ -60,8 +60,10 @@ struct RosterAgg {
     w_tov_pct: Option<f64>,
     w_stl_pct: Option<f64>,
     w_blk_pct: Option<f64>,
+    w_gbpm: Option<f64>,
     star_ppg: Option<f64>,
     star_bpm: Option<f64>,
+    star_gbpm: Option<f64>,
     star_ortg: Option<f64>,
     minutes_stddev: Option<f64>,
 }
@@ -108,17 +110,21 @@ async fn get_roster_agg(
     sqlx::query_as::<_, RosterAgg>(
         r#"
         WITH qualified AS (
-            SELECT *,
-                   minutes_per_game * games_played AS total_minutes
-            FROM player_season_stats
-            WHERE team_id = $1
-              AND season = $2
-              AND games_played >= 5
-              AND minutes_per_game >= 10
+            SELECT pss.*,
+                   pss.minutes_per_game * pss.games_played AS total_minutes,
+                   tps.gbpm AS torvik_gbpm
+            FROM player_season_stats pss
+            LEFT JOIN torvik_player_stats tps
+              ON tps.player_id = pss.player_id AND tps.season = pss.season
+            WHERE pss.team_id = $1
+              AND pss.season = $2
+              AND pss.games_played >= 5
+              AND pss.minutes_per_game >= 10
         ),
         star AS (
             SELECT ppg AS star_ppg,
                    bpm AS star_bpm,
+                   torvik_gbpm AS star_gbpm,
                    offensive_rating AS star_ortg
             FROM qualified
             ORDER BY total_minutes DESC
@@ -145,6 +151,7 @@ async fn get_roster_agg(
                 SUM(tov_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_tov_pct,
                 SUM(stl_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_stl_pct,
                 SUM(blk_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_blk_pct,
+                SUM(torvik_gbpm * total_minutes)   / NULLIF(SUM(CASE WHEN torvik_gbpm IS NOT NULL THEN total_minutes END), 0) AS w_gbpm,
                 STDDEV(minutes_per_game) AS minutes_stddev
             FROM qualified
         )
@@ -288,9 +295,12 @@ pub async fn build_game_features(
         d(home_roster.w_tov_pct, away_roster.w_tov_pct),
         d(home_roster.w_stl_pct, away_roster.w_stl_pct),
         d(home_roster.w_blk_pct, away_roster.w_blk_pct),
+        // Torvik
+        d(home_roster.w_gbpm, away_roster.w_gbpm),
         // Star power
         d(home_roster.star_ppg, away_roster.star_ppg),
         d(home_roster.star_bpm, away_roster.star_bpm),
+        d(home_roster.star_gbpm, away_roster.star_gbpm),
         d(home_roster.star_ortg, away_roster.star_ortg),
         // Depth
         d(home_roster.minutes_stddev, away_roster.minutes_stddev),

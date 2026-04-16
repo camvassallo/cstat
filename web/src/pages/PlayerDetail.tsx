@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
-import { fetchPlayerDetail, type PlayerProfile, type PlayerSeasonStats, type Percentiles, type GameLogEntry, type LeagueAverages } from '../api/client';
+import { fetchPlayerDetail, type PlayerProfile, type PlayerSeasonStats, type Percentiles, type GameLogEntry, type LeagueAverages, type TorkvikStats } from '../api/client';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -34,6 +34,7 @@ export default function PlayerDetail() {
   const [percentiles, setPercentiles] = useState<Percentiles | null>(null);
   const [gameLog, setGameLog] = useState<GameLogEntry[]>([]);
   const [leagueAvg, setLeagueAvg] = useState<LeagueAverages | null>(null);
+  const [torvik, setTorvik] = useState<TorkvikStats | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export default function PlayerDetail() {
         setPercentiles(r.percentiles);
         setGameLog(r.game_log);
         setLeagueAvg(r.league_averages);
+        setTorvik(r.torvik_stats);
       })
       .finally(() => setLoading(false));
   }, [id]);
@@ -131,6 +133,132 @@ export default function PlayerDetail() {
               </ResponsiveContainer>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Torvik Advanced Metrics */}
+      {torvik && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-gray-800 rounded-lg p-5">
+            <h2 className="text-lg font-bold mb-3">Advanced Metrics <span className="text-xs text-gray-500 font-normal">(Barttorvik)</span></h2>
+            <div className="space-y-3">
+              {/* GBPM with O/D split */}
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-gray-400">GBPM</span>
+                  <span className="font-medium">{fmt(torvik.gbpm)}</span>
+                </div>
+                <div className="flex gap-2 text-xs text-gray-500">
+                  <span>Off: {fmt(torvik.ogbpm)}</span>
+                  <span>&middot;</span>
+                  <span>Def: {fmt(torvik.dgbpm)}</span>
+                </div>
+              </div>
+              {/* PORPAG */}
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">PORPAG</span>
+                <span className="font-medium">{fmt(torvik.porpag)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">DPORPAG</span>
+                <span className="font-medium">{fmt(torvik.dporpag)}</span>
+              </div>
+              {/* Adj Efficiency */}
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">Adj OE</span>
+                <span className="font-medium">{fmt(torvik.adj_oe)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">Adj DE</span>
+                <span className="font-medium">{fmt(torvik.adj_de)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">Stops</span>
+                <span className="font-medium">{fmt(torvik.stops)}</span>
+              </div>
+              {/* Context */}
+              {torvik.recruiting_rank != null && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Recruit Rank</span>
+                  <span className="font-medium">{fmt(torvik.recruiting_rank, 0)}</span>
+                </div>
+              )}
+              {torvik.player_type && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Player Type</span>
+                  <span className="font-medium">{torvik.player_type}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Shot Zone Breakdown */}
+          <div className="bg-gray-800 rounded-lg p-5">
+            <h2 className="text-lg font-bold mb-3">Shot Zones <span className="text-xs text-gray-500 font-normal">(Barttorvik)</span></h2>
+            <div className="space-y-3">
+              {torvik.rim_attempted != null && torvik.rim_attempted > 0 && (
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-400">At Rim</span>
+                    <span className="font-medium">{fmt(torvik.rim_pct, 1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div className="h-2 rounded-full bg-green-500" style={{ width: `${Math.min((torvik.rim_pct ?? 0), 100)}%` }} />
+                    </div>
+                    <span className="text-xs text-gray-500 w-20 text-right">{fmt(torvik.rim_made, 0)}/{fmt(torvik.rim_attempted, 0)}</span>
+                  </div>
+                </div>
+              )}
+              {torvik.mid_attempted != null && torvik.mid_attempted > 0 && (
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-400">Mid-Range</span>
+                    <span className="font-medium">{fmt(torvik.mid_pct, 1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div className="h-2 rounded-full bg-yellow-500" style={{ width: `${Math.min((torvik.mid_pct ?? 0), 100)}%` }} />
+                    </div>
+                    <span className="text-xs text-gray-500 w-20 text-right">{fmt(torvik.mid_made, 0)}/{fmt(torvik.mid_attempted, 0)}</span>
+                  </div>
+                </div>
+              )}
+              {torvik.tp_pct != null && (
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-400">Three-Point</span>
+                    <span className="font-medium">{fmt(torvik.tp_pct, 1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div className="h-2 rounded-full bg-blue-500" style={{ width: `${Math.min((torvik.tp_pct ?? 0), 100)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {torvik.dunks_attempted != null && torvik.dunks_attempted > 0 && (
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-400">Dunks</span>
+                    <span className="font-medium">{fmt(torvik.dunk_pct, 1)}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div className="h-2 rounded-full bg-purple-500" style={{ width: `${Math.min((torvik.dunk_pct ?? 0), 100)}%` }} />
+                    </div>
+                    <span className="text-xs text-gray-500 w-20 text-right">{fmt(torvik.dunks_made, 0)}/{fmt(torvik.dunks_attempted, 0)}</span>
+                  </div>
+                </div>
+              )}
+              {torvik.two_p_pct != null && (
+                <div className="flex justify-between text-sm pt-2 border-t border-gray-700">
+                  <span className="text-gray-400">Overall 2P%</span>
+                  <span className="font-medium">{fmt(torvik.two_p_pct, 1)}%</span>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

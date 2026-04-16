@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 /// Number of input features expected by the ONNX models.
-pub const NUM_FEATURES: usize = 47;
+pub const NUM_FEATURES: usize = 49;
 
 /// Feature names in the exact order expected by the ONNX models.
 pub const FEATURE_NAMES: [&str; NUM_FEATURES] = [
@@ -46,8 +46,10 @@ pub const FEATURE_NAMES: [&str; NUM_FEATURES] = [
     "diff_w_tov_pct",
     "diff_w_stl_pct",
     "diff_w_blk_pct",
+    "diff_w_gbpm",
     "diff_star_ppg",
     "diff_star_bpm",
+    "diff_star_gbpm",
     "diff_star_ortg",
     "diff_minutes_stddev",
     "diff_w_rolling_gs",

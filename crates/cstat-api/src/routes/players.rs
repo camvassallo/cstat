@@ -94,11 +94,12 @@ async fn player_detail(
             )
         })?;
 
-    let (season_stats, percentiles, game_log, league_averages) = tokio::try_join!(
+    let (season_stats, percentiles, game_log, league_averages, torvik_stats) = tokio::try_join!(
         queries::get_player_season_stats(pool, id, season),
         queries::get_player_percentiles(pool, id, season),
         queries::get_player_game_log(pool, id, season),
         queries::get_league_averages(pool, season),
+        queries::get_torvik_stats(pool, id, season),
     )
     .map_err(|e| {
         (
@@ -113,5 +114,6 @@ async fn player_detail(
         "percentiles": percentiles,
         "game_log": game_log,
         "league_averages": league_averages,
+        "torvik_stats": torvik_stats,
     })))
 }

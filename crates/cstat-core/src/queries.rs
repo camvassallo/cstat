@@ -782,6 +782,65 @@ pub async fn get_league_averages(
 }
 
 // ---------------------------------------------------------------------------
+// Torvik advanced stats
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct TorkvikStatsRow {
+    // Impact metrics
+    pub gbpm: Option<f64>,
+    pub ogbpm: Option<f64>,
+    pub dgbpm: Option<f64>,
+    pub porpag: Option<f64>,
+    pub dporpag: Option<f64>,
+    pub stops: Option<f64>,
+    // Efficiency
+    pub adj_oe: Option<f64>,
+    pub adj_de: Option<f64>,
+    pub o_rtg: Option<f64>,
+    pub d_rtg: Option<f64>,
+    // Shot zones
+    pub rim_pct: Option<f64>,
+    pub rim_made: Option<f64>,
+    pub rim_attempted: Option<f64>,
+    pub mid_pct: Option<f64>,
+    pub mid_made: Option<f64>,
+    pub mid_attempted: Option<f64>,
+    pub dunk_pct: Option<f64>,
+    pub dunks_made: Option<f64>,
+    pub dunks_attempted: Option<f64>,
+    pub two_p_pct: Option<f64>,
+    pub tp_pct: Option<f64>,
+    // Context
+    pub recruiting_rank: Option<f64>,
+    pub player_type: Option<String>,
+}
+
+pub async fn get_torvik_stats(
+    pool: &PgPool,
+    player_id: Uuid,
+    season: i32,
+) -> Result<Option<TorkvikStatsRow>, sqlx::Error> {
+    sqlx::query_as::<_, TorkvikStatsRow>(
+        r#"
+        SELECT gbpm, ogbpm, dgbpm, porpag, dporpag, stops,
+               adj_oe, adj_de, o_rtg, d_rtg,
+               rim_pct, rim_made, rim_attempted,
+               mid_pct, mid_made, mid_attempted,
+               dunk_pct, dunks_made, dunks_attempted,
+               two_p_pct, tp_pct,
+               recruiting_rank, player_type
+        FROM torvik_player_stats
+        WHERE player_id = $1 AND season = $2
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // Game queries
 // ---------------------------------------------------------------------------
 
