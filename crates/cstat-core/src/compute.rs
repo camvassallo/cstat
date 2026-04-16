@@ -122,15 +122,13 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
     // Scrub fake rebound zeros. NatStat omits rebound data for ~68% of games
-    // by returning `reb=0` for every player record. Per the docs, this is
-    // all-or-nothing per game. The ingest layer correctly nulls
-    // `total_rebounds` when `reb=0` BUT `oreb>0` (which is impossible), but
-    // it leaves `total_rebounds=0` on the same game's players whose `oreb=0`,
-    // creating fake zeros that pollute season aggregates and ML features.
+    // by returning `reb=0` for every player record. The ingest layer nulls
+    // `total_rebounds` when `reb=0` AND `oreb>0` (impossible), but leaves
+    // `total_rebounds=0` for players with `oreb=0` in the same game.
     //
-    // Here we identify any game containing at least one such impossible row,
-    // then null `total_rebounds` and `def_rebounds` for ALL players in those
-    // games — restoring the correct "missing data" semantics.
+    // Only null out rows with `total_rebounds=0` in games that have the
+    // impossible pattern — don't touch rows where Torvik backfill has
+    // already provided real rebound data (total_rebounds > 0).
     let r0 = sqlx::query(
         "UPDATE player_game_stats pgs
          SET total_rebounds = NULL,
@@ -140,7 +138,7 @@ pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
              FROM player_game_stats
              WHERE total_rebounds IS NULL AND off_rebounds > 0
          )
-         AND (pgs.total_rebounds IS NOT NULL OR pgs.def_rebounds IS NOT NULL)",
+         AND pgs.total_rebounds = 0",
     )
     .execute(pool)
     .await?;

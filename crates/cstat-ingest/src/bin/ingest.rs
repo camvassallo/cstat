@@ -112,6 +112,16 @@ enum Commands {
     /// Clean up expired cache entries.
     CleanCache,
 
+    /// Ingest Barttorvik player season stats (advanced metrics, shot zones, bio).
+    Torvik {
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+
+        /// Also backfill missing rebounds from Torvik game-level data.
+        #[arg(long)]
+        rebounds: bool,
+    },
+
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
     Explore {
         /// Endpoint (e.g., "teams", "players", "playerperfs")
@@ -271,6 +281,24 @@ async fn main() -> Result<()> {
         Commands::CleanCache => {
             let removed = client.cleanup_cache().await?;
             println!("Removed {removed} expired cache entries");
+        }
+
+        Commands::Torvik { year, rebounds } => {
+            let torvik = cstat_ingest::TorkvikClient::new();
+            let (upserted, matched) =
+                cstat_ingest::ingest::torvik::ingest_torvik_player_stats(&torvik, &db.pool, year)
+                    .await?;
+            println!(
+                "Torvik player stats: {upserted} upserted, {matched} matched to cstat players"
+            );
+
+            if rebounds {
+                let updated = cstat_ingest::ingest::torvik::backfill_rebounds_from_torvik(
+                    &torvik, &db.pool, year,
+                )
+                .await?;
+                println!("Rebound backfill: {updated} game rows updated");
+            }
         }
 
         Commands::Explore { endpoint, range } => {

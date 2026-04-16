@@ -6,8 +6,8 @@ A player-centric college basketball analytics platform that derives team-level i
 ## Architecture Overview
 
 ```
-NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] → React Frontend
-                                                  ↓
+NatStat API  → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] → React Frontend
+Barttorvik   ↗                                    ↓
                                           Python ML Training
                                                   ↓
                                             ONNX Models
@@ -95,7 +95,8 @@ NatStat API → [cstat-ingest] → PostgreSQL → [cstat-core] → [cstat-api] �
 - **Plus/minus**: Not available from NatStat box scores
 - **True lineup-based ORTG/DRTG**: Would require play-by-play data; current implementation is a box-score approximation
 
-### Future Data Sources (not yet ingested)
+### Additional Data Sources
+- **Barttorvik** (integrated): Player season stats (CSV), per-game box scores (gzip JSON). No auth required. Used for GBPM, shot zones, recruiting rank, bio data, and rebound backfill.
 - **NatStat play-by-play**: Would unlock lineup-based net ratings, clutch metrics, transition vs half-court splits, shot charts, and better defensive metrics. Expensive to consume and keep updated — worth exploring once core model is solid.
 - **247Sports recruiting rankings**: EvanMiya uses these as Bayesian priors for freshman/early-season projections. Separate data source, lower priority.
 
@@ -213,9 +214,18 @@ This naturally enables:
 - [x] 2025 season full re-ingestion (113k player perfs, 100% rebound coverage)
 - [x] Retrain ML models on 2026 (MAE 8.98, win acc 67.7%, AUC 0.725)
 - [x] Retrain on 2025+2026 combined (9,147 games; backtest MAE 8.86, win acc 68.6%, AUC 0.735; model trains 2x deeper)
-- [ ] Benchmark model against NatStat win probability
+- [x] Benchmark model against NatStat win probability (cstat wins every metric: +2.1pp accuracy, +0.014 AUC, 3x better calibration; wins 59.8% of disagreements)
 - [ ] Fix player rate stats to use possession-based formulas
-- [ ] Explore Barttorvik as secondary data source for rebound backfill (2026 NatStat has 32% rebound coverage; Torvik has full box scores via single gzip download per season)
+- [x] Barttorvik integration as secondary data source (player-centric focus)
+  - [x] Migration 008: `torvik_player_stats` table (GBPM, shot zones, bio, recruiting rank, 64 columns)
+  - [x] `TorkvikClient` — fetches CSV player season stats and gzip JSON per-game box scores
+  - [x] CSV parser (headerless, 64 positional columns) and gzip JSON parser (array-of-arrays, 53 columns)
+  - [x] Player matching: fuzzy team name match + name-only fallback (93.7% match rate, 4,664/4,979)
+  - [x] Backfill class_year and height_inches on player records from Torvik bio data
+  - [x] Rebound backfill from Torvik game-level data (76,385 game rows updated — NatStat had 32% coverage)
+  - [x] CLI subcommand: `torvik --year 2026 [--rebounds]`
+  - [ ] Surface Torvik advanced metrics (GBPM, shot zones, recruiting rank) in player detail API/UI
+  - [ ] Use Torvik data as ML features (GBPM as player impact, recruiting rank as prior)
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy

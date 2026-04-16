@@ -1,6 +1,6 @@
 # cstat
 
-College basketball analytics platform. Ingests data from the NatStat API, computes advanced metrics (KenPom-style adjusted efficiency, player percentiles, rolling averages), and serves them through a REST API and React frontend. Includes ML-based game predictions using LightGBM models exported to ONNX.
+College basketball analytics platform. Ingests data from the NatStat API and Barttorvik, computes advanced metrics (KenPom-style adjusted efficiency, player percentiles, rolling averages), and serves them through a REST API and React frontend. Includes ML-based game predictions using LightGBM models exported to ONNX.
 
 ## Quick Start
 
@@ -80,6 +80,7 @@ Other ingest subcommands:
 | `compute --year YYYY` | Derive season stats, percentiles, rolling averages |
 | `status` | Show NatStat API rate limit status |
 | `clean-cache` | Remove expired API cache entries |
+| `torvik --year YYYY [--rebounds]` | Ingest Barttorvik player stats + optional rebound backfill |
 | `explore ENDPOINT [--range PARAMS]` | Dump raw API JSON for exploration |
 
 ## Architecture
@@ -89,14 +90,14 @@ Three-crate Rust workspace:
 ```
 crates/
   cstat-core/     Shared types, DB models, query layer, compute pipeline
-  cstat-ingest/   NatStat API client, caching, rate limiting, ingestion CLI
+  cstat-ingest/   NatStat + Barttorvik clients, caching, rate limiting, ingestion CLI
   cstat-api/      Axum HTTP server, REST routes, ONNX inference
 web/              React + Vite + Tailwind frontend
 training/         Python ML pipeline (LightGBM, ONNX export)
 migrations/       SQLx Postgres migrations
 ```
 
-**Data flow:** NatStat API → cstat-ingest → Postgres → cstat-core (compute) → cstat-api → frontend
+**Data flow:** NatStat API + Barttorvik → cstat-ingest → Postgres → cstat-core (compute) → cstat-api → frontend
 
 ### API Endpoints
 
