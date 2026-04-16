@@ -313,6 +313,8 @@ pub struct PercentilesRow {
     pub defensive_rating_pct: Option<f64>,
     pub bpm_pct: Option<f64>,
     pub player_sos_pct: Option<f64>,
+    pub ast_pct_pct: Option<f64>,
+    pub tov_pct_pct: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -709,7 +711,8 @@ pub async fn get_player_percentiles(
             fg_pct_pct, tp_pct_pct, ft_pct_pct,
             true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
-            bpm_pct, player_sos_pct
+            bpm_pct, player_sos_pct,
+            ast_pct_pct, tov_pct_pct
         FROM player_percentiles
         WHERE player_id = $1 AND season = $2
         "#,
@@ -791,14 +794,10 @@ pub struct TorkvikStatsRow {
     pub gbpm: Option<f64>,
     pub ogbpm: Option<f64>,
     pub dgbpm: Option<f64>,
-    pub porpag: Option<f64>,
-    pub dporpag: Option<f64>,
     pub stops: Option<f64>,
     // Efficiency
     pub adj_oe: Option<f64>,
     pub adj_de: Option<f64>,
-    pub o_rtg: Option<f64>,
-    pub d_rtg: Option<f64>,
     // Shot zones
     pub rim_pct: Option<f64>,
     pub rim_made: Option<f64>,
@@ -811,9 +810,35 @@ pub struct TorkvikStatsRow {
     pub dunks_attempted: Option<f64>,
     pub two_p_pct: Option<f64>,
     pub tp_pct: Option<f64>,
+    pub tpm: Option<i32>,
+    pub tpa: Option<i32>,
+    // Rates (possession-based)
+    pub orb_pct: Option<f64>,
+    pub drb_pct: Option<f64>,
+    pub stl_pct: Option<f64>,
+    pub blk_pct: Option<f64>,
+    pub ft_rate: Option<f64>,
+    pub personal_foul_rate: Option<f64>,
+    // Shooting volume
+    pub ftm: Option<i32>,
+    pub fta: Option<i32>,
+    pub two_pm: Option<i32>,
+    pub two_pa: Option<i32>,
     // Context
     pub recruiting_rank: Option<f64>,
-    pub player_type: Option<String>,
+    pub hometown: Option<String>,
+    // Percentiles (computed on-the-fly)
+    pub gbpm_pct: Option<f64>,
+    pub ogbpm_pct: Option<f64>,
+    pub dgbpm_pct: Option<f64>,
+    pub adj_oe_pct: Option<f64>,
+    pub adj_de_pct: Option<f64>,
+    pub orb_pct_pct: Option<f64>,
+    pub drb_pct_pct: Option<f64>,
+    pub stl_pct_pct: Option<f64>,
+    pub blk_pct_pct: Option<f64>,
+    pub ft_rate_pct: Option<f64>,
+    pub fc_rate_pct: Option<f64>,
 }
 
 pub async fn get_torvik_stats(
@@ -823,15 +848,40 @@ pub async fn get_torvik_stats(
 ) -> Result<Option<TorkvikStatsRow>, sqlx::Error> {
     sqlx::query_as::<_, TorkvikStatsRow>(
         r#"
-        SELECT gbpm, ogbpm, dgbpm, porpag, dporpag, stops,
-               adj_oe, adj_de, o_rtg, d_rtg,
+        WITH ranked AS (
+            SELECT *,
+                PERCENT_RANK() OVER (ORDER BY gbpm)    AS gbpm_pct,
+                PERCENT_RANK() OVER (ORDER BY ogbpm)   AS ogbpm_pct,
+                PERCENT_RANK() OVER (ORDER BY dgbpm)   AS dgbpm_pct,
+                PERCENT_RANK() OVER (ORDER BY adj_oe)  AS adj_oe_pct,
+                PERCENT_RANK() OVER (ORDER BY adj_de DESC) AS adj_de_pct,
+                PERCENT_RANK() OVER (ORDER BY orb_pct) AS orb_pct_pct,
+                PERCENT_RANK() OVER (ORDER BY drb_pct) AS drb_pct_pct,
+                PERCENT_RANK() OVER (ORDER BY stl_pct) AS stl_pct_pct,
+                PERCENT_RANK() OVER (ORDER BY blk_pct) AS blk_pct_pct,
+                PERCENT_RANK() OVER (ORDER BY ft_rate) AS ft_rate_pct,
+                PERCENT_RANK() OVER (ORDER BY personal_foul_rate DESC) AS fc_rate_pct
+            FROM torvik_player_stats
+            WHERE season = $2
+              AND games_played >= 10
+              AND minutes_per_game >= 10
+        )
+        SELECT gbpm, ogbpm, dgbpm, stops,
+               adj_oe, adj_de,
                rim_pct, rim_made, rim_attempted,
                mid_pct, mid_made, mid_attempted,
                dunk_pct, dunks_made, dunks_attempted,
-               two_p_pct, tp_pct,
-               recruiting_rank, player_type
-        FROM torvik_player_stats
-        WHERE player_id = $1 AND season = $2
+               two_p_pct, tp_pct, tpm, tpa,
+               orb_pct, drb_pct, stl_pct, blk_pct,
+               ft_rate, personal_foul_rate,
+               ftm, fta, two_pm, two_pa,
+               recruiting_rank, player_type AS hometown,
+               gbpm_pct, ogbpm_pct, dgbpm_pct,
+               adj_oe_pct, adj_de_pct,
+               orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,
+               ft_rate_pct, fc_rate_pct
+        FROM ranked
+        WHERE player_id = $1
         "#,
     )
     .bind(player_id)

@@ -58,10 +58,10 @@ export default function PlayerDetail() {
     ? [
         { stat: 'Scoring', value: (percentiles.ppg_pct ?? 0) * 100 },
         { stat: 'Efficiency', value: (percentiles.true_shooting_pct_pct ?? 0) * 100 },
-        { stat: 'ORTG', value: (percentiles.offensive_rating_pct ?? 0) * 100 },
+        { stat: 'Usage', value: (percentiles.usage_rate_pct ?? 0) * 100 },
         { stat: 'Rebounds', value: (percentiles.rpg_pct ?? 0) * 100 },
         { stat: 'Assists', value: (percentiles.apg_pct ?? 0) * 100 },
-        { stat: 'Defense', value: (percentiles.bpm_pct ?? 0) * 100 },
+        { stat: 'Game Score', value: (percentiles.bpm_pct ?? 0) * 100 },
         { stat: 'Steals', value: (percentiles.spg_pct ?? 0) * 100 },
         { stat: 'Blocks', value: (percentiles.bpg_pct ?? 0) * 100 },
       ]
@@ -98,6 +98,7 @@ export default function PlayerDetail() {
             <span>{player.team_name ?? 'Unknown'}</span>
           )}
           {player.conference && <span className="text-gray-500">({player.conference})</span>}
+          {torvik?.hometown && <><span>&middot;</span><span>{torvik.hometown}</span></>}
         </div>
       </div>
 
@@ -112,11 +113,10 @@ export default function PlayerDetail() {
             <PercentileBar label="APG" value={fmt(stats.apg)} pctile={percentiles?.apg_pct ?? null} />
             <PercentileBar label="SPG" value={fmt(stats.spg)} pctile={percentiles?.spg_pct ?? null} />
             <PercentileBar label="BPG" value={fmt(stats.bpg)} pctile={percentiles?.bpg_pct ?? null} />
-            <PercentileBar label="TS%" value={pct(stats.true_shooting_pct)} pctile={percentiles?.true_shooting_pct_pct ?? null} />
             <PercentileBar label="USG%" value={pct(stats.usage_rate)} pctile={percentiles?.usage_rate_pct ?? null} />
-            <PercentileBar label="ORTG" value={fmt(stats.offensive_rating)} pctile={percentiles?.offensive_rating_pct ?? null} />
-            <PercentileBar label="DRTG" value={fmt(stats.defensive_rating)} pctile={percentiles?.defensive_rating_pct ?? null} />
-            <PercentileBar label="BPM" value={fmt(stats.bpm)} pctile={percentiles?.bpm_pct ?? null} />
+            <PercentileBar label="TS%" value={pct(stats.true_shooting_pct)} pctile={percentiles?.true_shooting_pct_pct ?? null} />
+            <PercentileBar label="eFG%" value={pct(stats.effective_fg_pct)} pctile={percentiles?.fg_pct_pct ?? null} />
+            <PercentileBar label="Game Score" value={fmt(stats.bpm)} pctile={percentiles?.bpm_pct ?? null} />
           </div>
 
           {/* Radar Chart */}
@@ -141,60 +141,69 @@ export default function PlayerDetail() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-gray-800 rounded-lg p-5">
             <h2 className="text-lg font-bold mb-3">Advanced Metrics <span className="text-xs text-gray-500 font-normal">(Barttorvik)</span></h2>
-            <div className="space-y-3">
-              {/* GBPM with O/D split */}
-              <div>
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-gray-400">GBPM</span>
-                  <span className="font-medium">{fmt(torvik.gbpm)}</span>
-                </div>
-                <div className="flex gap-2 text-xs text-gray-500">
-                  <span>Off: {fmt(torvik.ogbpm)}</span>
-                  <span>&middot;</span>
-                  <span>Def: {fmt(torvik.dgbpm)}</span>
-                </div>
-              </div>
-              {/* PORPAG */}
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">PORPAG</span>
-                <span className="font-medium">{fmt(torvik.porpag)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">DPORPAG</span>
-                <span className="font-medium">{fmt(torvik.dporpag)}</span>
-              </div>
-              {/* Adj Efficiency */}
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Adj OE</span>
-                <span className="font-medium">{fmt(torvik.adj_oe)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Adj DE</span>
-                <span className="font-medium">{fmt(torvik.adj_de)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Stops</span>
-                <span className="font-medium">{fmt(torvik.stops)}</span>
-              </div>
-              {/* Context */}
-              {torvik.recruiting_rank != null && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Recruit Rank</span>
-                  <span className="font-medium">{fmt(torvik.recruiting_rank, 0)}</span>
-                </div>
-              )}
-              {torvik.player_type && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Player Type</span>
-                  <span className="font-medium">{torvik.player_type}</span>
-                </div>
-              )}
+            <PercentileBar label="BPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
+            <PercentileBar label="OBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
+            <PercentileBar label="DBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
+            <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
+            <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
+            {/* Rate Stats */}
+            <div className="mt-3 pt-3 border-t border-gray-700">
+              <div className="text-xs text-gray-500 mb-2">Rate Stats</div>
+              <PercentileBar label="AST%" value={pct(stats?.ast_pct)} pctile={percentiles?.ast_pct_pct ?? null} />
+              <PercentileBar label="TOV%" value={pct(stats?.tov_pct)} pctile={percentiles?.tov_pct_pct ?? null} />
+              <PercentileBar label="OR%" value={torvik.orb_pct != null ? `${fmt(torvik.orb_pct)}%` : '—'} pctile={torvik.orb_pct_pct} />
+              <PercentileBar label="DR%" value={torvik.drb_pct != null ? `${fmt(torvik.drb_pct)}%` : '—'} pctile={torvik.drb_pct_pct} />
+              <PercentileBar label="STL%" value={torvik.stl_pct != null ? `${fmt(torvik.stl_pct)}%` : '—'} pctile={torvik.stl_pct_pct} />
+              <PercentileBar label="BLK%" value={torvik.blk_pct != null ? `${fmt(torvik.blk_pct)}%` : '—'} pctile={torvik.blk_pct_pct} />
             </div>
+              <PercentileBar label="FT Rate" value={torvik.ft_rate != null ? `${fmt(torvik.ft_rate)}%` : '—'} pctile={torvik.ft_rate_pct} />
+              <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
           </div>
 
-          {/* Shot Zone Breakdown */}
+          {/* Shot Profile */}
           <div className="bg-gray-800 rounded-lg p-5">
-            <h2 className="text-lg font-bold mb-3">Shot Zones <span className="text-xs text-gray-500 font-normal">(Barttorvik)</span></h2>
+            <h2 className="text-lg font-bold mb-3">Shot Profile <span className="text-xs text-gray-500 font-normal">(Barttorvik)</span></h2>
+
+            {/* Shot distribution bar */}
+            {(() => {
+              const rim = torvik.rim_attempted ?? 0;
+              const mid = torvik.mid_attempted ?? 0;
+              const tp = torvik.tpa ?? 0;
+              const total = rim + mid + tp;
+              if (total === 0) return null;
+              const rimPct = (rim / total) * 100;
+              const midPct = (mid / total) * 100;
+              const tpPct = (tp / total) * 100;
+              return (
+                <div className="mb-4">
+                  <div className="text-xs text-gray-500 mb-1.5">Shot Distribution</div>
+                  <div className="flex rounded-full h-5 overflow-hidden text-[10px] font-medium">
+                    {rimPct > 0 && (
+                      <div className="bg-green-600 flex items-center justify-center" style={{ width: `${rimPct}%` }}>
+                        {rimPct >= 10 ? `Rim ${rimPct.toFixed(0)}%` : ''}
+                      </div>
+                    )}
+                    {midPct > 0 && (
+                      <div className="bg-yellow-600 flex items-center justify-center" style={{ width: `${midPct}%` }}>
+                        {midPct >= 10 ? `Mid ${midPct.toFixed(0)}%` : ''}
+                      </div>
+                    )}
+                    {tpPct > 0 && (
+                      <div className="bg-blue-600 flex items-center justify-center" style={{ width: `${tpPct}%` }}>
+                        {tpPct >= 10 ? `3PT ${tpPct.toFixed(0)}%` : ''}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-600 inline-block" />Rim</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-600 inline-block" />Mid</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-600 inline-block" />3PT</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Zone-by-zone efficiency */}
             <div className="space-y-3">
               {torvik.rim_attempted != null && torvik.rim_attempted > 0 && (
                 <div>
@@ -224,7 +233,7 @@ export default function PlayerDetail() {
                   </div>
                 </div>
               )}
-              {torvik.tp_pct != null && (
+              {torvik.tpa != null && torvik.tpa > 0 && (
                 <div>
                   <div className="flex justify-between text-sm mb-1">
                     <span className="text-gray-400">Three-Point</span>
@@ -234,6 +243,7 @@ export default function PlayerDetail() {
                     <div className="flex-1 bg-gray-700 rounded-full h-2">
                       <div className="h-2 rounded-full bg-blue-500" style={{ width: `${Math.min((torvik.tp_pct ?? 0), 100)}%` }} />
                     </div>
+                    <span className="text-xs text-gray-500 w-20 text-right">{torvik.tpm ?? '—'}/{torvik.tpa}</span>
                   </div>
                 </div>
               )}
@@ -251,12 +261,41 @@ export default function PlayerDetail() {
                   </div>
                 </div>
               )}
-              {torvik.two_p_pct != null && (
-                <div className="flex justify-between text-sm pt-2 border-t border-gray-700">
-                  <span className="text-gray-400">Overall 2P%</span>
-                  <span className="font-medium">{fmt(torvik.two_p_pct, 1)}%</span>
-                </div>
-              )}
+              {/* Shooting summary table */}
+              <div className="pt-3 mt-3 border-t border-gray-700">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-gray-500 text-xs">
+                      <th className="text-left pb-1">Zone</th>
+                      <th className="text-right pb-1">Made-Att</th>
+                      <th className="text-right pb-1">Pct</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-gray-300">
+                    {torvik.two_pm != null && (
+                      <tr>
+                        <td className="text-gray-400">2PT</td>
+                        <td className="text-right">{torvik.two_pm}-{torvik.two_pa}</td>
+                        <td className="text-right font-medium">{torvik.two_p_pct != null ? `${fmt(torvik.two_p_pct, 1)}%` : '—'}</td>
+                      </tr>
+                    )}
+                    {torvik.tpm != null && (
+                      <tr>
+                        <td className="text-gray-400">3PT</td>
+                        <td className="text-right">{torvik.tpm}-{torvik.tpa}</td>
+                        <td className="text-right font-medium">{torvik.tp_pct != null ? `${fmt(torvik.tp_pct, 1)}%` : '—'}</td>
+                      </tr>
+                    )}
+                    {torvik.ftm != null && (
+                      <tr>
+                        <td className="text-gray-400">FT</td>
+                        <td className="text-right">{torvik.ftm}-{torvik.fta}</td>
+                        <td className="text-right font-medium">{torvik.fta != null && torvik.fta > 0 ? `${((torvik.ftm! / torvik.fta) * 100).toFixed(1)}%` : '—'}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>

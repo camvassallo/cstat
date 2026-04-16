@@ -232,6 +232,8 @@ export interface Percentiles {
   defensive_rating_pct: number | null;
   bpm_pct: number | null;
   player_sos_pct: number | null;
+  ast_pct_pct: number | null;
+  tov_pct_pct: number | null;
 }
 
 export interface GameLogEntry {
@@ -290,14 +292,10 @@ export interface TorkvikStats {
   gbpm: number | null;
   ogbpm: number | null;
   dgbpm: number | null;
-  porpag: number | null;
-  dporpag: number | null;
   stops: number | null;
   // Efficiency
   adj_oe: number | null;
   adj_de: number | null;
-  o_rtg: number | null;
-  d_rtg: number | null;
   // Shot zones
   rim_pct: number | null;
   rim_made: number | null;
@@ -310,9 +308,35 @@ export interface TorkvikStats {
   dunks_attempted: number | null;
   two_p_pct: number | null;
   tp_pct: number | null;
+  tpm: number | null;
+  tpa: number | null;
+  // Rates (possession-based)
+  orb_pct: number | null;
+  drb_pct: number | null;
+  stl_pct: number | null;
+  blk_pct: number | null;
+  ft_rate: number | null;
+  personal_foul_rate: number | null;
+  // Shooting volume
+  ftm: number | null;
+  fta: number | null;
+  two_pm: number | null;
+  two_pa: number | null;
   // Context
   recruiting_rank: number | null;
-  player_type: string | null;
+  hometown: string | null;
+  // Percentiles
+  gbpm_pct: number | null;
+  ogbpm_pct: number | null;
+  dgbpm_pct: number | null;
+  adj_oe_pct: number | null;
+  adj_de_pct: number | null;
+  orb_pct_pct: number | null;
+  drb_pct_pct: number | null;
+  stl_pct_pct: number | null;
+  blk_pct_pct: number | null;
+  ft_rate_pct: number | null;
+  fc_rate_pct: number | null;
 }
 
 export function fetchPlayerDetail(id: string, season?: number) {
