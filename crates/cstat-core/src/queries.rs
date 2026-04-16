@@ -894,15 +894,14 @@ pub async fn get_torvik_stats(
                orb_pct, drb_pct, stl_pct, blk_pct,
                ft_rate, personal_foul_rate,
                ftm, fta, two_pm, two_pa,
-               recruiting_rank, p.hometown,
+               recruiting_rank, player_type AS hometown,
                gbpm_pct, ogbpm_pct, dgbpm_pct,
                adj_oe_pct, adj_de_pct,
                orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,
                ft_rate_pct, fc_rate_pct,
                rim_pct_pct, mid_pct_pct, dunk_pct_pct, tp_pct_pct
-        FROM ranked r
-        JOIN players p ON p.id = r.player_id
-        WHERE r.player_id = $1
+        FROM ranked
+        WHERE player_id = $1
         "#,
     )
     .bind(player_id)
