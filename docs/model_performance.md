@@ -65,10 +65,12 @@ Chronological 80/20 split: train on first 3,285 games (2025-11-18 to 2026-02-21)
 
 Compared on the same 1,590 test games where both cstat and NatStat forecasts are available.
 
+> **Note:** This benchmark was run with the prior 47-feature model. The current 49-feature model (with Barttorvik GBPM) should perform at least as well — a re-benchmark is pending.
+
 ### Head-to-Head
 
-| Metric | cstat | NatStat | Delta | Winner |
-|--------|-------|---------|-------|--------|
+| Metric | cstat (47-feat) | NatStat | Delta | Winner |
+|--------|-----------------|---------|-------|--------|
 | Win Accuracy | 69.4% | 67.3% | +2.1pp | cstat |
 | AUC | 0.738 | 0.724 | +0.014 | cstat |
 | Log Loss | 0.578 | 0.595 | -0.017 | cstat |
