@@ -84,7 +84,7 @@ export default function PlayerDetail() {
         { stat: 'Steals', value: (torvik?.stl_pct_pct ?? percentiles.spg_pct ?? 0) * 100 },
         { stat: 'Blocks', value: (torvik?.blk_pct_pct ?? percentiles.bpg_pct ?? 0) * 100 },
         { stat: 'Rebounding', value: (torvik?.drb_pct_pct ?? percentiles.rpg_pct ?? 0) * 100 },
-        { stat: 'Def Rating', value: (torvik?.adj_de_pct ?? 0) * 100 },
+        { stat: 'Def Rating', value: (torvik?.adj_de_pct ?? percentiles.defensive_rating_pct ?? 0) * 100 },
       ]
     : [];
 
@@ -178,9 +178,9 @@ export default function PlayerDetail() {
             <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
 
             <h2 className="text-lg font-bold mt-5 mb-3">Advanced Metrics</h2>
-            <PercentileBar label="BPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
-            <PercentileBar label="OBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
-            <PercentileBar label="DBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
+            <PercentileBar label="GBPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
+            <PercentileBar label="OGBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
+            <PercentileBar label="DGBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
             <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
             <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
           </div>

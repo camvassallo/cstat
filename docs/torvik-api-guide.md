@@ -80,7 +80,7 @@ None available at the API level. All endpoints return the complete dataset for t
 | 30 | `pfr` | float | Personal foul rate |
 | 31 | `year` | int | Season year |
 | 32 | `pid` | int | Unique player ID |
-| 33 | `player_type` | string | Player archetype/type classification |
+| 33 | `player_type` | string | Hometown (despite the column name; actually contains player hometown, not archetype) |
 | 34 | `rec_rank` | float | Recruiting rank |
 | 35 | `ast_tov` | float | Assist-to-turnover ratio |
 | 36 | `rim_made` | float | Rim shots made |
