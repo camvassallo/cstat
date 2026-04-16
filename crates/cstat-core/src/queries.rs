@@ -841,6 +841,11 @@ pub struct TorkvikStatsRow {
     pub blk_pct_pct: Option<f64>,
     pub ft_rate_pct: Option<f64>,
     pub fc_rate_pct: Option<f64>,
+    // Shot zone percentiles
+    pub rim_pct_pct: Option<f64>,
+    pub mid_pct_pct: Option<f64>,
+    pub dunk_pct_pct: Option<f64>,
+    pub tp_pct_pct: Option<f64>,
 }
 
 pub async fn get_torvik_stats(
@@ -862,7 +867,19 @@ pub async fn get_torvik_stats(
                 PERCENT_RANK() OVER (ORDER BY stl_pct) AS stl_pct_pct,
                 PERCENT_RANK() OVER (ORDER BY blk_pct) AS blk_pct_pct,
                 PERCENT_RANK() OVER (ORDER BY ft_rate) AS ft_rate_pct,
-                PERCENT_RANK() OVER (ORDER BY personal_foul_rate DESC) AS fc_rate_pct
+                PERCENT_RANK() OVER (ORDER BY personal_foul_rate DESC) AS fc_rate_pct,
+                CASE WHEN rim_attempted > 0 THEN PERCENT_RANK() OVER (
+                    PARTITION BY CASE WHEN rim_attempted > 0 THEN 1 ELSE 0 END ORDER BY rim_pct
+                ) END AS rim_pct_pct,
+                CASE WHEN mid_attempted > 0 THEN PERCENT_RANK() OVER (
+                    PARTITION BY CASE WHEN mid_attempted > 0 THEN 1 ELSE 0 END ORDER BY mid_pct
+                ) END AS mid_pct_pct,
+                CASE WHEN dunks_attempted > 0 THEN PERCENT_RANK() OVER (
+                    PARTITION BY CASE WHEN dunks_attempted > 0 THEN 1 ELSE 0 END ORDER BY dunk_pct
+                ) END AS dunk_pct_pct,
+                CASE WHEN tpa > 0 THEN PERCENT_RANK() OVER (
+                    PARTITION BY CASE WHEN tpa > 0 THEN 1 ELSE 0 END ORDER BY tp_pct
+                ) END AS tp_pct_pct
             FROM torvik_player_stats
             WHERE season = $2
               AND games_played >= 10
@@ -881,7 +898,8 @@ pub async fn get_torvik_stats(
                gbpm_pct, ogbpm_pct, dgbpm_pct,
                adj_oe_pct, adj_de_pct,
                orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,
-               ft_rate_pct, fc_rate_pct
+               ft_rate_pct, fc_rate_pct,
+               rim_pct_pct, mid_pct_pct, dunk_pct_pct, tp_pct_pct
         FROM ranked
         WHERE player_id = $1
         "#,

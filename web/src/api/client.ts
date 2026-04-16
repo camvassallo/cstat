@@ -339,6 +339,11 @@ export interface TorkvikStats {
   blk_pct_pct: number | null;
   ft_rate_pct: number | null;
   fc_rate_pct: number | null;
+  // Shot zone percentiles
+  rim_pct_pct: number | null;
+  mid_pct_pct: number | null;
+  dunk_pct_pct: number | null;
+  tp_pct_pct: number | null;
 }
 
 export function fetchPlayerDetail(id: string, season?: number) {
