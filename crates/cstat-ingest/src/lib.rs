@@ -2,8 +2,10 @@ pub mod cache;
 pub mod client;
 pub mod ingest;
 pub mod rate_limiter;
+pub mod torvik;
 
 pub use client::NatStatClient;
+pub use torvik::TorkvikClient;
 
 use serde_json::Value;
 
