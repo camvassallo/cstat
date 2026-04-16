@@ -303,3 +303,104 @@ pub async fn build_game_features(
 
     Ok(features)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn win_pct_even_record() {
+        let ts = TeamStats {
+            wins: 15,
+            losses: 15,
+            adj_offense: None,
+            adj_defense: None,
+            adj_efficiency_margin: None,
+            effective_fg_pct: None,
+            turnover_pct: None,
+            off_rebound_pct: None,
+            ft_rate: None,
+            opp_effective_fg_pct: None,
+            opp_turnover_pct: None,
+            def_rebound_pct: None,
+            opp_ft_rate: None,
+            adj_tempo: None,
+            sos: None,
+            elo_rating: None,
+            point_diff: None,
+            pythag_win_pct: None,
+            road_win_pct: None,
+        };
+        assert!((ts.win_pct() - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn win_pct_no_games() {
+        let ts = TeamStats {
+            wins: 0,
+            losses: 0,
+            adj_offense: None,
+            adj_defense: None,
+            adj_efficiency_margin: None,
+            effective_fg_pct: None,
+            turnover_pct: None,
+            off_rebound_pct: None,
+            ft_rate: None,
+            opp_effective_fg_pct: None,
+            opp_turnover_pct: None,
+            def_rebound_pct: None,
+            opp_ft_rate: None,
+            adj_tempo: None,
+            sos: None,
+            elo_rating: None,
+            point_diff: None,
+            pythag_win_pct: None,
+            road_win_pct: None,
+        };
+        assert!((ts.win_pct() - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn win_pct_undefeated() {
+        let ts = TeamStats {
+            wins: 30,
+            losses: 0,
+            adj_offense: None,
+            adj_defense: None,
+            adj_efficiency_margin: None,
+            effective_fg_pct: None,
+            turnover_pct: None,
+            off_rebound_pct: None,
+            ft_rate: None,
+            opp_effective_fg_pct: None,
+            opp_turnover_pct: None,
+            def_rebound_pct: None,
+            opp_ft_rate: None,
+            adj_tempo: None,
+            sos: None,
+            elo_rating: None,
+            point_diff: None,
+            pythag_win_pct: None,
+            road_win_pct: None,
+        };
+        assert!((ts.win_pct() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn diff_helper_both_some() {
+        let d = |home: Option<f64>, away: Option<f64>| -> f32 {
+            (home.unwrap_or(0.0) - away.unwrap_or(0.0)) as f32
+        };
+        assert!((d(Some(110.0), Some(100.0)) - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn diff_helper_none_defaults_to_zero() {
+        let d = |home: Option<f64>, away: Option<f64>| -> f32 {
+            (home.unwrap_or(0.0) - away.unwrap_or(0.0)) as f32
+        };
+        assert!((d(Some(5.0), None) - 5.0).abs() < 0.001);
+        assert!((d(None, Some(5.0)) - (-5.0)).abs() < 0.001);
+        assert!((d(None, None) - 0.0).abs() < 0.001);
+    }
+}
