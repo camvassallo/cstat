@@ -234,6 +234,8 @@ export interface Percentiles {
   player_sos_pct: number | null;
   ast_pct_pct: number | null;
   tov_pct_pct: number | null;
+  mpg_pct: number | null;
+  topg_pct: number | null;
 }
 
 export interface GameLogEntry {

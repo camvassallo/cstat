@@ -315,6 +315,8 @@ pub struct PercentilesRow {
     pub player_sos_pct: Option<f64>,
     pub ast_pct_pct: Option<f64>,
     pub tov_pct_pct: Option<f64>,
+    pub mpg_pct: Option<f64>,
+    pub topg_pct: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -712,7 +714,7 @@ pub async fn get_player_percentiles(
             true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct,
-            ast_pct_pct, tov_pct_pct
+            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct
         FROM player_percentiles
         WHERE player_id = $1 AND season = $2
         "#,

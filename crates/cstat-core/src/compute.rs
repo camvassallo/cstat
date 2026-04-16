@@ -482,14 +482,14 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             fg_pct_pct, tp_pct_pct, ft_pct_pct, true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct,
-            ast_pct_pct, tov_pct_pct
+            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct
         )
         WITH best AS (
             SELECT DISTINCT ON (player_id)
                 player_id, season, ppg, rpg, apg, spg, bpg,
                 fg_pct, tp_pct, ft_pct, true_shooting_pct,
                 usage_rate, offensive_rating, defensive_rating,
-                bpm, player_sos, ast_pct, tov_pct
+                bpm, player_sos, ast_pct, tov_pct, minutes_per_game, topg
             FROM player_season_stats
             WHERE season = $1
               AND games_played >= 10
@@ -515,7 +515,9 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.bpm),
             PERCENT_RANK() OVER (ORDER BY b.player_sos),
             PERCENT_RANK() OVER (ORDER BY b.ast_pct),
-            PERCENT_RANK() OVER (ORDER BY b.tov_pct DESC)
+            PERCENT_RANK() OVER (ORDER BY b.tov_pct DESC),
+            PERCENT_RANK() OVER (ORDER BY b.minutes_per_game),
+            PERCENT_RANK() OVER (ORDER BY b.topg DESC)
         FROM best b
         ON CONFLICT (player_id, season) DO UPDATE
         SET ppg_pct = EXCLUDED.ppg_pct,
@@ -533,7 +535,9 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             bpm_pct = EXCLUDED.bpm_pct,
             player_sos_pct = EXCLUDED.player_sos_pct,
             ast_pct_pct = EXCLUDED.ast_pct_pct,
-            tov_pct_pct = EXCLUDED.tov_pct_pct",
+            tov_pct_pct = EXCLUDED.tov_pct_pct,
+            mpg_pct = EXCLUDED.mpg_pct,
+            topg_pct = EXCLUDED.topg_pct",
     )
     .bind(season)
     .execute(pool)

@@ -58,12 +58,13 @@ export default function PlayerDetail() {
     ? [
         { stat: 'Scoring', value: (percentiles.ppg_pct ?? 0) * 100 },
         { stat: 'Efficiency', value: (percentiles.true_shooting_pct_pct ?? 0) * 100 },
+        { stat: '3PT', value: (percentiles.tp_pct_pct ?? 0) * 100 },
+        { stat: 'Playmaking', value: (percentiles.ast_pct_pct ?? percentiles.apg_pct ?? 0) * 100 },
         { stat: 'Usage', value: (percentiles.usage_rate_pct ?? 0) * 100 },
-        { stat: 'Rebounds', value: (percentiles.rpg_pct ?? 0) * 100 },
-        { stat: 'Assists', value: (percentiles.apg_pct ?? 0) * 100 },
-        { stat: 'Game Score', value: (percentiles.bpm_pct ?? 0) * 100 },
-        { stat: 'Steals', value: (percentiles.spg_pct ?? 0) * 100 },
-        { stat: 'Blocks', value: (percentiles.bpg_pct ?? 0) * 100 },
+        { stat: 'Steals', value: (torvik?.stl_pct_pct ?? percentiles.spg_pct ?? 0) * 100 },
+        { stat: 'Blocks', value: (torvik?.blk_pct_pct ?? percentiles.bpg_pct ?? 0) * 100 },
+        { stat: 'Rebounding', value: (torvik?.drb_pct_pct ?? percentiles.rpg_pct ?? 0) * 100 },
+        { stat: 'Def Rating', value: (torvik?.adj_de_pct ?? 0) * 100 },
       ]
     : [];
 
@@ -98,6 +99,7 @@ export default function PlayerDetail() {
             <span>{player.team_name ?? 'Unknown'}</span>
           )}
           {player.conference && <span className="text-gray-500">({player.conference})</span>}
+          {stats && <><span>&middot;</span><span>{stats.games_played} GP</span></>}
           {torvik?.hometown && <><span>&middot;</span><span>{torvik.hometown}</span></>}
         </div>
       </div>
@@ -107,16 +109,18 @@ export default function PlayerDetail() {
           {/* Season Stats with Percentile Bars */}
           <div className="bg-gray-800 rounded-lg p-5">
             <h2 className="text-lg font-bold mb-3">Season Stats</h2>
-            <div className="text-xs text-gray-500 mb-2">{stats.games_played} GP &middot; {fmt(stats.minutes_per_game)} MPG</div>
+            <PercentileBar label="MPG" value={fmt(stats.minutes_per_game)} pctile={percentiles?.mpg_pct ?? null} />
+            <PercentileBar label="USG%" value={pct(stats.usage_rate)} pctile={percentiles?.usage_rate_pct ?? null} />
+            <div className="border-t border-gray-700 my-2" />
             <PercentileBar label="PPG" value={fmt(stats.ppg)} pctile={percentiles?.ppg_pct ?? null} />
             <PercentileBar label="RPG" value={fmt(stats.rpg)} pctile={percentiles?.rpg_pct ?? null} />
             <PercentileBar label="APG" value={fmt(stats.apg)} pctile={percentiles?.apg_pct ?? null} />
             <PercentileBar label="SPG" value={fmt(stats.spg)} pctile={percentiles?.spg_pct ?? null} />
             <PercentileBar label="BPG" value={fmt(stats.bpg)} pctile={percentiles?.bpg_pct ?? null} />
-            <PercentileBar label="USG%" value={pct(stats.usage_rate)} pctile={percentiles?.usage_rate_pct ?? null} />
+            <PercentileBar label="TOPG" value={fmt(stats.topg)} pctile={percentiles?.topg_pct ?? null} />
+            <div className="border-t border-gray-700 my-2" />
             <PercentileBar label="TS%" value={pct(stats.true_shooting_pct)} pctile={percentiles?.true_shooting_pct_pct ?? null} />
             <PercentileBar label="eFG%" value={pct(stats.effective_fg_pct)} pctile={percentiles?.fg_pct_pct ?? null} />
-            <PercentileBar label="Game Score" value={fmt(stats.bpm)} pctile={percentiles?.bpm_pct ?? null} />
           </div>
 
           {/* Radar Chart */}
@@ -136,33 +140,27 @@ export default function PlayerDetail() {
         </div>
       )}
 
-      {/* Torvik Advanced Metrics */}
+      {/* Rate Stats */}
       {torvik && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-gray-800 rounded-lg p-5">
-            <h2 className="text-lg font-bold mb-3">Advanced Metrics <span className="text-xs text-gray-500 font-normal">(Barttorvik)</span></h2>
-            <PercentileBar label="BPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
-            <PercentileBar label="OBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
-            <PercentileBar label="DBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
-            <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
-            <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
-            {/* Rate Stats */}
-            <div className="mt-3 pt-3 border-t border-gray-700">
-              <div className="text-xs text-gray-500 mb-2">Rate Stats</div>
-              <PercentileBar label="AST%" value={pct(stats?.ast_pct)} pctile={percentiles?.ast_pct_pct ?? null} />
-              <PercentileBar label="TOV%" value={pct(stats?.tov_pct)} pctile={percentiles?.tov_pct_pct ?? null} />
-              <PercentileBar label="OR%" value={torvik.orb_pct != null ? `${fmt(torvik.orb_pct)}%` : '—'} pctile={torvik.orb_pct_pct} />
-              <PercentileBar label="DR%" value={torvik.drb_pct != null ? `${fmt(torvik.drb_pct)}%` : '—'} pctile={torvik.drb_pct_pct} />
-              <PercentileBar label="STL%" value={torvik.stl_pct != null ? `${fmt(torvik.stl_pct)}%` : '—'} pctile={torvik.stl_pct_pct} />
-              <PercentileBar label="BLK%" value={torvik.blk_pct != null ? `${fmt(torvik.blk_pct)}%` : '—'} pctile={torvik.blk_pct_pct} />
-            </div>
-              <PercentileBar label="FT Rate" value={torvik.ft_rate != null ? `${fmt(torvik.ft_rate)}%` : '—'} pctile={torvik.ft_rate_pct} />
-              <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
+            <h2 className="text-lg font-bold mb-3">Rate Stats</h2>
+            <PercentileBar label="AST%" value={pct(stats?.ast_pct)} pctile={percentiles?.ast_pct_pct ?? null} />
+            <PercentileBar label="TOV%" value={pct(stats?.tov_pct)} pctile={percentiles?.tov_pct_pct ?? null} />
+            <div className="border-t border-gray-700 my-2" />
+            <PercentileBar label="OR%" value={torvik.orb_pct != null ? `${fmt(torvik.orb_pct)}%` : '—'} pctile={torvik.orb_pct_pct} />
+            <PercentileBar label="DR%" value={torvik.drb_pct != null ? `${fmt(torvik.drb_pct)}%` : '—'} pctile={torvik.drb_pct_pct} />
+            <div className="border-t border-gray-700 my-2" />
+            <PercentileBar label="STL%" value={torvik.stl_pct != null ? `${fmt(torvik.stl_pct)}%` : '—'} pctile={torvik.stl_pct_pct} />
+            <PercentileBar label="BLK%" value={torvik.blk_pct != null ? `${fmt(torvik.blk_pct)}%` : '—'} pctile={torvik.blk_pct_pct} />
+            <div className="border-t border-gray-700 my-2" />
+            <PercentileBar label="FT Rate" value={torvik.ft_rate != null ? `${fmt(torvik.ft_rate)}%` : '—'} pctile={torvik.ft_rate_pct} />
+            <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
           </div>
 
           {/* Shot Profile */}
           <div className="bg-gray-800 rounded-lg p-5">
-            <h2 className="text-lg font-bold mb-3">Shot Profile <span className="text-xs text-gray-500 font-normal">(Barttorvik)</span></h2>
+            <h2 className="text-lg font-bold mb-3">Shot Profile</h2>
 
             {/* Shot distribution bar */}
             {(() => {
@@ -298,6 +296,18 @@ export default function PlayerDetail() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Advanced Metrics */}
+      {torvik && (
+        <div className="bg-gray-800 rounded-lg p-5 max-w-lg">
+          <h2 className="text-lg font-bold mb-3">Advanced Metrics</h2>
+          <PercentileBar label="BPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
+          <PercentileBar label="OBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
+          <PercentileBar label="DBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
+          <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
+          <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
         </div>
       )}
 
