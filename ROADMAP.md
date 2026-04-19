@@ -218,7 +218,7 @@ This naturally enables:
 - [x] Retrain on 2025+2026 combined (9,147 games; backtest MAE 8.86, win acc 68.6%, AUC 0.735; model trains 2x deeper)
   - [x] Added Torvik GBPM features (w_gbpm, star_gbpm — 47→49 features; backtest MAE 8.68, win acc 70.0%, AUC 0.764; GBPM is #1 feature by importance)
 - [x] Benchmark model against NatStat win probability (cstat wins every metric: +2.1pp accuracy, +0.014 AUC, 3x better calibration; wins 59.8% of disagreements)
-- [ ] Fix player rate stats to use possession-based formulas
+- [x] Fix player rate stats to use possession-based formulas (ORB%, DRB%, STL%, BLK% now use Basketball Reference formulas with team/opponent game stats)
 - [x] Barttorvik integration as secondary data source (player-centric focus)
   - [x] Migration 008: `torvik_player_stats` table (GBPM, shot zones, bio, recruiting rank, 64 columns)
   - [x] `TorkvikClient` — fetches CSV player season stats and gzip JSON per-game box scores
