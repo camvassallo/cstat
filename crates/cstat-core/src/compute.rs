@@ -332,7 +332,8 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
             games_played, games_started, minutes_per_game,
             ppg, rpg, apg, spg, bpg, topg, fpg,
             fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
-            usage_rate, bpm, ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct
+            usage_rate, bpm, ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct,
+            ft_rate
         )
         SELECT
             gen_random_uuid(),
@@ -418,6 +419,10 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
                     * (SUM(COALESCE(tgs.minutes, 200))::float / 5.0)
                     / (SUM(pgs.minutes)::float
                     * SUM(COALESCE(opp.fga, 0) - COALESCE(opp.tpa, 0))::float))::numeric, 1)
+                ELSE NULL END,
+            -- FT Rate = FTA / FGA
+            CASE WHEN SUM(pgs.fga) > 0
+                THEN ROUND((SUM(COALESCE(pgs.fta, 0))::float / SUM(pgs.fga)::float)::numeric, 3)
                 ELSE NULL END
         FROM player_game_stats pgs
         LEFT JOIN team_game_stats tgs
@@ -502,14 +507,16 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             fg_pct_pct, tp_pct_pct, ft_pct_pct, true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct,
-            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct
+            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
+            orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct
         )
         WITH best AS (
             SELECT DISTINCT ON (player_id)
                 player_id, season, ppg, rpg, apg, spg, bpg,
                 fg_pct, tp_pct, ft_pct, true_shooting_pct,
                 usage_rate, offensive_rating, defensive_rating,
-                bpm, player_sos, ast_pct, tov_pct, minutes_per_game, topg
+                bpm, player_sos, ast_pct, tov_pct, minutes_per_game, topg,
+                orb_pct, drb_pct, stl_pct, blk_pct, ft_rate
             FROM player_season_stats
             WHERE season = $1
               AND games_played >= 10
@@ -537,7 +544,12 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.ast_pct),
             PERCENT_RANK() OVER (ORDER BY b.tov_pct DESC),
             PERCENT_RANK() OVER (ORDER BY b.minutes_per_game),
-            PERCENT_RANK() OVER (ORDER BY b.topg DESC)
+            PERCENT_RANK() OVER (ORDER BY b.topg DESC),
+            PERCENT_RANK() OVER (ORDER BY b.orb_pct),
+            PERCENT_RANK() OVER (ORDER BY b.drb_pct),
+            PERCENT_RANK() OVER (ORDER BY b.stl_pct),
+            PERCENT_RANK() OVER (ORDER BY b.blk_pct),
+            PERCENT_RANK() OVER (ORDER BY b.ft_rate)
         FROM best b
         ON CONFLICT (player_id, season) DO UPDATE
         SET ppg_pct = EXCLUDED.ppg_pct,
@@ -557,7 +569,12 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             ast_pct_pct = EXCLUDED.ast_pct_pct,
             tov_pct_pct = EXCLUDED.tov_pct_pct,
             mpg_pct = EXCLUDED.mpg_pct,
-            topg_pct = EXCLUDED.topg_pct",
+            topg_pct = EXCLUDED.topg_pct,
+            orb_pct_pct = EXCLUDED.orb_pct_pct,
+            drb_pct_pct = EXCLUDED.drb_pct_pct,
+            stl_pct_pct = EXCLUDED.stl_pct_pct,
+            blk_pct_pct = EXCLUDED.blk_pct_pct,
+            ft_rate_pct = EXCLUDED.ft_rate_pct",
     )
     .bind(season)
     .execute(pool)

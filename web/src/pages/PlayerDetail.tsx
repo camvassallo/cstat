@@ -81,9 +81,9 @@ export default function PlayerDetail() {
         { stat: '3PT', value: (percentiles.tp_pct_pct ?? 0) * 100 },
         { stat: 'Playmaking', value: (percentiles.ast_pct_pct ?? percentiles.apg_pct ?? 0) * 100 },
         { stat: 'Usage', value: (percentiles.usage_rate_pct ?? 0) * 100 },
-        { stat: 'Steals', value: (torvik?.stl_pct_pct ?? percentiles.spg_pct ?? 0) * 100 },
-        { stat: 'Blocks', value: (torvik?.blk_pct_pct ?? percentiles.bpg_pct ?? 0) * 100 },
-        { stat: 'Rebounding', value: (torvik?.drb_pct_pct ?? percentiles.rpg_pct ?? 0) * 100 },
+        { stat: 'Steals', value: (percentiles.stl_pct_pct ?? torvik?.stl_pct_pct ?? percentiles.spg_pct ?? 0) * 100 },
+        { stat: 'Blocks', value: (percentiles.blk_pct_pct ?? torvik?.blk_pct_pct ?? percentiles.bpg_pct ?? 0) * 100 },
+        { stat: 'Rebounding', value: (percentiles.drb_pct_pct ?? torvik?.drb_pct_pct ?? percentiles.rpg_pct ?? 0) * 100 },
         { stat: 'Def Rating', value: (torvik?.adj_de_pct ?? percentiles.defensive_rating_pct ?? 0) * 100 },
       ]
     : [];
@@ -160,33 +160,39 @@ export default function PlayerDetail() {
         </div>
       )}
 
-      {/* Rate Stats */}
-      {torvik && (
+      {/* Rate Stats + Advanced Metrics */}
+      {stats && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-gray-800 rounded-lg p-5">
             <h2 className="text-lg font-bold mb-3">Rate Stats</h2>
-            <PercentileBar label="AST%" value={pct(stats?.ast_pct)} pctile={percentiles?.ast_pct_pct ?? null} />
-            <PercentileBar label="TOV%" value={pct(stats?.tov_pct)} pctile={percentiles?.tov_pct_pct ?? null} />
+            <PercentileBar label="AST%" value={pct(stats.ast_pct)} pctile={percentiles?.ast_pct_pct ?? null} />
+            <PercentileBar label="TOV%" value={pct(stats.tov_pct)} pctile={percentiles?.tov_pct_pct ?? null} />
             <div className="border-t border-gray-700 my-2" />
-            <PercentileBar label="OR%" value={torvik.orb_pct != null ? `${fmt(torvik.orb_pct)}%` : '—'} pctile={torvik.orb_pct_pct} />
-            <PercentileBar label="DR%" value={torvik.drb_pct != null ? `${fmt(torvik.drb_pct)}%` : '—'} pctile={torvik.drb_pct_pct} />
+            <PercentileBar label="OR%" value={stats.orb_pct != null ? `${fmt(stats.orb_pct)}%` : '—'} pctile={percentiles?.orb_pct_pct ?? null} />
+            <PercentileBar label="DR%" value={stats.drb_pct != null ? `${fmt(stats.drb_pct)}%` : '—'} pctile={percentiles?.drb_pct_pct ?? null} />
             <div className="border-t border-gray-700 my-2" />
-            <PercentileBar label="STL%" value={torvik.stl_pct != null ? `${fmt(torvik.stl_pct)}%` : '—'} pctile={torvik.stl_pct_pct} />
-            <PercentileBar label="BLK%" value={torvik.blk_pct != null ? `${fmt(torvik.blk_pct)}%` : '—'} pctile={torvik.blk_pct_pct} />
+            <PercentileBar label="STL%" value={stats.stl_pct != null ? `${fmt(stats.stl_pct)}%` : '—'} pctile={percentiles?.stl_pct_pct ?? null} />
+            <PercentileBar label="BLK%" value={stats.blk_pct != null ? `${fmt(stats.blk_pct)}%` : '—'} pctile={percentiles?.blk_pct_pct ?? null} />
             <div className="border-t border-gray-700 my-2" />
-            <PercentileBar label="FT Rate" value={torvik.ft_rate != null ? `${fmt(torvik.ft_rate)}%` : '—'} pctile={torvik.ft_rate_pct} />
-            <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
+            <PercentileBar label="FT Rate" value={stats.ft_rate != null ? fmt(stats.ft_rate, 2) : '—'} pctile={percentiles?.ft_rate_pct ?? null} />
+            {torvik?.personal_foul_rate != null && (
+              <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
+            )}
 
-            <h2 className="text-lg font-bold mt-5 mb-3">Advanced Metrics</h2>
-            <PercentileBar label="GBPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
-            <PercentileBar label="OGBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
-            <PercentileBar label="DGBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
-            <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
-            <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
+            {torvik && (
+              <>
+                <h2 className="text-lg font-bold mt-5 mb-3">Advanced Metrics</h2>
+                <PercentileBar label="GBPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
+                <PercentileBar label="OGBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
+                <PercentileBar label="DGBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
+                <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
+                <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
+              </>
+            )}
           </div>
 
           {/* Shot Diet */}
-          <div className="bg-gray-800 rounded-lg p-5">
+          {torvik && <div className="bg-gray-800 rounded-lg p-5">
             <h2 className="text-lg font-bold mb-3">Shot Diet</h2>
             {(() => {
               // Convert 0-1 decimals to 0-100 for display
@@ -322,7 +328,7 @@ export default function PlayerDetail() {
                 </div>
               );
             })()}
-          </div>
+          </div>}
         </div>
       )}
 
