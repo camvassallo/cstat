@@ -275,7 +275,7 @@ export default function PlayerCompare() {
         { label: 'FG%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.fg_pct), pctile: p.percentiles?.fg_pct_pct, color: PLAYER_COLORS[i] })) },
         { label: '3P%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.tp_pct), pctile: p.percentiles?.tp_pct_pct, color: PLAYER_COLORS[i] })) },
         { label: 'FT%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.ft_pct), pctile: p.percentiles?.ft_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'eFG%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.effective_fg_pct), color: PLAYER_COLORS[i] })) },
+        { label: 'eFG%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.effective_fg_pct), pctile: p.percentiles?.effective_fg_pct_pct, color: PLAYER_COLORS[i] })) },
         { label: 'TS%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.true_shooting_pct), pctile: p.percentiles?.true_shooting_pct_pct, color: PLAYER_COLORS[i] })) },
         { label: 'USG%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.usage_rate), pctile: p.percentiles?.usage_rate_pct, color: PLAYER_COLORS[i] })) },
       ]

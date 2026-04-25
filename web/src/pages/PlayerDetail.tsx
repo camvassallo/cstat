@@ -129,7 +129,7 @@ export default function PlayerDetail() {
             <PercentileBar label="TOPG" value={fmt(stats.topg)} pctile={percentiles?.topg_pct ?? null} />
             <div className="border-t border-gray-700 my-2" />
             <PercentileBar label="TS%" value={pct(stats.true_shooting_pct)} pctile={percentiles?.true_shooting_pct_pct ?? null} />
-            <PercentileBar label="eFG%" value={pct(stats.effective_fg_pct)} pctile={percentiles?.fg_pct_pct ?? null} />
+            <PercentileBar label="eFG%" value={pct(stats.effective_fg_pct)} pctile={percentiles?.effective_fg_pct_pct ?? null} />
           </div>
 
           {/* Radar Chart */}

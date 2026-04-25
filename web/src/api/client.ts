@@ -227,6 +227,7 @@ export interface Percentiles {
   fg_pct_pct: number | null;
   tp_pct_pct: number | null;
   ft_pct_pct: number | null;
+  effective_fg_pct_pct: number | null;
   true_shooting_pct_pct: number | null;
   usage_rate_pct: number | null;
   offensive_rating_pct: number | null;
