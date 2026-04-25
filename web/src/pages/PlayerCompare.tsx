@@ -21,6 +21,7 @@ import {
   type ComparePlayer,
   type PlayerRow,
 } from '../api/client';
+import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 
 const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
 const MAX_PLAYERS = 4;
@@ -442,6 +443,37 @@ export default function PlayerCompare() {
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                 </RadarChart>
               </ResponsiveContainer>
+            </div>
+          )}
+
+          {players.some((p) => p.torvik_stats) && (
+            <div className="bg-gray-800 rounded-lg p-5">
+              <h2 className="text-lg font-bold mb-3">Shot Diet</h2>
+              <div
+                className="grid gap-3"
+                style={{ gridTemplateColumns: `repeat(${players.length}, minmax(0, 1fr))` }}
+              >
+                {players.map((p, i) => (
+                  <div key={p.player.id} className="flex flex-col items-center">
+                    <div
+                      className="text-xs font-medium mb-2 truncate w-full text-center"
+                      style={{ color: PLAYER_COLORS[i] }}
+                    >
+                      {p.player.name}
+                    </div>
+                    {p.torvik_stats ? (
+                      <>
+                        <ShotDietCourt torvik={p.torvik_stats} />
+                        <div className="w-full mt-3">
+                          <ShotDistributionBar torvik={p.torvik_stats} />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-xs text-gray-500 py-12">No Torvik data</div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
