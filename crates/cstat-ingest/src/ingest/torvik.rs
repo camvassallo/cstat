@@ -361,3 +361,90 @@ fn parse_height(s: &str) -> Option<i32> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // normalize_name tests
+
+    #[test]
+    fn normalize_strips_jr_suffix() {
+        assert_eq!(normalize_name("Roddy Gayle Jr"), "roddy gayle");
+    }
+
+    #[test]
+    fn normalize_strips_sr_suffix() {
+        assert_eq!(normalize_name("John Smith Sr"), "john smith");
+    }
+
+    #[test]
+    fn normalize_strips_roman_numeral_suffixes() {
+        assert_eq!(normalize_name("Robert Davis II"), "robert davis");
+        assert_eq!(normalize_name("Robert Davis III"), "robert davis");
+        assert_eq!(normalize_name("Robert Davis IV"), "robert davis");
+    }
+
+    #[test]
+    fn normalize_strips_periods() {
+        assert_eq!(normalize_name("D.J. Wagner"), "dj wagner");
+    }
+
+    #[test]
+    fn normalize_strips_apostrophes() {
+        assert_eq!(normalize_name("D'Angelo Russell"), "dangelo russell");
+    }
+
+    #[test]
+    fn normalize_strips_unicode_apostrophe() {
+        assert_eq!(normalize_name("D\u{2019}Angelo Russell"), "dangelo russell");
+    }
+
+    #[test]
+    fn normalize_lowercases() {
+        assert_eq!(normalize_name("COOPER FLAGG"), "cooper flagg");
+    }
+
+    #[test]
+    fn normalize_no_suffix_unchanged() {
+        assert_eq!(normalize_name("Cooper Flagg"), "cooper flagg");
+    }
+
+    #[test]
+    fn normalize_v_suffix_stripped() {
+        // "V" is treated as a suffix (Roman numeral 5)
+        assert_eq!(normalize_name("Someone V"), "someone");
+    }
+
+    // parse_height tests
+
+    #[test]
+    fn parse_height_standard() {
+        assert_eq!(parse_height("6-5"), Some(77));
+    }
+
+    #[test]
+    fn parse_height_with_spaces() {
+        assert_eq!(parse_height("6 - 5"), Some(77));
+    }
+
+    #[test]
+    fn parse_height_short() {
+        assert_eq!(parse_height("5-10"), Some(70));
+    }
+
+    #[test]
+    fn parse_height_tall() {
+        assert_eq!(parse_height("7-1"), Some(85));
+    }
+
+    #[test]
+    fn parse_height_invalid() {
+        assert_eq!(parse_height("six-five"), None);
+    }
+
+    #[test]
+    fn parse_height_single_part() {
+        assert_eq!(parse_height("75"), None);
+    }
+}

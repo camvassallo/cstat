@@ -122,7 +122,7 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 - **Adjusted efficiency** — KenPom-style iterative regression (ADJO/ADJD)
 - **Player percentiles** — PERCENT_RANK across all players
 - **Rolling averages** — last-5-game rolling stats
-- **Player rates** — AST%, ORB%, DRB%, STL%, BLK%
+- **Player rates** — AST%, ORB%, DRB%, STL%, BLK%, FT Rate (possession-based formulas)
 
 ### ML Predictions
 

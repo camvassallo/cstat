@@ -1,22 +1,9 @@
+use super::utils::{parse_f64, parse_i32};
 use crate::NatStatClient;
 use crate::extract_results;
-use serde_json::Value;
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
-
-/// Helper to extract f64 from a JSON value that may be string or number.
-fn parse_f64(v: &Value) -> Option<f64> {
-    v.as_f64()
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-}
-
-/// Helper to extract i32 from a JSON value that may be string or number.
-fn parse_i32(v: &Value) -> Option<i32> {
-    v.as_i64()
-        .map(|i| i as i32)
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-}
 
 /// Ingest real ELO ratings from the /elo endpoint.
 /// Updates team_season_stats.elo_rating and elo_rank for all teams.

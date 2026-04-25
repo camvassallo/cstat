@@ -1,3 +1,4 @@
+use super::utils::{get_f64, get_i32, parse_i32};
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::extract_results;
@@ -260,19 +261,19 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, N
     let home_half1 = game
         .get("line-home")
         .and_then(|l| l.get("p1"))
-        .and_then(get_i32_val);
+        .and_then(parse_i32);
     let home_half2 = game
         .get("line-home")
         .and_then(|l| l.get("p2"))
-        .and_then(get_i32_val);
+        .and_then(parse_i32);
     let away_half1 = game
         .get("line-vis")
         .and_then(|l| l.get("p1"))
-        .and_then(get_i32_val);
+        .and_then(parse_i32);
     let away_half2 = game
         .get("line-vis")
         .and_then(|l| l.get("p2"))
-        .and_then(get_i32_val);
+        .and_then(parse_i32);
 
     sqlx::query(
         "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id,
@@ -609,47 +610,6 @@ async fn resolve_team_id(
     Ok(row.map(|(id,)| id))
 }
 
-/// Extract an i32 from a single JSON value (not searching multiple keys).
-fn get_i32_val(v: &Value) -> Option<i32> {
-    v.as_i64()
-        .map(|i| i as i32)
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-}
-
-/// Extract a float from a JSON value, trying multiple field names.
-fn get_f64(v: &Value, keys: &[&str]) -> Option<f64> {
-    for key in keys {
-        if let Some(val) = v.get(*key) {
-            if let Some(f) = val.as_f64() {
-                return Some(f);
-            }
-            if let Some(s) = val.as_str()
-                && let Ok(f) = s.parse::<f64>()
-            {
-                return Some(f);
-            }
-        }
-    }
-    None
-}
-
-/// Extract an int from a JSON value, trying multiple field names.
-fn get_i32(v: &Value, keys: &[&str]) -> Option<i32> {
-    for key in keys {
-        if let Some(val) = v.get(*key) {
-            if let Some(i) = val.as_i64() {
-                return Some(i as i32);
-            }
-            if let Some(s) = val.as_str()
-                && let Ok(i) = s.parse::<i32>()
-            {
-                return Some(i);
-            }
-        }
-    }
-    None
-}
-
 /// Ingest team performances for all teams in a season.
 pub async fn ingest_all_team_performances(
     client: &NatStatClient,
@@ -847,40 +807,4 @@ async fn upsert_team_game_stats(
     .await?;
 
     Ok(true)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn test_get_f64_from_number() {
-        let v = json!({"min": 32.5});
-        assert_eq!(get_f64(&v, &["min"]), Some(32.5));
-    }
-
-    #[test]
-    fn test_get_f64_from_string() {
-        let v = json!({"min": "32.5"});
-        assert_eq!(get_f64(&v, &["min"]), Some(32.5));
-    }
-
-    #[test]
-    fn test_get_f64_fallback_key() {
-        let v = json!({"mp": 28.0});
-        assert_eq!(get_f64(&v, &["min", "minutes", "mp"]), Some(28.0));
-    }
-
-    #[test]
-    fn test_get_i32_from_number() {
-        let v = json!({"pts": 25});
-        assert_eq!(get_i32(&v, &["pts"]), Some(25));
-    }
-
-    #[test]
-    fn test_get_i32_from_string() {
-        let v = json!({"pts": "25"});
-        assert_eq!(get_i32(&v, &["pts"]), Some(25));
-    }
 }
