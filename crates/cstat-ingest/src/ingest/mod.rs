@@ -4,6 +4,7 @@ pub mod players;
 pub mod season;
 pub mod teams;
 pub mod torvik;
+pub mod utils;
 
 pub use elo::{ingest_elo_ratings, ingest_game_forecasts};
 pub use players::{ingest_all_rosters, ingest_team_roster};

@@ -85,7 +85,7 @@ Barttorvik   ↗                                    ↓
 - [x] **Opponent-adjusted efficiency** (KenPom-style): iterative regression adjusts off/def efficiency by opponent quality until convergence, plus SOS and SOS rank
 - [x] **Player strength of schedule**: minutes-weighted avg opponent adj efficiency margin, plus SOS percentile
 - [x] **Rolling averages**: last 5 games PPG, RPG, APG, FG%, TS%, game score on every player_game_stats row (102K rows)
-- [x] **Player rate stats**: AST% (from team FGM context), ORB%, DRB%, STL%, BLK% (per-40 proxies)
+- [x] **Player rate stats**: AST% (from team FGM context), ORB%, DRB%, STL%, BLK% (Basketball Reference possession-based formulas), FT Rate
 - [x] **Individual ORTG/DRTG**: box-score approximation using team adjusted efficiency as base, plus net rating
 - [x] **BPM splits**: OBPM/DBPM derived from offensive/defensive game_score components
 - [x] **Pipeline gap fill**: captured `team_fga`/`team_fta`/`team_turnovers` from NatStat playerperfs; `overtime`, `attendance`, `half scores`, `venue_code` from games; `is_conference` derived from team conferences; `is_postseason` from dates; `point_diff` from team_game_stats
@@ -223,7 +223,7 @@ This naturally enables:
   - [x] Migration 008: `torvik_player_stats` table (GBPM, shot zones, bio, recruiting rank, 64 columns)
   - [x] `TorkvikClient` — fetches CSV player season stats and gzip JSON per-game box scores
   - [x] CSV parser (headerless, 64 positional columns) and gzip JSON parser (array-of-arrays, 53 columns)
-  - [x] Player matching: fuzzy team name match + name-only fallback (93.7% match rate, 4,664/4,979)
+  - [x] Player matching: normalized name matching (suffix stripping, punctuation removal) + team match (98.6% match rate, 4,911/4,979)
   - [x] Backfill class_year and height_inches on player records from Torvik bio data
   - [x] Rebound backfill from Torvik game-level data (76,385 game rows updated — NatStat had 32% coverage)
   - [x] CLI subcommand: `torvik --year 2026 [--rebounds]`
@@ -284,10 +284,8 @@ NatStat's `reb` field in both `playerperfs` and `teamperfs` represents **total r
 ### ELO Shows Rank, Not Rating (P2 — Fixed)
 NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. **Fixed**: Real ELO ratings now ingested from dedicated `/elo` endpoint (364 teams for 2025, 365 for 2026). Ranks recomputed globally via `DENSE_RANK()` to avoid NatStat's per-page rank collision bug.
 
-### Player Rate Stats Are Per-40-Min Proxies (P2)
-`compute_player_rates` computes AST%, ORB%, DRB%, STL%, BLK% as per-40-minute rates, not true possession-based percentages. Reasonable proxies but differ from standard definitions (e.g., Basketball Reference).
-
-**Fix**: Implement proper possession-based formulas using team pace and possession estimates.
+### Player Rate Stats Were Per-40-Min Proxies (P2 — Fixed)
+`compute_player_rates` originally computed ORB%, DRB%, STL%, BLK% as per-40-minute proxies. **Fixed**: Now uses proper possession-based Basketball Reference formulas with team/opponent game stats (e.g., `ORB% = 100 × (ORB × (Tm MP / 5)) / (MP × (Tm ORB + Opp DRB))`). Also added FT Rate (FTA/FGA) and rate stat percentiles. Player name normalization (suffix stripping, punctuation removal) improved Torvik↔NatStat match rate to 98.6%.
 
 ### USG% Was Ingested as Whole Numbers (Fixed)
 NatStat returns `usgpct` as whole numbers (e.g., 19.5 for 19.5%). Frontend `pct()` multiplied by 100 again → 1950%. **Fixed**: divide by 100 at ingestion time.

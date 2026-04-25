@@ -1,3 +1,4 @@
+use super::utils::get_f64_from;
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::extract_results;
@@ -228,11 +229,4 @@ pub async fn ingest_single_team_details(
     .await?;
 
     Ok(true)
-}
-
-fn get_f64_from(parent: Option<&Value>, key: &str) -> Option<f64> {
-    parent?.get(key).and_then(|v| {
-        v.as_f64()
-            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-    })
 }
