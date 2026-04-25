@@ -308,6 +308,7 @@ pub struct PercentilesRow {
     pub fg_pct_pct: Option<f64>,
     pub tp_pct_pct: Option<f64>,
     pub ft_pct_pct: Option<f64>,
+    pub effective_fg_pct_pct: Option<f64>,
     pub true_shooting_pct_pct: Option<f64>,
     pub usage_rate_pct: Option<f64>,
     pub offensive_rating_pct: Option<f64>,
@@ -717,7 +718,7 @@ pub async fn get_player_percentiles(
         SELECT
             ppg_pct, rpg_pct, apg_pct, spg_pct, bpg_pct,
             fg_pct_pct, tp_pct_pct, ft_pct_pct,
-            true_shooting_pct_pct,
+            effective_fg_pct_pct, true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct,
             ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,

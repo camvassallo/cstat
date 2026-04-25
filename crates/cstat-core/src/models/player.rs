@@ -146,6 +146,7 @@ pub struct PlayerPercentiles {
     pub fg_pct_pct: Option<f64>,
     pub tp_pct_pct: Option<f64>,
     pub ft_pct_pct: Option<f64>,
+    pub effective_fg_pct_pct: Option<f64>,
     pub true_shooting_pct_pct: Option<f64>,
     pub usage_rate_pct: Option<f64>,
     pub offensive_rating_pct: Option<f64>,

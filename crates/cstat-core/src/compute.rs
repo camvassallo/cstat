@@ -504,7 +504,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
         "INSERT INTO player_percentiles (
             id, player_id, season,
             ppg_pct, rpg_pct, apg_pct, spg_pct, bpg_pct,
-            fg_pct_pct, tp_pct_pct, ft_pct_pct, true_shooting_pct_pct,
+            fg_pct_pct, tp_pct_pct, ft_pct_pct, effective_fg_pct_pct, true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct,
             ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
@@ -513,7 +513,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
         WITH best AS (
             SELECT DISTINCT ON (player_id)
                 player_id, season, ppg, rpg, apg, spg, bpg,
-                fg_pct, tp_pct, ft_pct, true_shooting_pct,
+                fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
                 usage_rate, offensive_rating, defensive_rating,
                 bpm, player_sos, ast_pct, tov_pct, minutes_per_game, topg,
                 orb_pct, drb_pct, stl_pct, blk_pct, ft_rate
@@ -535,6 +535,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.fg_pct),
             PERCENT_RANK() OVER (ORDER BY b.tp_pct),
             PERCENT_RANK() OVER (ORDER BY b.ft_pct),
+            PERCENT_RANK() OVER (ORDER BY b.effective_fg_pct),
             PERCENT_RANK() OVER (ORDER BY b.true_shooting_pct),
             PERCENT_RANK() OVER (ORDER BY b.usage_rate),
             PERCENT_RANK() OVER (ORDER BY b.offensive_rating),
@@ -560,6 +561,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             fg_pct_pct = EXCLUDED.fg_pct_pct,
             tp_pct_pct = EXCLUDED.tp_pct_pct,
             ft_pct_pct = EXCLUDED.ft_pct_pct,
+            effective_fg_pct_pct = EXCLUDED.effective_fg_pct_pct,
             true_shooting_pct_pct = EXCLUDED.true_shooting_pct_pct,
             usage_rate_pct = EXCLUDED.usage_rate_pct,
             offensive_rating_pct = EXCLUDED.offensive_rating_pct,

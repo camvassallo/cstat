@@ -227,6 +227,7 @@ export interface Percentiles {
   fg_pct_pct: number | null;
   tp_pct_pct: number | null;
   ft_pct_pct: number | null;
+  effective_fg_pct_pct: number | null;
   true_shooting_pct_pct: number | null;
   usage_rate_pct: number | null;
   offensive_rating_pct: number | null;
@@ -361,6 +362,25 @@ export function fetchPlayerDetail(id: string, season?: number) {
     league_averages: LeagueAverages | null;
     torvik_stats: TorkvikStats | null;
   }>(`/players/${id}`, { season: season?.toString() });
+}
+
+export interface ComparePlayer {
+  player: PlayerProfile;
+  season_stats: PlayerSeasonStats | null;
+  percentiles: Percentiles | null;
+  game_log: GameLogEntry[];
+  torvik_stats: TorkvikStats | null;
+}
+
+export function fetchPlayerCompare(ids: string[], season?: number) {
+  return fetchJson<{
+    season: number;
+    league_averages: LeagueAverages | null;
+    players: ComparePlayer[];
+  }>('/players/compare', {
+    ids: ids.join(','),
+    season: season?.toString(),
+  });
 }
 
 // Predict
