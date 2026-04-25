@@ -4,6 +4,7 @@ import Rankings from './pages/Rankings';
 import TeamDetail from './pages/TeamDetail';
 import Players from './pages/Players';
 import PlayerDetail from './pages/PlayerDetail';
+import PlayerCompare from './pages/PlayerCompare';
 import Predict from './pages/Predict';
 
 export default function App() {
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="/" element={<Rankings />} />
           <Route path="/teams/:id" element={<TeamDetail />} />
           <Route path="/players" element={<Players />} />
+          <Route path="/players/compare" element={<PlayerCompare />} />
           <Route path="/players/:id" element={<PlayerDetail />} />
           <Route path="/predict" element={<Predict />} />
         </Route>

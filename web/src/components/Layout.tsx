@@ -1,8 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom';
 
 const links = [
-  { to: '/', label: 'Rankings' },
-  { to: '/players', label: 'Players' },
+  { to: '/', label: 'Rankings', end: true },
+  { to: '/players', label: 'Players', end: true },
+  { to: '/players/compare', label: 'Compare' },
   { to: '/predict', label: 'Predict' },
 ];
 
@@ -18,6 +19,7 @@ export default function Layout() {
             <NavLink
               key={l.to}
               to={l.to}
+              end={l.end}
               className={({ isActive }) =>
                 `px-3 py-1.5 rounded text-sm font-medium transition-colors ${
                   isActive

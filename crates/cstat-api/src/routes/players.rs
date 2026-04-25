@@ -16,6 +16,7 @@ use crate::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/players", get(player_list))
+        .route("/api/players/compare", get(player_compare))
         .route("/api/players/{id}", get(player_detail))
 }
 
@@ -115,5 +116,92 @@ async fn player_detail(
         "game_log": game_log,
         "league_averages": league_averages,
         "torvik_stats": torvik_stats,
+    })))
+}
+
+#[derive(Deserialize)]
+struct PlayerCompareParams {
+    ids: String,
+    season: Option<i32>,
+}
+
+const MAX_COMPARE_PLAYERS: usize = 4;
+
+async fn player_compare(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<PlayerCompareParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let season = params.season.unwrap_or_else(crate::default_season);
+    let pool = &state.db.pool;
+
+    let ids: Vec<Uuid> = params
+        .ids
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(Uuid::parse_str)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("invalid uuid in ids: {e}") })),
+            )
+        })?;
+
+    if ids.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "ids query param is required" })),
+        ));
+    }
+    if ids.len() > MAX_COMPARE_PLAYERS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("max {MAX_COMPARE_PLAYERS} players per compare request"),
+            })),
+        ));
+    }
+
+    let league_averages = queries::get_league_averages(pool, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+    let mut players_data = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let (player, season_stats, percentiles, game_log, torvik_stats) = tokio::try_join!(
+            queries::get_player_by_id(pool, *id, season),
+            queries::get_player_season_stats(pool, *id, season),
+            queries::get_player_percentiles(pool, *id, season),
+            queries::get_player_game_log(pool, *id, season),
+            queries::get_torvik_stats(pool, *id, season),
+        )
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+        let Some(player) = player else { continue };
+
+        players_data.push(json!({
+            "player": player,
+            "season_stats": season_stats,
+            "percentiles": percentiles,
+            "game_log": game_log,
+            "torvik_stats": torvik_stats,
+        }));
+    }
+
+    Ok(Json(json!({
+        "season": season,
+        "league_averages": league_averages,
+        "players": players_data,
     })))
 }

@@ -363,6 +363,25 @@ export function fetchPlayerDetail(id: string, season?: number) {
   }>(`/players/${id}`, { season: season?.toString() });
 }
 
+export interface ComparePlayer {
+  player: PlayerProfile;
+  season_stats: PlayerSeasonStats | null;
+  percentiles: Percentiles | null;
+  game_log: GameLogEntry[];
+  torvik_stats: TorkvikStats | null;
+}
+
+export function fetchPlayerCompare(ids: string[], season?: number) {
+  return fetchJson<{
+    season: number;
+    league_averages: LeagueAverages | null;
+    players: ComparePlayer[];
+  }>('/players/compare', {
+    ids: ids.join(','),
+    season: season?.toString(),
+  });
+}
+
 // Predict
 export interface PredictionResult {
   home_team: string;

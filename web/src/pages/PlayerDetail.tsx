@@ -102,26 +102,34 @@ export default function PlayerDetail() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold">{player.name}</h1>
-        <div className="text-gray-400 flex gap-2 items-center flex-wrap">
-          {player.jersey_number && <span>#{player.jersey_number}</span>}
-          {player.position && <span>&middot; {player.position}</span>}
-          {player.class_year && <span>&middot; {player.class_year}</span>}
-          {player.height_inches && <span>&middot; {heightString(player.height_inches)}</span>}
-          {player.weight_lbs && <span>&middot; {player.weight_lbs} lbs</span>}
-          <span>&middot;</span>
-          {player.team_id ? (
-            <Link to={`/teams/${player.team_id}`} className="text-blue-400 hover:underline">
-              {player.team_name}
-            </Link>
-          ) : (
-            <span>{player.team_name ?? 'Unknown'}</span>
-          )}
-          {player.conference && <span className="text-gray-500">({player.conference})</span>}
-          {stats && <><span>&middot;</span><span>{stats.games_played} GP</span></>}
-          {torvik?.hometown && <><span>&middot;</span><span>{torvik.hometown}</span></>}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold">{player.name}</h1>
+          <div className="text-gray-400 flex gap-2 items-center flex-wrap">
+            {player.jersey_number && <span>#{player.jersey_number}</span>}
+            {player.position && <span>&middot; {player.position}</span>}
+            {player.class_year && <span>&middot; {player.class_year}</span>}
+            {player.height_inches && <span>&middot; {heightString(player.height_inches)}</span>}
+            {player.weight_lbs && <span>&middot; {player.weight_lbs} lbs</span>}
+            <span>&middot;</span>
+            {player.team_id ? (
+              <Link to={`/teams/${player.team_id}`} className="text-blue-400 hover:underline">
+                {player.team_name}
+              </Link>
+            ) : (
+              <span>{player.team_name ?? 'Unknown'}</span>
+            )}
+            {player.conference && <span className="text-gray-500">({player.conference})</span>}
+            {stats && <><span>&middot;</span><span>{stats.games_played} GP</span></>}
+            {torvik?.hometown && <><span>&middot;</span><span>{torvik.hometown}</span></>}
+          </div>
         </div>
+        <Link
+          to={`/players/compare?ids=${player.id}`}
+          className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-medium"
+        >
+          Compare
+        </Link>
       </div>
 
       {stats && (
@@ -185,6 +193,7 @@ export default function PlayerDetail() {
                 <PercentileBar label="GBPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
                 <PercentileBar label="OGBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
                 <PercentileBar label="DGBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
+                <div className="border-t border-gray-700 my-2" />
                 <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
                 <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
               </>

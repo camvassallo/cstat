@@ -179,7 +179,7 @@ This naturally enables:
 - [x] `GET /api/teams/:id` — team profile: season stats, four factors, schedule/results
 - [x] `GET /api/players?search=&team=&season=` — player search/filter
 - [x] `GET /api/players/:id` — player profile: season stats, percentiles, rolling form
-- [ ] `GET /api/players/compare?ids=` — side-by-side player comparison
+- [x] `GET /api/players/compare?ids=` — side-by-side player comparison (up to 4 players, parallel queries per player)
 - [x] `GET /api/games?date=&team=` — game results
 
 ### 4b: React Frontend (Vite + AG Grid + Recharts)
@@ -188,7 +188,7 @@ This naturally enables:
 - [x] Team detail page (four factors, schedule, roster)
 - [x] Player stats table (sortable, with search)
 - [x] Player detail page (season stats, rolling form charts, percentile spider/radar)
-- [ ] Player comparison view (side-by-side stats + visualizations)
+- [x] Player comparison view (side-by-side stats + visualizations) — picker, color-coded chips, per-stat percentile bars, overlaid radar + rolling game-score lines
 - [x] Game prediction interface (pick two teams → predicted margin + win prob)
 - [ ] Score ticker / recent results
 - [ ] Mobile-responsive design
@@ -231,6 +231,7 @@ This naturally enables:
   - [x] Polish Torvik data display on player detail page (shot zone visualization, GBPM context/percentiles)
   - [x] Use Torvik data as ML features (GBPM as roster aggregate and star-player feature)
   - [ ] Use recruiting rank as early-season prior (team-avg recruit rank for first ~3 weeks when model lacks game data)
+- [ ] **Compute pipeline audit**: cross-check all derived metrics against Torvik (and manual references) — see "Compute Pipeline Audit Pending" below. Top priority: replace broken cstat BPM/OBPM/DBPM with real formulas (or Torvik passthrough) and retrain ML.
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
@@ -283,6 +284,33 @@ NatStat's `reb` field in both `playerperfs` and `teamperfs` represents **total r
 
 ### ELO Shows Rank, Not Rating (P2 — Fixed)
 NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. **Fixed**: Real ELO ratings now ingested from dedicated `/elo` endpoint (364 teams for 2025, 365 for 2026). Ranks recomputed globally via `DENSE_RANK()` to avoid NatStat's per-page rank collision bug.
+
+### cstat BPM/OBPM/DBPM Are Broken (P1)
+Sanity-check vs Torvik (2026, 3,255 qualified players matched):
+- cstat OBPM ↔ Torvik OBPM: **r = 0.075**, sd of diff = 30.0
+- cstat DBPM ↔ Torvik DBPM: **r = −0.026**, sd of diff = 30.1
+- cstat BPM ↔ Torvik BPM: r = 0.523 (mean +6.54 vs Torvik −0.58 — biased and floored at 0)
+- cstat OBPM range: −1649 to +15.6; cstat DBPM range: 0.1 to +1655 (vs Torvik ±15)
+
+**Root causes** (`crates/cstat-core/src/compute.rs:376, 1059–1124`):
+1. cstat "BPM" is `AVG(game_score)` per player — not Daniel Myers BPM. Game score skews positive, so it's biased ~+7 and floored at 0.
+2. OBPM/DBPM split divides by `(off_component + def_component)`, where `off_component` includes a `ppg / fg%` term that explodes negative on low-fg% volume scorers (e.g., Rob Brown @ 35.1% → OBPM −1649, DBPM +1655).
+3. These broken values flow into `features.rs:147–148` as roster aggregates (`w_obpm`, `w_dbpm`) and into the trained ML models.
+
+**Mitigation (shipped)**: PlayerDetail and PlayerCompare drop the cstat BPM rows entirely and show Torvik's `gbpm`/`ogbpm`/`dgbpm` (with percentiles) — full coverage for 2026 (3,659 qualified, 98.7% matched to cstat). GBPM is also already the #1 ML feature, so the UI now matches what the model sees.
+
+**Pending fix (Phase 4c)**: Implement real Basketball Reference BPM, or replace cstat's compute with Torvik values directly (and stop populating `pss.bpm`/`obpm`/`dbpm` in `compute_individual_ratings`). Retrain ML once feature is corrected.
+
+### Compute Pipeline Audit Pending (P2)
+The BPM bug above suggests other derived metrics may be similarly off. **TODO**: cross-check each cstat-computed metric against Torvik (or a manual reference) and document drift. Specifically:
+- `offensive_rating`/`defensive_rating` (`compute_individual_ratings`) — heuristic team-context scaling, not box-score ORTG
+- `ast_pct` derivation (uses team FGM context — verify against Basketball Reference formula)
+- `tov_pct`, `usage_rate` — confirm ingestion-time scaling matches NatStat semantics
+- `game_score` — verify Hollinger formula constants
+- `adj_efficiency_margin` — convergence vs Torvik adj_oe/adj_de
+- Rolling averages — confirm 5-game window semantics
+
+Goal: produce a per-metric correlation table vs Torvik (where available) and a fix list ranked by ML feature importance.
 
 ### Player Rate Stats Were Per-40-Min Proxies (P2 — Fixed)
 `compute_player_rates` originally computed ORB%, DRB%, STL%, BLK% as per-40-minute proxies. **Fixed**: Now uses proper possession-based Basketball Reference formulas with team/opponent game stats (e.g., `ORB% = 100 × (ORB × (Tm MP / 5)) / (MP × (Tm ORB + Opp DRB))`). Also added FT Rate (FTA/FGA) and rate stat percentiles. Player name normalization (suffix stripping, punctuation removal) improved Torvik↔NatStat match rate to 98.6%.
