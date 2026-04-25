@@ -214,6 +214,7 @@ export interface PlayerSeasonStats {
   drb_pct: number | null;
   stl_pct: number | null;
   blk_pct: number | null;
+  ft_rate: number | null;
   player_sos: number | null;
 }
 
@@ -236,6 +237,11 @@ export interface Percentiles {
   tov_pct_pct: number | null;
   mpg_pct: number | null;
   topg_pct: number | null;
+  orb_pct_pct: number | null;
+  drb_pct_pct: number | null;
+  stl_pct_pct: number | null;
+  blk_pct_pct: number | null;
+  ft_rate_pct: number | null;
 }
 
 export interface GameLogEntry {

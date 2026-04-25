@@ -332,7 +332,8 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
             games_played, games_started, minutes_per_game,
             ppg, rpg, apg, spg, bpg, topg, fpg,
             fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
-            usage_rate, bpm, ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct
+            usage_rate, bpm, ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct,
+            ft_rate
         )
         SELECT
             gen_random_uuid(),
@@ -373,8 +374,8 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
             ROUND(AVG(pgs.usage_rate)::numeric, 3),
             -- BPM placeholder (avg game_score as proxy until we compute real BPM)
             ROUND(AVG(pgs.game_score)::numeric, 2),
-            -- AST% = AST / (teammate FGM) ≈ AST / (team_FGM - player_FGM) * (team_minutes / player_minutes)
-            -- Simplified: AST / (team_FGM_per_min * minutes - FGM) where team_FGM_per_min comes from team_fgm
+            -- AST% = AST / (teammate FGM while player on floor)
+            -- Approximated as AST / (team_FGM - player_FGM) across the season
             CASE WHEN SUM(COALESCE(pgs.team_fgm, 0)) - SUM(pgs.fgm) > 0
                 THEN ROUND((SUM(pgs.assists)::float /
                     (SUM(COALESCE(pgs.team_fgm, 0))::float - SUM(pgs.fgm)::float))::numeric, 3)
@@ -384,26 +385,50 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
                 THEN ROUND((SUM(COALESCE(pgs.turnovers, 0))::float /
                     (SUM(pgs.fga) + 0.44 * SUM(COALESCE(pgs.fta, 0)) + SUM(COALESCE(pgs.turnovers, 0))))::numeric, 3)
                 ELSE NULL END,
-            -- ORB% = player_OREB / (player_OREB + opp_DREB_while_on_floor)
-            -- Approximate: player_OREB / (player_minutes/team_minutes * team_OREB_opportunities)
-            -- Simpler proxy: OREB per minute / league avg OREB per minute
-            CASE WHEN SUM(pgs.minutes) > 0 AND SUM(COALESCE(pgs.off_rebounds, 0)) > 0
-                THEN ROUND((SUM(COALESCE(pgs.off_rebounds, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
-                ELSE 0.0 END,
-            -- DRB% = DREB per 40 minutes as proxy
-            CASE WHEN SUM(pgs.minutes) > 0 AND SUM(COALESCE(pgs.def_rebounds, 0)) > 0
-                THEN ROUND((SUM(COALESCE(pgs.def_rebounds, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
-                ELSE 0.0 END,
-            -- STL% = steals / (minutes/team_minutes * opp_possessions)
-            -- Approximate: STL per 40 minutes as proxy
+            -- ORB% = 100 * (ORB * (Tm MP / 5)) / (MP * (Tm ORB + Opp DRB))
             CASE WHEN SUM(pgs.minutes) > 0
-                THEN ROUND((SUM(COALESCE(pgs.steals, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
-                ELSE 0.0 END,
-            -- BLK% = blocks per 40 minutes as proxy
+                      AND SUM(COALESCE(tgs.off_rebounds, 0) + COALESCE(opp.def_rebounds, 0)) > 0
+                THEN ROUND((100.0 * SUM(COALESCE(pgs.off_rebounds, 0))::float
+                    * (SUM(COALESCE(tgs.minutes, 200))::float / 5.0)
+                    / (SUM(pgs.minutes)::float
+                    * SUM(COALESCE(tgs.off_rebounds, 0) + COALESCE(opp.def_rebounds, 0))::float))::numeric, 1)
+                ELSE NULL END,
+            -- DRB% = 100 * (DRB * (Tm MP / 5)) / (MP * (Tm DRB + Opp ORB))
             CASE WHEN SUM(pgs.minutes) > 0
-                THEN ROUND((SUM(COALESCE(pgs.blocks, 0))::float / SUM(pgs.minutes) * 40.0)::numeric, 1)
-                ELSE 0.0 END
+                      AND SUM(COALESCE(tgs.def_rebounds, 0) + COALESCE(opp.off_rebounds, 0)) > 0
+                THEN ROUND((100.0 * SUM(COALESCE(pgs.def_rebounds, 0))::float
+                    * (SUM(COALESCE(tgs.minutes, 200))::float / 5.0)
+                    / (SUM(pgs.minutes)::float
+                    * SUM(COALESCE(tgs.def_rebounds, 0) + COALESCE(opp.off_rebounds, 0))::float))::numeric, 1)
+                ELSE NULL END,
+            -- STL% = 100 * (STL * (Tm MP / 5)) / (MP * Opp Poss)
+            -- Opp Poss ≈ Opp FGA - Opp ORB + Opp TOV + 0.44 * Opp FTA
+            CASE WHEN SUM(pgs.minutes) > 0
+                      AND SUM(COALESCE(opp.fga, 0) - COALESCE(opp.off_rebounds, 0)
+                            + COALESCE(opp.turnovers, 0) + 0.44 * COALESCE(opp.fta, 0)) > 0
+                THEN ROUND((100.0 * SUM(COALESCE(pgs.steals, 0))::float
+                    * (SUM(COALESCE(tgs.minutes, 200))::float / 5.0)
+                    / (SUM(pgs.minutes)::float
+                    * SUM(COALESCE(opp.fga, 0)::float - COALESCE(opp.off_rebounds, 0)::float
+                        + COALESCE(opp.turnovers, 0)::float + 0.44 * COALESCE(opp.fta, 0)::float)))::numeric, 1)
+                ELSE NULL END,
+            -- BLK% = 100 * (BLK * (Tm MP / 5)) / (MP * (Opp FGA - Opp 3PA))
+            CASE WHEN SUM(pgs.minutes) > 0
+                      AND SUM(COALESCE(opp.fga, 0) - COALESCE(opp.tpa, 0)) > 0
+                THEN ROUND((100.0 * SUM(COALESCE(pgs.blocks, 0))::float
+                    * (SUM(COALESCE(tgs.minutes, 200))::float / 5.0)
+                    / (SUM(pgs.minutes)::float
+                    * SUM(COALESCE(opp.fga, 0) - COALESCE(opp.tpa, 0))::float))::numeric, 1)
+                ELSE NULL END,
+            -- FT Rate = FTA / FGA
+            CASE WHEN SUM(pgs.fga) > 0
+                THEN ROUND((SUM(COALESCE(pgs.fta, 0))::float / SUM(pgs.fga)::float)::numeric, 3)
+                ELSE NULL END
         FROM player_game_stats pgs
+        LEFT JOIN team_game_stats tgs
+            ON tgs.game_id = pgs.game_id AND tgs.team_id = pgs.team_id
+        LEFT JOIN team_game_stats opp
+            ON opp.game_id = pgs.game_id AND opp.team_id = pgs.opponent_id
         WHERE pgs.season = $1
           AND pgs.minutes IS NOT NULL
           AND pgs.minutes > 0
@@ -482,14 +507,16 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             fg_pct_pct, tp_pct_pct, ft_pct_pct, true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct,
-            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct
+            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
+            orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct
         )
         WITH best AS (
             SELECT DISTINCT ON (player_id)
                 player_id, season, ppg, rpg, apg, spg, bpg,
                 fg_pct, tp_pct, ft_pct, true_shooting_pct,
                 usage_rate, offensive_rating, defensive_rating,
-                bpm, player_sos, ast_pct, tov_pct, minutes_per_game, topg
+                bpm, player_sos, ast_pct, tov_pct, minutes_per_game, topg,
+                orb_pct, drb_pct, stl_pct, blk_pct, ft_rate
             FROM player_season_stats
             WHERE season = $1
               AND games_played >= 10
@@ -517,7 +544,12 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.ast_pct),
             PERCENT_RANK() OVER (ORDER BY b.tov_pct DESC),
             PERCENT_RANK() OVER (ORDER BY b.minutes_per_game),
-            PERCENT_RANK() OVER (ORDER BY b.topg DESC)
+            PERCENT_RANK() OVER (ORDER BY b.topg DESC),
+            PERCENT_RANK() OVER (ORDER BY b.orb_pct),
+            PERCENT_RANK() OVER (ORDER BY b.drb_pct),
+            PERCENT_RANK() OVER (ORDER BY b.stl_pct),
+            PERCENT_RANK() OVER (ORDER BY b.blk_pct),
+            PERCENT_RANK() OVER (ORDER BY b.ft_rate)
         FROM best b
         ON CONFLICT (player_id, season) DO UPDATE
         SET ppg_pct = EXCLUDED.ppg_pct,
@@ -537,7 +569,12 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             ast_pct_pct = EXCLUDED.ast_pct_pct,
             tov_pct_pct = EXCLUDED.tov_pct_pct,
             mpg_pct = EXCLUDED.mpg_pct,
-            topg_pct = EXCLUDED.topg_pct",
+            topg_pct = EXCLUDED.topg_pct,
+            orb_pct_pct = EXCLUDED.orb_pct_pct,
+            drb_pct_pct = EXCLUDED.drb_pct_pct,
+            stl_pct_pct = EXCLUDED.stl_pct_pct,
+            blk_pct_pct = EXCLUDED.blk_pct_pct,
+            ft_rate_pct = EXCLUDED.ft_rate_pct",
     )
     .bind(season)
     .execute(pool)

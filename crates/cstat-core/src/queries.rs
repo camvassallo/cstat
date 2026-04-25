@@ -294,6 +294,7 @@ pub struct PlayerSeasonStatsRow {
     pub drb_pct: Option<f64>,
     pub stl_pct: Option<f64>,
     pub blk_pct: Option<f64>,
+    pub ft_rate: Option<f64>,
     pub player_sos: Option<f64>,
 }
 
@@ -317,6 +318,11 @@ pub struct PercentilesRow {
     pub tov_pct_pct: Option<f64>,
     pub mpg_pct: Option<f64>,
     pub topg_pct: Option<f64>,
+    pub orb_pct_pct: Option<f64>,
+    pub drb_pct_pct: Option<f64>,
+    pub stl_pct_pct: Option<f64>,
+    pub blk_pct_pct: Option<f64>,
+    pub ft_rate_pct: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -690,7 +696,7 @@ pub async fn get_player_season_stats(
             offensive_rating, defensive_rating, net_rating,
             usage_rate, bpm, obpm, dbpm,
             ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct,
-            player_sos
+            ft_rate, player_sos
         FROM player_season_stats
         WHERE player_id = $1 AND season = $2
         "#,
@@ -714,7 +720,8 @@ pub async fn get_player_percentiles(
             true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             bpm_pct, player_sos_pct,
-            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct
+            ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
+            orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct
         FROM player_percentiles
         WHERE player_id = $1 AND season = $2
         "#,

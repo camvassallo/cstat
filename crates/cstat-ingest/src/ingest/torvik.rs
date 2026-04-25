@@ -204,6 +204,20 @@ pub async fn backfill_rebounds_from_torvik(
     pool: &PgPool,
     season: i32,
 ) -> anyhow::Result<u64> {
+    // Pre-build a lookup: normalized_name → Vec<player_id> for this season.
+    // This avoids running REGEXP_REPLACE in SQL for every one of 113k rows.
+    let players =
+        sqlx::query_as::<_, (Uuid, String)>("SELECT id, name FROM players WHERE season = $1")
+            .bind(season)
+            .fetch_all(pool)
+            .await?;
+
+    let mut name_map: std::collections::HashMap<String, Vec<Uuid>> =
+        std::collections::HashMap::new();
+    for (id, name) in &players {
+        name_map.entry(normalize_name(name)).or_default().push(*id);
+    }
+
     let games = client.fetch_game_stats(season).await?;
     let mut updated: u64 = 0;
 
@@ -218,36 +232,39 @@ pub async fn backfill_rebounds_from_torvik(
         };
         let total_reb = oreb + dreb;
 
-        // Parse game date from Torvik's YYYYMMDD format
         let game_date = match chrono::NaiveDate::parse_from_str(&g.date_str, "%Y%m%d") {
             Ok(d) => d,
             Err(_) => continue,
         };
 
-        // Match by player name + team + game_date.
-        // We only update rows where rebounds are missing (total_rebounds IS NULL OR total_rebounds = 0).
-        let result = sqlx::query(
-            r#"UPDATE player_game_stats pgs
-               SET off_rebounds = $1,
-                   def_rebounds = $2,
-                   total_rebounds = $3
-               FROM players p
-               WHERE pgs.player_id = p.id
-                 AND pgs.season = $4
-                 AND pgs.game_date = $5
-                 AND LOWER(p.name) = LOWER($6)
-                 AND (pgs.total_rebounds IS NULL OR pgs.total_rebounds = 0)"#,
-        )
-        .bind(oreb)
-        .bind(dreb)
-        .bind(total_reb)
-        .bind(season)
-        .bind(game_date)
-        .bind(&g.player_name)
-        .execute(pool)
-        .await?;
+        let normalized = normalize_name(&g.player_name);
+        let player_ids = match name_map.get(&normalized) {
+            Some(ids) => ids,
+            None => continue,
+        };
 
-        updated += result.rows_affected();
+        for pid in player_ids {
+            let result = sqlx::query(
+                r#"UPDATE player_game_stats
+                   SET off_rebounds = $1,
+                       def_rebounds = $2,
+                       total_rebounds = $3
+                   WHERE player_id = $4
+                     AND season = $5
+                     AND game_date = $6
+                     AND (total_rebounds IS NULL OR total_rebounds = 0)"#,
+            )
+            .bind(oreb)
+            .bind(dreb)
+            .bind(total_reb)
+            .bind(pid)
+            .bind(season)
+            .bind(game_date)
+            .execute(pool)
+            .await?;
+
+            updated += result.rows_affected();
+        }
     }
 
     info!(season, updated, "Torvik rebound backfill complete");
@@ -255,29 +272,58 @@ pub async fn backfill_rebounds_from_torvik(
 }
 
 // ---------------------------------------------------------------------------
+// Name normalization
+// ---------------------------------------------------------------------------
+
+/// Normalize a player name for matching across data sources.
+/// Strips suffixes (Jr, Sr, II, III, IV, V), collapses whitespace,
+/// removes periods/apostrophes, and lowercases.
+fn normalize_name(name: &str) -> String {
+    let s = name.replace(['.', '\'', '\u{2019}'], "").to_lowercase();
+
+    // Split into tokens and strip trailing suffix tokens
+    let tokens: Vec<&str> = s.split_whitespace().collect();
+    let suffixes = ["jr", "sr", "ii", "iii", "iv", "v"];
+
+    let end = if tokens.last().is_some_and(|t| suffixes.contains(t)) {
+        tokens.len() - 1
+    } else {
+        tokens.len()
+    };
+
+    tokens[..end].join(" ")
+}
+
+// ---------------------------------------------------------------------------
 // Player matching
 // ---------------------------------------------------------------------------
 
 /// Match a Torvik player to a cstat player by name + team + season.
-/// Uses case-insensitive name matching and fuzzy team name matching.
+/// Uses normalized name matching and fuzzy team name matching.
 async fn match_player(
     pool: &PgPool,
     name: &str,
     torvik_team: &str,
     season: i32,
 ) -> anyhow::Result<Option<Uuid>> {
-    // First try exact name match within the season
+    let normalized = normalize_name(name);
+
+    // First try normalized name match + team within the season.
+    // SQL-side: TRANSLATE strips . ' ' (apostrophes), then REGEXP_REPLACE strips suffixes.
     let row = sqlx::query_as::<_, (Uuid,)>(
         r#"SELECT p.id FROM players p
            JOIN teams t ON t.id = p.team_id AND t.season = p.season
            WHERE p.season = $1
-             AND LOWER(p.name) = LOWER($2)
+             AND LOWER(TRIM(REGEXP_REPLACE(
+                   TRANSLATE(p.name, E'.\x27\u2019', ''),
+                   E'\\s+(Jr|Sr|II|III|IV|V)$', '', 'i'
+                 ))) = $2
              AND (LOWER(t.name) LIKE '%' || LOWER($3) || '%'
                   OR LOWER($3) LIKE '%' || LOWER(t.short_name) || '%')
            LIMIT 1"#,
     )
     .bind(season)
-    .bind(name)
+    .bind(&normalized)
     .bind(torvik_team)
     .fetch_optional(pool)
     .await?;
@@ -286,15 +332,18 @@ async fn match_player(
         return Ok(Some(id));
     }
 
-    // Fallback: just match by name within season (may match wrong player if
-    // common name, but better than no match for unique names)
+    // Fallback: normalized name only within season
     let row = sqlx::query_as::<_, (Uuid,)>(
         r#"SELECT p.id FROM players p
-           WHERE p.season = $1 AND LOWER(p.name) = LOWER($2)
+           WHERE p.season = $1
+             AND LOWER(TRIM(REGEXP_REPLACE(
+                   TRANSLATE(p.name, E'.\x27\u2019', ''),
+                   E'\\s+(Jr|Sr|II|III|IV|V)$', '', 'i'
+                 ))) = $2
            LIMIT 1"#,
     )
     .bind(season)
-    .bind(name)
+    .bind(&normalized)
     .fetch_optional(pool)
     .await?;
 
