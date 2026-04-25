@@ -206,20 +206,16 @@ pub async fn backfill_rebounds_from_torvik(
 ) -> anyhow::Result<u64> {
     // Pre-build a lookup: normalized_name → Vec<player_id> for this season.
     // This avoids running REGEXP_REPLACE in SQL for every one of 113k rows.
-    let players = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, name FROM players WHERE season = $1",
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await?;
+    let players =
+        sqlx::query_as::<_, (Uuid, String)>("SELECT id, name FROM players WHERE season = $1")
+            .bind(season)
+            .fetch_all(pool)
+            .await?;
 
     let mut name_map: std::collections::HashMap<String, Vec<Uuid>> =
         std::collections::HashMap::new();
     for (id, name) in &players {
-        name_map
-            .entry(normalize_name(name))
-            .or_default()
-            .push(*id);
+        name_map.entry(normalize_name(name)).or_default().push(*id);
     }
 
     let games = client.fetch_game_stats(season).await?;
@@ -283,9 +279,7 @@ pub async fn backfill_rebounds_from_torvik(
 /// Strips suffixes (Jr, Sr, II, III, IV, V), collapses whitespace,
 /// removes periods/apostrophes, and lowercases.
 fn normalize_name(name: &str) -> String {
-    let s = name
-        .replace(['.', '\'', '\u{2019}'], "")
-        .to_lowercase();
+    let s = name.replace(['.', '\'', '\u{2019}'], "").to_lowercase();
 
     // Split into tokens and strip trailing suffix tokens
     let tokens: Vec<&str> = s.split_whitespace().collect();
