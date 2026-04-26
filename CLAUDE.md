@@ -48,12 +48,12 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 `cstat-core/src/compute.rs` contains all derived metric calculations (~1,500 lines):
 - `backfill_game_stats` — defensive rebounds, assist-to-turnover ratio, game score
-- `compute_player_season_stats` — aggregates game stats into per-season averages
+- `compute_player_season_stats` — aggregates game stats into per-season averages, including rate stats (AST%, TOV%, ORB%, DRB%, STL%, BLK%, FT Rate) using possession-based Basketball Reference formulas
 - `compute_team_season_stats` — four factors, raw efficiency
 - `compute_adjusted_efficiency` — KenPom-style iterative regression for ADJO/ADJD
 - `compute_player_percentiles` — PERCENT_RANK across all players (including rate stat percentiles)
 - `compute_rolling_averages` — last-5-game rolling stats
-- `compute_player_rates` — AST%, ORB%, DRB%, STL%, BLK%, FT Rate (possession-based Basketball Reference formulas)
+- `compute_individual_ratings` — populates `pss.offensive_rating` / `defensive_rating` / `net_rating` from `torvik_player_stats.o_rtg` / `d_rtg` (passthrough; cstat's prior heuristic was broken — see ROADMAP "Compute Pipeline Audit")
 
 ## Database
 

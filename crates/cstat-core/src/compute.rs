@@ -1055,6 +1055,10 @@ pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64,
 /// Audit"). Torvik publishes per-player season ORTG/DRTG (Dean Oliver style)
 /// that correlates ~1.0 with their reference implementation; we passthrough.
 ///
+/// **For consumers:** `pss.offensive_rating` / `defensive_rating` / `net_rating`
+/// now hold Torvik `o_rtg` / `d_rtg` values (rounded to one decimal). Players
+/// without a Torvik match (~1.4%) have NULLs in these columns.
+///
 /// bpm/obpm/dbpm columns are intentionally NULLed for the same reason —
 /// Torvik's GBPM/OGBPM/DGBPM serve that role and live in `torvik_player_stats`.
 pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
