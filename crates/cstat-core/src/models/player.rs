@@ -114,9 +114,6 @@ pub struct PlayerSeasonStats {
     pub defensive_rating: Option<f64>,
     pub net_rating: Option<f64>,
     pub usage_rate: Option<f64>,
-    pub bpm: Option<f64>,
-    pub obpm: Option<f64>,
-    pub dbpm: Option<f64>,
     pub ast_pct: Option<f64>,
     pub tov_pct: Option<f64>,
     pub orb_pct: Option<f64>,
@@ -151,7 +148,6 @@ pub struct PlayerPercentiles {
     pub usage_rate_pct: Option<f64>,
     pub offensive_rating_pct: Option<f64>,
     pub defensive_rating_pct: Option<f64>,
-    pub bpm_pct: Option<f64>,
     pub player_sos_pct: Option<f64>,
 
     pub created_at: chrono::NaiveDateTime,

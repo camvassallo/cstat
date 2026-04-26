@@ -370,8 +370,19 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
             CASE WHEN (SUM(pgs.fga) + 0.44 * SUM(COALESCE(pgs.fta, 0))) > 0
                 THEN ROUND((SUM(pgs.points)::float / (2.0 * (SUM(pgs.fga) + 0.44 * SUM(COALESCE(pgs.fta, 0)))))::numeric, 3)
                 ELSE NULL END,
-            -- Usage rate (avg of per-game NatStat usage)
-            ROUND(AVG(pgs.usage_rate)::numeric, 3),
+            -- USG% (Basketball Reference): 100 × ((Plays × Tm_MP/5) / (MP × Tm_Plays))
+            -- where Plays = FGA + 0.44×FTA + TOV. Stored as a fraction (multiply by 100 for percent).
+            CASE WHEN SUM(pgs.minutes) > 0
+                  AND SUM(COALESCE(pgs.team_fga, 0) + 0.44 * COALESCE(pgs.team_fta, 0)
+                          + COALESCE(pgs.team_turnovers, 0)) > 0
+                THEN ROUND((
+                    (SUM(pgs.fga + 0.44 * COALESCE(pgs.fta, 0) + COALESCE(pgs.turnovers, 0))::float
+                        * (SUM(COALESCE(tgs.minutes, 200))::float / 5.0))
+                    / (SUM(pgs.minutes)::float
+                        * SUM(COALESCE(pgs.team_fga, 0) + 0.44 * COALESCE(pgs.team_fta, 0)
+                              + COALESCE(pgs.team_turnovers, 0))::float)
+                )::numeric, 3)
+                ELSE NULL END,
             -- AST% (Basketball Reference): AST / ((MP / (Team_MP / 5)) × Team_FGM − Player_FGM)
             -- Stored as a fraction (multiply by 100 for percent).
             CASE WHEN (5.0 * SUM(pgs.minutes)::float * SUM(COALESCE(pgs.team_fgm, 0))::float
@@ -598,7 +609,7 @@ pub async fn compute_team_four_factors(pool: &PgPool, season: i32) -> Result<u64
     // Offensive efficiency = Points / Possessions * 100
     // eFG% = (FGM + 0.5 * 3PM) / FGA
     // TOV% = TOV / Possessions
-    // ORB% = OREB / (OREB + Opp DREB) — needs opponent data, approximate for now
+    // ORB% = OREB / (OREB + Opp DREB) — computed via reb_agg self-join below
     // FT Rate = FTA / FGA
     let result = sqlx::query(
         "WITH team_agg AS (
@@ -1058,16 +1069,12 @@ pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64,
 /// **For consumers:** `pss.offensive_rating` / `defensive_rating` / `net_rating`
 /// now hold Torvik `o_rtg` / `d_rtg` values (rounded to one decimal). Players
 /// without a Torvik match (~1.4%) have NULLs in these columns.
-///
-/// bpm/obpm/dbpm columns are intentionally NULLed for the same reason —
-/// Torvik's GBPM/OGBPM/DGBPM serve that role and live in `torvik_player_stats`.
 pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     // Clear stale heuristic values so unmatched Torvik players see NULLs
     // instead of garbage from prior pipeline runs.
     sqlx::query(
         "UPDATE player_season_stats
-            SET bpm = NULL, obpm = NULL, dbpm = NULL,
-                offensive_rating = NULL, defensive_rating = NULL, net_rating = NULL
+            SET offensive_rating = NULL, defensive_rating = NULL, net_rating = NULL
             WHERE season = $1",
     )
     .bind(season)

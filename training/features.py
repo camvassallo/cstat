@@ -85,10 +85,13 @@ def load_player_game_stats(engine, seasons=None) -> pd.DataFrame:
                pgs.off_rebounds, pgs.def_rebounds, pgs.total_rebounds,
                pgs.assists, pgs.turnovers, pgs.steals, pgs.blocks,
                pgs.game_score, pgs.usage_rate,
-               pgs.team_fga, pgs.team_fgm, pgs.team_turnovers,
+               pgs.team_fga, pgs.team_fgm, pgs.team_fta, pgs.team_turnovers,
+               COALESCE(tgs.minutes, 200) AS team_minutes,
                pgs.rolling_ppg, pgs.rolling_rpg, pgs.rolling_apg,
                pgs.rolling_fg_pct, pgs.rolling_ts_pct, pgs.rolling_game_score
         FROM player_game_stats pgs
+        LEFT JOIN team_game_stats tgs
+            ON tgs.game_id = pgs.game_id AND tgs.team_id = pgs.team_id
         WHERE pgs.season = ANY(%(seasons)s)
           AND pgs.minutes IS NOT NULL
           AND pgs.minutes > 0
@@ -478,10 +481,15 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
     pgs["efg_pct"] = (pgs["fgm"] + 0.5 * pgs["tpm"]) / pgs["fga"].replace(0, np.nan)
     pgs["ast_to"] = pgs["assists"] / pgs["turnovers"].replace(0, np.nan)
 
-    # Rate stats (per-40-minute proxies)
+    # Rate stats — Basketball Reference / box-score formulas (match cstat compute)
     min40 = pgs["minutes"].replace(0, np.nan) / 40.0
-    team_fga_safe = pgs["team_fga"].replace(0, np.nan)
-    pgs["ast_pct_g"] = pgs["assists"] / team_fga_safe
+    minutes_safe = pgs["minutes"].replace(0, np.nan)
+    team_minutes_fifth = (pgs["team_minutes"] / 5.0).replace(0, np.nan)
+
+    # AST% = AST / ((MP / (Tm_MP/5)) × Tm_FGM − Player_FGM)  (stored as fraction)
+    ast_denom = (minutes_safe / team_minutes_fifth) * pgs["team_fgm"] - pgs["fgm"]
+    pgs["ast_pct_g"] = pgs["assists"] / ast_denom.where(ast_denom > 0)
+
     pgs["tov_pct_g"] = pgs["turnovers"] / (pgs["fga"] + 0.44 * pgs["fta"] + pgs["turnovers"]).replace(0, np.nan)
     pgs["stl_pct_g"] = pgs["steals"] / min40
     pgs["blk_pct_g"] = pgs["blocks"] / min40
@@ -491,8 +499,10 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
     pgs["poss_used"] = pgs["poss_used"].clip(lower=0.1)
     pgs["ortg_g"] = pgs["points"] / pgs["poss_used"] * 100.0
 
-    # Usage rate from NatStat (per-game, no leakage)
-    pgs["usage_g"] = pgs["usage_rate"]
+    # USG% (Bball Ref): (Plays × Tm_MP/5) / (MP × Tm_Plays), stored as fraction
+    plays = pgs["fga"] + 0.44 * pgs["fta"] + pgs["turnovers"]
+    team_plays = (pgs["team_fga"] + 0.44 * pgs["team_fta"] + pgs["team_turnovers"]).replace(0, np.nan)
+    pgs["usage_g"] = (plays * team_minutes_fifth) / (minutes_safe * team_plays)
 
     # Stat columns to accumulate per player
     stat_cols = [
