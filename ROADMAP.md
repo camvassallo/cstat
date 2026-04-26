@@ -232,7 +232,7 @@ This naturally enables:
   - [x] Use Torvik data as ML features (GBPM as roster aggregate and star-player feature)
   - [x] Replace broken cstat BPM/OBPM/DBPM with Torvik OGBPM/DGBPM passthrough in ML features; retrain (see "cstat BPM/OBPM/DBPM Are Broken" below for resolution)
   - [ ] Use recruiting rank as early-season prior (team-avg recruit rank for first ~3 weeks when model lacks game data)
-- [ ] **Compute pipeline audit**: cross-check remaining derived metrics against Torvik (ORTG/DRTG, AST%, TOV%, USG%, game_score, adj_efficiency_margin) — see "Compute Pipeline Audit Pending" below.
+- [x] **Compute pipeline audit**: cross-checked all derived metrics against Torvik (n=3,255 qualified 2026 players); fixed ORTG/DRTG (Torvik passthrough) and AST% (added missing MP correction factor). See "Compute Pipeline Audit" below.
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
@@ -314,7 +314,7 @@ Sanity-check vs Torvik (2026, 3,255 qualified players matched):
 
 Top features now: `diff_w_gbpm` (271), `diff_w_ogbpm` (92), `diff_w_dgbpm` (80) — Torvik impact metrics dominate the model.
 
-### Compute Pipeline Audit (Findings)
+### Compute Pipeline Audit (Fixed)
 Cross-checked every cstat-computed metric against Torvik on 2026, qualified players (≥10 GP, ≥10 MPG), n=3,255.
 
 | Metric  | corr  | cstat mean | Torvik mean | bias (rescaled) | verdict |
@@ -334,30 +334,24 @@ Cross-checked every cstat-computed metric against Torvik on 2026, qualified play
 | TS%     | 0.960 |      55.49 |       54.38 |          +1.11  | ✓ healthy (after ×100) |
 | STL%    | 0.958 |       2.03 |        1.87 |          +0.16  | ✓ healthy |
 | 3P%     | 0.940 |       0.31 |        0.29 |          +0.02  | ✓ healthy |
-| **USG%** | 0.924 |  17.65    |       19.11 |          −1.46  | ⚠ NatStat methodology drift |
-| **AST%** | 0.898 |   7.42    |       12.48 |          **−5.05** | ✗ formula bug |
-| **DRTG** | 0.718 | 106.5     |      109.5  |          −3.02  | ✗ heuristic, weak corr |
-| **ORTG** | 0.702 |  92.0     |      107.5  |         **−15.5**  | ✗ heuristic, severely biased |
+| **USG%** | 0.924 |  17.65    |       19.11 |          −1.46  | ⚠ NatStat methodology drift (deferred) |
+| **AST%** | 0.898 → **0.982** |  7.42 → **13.44** | 12.48 | −5.05 → **+0.96** | ✓ formula fixed |
+| **DRTG** | 0.718 → **0.999** | 106.5 → **109.5** | 109.5 | −3.02 → **+0.01** | ✓ Torvik passthrough |
+| **ORTG** | 0.702 → **0.998** |  92.0 → **107.5** | 107.5 | −15.5 → **+0.03** | ✓ Torvik passthrough |
 
 Plus team-level checks: `adj_offense=107.3`, `adj_defense=108.6`, `adj_efficiency_margin=−1.3`, `adj_tempo=67.4` — KenPom-style values look healthy. `game_score` matches the textbook Hollinger formula. Rolling averages use a strict point-in-time `ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING` window (no leakage; partial windows for early-season games are not flagged but feed downstream features as-is).
 
-**Bugs identified (ranked by ML impact):**
+**Fixes shipped:**
 
-**P0 — Train/serve skew on `w_ortg` / `star_ortg`.** The deployed ONNX model trained on Python `ortg_g = points / poss_used × 100` (mean ~110), but Rust inference (`features.rs:149,131`) feeds `pss.offensive_rating` (mean 92, the broken heuristic). That's an ~18-point distribution shift on a feature the model has learned to weight. Same shape issue on `diff_w_ast_pct` (training: `assists/team_fga`; inference: `assists/(team_fgm−player_fgm)`) — different formulas, scale mismatch.
+- **`compute_individual_ratings`** (`compute.rs:1058`): replaced the broken Dean-Oliver-style heuristic with a Torvik `o_rtg` / `d_rtg` passthrough — same pattern as the PR #25 BPM fix. `net_rating = o_rtg − d_rtg`. Stale values are NULLed at the start of the step so unmatched players (~1.4%) don't show garbage.
+- **`compute_player_season_stats`** (`compute.rs:377`): patched AST% to use the Basketball Reference formula `AST / ((MP / (Team_MP / 5)) × Team_FGM − Player_FGM)`, aggregated over the season as `AST / (5 × ΣMP × ΣTeam_FGM / ΣTeam_MP − ΣFGM)`.
+- **Train/serve skew closed.** Python training computes `w_ortg ≈ points/poss × 100` (mean ~110); Rust inference reads `pss.offensive_rating`. Pre-fix, inference fed mean ~92 — an ~18-point distribution shift on a feature the ONNX model was trained to weight. Post-fix, inference feeds Torvik o_rtg (mean ~107). Residual ~3-point gap is methodology only (Torvik's full Dean Oliver vs Python's simplified formula). No retrain required since training reads only from raw `player_game_stats` / `team_game_stats`, never from `pss`.
 
-**P1 — Broken `compute_individual_ratings`** (`compute.rs:1058`). Same family of bug as the BPM/OBPM/DBPM problem fixed in PR #25:
-- `off_component` includes a `0.7 × (ppg/fg_pct × (1 − fg_pct))` term that pulls ORTG arbitrarily far below team mean for low-FG% scorers.
-- DRTG is `team_drtg × (1 − def_component / 100)` — barely deviates from team value, weak signal.
-- Both are surfaced on the player detail page in the UI.
-- **Recommended fix:** swap to a Torvik passthrough (`torvik_player_stats.o_rtg` / `d_rtg`) — same approach as BPM. ORTG/DRTG correlation jumps to 1.0; UI gets honest values; ML features `w_ortg`/`star_ortg` align with what training expected (Torvik ORTG mean ~107, training mean ~110 — close).
+**Deferred (low priority):**
 
-**P2 — `ast_pct` missing the MP correction factor** (`compute.rs:377`). cstat: `ast / (team_fgm − player_fgm)`. Bball Ref: `ast / ((mp / (team_mp/5)) × team_fgm − player_fgm)`. Verified: with the correction, n=3255, **r jumps 0.898 → 0.982, bias drops −5.05pp → +0.97pp, sd 3.35 → 1.48**. One-line SQL fix.
-
-**P3 — USG% drift (−1.5pp).** `pss.usage_rate` is just `AVG(per-game NatStat usgpct)`. Could switch to a box-score-derived USG% (`100 × ((FGA + 0.44×FTA + TOV) × (Tm_MP/5)) / (MP × (Tm_FGA + 0.44×Tm_FTA + Tm_TOV))`) to get off NatStat's black-box value and match Torvik. Low priority — bias is small.
-
-**P4 — TOV% drift (−2pp).** Formula matches Bball Ref; remaining gap is methodology (likely Torvik uses minutes-weighted possessions). Defer.
-
-**Cosmetic (not bugs, but a footgun):** `pss` mixes scales — shooting splits/rate stats are stored as fractions (0–1), while Torvik stores percents (0–100). Anything that joins or compares the two needs to normalize. Worth a follow-up to either rescale `pss` to percent units or add a clear convention doc.
+- **USG% (−1.5pp drift).** `pss.usage_rate` is `AVG(per-game NatStat usgpct)`; could switch to a box-score-derived USG% (`100 × ((FGA + 0.44×FTA + TOV) × (Tm_MP/5)) / (MP × (Tm_FGA + 0.44×Tm_FTA + Tm_TOV))`) to get off NatStat's black-box value and match Torvik.
+- **TOV% (−2pp drift).** Formula matches Bball Ref; remaining gap is methodology (likely Torvik uses minutes-weighted team possessions in the denominator).
+- **Mixed scale convention.** `pss` stores rate stats as fractions (0–1) while Torvik stores percents (0–100). Anything that joins or compares the two needs to normalize. Worth a follow-up to standardize.
 
 ### Player Rate Stats Were Per-40-Min Proxies (P2 — Fixed)
 `compute_player_rates` originally computed ORB%, DRB%, STL%, BLK% as per-40-minute proxies. **Fixed**: Now uses proper possession-based Basketball Reference formulas with team/opponent game stats (e.g., `ORB% = 100 × (ORB × (Tm MP / 5)) / (MP × (Tm ORB + Opp DRB))`). Also added FT Rate (FTA/FGA) and rate stat percentiles. Player name normalization (suffix stripping, punctuation removal) improved Torvik↔NatStat match rate to 98.6%.

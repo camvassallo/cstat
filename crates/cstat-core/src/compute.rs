@@ -372,11 +372,16 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
                 ELSE NULL END,
             -- Usage rate (avg of per-game NatStat usage)
             ROUND(AVG(pgs.usage_rate)::numeric, 3),
-            -- AST% = AST / (teammate FGM while player on floor)
-            -- Approximated as AST / (team_FGM - player_FGM) across the season
-            CASE WHEN SUM(COALESCE(pgs.team_fgm, 0)) - SUM(pgs.fgm) > 0
-                THEN ROUND((SUM(pgs.assists)::float /
-                    (SUM(COALESCE(pgs.team_fgm, 0))::float - SUM(pgs.fgm)::float))::numeric, 3)
+            -- AST% (Basketball Reference): AST / ((MP / (Team_MP / 5)) × Team_FGM − Player_FGM)
+            -- Stored as a fraction (multiply by 100 for percent).
+            CASE WHEN (5.0 * SUM(pgs.minutes)::float * SUM(COALESCE(pgs.team_fgm, 0))::float
+                       / NULLIF(SUM(COALESCE(tgs.minutes, 200))::float, 0)
+                       - SUM(pgs.fgm)::float) > 0
+                THEN ROUND((SUM(pgs.assists)::float / (
+                    5.0 * SUM(pgs.minutes)::float * SUM(COALESCE(pgs.team_fgm, 0))::float
+                        / NULLIF(SUM(COALESCE(tgs.minutes, 200))::float, 0)
+                    - SUM(pgs.fgm)::float
+                ))::numeric, 3)
                 ELSE NULL END,
             -- TOV% = TOV / (FGA + 0.44 * FTA + TOV)
             CASE WHEN (SUM(pgs.fga) + 0.44 * SUM(COALESCE(pgs.fta, 0)) + SUM(COALESCE(pgs.turnovers, 0))) > 0
@@ -1043,79 +1048,39 @@ pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64,
     Ok(result.rows_affected())
 }
 
-/// Compute individual offensive/defensive rating from aggregated box scores.
+/// Populate individual ORTG/DRTG/net_rating from Torvik passthrough.
 ///
-/// Offensive rating (box-score approximation, Dean Oliver simplified):
-///   PProd ≈ (FGM + AST * 0.5) * (PTS / (FGM + AST * 0.5 + FTM * 0.5)) + FTM * 0.5
-///   Individual possessions ≈ FGA + 0.44 * FTA + TOV
-///   ORTG = PProd / individual_possessions * 100, scaled by team context.
+/// The prior box-score heuristic produced unusable values — same family of
+/// formula bug as cstat's old BPM/OBPM/DBPM (see ROADMAP "Compute Pipeline
+/// Audit"). Torvik publishes per-player season ORTG/DRTG (Dean Oliver style)
+/// that correlates ~1.0 with their reference implementation; we passthrough.
 ///
-/// Defensive rating: team adj_defense scaled by individual defensive contribution.
-///
-/// Note: bpm/obpm/dbpm columns are intentionally not populated — the prior
-/// approximation produced unusable values (see ROADMAP "cstat BPM/OBPM/DBPM
-/// Are Broken"). Torvik's GBPM/OGBPM/DGBPM serves this role instead.
+/// bpm/obpm/dbpm columns are intentionally NULLed for the same reason —
+/// Torvik's GBPM/OGBPM/DGBPM serve that role and live in `torvik_player_stats`.
 pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
-    // NULL out any stale BPM/OBPM/DBPM values from prior pipeline runs so that
-    // downstream consumers see fresh NULLs instead of garbage.
+    // Clear stale heuristic values so unmatched Torvik players see NULLs
+    // instead of garbage from prior pipeline runs.
     sqlx::query(
         "UPDATE player_season_stats
-            SET bpm = NULL, obpm = NULL, dbpm = NULL
-            WHERE season = $1
-              AND (bpm IS NOT NULL OR obpm IS NOT NULL OR dbpm IS NOT NULL)",
+            SET bpm = NULL, obpm = NULL, dbpm = NULL,
+                offensive_rating = NULL, defensive_rating = NULL, net_rating = NULL
+            WHERE season = $1",
     )
     .bind(season)
     .execute(pool)
     .await?;
 
     let r1 = sqlx::query(
-        "WITH player_prod AS (
-            SELECT
-                pss.player_id, pss.team_id,
-                pss.ppg, pss.apg, pss.rpg, pss.spg, pss.bpg, pss.topg, pss.fpg,
-                pss.fg_pct, pss.ft_pct, pss.games_played, pss.minutes_per_game,
-                -- Offensive components per game
-                pss.ppg + 0.4 * (pss.ppg * COALESCE(pss.fg_pct, 0.4)) - 0.7 * (pss.ppg / NULLIF(COALESCE(pss.fg_pct, 0.4), 0) * (1 - COALESCE(pss.fg_pct, 0.4)))
-                as off_component,
-                -- Defensive components per game
-                pss.rpg * 0.3 + pss.spg + pss.bpg * 0.7 - pss.fpg * 0.4
-                as def_component,
-                -- Individual possessions per game
-                CASE WHEN pss.fg_pct IS NOT NULL AND pss.fg_pct > 0
-                    THEN pss.ppg / NULLIF(pss.fg_pct, 0) + 0.44 * COALESCE(
-                        pss.ppg * COALESCE(pss.ft_pct, 0.7) / NULLIF(COALESCE(pss.ft_pct, 0.7), 0), 0
-                    ) * 0.44 + pss.topg
-                    ELSE pss.ppg * 1.1 + pss.topg
-                END as indiv_poss,
-                tss.adj_offense as team_ortg,
-                tss.adj_defense as team_drtg
-            FROM player_season_stats pss
-            LEFT JOIN team_season_stats tss ON tss.team_id = pss.team_id AND tss.season = $1
-            WHERE pss.season = $1
-              AND pss.minutes_per_game >= 5
-              AND pss.games_played >= 3
-        )
-        UPDATE player_season_stats pss SET
-            offensive_rating = ROUND(CASE
-                WHEN pp.indiv_poss > 0 AND pp.team_ortg IS NOT NULL
-                THEN pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 0) * 0.2)
-                ELSE pp.team_ortg
-            END::numeric, 1),
-            defensive_rating = ROUND(CASE
-                WHEN pp.team_drtg IS NOT NULL
-                THEN pp.team_drtg * (1 - pp.def_component / 10.0 * 0.1)
-                ELSE NULL
-            END::numeric, 1),
-            net_rating = ROUND(CASE
-                WHEN pp.team_ortg IS NOT NULL AND pp.team_drtg IS NOT NULL
-                THEN (pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 0) * 0.2))
-                   - (pp.team_drtg * (1 - pp.def_component / 10.0 * 0.1))
-                ELSE NULL
-            END::numeric, 1)
-        FROM player_prod pp
-        WHERE pss.player_id = pp.player_id
-          AND pss.team_id = pp.team_id
-          AND pss.season = $1",
+        "UPDATE player_season_stats pss SET
+            offensive_rating = ROUND(t.o_rtg::numeric, 1),
+            defensive_rating = ROUND(t.d_rtg::numeric, 1),
+            net_rating       = ROUND((t.o_rtg - t.d_rtg)::numeric, 1)
+        FROM torvik_player_stats t
+        WHERE pss.player_id = t.player_id
+          AND pss.season = t.season
+          AND pss.season = $1
+          AND t.o_rtg IS NOT NULL
+          AND t.d_rtg IS NOT NULL",
     )
     .bind(season)
     .execute(pool)
@@ -1123,7 +1088,7 @@ pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u6
 
     info!(
         count = r1.rows_affected(),
-        season, "computed individual ORTG/DRTG (BPM intentionally NULL — use Torvik GBPM)"
+        season, "populated ORTG/DRTG from Torvik passthrough"
     );
     Ok(r1.rows_affected())
 }
