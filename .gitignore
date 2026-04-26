@@ -29,12 +29,14 @@ dist/
 __pycache__/
 *.pyc
 
-# ML models
-*.onnx
+# ML models — training intermediates are noise, but the production ONNX
+# models ship with the repo so the deploy image can bundle them.
 *.lgb
 *.pkl
 *.joblib
-training/models/
+*.onnx
+!/training/models/margin_model.onnx
+!/training/models/win_model.onnx
 
 # Logs
 /logs/
