@@ -332,7 +332,7 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
             games_played, games_started, minutes_per_game,
             ppg, rpg, apg, spg, bpg, topg, fpg,
             fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
-            usage_rate, bpm, ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct,
+            usage_rate, ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct,
             ft_rate
         )
         SELECT
@@ -372,8 +372,6 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
                 ELSE NULL END,
             -- Usage rate (avg of per-game NatStat usage)
             ROUND(AVG(pgs.usage_rate)::numeric, 3),
-            -- BPM placeholder (avg game_score as proxy until we compute real BPM)
-            ROUND(AVG(pgs.game_score)::numeric, 2),
             -- AST% = AST / (teammate FGM while player on floor)
             -- Approximated as AST / (team_FGM - player_FGM) across the season
             CASE WHEN SUM(COALESCE(pgs.team_fgm, 0)) - SUM(pgs.fgm) > 0
@@ -506,7 +504,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             ppg_pct, rpg_pct, apg_pct, spg_pct, bpg_pct,
             fg_pct_pct, tp_pct_pct, ft_pct_pct, effective_fg_pct_pct, true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
-            bpm_pct, player_sos_pct,
+            player_sos_pct,
             ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
             orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct
         )
@@ -515,7 +513,7 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
                 player_id, season, ppg, rpg, apg, spg, bpg,
                 fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
                 usage_rate, offensive_rating, defensive_rating,
-                bpm, player_sos, ast_pct, tov_pct, minutes_per_game, topg,
+                player_sos, ast_pct, tov_pct, minutes_per_game, topg,
                 orb_pct, drb_pct, stl_pct, blk_pct, ft_rate
             FROM player_season_stats
             WHERE season = $1
@@ -540,7 +538,6 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.usage_rate),
             PERCENT_RANK() OVER (ORDER BY b.offensive_rating),
             PERCENT_RANK() OVER (ORDER BY b.defensive_rating DESC),
-            PERCENT_RANK() OVER (ORDER BY b.bpm),
             PERCENT_RANK() OVER (ORDER BY b.player_sos),
             PERCENT_RANK() OVER (ORDER BY b.ast_pct),
             PERCENT_RANK() OVER (ORDER BY b.tov_pct DESC),
@@ -566,7 +563,6 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             usage_rate_pct = EXCLUDED.usage_rate_pct,
             offensive_rating_pct = EXCLUDED.offensive_rating_pct,
             defensive_rating_pct = EXCLUDED.defensive_rating_pct,
-            bpm_pct = EXCLUDED.bpm_pct,
             player_sos_pct = EXCLUDED.player_sos_pct,
             ast_pct_pct = EXCLUDED.ast_pct_pct,
             tov_pct_pct = EXCLUDED.tov_pct_pct,
@@ -1047,29 +1043,36 @@ pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64,
     Ok(result.rows_affected())
 }
 
-/// Compute individual offensive/defensive rating and BPM splits.
+/// Compute individual offensive/defensive rating from aggregated box scores.
 ///
 /// Offensive rating (box-score approximation):
 ///   Points produced per 100 possessions, using Dean Oliver's simplified formula.
-///   PProd ≈ (FGM + AST * 0.5) * (PTS / (FGM + AST * 0.5 + FTM * 0.5)) + FTM * 0.5
-///   Individual possessions ≈ FGA + 0.44 * FTA + TOV
 ///   ORTG = PProd / individual_possessions * 100
 ///
-/// Defensive rating: approximated from team defensive efficiency + individual defensive stats.
-///   Base = team adj_defense, then adjust by steal/block/rebound contribution relative to team avg.
+/// Defensive rating: team adj_defense scaled by individual defensive contribution.
 ///
-/// BPM split: use the offensive/defensive share of game_score.
-///   OBPM ≈ BPM * (off_component / total_component)
-///   DBPM ≈ BPM - OBPM
+/// Note: bpm/obpm/dbpm columns are intentionally not populated — the prior
+/// approximation produced unusable values (see ROADMAP "cstat BPM/OBPM/DBPM
+/// Are Broken"). Torvik's GBPM/OGBPM/DGBPM serves this role instead.
 pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
-    // Step 1: Compute per-player ORTG from aggregated box scores
+    // NULL out any stale BPM/OBPM/DBPM values from prior pipeline runs so that
+    // downstream consumers see fresh NULLs instead of garbage.
+    sqlx::query(
+        "UPDATE player_season_stats
+            SET bpm = NULL, obpm = NULL, dbpm = NULL
+            WHERE season = $1
+              AND (bpm IS NOT NULL OR obpm IS NOT NULL OR dbpm IS NOT NULL)",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
     let r1 = sqlx::query(
         "WITH player_prod AS (
             SELECT
                 pss.player_id, pss.team_id,
                 pss.ppg, pss.apg, pss.rpg, pss.spg, pss.bpg, pss.topg, pss.fpg,
                 pss.fg_pct, pss.ft_pct, pss.games_played, pss.minutes_per_game,
-                pss.bpm,
                 -- Offensive components per game
                 pss.ppg + 0.4 * (pss.ppg * COALESCE(pss.fg_pct, 0.4)) - 0.7 * (pss.ppg / NULLIF(COALESCE(pss.fg_pct, 0.4), 0) * (1 - COALESCE(pss.fg_pct, 0.4)))
                 as off_component,
@@ -1092,36 +1095,21 @@ pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u6
               AND pss.games_played >= 3
         )
         UPDATE player_season_stats pss SET
-            -- ORTG: scale by team context
             offensive_rating = ROUND(CASE
                 WHEN pp.indiv_poss > 0 AND pp.team_ortg IS NOT NULL
                 THEN pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 0) * 0.2)
                 ELSE pp.team_ortg
             END::numeric, 1),
-            -- DRTG: team base adjusted by individual defensive contribution
             defensive_rating = ROUND(CASE
                 WHEN pp.team_drtg IS NOT NULL
                 THEN pp.team_drtg * (1 - pp.def_component / 10.0 * 0.1)
                 ELSE NULL
             END::numeric, 1),
-            -- Net rating
             net_rating = ROUND(CASE
                 WHEN pp.team_ortg IS NOT NULL AND pp.team_drtg IS NOT NULL
                 THEN (pp.team_ortg * (1 + (pp.off_component - pp.ppg) / NULLIF(pp.ppg, 0) * 0.2))
                    - (pp.team_drtg * (1 - pp.def_component / 10.0 * 0.1))
                 ELSE NULL
-            END::numeric, 1),
-            -- BPM split: offensive share
-            obpm = ROUND(CASE
-                WHEN (pp.off_component + pp.def_component) > 0
-                THEN pp.bpm * pp.off_component / NULLIF(pp.off_component + GREATEST(pp.def_component, 0.1), 0)
-                ELSE pp.bpm * 0.6
-            END::numeric, 1),
-            -- BPM split: defensive share
-            dbpm = ROUND(CASE
-                WHEN (pp.off_component + pp.def_component) > 0
-                THEN pp.bpm * GREATEST(pp.def_component, 0.1) / NULLIF(pp.off_component + GREATEST(pp.def_component, 0.1), 0)
-                ELSE pp.bpm * 0.4
             END::numeric, 1)
         FROM player_prod pp
         WHERE pss.player_id = pp.player_id
@@ -1134,7 +1122,7 @@ pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u6
 
     info!(
         count = r1.rows_affected(),
-        season, "computed individual ORTG/DRTG and BPM splits"
+        season, "computed individual ORTG/DRTG (BPM intentionally NULL — use Torvik GBPM)"
     );
     Ok(r1.rows_affected())
 }

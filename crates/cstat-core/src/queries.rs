@@ -212,7 +212,7 @@ pub struct RosterEntry {
     pub effective_fg_pct: Option<f64>,
     pub true_shooting_pct: Option<f64>,
     pub usage_rate: Option<f64>,
-    pub bpm: Option<f64>,
+    pub gbpm: Option<f64>,
     pub offensive_rating: Option<f64>,
     pub defensive_rating: Option<f64>,
 }
@@ -560,10 +560,12 @@ pub async fn get_team_roster(
             pss.ppg, pss.rpg, pss.apg, pss.spg, pss.bpg,
             pss.fg_pct, pss.tp_pct, pss.ft_pct,
             pss.effective_fg_pct, pss.true_shooting_pct,
-            pss.usage_rate, pss.bpm,
+            pss.usage_rate,
+            tps.gbpm,
             pss.offensive_rating, pss.defensive_rating
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
+        LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
         WHERE p.team_id = $1 AND p.season = $2
         ORDER BY pss.minutes_per_game DESC NULLS LAST
         "#,

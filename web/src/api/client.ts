@@ -84,7 +84,7 @@ export interface RosterEntry {
   effective_fg_pct: number | null;
   true_shooting_pct: number | null;
   usage_rate: number | null;
-  bpm: number | null;
+  gbpm: number | null;
   offensive_rating: number | null;
   defensive_rating: number | null;
 }

@@ -37,19 +37,19 @@ pub const FEATURE_NAMES: [&str; NUM_FEATURES] = [
     "diff_w_ts_pct",
     "diff_w_efg_pct",
     "diff_w_usage",
-    "diff_w_bpm",
     "diff_w_player_sos",
-    "diff_w_obpm",
-    "diff_w_dbpm",
     "diff_w_ortg",
     "diff_w_ast_pct",
     "diff_w_tov_pct",
     "diff_w_stl_pct",
     "diff_w_blk_pct",
     "diff_w_gbpm",
+    "diff_w_ogbpm",
+    "diff_w_dgbpm",
     "diff_star_ppg",
-    "diff_star_bpm",
     "diff_star_gbpm",
+    "diff_star_ogbpm",
+    "diff_star_dgbpm",
     "diff_star_ortg",
     "diff_minutes_stddev",
     "diff_w_rolling_gs",
@@ -228,17 +228,20 @@ mod tests {
 
         let predictor = Predictor::load(&dir).unwrap();
 
-        // Strong home team: positive efficiency margin, high ELO diff
+        // Strong home team: positive efficiency margin, high ELO diff,
+        // plus a positive Torvik impact diff (now the dominant ML signal).
         let mut home_favored = [0.0_f32; NUM_FEATURES];
         home_favored[0] = 1.0; // venue = home
-        home_favored[5] = 15.0; // diff_adj_efficiency_margin
-        home_favored[16] = 100.0; // diff_elo
+        home_favored[5] = 25.0; // diff_adj_efficiency_margin
+        home_favored[16] = 200.0; // diff_elo
+        home_favored[36] = 5.0; // diff_w_gbpm
 
         // Strong away team: flip the signs
         let mut away_favored = [0.0_f32; NUM_FEATURES];
         away_favored[0] = 1.0;
-        away_favored[5] = -15.0;
-        away_favored[16] = -100.0;
+        away_favored[5] = -25.0;
+        away_favored[16] = -200.0;
+        away_favored[36] = -5.0;
 
         let pred_home = predictor.predict(&home_favored).unwrap();
         let pred_away = predictor.predict(&away_favored).unwrap();

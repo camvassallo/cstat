@@ -230,8 +230,9 @@ This naturally enables:
   - [x] Surface Torvik advanced metrics (GBPM, shot zones, recruiting rank) in player detail API
   - [x] Polish Torvik data display on player detail page (shot zone visualization, GBPM context/percentiles)
   - [x] Use Torvik data as ML features (GBPM as roster aggregate and star-player feature)
+  - [x] Replace broken cstat BPM/OBPM/DBPM with Torvik OGBPM/DGBPM passthrough in ML features; retrain (see "cstat BPM/OBPM/DBPM Are Broken" below for resolution)
   - [ ] Use recruiting rank as early-season prior (team-avg recruit rank for first ~3 weeks when model lacks game data)
-- [ ] **Compute pipeline audit**: cross-check all derived metrics against Torvik (and manual references) — see "Compute Pipeline Audit Pending" below. Top priority: replace broken cstat BPM/OBPM/DBPM with real formulas (or Torvik passthrough) and retrain ML.
+- [ ] **Compute pipeline audit**: cross-check remaining derived metrics against Torvik (ORTG/DRTG, AST%, TOV%, USG%, game_score, adj_efficiency_margin) — see "Compute Pipeline Audit Pending" below.
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
@@ -285,21 +286,33 @@ NatStat's `reb` field in both `playerperfs` and `teamperfs` represents **total r
 ### ELO Shows Rank, Not Rating (P2 — Fixed)
 NatStat's `/teams` endpoint only provides `elo.rank` (ordinal 1-364), not the actual ELO rating. **Fixed**: Real ELO ratings now ingested from dedicated `/elo` endpoint (364 teams for 2025, 365 for 2026). Ranks recomputed globally via `DENSE_RANK()` to avoid NatStat's per-page rank collision bug.
 
-### cstat BPM/OBPM/DBPM Are Broken (P1)
+### cstat BPM/OBPM/DBPM Are Broken (P1 — Fixed)
 Sanity-check vs Torvik (2026, 3,255 qualified players matched):
 - cstat OBPM ↔ Torvik OBPM: **r = 0.075**, sd of diff = 30.0
 - cstat DBPM ↔ Torvik DBPM: **r = −0.026**, sd of diff = 30.1
 - cstat BPM ↔ Torvik BPM: r = 0.523 (mean +6.54 vs Torvik −0.58 — biased and floored at 0)
 - cstat OBPM range: −1649 to +15.6; cstat DBPM range: 0.1 to +1655 (vs Torvik ±15)
 
-**Root causes** (`crates/cstat-core/src/compute.rs:376, 1059–1124`):
-1. cstat "BPM" is `AVG(game_score)` per player — not Daniel Myers BPM. Game score skews positive, so it's biased ~+7 and floored at 0.
-2. OBPM/DBPM split divides by `(off_component + def_component)`, where `off_component` includes a `ppg / fg%` term that explodes negative on low-fg% volume scorers (e.g., Rob Brown @ 35.1% → OBPM −1649, DBPM +1655).
-3. These broken values flow into `features.rs:147–148` as roster aggregates (`w_obpm`, `w_dbpm`) and into the trained ML models.
+**Root causes** (`crates/cstat-core/src/compute.rs`):
+1. cstat "BPM" was `AVG(game_score)` per player — not Daniel Myers BPM. Game score skews positive, so it was biased ~+7 and floored at 0.
+2. OBPM/DBPM split divided by `(off_component + def_component)`, where `off_component` includes a `ppg / fg%` term that explodes negative on low-fg% volume scorers (e.g., Rob Brown @ 35.1% → OBPM −1649, DBPM +1655).
+3. These broken values flowed into `features.rs` as roster aggregates (`w_bpm`, `w_obpm`, `w_dbpm`, `star_bpm`) and into the trained ML models.
 
-**Mitigation (shipped)**: PlayerDetail and PlayerCompare drop the cstat BPM rows entirely and show Torvik's `gbpm`/`ogbpm`/`dgbpm` (with percentiles) — full coverage for 2026 (3,659 qualified, 98.7% matched to cstat). GBPM is also already the #1 ML feature, so the UI now matches what the model sees.
+**Fix (shipped)**: Replaced cstat's compute with a Torvik passthrough.
+- `compute.rs`: `compute_player_season_stats` no longer populates `bpm`. `compute_individual_ratings` no longer populates `obpm`/`dbpm` (and now NULLs out any stale values). `compute_player_percentiles` no longer computes `bpm_pct`. The `pss.bpm/obpm/dbpm` columns remain in the schema as NULL — kept for now so existing API consumers don't break.
+- ML features (`features.rs` / `inference.rs` / `training/features.py`): dropped `diff_w_bpm`, `diff_w_obpm`, `diff_w_dbpm`, `diff_star_bpm`; added `diff_w_ogbpm`, `diff_w_dgbpm`, `diff_star_ogbpm`, `diff_star_dgbpm` from Torvik. Stays at 49 features.
+- API roster query (`get_team_roster`) now serves Torvik `gbpm` instead of stale `pss.bpm`. Frontend TeamDetail roster column relabeled BPM → GBPM. PlayerDetail / PlayerCompare were already Torvik-only.
 
-**Pending fix (Phase 4c)**: Implement real Basketball Reference BPM, or replace cstat's compute with Torvik values directly (and stop populating `pss.bpm`/`obpm`/`dbpm` in `compute_individual_ratings`). Retrain ML once feature is corrected.
+**Backtest comparison** (chronological 80/20, 2025+2026):
+| Metric        | Before (broken BPM) | After (Torvik OGBPM/DGBPM) |
+|---------------|---------------------|----------------------------|
+| Margin MAE    | 8.68 pts            | **8.47 pts**               |
+| Win accuracy  | 70.0%               | **71.1%**                  |
+| Win AUC       | 0.764               | **0.773**                  |
+| 5-fold CV MAE | 8.86                | **8.63**                   |
+| 5-fold CV AUC | 0.735               | **0.791**                  |
+
+Top features now: `diff_w_gbpm` (271), `diff_w_ogbpm` (92), `diff_w_dgbpm` (80) — Torvik impact metrics dominate the model.
 
 ### Compute Pipeline Audit Pending (P2)
 The BPM bug above suggests other derived metrics may be similarly off. **TODO**: cross-check each cstat-computed metric against Torvik (or a manual reference) and document drift. Specifically:
