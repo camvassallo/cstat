@@ -232,7 +232,7 @@ This naturally enables:
   - [x] Use Torvik data as ML features (GBPM as roster aggregate and star-player feature)
   - [x] Replace broken cstat BPM/OBPM/DBPM with Torvik OGBPM/DGBPM passthrough in ML features; retrain (see "cstat BPM/OBPM/DBPM Are Broken" below for resolution)
   - [ ] Use recruiting rank as early-season prior (team-avg recruit rank for first ~3 weeks when model lacks game data)
-- [x] **Compute pipeline audit**: cross-checked all derived metrics against Torvik (n=3,255 qualified 2026 players); fixed ORTG/DRTG (Torvik passthrough) and AST% (added missing MP correction factor). See "Compute Pipeline Audit" below.
+- [x] **Compute pipeline audit**: cross-checked all derived metrics against Torvik (n=3,255 qualified 2026 players); fixed ORTG/DRTG (Torvik passthrough), AST% and USG% (Basketball Reference formulas), aligned the Python training pipeline, dropped dead BPM columns, and retrained the ML model. See "Compute Pipeline Audit" below.
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
