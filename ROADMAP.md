@@ -314,16 +314,50 @@ Sanity-check vs Torvik (2026, 3,255 qualified players matched):
 
 Top features now: `diff_w_gbpm` (271), `diff_w_ogbpm` (92), `diff_w_dgbpm` (80) — Torvik impact metrics dominate the model.
 
-### Compute Pipeline Audit Pending (P2)
-The BPM bug above suggests other derived metrics may be similarly off. **TODO**: cross-check each cstat-computed metric against Torvik (or a manual reference) and document drift. Specifically:
-- `offensive_rating`/`defensive_rating` (`compute_individual_ratings`) — heuristic team-context scaling, not box-score ORTG
-- `ast_pct` derivation (uses team FGM context — verify against Basketball Reference formula)
-- `tov_pct`, `usage_rate` — confirm ingestion-time scaling matches NatStat semantics
-- `game_score` — verify Hollinger formula constants
-- `adj_efficiency_margin` — convergence vs Torvik adj_oe/adj_de
-- Rolling averages — confirm 5-game window semantics
+### Compute Pipeline Audit (Findings)
+Cross-checked every cstat-computed metric against Torvik on 2026, qualified players (≥10 GP, ≥10 MPG), n=3,255.
 
-Goal: produce a per-metric correlation table vs Torvik (where available) and a fix list ranked by ML feature importance.
+| Metric  | corr  | cstat mean | Torvik mean | bias (rescaled) | verdict |
+|---------|-------|-----------:|------------:|----------------:|---------|
+| PPG     | 0.997 |       8.61 |        8.60 |          +0.01  | ✓ healthy |
+| RPG     | 0.996 |       3.59 |        3.57 |          +0.02  | ✓ healthy |
+| APG     | 0.996 |       1.60 |        1.60 |           0.00  | ✓ healthy |
+| BPG     | 0.995 |       0.37 |        0.37 |           0.00  | ✓ healthy |
+| SPG     | 0.993 |       0.76 |        0.76 |           0.00  | ✓ healthy |
+| BLK%    | 0.990 |       2.13 |        1.98 |          +0.15  | ✓ healthy |
+| ORB%    | 0.987 |       6.11 |        5.29 |          +0.81  | ✓ healthy |
+| FT Rate | 0.987 |      35.71 |       35.88 |          −0.18  | ✓ healthy (after ×100) |
+| DRB%    | 0.984 |      14.34 |       12.91 |          +1.43  | ✓ healthy |
+| TOV%    | 0.964 |      14.42 |       16.46 |          −2.04  | ⚠ small bias (after ×100) |
+| eFG%    | 0.962 |      51.85 |       51.22 |          +0.62  | ✓ healthy (after ×100) |
+| FT%     | 0.961 |       0.71 |        0.71 |          +0.00  | ✓ healthy |
+| TS%     | 0.960 |      55.49 |       54.38 |          +1.11  | ✓ healthy (after ×100) |
+| STL%    | 0.958 |       2.03 |        1.87 |          +0.16  | ✓ healthy |
+| 3P%     | 0.940 |       0.31 |        0.29 |          +0.02  | ✓ healthy |
+| **USG%** | 0.924 |  17.65    |       19.11 |          −1.46  | ⚠ NatStat methodology drift |
+| **AST%** | 0.898 |   7.42    |       12.48 |          **−5.05** | ✗ formula bug |
+| **DRTG** | 0.718 | 106.5     |      109.5  |          −3.02  | ✗ heuristic, weak corr |
+| **ORTG** | 0.702 |  92.0     |      107.5  |         **−15.5**  | ✗ heuristic, severely biased |
+
+Plus team-level checks: `adj_offense=107.3`, `adj_defense=108.6`, `adj_efficiency_margin=−1.3`, `adj_tempo=67.4` — KenPom-style values look healthy. `game_score` matches the textbook Hollinger formula. Rolling averages use a strict point-in-time `ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING` window (no leakage; partial windows for early-season games are not flagged but feed downstream features as-is).
+
+**Bugs identified (ranked by ML impact):**
+
+**P0 — Train/serve skew on `w_ortg` / `star_ortg`.** The deployed ONNX model trained on Python `ortg_g = points / poss_used × 100` (mean ~110), but Rust inference (`features.rs:149,131`) feeds `pss.offensive_rating` (mean 92, the broken heuristic). That's an ~18-point distribution shift on a feature the model has learned to weight. Same shape issue on `diff_w_ast_pct` (training: `assists/team_fga`; inference: `assists/(team_fgm−player_fgm)`) — different formulas, scale mismatch.
+
+**P1 — Broken `compute_individual_ratings`** (`compute.rs:1058`). Same family of bug as the BPM/OBPM/DBPM problem fixed in PR #25:
+- `off_component` includes a `0.7 × (ppg/fg_pct × (1 − fg_pct))` term that pulls ORTG arbitrarily far below team mean for low-FG% scorers.
+- DRTG is `team_drtg × (1 − def_component / 100)` — barely deviates from team value, weak signal.
+- Both are surfaced on the player detail page in the UI.
+- **Recommended fix:** swap to a Torvik passthrough (`torvik_player_stats.o_rtg` / `d_rtg`) — same approach as BPM. ORTG/DRTG correlation jumps to 1.0; UI gets honest values; ML features `w_ortg`/`star_ortg` align with what training expected (Torvik ORTG mean ~107, training mean ~110 — close).
+
+**P2 — `ast_pct` missing the MP correction factor** (`compute.rs:377`). cstat: `ast / (team_fgm − player_fgm)`. Bball Ref: `ast / ((mp / (team_mp/5)) × team_fgm − player_fgm)`. Verified: with the correction, n=3255, **r jumps 0.898 → 0.982, bias drops −5.05pp → +0.97pp, sd 3.35 → 1.48**. One-line SQL fix.
+
+**P3 — USG% drift (−1.5pp).** `pss.usage_rate` is just `AVG(per-game NatStat usgpct)`. Could switch to a box-score-derived USG% (`100 × ((FGA + 0.44×FTA + TOV) × (Tm_MP/5)) / (MP × (Tm_FGA + 0.44×Tm_FTA + Tm_TOV))`) to get off NatStat's black-box value and match Torvik. Low priority — bias is small.
+
+**P4 — TOV% drift (−2pp).** Formula matches Bball Ref; remaining gap is methodology (likely Torvik uses minutes-weighted possessions). Defer.
+
+**Cosmetic (not bugs, but a footgun):** `pss` mixes scales — shooting splits/rate stats are stored as fractions (0–1), while Torvik stores percents (0–100). Anything that joins or compares the two needs to normalize. Worth a follow-up to either rescale `pss` to percent units or add a clear convention doc.
 
 ### Player Rate Stats Were Per-40-Min Proxies (P2 — Fixed)
 `compute_player_rates` originally computed ORB%, DRB%, STL%, BLK% as per-40-minute proxies. **Fixed**: Now uses proper possession-based Basketball Reference formulas with team/opponent game stats (e.g., `ORB% = 100 × (ORB × (Tm MP / 5)) / (MP × (Tm ORB + Opp DRB))`). Also added FT Rate (FTA/FGA) and rate stat percentiles. Player name normalization (suffix stripping, punctuation removal) improved Torvik↔NatStat match rate to 98.6%.
