@@ -9,7 +9,7 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Build the Rust workspace ────────────────────────────────
-FROM rust:1-bookworm AS rust-build
+FROM rust:1-trixie AS rust-build
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,8 +23,7 @@ COPY migrations/ migrations/
 # Build release binaries, then stage them along with any onnxruntime shared
 # libs `ort` downloaded into target/. The libs are needed at runtime for
 # dynamic linking; `find` finds nothing if ort static-links, which is fine.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release --bin cstat-api --bin cstat-ingest \
+RUN cargo build --release --bin cstat-api --bin cstat-ingest \
  && mkdir -p /artifacts/bin /artifacts/lib \
  && cp target/release/cstat-api target/release/cstat-ingest /artifacts/bin/ \
  && find target -name 'libonnxruntime.so*' -print -exec cp -P {} /artifacts/lib/ \; \
@@ -32,7 +31,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && ls -la /artifacts/bin/ /artifacts/lib/
 
 # ── Stage 3: Slim runtime image ──────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

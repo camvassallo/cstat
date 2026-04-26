@@ -238,8 +238,12 @@ This naturally enables:
 - [x] **Compute pipeline audit**: cross-checked all derived metrics against Torvik (n=3,255 qualified 2026 players); fixed ORTG/DRTG (Torvik passthrough), AST% and USG% (Basketball Reference formulas), aligned the Python training pipeline, dropped dead BPM columns, and retrained the ML model. See "Compute Pipeline Audit" below.
 
 ### 4d: Deployment
-- [ ] Deploy to domain with Nginx reverse proxy
+- [x] Containerize for Railway: multi-stage Dockerfile (Vite + Rust → slim Debian trixie runtime), `railway.json` with Dockerfile builder
+- [x] Deploy to Railway (managed Postgres plugin, public domain on `*.up.railway.app`, ONNX models bundled in image)
+- [x] Seed production DB via `pg_dump`/`psql` from local snapshot (full schema + computed tables + cache)
 - [x] Serve React build from cstat-api (static file fallback)
+- [ ] Custom domain on `campom.org` (Cloudflare CNAME → Railway, TLS via Railway/Let's Encrypt)
+- [ ] **Auto data consumer (in-season cron)**: Railway cron service running `cstat-ingest update --year <YYYY> && cstat-ingest compute --year <YYYY>` nightly during the season to fetch new games and refresh derived metrics. Deferred until next season tips off — offseason has no new games to consume. Same Docker image as the API service, scheduled via Railway's cron, sharing the Postgres plugin and `NATSTAT_API_KEY` env. Rate-limit budget: ~57 forecast calls + per-team perfs, well under the 500/hr NatStat ceiling.
 
 ### 4e: Bracketology & Tournament Resume
 - [ ] **Quad 1-4 record tracking**: classify each game by NET-style quadrants (home/away/neutral × opponent rank tier)
