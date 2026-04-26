@@ -189,6 +189,8 @@ This naturally enables:
 - [x] Player stats table (sortable, with search)
 - [x] Player detail page (season stats, rolling form charts, percentile spider/radar)
 - [x] Player comparison view (side-by-side stats + visualizations) — picker, color-coded chips, per-stat percentile bars, overlaid radar + rolling game-score lines
+- [ ] **Player comparison advantage indicators**: percentile-aware advantage chips on the comparison page. Each row gets a tiered chip on the leading value — `EDGE` (small percentile gap), `ADVANTAGE` (medium), `DOMINANT` (large) — so a 2-PPG gap between the 95th and 80th percentile reads differently than a 2-PPG gap mid-pack. Direction-aware (lower-is-better for TOV%, fouls, etc.). Show raw delta alongside the chip; toggle to hide chips entirely.
+  - [ ] *Stretch (lands with Phase 5a):* **Duel mode** — frame the comparison as a D&D-style combat where each stat row is a "round," winner takes the round, and the header shows the round count (e.g., "*Wizard 11, Ranger 7*"). Reuses the archetype names from 5a and gives the page a shareable summary line.
 - [x] Game prediction interface (pick two teams → predicted margin + win prob)
 - [ ] **Game prediction explainability**: per-prediction attribution panel showing top contributing features (e.g., "Duke +5 from GBPM gap, +3 from defense, −2 road game"). Export SHAP values from training, expose via API, render as a horizontal bar breakdown beneath the margin/win prob.
 - [ ] Score ticker / recent results
