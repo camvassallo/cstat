@@ -1,22 +1,22 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchArchetypes, type ArchetypeClassInfo } from '../api/client';
-import { classColor } from '../components/archetypeColors';
+import { classColor, classTagline } from '../components/archetypeColors';
 
 interface ClassDef {
   name: string;
-  tagline: string;
   description: string;
   signature: string[];   // "high X" / "low Y" badges
   comparable: string;    // pro / college parallel
 }
 
 // Hand-written descriptions paired with the signatures in
-// `training/archetypes.py`. Kept to roughly equal length per card.
+// `training/archetypes.py`. Taglines come from the shared `classTagline()`
+// (single source of truth, also used by hover tooltips). Keep description
+// lengths roughly even so the cards line up.
 const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Wizard',
-    tagline: 'Pure floor general.',
     description:
       'Elite assist rate paired with low turnovers and heavy minutes. Orchestrates every possession from the perimeter rather than hunting shots at the rim.',
     signature: ['high AST%', 'low TOV%', 'heavy minutes'],
@@ -24,7 +24,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Sorcerer',
-    tagline: 'Star scorer.',
     description:
       'The team\'s primary creator and finisher. Highest-USG class in the dataset paired with strong OGBPM and big minutes — everything runs through them.',
     signature: ['highest USG%', 'high OGBPM', 'heavy minutes'],
@@ -32,7 +31,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Warlock',
-    tagline: 'Chaos gunner.',
     description:
       'Lives and dies from beyond the arc. Heaviest three-point volume of any class, with above-average usage and below-average rim attacks. Boom-or-bust scoring.',
     signature: ['heavy 3PA share', 'high USG%', 'low rim share'],
@@ -40,7 +38,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Bard',
-    tagline: 'Pass-first playmaker.',
     description:
       'Distributes more than they hunt. High assist rate with modest usage — they\'d rather set up a teammate than take the shot themselves.',
     signature: ['high AST%', 'low USG%', 'positive OGBPM'],
@@ -48,7 +45,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Ranger',
-    tagline: '3-and-D wing.',
     description:
       'The complementary perimeter piece. Lives behind the arc and racks up steals on the other end without dominating the ball or the offensive plan.',
     signature: ['heavy 3PA share', 'high STL%', 'low USG%'],
@@ -56,7 +52,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Barbarian',
-    tagline: 'Rim attacker.',
     description:
       'Drives, dunks, and gets fouled. The highest free-throw rate of any class — they earn their points by going through people instead of around them.',
     signature: ['highest FT Rate', 'high rim share', 'low 3PA share'],
@@ -64,7 +59,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Paladin',
-    tagline: 'Two-way anchor.',
     description:
       'The rim protector and defensive leader. Elite block rate paired with strong DGBPM and defensive rebounding — the wall in the paint, low offensive usage.',
     signature: ['elite BLK%', 'high DGBPM', 'strong DRB%'],
@@ -72,7 +66,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Monk',
-    tagline: 'Efficient role player.',
     description:
       'Doesn\'t make mistakes. Lowest TOV rate of any class, modest usage, positive impact. The "play 30 minutes, post a clean line" archetype.',
     signature: ['lowest TOV%', 'modest USG%', 'positive OGBPM'],
@@ -80,7 +73,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Cleric',
-    tagline: 'Glue connector.',
     description:
       'Holds the rotation together without dominating any column. Defensive rebounds, occasional creation, low usage — the lineup just runs better with them on the floor.',
     signature: ['solid DRB%', 'modest DGBPM', 'low USG%'],
@@ -88,7 +80,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Druid',
-    tagline: 'Frontcourt anchor.',
     description:
       'High-impact interior big. Owns the glass, finishes inside, blocks shots, posts positive two-way GBPM. Secondary class flags scoring-stretch (/Sorcerer) vs defense-first (/Paladin).',
     signature: ['high rim share', 'elite rebounding', 'two-way impact'],
@@ -96,7 +87,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Rogue',
-    tagline: 'Event creator.',
     description:
       'Disruptive on defense. Above-average steal AND block rate simultaneously — opportunistic, off-ball, makes things happen without dominating possessions.',
     signature: ['high STL%', 'high BLK%', 'low USG%'],
@@ -104,7 +94,6 @@ const CLASS_DEFS: ClassDef[] = [
   },
   {
     name: 'Fighter',
-    tagline: 'Balanced two-way.',
     description:
       'No single specialty. Solid contributors across the board without elite production in any one area — the catch-all for players who don\'t fit a sharper mold.',
     signature: ['no specialty', 'positive OGBPM/DGBPM', 'steady minutes'],
@@ -130,7 +119,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
             </span>
           )}
         </div>
-        <div className="text-sm text-gray-300 mt-0.5">{def.tagline}</div>
+        <div className="text-sm text-gray-300 mt-0.5">{classTagline(def.name)}</div>
       </div>
       <div className="p-4 flex-1 space-y-3">
         <p className="text-sm text-gray-300 leading-relaxed">{def.description}</p>

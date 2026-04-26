@@ -7,8 +7,11 @@ k-means with k=12, then assigns each cluster to one of 12 D&D-class archetypes
 via a Hungarian-matched score against per-archetype "signature" templates.
 
 Writes results to `player_archetypes` (one row per player-season) and stashes
-centroids + scaler params in `archetype_models` so the API can answer
-"most similar players" / "what would Player X be" without re-running clustering.
+centroids + scaler params in `archetype_models`. The model table is currently
+unread by the API — `get_similar_players` works directly off the per-row
+`feature_vector` column. The model table is kept so a future endpoint can
+classify an arbitrary feature vector (hypothetical roster, "what would
+Player X be?") against existing centroids without re-running clustering.
 
 Usage: `python -m training.archetypes --season 2026`
 """
@@ -272,7 +275,6 @@ def match_clusters_to_classes(centroids: np.ndarray) -> dict[int, str]:
 
 def write_results(engine, season: int, df: pd.DataFrame, result: ClusterResult):
     cluster_to_class = result.cluster_to_class
-    class_to_idx = {cls: i for i, cls in enumerate(CLASSES)}
 
     rows = []
     for i, row in df.iterrows():
@@ -371,7 +373,6 @@ def write_results(engine, season: int, df: pd.DataFrame, result: ClusterResult):
                 "n_qualified": len(rows),
             },
         )
-    class_to_idx  # silence linter (kept for potential downstream use)
 
 
 def print_diagnostics(df: pd.DataFrame, result: ClusterResult):

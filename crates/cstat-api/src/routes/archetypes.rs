@@ -76,7 +76,6 @@ async fn archetypes_index(
                 "name": c.primary_class,
                 "count": c.count,
                 "mean_gbpm": c.mean_gbpm,
-                "mean_usage_rate": c.mean_usage_rate,
                 "exemplars": players,
             })
         })

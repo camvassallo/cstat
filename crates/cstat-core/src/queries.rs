@@ -1087,9 +1087,20 @@ pub async fn get_archetype_exemplars(
     // ensures membership; ordering by GBPM surfaces the highest-impact (and
     // most recognizable) representatives. Going by raw fit-purity instead
     // returned obscure role players.
+    //
+    // Torvik can have multiple rows per (player_id, season) for transfer
+    // players (different torvik_pid per stint), so we pre-aggregate to one
+    // row per player before joining — otherwise ROW_NUMBER counts the
+    // duplicates and we end up with the same name twice in a class.
     sqlx::query_as::<_, ArchetypeExemplar>(
         r#"
-        WITH ranked AS (
+        WITH torvik_dedup AS (
+            SELECT player_id, MAX(gbpm) AS gbpm
+            FROM torvik_player_stats
+            WHERE season = $1 AND player_id IS NOT NULL
+            GROUP BY player_id
+        ),
+        ranked AS (
             SELECT
                 pa.primary_class,
                 pa.primary_score,
@@ -1099,12 +1110,12 @@ pub async fn get_archetype_exemplars(
                 t.name AS team_name,
                 ROW_NUMBER() OVER (
                     PARTITION BY pa.primary_class
-                    ORDER BY COALESCE(tps.gbpm, -99) DESC, pa.primary_score DESC
+                    ORDER BY tps.gbpm DESC NULLS LAST, pa.primary_score DESC
                 ) AS rn
             FROM player_archetypes pa
             JOIN players p ON p.id = pa.player_id
             LEFT JOIN teams t ON t.id = p.team_id AND t.season = pa.season
-            LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pa.season
+            LEFT JOIN torvik_dedup tps ON tps.player_id = p.id
             WHERE pa.season = $1
         )
         SELECT primary_class, player_id, name, team_id, team_name, primary_score
@@ -1145,26 +1156,29 @@ pub struct ArchetypeClassSummary {
     /// Mean GBPM (overall two-way impact) across cluster members. Used for
     /// ordering archetypes from most to least impactful on the glossary page.
     pub mean_gbpm: Option<f64>,
-    pub mean_usage_rate: Option<f64>,
 }
 
 pub async fn get_archetype_class_summary(
     pool: &PgPool,
     season: i32,
 ) -> Result<Vec<ArchetypeClassSummary>, sqlx::Error> {
+    // Pre-dedupe Torvik to one row per player_id — transfer players can have
+    // multiple torvik_pid stints for the same season, which would inflate
+    // COUNT(*) and skew AVG(gbpm) when joined directly.
     sqlx::query_as::<_, ArchetypeClassSummary>(
         r#"
+        WITH torvik_dedup AS (
+            SELECT player_id, AVG(gbpm) AS gbpm
+            FROM torvik_player_stats
+            WHERE season = $1 AND player_id IS NOT NULL
+            GROUP BY player_id
+        )
         SELECT
             pa.primary_class,
             COUNT(*) AS count,
-            AVG(tps.gbpm) AS mean_gbpm,
-            AVG(pss.usage_rate) AS mean_usage_rate
+            AVG(tps.gbpm) AS mean_gbpm
         FROM player_archetypes pa
-        JOIN players p ON p.id = pa.player_id
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = p.id AND tps.season = pa.season
-        LEFT JOIN player_season_stats pss
-            ON pss.player_id = p.id AND pss.season = pa.season
+        LEFT JOIN torvik_dedup tps ON tps.player_id = pa.player_id
         WHERE pa.season = $1
         GROUP BY pa.primary_class
         ORDER BY mean_gbpm DESC NULLS LAST
