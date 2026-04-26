@@ -1,0 +1,42 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Frontend artifacts (rebuilt inside the image)
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Git metadata (not needed for the build)
+.git/
+.github/
+
+# Editor / OS junk
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs / pids
+logs/
+*.log
+*.pid
+
+# Python training
+training/.venv/
+training/__pycache__/
+training/**/__pycache__/
+training/data/
+*.lgb
+*.pkl
+*.joblib
+
+# Local docker compose (dev only)
+docker-compose.yml
+start.sh

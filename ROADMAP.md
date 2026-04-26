@@ -189,7 +189,10 @@ This naturally enables:
 - [x] Player stats table (sortable, with search)
 - [x] Player detail page (season stats, rolling form charts, percentile spider/radar)
 - [x] Player comparison view (side-by-side stats + visualizations) — picker, color-coded chips, per-stat percentile bars, overlaid radar + rolling game-score lines
+- [ ] **Player comparison advantage indicators**: percentile-aware advantage chips on the comparison page. Each row gets a tiered chip on the leading value — `EDGE` (small percentile gap), `ADVANTAGE` (medium), `DOMINANT` (large) — so a 2-PPG gap between the 95th and 80th percentile reads differently than a 2-PPG gap mid-pack. Direction-aware (lower-is-better for TOV%, fouls, etc.). Show raw delta alongside the chip; toggle to hide chips entirely.
+  - [ ] *Stretch (lands with Phase 5a):* **Duel mode** — frame the comparison as a D&D-style combat where each stat row is a "round," winner takes the round, and the header shows the round count (e.g., "*Wizard 11, Ranger 7*"). Reuses the archetype names from 5a and gives the page a shareable summary line.
 - [x] Game prediction interface (pick two teams → predicted margin + win prob)
+- [ ] **Game prediction explainability**: per-prediction attribution panel showing top contributing features (e.g., "Duke +5 from GBPM gap, +3 from defense, −2 road game"). Export SHAP values from training, expose via API, render as a horizontal bar breakdown beneath the margin/win prob.
 - [ ] Score ticker / recent results
 - [ ] Mobile-responsive design
 
@@ -232,21 +235,55 @@ This naturally enables:
   - [x] Use Torvik data as ML features (GBPM as roster aggregate and star-player feature)
   - [x] Replace broken cstat BPM/OBPM/DBPM with Torvik OGBPM/DGBPM passthrough in ML features; retrain (see "cstat BPM/OBPM/DBPM Are Broken" below for resolution)
   - [ ] Use recruiting rank as early-season prior (team-avg recruit rank for first ~3 weeks when model lacks game data)
-- [x] **Compute pipeline audit**: cross-checked all derived metrics against Torvik (n=3,255 qualified 2026 players); fixed ORTG/DRTG (Torvik passthrough) and AST% (added missing MP correction factor). See "Compute Pipeline Audit" below.
+- [x] **Compute pipeline audit**: cross-checked all derived metrics against Torvik (n=3,255 qualified 2026 players); fixed ORTG/DRTG (Torvik passthrough), AST% and USG% (Basketball Reference formulas), aligned the Python training pipeline, dropped dead BPM columns, and retrained the ML model. See "Compute Pipeline Audit" below.
 
 ### 4d: Deployment
 - [ ] Deploy to domain with Nginx reverse proxy
 - [x] Serve React build from cstat-api (static file fallback)
 
+### 4e: Bracketology & Tournament Resume
+- [ ] **Quad 1-4 record tracking**: classify each game by NET-style quadrants (home/away/neutral × opponent rank tier)
+- [ ] **Resume page per team**: Q1-Q4 records, signature wins, bad losses, projected seed, bid status (auto / at-large / bubble / out)
+- [ ] **NET-replica ranking**: blend Team Value Index (win-based) with adjusted efficiency margin to approximate the NCAA NET; calibrate against published NET when in season
+- [ ] **Bracket projector**: Monte Carlo over remaining schedule + auto-bid logic to project the field of 68
+- [ ] **Bubble watch dashboard**: at-large probability per team with week-over-week movement indicators
+- [ ] API endpoints for resume + bracket queries
+- [ ] Frontend: Resume tab on TeamDetail, dedicated Bracketology page
+
 ---
 
-## Phase 5: Transfer Portal & Roster Composition Tool
-> "What if" roster analysis for the offseason
+## Phase 5: Player Archetypes & Roster Composition
+> Cluster players into fantasy-flavored skill archetypes, then build "what if" roster tools on top
 
+### 5a: Player Archetype Engine (D&D Classes)
+Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate stats, GBPM components, usage profile). Each player gets a primary class plus secondary-class affinity scores. The naming makes the surface fun and inherently shareable, while the underlying clusters power roster fit scoring in 5b.
+
+- [ ] Feature vector per player-season: shot zone share, AST%, USG%, ORB%/DRB%, STL%, BLK%, FT Rate, 3PA rate, OGBPM/DGBPM, MP%
+- [ ] K-means / GMM clustering with k=10-12; validate cluster stability across seasons via `adjusted_rand_score` between 2025/2026 cohorts
+- [ ] Archetype taxonomy (working set — names finalized once clusters land):
+  - **Wizard** — Pure floor general (high AST%, low TOV%, controls tempo)
+  - **Sorcerer** — Star scorer / volume creator (high USG%, leads team in points, efficient)
+  - **Warlock** — High-variance gunner (heavy 3PA, boom-or-bust efficiency)
+  - **Bard** — Pass-first playmaker (high AST%, lower USG, elevates teammates)
+  - **Ranger** — 3-and-D wing (3P% + STL%, perimeter sniper/defender)
+  - **Barbarian** — Slasher / rim attacker (high FT rate, drives, physical)
+  - **Paladin** — Two-way anchor (BLK% + high TS%, defensive leader)
+  - **Monk** — High-efficiency role player (elite TS%, low TOV%, disciplined)
+  - **Cleric** — Glue guy / connector (defensive intangibles, screens, hustle)
+  - **Druid** — Positionless big (stretch + interior, plays inside/out)
+  - **Rogue** — Event creator (high STL%/BLK%, off-ball opportunist)
+  - **Fighter** — Balanced two-way wing (no specialty, solid all-around)
+- [ ] Migration: `player_archetypes` table (`player_id`, `season`, `primary_class`, `secondary_class`, `affinity_scores` JSONB, `feature_vector` REAL[])
+- [ ] API: `GET /api/players/:id/archetype`, `GET /api/players/:id/similar?k=10` (cosine similarity over normalized feature vectors, optionally filtered by team/conf/class year)
+- [ ] Player detail UI: archetype badge with hover-tooltip showing affinity bars; "Most Similar Players" carousel with similarity scores
+- [ ] Team detail UI: roster archetype distribution (e.g., "this team rolls 3 Rangers, 1 Druid, 1 Sorcerer") and a balance score
+- [ ] Easter egg: D&D alignment grid placement on player profile (Lawful Good ≈ Monk/Paladin, Chaotic Evil ≈ Warlock/Sorcerer) — half joke, half discovery surface
+
+### 5b: Roster Composition & Transfer Portal Sandbox
 - [ ] Player search and comparison across all teams
 - [ ] "What if Player X transfers to Team Y?" — recompose team strength
-- [ ] Roster fit scoring (complementary skills, redundancy detection)
-- [ ] Portal player rankings by projected impact at destination
+- [ ] Roster fit scoring built on archetypes (redundancy detection: "team has 3 Sorcerers, missing a Cleric")
+- [ ] Portal player rankings by projected impact at destination (Δteam rating including archetype fit bonus/penalty)
 - [ ] API endpoints for all composition queries
 - [ ] Transfer portal sandbox UI
 

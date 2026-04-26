@@ -86,7 +86,11 @@ async fn main() -> Result<()> {
         .with_state(state)
         .fallback_service(spa);
 
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| {
+        std::env::var("PORT")
+            .map(|p| format!("0.0.0.0:{p}"))
+            .unwrap_or_else(|_| "0.0.0.0:8080".into())
+    });
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     info!("listening on {}", bind_addr);
     axum::serve(listener, app).await?;
