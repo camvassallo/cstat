@@ -190,6 +190,7 @@ This naturally enables:
 - [x] Player detail page (season stats, rolling form charts, percentile spider/radar)
 - [x] Player comparison view (side-by-side stats + visualizations) — picker, color-coded chips, per-stat percentile bars, overlaid radar + rolling game-score lines
 - [x] Game prediction interface (pick two teams → predicted margin + win prob)
+- [ ] **Game prediction explainability**: per-prediction attribution panel showing top contributing features (e.g., "Duke +5 from GBPM gap, +3 from defense, −2 road game"). Export SHAP values from training, expose via API, render as a horizontal bar breakdown beneath the margin/win prob.
 - [ ] Score ticker / recent results
 - [ ] Mobile-responsive design
 
@@ -238,15 +239,49 @@ This naturally enables:
 - [ ] Deploy to domain with Nginx reverse proxy
 - [x] Serve React build from cstat-api (static file fallback)
 
+### 4e: Bracketology & Tournament Resume
+- [ ] **Quad 1-4 record tracking**: classify each game by NET-style quadrants (home/away/neutral × opponent rank tier)
+- [ ] **Resume page per team**: Q1-Q4 records, signature wins, bad losses, projected seed, bid status (auto / at-large / bubble / out)
+- [ ] **NET-replica ranking**: blend Team Value Index (win-based) with adjusted efficiency margin to approximate the NCAA NET; calibrate against published NET when in season
+- [ ] **Bracket projector**: Monte Carlo over remaining schedule + auto-bid logic to project the field of 68
+- [ ] **Bubble watch dashboard**: at-large probability per team with week-over-week movement indicators
+- [ ] API endpoints for resume + bracket queries
+- [ ] Frontend: Resume tab on TeamDetail, dedicated Bracketology page
+
 ---
 
-## Phase 5: Transfer Portal & Roster Composition Tool
-> "What if" roster analysis for the offseason
+## Phase 5: Player Archetypes & Roster Composition
+> Cluster players into fantasy-flavored skill archetypes, then build "what if" roster tools on top
 
+### 5a: Player Archetype Engine (D&D Classes)
+Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate stats, GBPM components, usage profile). Each player gets a primary class plus secondary-class affinity scores. The naming makes the surface fun and inherently shareable, while the underlying clusters power roster fit scoring in 5b.
+
+- [ ] Feature vector per player-season: shot zone share, AST%, USG%, ORB%/DRB%, STL%, BLK%, FT Rate, 3PA rate, OGBPM/DGBPM, MP%
+- [ ] K-means / GMM clustering with k=10-12; validate cluster stability across seasons via `adjusted_rand_score` between 2025/2026 cohorts
+- [ ] Archetype taxonomy (working set — names finalized once clusters land):
+  - **Wizard** — Pure floor general (high AST%, low TOV%, controls tempo)
+  - **Sorcerer** — Star scorer / volume creator (high USG%, leads team in points, efficient)
+  - **Warlock** — High-variance gunner (heavy 3PA, boom-or-bust efficiency)
+  - **Bard** — Pass-first playmaker (high AST%, lower USG, elevates teammates)
+  - **Ranger** — 3-and-D wing (3P% + STL%, perimeter sniper/defender)
+  - **Barbarian** — Slasher / rim attacker (high FT rate, drives, physical)
+  - **Paladin** — Two-way anchor (BLK% + high TS%, defensive leader)
+  - **Monk** — High-efficiency role player (elite TS%, low TOV%, disciplined)
+  - **Cleric** — Glue guy / connector (defensive intangibles, screens, hustle)
+  - **Druid** — Positionless big (stretch + interior, plays inside/out)
+  - **Rogue** — Event creator (high STL%/BLK%, off-ball opportunist)
+  - **Fighter** — Balanced two-way wing (no specialty, solid all-around)
+- [ ] Migration: `player_archetypes` table (`player_id`, `season`, `primary_class`, `secondary_class`, `affinity_scores` JSONB, `feature_vector` REAL[])
+- [ ] API: `GET /api/players/:id/archetype`, `GET /api/players/:id/similar?k=10` (cosine similarity over normalized feature vectors, optionally filtered by team/conf/class year)
+- [ ] Player detail UI: archetype badge with hover-tooltip showing affinity bars; "Most Similar Players" carousel with similarity scores
+- [ ] Team detail UI: roster archetype distribution (e.g., "this team rolls 3 Rangers, 1 Druid, 1 Sorcerer") and a balance score
+- [ ] Easter egg: D&D alignment grid placement on player profile (Lawful Good ≈ Monk/Paladin, Chaotic Evil ≈ Warlock/Sorcerer) — half joke, half discovery surface
+
+### 5b: Roster Composition & Transfer Portal Sandbox
 - [ ] Player search and comparison across all teams
 - [ ] "What if Player X transfers to Team Y?" — recompose team strength
-- [ ] Roster fit scoring (complementary skills, redundancy detection)
-- [ ] Portal player rankings by projected impact at destination
+- [ ] Roster fit scoring built on archetypes (redundancy detection: "team has 3 Sorcerers, missing a Cleric")
+- [ ] Portal player rankings by projected impact at destination (Δteam rating including archetype fit bonus/penalty)
 - [ ] API endpoints for all composition queries
 - [ ] Transfer portal sandbox UI
 
