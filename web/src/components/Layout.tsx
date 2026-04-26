@@ -19,7 +19,7 @@ export default function Layout() {
     <div className="min-h-screen flex flex-col bg-gray-900">
       <nav className="bg-gray-950 border-b border-gray-800 px-6 py-3 flex items-center gap-8">
         <NavLink to="/" className="text-xl font-bold text-blue-400 tracking-tight">
-          cstat
+          CamPom
         </NavLink>
         <div className="flex gap-1">
           <NavLink to="/" end className={({ isActive }) => navLinkClass(isActive)}>
