@@ -20,10 +20,16 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY migrations/ migrations/
 
+# Build release binaries, then stage them along with any onnxruntime shared
+# libs `ort` downloaded into target/. The libs are needed at runtime for
+# dynamic linking; `find` finds nothing if ort static-links, which is fine.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
     cargo build --release --bin cstat-api --bin cstat-ingest \
- && cp target/release/cstat-api target/release/cstat-ingest /usr/local/bin/
+ && mkdir -p /artifacts/bin /artifacts/lib \
+ && cp target/release/cstat-api target/release/cstat-ingest /artifacts/bin/ \
+ && find target -name 'libonnxruntime.so*' -print -exec cp -P {} /artifacts/lib/ \; \
+ && touch /artifacts/lib/.keep \
+ && ls -la /artifacts/bin/ /artifacts/lib/
 
 # ── Stage 3: Slim runtime image ──────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -36,8 +42,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && mkdir -p /app/web /app/training/models \
  && chown -R cstat:cstat /app
 
-COPY --from=rust-build /usr/local/bin/cstat-api  /usr/local/bin/cstat-api
-COPY --from=rust-build /usr/local/bin/cstat-ingest /usr/local/bin/cstat-ingest
+COPY --from=rust-build /artifacts/bin/cstat-api  /usr/local/bin/cstat-api
+COPY --from=rust-build /artifacts/bin/cstat-ingest /usr/local/bin/cstat-ingest
+COPY --from=rust-build /artifacts/lib/ /usr/local/lib/onnxruntime/
+RUN echo /usr/local/lib/onnxruntime > /etc/ld.so.conf.d/onnxruntime.conf && ldconfig
+
 COPY --from=web-build  /web/dist /app/web/dist
 COPY training/models/margin_model.onnx \
      training/models/win_model.onnx \
