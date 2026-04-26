@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { fetchTeamDetail, type TeamProfile, type ScheduleEntry, type RosterEntry } from '../api/client';
+import {
+  fetchTeamDetail,
+  type TeamProfile,
+  type ScheduleEntry,
+  type RosterEntry,
+  type ArchetypeCount,
+} from '../api/client';
+import { classColor } from '../components/archetypeColors';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -53,6 +60,7 @@ export default function TeamDetail() {
   const [team, setTeam] = useState<TeamProfile | null>(null);
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [archetypeDist, setArchetypeDist] = useState<ArchetypeCount[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -62,9 +70,22 @@ export default function TeamDetail() {
         setTeam(r.team);
         setSchedule(r.schedule);
         setRoster(r.roster);
+        setArchetypeDist(r.archetype_distribution);
       })
       .finally(() => setLoading(false));
   }, [id]);
+
+  // Balance score: normalized Shannon entropy of archetype distribution.
+  // 1.0 = maximally diverse, 0 = single-class roster.
+  const balance = useMemo(() => {
+    const total = archetypeDist.reduce((s, a) => s + a.count, 0);
+    if (total < 2 || archetypeDist.length < 2) return null;
+    const entropy = archetypeDist.reduce((s, a) => {
+      const p = a.count / total;
+      return s + (p > 0 ? -p * Math.log(p) : 0);
+    }, 0);
+    return entropy / Math.log(archetypeDist.length);
+  }, [archetypeDist]);
 
   if (loading) return <div className="text-gray-400">Loading...</div>;
   if (!team) return <div className="text-red-400">Team not found</div>;
@@ -95,6 +116,67 @@ export default function TeamDetail() {
         <FourFactors team={team} label="Defense" />
       </div>
 
+      {/* Archetype Distribution */}
+      {archetypeDist.length > 0 && (
+        <div className="bg-gray-800 rounded-lg p-5">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h2 className="text-lg font-bold">Roster Archetypes</h2>
+            {balance != null && (
+              <span className="text-xs text-gray-400">
+                Balance:{' '}
+                <span className="font-bold text-gray-200">
+                  {(balance * 100).toFixed(0)}%
+                </span>
+                <span className="text-gray-500 ml-1">
+                  ({balance >= 0.85 ? 'very diverse'
+                    : balance >= 0.7 ? 'diverse'
+                    : balance >= 0.5 ? 'balanced'
+                    : balance >= 0.3 ? 'narrow'
+                    : 'single-style'})
+                </span>
+              </span>
+            )}
+          </div>
+          {(() => {
+            const total = archetypeDist.reduce((s, a) => s + a.count, 0);
+            return (
+              <div className="space-y-2">
+                <div className="flex h-3 rounded overflow-hidden bg-gray-900">
+                  {archetypeDist.map((a) => (
+                    <div
+                      key={a.primary_class}
+                      className="h-3"
+                      style={{
+                        flexBasis: `${(a.count / total) * 100}%`,
+                        background: classColor(a.primary_class),
+                      }}
+                      title={`${a.primary_class}: ${a.count}`}
+                    />
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {archetypeDist.map((a) => (
+                    <span
+                      key={a.primary_class}
+                      className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-gray-900"
+                    >
+                      <span
+                        className="inline-block w-2 h-2 rounded-full"
+                        style={{ background: classColor(a.primary_class) }}
+                      />
+                      <span style={{ color: classColor(a.primary_class) }} className="font-semibold">
+                        {a.primary_class}
+                      </span>
+                      <span className="text-gray-400">× {a.count}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {/* Roster */}
       <div>
         <h2 className="text-xl font-bold mb-3">Roster</h2>
@@ -103,6 +185,7 @@ export default function TeamDetail() {
             <thead>
               <tr className="text-gray-400 border-b border-gray-700 text-left">
                 <th className="py-2 px-2">Player</th>
+                <th className="py-2 px-2">Class</th>
                 <th className="py-2 px-2 text-right">GP</th>
                 <th className="py-2 px-2 text-right">MPG</th>
                 <th className="py-2 px-2 text-right">PPG</th>
@@ -121,6 +204,21 @@ export default function TeamDetail() {
                     <Link to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
                       {p.name}
                     </Link>
+                  </td>
+                  <td className="py-2 px-2">
+                    {p.primary_class ? (
+                      <span
+                        className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+                        style={{
+                          color: classColor(p.primary_class),
+                          background: classColor(p.primary_class) + '22',
+                        }}
+                      >
+                        {p.primary_class}
+                      </span>
+                    ) : (
+                      <span className="text-gray-600 text-xs">—</span>
+                    )}
                   </td>
                   <td className="py-2 px-2 text-right">{p.games_played}</td>
                   <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>

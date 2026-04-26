@@ -18,6 +18,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/players", get(player_list))
         .route("/api/players/compare", get(player_compare))
         .route("/api/players/{id}", get(player_detail))
+        .route("/api/players/{id}/archetype", get(player_archetype))
+        .route("/api/players/{id}/similar", get(player_similar))
 }
 
 #[derive(Deserialize)]
@@ -95,12 +97,13 @@ async fn player_detail(
             )
         })?;
 
-    let (season_stats, percentiles, game_log, league_averages, torvik_stats) = tokio::try_join!(
+    let (season_stats, percentiles, game_log, league_averages, torvik_stats, archetype) = tokio::try_join!(
         queries::get_player_season_stats(pool, id, season),
         queries::get_player_percentiles(pool, id, season),
         queries::get_player_game_log(pool, id, season),
         queries::get_league_averages(pool, season),
         queries::get_torvik_stats(pool, id, season),
+        queries::get_player_archetype(pool, id, season),
     )
     .map_err(|e| {
         (
@@ -116,6 +119,67 @@ async fn player_detail(
         "game_log": game_log,
         "league_averages": league_averages,
         "torvik_stats": torvik_stats,
+        "archetype": archetype,
+    })))
+}
+
+#[derive(Deserialize)]
+struct PlayerArchetypeParams {
+    season: Option<i32>,
+}
+
+async fn player_archetype(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<PlayerArchetypeParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let season = params.season.unwrap_or_else(crate::default_season);
+    let archetype = queries::get_player_archetype(&state.db.pool, id, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+    match archetype {
+        Some(a) => Ok(Json(json!({
+            "season": season,
+            "archetype": a,
+        }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no archetype assigned for this player/season" })),
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+struct PlayerSimilarParams {
+    season: Option<i32>,
+    k: Option<i64>,
+}
+
+async fn player_similar(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<PlayerSimilarParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let season = params.season.unwrap_or_else(crate::default_season);
+    let limit = params.k.unwrap_or(10).clamp(1, 50);
+    let players = queries::get_similar_players(&state.db.pool, id, season, limit)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+    Ok(Json(json!({
+        "season": season,
+        "players": players,
     })))
 }
 
