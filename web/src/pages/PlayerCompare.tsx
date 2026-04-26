@@ -33,22 +33,77 @@ const pct = (v: number | null | undefined) =>
 const pctVal = (v: number | null | undefined) =>
   v != null && Number.isFinite(v) ? `${v.toFixed(1)}%` : '—';
 
+// Delta formatters for advantage chips (always render absolute value).
+const dFmt1 = (n: number) => n.toFixed(1);
+const dFmt2 = (n: number) => n.toFixed(2);
+const dFmtPpFrac = (n: number) => (n * 100).toFixed(1) + 'pp';
+const dFmtPpDirect = (n: number) => n.toFixed(1) + 'pp';
+
 function heightString(inches: number | null | undefined) {
   if (inches == null) return null;
   return `${Math.floor(inches / 12)}'${inches % 12}"`;
+}
+
+type ChipTier = 'EDGE' | 'ADVANTAGE' | 'DOMINANT';
+
+interface ChipInfo {
+  tier: ChipTier;
+  delta: string;
+}
+
+const CHIP_TIERS: Record<ChipTier, { label: string; classes: string; minGap: number }> = {
+  EDGE: {
+    label: 'EDGE',
+    classes: 'bg-blue-900/50 text-blue-200 ring-1 ring-blue-500/40',
+    minGap: 0.05,
+  },
+  ADVANTAGE: {
+    label: 'ADV',
+    classes: 'bg-amber-900/50 text-amber-200 ring-1 ring-amber-500/50',
+    minGap: 0.15,
+  },
+  DOMINANT: {
+    label: 'DOM',
+    classes: 'bg-rose-900/60 text-rose-200 ring-1 ring-rose-500/60',
+    minGap: 0.3,
+  },
+};
+
+function tierForGap(gap: number): ChipTier | null {
+  if (gap >= CHIP_TIERS.DOMINANT.minGap) return 'DOMINANT';
+  if (gap >= CHIP_TIERS.ADVANTAGE.minGap) return 'ADVANTAGE';
+  if (gap >= CHIP_TIERS.EDGE.minGap) return 'EDGE';
+  return null;
+}
+
+function Chip({ tier, delta }: ChipInfo) {
+  const cfg = CHIP_TIERS[tier];
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded leading-none ${cfg.classes}`}
+      title={`${tier}${delta ? ` — +${delta} over runner-up` : ''}`}
+    >
+      {cfg.label}
+      {delta && <span className="font-normal opacity-90">+{delta}</span>}
+    </span>
+  );
 }
 
 interface StatCellProps {
   value: string;
   pctile?: number | null;
   color: string;
+  chip?: ChipInfo | null;
 }
 
-function StatCell({ value, pctile, color }: StatCellProps) {
+function StatCell({ value, pctile, color, chip }: StatCellProps) {
   const p = pctile != null ? Math.max(0, Math.min(1, pctile)) : null;
   return (
     <div>
-      <div className="font-medium text-sm">{value}</div>
+      <div className="flex items-center justify-end gap-1.5">
+        {chip && <Chip {...chip} />}
+        <span className="font-medium text-sm">{value}</span>
+      </div>
       {p != null && (
         <div className="mt-1 h-1 bg-gray-700 rounded overflow-hidden">
           <div
@@ -64,9 +119,48 @@ function StatCell({ value, pctile, color }: StatCellProps) {
 interface StatRow {
   label: string;
   cells: StatCellProps[];
+  raws?: (number | null | undefined)[];
+  deltaFmt?: (n: number) => string;
 }
 
-function StatTable({ title, rows }: { title: string; rows: StatRow[] }) {
+function chipsForRow(row: StatRow): (ChipInfo | null)[] {
+  const empty = row.cells.map(() => null as ChipInfo | null);
+  const pcts = row.cells.map((c) =>
+    c.pctile != null && Number.isFinite(c.pctile)
+      ? Math.max(0, Math.min(1, c.pctile))
+      : null,
+  );
+  const valid = pcts
+    .map((p, i) => (p != null ? i : -1))
+    .filter((i) => i >= 0);
+  if (valid.length < 2) return empty;
+  const sorted = [...valid].sort((a, b) => pcts[b]! - pcts[a]!);
+  const leader = sorted[0];
+  const runnerUp = sorted[1];
+  const gap = pcts[leader]! - pcts[runnerUp]!;
+  const tier = tierForGap(gap);
+  if (!tier) return empty;
+  const lr = row.raws?.[leader];
+  const rr = row.raws?.[runnerUp];
+  let delta = '';
+  if (lr != null && rr != null && Number.isFinite(lr) && Number.isFinite(rr)) {
+    const fmtFn = row.deltaFmt ?? dFmt1;
+    delta = fmtFn(Math.abs(lr - rr));
+  }
+  return row.cells.map((_, i) =>
+    i === leader ? { tier, delta } : null,
+  );
+}
+
+function StatTable({
+  title,
+  rows,
+  showChips,
+}: {
+  title: string;
+  rows: StatRow[];
+  showChips: boolean;
+}) {
   if (rows.length === 0) return null;
   const cols = rows[0].cells.length;
   return (
@@ -74,20 +168,23 @@ function StatTable({ title, rows }: { title: string; rows: StatRow[] }) {
       <h2 className="text-lg font-bold mb-3">{title}</h2>
       <table className="w-full">
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className="border-b border-gray-700/60 last:border-0">
-              <td className="py-2 pr-3 text-xs text-gray-400 w-24">{row.label}</td>
-              {row.cells.map((cell, j) => (
-                <td
-                  key={j}
-                  className="py-2 px-2 text-right align-top"
-                  style={{ width: `${(100 - 24) / cols}%` }}
-                >
-                  <StatCell {...cell} />
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row, i) => {
+            const chips = showChips ? chipsForRow(row) : row.cells.map(() => null);
+            return (
+              <tr key={i} className="border-b border-gray-700/60 last:border-0">
+                <td className="py-2 pr-3 text-xs text-gray-400 w-24">{row.label}</td>
+                {row.cells.map((cell, j) => (
+                  <td
+                    key={j}
+                    className="py-2 px-2 text-right align-top"
+                    style={{ width: `${(100 - 24) / cols}%` }}
+                  >
+                    <StatCell {...cell} chip={chips[j]} />
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -228,6 +325,7 @@ export default function PlayerCompare() {
   const [players, setPlayers] = useState<ComparePlayer[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showChips, setShowChips] = useState(true);
 
   useEffect(() => {
     if (ids.length === 0) {
@@ -260,53 +358,53 @@ export default function PlayerCompare() {
   // ---------- table rows ----------
   const perGameRows: StatRow[] = players.length
     ? [
-        { label: 'MPG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.minutes_per_game), pctile: p.percentiles?.mpg_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'PPG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.ppg), pctile: p.percentiles?.ppg_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'RPG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.rpg), pctile: p.percentiles?.rpg_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'APG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.apg), pctile: p.percentiles?.apg_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'SPG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.spg), pctile: p.percentiles?.spg_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'BPG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.bpg), pctile: p.percentiles?.bpg_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'TOPG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.topg), pctile: p.percentiles?.topg_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'MPG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.minutes_per_game), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.minutes_per_game), pctile: p.percentiles?.mpg_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'PPG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.ppg), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.ppg), pctile: p.percentiles?.ppg_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'RPG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.rpg), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.rpg), pctile: p.percentiles?.rpg_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'APG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.apg), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.apg), pctile: p.percentiles?.apg_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'SPG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.spg), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.spg), pctile: p.percentiles?.spg_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'BPG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.bpg), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.bpg), pctile: p.percentiles?.bpg_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'TOPG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.topg), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.topg), pctile: p.percentiles?.topg_pct, color: PLAYER_COLORS[i] })) },
       ]
     : [];
 
   const shootingRows: StatRow[] = players.length
     ? [
-        { label: 'FG%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.fg_pct), pctile: p.percentiles?.fg_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: '3P%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.tp_pct), pctile: p.percentiles?.tp_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'FT%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.ft_pct), pctile: p.percentiles?.ft_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'eFG%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.effective_fg_pct), pctile: p.percentiles?.effective_fg_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'TS%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.true_shooting_pct), pctile: p.percentiles?.true_shooting_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'USG%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.usage_rate), pctile: p.percentiles?.usage_rate_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'FG%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.fg_pct), cells: players.map((p, i) => ({ value: pct(p.season_stats?.fg_pct), pctile: p.percentiles?.fg_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: '3P%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.tp_pct), cells: players.map((p, i) => ({ value: pct(p.season_stats?.tp_pct), pctile: p.percentiles?.tp_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'FT%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.ft_pct), cells: players.map((p, i) => ({ value: pct(p.season_stats?.ft_pct), pctile: p.percentiles?.ft_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'eFG%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.effective_fg_pct), cells: players.map((p, i) => ({ value: pct(p.season_stats?.effective_fg_pct), pctile: p.percentiles?.effective_fg_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'TS%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.true_shooting_pct), cells: players.map((p, i) => ({ value: pct(p.season_stats?.true_shooting_pct), pctile: p.percentiles?.true_shooting_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'USG%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.usage_rate), cells: players.map((p, i) => ({ value: pct(p.season_stats?.usage_rate), pctile: p.percentiles?.usage_rate_pct, color: PLAYER_COLORS[i] })) },
       ]
     : [];
 
   const rateRows: StatRow[] = players.length
     ? [
-        { label: 'AST%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.ast_pct), pctile: p.percentiles?.ast_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'TOV%', cells: players.map((p, i) => ({ value: pct(p.season_stats?.tov_pct), pctile: p.percentiles?.tov_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'OR%', cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.orb_pct), pctile: p.percentiles?.orb_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'DR%', cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.drb_pct), pctile: p.percentiles?.drb_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'STL%', cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.stl_pct), pctile: p.percentiles?.stl_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'BLK%', cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.blk_pct), pctile: p.percentiles?.blk_pct_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'FT Rate', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.ft_rate, 2), pctile: p.percentiles?.ft_rate_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'AST%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.ast_pct), cells: players.map((p, i) => ({ value: pct(p.season_stats?.ast_pct), pctile: p.percentiles?.ast_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'TOV%', deltaFmt: dFmtPpFrac, raws: players.map((p) => p.season_stats?.tov_pct), cells: players.map((p, i) => ({ value: pct(p.season_stats?.tov_pct), pctile: p.percentiles?.tov_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'OR%', deltaFmt: dFmtPpDirect, raws: players.map((p) => p.season_stats?.orb_pct), cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.orb_pct), pctile: p.percentiles?.orb_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'DR%', deltaFmt: dFmtPpDirect, raws: players.map((p) => p.season_stats?.drb_pct), cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.drb_pct), pctile: p.percentiles?.drb_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'STL%', deltaFmt: dFmtPpDirect, raws: players.map((p) => p.season_stats?.stl_pct), cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.stl_pct), pctile: p.percentiles?.stl_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'BLK%', deltaFmt: dFmtPpDirect, raws: players.map((p) => p.season_stats?.blk_pct), cells: players.map((p, i) => ({ value: pctVal(p.season_stats?.blk_pct), pctile: p.percentiles?.blk_pct_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'FT Rate', deltaFmt: dFmt2, raws: players.map((p) => p.season_stats?.ft_rate), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.ft_rate, 2), pctile: p.percentiles?.ft_rate_pct, color: PLAYER_COLORS[i] })) },
       ]
     : [];
 
   const hasTorvik = players.some((p) => p.torvik_stats);
   const advancedRows: StatRow[] = hasTorvik
     ? [
-        { label: 'GBPM', cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.gbpm), pctile: p.torvik_stats?.gbpm_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'OGBPM', cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.ogbpm), pctile: p.torvik_stats?.ogbpm_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'DGBPM', cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.dgbpm), pctile: p.torvik_stats?.dgbpm_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'Adj ORTG', cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), pctile: p.torvik_stats?.adj_oe_pct ?? p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'Adj DRTG', cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), pctile: p.torvik_stats?.adj_de_pct ?? p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'SOS', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'GBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.gbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.gbpm), pctile: p.torvik_stats?.gbpm_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'OGBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.ogbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.ogbpm), pctile: p.torvik_stats?.ogbpm_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'DGBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.dgbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.dgbpm), pctile: p.torvik_stats?.dgbpm_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'Adj ORTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), pctile: p.torvik_stats?.adj_oe_pct ?? p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'Adj DRTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), pctile: p.torvik_stats?.adj_de_pct ?? p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'SOS', deltaFmt: dFmt2, raws: players.map((p) => p.season_stats?.player_sos), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },
       ]
     : [
-        { label: 'ORTG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.offensive_rating), pctile: p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'DRTG', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.defensive_rating), pctile: p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'SOS', cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'ORTG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.offensive_rating), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.offensive_rating), pctile: p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'DRTG', deltaFmt: dFmt1, raws: players.map((p) => p.season_stats?.defensive_rating), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.defensive_rating), pctile: p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
+        { label: 'SOS', deltaFmt: dFmt2, raws: players.map((p) => p.season_stats?.player_sos), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },
       ];
 
   // ---------- radar overlay ----------
@@ -365,7 +463,7 @@ export default function PlayerCompare() {
           existingIds={ids}
         />
         {players.length > 0 && (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {players.map((p, i) => (
               <span
                 key={p.player.id}
@@ -386,6 +484,17 @@ export default function PlayerCompare() {
                 </button>
               </span>
             ))}
+            {players.length >= 2 && (
+              <label className="ml-auto inline-flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showChips}
+                  onChange={(e) => setShowChips(e.target.checked)}
+                  className="accent-blue-500"
+                />
+                Advantage chips
+              </label>
+            )}
           </div>
         )}
       </div>
@@ -416,10 +525,10 @@ export default function PlayerCompare() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <StatTable title="Per-Game" rows={perGameRows} />
-            <StatTable title="Shooting & Usage" rows={shootingRows} />
-            <StatTable title="Rate Stats" rows={rateRows} />
-            <StatTable title="Advanced Metrics" rows={advancedRows} />
+            <StatTable title="Per-Game" rows={perGameRows} showChips={showChips} />
+            <StatTable title="Shooting & Usage" rows={shootingRows} showChips={showChips} />
+            <StatTable title="Rate Stats" rows={rateRows} showChips={showChips} />
+            <StatTable title="Advanced Metrics" rows={advancedRows} showChips={showChips} />
           </div>
 
           {radarData.length > 0 && (
