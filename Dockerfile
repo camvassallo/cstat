@@ -23,8 +23,7 @@ COPY migrations/ migrations/
 # Build release binaries, then stage them along with any onnxruntime shared
 # libs `ort` downloaded into target/. The libs are needed at runtime for
 # dynamic linking; `find` finds nothing if ort static-links, which is fine.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release --bin cstat-api --bin cstat-ingest \
+RUN cargo build --release --bin cstat-api --bin cstat-ingest \
  && mkdir -p /artifacts/bin /artifacts/lib \
  && cp target/release/cstat-api target/release/cstat-ingest /artifacts/bin/ \
  && find target -name 'libonnxruntime.so*' -print -exec cp -P {} /artifacts/lib/ \; \
