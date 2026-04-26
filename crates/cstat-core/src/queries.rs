@@ -1130,25 +1130,6 @@ pub async fn get_archetype_exemplars(
     .await
 }
 
-pub async fn get_archetype_class_counts(
-    pool: &PgPool,
-    season: i32,
-) -> Result<Vec<ArchetypeCount>, sqlx::Error> {
-    sqlx::query_as::<_, ArchetypeCount>(
-        r#"
-        SELECT primary_class, COUNT(*) AS count,
-               NULL::DOUBLE PRECISION AS total_minutes
-        FROM player_archetypes
-        WHERE season = $1
-        GROUP BY primary_class
-        ORDER BY count DESC
-        "#,
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await
-}
-
 #[derive(Debug, Serialize, FromRow)]
 pub struct ArchetypeClassSummary {
     pub primary_class: String,
