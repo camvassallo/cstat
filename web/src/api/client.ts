@@ -394,6 +394,27 @@ export function fetchPlayerSimilar(id: string, k = 8, season?: number) {
   );
 }
 
+export interface ArchetypeExemplar {
+  player_id: string;
+  name: string;
+  team_id: string | null;
+  team_name: string | null;
+  primary_score: number;
+}
+
+export interface ArchetypeClassInfo {
+  name: string;
+  count: number;
+  exemplars: ArchetypeExemplar[];
+}
+
+export function fetchArchetypes(perClass = 5, season?: number) {
+  return fetchJson<{ season: number; classes: ArchetypeClassInfo[] }>(
+    '/archetypes',
+    { per_class: perClass.toString(), season: season?.toString() },
+  );
+}
+
 export interface ComparePlayer {
   player: PlayerProfile;
   season_stats: PlayerSeasonStats | null;

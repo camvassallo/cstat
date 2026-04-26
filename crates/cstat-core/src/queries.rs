@@ -1063,6 +1063,83 @@ pub struct ArchetypeCount {
     pub count: i64,
 }
 
+#[derive(Debug, Serialize, FromRow)]
+pub struct ArchetypeExemplar {
+    pub primary_class: String,
+    pub player_id: Uuid,
+    pub name: String,
+    pub team_id: Option<Uuid>,
+    pub team_name: Option<String>,
+    pub primary_score: f64,
+}
+
+pub async fn get_archetype_exemplars(
+    pool: &PgPool,
+    season: i32,
+    per_class: i64,
+) -> Result<Vec<ArchetypeExemplar>, sqlx::Error> {
+    // Rank within each class by impact (GBPM) among players who are a clear
+    // member of their cluster (primary_score above the class median). This
+    // surfaces recognizable stars rather than obscure pure-fit role players.
+    sqlx::query_as::<_, ArchetypeExemplar>(
+        r#"
+        WITH base AS (
+            SELECT
+                pa.primary_class,
+                pa.primary_score,
+                p.id AS player_id,
+                p.name,
+                p.team_id,
+                t.name AS team_name,
+                COALESCE(tps.gbpm, 0) AS gbpm,
+                PERCENT_RANK() OVER (
+                    PARTITION BY pa.primary_class ORDER BY pa.primary_score
+                ) AS fit_rank
+            FROM player_archetypes pa
+            JOIN players p ON p.id = pa.player_id
+            LEFT JOIN teams t ON t.id = p.team_id AND t.season = pa.season
+            LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pa.season
+            WHERE pa.season = $1
+        ),
+        ranked AS (
+            SELECT
+                primary_class, primary_score, player_id, name, team_id, team_name,
+                ROW_NUMBER() OVER (
+                    PARTITION BY primary_class ORDER BY gbpm DESC
+                ) AS rn
+            FROM base
+            WHERE fit_rank >= 0.5  -- only well-fit members of the class
+        )
+        SELECT primary_class, player_id, name, team_id, team_name, primary_score
+        FROM ranked
+        WHERE rn <= $2
+        ORDER BY primary_class, rn
+        "#,
+    )
+    .bind(season)
+    .bind(per_class)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_archetype_class_counts(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<ArchetypeCount>, sqlx::Error> {
+    sqlx::query_as::<_, ArchetypeCount>(
+        r#"
+        SELECT primary_class, COUNT(*) AS count
+        FROM player_archetypes
+        WHERE season = $1
+        GROUP BY primary_class
+        ORDER BY count DESC
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_team_archetype_distribution(
     pool: &PgPool,
     team_id: Uuid,
