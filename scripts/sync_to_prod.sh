@@ -83,6 +83,16 @@ echo "→ Prod:   $(mask_url "$PROD_URL")"
 echo "→ Tables: ${TABLE_LIST//,/, }"
 echo
 
+# Fail fast on a bad PROD_DATABASE_URL so we don't waste time dumping
+# hundreds of MB only to discover the connection is wrong.
+echo "→ Verifying prod connection..."
+if ! "${PSQL[@]}" "$PROD_URL" -t -A -c "SELECT 1" >/dev/null 2>&1; then
+  echo "  ✗ Cannot connect to prod. Check PROD_DATABASE_URL."
+  exit 1
+fi
+echo "  ✓ reachable"
+echo
+
 echo "→ Local row counts:"
 for t in ${TABLE_LIST//,/ }; do
   c=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "SELECT count(*) FROM \"$t\"" | tr -d '[:space:]')
