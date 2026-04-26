@@ -1,6 +1,51 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { PlayerArchetype, SimilarPlayer } from '../api/client';
-import { classColor } from './archetypeColors';
+import { classColor, classTagline, classTitle } from './archetypeColors';
+
+/// Styled hover tooltip for any class label — mirrors the look of the
+/// affinity popover on `ArchetypeBadge`. Wrap a chip / span with this and
+/// the tooltip pops below the trigger on hover. Pass `extra` to append a
+/// secondary line (e.g. "27.6% of minutes · 2 players").
+export function ClassTooltip({
+  cls,
+  children,
+  extra,
+  asBlock = false,
+}: {
+  cls: string;
+  children: ReactNode;
+  extra?: ReactNode;
+  /// Render the wrapper as a block-level element. Use this when the trigger
+  /// is itself a block (e.g. flex bar segments) so layout isn't disrupted.
+  asBlock?: boolean;
+}) {
+  const color = classColor(cls);
+  const tagline = classTagline(cls);
+  const Wrap = asBlock ? 'div' : 'span';
+  return (
+    <Wrap className={`relative group ${asBlock ? 'block h-full' : 'inline-block'}`}>
+      <Wrap className="cursor-help block h-full">{children}</Wrap>
+      <span
+        className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-20 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl px-3 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity pointer-events-none text-left whitespace-normal"
+      >
+        <span className="block text-xs font-bold" style={{ color }}>
+          {cls}
+        </span>
+        {tagline && (
+          <span className="block text-[11px] text-gray-300 mt-0.5 normal-case font-normal tracking-normal">
+            {tagline}
+          </span>
+        )}
+        {extra && (
+          <span className="block text-[10px] text-gray-400 mt-1 normal-case font-normal tracking-normal">
+            {extra}
+          </span>
+        )}
+      </span>
+    </Wrap>
+  );
+}
 
 export function ArchetypeBadge({
   archetype,
@@ -10,6 +55,7 @@ export function ArchetypeBadge({
   size?: 'sm' | 'md';
 }) {
   const primaryColor = classColor(archetype.primary_class);
+  const primaryTagline = classTagline(archetype.primary_class);
   const ranked = Object.entries(archetype.affinity_scores)
     .sort((a, b) => b[1] - a[1]);
 
@@ -18,6 +64,10 @@ export function ArchetypeBadge({
     size === 'sm'
       ? 'text-[10px] px-2 py-0.5'
       : 'text-xs px-2.5 py-1';
+
+  const titleStr = archetype.secondary_class
+    ? `${classTitle(archetype.primary_class)} / ${classTitle(archetype.secondary_class)}`
+    : classTitle(archetype.primary_class);
 
   return (
     <div className="relative group inline-block">
@@ -29,7 +79,7 @@ export function ArchetypeBadge({
           // ring color via inline style (Tailwind ring-color uses DEFAULT)
           boxShadow: `inset 0 0 0 1px ${primaryColor}66`,
         }}
-        title={`${archetype.primary_class}${archetype.secondary_class ? ` / ${archetype.secondary_class}` : ''}`}
+        title={titleStr}
       >
         <span
           className="inline-block w-1.5 h-1.5 rounded-full"
@@ -48,7 +98,13 @@ export function ArchetypeBadge({
       <div
         className="absolute left-0 top-full mt-2 z-20 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity pointer-events-none"
       >
-        <div className="text-xs font-bold text-gray-300 mb-2 uppercase tracking-wider">
+        {primaryTagline && (
+          <div className="text-xs font-bold mb-1" style={{ color: primaryColor }}>
+            {archetype.primary_class}
+            <span className="font-normal text-gray-400"> — {primaryTagline}</span>
+          </div>
+        )}
+        <div className="text-[10px] font-bold text-gray-500 mb-2 uppercase tracking-wider">
           Class Affinity
         </div>
         <div className="space-y-1">
@@ -108,19 +164,23 @@ export function SimilarPlayers({
                 {p.team_name ?? '—'}
               </div>
               <div className="flex items-center gap-2 mt-2">
-                <span
-                  className="text-[10px] font-bold uppercase tracking-wide"
-                  style={{ color: c }}
-                >
-                  {p.primary_class}
-                </span>
-                {p.secondary_class && (
+                <ClassTooltip cls={p.primary_class}>
                   <span
-                    className="text-[10px] opacity-70"
-                    style={{ color: classColor(p.secondary_class) }}
+                    className="text-[10px] font-bold uppercase tracking-wide"
+                    style={{ color: c }}
                   >
-                    / {p.secondary_class}
+                    {p.primary_class}
                   </span>
+                </ClassTooltip>
+                {p.secondary_class && (
+                  <ClassTooltip cls={p.secondary_class}>
+                    <span
+                      className="text-[10px] opacity-70"
+                      style={{ color: classColor(p.secondary_class) }}
+                    >
+                      / {p.secondary_class}
+                    </span>
+                  </ClassTooltip>
                 )}
               </div>
               <div className="mt-2 flex items-center gap-2">

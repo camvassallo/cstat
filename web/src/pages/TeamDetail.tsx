@@ -8,6 +8,7 @@ import {
   type ArchetypeCount,
 } from '../api/client';
 import { classColor } from '../components/archetypeColors';
+import { ClassTooltip } from '../components/Archetype';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -75,17 +76,33 @@ export default function TeamDetail() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  // Balance score: normalized Shannon entropy of archetype distribution.
-  // 1.0 = maximally diverse, 0 = single-class roster.
+  // Minute-weighted distribution. Each class's "weight" is its share of total
+  // team minutes — a 5-min/game deep-bench Druid contributes far less than
+  // a 32-min/game Druid starter. Falls back to player count if minutes are
+  // missing (shouldn't happen in practice).
+  const distWeights = useMemo(() => {
+    const items = archetypeDist.map((a) => ({
+      primary_class: a.primary_class,
+      count: a.count,
+      weight: a.total_minutes != null && a.total_minutes > 0
+        ? a.total_minutes
+        : a.count,
+    }));
+    const total = items.reduce((s, x) => s + x.weight, 0);
+    return { items, total };
+  }, [archetypeDist]);
+
+  // Balance score: normalized Shannon entropy of the minute-weighted
+  // distribution. 1.0 = maximally diverse rotation, 0 = single-style roster.
   const balance = useMemo(() => {
-    const total = archetypeDist.reduce((s, a) => s + a.count, 0);
-    if (total < 2 || archetypeDist.length < 2) return null;
-    const entropy = archetypeDist.reduce((s, a) => {
-      const p = a.count / total;
+    const { items, total } = distWeights;
+    if (total <= 0 || items.length < 2) return null;
+    const entropy = items.reduce((s, a) => {
+      const p = a.weight / total;
       return s + (p > 0 ? -p * Math.log(p) : 0);
     }, 0);
-    return entropy / Math.log(archetypeDist.length);
-  }, [archetypeDist]);
+    return entropy / Math.log(items.length);
+  }, [distWeights]);
 
   if (loading) return <div className="text-gray-400">Loading...</div>;
   if (!team) return <div className="text-red-400">Team not found</div>;
@@ -116,10 +133,10 @@ export default function TeamDetail() {
         <FourFactors team={team} label="Defense" />
       </div>
 
-      {/* Archetype Distribution */}
-      {archetypeDist.length > 0 && (
+      {/* Archetype Distribution (minute-weighted) */}
+      {archetypeDist.length > 0 && distWeights.total > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
             <h2 className="text-lg font-bold">Roster Archetypes</h2>
             {balance != null && (
               <span className="text-xs text-gray-400">
@@ -137,29 +154,42 @@ export default function TeamDetail() {
               </span>
             )}
           </div>
-          {(() => {
-            const total = archetypeDist.reduce((s, a) => s + a.count, 0);
-            return (
-              <div className="space-y-2">
-                <div className="flex h-3 rounded overflow-hidden bg-gray-900">
-                  {archetypeDist.map((a) => (
-                    <div
-                      key={a.primary_class}
-                      className="h-3"
-                      style={{
-                        flexBasis: `${(a.count / total) * 100}%`,
-                        background: classColor(a.primary_class),
-                      }}
-                      title={`${a.primary_class}: ${a.count}`}
-                    />
-                  ))}
-                </div>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {archetypeDist.map((a) => (
-                    <span
-                      key={a.primary_class}
-                      className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-gray-900"
+          <p className="text-xs text-gray-500 mb-3">
+            Weighted by total minutes played, so the rotation drives the breakdown.
+          </p>
+          <div className="space-y-2">
+            <div className="flex h-3 rounded overflow-hidden bg-gray-900">
+              {distWeights.items.map((a) => {
+                const share = a.weight / distWeights.total;
+                return (
+                  <div
+                    key={a.primary_class}
+                    style={{ flexBasis: `${share * 100}%` }}
+                  >
+                    <ClassTooltip
+                      cls={a.primary_class}
+                      asBlock
+                      extra={`${(share * 100).toFixed(1)}% of minutes · ${a.count} ${a.count === 1 ? 'player' : 'players'}`}
                     >
+                      <div
+                        className="h-3 w-full"
+                        style={{ background: classColor(a.primary_class) }}
+                      />
+                    </ClassTooltip>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {distWeights.items.map((a) => {
+                const share = a.weight / distWeights.total;
+                return (
+                  <ClassTooltip
+                    key={a.primary_class}
+                    cls={a.primary_class}
+                    extra={`${(share * 100).toFixed(1)}% of minutes · ${a.count} ${a.count === 1 ? 'player' : 'players'}`}
+                  >
+                    <span className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
                       <span
                         className="inline-block w-2 h-2 rounded-full"
                         style={{ background: classColor(a.primary_class) }}
@@ -167,13 +197,13 @@ export default function TeamDetail() {
                       <span style={{ color: classColor(a.primary_class) }} className="font-semibold">
                         {a.primary_class}
                       </span>
-                      <span className="text-gray-400">× {a.count}</span>
+                      <span className="text-gray-400">{(share * 100).toFixed(0)}%</span>
                     </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
+                  </ClassTooltip>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -207,15 +237,17 @@ export default function TeamDetail() {
                   </td>
                   <td className="py-2 px-2">
                     {p.primary_class ? (
-                      <span
-                        className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
-                        style={{
-                          color: classColor(p.primary_class),
-                          background: classColor(p.primary_class) + '22',
-                        }}
-                      >
-                        {p.primary_class}
-                      </span>
+                      <ClassTooltip cls={p.primary_class}>
+                        <span
+                          className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+                          style={{
+                            color: classColor(p.primary_class),
+                            background: classColor(p.primary_class) + '22',
+                          }}
+                        >
+                          {p.primary_class}
+                        </span>
+                      </ClassTooltip>
                     ) : (
                       <span className="text-gray-600 text-xs">—</span>
                     )}

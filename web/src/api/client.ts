@@ -94,6 +94,7 @@ export interface RosterEntry {
 export interface ArchetypeCount {
   primary_class: string;
   count: number;
+  total_minutes: number | null;
 }
 
 export interface TeamProfile {

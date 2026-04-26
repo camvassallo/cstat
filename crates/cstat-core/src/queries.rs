@@ -1061,6 +1061,11 @@ pub async fn get_similar_players(
 pub struct ArchetypeCount {
     pub primary_class: String,
     pub count: i64,
+    /// Sum of (minutes_per_game × games_played) across class members, scoped
+    /// to the team / season being queried. Used by the team page to weight
+    /// the distribution by who actually plays vs. who's on the bench.
+    /// May be NULL on queries that don't compute it (e.g. season-wide counts).
+    pub total_minutes: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -1120,7 +1125,8 @@ pub async fn get_archetype_class_counts(
 ) -> Result<Vec<ArchetypeCount>, sqlx::Error> {
     sqlx::query_as::<_, ArchetypeCount>(
         r#"
-        SELECT primary_class, COUNT(*) AS count
+        SELECT primary_class, COUNT(*) AS count,
+               NULL::DOUBLE PRECISION AS total_minutes
         FROM player_archetypes
         WHERE season = $1
         GROUP BY primary_class
@@ -1174,14 +1180,23 @@ pub async fn get_team_archetype_distribution(
     team_id: Uuid,
     season: i32,
 ) -> Result<Vec<ArchetypeCount>, sqlx::Error> {
+    // Order by total minutes (mpg × gp) so the team's actual rotation —
+    // not the deep bench — drives the visualization.
     sqlx::query_as::<_, ArchetypeCount>(
         r#"
-        SELECT pa.primary_class, COUNT(*) AS count
+        SELECT
+            pa.primary_class,
+            COUNT(*) AS count,
+            SUM(COALESCE(pss.minutes_per_game * pss.games_played, 0)) AS total_minutes
         FROM player_archetypes pa
         JOIN players p ON p.id = pa.player_id
+        LEFT JOIN player_season_stats pss
+            ON pss.player_id = p.id
+           AND pss.season = pa.season
+           AND pss.team_id = p.team_id
         WHERE p.team_id = $1 AND pa.season = $2
         GROUP BY pa.primary_class
-        ORDER BY count DESC
+        ORDER BY total_minutes DESC NULLS LAST
         "#,
     )
     .bind(team_id)
