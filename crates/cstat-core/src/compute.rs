@@ -1045,9 +1045,10 @@ pub async fn compute_rolling_averages(pool: &PgPool, season: i32) -> Result<u64,
 
 /// Compute individual offensive/defensive rating from aggregated box scores.
 ///
-/// Offensive rating (box-score approximation):
-///   Points produced per 100 possessions, using Dean Oliver's simplified formula.
-///   ORTG = PProd / individual_possessions * 100
+/// Offensive rating (box-score approximation, Dean Oliver simplified):
+///   PProd ≈ (FGM + AST * 0.5) * (PTS / (FGM + AST * 0.5 + FTM * 0.5)) + FTM * 0.5
+///   Individual possessions ≈ FGA + 0.44 * FTA + TOV
+///   ORTG = PProd / individual_possessions * 100, scaled by team context.
 ///
 /// Defensive rating: team adj_defense scaled by individual defensive contribution.
 ///

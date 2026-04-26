@@ -228,20 +228,33 @@ mod tests {
 
         let predictor = Predictor::load(&dir).unwrap();
 
+        // Look up indices by name so the test stays correct when feature
+        // ordering changes.
+        let idx = |name: &str| {
+            FEATURE_NAMES
+                .iter()
+                .position(|n| *n == name)
+                .unwrap_or_else(|| panic!("feature {name} missing from FEATURE_NAMES"))
+        };
+        let i_venue = idx("venue");
+        let i_eff = idx("diff_adj_efficiency_margin");
+        let i_elo = idx("diff_elo");
+        let i_gbpm = idx("diff_w_gbpm");
+
         // Strong home team: positive efficiency margin, high ELO diff,
         // plus a positive Torvik impact diff (now the dominant ML signal).
         let mut home_favored = [0.0_f32; NUM_FEATURES];
-        home_favored[0] = 1.0; // venue = home
-        home_favored[5] = 25.0; // diff_adj_efficiency_margin
-        home_favored[16] = 200.0; // diff_elo
-        home_favored[36] = 5.0; // diff_w_gbpm
+        home_favored[i_venue] = 1.0;
+        home_favored[i_eff] = 25.0;
+        home_favored[i_elo] = 200.0;
+        home_favored[i_gbpm] = 5.0;
 
-        // Strong away team: flip the signs
+        // Strong away team: flip the signs.
         let mut away_favored = [0.0_f32; NUM_FEATURES];
-        away_favored[0] = 1.0;
-        away_favored[5] = -25.0;
-        away_favored[16] = -200.0;
-        away_favored[36] = -5.0;
+        away_favored[i_venue] = 1.0;
+        away_favored[i_eff] = -25.0;
+        away_favored[i_elo] = -200.0;
+        away_favored[i_gbpm] = -5.0;
 
         let pred_home = predictor.predict(&home_favored).unwrap();
         let pred_away = predictor.predict(&away_favored).unwrap();

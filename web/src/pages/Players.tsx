@@ -24,7 +24,6 @@ const columns: ColDef<PlayerRow>[] = [
   { field: 'effective_fg_pct', headerName: 'eFG%', width: 80, valueFormatter: (p) => pct(p.value) },
   { field: 'true_shooting_pct', headerName: 'TS%', width: 75, valueFormatter: (p) => pct(p.value) },
   { field: 'usage_rate', headerName: 'USG%', width: 80, valueFormatter: (p) => pct(p.value) },
-  { field: 'bpm', headerName: 'BPM', width: 70, valueFormatter: (p) => fmt(p.value) },
   { field: 'offensive_rating', headerName: 'ORTG', width: 75, valueFormatter: (p) => fmt(p.value) },
   { field: 'defensive_rating', headerName: 'DRTG', width: 75, valueFormatter: (p) => fmt(p.value) },
   { field: 'net_rating', headerName: 'NET', width: 70, valueFormatter: (p) => fmt(p.value) },
