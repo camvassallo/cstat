@@ -9,7 +9,7 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Build the Rust workspace ────────────────────────────────
-FROM rust:1-bookworm AS rust-build
+FROM rust:1-trixie AS rust-build
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -31,7 +31,7 @@ RUN cargo build --release --bin cstat-api --bin cstat-ingest \
  && ls -la /artifacts/bin/ /artifacts/lib/
 
 # ── Stage 3: Slim runtime image ──────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
