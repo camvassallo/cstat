@@ -31,8 +31,8 @@ async fn archetypes_index(
     let per_class = params.per_class.unwrap_or(5).clamp(1, 20);
     let pool = &state.db.pool;
 
-    let (counts, exemplars) = tokio::try_join!(
-        queries::get_archetype_class_counts(pool, season),
+    let (summaries, exemplars) = tokio::try_join!(
+        queries::get_archetype_class_summary(pool, season),
         queries::get_archetype_exemplars(pool, season, per_class),
     )
     .map_err(|e| {
@@ -51,7 +51,9 @@ async fn archetypes_index(
             .push(ex);
     }
 
-    let classes: Vec<Value> = counts
+    // Summaries arrive sorted by mean_gbpm DESC — preserve that order so the
+    // glossary renders most-impactful → least-impactful.
+    let classes: Vec<Value> = summaries
         .iter()
         .map(|c| {
             let players: Vec<Value> = by_class
@@ -73,6 +75,8 @@ async fn archetypes_index(
             json!({
                 "name": c.primary_class,
                 "count": c.count,
+                "mean_gbpm": c.mean_gbpm,
+                "mean_usage_rate": c.mean_usage_rate,
                 "exemplars": players,
             })
         })

@@ -98,9 +98,16 @@ ARCHETYPE_SIGNATURES: dict[str, dict[str, float]] = {
         "stl_pct": 0.3, "blk_pct": 0.3, "ast_pct": 0.3,
     },
     "Druid": {
-        # Stretch big — inside + out
-        "blk_pct": 1.0, "three_share": 0.8, "drb_pct": 1.0,
-        "rim_share": 0.5, "orb_pct": 0.5,
+        # Frontcourt anchor — high-impact interior big who owns the glass at
+        # both ends, finishes through contact at the rim, and blocks shots.
+        # Originally framed as a "stretch big," but the data doesn't form a
+        # distinct stretch-big cluster (too rare in college); this signature
+        # now matches the actual rim-running impact-big cluster instead. Note
+        # the negative three_share weight: Druid in this dataset does NOT
+        # shoot from outside.
+        "rim_share": 1.0, "orb_pct": 1.0, "drb_pct": 1.0,
+        "blk_pct": 0.5, "ogbpm": 1.5, "dgbpm": 0.5, "usage_rate": 1.0,
+        "three_share": -0.3,
     },
     "Rogue": {
         # Event creator — high STL/BLK, off-ball opportunist

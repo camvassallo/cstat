@@ -1078,12 +1078,13 @@ pub async fn get_archetype_exemplars(
     season: i32,
     per_class: i64,
 ) -> Result<Vec<ArchetypeExemplar>, sqlx::Error> {
-    // Rank within each class by impact (GBPM) among players who are a clear
-    // member of their cluster (primary_score above the class median). This
-    // surfaces recognizable stars rather than obscure pure-fit role players.
+    // Rank within each class by impact (GBPM). The cluster assignment already
+    // ensures membership; ordering by GBPM surfaces the highest-impact (and
+    // most recognizable) representatives. Going by raw fit-purity instead
+    // returned obscure role players.
     sqlx::query_as::<_, ArchetypeExemplar>(
         r#"
-        WITH base AS (
+        WITH ranked AS (
             SELECT
                 pa.primary_class,
                 pa.primary_score,
@@ -1091,24 +1092,15 @@ pub async fn get_archetype_exemplars(
                 p.name,
                 p.team_id,
                 t.name AS team_name,
-                COALESCE(tps.gbpm, 0) AS gbpm,
-                PERCENT_RANK() OVER (
-                    PARTITION BY pa.primary_class ORDER BY pa.primary_score
-                ) AS fit_rank
+                ROW_NUMBER() OVER (
+                    PARTITION BY pa.primary_class
+                    ORDER BY COALESCE(tps.gbpm, -99) DESC, pa.primary_score DESC
+                ) AS rn
             FROM player_archetypes pa
             JOIN players p ON p.id = pa.player_id
             LEFT JOIN teams t ON t.id = p.team_id AND t.season = pa.season
             LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pa.season
             WHERE pa.season = $1
-        ),
-        ranked AS (
-            SELECT
-                primary_class, primary_score, player_id, name, team_id, team_name,
-                ROW_NUMBER() OVER (
-                    PARTITION BY primary_class ORDER BY gbpm DESC
-                ) AS rn
-            FROM base
-            WHERE fit_rank >= 0.5  -- only well-fit members of the class
         )
         SELECT primary_class, player_id, name, team_id, team_name, primary_score
         FROM ranked
@@ -1133,6 +1125,43 @@ pub async fn get_archetype_class_counts(
         WHERE season = $1
         GROUP BY primary_class
         ORDER BY count DESC
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct ArchetypeClassSummary {
+    pub primary_class: String,
+    pub count: i64,
+    /// Mean GBPM (overall two-way impact) across cluster members. Used for
+    /// ordering archetypes from most to least impactful on the glossary page.
+    pub mean_gbpm: Option<f64>,
+    pub mean_usage_rate: Option<f64>,
+}
+
+pub async fn get_archetype_class_summary(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<ArchetypeClassSummary>, sqlx::Error> {
+    sqlx::query_as::<_, ArchetypeClassSummary>(
+        r#"
+        SELECT
+            pa.primary_class,
+            COUNT(*) AS count,
+            AVG(tps.gbpm) AS mean_gbpm,
+            AVG(pss.usage_rate) AS mean_usage_rate
+        FROM player_archetypes pa
+        JOIN players p ON p.id = pa.player_id
+        LEFT JOIN torvik_player_stats tps
+            ON tps.player_id = p.id AND tps.season = pa.season
+        LEFT JOIN player_season_stats pss
+            ON pss.player_id = p.id AND pss.season = pa.season
+        WHERE pa.season = $1
+        GROUP BY pa.primary_class
+        ORDER BY mean_gbpm DESC NULLS LAST
         "#,
     )
     .bind(season)

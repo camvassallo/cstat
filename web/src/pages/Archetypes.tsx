@@ -12,13 +12,13 @@ interface ClassDef {
 }
 
 // Hand-written descriptions paired with the signatures in
-// `training/archetypes.py`. Keep these in sync if the cluster taxonomy changes.
+// `training/archetypes.py`. Kept to roughly equal length per card.
 const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Wizard',
     tagline: 'Pure floor general.',
     description:
-      'The conductor. Elite assist rate paired with low turnovers and heavy minutes — they orchestrate every possession, taking few shots at the rim themselves.',
+      'Elite assist rate paired with low turnovers and heavy minutes. Orchestrates every possession from the perimeter rather than hunting shots at the rim.',
     signature: ['high AST%', 'low TOV%', 'heavy minutes'],
     comparable: 'Steady starting point guards',
   },
@@ -26,7 +26,7 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Sorcerer',
     tagline: 'Star scorer.',
     description:
-      'The team\'s primary creator and finisher. High usage, high impact (OGBPM), big minutes. Everything runs through them.',
+      'The team\'s primary creator and finisher. Highest-USG class in the dataset paired with strong OGBPM and big minutes — everything runs through them.',
     signature: ['highest USG%', 'high OGBPM', 'heavy minutes'],
     comparable: 'Lottery-pick alphas',
   },
@@ -34,7 +34,7 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Warlock',
     tagline: 'Chaos gunner.',
     description:
-      'High-variance volume shooter from beyond the arc. Heavy 3PA share with above-average usage and a willingness to live and die from deep.',
+      'Lives and dies from beyond the arc. Heaviest three-point volume of any class, with above-average usage and below-average rim attacks. Boom-or-bust scoring.',
     signature: ['heavy 3PA share', 'high USG%', 'low rim share'],
     comparable: 'Microwave 6th men',
   },
@@ -42,7 +42,7 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Bard',
     tagline: 'Pass-first playmaker.',
     description:
-      'Distributes more than they hunt. High AST% with modest usage — they\'d rather set up a teammate than take the shot themselves.',
+      'Distributes more than they hunt. High assist rate with modest usage — they\'d rather set up a teammate than take the shot themselves.',
     signature: ['high AST%', 'low USG%', 'positive OGBPM'],
     comparable: 'Backup point guards & connectors',
   },
@@ -50,7 +50,7 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Ranger',
     tagline: '3-and-D wing.',
     description:
-      'The complementary perimeter piece. Lives behind the arc and racks up steals on the other end without dominating the ball.',
+      'The complementary perimeter piece. Lives behind the arc and racks up steals on the other end without dominating the ball or the offensive plan.',
     signature: ['heavy 3PA share', 'high STL%', 'low USG%'],
     comparable: 'Switchable wings',
   },
@@ -58,7 +58,7 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Barbarian',
     tagline: 'Rim attacker.',
     description:
-      'Drives, dunks, and gets fouled. The highest free-throw rate in the dataset — they earn their points by going through people, not around them.',
+      'Drives, dunks, and gets fouled. The highest free-throw rate of any class — they earn their points by going through people instead of around them.',
     signature: ['highest FT Rate', 'high rim share', 'low 3PA share'],
     comparable: 'Bully-ball forwards',
   },
@@ -66,7 +66,7 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Paladin',
     tagline: 'Two-way anchor.',
     description:
-      'The rim protector and defensive leader. Elite block rate paired with strong DGBPM and defensive rebounding. The wall in the paint.',
+      'The rim protector and defensive leader. Elite block rate paired with strong DGBPM and defensive rebounding — the wall in the paint, low offensive usage.',
     signature: ['elite BLK%', 'high DGBPM', 'strong DRB%'],
     comparable: 'Defensive bigs / shot-blockers',
   },
@@ -74,7 +74,7 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Monk',
     tagline: 'Efficient role player.',
     description:
-      'Doesn\'t make mistakes. Lowest TOV rate in the dataset, modest usage, positive impact. The "play 30 minutes, post a clean line" archetype.',
+      'Doesn\'t make mistakes. Lowest TOV rate of any class, modest usage, positive impact. The "play 30 minutes, post a clean line" archetype.',
     signature: ['lowest TOV%', 'modest USG%', 'positive OGBPM'],
     comparable: 'Steady veterans',
   },
@@ -82,17 +82,17 @@ const CLASS_DEFS: ClassDef[] = [
     name: 'Cleric',
     tagline: 'Glue connector.',
     description:
-      'Holds the rotation together without dominating any column. Defensive rebounds, occasional creation, low usage — the lineup just works better with them on the floor.',
+      'Holds the rotation together without dominating any column. Defensive rebounds, occasional creation, low usage — the lineup just runs better with them on the floor.',
     signature: ['solid DRB%', 'modest DGBPM', 'low USG%'],
     comparable: 'High-IQ role players',
   },
   {
     name: 'Druid',
-    tagline: 'Stretch big.',
+    tagline: 'Frontcourt anchor.',
     description:
-      'Plays inside and out. Real three-point volume paired with rebounding and shot-blocking — too quick for traditional bigs, too physical for wings.',
-    signature: ['high BLK%', '3PA share', 'strong rebounding'],
-    comparable: 'Modern stretch fours',
+      'High-impact interior big. Owns the glass, finishes inside, blocks shots, posts positive two-way GBPM. Secondary class flags scoring-stretch (/Sorcerer) vs defense-first (/Paladin).',
+    signature: ['high rim share', 'elite rebounding', 'two-way impact'],
+    comparable: 'Modern frontcourt impact bigs',
   },
   {
     name: 'Rogue',
@@ -125,7 +125,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
             {def.name}
           </h2>
           {info != null && (
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-gray-400 shrink-0">
               {info.count.toLocaleString()} players
             </span>
           )}
@@ -168,9 +168,6 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
                     <span className="font-medium">{ex.name}</span>
                     <span className="text-gray-500"> — {ex.team_name ?? '—'}</span>
                   </span>
-                  <span className="text-gray-500 text-[10px] ml-2 shrink-0">
-                    {(ex.primary_score * 100).toFixed(0)}%
-                  </span>
                 </Link>
               ))}
             </div>
@@ -197,7 +194,12 @@ export default function Archetypes() {
       .finally(() => setLoading(false));
   }, []);
 
-  const byName = new Map(classes.map((c) => [c.name, c]));
+  const defsByName = new Map(CLASS_DEFS.map((d) => [d.name, d]));
+  // API returns classes sorted by mean GBPM desc — render in that order so the
+  // page reads from highest two-way impact down to lowest.
+  const ordered = classes
+    .map((info) => ({ info, def: defsByName.get(info.name) }))
+    .filter((x): x is { info: ArchetypeClassInfo; def: ClassDef } => !!x.def);
   const totalPlayers = classes.reduce((s, c) => s + c.count, 0);
 
   return (
@@ -208,7 +210,8 @@ export default function Archetypes() {
           Every qualified D-I player is clustered into one of twelve D&amp;D-flavored
           classes based on their shot diet, rate stats, impact metrics, and minutes
           share. Clusters come from k-means in standardized feature space; each
-          centroid is matched to the archetype it best resembles.
+          centroid is matched to the archetype it best resembles. Cards are ordered
+          by mean GBPM (overall two-way impact), highest to lowest.
         </p>
         {!loading && season != null && (
           <p className="text-xs text-gray-500 mt-2">
@@ -222,13 +225,14 @@ export default function Archetypes() {
       {loading && <div className="text-gray-400 text-sm">Loading…</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {CLASS_DEFS.map((def) => (
-          <ClassCard
-            key={def.name}
-            def={def}
-            info={byName.get(def.name) ?? null}
-          />
-        ))}
+        {ordered.length > 0
+          ? ordered.map(({ def, info }) => (
+              <ClassCard key={def.name} def={def} info={info} />
+            ))
+          : // Fallback: API not loaded yet — render the static defs.
+            CLASS_DEFS.map((def) => (
+              <ClassCard key={def.name} def={def} info={null} />
+            ))}
       </div>
 
       <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 text-xs text-gray-400 leading-relaxed">

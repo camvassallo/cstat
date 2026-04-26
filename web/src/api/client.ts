@@ -405,6 +405,8 @@ export interface ArchetypeExemplar {
 export interface ArchetypeClassInfo {
   name: string;
   count: number;
+  mean_gbpm: number | null;
+  mean_usage_rate: number | null;
   exemplars: ArchetypeExemplar[];
 }
 
