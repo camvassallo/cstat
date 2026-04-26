@@ -57,7 +57,7 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 ## Database
 
-Postgres with SQLx. Migrations in `/migrations/` (10 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `api_cache`.
+Postgres with SQLx. Migrations in `/migrations/` (12 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `api_cache`.
 
 ## ML Inference
 

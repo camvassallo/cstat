@@ -319,6 +319,15 @@ pub async fn estimate_missing_team_rebounds(
 }
 
 /// Compute player_season_stats by aggregating player_game_stats.
+///
+/// **Unit conventions** (carry through to API consumers and ML features):
+/// - Shooting splits (`fg_pct`, `tp_pct`, `ft_pct`, `effective_fg_pct`,
+///   `true_shooting_pct`) are stored as **fractions** (0.0–1.0).
+/// - Rate stats (`usage_rate`, `ast_pct`, `tov_pct`, `ft_rate`) are also
+///   stored as **fractions**, despite their `_pct` names — multiply by 100
+///   to compare against Torvik or other percent-scaled sources.
+/// - Possession-based percentages (`orb_pct`, `drb_pct`, `stl_pct`, `blk_pct`)
+///   are stored as **percent** (0–100), matching Basketball Reference convention.
 pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     // Clear existing for this season so we recompute cleanly
     sqlx::query("DELETE FROM player_season_stats WHERE season = $1")
