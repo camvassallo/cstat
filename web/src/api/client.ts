@@ -84,7 +84,7 @@ export interface RosterEntry {
   effective_fg_pct: number | null;
   true_shooting_pct: number | null;
   usage_rate: number | null;
-  bpm: number | null;
+  gbpm: number | null;
   offensive_rating: number | null;
   defensive_rating: number | null;
 }
@@ -164,9 +164,6 @@ export interface PlayerRow {
   effective_fg_pct: number | null;
   true_shooting_pct: number | null;
   usage_rate: number | null;
-  bpm: number | null;
-  obpm: number | null;
-  dbpm: number | null;
   offensive_rating: number | null;
   defensive_rating: number | null;
   net_rating: number | null;
@@ -205,9 +202,6 @@ export interface PlayerSeasonStats {
   defensive_rating: number | null;
   net_rating: number | null;
   usage_rate: number | null;
-  bpm: number | null;
-  obpm: number | null;
-  dbpm: number | null;
   ast_pct: number | null;
   tov_pct: number | null;
   orb_pct: number | null;
@@ -232,7 +226,6 @@ export interface Percentiles {
   usage_rate_pct: number | null;
   offensive_rating_pct: number | null;
   defensive_rating_pct: number | null;
-  bpm_pct: number | null;
   player_sos_pct: number | null;
   ast_pct_pct: number | null;
   tov_pct_pct: number | null;

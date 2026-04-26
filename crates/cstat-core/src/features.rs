@@ -51,19 +51,19 @@ struct RosterAgg {
     w_ts_pct: Option<f64>,
     w_efg_pct: Option<f64>,
     w_usage: Option<f64>,
-    w_bpm: Option<f64>,
     w_player_sos: Option<f64>,
-    w_obpm: Option<f64>,
-    w_dbpm: Option<f64>,
     w_ortg: Option<f64>,
     w_ast_pct: Option<f64>,
     w_tov_pct: Option<f64>,
     w_stl_pct: Option<f64>,
     w_blk_pct: Option<f64>,
     w_gbpm: Option<f64>,
+    w_ogbpm: Option<f64>,
+    w_dgbpm: Option<f64>,
     star_ppg: Option<f64>,
-    star_bpm: Option<f64>,
     star_gbpm: Option<f64>,
+    star_ogbpm: Option<f64>,
+    star_dgbpm: Option<f64>,
     star_ortg: Option<f64>,
     minutes_stddev: Option<f64>,
 }
@@ -112,7 +112,9 @@ async fn get_roster_agg(
         WITH qualified AS (
             SELECT pss.*,
                    pss.minutes_per_game * pss.games_played AS total_minutes,
-                   tps.gbpm AS torvik_gbpm
+                   tps.gbpm   AS torvik_gbpm,
+                   tps.ogbpm  AS torvik_ogbpm,
+                   tps.dgbpm  AS torvik_dgbpm
             FROM player_season_stats pss
             LEFT JOIN torvik_player_stats tps
               ON tps.player_id = pss.player_id AND tps.season = pss.season
@@ -122,9 +124,10 @@ async fn get_roster_agg(
               AND pss.minutes_per_game >= 10
         ),
         star AS (
-            SELECT ppg AS star_ppg,
-                   bpm AS star_bpm,
-                   torvik_gbpm AS star_gbpm,
+            SELECT ppg          AS star_ppg,
+                   torvik_gbpm  AS star_gbpm,
+                   torvik_ogbpm AS star_ogbpm,
+                   torvik_dgbpm AS star_dgbpm,
                    offensive_rating AS star_ortg
             FROM qualified
             ORDER BY total_minutes DESC
@@ -142,16 +145,15 @@ async fn get_roster_agg(
                 SUM(true_shooting_pct * total_minutes)  / NULLIF(SUM(total_minutes), 0) AS w_ts_pct,
                 SUM(effective_fg_pct * total_minutes)   / NULLIF(SUM(total_minutes), 0) AS w_efg_pct,
                 SUM(usage_rate * total_minutes)    / NULLIF(SUM(total_minutes), 0) AS w_usage,
-                SUM(bpm * total_minutes)           / NULLIF(SUM(total_minutes), 0) AS w_bpm,
                 SUM(player_sos * total_minutes)    / NULLIF(SUM(total_minutes), 0) AS w_player_sos,
-                SUM(obpm * total_minutes)          / NULLIF(SUM(total_minutes), 0) AS w_obpm,
-                SUM(dbpm * total_minutes)          / NULLIF(SUM(total_minutes), 0) AS w_dbpm,
                 SUM(offensive_rating * total_minutes)   / NULLIF(SUM(total_minutes), 0) AS w_ortg,
                 SUM(ast_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_ast_pct,
                 SUM(tov_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_tov_pct,
                 SUM(stl_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_stl_pct,
                 SUM(blk_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_blk_pct,
-                SUM(torvik_gbpm * total_minutes)   / NULLIF(SUM(CASE WHEN torvik_gbpm IS NOT NULL THEN total_minutes END), 0) AS w_gbpm,
+                SUM(torvik_gbpm  * total_minutes)  / NULLIF(SUM(CASE WHEN torvik_gbpm  IS NOT NULL THEN total_minutes END), 0) AS w_gbpm,
+                SUM(torvik_ogbpm * total_minutes)  / NULLIF(SUM(CASE WHEN torvik_ogbpm IS NOT NULL THEN total_minutes END), 0) AS w_ogbpm,
+                SUM(torvik_dgbpm * total_minutes)  / NULLIF(SUM(CASE WHEN torvik_dgbpm IS NOT NULL THEN total_minutes END), 0) AS w_dgbpm,
                 STDDEV(minutes_per_game) AS minutes_stddev
             FROM qualified
         )
@@ -286,21 +288,21 @@ pub async fn build_game_features(
         d(home_roster.w_efg_pct, away_roster.w_efg_pct),
         // Roster advanced
         d(home_roster.w_usage, away_roster.w_usage),
-        d(home_roster.w_bpm, away_roster.w_bpm),
         d(home_roster.w_player_sos, away_roster.w_player_sos),
-        d(home_roster.w_obpm, away_roster.w_obpm),
-        d(home_roster.w_dbpm, away_roster.w_dbpm),
         d(home_roster.w_ortg, away_roster.w_ortg),
         d(home_roster.w_ast_pct, away_roster.w_ast_pct),
         d(home_roster.w_tov_pct, away_roster.w_tov_pct),
         d(home_roster.w_stl_pct, away_roster.w_stl_pct),
         d(home_roster.w_blk_pct, away_roster.w_blk_pct),
-        // Torvik
+        // Torvik impact (replaces broken cstat BPM/OBPM/DBPM)
         d(home_roster.w_gbpm, away_roster.w_gbpm),
+        d(home_roster.w_ogbpm, away_roster.w_ogbpm),
+        d(home_roster.w_dgbpm, away_roster.w_dgbpm),
         // Star power
         d(home_roster.star_ppg, away_roster.star_ppg),
-        d(home_roster.star_bpm, away_roster.star_bpm),
         d(home_roster.star_gbpm, away_roster.star_gbpm),
+        d(home_roster.star_ogbpm, away_roster.star_ogbpm),
+        d(home_roster.star_dgbpm, away_roster.star_dgbpm),
         d(home_roster.star_ortg, away_roster.star_ortg),
         // Depth
         d(home_roster.minutes_stddev, away_roster.minutes_stddev),

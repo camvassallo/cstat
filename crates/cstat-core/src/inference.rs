@@ -37,19 +37,19 @@ pub const FEATURE_NAMES: [&str; NUM_FEATURES] = [
     "diff_w_ts_pct",
     "diff_w_efg_pct",
     "diff_w_usage",
-    "diff_w_bpm",
     "diff_w_player_sos",
-    "diff_w_obpm",
-    "diff_w_dbpm",
     "diff_w_ortg",
     "diff_w_ast_pct",
     "diff_w_tov_pct",
     "diff_w_stl_pct",
     "diff_w_blk_pct",
     "diff_w_gbpm",
+    "diff_w_ogbpm",
+    "diff_w_dgbpm",
     "diff_star_ppg",
-    "diff_star_bpm",
     "diff_star_gbpm",
+    "diff_star_ogbpm",
+    "diff_star_dgbpm",
     "diff_star_ortg",
     "diff_minutes_stddev",
     "diff_w_rolling_gs",
@@ -228,17 +228,33 @@ mod tests {
 
         let predictor = Predictor::load(&dir).unwrap();
 
-        // Strong home team: positive efficiency margin, high ELO diff
-        let mut home_favored = [0.0_f32; NUM_FEATURES];
-        home_favored[0] = 1.0; // venue = home
-        home_favored[5] = 15.0; // diff_adj_efficiency_margin
-        home_favored[16] = 100.0; // diff_elo
+        // Look up indices by name so the test stays correct when feature
+        // ordering changes.
+        let idx = |name: &str| {
+            FEATURE_NAMES
+                .iter()
+                .position(|n| *n == name)
+                .unwrap_or_else(|| panic!("feature {name} missing from FEATURE_NAMES"))
+        };
+        let i_venue = idx("venue");
+        let i_eff = idx("diff_adj_efficiency_margin");
+        let i_elo = idx("diff_elo");
+        let i_gbpm = idx("diff_w_gbpm");
 
-        // Strong away team: flip the signs
+        // Strong home team: positive efficiency margin, high ELO diff,
+        // plus a positive Torvik impact diff (now the dominant ML signal).
+        let mut home_favored = [0.0_f32; NUM_FEATURES];
+        home_favored[i_venue] = 1.0;
+        home_favored[i_eff] = 25.0;
+        home_favored[i_elo] = 200.0;
+        home_favored[i_gbpm] = 5.0;
+
+        // Strong away team: flip the signs.
         let mut away_favored = [0.0_f32; NUM_FEATURES];
-        away_favored[0] = 1.0;
-        away_favored[5] = -15.0;
-        away_favored[16] = -100.0;
+        away_favored[i_venue] = 1.0;
+        away_favored[i_eff] = -25.0;
+        away_favored[i_elo] = -200.0;
+        away_favored[i_gbpm] = -5.0;
 
         let pred_home = predictor.predict(&home_favored).unwrap();
         let pred_away = predictor.predict(&away_favored).unwrap();

@@ -48,7 +48,6 @@ pub enum PlayerSortField {
     Ppg,
     Rpg,
     Apg,
-    Bpm,
     OffensiveRating,
     MinutesPerGame,
     TrueShootingPct,
@@ -62,7 +61,6 @@ impl PlayerSortField {
             Self::Ppg => "pss.ppg",
             Self::Rpg => "pss.rpg",
             Self::Apg => "pss.apg",
-            Self::Bpm => "pss.bpm",
             Self::OffensiveRating => "pss.offensive_rating",
             Self::MinutesPerGame => "pss.minutes_per_game",
             Self::TrueShootingPct => "pss.true_shooting_pct",
@@ -212,7 +210,7 @@ pub struct RosterEntry {
     pub effective_fg_pct: Option<f64>,
     pub true_shooting_pct: Option<f64>,
     pub usage_rate: Option<f64>,
-    pub bpm: Option<f64>,
+    pub gbpm: Option<f64>,
     pub offensive_rating: Option<f64>,
     pub defensive_rating: Option<f64>,
 }
@@ -241,9 +239,6 @@ pub struct PlayerRow {
     pub effective_fg_pct: Option<f64>,
     pub true_shooting_pct: Option<f64>,
     pub usage_rate: Option<f64>,
-    pub bpm: Option<f64>,
-    pub obpm: Option<f64>,
-    pub dbpm: Option<f64>,
     pub offensive_rating: Option<f64>,
     pub defensive_rating: Option<f64>,
     pub net_rating: Option<f64>,
@@ -285,9 +280,6 @@ pub struct PlayerSeasonStatsRow {
     pub defensive_rating: Option<f64>,
     pub net_rating: Option<f64>,
     pub usage_rate: Option<f64>,
-    pub bpm: Option<f64>,
-    pub obpm: Option<f64>,
-    pub dbpm: Option<f64>,
     pub ast_pct: Option<f64>,
     pub tov_pct: Option<f64>,
     pub orb_pct: Option<f64>,
@@ -313,7 +305,6 @@ pub struct PercentilesRow {
     pub usage_rate_pct: Option<f64>,
     pub offensive_rating_pct: Option<f64>,
     pub defensive_rating_pct: Option<f64>,
-    pub bpm_pct: Option<f64>,
     pub player_sos_pct: Option<f64>,
     pub ast_pct_pct: Option<f64>,
     pub tov_pct_pct: Option<f64>,
@@ -560,10 +551,12 @@ pub async fn get_team_roster(
             pss.ppg, pss.rpg, pss.apg, pss.spg, pss.bpg,
             pss.fg_pct, pss.tp_pct, pss.ft_pct,
             pss.effective_fg_pct, pss.true_shooting_pct,
-            pss.usage_rate, pss.bpm,
+            pss.usage_rate,
+            tps.gbpm,
             pss.offensive_rating, pss.defensive_rating
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
+        LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
         WHERE p.team_id = $1 AND p.season = $2
         ORDER BY pss.minutes_per_game DESC NULLS LAST
         "#,
@@ -627,7 +620,7 @@ pub async fn search_players(
             pss.ppg, pss.rpg, pss.apg, pss.spg, pss.bpg, pss.topg,
             pss.fg_pct, pss.tp_pct, pss.ft_pct,
             pss.effective_fg_pct, pss.true_shooting_pct,
-            pss.usage_rate, pss.bpm, pss.obpm, pss.dbpm,
+            pss.usage_rate,
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
             pss.player_sos
         FROM player_season_stats pss
@@ -695,7 +688,7 @@ pub async fn get_player_season_stats(
             fg_pct, tp_pct, ft_pct,
             effective_fg_pct, true_shooting_pct,
             offensive_rating, defensive_rating, net_rating,
-            usage_rate, bpm, obpm, dbpm,
+            usage_rate,
             ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct,
             ft_rate, player_sos
         FROM player_season_stats
@@ -720,7 +713,7 @@ pub async fn get_player_percentiles(
             fg_pct_pct, tp_pct_pct, ft_pct_pct,
             effective_fg_pct_pct, true_shooting_pct_pct,
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
-            bpm_pct, player_sos_pct,
+            player_sos_pct,
             ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
             orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct
         FROM player_percentiles

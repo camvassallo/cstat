@@ -137,11 +137,14 @@ def load_team_conferences(engine, seasons=None) -> pd.DataFrame:
 
 
 def load_torvik_stats(engine, seasons=None) -> pd.DataFrame:
-    """Load Torvik GBPM per player for roster aggregation."""
+    """Load Torvik GBPM/OGBPM/DGBPM per player for roster aggregation.
+
+    Replaces cstat's broken BPM/OBPM/DBPM as the player-impact signal.
+    """
     seasons = seasons or SEASONS
     return pd.read_sql(
         """
-        SELECT player_id, season, gbpm
+        SELECT player_id, season, gbpm, ogbpm, dgbpm
         FROM torvik_player_stats
         WHERE player_id IS NOT NULL
           AND season = ANY(%(seasons)s)
@@ -475,19 +478,6 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
     pgs["efg_pct"] = (pgs["fgm"] + 0.5 * pgs["tpm"]) / pgs["fga"].replace(0, np.nan)
     pgs["ast_to"] = pgs["assists"] / pgs["turnovers"].replace(0, np.nan)
 
-    # BPM approximation: game_score is already computed (Hollinger)
-    # OBPM/DBPM split: offensive game score vs defensive game score
-    pgs["off_game_score"] = (
-        pgs["points"] * 0.5 + pgs["fgm"] * 0.5 - pgs["fga"] * 0.35
-        + pgs["ftm"] * 0.3 - pgs["fta"] * 0.2
-        + pgs["assists"] * 0.6 + pgs["off_rebounds"] * 0.5
-        - pgs["turnovers"] * 0.8
-    )
-    pgs["def_game_score"] = (
-        pgs["def_rebounds"] * 0.5 + pgs["steals"] * 0.7
-        + pgs["blocks"] * 0.7
-    )
-
     # Rate stats (per-40-minute proxies)
     min40 = pgs["minutes"].replace(0, np.nan) / 40.0
     team_fga_safe = pgs["team_fga"].replace(0, np.nan)
@@ -510,7 +500,6 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         "fgm", "fga", "tpm", "tpa", "ftm", "fta",
         "off_rebounds", "def_rebounds",
         "ts_pct", "efg_pct", "game_score",
-        "off_game_score", "def_game_score",
         "ast_pct_g", "tov_pct_g", "stl_pct_g", "blk_pct_g",
         "ortg_g", "usage_g",
     ]
@@ -537,16 +526,20 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
 
     player_cum_df = pd.concat(player_cum, ignore_index=True)
 
-    # Merge Torvik GBPM (season-level metric) onto per-player entries
+    # Merge Torvik GBPM/OGBPM/DGBPM (season-level metrics) onto per-player entries
     if torvik_df is not None and not torvik_df.empty:
         player_cum_df = player_cum_df.merge(
-            torvik_df[["player_id", "season", "gbpm"]].rename(columns={"gbpm": "torvik_gbpm"}),
+            torvik_df[["player_id", "season", "gbpm", "ogbpm", "dgbpm"]].rename(
+                columns={"gbpm": "torvik_gbpm", "ogbpm": "torvik_ogbpm", "dgbpm": "torvik_dgbpm"}
+            ),
             left_on=["player_id", "season"],
             right_on=["player_id", "season"],
             how="left",
         )
     else:
         player_cum_df["torvik_gbpm"] = np.nan
+        player_cum_df["torvik_ogbpm"] = np.nan
+        player_cum_df["torvik_dgbpm"] = np.nan
 
     # Now aggregate per (team_id, game_date): minutes-weighted averages
     # across qualified players (>= 5 prior games, >= 10 cum_minutes)
@@ -569,9 +562,6 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         "cum_turnovers": "w_topg",
         "cum_ts_pct": "w_ts_pct",
         "cum_efg_pct": "w_efg_pct",
-        "cum_game_score": "w_bpm",
-        "cum_off_game_score": "w_obpm",
-        "cum_def_game_score": "w_dbpm",
         "cum_ortg_g": "w_ortg",
         "cum_usage_g": "w_usage",
         "cum_ast_pct_g": "w_ast_pct",
@@ -579,6 +569,8 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         "cum_stl_pct_g": "w_stl_pct",
         "cum_blk_pct_g": "w_blk_pct",
         "torvik_gbpm": "w_gbpm",
+        "torvik_ogbpm": "w_ogbpm",
+        "torvik_dgbpm": "w_dgbpm",
     }
 
     # Rolling form columns
@@ -627,9 +619,10 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         # Star player stats (top by weight)
         top_idx = w.idxmax()
         row["star_ppg"] = group.loc[top_idx, "cum_points"] if pd.notna(group.loc[top_idx, "cum_points"]) else np.nan
-        row["star_bpm"] = group.loc[top_idx, "cum_game_score"] if pd.notna(group.loc[top_idx, "cum_game_score"]) else np.nan
         row["star_ortg"] = group.loc[top_idx, "cum_ortg_g"] if pd.notna(group.loc[top_idx, "cum_ortg_g"]) else np.nan
-        row["star_gbpm"] = group.loc[top_idx, "torvik_gbpm"] if pd.notna(group.loc[top_idx, "torvik_gbpm"]) else np.nan
+        row["star_gbpm"]  = group.loc[top_idx, "torvik_gbpm"]  if pd.notna(group.loc[top_idx, "torvik_gbpm"])  else np.nan
+        row["star_ogbpm"] = group.loc[top_idx, "torvik_ogbpm"] if pd.notna(group.loc[top_idx, "torvik_ogbpm"]) else np.nan
+        row["star_dgbpm"] = group.loc[top_idx, "torvik_dgbpm"] if pd.notna(group.loc[top_idx, "torvik_dgbpm"]) else np.nan
 
         # Minutes stddev (depth indicator)
         row["minutes_stddev"] = group["cum_minutes"].std()
@@ -943,22 +936,22 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
         "w_ts_pct": "w_ts_pct",
         "w_efg_pct": "w_efg_pct",
         "w_usage": "w_usage",
-        "w_bpm": "w_bpm",
         "w_player_sos": "w_player_sos",
         # Roster advanced
-        "w_obpm": "w_obpm",
-        "w_dbpm": "w_dbpm",
         "w_ortg": "w_ortg",
         "w_ast_pct": "w_ast_pct",
         "w_tov_pct": "w_tov_pct",
         "w_stl_pct": "w_stl_pct",
         "w_blk_pct": "w_blk_pct",
-        # Torvik
+        # Torvik impact (replaces broken cstat BPM/OBPM/DBPM)
         "w_gbpm": "w_gbpm",
+        "w_ogbpm": "w_ogbpm",
+        "w_dgbpm": "w_dgbpm",
         # Star power
         "star_ppg": "star_ppg",
-        "star_bpm": "star_bpm",
         "star_gbpm": "star_gbpm",
+        "star_ogbpm": "star_ogbpm",
+        "star_dgbpm": "star_dgbpm",
         "star_ortg": "star_ortg",
         # Depth
         "minutes_stddev": "minutes_stddev",

@@ -110,7 +110,7 @@ export default function TeamDetail() {
                 <th className="py-2 px-2 text-right">APG</th>
                 <th className="py-2 px-2 text-right">eFG%</th>
                 <th className="py-2 px-2 text-right">TS%</th>
-                <th className="py-2 px-2 text-right">BPM</th>
+                <th className="py-2 px-2 text-right">GBPM</th>
                 <th className="py-2 px-2 text-right">ORTG</th>
               </tr>
             </thead>
@@ -129,7 +129,7 @@ export default function TeamDetail() {
                   <td className="py-2 px-2 text-right">{fmt(p.apg)}</td>
                   <td className="py-2 px-2 text-right">{pct(p.effective_fg_pct)}</td>
                   <td className="py-2 px-2 text-right">{pct(p.true_shooting_pct)}</td>
-                  <td className="py-2 px-2 text-right">{fmt(p.bpm)}</td>
+                  <td className="py-2 px-2 text-right">{fmt(p.gbpm)}</td>
                   <td className="py-2 px-2 text-right">{fmt(p.offensive_rating)}</td>
                 </tr>
               ))}
