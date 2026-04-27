@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod campom_parity;
 pub mod client;
 pub mod ingest;
 pub mod rate_limiter;

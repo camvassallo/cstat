@@ -54,6 +54,7 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 - `compute_player_percentiles` — PERCENT_RANK across all players (including rate stat percentiles)
 - `compute_rolling_averages` — last-5-game rolling stats
 - `compute_individual_ratings` — populates `pss.offensive_rating` / `defensive_rating` / `net_rating` from `torvik_player_stats.o_rtg` / `d_rtg` (passthrough; cstat's prior heuristic was broken — see ROADMAP "Compute Pipeline Audit")
+- `compute_campom` — usage/minutes/sample/SOS-adjusted GBPM composites (`cam_gbpm`, `cam_gbpm_v2`, `cam_gbpm_v3` and o/d splits at every tier). Tunable constants live at the top of `compute.rs` as `CAMPOM_*` consts; methodology in `docs/campom_methodology.md`.
 
 ## Database
 

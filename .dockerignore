@@ -39,4 +39,4 @@ training/data/
 
 # Local docker compose (dev only)
 docker-compose.yml
-start.sh
+scripts/start.sh

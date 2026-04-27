@@ -1113,6 +1113,292 @@ pub async fn compute_individual_ratings(pool: &PgPool, season: i32) -> Result<u6
     Ok(r1.rows_affected())
 }
 
+// ---------------------------------------------------------------------------
+// CamPom — composite player valuation (see docs/campom_methodology.md)
+// ---------------------------------------------------------------------------
+
+/// Tunable parameters for the CamPom composite. Each is the input to the
+/// hyperparameter grid search planned in ROADMAP §4f, where the predict model
+/// is the fitness function. Keep changes to one constant per PR.
+pub const CAMPOM_OFFENSE_EXPONENT: f64 = 0.7;
+pub const CAMPOM_DEFENSE_DISCOUNT: f64 = 0.1;
+pub const CAMPOM_USG_REF: f64 = 17.873_577_08;
+pub const CAMPOM_MINUTES_EXPONENT: f64 = 0.5;
+pub const CAMPOM_GP_K: f64 = 8.0;
+pub const CAMPOM_SOS_TRANSFER_RATE: f64 = 0.5;
+/// Transfer rate applied to player-level SOS in the parallel `_psos` tier.
+/// Scaled down from the conference-SOS rate because `player_sos` (cstat
+/// minutes-weighted opponent adj-efficiency-margin) has ~2.5× the magnitude
+/// of `conf_sos` (CamPom GBPM units). 0.15 gives a Big Ten player roughly
+/// the same ±2 GBPM adjustment as the conf-SOS path.
+pub const CAMPOM_PLAYER_SOS_TRANSFER_RATE: f64 = 0.15;
+/// Minimum games-played threshold for a player to count toward conference
+/// quality (`conf_sos`). Filters out small-sample noise from the SOS table.
+pub const CAMPOM_SOS_MIN_GP: i32 = 20;
+
+/// Compute CamPom composite player-valuation metrics.
+///
+/// Reads inputs from `torvik_player_stats` (`ogbpm`, `dgbpm`, `usage_rate`,
+/// `min_per`, `total_minutes`, `games_played`, `conf`) and writes the full
+/// chain of intermediates and final composites back to the same row.
+///
+/// The o-side and d-side components of `adj_gbpm` are tracked separately so
+/// each tier (`cam_gbpm`, `cam_gbpm_v2`, `cam_gbpm_v3`) gets first-class
+/// offensive / defensive splits in addition to the total.
+pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Wipe any stale composite values first so unmatched / unqualified rows
+    // (missing inputs) end up NULL rather than retaining last run's numbers.
+    sqlx::query(
+        "UPDATE torvik_player_stats SET
+             min_factor = NULL, mp_factor = NULL, gp_weight = NULL,
+             adj_gbpm = NULL, conf_sos = NULL, sos_adj = NULL, adj_gbpm_sos = NULL,
+             cam_gbpm = NULL, cam_o_gbpm = NULL, cam_d_gbpm = NULL, min_adj_gbpm = NULL,
+             cam_gbpm_v2 = NULL, cam_o_gbpm_v2 = NULL, cam_d_gbpm_v2 = NULL, min_adj_gbpm_v2 = NULL,
+             cam_gbpm_v3 = NULL, cam_o_gbpm_v3 = NULL, cam_d_gbpm_v3 = NULL, min_adj_gbpm_v3 = NULL,
+             psos_adj = NULL, adj_gbpm_psos = NULL,
+             cam_gbpm_v3_psos = NULL, cam_o_gbpm_v3_psos = NULL,
+             cam_d_gbpm_v3_psos = NULL, min_adj_gbpm_v3_psos = NULL,
+             cam_gbpm_v3_psos_pct = NULL,
+             updated_at = now()
+         WHERE season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    // Season constants. Computed over the full cohort (no GP filter) per the
+    // methodology doc; only the SOS table uses the GP>=20 stable subset.
+    //
+    // Column-naming gotcha: `torvik_player_stats.total_minutes` actually holds
+    // minutes-per-game (Torvik's `mp`), and `minutes_per_game` actually holds
+    // Min% (Torvik's `Min_per`, copied to the new `min_per` column in
+    // migration 014). The misnomers predate this work; CamPom reads what each
+    // column truly contains. A schema rename is a follow-up.
+    let row: (Option<f64>, Option<f64>) = sqlx::query_as(
+        "SELECT AVG(total_minutes)::float8 AS mean_mp,
+                AVG(min_per)::float8 AS mean_min_per
+           FROM torvik_player_stats
+          WHERE season = $1
+            AND ogbpm IS NOT NULL AND dgbpm IS NOT NULL
+            AND usage_rate IS NOT NULL AND min_per IS NOT NULL
+            AND total_minutes IS NOT NULL AND games_played IS NOT NULL
+            AND games_played > 0",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+
+    let (mean_mp, mean_min_per) = match (row.0, row.1) {
+        (Some(a), Some(b)) if a > 0.0 && b > 0.0 => (a, b),
+        _ => {
+            info!(season, "compute_campom: no qualified torvik rows; skipping");
+            return Ok(0);
+        }
+    };
+
+    info!(season, mean_mp, mean_min_per, "CamPom season constants");
+
+    // Step 1-3: per-row intermediates and conference-neutral composites.
+    // Done in one UPDATE; SOS is layered on after we know per-conference means.
+    //
+    // adj_gbpm offense component: OGBPM × (USG/USG_REF)^OFFENSE_EXPONENT × ...
+    // adj_gbpm defense component: DGBPM × (1 − DEFENSE_DISCOUNT × USG/USG_REF)
+    let r1 = sqlx::query(
+        "UPDATE torvik_player_stats SET
+             min_factor   = power(total_minutes / $2, $5),
+             mp_factor    = power(min_per / $3, $5),
+             gp_weight    = games_played::float8 / (games_played::float8 + $4),
+             adj_gbpm     = ogbpm * power(usage_rate / $6, $7)
+                          + dgbpm * (1.0 - $8 * usage_rate / $6),
+             cam_o_gbpm   = ogbpm * power(usage_rate / $6, $7)
+                          * power(min_per / $3, $5),
+             cam_d_gbpm   = dgbpm * (1.0 - $8 * usage_rate / $6)
+                          * power(min_per / $3, $5),
+             cam_gbpm     = (ogbpm * power(usage_rate / $6, $7)
+                           + dgbpm * (1.0 - $8 * usage_rate / $6))
+                          * power(min_per / $3, $5),
+             min_adj_gbpm = (ogbpm * power(usage_rate / $6, $7)
+                           + dgbpm * (1.0 - $8 * usage_rate / $6))
+                          * power(total_minutes / $2, $5),
+             updated_at   = now()
+         WHERE season = $1
+           AND ogbpm IS NOT NULL AND dgbpm IS NOT NULL
+           AND usage_rate IS NOT NULL
+           AND min_per IS NOT NULL AND min_per > 0
+           AND total_minutes IS NOT NULL AND games_played IS NOT NULL
+           AND games_played > 0",
+    )
+    .bind(season) // $1
+    .bind(mean_mp) // $2
+    .bind(mean_min_per) // $3
+    .bind(CAMPOM_GP_K) // $4
+    .bind(CAMPOM_MINUTES_EXPONENT) // $5
+    .bind(CAMPOM_USG_REF) // $6
+    .bind(CAMPOM_OFFENSE_EXPONENT) // $7
+    .bind(CAMPOM_DEFENSE_DISCOUNT) // $8
+    .execute(pool)
+    .await?;
+
+    // Tier 2: GP-shrunk versions (× gp_weight)
+    sqlx::query(
+        "UPDATE torvik_player_stats SET
+             cam_gbpm_v2     = cam_gbpm     * gp_weight,
+             cam_o_gbpm_v2   = cam_o_gbpm   * gp_weight,
+             cam_d_gbpm_v2   = cam_d_gbpm   * gp_weight,
+             min_adj_gbpm_v2 = min_adj_gbpm * gp_weight
+         WHERE season = $1 AND adj_gbpm IS NOT NULL",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    // Step 4: conference SOS, restricted to stable estimates (GP >= threshold).
+    // conf_sos = avg(adj_gbpm in conference) − overall_mean(adj_gbpm).
+    let r4 = sqlx::query(
+        "WITH stable AS (
+             SELECT conf, adj_gbpm
+               FROM torvik_player_stats
+              WHERE season = $1
+                AND games_played >= $2
+                AND adj_gbpm IS NOT NULL
+                AND conf IS NOT NULL
+         ),
+         overall AS (SELECT AVG(adj_gbpm) AS mean FROM stable),
+         conf_q  AS (SELECT conf, AVG(adj_gbpm) - (SELECT mean FROM overall) AS sos
+                       FROM stable GROUP BY conf)
+         UPDATE torvik_player_stats t SET
+             conf_sos     = c.sos,
+             sos_adj      = c.sos * $3,
+             adj_gbpm_sos = t.adj_gbpm + c.sos * $3
+           FROM conf_q c
+          WHERE t.season = $1
+            AND t.conf = c.conf
+            AND t.adj_gbpm IS NOT NULL",
+    )
+    .bind(season) // $1
+    .bind(CAMPOM_SOS_MIN_GP) // $2
+    .bind(CAMPOM_SOS_TRANSFER_RATE) // $3
+    .execute(pool)
+    .await?;
+
+    // Tier 3: SOS-then-volume-then-shrinkage. SOS is applied on top of
+    // adj_gbpm so it scales with mp_factor (and is subsequently shrunk by GP).
+    //
+    // Offensive / defensive split of SOS: proportional to each side's signed
+    // contribution to adj_gbpm. If adj_gbpm is ~0, fall back to a 50/50 split
+    // to avoid divide-by-zero blowups (only ~handful of players land there).
+    sqlx::query(
+        "UPDATE torvik_player_stats SET
+             cam_gbpm_v3     = adj_gbpm_sos * mp_factor * gp_weight,
+             min_adj_gbpm_v3 = adj_gbpm_sos * min_factor * gp_weight,
+             cam_o_gbpm_v3   = (
+                 ogbpm * power(usage_rate / $2, $3)
+                 + CASE
+                     WHEN abs(adj_gbpm) > 1e-9
+                       THEN sos_adj * (ogbpm * power(usage_rate / $2, $3)) / adj_gbpm
+                     ELSE sos_adj * 0.5
+                   END
+               ) * mp_factor * gp_weight,
+             cam_d_gbpm_v3   = (
+                 dgbpm * (1.0 - $4 * usage_rate / $2)
+                 + CASE
+                     WHEN abs(adj_gbpm) > 1e-9
+                       THEN sos_adj * (dgbpm * (1.0 - $4 * usage_rate / $2)) / adj_gbpm
+                     ELSE sos_adj * 0.5
+                   END
+               ) * mp_factor * gp_weight
+         WHERE season = $1
+           AND adj_gbpm_sos IS NOT NULL",
+    )
+    .bind(season) // $1
+    .bind(CAMPOM_USG_REF) // $2
+    .bind(CAMPOM_OFFENSE_EXPONENT) // $3
+    .bind(CAMPOM_DEFENSE_DISCOUNT) // $4
+    .execute(pool)
+    .await?;
+
+    // Parallel Tier-3: same machinery, but with cstat's player-level SOS
+    // (`player_season_stats.player_sos`, minutes-weighted opponent
+    // adj-efficiency-margin) instead of conference-level. Only populated for
+    // players with a `player_sos` row; others stay NULL.
+    let r_psos = sqlx::query(
+        "UPDATE torvik_player_stats t SET
+             psos_adj      = pss.player_sos * $2,
+             adj_gbpm_psos = t.adj_gbpm + pss.player_sos * $2,
+             cam_gbpm_v3_psos     = (t.adj_gbpm + pss.player_sos * $2)
+                                  * t.mp_factor * t.gp_weight,
+             min_adj_gbpm_v3_psos = (t.adj_gbpm + pss.player_sos * $2)
+                                  * t.min_factor * t.gp_weight,
+             cam_o_gbpm_v3_psos   = (
+                 t.ogbpm * power(t.usage_rate / $3, $4)
+                 + CASE
+                     WHEN abs(t.adj_gbpm) > 1e-9
+                       THEN (pss.player_sos * $2)
+                              * (t.ogbpm * power(t.usage_rate / $3, $4))
+                              / t.adj_gbpm
+                     ELSE (pss.player_sos * $2) * 0.5
+                   END
+               ) * t.mp_factor * t.gp_weight,
+             cam_d_gbpm_v3_psos   = (
+                 t.dgbpm * (1.0 - $5 * t.usage_rate / $3)
+                 + CASE
+                     WHEN abs(t.adj_gbpm) > 1e-9
+                       THEN (pss.player_sos * $2)
+                              * (t.dgbpm * (1.0 - $5 * t.usage_rate / $3))
+                              / t.adj_gbpm
+                     ELSE (pss.player_sos * $2) * 0.5
+                   END
+               ) * t.mp_factor * t.gp_weight
+           FROM player_season_stats pss
+          WHERE pss.player_id = t.player_id
+            AND pss.season = t.season
+            AND t.season = $1
+            AND t.adj_gbpm IS NOT NULL
+            AND pss.player_sos IS NOT NULL",
+    )
+    .bind(season) // $1
+    .bind(CAMPOM_PLAYER_SOS_TRANSFER_RATE) // $2
+    .bind(CAMPOM_USG_REF) // $3
+    .bind(CAMPOM_OFFENSE_EXPONENT) // $4
+    .bind(CAMPOM_DEFENSE_DISCOUNT) // $5
+    .execute(pool)
+    .await?;
+
+    // Percentile companion for the canonical site-wide CamPom score.
+    // Restricted to qualified players (>=10 GP, >=10 MPG via the misnamed
+    // `total_minutes` column which actually holds MP). Unqualified players
+    // get NULL — the API/UI defaults filter them out.
+    let r_pct = sqlx::query(
+        "WITH ranked AS (
+             SELECT torvik_pid, season,
+                    PERCENT_RANK() OVER (ORDER BY cam_gbpm_v3_psos) AS pct
+               FROM torvik_player_stats
+              WHERE season = $1
+                AND cam_gbpm_v3_psos IS NOT NULL
+                AND games_played >= 10
+                AND total_minutes >= 10
+         )
+         UPDATE torvik_player_stats t
+            SET cam_gbpm_v3_psos_pct = r.pct
+           FROM ranked r
+          WHERE t.torvik_pid = r.torvik_pid
+            AND t.season = r.season",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    info!(
+        per_player = r1.rows_affected(),
+        with_sos = r4.rows_affected(),
+        with_psos = r_psos.rows_affected(),
+        with_pct = r_pct.rows_affected(),
+        season,
+        "computed CamPom composites"
+    );
+    Ok(r1.rows_affected())
+}
+
 /// Derive is_conference flag on games where both teams share a conference.
 /// Also backfill point_diff on team_season_stats from team_game_stats.
 pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
@@ -1188,40 +1474,43 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
 
     info!(season, "starting compute pipeline");
 
-    info!("step 1/12: deduplicating players");
+    info!("step 1/13: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
-    info!("step 2/12: backfilling derived game stats");
+    info!("step 2/13: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 3/12: estimating missing team defensive rebounds");
+    info!("step 3/13: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 4/12: computing player season stats (with rate stats)");
+    info!("step 4/13: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
-    info!("step 5/12: computing team four factors");
+    info!("step 5/13: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 6/12: computing adjusted efficiency (KenPom-style)");
+    info!("step 6/13: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 7/12: computing individual ORTG/DRTG and BPM splits");
+    info!("step 7/13: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 8/12: computing player SOS");
+    info!("step 8/13: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 9/12: computing rolling averages");
+    info!("step 9/13: computing CamPom composites");
+    report.campom = compute_campom(pool, season).await?;
+
+    info!("step 10/13: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 10/12: computing derived game fields");
+    info!("step 11/13: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 11/12: computing schedules");
+    info!("step 12/13: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 12/12: computing player percentiles");
+    info!("step 13/13: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -1237,6 +1526,7 @@ pub struct ComputeReport {
     pub team_four_factors: u64,
     pub adjusted_efficiency: u64,
     pub individual_ratings: u64,
+    pub campom: u64,
     pub player_sos: u64,
     pub rolling_averages: u64,
     pub derived_fields: u64,
@@ -1248,7 +1538,7 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} four factors, {} adj eff, {} ORTG/DRTG, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.deduplicated_players,
             self.backfilled,
             self.estimated_rebounds,
@@ -1256,6 +1546,7 @@ impl std::fmt::Display for ComputeReport {
             self.team_four_factors,
             self.adjusted_efficiency,
             self.individual_ratings,
+            self.campom,
             self.player_sos,
             self.rolling_averages,
             self.derived_fields,

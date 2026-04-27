@@ -38,5 +38,12 @@ __pycache__/
 !/training/models/margin_model.onnx
 !/training/models/win_model.onnx
 
+# Training experiment side-by-side outputs. Results live in ROADMAP §4f;
+# artifacts here are reproducible from the GBPM_VARIANT env var.
+/training/models_experiments/
+
+# Claude Code runtime state — machine-local, not part of the project.
+/.claude/scheduled_tasks.lock
+
 # Logs
 /logs/

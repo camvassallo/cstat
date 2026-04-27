@@ -22,6 +22,7 @@ import {
   type PlayerRow,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
+import { campomTier, campomTierColor } from '../components/campom';
 
 const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
 const MAX_PLAYERS = 4;
@@ -193,6 +194,10 @@ function StatTable({
 
 function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string; onRemove: () => void }) {
   const { player } = p;
+  const campom = p.torvik_stats?.campom ?? null;
+  const campomPct = p.torvik_stats?.campom_pct ?? null;
+  const tier = campomTier(campom);
+  const pctStr = campomPct != null ? Math.round(campomPct * 100) : null;
   return (
     <div
       className="bg-gray-800 rounded-lg p-4 flex items-start justify-between gap-3 border-l-4"
@@ -225,6 +230,19 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
             .filter(Boolean)
             .join(' · ') || '—'}
         </div>
+        {campom != null && (
+          <div className="mt-2">
+            <span
+              className={`inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded border text-xs ${campomTierColor(tier)}`}
+              title="CamPom: composite player valuation"
+            >
+              <span className="uppercase tracking-wide opacity-70">CamPom</span>
+              <span className="font-bold">{campom.toFixed(1)}</span>
+              {pctStr != null && <span className="opacity-80">{pctStr} pct</span>}
+              {tier && <span className="opacity-80">· {tier}</span>}
+            </span>
+          </div>
+        )}
       </div>
       <button
         onClick={onRemove}
@@ -394,6 +412,7 @@ export default function PlayerCompare() {
   const hasTorvik = players.some((p) => p.torvik_stats);
   const advancedRows: StatRow[] = hasTorvik
     ? [
+        { label: 'CamPom', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom), pctile: p.torvik_stats?.campom_pct, color: PLAYER_COLORS[i] })) },
         { label: 'GBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.gbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.gbpm), pctile: p.torvik_stats?.gbpm_pct, color: PLAYER_COLORS[i] })) },
         { label: 'OGBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.ogbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.ogbpm), pctile: p.torvik_stats?.ogbpm_pct, color: PLAYER_COLORS[i] })) },
         { label: 'DGBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.dgbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.dgbpm), pctile: p.torvik_stats?.dgbpm_pct, color: PLAYER_COLORS[i] })) },

@@ -85,6 +85,8 @@ export interface RosterEntry {
   true_shooting_pct: number | null;
   usage_rate: number | null;
   gbpm: number | null;
+  campom: number | null;
+  campom_pct: number | null;
   offensive_rating: number | null;
   defensive_rating: number | null;
   primary_class: string | null;
@@ -178,6 +180,8 @@ export interface PlayerRow {
   defensive_rating: number | null;
   net_rating: number | null;
   player_sos: number | null;
+  campom: number | null;
+  campom_pct: number | null;
 }
 
 export interface PlayerProfile {
@@ -337,6 +341,9 @@ export interface TorkvikStats {
   // Context
   recruiting_rank: number | null;
   hometown: string | null;
+  // CamPom (canonical site-wide composite)
+  campom: number | null;
+  campom_pct: number | null;
   // Percentiles
   gbpm_pct: number | null;
   ogbpm_pct: number | null;

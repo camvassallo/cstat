@@ -14,11 +14,28 @@ Feature groups:
   - Context: venue, conference matchup, win percentage diff
 """
 
+import os
 import numpy as np
 import pandas as pd
 from db import get_engine
 
 SEASONS = [2025, 2026]
+
+# GBPM source for roster aggregates / star features. Lets us A/B raw Torvik
+# GBPM against CamPom composites without changing feature names or count.
+# - "raw"         : ogbpm / dgbpm / gbpm from torvik_player_stats (production)
+# - "cam_v3"      : cam_o_gbpm_v3 / cam_d_gbpm_v3 / cam_gbpm_v3 (conf-SOS)
+# - "cam_v3_psos" : cam_o_gbpm_v3_psos / cam_d_gbpm_v3_psos / cam_gbpm_v3_psos
+GBPM_VARIANT = os.environ.get("GBPM_VARIANT", "raw").strip()
+_GBPM_COLUMNS = {
+    "raw":         ("gbpm",             "ogbpm",             "dgbpm"),
+    "cam_v3":      ("cam_gbpm_v3",      "cam_o_gbpm_v3",     "cam_d_gbpm_v3"),
+    "cam_v3_psos": ("cam_gbpm_v3_psos", "cam_o_gbpm_v3_psos", "cam_d_gbpm_v3_psos"),
+}
+if GBPM_VARIANT not in _GBPM_COLUMNS:
+    raise ValueError(
+        f"GBPM_VARIANT={GBPM_VARIANT!r} not recognized; choose one of {list(_GBPM_COLUMNS)}"
+    )
 
 # ELO parameters
 ELO_K = 20.0
@@ -140,21 +157,25 @@ def load_team_conferences(engine, seasons=None) -> pd.DataFrame:
 
 
 def load_torvik_stats(engine, seasons=None) -> pd.DataFrame:
-    """Load Torvik GBPM/OGBPM/DGBPM per player for roster aggregation.
+    """Load player-impact GBPM signal for roster aggregation.
 
-    Replaces cstat's broken BPM/OBPM/DBPM as the player-impact signal.
+    Source columns are selected by GBPM_VARIANT. Returns a DataFrame with
+    canonical column names ``gbpm`` / ``ogbpm`` / ``dgbpm`` so downstream
+    aggregation stays variant-agnostic and the trained-feature names are
+    stable.
     """
     seasons = seasons or SEASONS
-    return pd.read_sql(
-        """
-        SELECT player_id, season, gbpm, ogbpm, dgbpm
+    g, og, dg = _GBPM_COLUMNS[GBPM_VARIANT]
+    sql = f"""
+        SELECT player_id, season,
+               {g}  AS gbpm,
+               {og} AS ogbpm,
+               {dg} AS dgbpm
         FROM torvik_player_stats
         WHERE player_id IS NOT NULL
           AND season = ANY(%(seasons)s)
-        """,
-        engine,
-        params={"seasons": seasons},
-    )
+    """
+    return pd.read_sql(sql, engine, params={"seasons": seasons})
 
 
 # ---------------------------------------------------------------------------

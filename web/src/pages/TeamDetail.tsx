@@ -9,6 +9,7 @@ import {
 } from '../api/client';
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
+import { campomTier, campomTierColor } from '../components/campom';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -223,7 +224,7 @@ export default function TeamDetail() {
                 <th className="py-2 px-2 text-right">APG</th>
                 <th className="py-2 px-2 text-right">eFG%</th>
                 <th className="py-2 px-2 text-right">TS%</th>
-                <th className="py-2 px-2 text-right">GBPM</th>
+                <th className="py-2 px-2 text-right" title="Composite player valuation. Sorted by this column.">CamPom</th>
                 <th className="py-2 px-2 text-right">ORTG</th>
               </tr>
             </thead>
@@ -259,7 +260,18 @@ export default function TeamDetail() {
                   <td className="py-2 px-2 text-right">{fmt(p.apg)}</td>
                   <td className="py-2 px-2 text-right">{pct(p.effective_fg_pct)}</td>
                   <td className="py-2 px-2 text-right">{pct(p.true_shooting_pct)}</td>
-                  <td className="py-2 px-2 text-right">{fmt(p.gbpm)}</td>
+                  <td className="py-2 px-2 text-right">
+                    {p.campom != null ? (
+                      <span
+                        className={`px-1.5 rounded border text-xs ${campomTierColor(campomTier(p.campom))}`}
+                        title={campomTier(p.campom) ?? ''}
+                      >
+                        {p.campom.toFixed(1)}
+                      </span>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 text-right">{fmt(p.offensive_rating)}</td>
                 </tr>
               ))}
