@@ -119,9 +119,9 @@ for t in ${TABLE_LIST//,/ }; do
 done
 echo
 
-# Dump in custom format. When using docker, the dump is written *inside* the
-# container, so we have to copy it out to the host afterward to feed pg_restore.
-# Simpler: dump directly to stdout and capture on the host.
+# Dump in custom format to a host-side temp file. When pg_dump runs inside
+# the docker container, its stdout still streams out through `docker exec`,
+# so the redirect captures everything host-side regardless of mode.
 TMPFILE=$(mktemp -t cstat-sync.XXXXXX)
 trap 'rm -f "$TMPFILE"' EXIT
 
