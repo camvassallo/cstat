@@ -13,6 +13,7 @@ import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from '../components/campom';
 import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
+import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -256,6 +257,15 @@ export default function Players() {
 
   const columns = useMemo(() => buildColumns(view), [view]);
 
+  // Debounce keystroke → backend re-fetch so the API isn't hit on every
+  // character. 250ms feels live without flooding the server.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setSearch(searchInput.trim());
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
+
   // Build a fresh datasource whenever the filters change. AG Grid's infinite
   // row model caches blocks keyed by start row; swapping the datasource (or
   // calling `purgeInfiniteCache()`) is what forces a refetch.
@@ -295,11 +305,6 @@ export default function Players() {
     gridApiRef.current?.setGridOption('datasource', datasource);
   }, [datasource]);
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSearch(searchInput.trim());
-  };
-
   const clearArchetype = useCallback(() => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -326,49 +331,45 @@ export default function Players() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <h1 className="text-2xl font-bold">Player Stats</h1>
-        {total != null && (
-          <span className="text-xs text-gray-500">
-            {total.toLocaleString()} qualified
-          </span>
-        )}
-        <form onSubmit={handleSearch} className="flex gap-2">
-          <input
-            type="text"
+      <TableToolbar
+        title="Player Stats"
+        count={total}
+        countLabel="qualified"
+        search={
+          <TableSearchInput
             value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search players..."
-            className="bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+            onChange={setSearchInput}
+            placeholder="Search players…"
           />
-          <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1.5 rounded">
-            Search
-          </button>
-        </form>
-        <div className="flex items-center gap-1 ml-auto">
-          <span className="text-xs text-gray-500 mr-1">View</span>
-          <button
-            onClick={() => setView('raw')}
-            className={`text-xs px-2.5 py-1 rounded ${
-              view === 'raw'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-            }`}
-          >
-            Raw
-          </button>
-          <button
-            onClick={() => setView('rate')}
-            className={`text-xs px-2.5 py-1 rounded ${
-              view === 'rate'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-            }`}
-          >
-            Rate
-          </button>
-        </div>
-      </div>
+        }
+        controls={
+          <>
+            <span className="text-xs text-gray-500">View</span>
+            <div className="inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs">
+              <button
+                onClick={() => setView('raw')}
+                className={`px-2.5 py-1 ${
+                  view === 'raw'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                }`}
+              >
+                Raw
+              </button>
+              <button
+                onClick={() => setView('rate')}
+                className={`px-2.5 py-1 ${
+                  view === 'rate'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                }`}
+              >
+                Rate
+              </button>
+            </div>
+          </>
+        }
+      />
 
       {archetype && (
         <div

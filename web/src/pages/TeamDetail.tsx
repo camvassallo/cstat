@@ -301,12 +301,11 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
           </button>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-gray-400 border-b border-gray-700">
-              <SortHeader label="Player" sortKey="name" current={sort} onSort={onSort} />
-              <StickyHeader>Class</StickyHeader>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-gray-400 border-b border-gray-700">
+            <SortHeader label="Player" sortKey="name" current={sort} onSort={onSort} />
+            <StickyHeader>Class</StickyHeader>
               <SortHeader
                 label="CamPom"
                 sortKey="campom"
@@ -457,16 +456,15 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 )}
               </tr>
             ))}
-            {sorted.length === 0 && (
-              <tr>
-                <td colSpan={13} className="py-6 text-center text-gray-500 text-sm">
-                  No roster data.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+          {sorted.length === 0 && (
+            <tr>
+              <td colSpan={13} className="py-6 text-center text-gray-500 text-sm">
+                No roster data.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }

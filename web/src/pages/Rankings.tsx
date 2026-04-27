@@ -4,6 +4,7 @@ import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
 import { gridTheme } from '../theme';
+import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -27,13 +28,11 @@ const columns: ColDef<TeamRanking>[] = [
     headerName: 'Team',
     width: 200,
     pinned: 'left',
-    filter: 'agTextColumnFilter',
-    floatingFilter: true,
     cellRenderer: (p: { value: string }) => (
       <span className="text-blue-400 hover:underline cursor-pointer">{p.value}</span>
     ),
   },
-  { field: 'conference', headerName: 'Conf', width: 120, filter: 'agTextColumnFilter', floatingFilter: true },
+  { field: 'conference', headerName: 'Conf', width: 120 },
   {
     headerName: 'Record',
     width: 80,
@@ -132,6 +131,7 @@ const columns: ColDef<TeamRanking>[] = [
 export default function Rankings() {
   const [teams, setTeams] = useState<TeamRanking[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -142,7 +142,18 @@ export default function Rankings() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">Team Rankings</h1>
+      <TableToolbar
+        title="Team Rankings"
+        count={teams.length || null}
+        countLabel="teams"
+        search={
+          <TableSearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search team or conference…"
+          />
+        }
+      />
       <div style={{ height: 'calc(100vh - 160px)', width: '100%' }}>
         <AgGridReact<TeamRanking>
           theme={gridTheme}
@@ -150,6 +161,7 @@ export default function Rankings() {
           columnDefs={columns}
           loading={loading}
           rowHeight={48}
+          quickFilterText={search}
           defaultColDef={{
             sortable: true,
             resizable: true,
