@@ -200,6 +200,9 @@ This naturally enables:
   - Consistent sorting + filtering UX across tables (column sort affordances, filter inputs, empty/no-results states)
   - Consistent typography, density, and sticky headers across surfaces
   - Note: per-page default-sort tweaks (e.g., players page → `cam_gbpm_v3`) live in **4f Ship**, not here
+- [ ] **Sortable-table follow-ups** (small polish items uncovered during the table polish work):
+  - **Keyboard a11y on `SortHeader`**: the clickable `<th>` in `web/src/components/TableHeaders.tsx` has `cursor-pointer` and an `onClick` but no `role="button"`, `tabIndex={0}`, or keyboard activation — keyboard-only users can't trigger column sort. Add proper button semantics + `Enter`/`Space` handling. Apply consistently to the Roster, Schedule, and GameLog hand-rolled tables (AG Grid surfaces handle this themselves).
+  - **`pctileTextColor` input clamp**: the red → neutral → green lerp in `web/src/pages/TeamDetail.tsx` produces out-of-gamut RGB if a percentile ever lands outside [0, 1]. `PERCENT_RANK()` is bounded so this can't happen with current data, but a `Math.max(0, Math.min(1, p))` clamp at the function entry is defensive coding for free.
 - [ ] **Spider/radar chart axis transparency**: surface what each prong of the player detail and compare-page radars actually represents — which underlying stat(s) + percentile feed each axis. Today the labels are opaque; a viewer can't tell whether "playmaking" is AST%, AST/TO, raw APG, or a blend. Work:
   - Audit the current axis-to-stat mapping; confirm each prong reflects its label and that no axis double-counts a stat
   - Hover/tap tooltip on each prong showing the contributing stat(s), the player's raw value, and the percentile feeding the spoke length
