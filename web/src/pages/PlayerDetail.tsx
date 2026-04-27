@@ -15,6 +15,7 @@ import {
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
+import { campomTier, campomTierColor } from '../components/campom';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -110,6 +111,21 @@ export default function PlayerDetail() {
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-3xl font-bold">{player.name}</h1>
             {archetype && <ArchetypeBadge archetype={archetype} />}
+            {torvik?.campom != null && (() => {
+              const tier = campomTier(torvik.campom);
+              const pctStr = torvik.campom_pct != null ? Math.round(torvik.campom_pct * 100) : null;
+              return (
+                <span
+                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border ${campomTierColor(tier)}`}
+                  title="CamPom: composite player valuation. See methodology in docs/campom_methodology.md."
+                >
+                  <span className="text-xs uppercase tracking-wide opacity-70">CamPom</span>
+                  <span className="font-bold">{torvik.campom.toFixed(1)}</span>
+                  {pctStr != null && <span className="text-xs opacity-80">{pctStr} pct</span>}
+                  {tier && <span className="text-xs opacity-80">· {tier}</span>}
+                </span>
+              );
+            })()}
           </div>
           <div className="text-gray-400 flex gap-2 items-center flex-wrap mt-1">
             {player.jersey_number && <span>#{player.jersey_number}</span>}

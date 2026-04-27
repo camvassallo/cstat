@@ -4,16 +4,40 @@ import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
 import { fetchPlayers, type PlayerRow } from '../api/client';
 import { gridTheme } from '../theme';
+import { campomTier, campomTierColor } from '../components/campom';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
 
+const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
+  if (p.value == null) return <span className="text-slate-500">—</span>;
+  const tier = campomTier(p.value);
+  const pctVal = p.data?.campom_pct;
+  const pctStr = pctVal != null ? Math.round(pctVal * 100) : null;
+  return (
+    <span className="inline-flex items-baseline gap-2">
+      <span className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`} title={tier ?? ''}>
+        {p.value.toFixed(1)}
+      </span>
+      {pctStr != null && <span className="text-slate-400 text-xs">{pctStr}</span>}
+    </span>
+  );
+};
+
 const columns: ColDef<PlayerRow>[] = [
   { field: 'name', headerName: 'Player', width: 180, pinned: 'left' },
   { field: 'team_name', headerName: 'Team', width: 170 },
   { field: 'conference', headerName: 'Conf', width: 90 },
+  {
+    field: 'campom',
+    headerName: 'CamPom',
+    headerTooltip: 'Composite player valuation. Hover the chip for tier.',
+    width: 120,
+    sort: 'desc',
+    cellRenderer: campomCellRenderer,
+  },
   { field: 'games_played', headerName: 'GP', width: 60 },
   { field: 'minutes_per_game', headerName: 'MPG', width: 70, valueFormatter: (p) => fmt(p.value) },
   { field: 'ppg', headerName: 'PPG', width: 70, valueFormatter: (p) => fmt(p.value) },

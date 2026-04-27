@@ -45,6 +45,7 @@ impl TeamSortField {
 #[serde(rename_all = "snake_case")]
 pub enum PlayerSortField {
     #[default]
+    Campom,
     Ppg,
     Rpg,
     Apg,
@@ -58,6 +59,7 @@ pub enum PlayerSortField {
 impl PlayerSortField {
     pub fn column(&self) -> &'static str {
         match self {
+            Self::Campom => "tps.cam_gbpm_v3_psos",
             Self::Ppg => "pss.ppg",
             Self::Rpg => "pss.rpg",
             Self::Apg => "pss.apg",
@@ -211,6 +213,8 @@ pub struct RosterEntry {
     pub true_shooting_pct: Option<f64>,
     pub usage_rate: Option<f64>,
     pub gbpm: Option<f64>,
+    pub campom: Option<f64>,
+    pub campom_pct: Option<f64>,
     pub offensive_rating: Option<f64>,
     pub defensive_rating: Option<f64>,
     pub primary_class: Option<String>,
@@ -245,6 +249,8 @@ pub struct PlayerRow {
     pub defensive_rating: Option<f64>,
     pub net_rating: Option<f64>,
     pub player_sos: Option<f64>,
+    pub campom: Option<f64>,
+    pub campom_pct: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -555,6 +561,8 @@ pub async fn get_team_roster(
             pss.effective_fg_pct, pss.true_shooting_pct,
             pss.usage_rate,
             tps.gbpm,
+            tps.cam_gbpm_v3_psos     AS campom,
+            tps.cam_gbpm_v3_psos_pct AS campom_pct,
             pss.offensive_rating, pss.defensive_rating,
             pa.primary_class, pa.secondary_class
         FROM players p
@@ -562,7 +570,7 @@ pub async fn get_team_roster(
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
         LEFT JOIN player_archetypes pa ON pa.player_id = p.id AND pa.season = p.season
         WHERE p.team_id = $1 AND p.season = $2
-        ORDER BY pss.minutes_per_game DESC NULLS LAST
+        ORDER BY tps.cam_gbpm_v3_psos DESC NULLS LAST, pss.minutes_per_game DESC NULLS LAST
         "#,
     )
     .bind(team_id)
@@ -626,10 +634,13 @@ pub async fn search_players(
             pss.effective_fg_pct, pss.true_shooting_pct,
             pss.usage_rate,
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
-            pss.player_sos
+            pss.player_sos,
+            tps.cam_gbpm_v3_psos     AS campom,
+            tps.cam_gbpm_v3_psos_pct AS campom_pct
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
+        LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pss.season
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
@@ -834,6 +845,9 @@ pub struct TorkvikStatsRow {
     // Context
     pub recruiting_rank: Option<f64>,
     pub hometown: Option<String>,
+    // CamPom (canonical site-wide composite)
+    pub campom: Option<f64>,
+    pub campom_pct: Option<f64>,
     // Percentiles (computed on-the-fly)
     pub gbpm_pct: Option<f64>,
     pub ogbpm_pct: Option<f64>,
@@ -900,6 +914,8 @@ pub async fn get_torvik_stats(
                ft_rate, personal_foul_rate,
                ftm, fta, two_pm, two_pa,
                recruiting_rank, player_type AS hometown,
+               cam_gbpm_v3_psos     AS campom,
+               cam_gbpm_v3_psos_pct AS campom_pct,
                gbpm_pct, ogbpm_pct, dgbpm_pct,
                adj_oe_pct, adj_de_pct,
                orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,

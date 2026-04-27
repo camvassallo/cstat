@@ -1158,6 +1158,7 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
              psos_adj = NULL, adj_gbpm_psos = NULL,
              cam_gbpm_v3_psos = NULL, cam_o_gbpm_v3_psos = NULL,
              cam_d_gbpm_v3_psos = NULL, min_adj_gbpm_v3_psos = NULL,
+             cam_gbpm_v3_psos_pct = NULL,
              updated_at = now()
          WHERE season = $1",
     )
@@ -1363,10 +1364,35 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     .execute(pool)
     .await?;
 
+    // Percentile companion for the canonical site-wide CamPom score.
+    // Restricted to qualified players (>=10 GP, >=10 MPG via the misnamed
+    // `total_minutes` column which actually holds MP). Unqualified players
+    // get NULL — the API/UI defaults filter them out.
+    let r_pct = sqlx::query(
+        "WITH ranked AS (
+             SELECT torvik_pid, season,
+                    PERCENT_RANK() OVER (ORDER BY cam_gbpm_v3_psos) AS pct
+               FROM torvik_player_stats
+              WHERE season = $1
+                AND cam_gbpm_v3_psos IS NOT NULL
+                AND games_played >= 10
+                AND total_minutes >= 10
+         )
+         UPDATE torvik_player_stats t
+            SET cam_gbpm_v3_psos_pct = r.pct
+           FROM ranked r
+          WHERE t.torvik_pid = r.torvik_pid
+            AND t.season = r.season",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
     info!(
         per_player = r1.rows_affected(),
         with_sos = r4.rows_affected(),
         with_psos = r_psos.rows_affected(),
+        with_pct = r_pct.rows_affected(),
         season,
         "computed CamPom composites"
     );

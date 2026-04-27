@@ -320,15 +320,23 @@ This naturally enables:
 - [ ] **Train/serve parity check**: verify Rust-side computed composites match Python training-side composites on a sampled cohort (same trap that bit BPM pre-PR #25). Lock as a regression test.
 
 #### Ship
-- [ ] **API**: new `GET /api/players/valuation` (rankings, sortable by composite, filterable by conf/team/class); offensive / defensive / total composites included in `GET /api/players/:id`, `GET /api/players` (list), and `GET /api/teams/:id` (roster) so existing surfaces can render the column without bespoke queries
-- [ ] **Frontend — surface the composite everywhere players appear** (CamPom becomes the canonical player ranking):
-  - **Players tab**: add `cam_gbpm_v3` as a column and make it the **default sort** (descending). Closes the open "better default sort for the players page" item flagged in the 4b tables UI polish note.
-  - **TeamDetail roster table**: add the composite column; default sort by `cam_gbpm_v3` desc so the best player on the team is always at the top
-  - **PlayerCompare**: include the composite alongside name/team in each player's header panel (same panel as the archetype primary/secondary class from Phase 5a)
-  - **Most Similar Players carousel** (Phase 5a): show the composite on each tile so similarity is obviously contextualized by quality
-  - All columns: subtle percentile/rank tint per the 4b tables UI polish patterns
-- [ ] **Frontend — dedicated CamPom rankings page**: default sort by `cam_gbpm_v3`; toggle between v3 / v2 / original; toggle offensive-only / defensive-only / total view; conf/class filters
-- [ ] **Frontend — player detail panel**: surface all three composite ranks (offense / defense / total) with a breakdown row showing the chain (raw GBPM → usage-adj → minutes-scaled → GP-shrunk → SOS-adj → final). Per-composite tooltip explaining what it means (reuses the radar-prong tooltip pattern from 4b).
+> Decisions taken in this batch (deviations from the original §4f Ship plan):
+> - **Canonical site rank is `cam_gbpm_v3_psos`** (player-level SOS, not conf-level). The doc itself flagged conf SOS as too coarse, and PSOS disambiguates exactly the players users care about (e.g. high-major guys who scheduled cupcakes vs mid-majors who played up). Conf-SOS `cam_gbpm_v3` stays computed and parity-locked but isn't the headline.
+> - **Pitch as a *descriptive* grade, not a forward-predictive feature.** The Iterate experiment showed CamPom doesn't beat raw GBPM at game prediction — but as a season-grade for "how should we rate this player," it's still our best metric. Tier labels (Elite / All-Conference / Quality starter / Rotation / Replacement / Below replacement) reinforce the grade framing.
+> - **Skipped the chain breakdown panel** (per direction: "we just pitch our best stat, give it a percentile, and publish it"). Single number + percentile + tier; methodology lives in the doc for the curious.
+> - **Skipped the dedicated rankings page**: the Players tab serves that role with the new default sort.
+
+- [x] **API**: `cam_gbpm_v3_psos` + percentile (`campom`, `campom_pct`) added to `GET /api/players` (list, default-sorted by CamPom desc with the existing 5 GP / 10 MPG qualified filter), `GET /api/players/:id` (in `torvik_stats`), `GET /api/teams/:id` (roster, default-sorted by CamPom desc), and `GET /api/players/compare` (via the shared `torvik_stats` block). New `Campom` variant in `PlayerSortField` so the sort param can request CamPom explicitly. Skipped the standalone `/api/players/valuation` endpoint — `/api/players` covers it.
+- [x] **Frontend — CamPom column with tier+percentile chip** on:
+  - **Players tab**: dedicated `CamPom` column with sort=desc default, score+percentile chip, tier color tint. Closes the "default sort for the players page" item.
+  - **TeamDetail roster**: replaced the `GBPM` column with `CamPom`, table inherits API's CamPom-first ordering.
+  - **PlayerCompare header panels**: each player gets a CamPom chip (score + percentile + tier) alongside name/team.
+  - **PlayerCompare Advanced Metrics table**: `CamPom` row added at the top of the section so the side-by-side comparison leads with it.
+  - **PlayerDetail header**: prominent CamPom badge next to the name + archetype (score, percentile rank, tier label).
+  - Tier-label helper (`web/src/components/campom.ts`) is the single source of truth for the score → tier → color mapping; reused across every surface.
+- [ ] *(Deferred to a follow-up if real-world feedback warrants it)* Most Similar Players carousel: surface CamPom on each tile so similarity is contextualized by quality.
+- [ ] *(Skipped per user direction)* PlayerDetail chain breakdown (raw GBPM → usage-adj → minutes-scaled → GP-shrunk → SOS-adj → final). The methodology doc covers it.
+- [ ] *(Skipped per user direction)* Dedicated CamPom rankings page with v2/v3/original + offensive-only/defensive-only toggles. Players tab is the de-facto rankings page.
 
 ---
 
@@ -382,6 +390,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 - [ ] Model accuracy dashboard with calibration tracking
 - [ ] Automated daily data refresh during season
 - [ ] Conference/team/player trend analysis over time
+- [ ] **Native cstat player impact metric** (alternative to Torvik GBPM passthrough). Frame as a *descriptive* grade — "what's this player's value, derived purely from cstat's own machinery" — not a predictor (the §4f experiment already showed CamPom-style adjustments don't beat raw GBPM as ML features; this is a different goal). Approach: non-linear regression of team-game outcomes on roster-composition features (player IDs × minutes) to attribute per-player coefficients. Acceptance: matches or beats CamPom on (a) year-over-year rank stability for returning players and (b) external benchmarks (KenPom POY, AP All-American). **Caveat — re-attempting failed work**: cstat's prior native BPM (`compute.rs` pre-PR #25) tried this with linear box-score formulas and got r=0.075 with Torvik OBPM. Don't repeat that approach; the limit at our data resolution is team-game level (no play-by-play) and box-score-derived linear coefficients are exactly what blew up. A LightGBM-on-team-game-outcomes attribution is a different methodology and worth trying — but it's a multi-PR project and would need its own design doc.
 
 ---
 
