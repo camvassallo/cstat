@@ -1303,11 +1303,13 @@ pub async fn get_archetype_class_summary(
 }
 
 /// Per-class roster breakdown for one team, indexed against the D-I-wide
-/// minute-weighted distribution. `index = team_share / d1_share` — values
-/// >1 mean the team is loaded with that class relative to the league,
-/// values <1 mean light. All classes present in the season's clustering
-/// are returned, including ones the team has zero minutes of (so under-
-/// indexed / missing classes are detectable).
+/// minute-weighted distribution.
+///
+/// `index = team_share / d1_share`: values above 1 mean the team is loaded
+/// with that class relative to the league, values below 1 mean light. All
+/// classes present in the season's clustering are returned, including ones
+/// the team has zero minutes of (so under-indexed and missing classes are
+/// detectable).
 #[derive(Debug, Serialize, FromRow)]
 pub struct ArchetypeShare {
     pub primary_class: String,

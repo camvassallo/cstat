@@ -18,11 +18,11 @@ import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');
-const pct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
-// pss stores rate stats with mixed scale conventions, matching how the
-// roster table handles them:
-//   ast_pct / tov_pct / ft_rate: fractions (0–1), need ×100 for display
-//   orb_pct / drb_pct / stl_pct / blk_pct: already percent-points (0–100)
+// pss stores rate stats with mixed scale conventions:
+//   ast_pct / tov_pct / ft_rate / usage_rate / true_shooting_pct / eFG%:
+//     fractions (0–1) — need ×100 for display
+//   orb_pct / drb_pct / stl_pct / blk_pct:
+//     already in percent points (0–100) — no scaling
 const fracPct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
 const pointPct = (v: number | null) => (v != null ? v.toFixed(1) : '—');
 
@@ -201,12 +201,12 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
     },
     {
       field: 'usage_rate', headerName: 'USG%', width: 80,
-      valueFormatter: (p) => pct(p.value),
+      valueFormatter: (p) => fracPct(p.value),
       cellStyle: gradientCellStyle('usage_rate_pct'),
     },
     {
       field: 'true_shooting_pct', headerName: 'TS%', width: 75,
-      valueFormatter: (p) => pct(p.value),
+      valueFormatter: (p) => fracPct(p.value),
       cellStyle: gradientCellStyle('true_shooting_pct_pct'),
     },
   ];

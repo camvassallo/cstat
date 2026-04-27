@@ -48,8 +48,8 @@ const pct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
 /** Cell renderer that shows a formatted value with a subtle rank underneath.
  *  The rank text is tinted by percentile when `totalTeams` is provided —
  *  small enough to stay subtle, but gives an at-a-glance cue alongside the
- *  precise rank number. AdjEM gets the vivid gradient on the value itself
- *  (different column treatment); this helper is for the supporting columns. */
+ *  precise rank number. AdjEM gets its own chip treatment (see
+ *  `adjEmTierColor`); this helper is for the supporting columns. */
 function RankedCell({
   value,
   rank,
