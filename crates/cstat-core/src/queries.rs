@@ -49,11 +49,24 @@ pub enum PlayerSortField {
     Ppg,
     Rpg,
     Apg,
+    Spg,
+    Bpg,
+    Topg,
     OffensiveRating,
+    DefensiveRating,
+    NetRating,
     MinutesPerGame,
+    EffectiveFgPct,
     TrueShootingPct,
     UsageRate,
     GamesPlayed,
+    AstPct,
+    TovPct,
+    OrbPct,
+    DrbPct,
+    StlPct,
+    BlkPct,
+    FtRate,
 }
 
 impl PlayerSortField {
@@ -63,11 +76,24 @@ impl PlayerSortField {
             Self::Ppg => "pss.ppg",
             Self::Rpg => "pss.rpg",
             Self::Apg => "pss.apg",
+            Self::Spg => "pss.spg",
+            Self::Bpg => "pss.bpg",
+            Self::Topg => "pss.topg",
             Self::OffensiveRating => "pss.offensive_rating",
+            Self::DefensiveRating => "pss.defensive_rating",
+            Self::NetRating => "pss.net_rating",
             Self::MinutesPerGame => "pss.minutes_per_game",
+            Self::EffectiveFgPct => "pss.effective_fg_pct",
             Self::TrueShootingPct => "pss.true_shooting_pct",
             Self::UsageRate => "pss.usage_rate",
             Self::GamesPlayed => "pss.games_played",
+            Self::AstPct => "pss.ast_pct",
+            Self::TovPct => "pss.tov_pct",
+            Self::OrbPct => "pss.orb_pct",
+            Self::DrbPct => "pss.drb_pct",
+            Self::StlPct => "pss.stl_pct",
+            Self::BlkPct => "pss.blk_pct",
+            Self::FtRate => "pss.ft_rate",
         }
     }
 }
@@ -270,6 +296,33 @@ pub struct PlayerRow {
     pub player_sos: Option<f64>,
     pub campom: Option<f64>,
     pub campom_pct: Option<f64>,
+    // Rate stats — surfaced on the Players tab Rate view.
+    pub ast_pct: Option<f64>,
+    pub tov_pct: Option<f64>,
+    pub orb_pct: Option<f64>,
+    pub drb_pct: Option<f64>,
+    pub stl_pct: Option<f64>,
+    pub blk_pct: Option<f64>,
+    pub ft_rate: Option<f64>,
+    // Percentiles — drive the red→green gradient on each stat cell.
+    pub ppg_pct: Option<f64>,
+    pub rpg_pct: Option<f64>,
+    pub apg_pct: Option<f64>,
+    pub spg_pct: Option<f64>,
+    pub bpg_pct: Option<f64>,
+    pub topg_pct: Option<f64>,
+    pub mpg_pct: Option<f64>,
+    pub usage_rate_pct: Option<f64>,
+    pub true_shooting_pct_pct: Option<f64>,
+    pub ast_pct_pct: Option<f64>,
+    pub tov_pct_pct: Option<f64>,
+    pub orb_pct_pct: Option<f64>,
+    pub drb_pct_pct: Option<f64>,
+    pub stl_pct_pct: Option<f64>,
+    pub blk_pct_pct: Option<f64>,
+    // Archetype — surfaced when the page filters by class.
+    pub primary_class: Option<String>,
+    pub secondary_class: Option<String>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -617,11 +670,17 @@ pub async fn search_players(
     season: i32,
     sort: PlayerSortField,
     order: Option<SortOrder>,
+    archetype: Option<&str>,
+    include_secondary_archetype: bool,
     limit: i64,
     offset: i64,
 ) -> Result<(Vec<PlayerRow>, i64), sqlx::Error> {
     let order = order.unwrap_or(SortOrder::Desc);
     let search_pattern = search.map(|s| format!("%{s}%"));
+
+    // Archetype filter: $4 holds the class name (or NULL); $5 toggles whether
+    // a player matches via secondary_class as well as primary_class.
+    let archetype_param = archetype.map(str::to_string);
 
     // Count query
     let total: i64 = sqlx::query_scalar(
@@ -629,16 +688,25 @@ pub async fn search_players(
         SELECT COUNT(*)
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = pss.player_id AND pa.season = pss.season
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3)
+          AND (
+              $4::text IS NULL
+              OR pa.primary_class = $4
+              OR ($5::bool AND pa.secondary_class = $4)
+          )
         "#,
     )
     .bind(season)
     .bind(team_id)
     .bind(&search_pattern)
+    .bind(&archetype_param)
+    .bind(include_secondary_archetype)
     .fetch_one(pool)
     .await?;
 
@@ -662,18 +730,33 @@ pub async fn search_players(
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
             pss.player_sos,
             tps.cam_gbpm_v3_psos     AS campom,
-            tps.cam_gbpm_v3_psos_pct AS campom_pct
+            tps.cam_gbpm_v3_psos_pct AS campom_pct,
+            pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
+            pss.stl_pct, pss.blk_pct, pss.ft_rate,
+            pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
+            pp.mpg_pct, pp.usage_rate_pct, pp.true_shooting_pct_pct,
+            pp.ast_pct_pct, pp.tov_pct_pct, pp.orb_pct_pct, pp.drb_pct_pct,
+            pp.stl_pct_pct, pp.blk_pct_pct,
+            pa.primary_class, pa.secondary_class
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pss.season
+        LEFT JOIN player_percentiles pp ON pp.player_id = pss.player_id AND pp.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = pss.player_id AND pa.season = pss.season
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3)
+          AND (
+              $4::text IS NULL
+              OR pa.primary_class = $4
+              OR ($5::bool AND pa.secondary_class = $4)
+          )
         ORDER BY {} {} NULLS LAST
-        LIMIT $4 OFFSET $5
+        LIMIT $6 OFFSET $7
         "#,
         sort.column(),
         order.sql(),
@@ -683,6 +766,8 @@ pub async fn search_players(
         .bind(season)
         .bind(team_id)
         .bind(&search_pattern)
+        .bind(&archetype_param)
+        .bind(include_secondary_archetype)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)

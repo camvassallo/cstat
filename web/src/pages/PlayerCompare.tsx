@@ -23,6 +23,8 @@ import {
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { campomTier, campomTierColor } from '../components/campom';
+import { ClassTooltip } from '../components/Archetype';
+import { classColor } from '../components/archetypeColors';
 
 const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
 const MAX_PLAYERS = 4;
@@ -198,6 +200,8 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
   const campomPct = p.torvik_stats?.campom_pct ?? null;
   const tier = campomTier(campom);
   const pctStr = campomPct != null ? Math.round(campomPct * 100) : null;
+  const arch = p.archetype;
+  const primaryClassColor = arch ? classColor(arch.primary_class) : null;
   return (
     <div
       className="bg-gray-800 rounded-lg p-4 flex items-start justify-between gap-3 border-l-4"
@@ -230,8 +234,27 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
             .filter(Boolean)
             .join(' · ') || '—'}
         </div>
-        {campom != null && (
-          <div className="mt-2">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {arch && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide">
+              <ClassTooltip cls={arch.primary_class}>
+                <span style={{ color: primaryClassColor ?? undefined }}>
+                  {arch.primary_class}
+                </span>
+              </ClassTooltip>
+              {arch.secondary_class && (
+                <ClassTooltip cls={arch.secondary_class}>
+                  <span
+                    className="opacity-70"
+                    style={{ color: classColor(arch.secondary_class) }}
+                  >
+                    / {arch.secondary_class}
+                  </span>
+                </ClassTooltip>
+              )}
+            </span>
+          )}
+          {campom != null && (
             <span
               className={`inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded border text-xs ${campomTierColor(tier)}`}
               title="CamPom: composite player valuation"
@@ -241,8 +264,8 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
               {pctStr != null && <span className="opacity-80">{pctStr} pct</span>}
               {tier && <span className="opacity-80">· {tier}</span>}
             </span>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       <button
         onClick={onRemove}

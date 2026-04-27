@@ -12,6 +12,7 @@ import { ClassTooltip } from '../components/Archetype';
 import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
+import { pctileTextColor } from '../components/pctile';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -244,17 +245,6 @@ type RosterView = 'raw' | 'rate';
 // Continuous red → neutral → green gradient on percentile (0–1).
 // Anchors: red-400 (#f87171) → gray-200 (#e5e7eb, the table's default text) → green-400 (#4ade80).
 // Returns an rgb() string suitable for a `style.color` value.
-function pctileTextColor(p: number | null | undefined): string {
-  if (p == null) return '#6b7280'; // gray-500 (matches the existing "—" muting)
-  const red = [248, 113, 113];
-  const mid = [229, 231, 235];
-  const green = [74, 222, 128];
-  const lerp = (a: number[], b: number[], t: number) =>
-    a.map((av, i) => Math.round(av + (b[i] - av) * t));
-  const c = p <= 0.5 ? lerp(red, mid, p / 0.5) : lerp(mid, green, (p - 0.5) / 0.5);
-  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-}
-
 function ValueWithPctile({ value, pctile }: { value: string; pctile: number | null | undefined }) {
   return <span style={{ color: pctileTextColor(pctile) }}>{value}</span>;
 }
@@ -375,17 +365,29 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 </td>
                 <td className="py-2 px-2">
                   {p.primary_class ? (
-                    <ClassTooltip cls={p.primary_class}>
-                      <span
-                        className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
-                        style={{
-                          color: classColor(p.primary_class),
-                          background: classColor(p.primary_class) + '22',
-                        }}
-                      >
-                        {p.primary_class}
-                      </span>
-                    </ClassTooltip>
+                    <span className="inline-flex items-center gap-1">
+                      <ClassTooltip cls={p.primary_class}>
+                        <span
+                          className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+                          style={{
+                            color: classColor(p.primary_class),
+                            background: classColor(p.primary_class) + '22',
+                          }}
+                        >
+                          {p.primary_class}
+                        </span>
+                      </ClassTooltip>
+                      {p.secondary_class && (
+                        <ClassTooltip cls={p.secondary_class}>
+                          <span
+                            className="text-[10px] uppercase tracking-wide opacity-75"
+                            style={{ color: classColor(p.secondary_class) }}
+                          >
+                            / {p.secondary_class}
+                          </span>
+                        </ClassTooltip>
+                      )}
+                    </span>
                   ) : (
                     <span className="text-gray-600 text-xs">—</span>
                   )}

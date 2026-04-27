@@ -110,13 +110,21 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
     >
       <div className="p-4 border-b border-gray-700/60">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-xl font-bold" style={{ color }}>
+          <Link
+            to={`/players?archetype=${encodeURIComponent(def.name)}`}
+            className="text-xl font-bold hover:underline"
+            style={{ color }}
+            title={`See all ${def.name}s ranked by CamPom`}
+          >
             {def.name}
-          </h2>
+          </Link>
           {info != null && (
-            <span className="text-xs text-gray-400 shrink-0">
-              {info.count.toLocaleString()} players
-            </span>
+            <Link
+              to={`/players?archetype=${encodeURIComponent(def.name)}`}
+              className="text-xs text-gray-400 shrink-0 hover:text-gray-200 hover:underline"
+            >
+              {info.count.toLocaleString()} players →
+            </Link>
           )}
         </div>
         <div className="text-sm text-gray-300 mt-0.5">{classTagline(def.name)}</div>

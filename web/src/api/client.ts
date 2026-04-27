@@ -180,6 +180,7 @@ export interface PlayerRow {
   team_name: string | null;
   conference: string | null;
   position: string | null;
+  class_year: string | null;
   season: number;
   games_played: number;
   minutes_per_game: number | null;
@@ -201,6 +202,30 @@ export interface PlayerRow {
   player_sos: number | null;
   campom: number | null;
   campom_pct: number | null;
+  ast_pct: number | null;
+  tov_pct: number | null;
+  orb_pct: number | null;
+  drb_pct: number | null;
+  stl_pct: number | null;
+  blk_pct: number | null;
+  ft_rate: number | null;
+  ppg_pct: number | null;
+  rpg_pct: number | null;
+  apg_pct: number | null;
+  spg_pct: number | null;
+  bpg_pct: number | null;
+  topg_pct: number | null;
+  mpg_pct: number | null;
+  usage_rate_pct: number | null;
+  true_shooting_pct_pct: number | null;
+  ast_pct_pct: number | null;
+  tov_pct_pct: number | null;
+  orb_pct_pct: number | null;
+  drb_pct_pct: number | null;
+  stl_pct_pct: number | null;
+  blk_pct_pct: number | null;
+  primary_class: string | null;
+  secondary_class: string | null;
 }
 
 export interface PlayerProfile {
@@ -301,6 +326,8 @@ export function fetchPlayers(params: {
   season?: number;
   sort?: string;
   order?: string;
+  archetype?: string;
+  includeSecondaryArchetype?: boolean;
   limit?: number;
   offset?: number;
 }) {
@@ -312,6 +339,8 @@ export function fetchPlayers(params: {
       season: params.season?.toString(),
       sort: params.sort,
       order: params.order,
+      archetype: params.archetype,
+      include_secondary_archetype: params.includeSecondaryArchetype ? 'true' : undefined,
       limit: params.limit?.toString(),
       offset: params.offset?.toString(),
     },
@@ -450,6 +479,7 @@ export interface ComparePlayer {
   percentiles: Percentiles | null;
   game_log: GameLogEntry[];
   torvik_stats: TorkvikStats | null;
+  archetype: PlayerArchetype | null;
 }
 
 export function fetchPlayerCompare(ids: string[], season?: number) {
