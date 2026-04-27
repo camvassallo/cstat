@@ -46,9 +46,11 @@ export interface TeamRanking {
   opp_effective_fg_pct: number | null;
   opp_effective_fg_pct_rank: number | null;
   opp_turnover_pct: number | null;
+  opp_turnover_pct_rank: number | null;
   def_rebound_pct: number | null;
   def_rebound_pct_rank: number | null;
   opp_ft_rate: number | null;
+  opp_ft_rate_rank: number | null;
 }
 
 export interface ScheduleEntry {

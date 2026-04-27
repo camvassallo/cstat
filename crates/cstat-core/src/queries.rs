@@ -154,9 +154,11 @@ pub struct TeamRanking {
     pub opp_effective_fg_pct: Option<f64>,
     pub opp_effective_fg_pct_rank: Option<i64>,
     pub opp_turnover_pct: Option<f64>,
+    pub opp_turnover_pct_rank: Option<i64>,
     pub def_rebound_pct: Option<f64>,
     pub def_rebound_pct_rank: Option<i64>,
     pub opp_ft_rate: Option<f64>,
+    pub opp_ft_rate_rank: Option<i64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -494,9 +496,11 @@ pub async fn get_team_rankings(
             tss.opp_effective_fg_pct,
             RANK() OVER (ORDER BY tss.opp_effective_fg_pct ASC NULLS LAST) AS opp_effective_fg_pct_rank,
             tss.opp_turnover_pct,
+            RANK() OVER (ORDER BY tss.opp_turnover_pct DESC NULLS LAST) AS opp_turnover_pct_rank,
             tss.def_rebound_pct,
             RANK() OVER (ORDER BY tss.def_rebound_pct DESC NULLS LAST) AS def_rebound_pct_rank,
-            tss.opp_ft_rate
+            tss.opp_ft_rate,
+            RANK() OVER (ORDER BY tss.opp_ft_rate ASC NULLS LAST) AS opp_ft_rate_rank
         FROM teams t
         JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
         WHERE t.season = $1
