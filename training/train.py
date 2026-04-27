@@ -32,8 +32,9 @@ from db import get_engine
 from features import GBPM_VARIANT, SEASONS, build_feature_matrix
 
 # Override target dir per-experiment with MODEL_DIR=...; default is the
-# production location. Used by run_experiments.py to keep raw / cam_v3 /
-# cam_v3_psos artifacts side by side without clobbering each other.
+# production location. Used together with GBPM_VARIANT (see features.py) to
+# keep experimental artifacts side-by-side without clobbering production —
+# e.g. `MODEL_DIR=models_experiments/cam_v3 GBPM_VARIANT=cam_v3 python train.py`.
 MODEL_DIR = Path(os.environ.get("MODEL_DIR") or (Path(__file__).parent / "models"))
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 

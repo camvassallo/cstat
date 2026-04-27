@@ -36,9 +36,10 @@ ALTER TABLE torvik_player_stats
 -- The existing `minutes_per_game` column is misnamed: ingestion writes Torvik's
 -- `Min_per` (column 4 of the source CSV — share of team minutes, 0–100) into it.
 -- Backfill the new semantically-correct `min_per` column from existing rows so
--- we don't need to re-ingest just to run CamPom. The misnomer on
--- `minutes_per_game` is left as-is for a follow-up cleanup; CamPom reads
--- `min_per` and derives actual MP from `total_minutes / games_played`.
+-- we don't need to re-ingest just to run CamPom. (Separate latent misnomer:
+-- `total_minutes` actually stores MP — minutes per game, Torvik CSV col 54 —
+-- not season totals. CamPom reads it for what it truly contains.) The misnomers
+-- are left as-is for a follow-up rename PR.
 UPDATE torvik_player_stats
    SET min_per = minutes_per_game
  WHERE min_per IS NULL

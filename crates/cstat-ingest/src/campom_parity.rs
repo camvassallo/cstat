@@ -315,6 +315,8 @@ pub async fn run(pool: &PgPool, season: i32, baseline_path: &Path) -> Result<Par
         },
     ];
 
+    // The compare_column calls below are positional by `columns` index — keep
+    // them in lockstep with the `columns` vec construction above.
     let mut matched = 0usize;
     let mut baseline_only = 0usize;
     for (pid, b) in &baseline {

@@ -32,13 +32,3 @@ export function campomTierColor(tier: CampomTier | null): string {
     default:                  return "bg-slate-700/40 text-slate-400 border-slate-600/40";
   }
 }
-
-export function formatCampom(score: number | null | undefined): string {
-  if (score == null) return "—";
-  return score.toFixed(1);
-}
-
-export function formatCampomPct(pct: number | null | undefined): string {
-  if (pct == null) return "—";
-  return `${(pct * 100).toFixed(0)}`;
-}
