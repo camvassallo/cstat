@@ -162,10 +162,13 @@ export PROD_DATABASE_URL="postgresql://..."
 ./scripts/sync_to_prod.sh
 ```
 
-The script TRUNCATEs every public table on prod (except `api_cache` and
-`_sqlx_migrations`) and restores from a fresh local `pg_dump --data-only`
-in a single transaction. Falls back to running pg_dump/psql inside the
-local Postgres container if the host doesn't have them installed.
+The script dumps locally with `pg_dump -Fc` (binary, compressed — typically
+~7× smaller than plain text), then in a single transaction TRUNCATEs every
+public table on prod (except `api_cache` and `_sqlx_migrations`) and
+restores via `COPY` statements from `pg_restore`. Atomic: prod readers see
+old data until the COMMIT, then new instantly. Falls back to running the
+psql tools inside the local Postgres container if the host doesn't have
+them installed.
 
 ## Environment Variables
 
