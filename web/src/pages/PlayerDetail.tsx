@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
-import { fetchPlayerDetail, type PlayerProfile, type PlayerSeasonStats, type Percentiles, type GameLogEntry, type LeagueAverages, type TorkvikStats } from '../api/client';
+import {
+  fetchPlayerDetail,
+  fetchPlayerSimilar,
+  type PlayerProfile,
+  type PlayerSeasonStats,
+  type Percentiles,
+  type GameLogEntry,
+  type LeagueAverages,
+  type TorkvikStats,
+  type PlayerArchetype,
+  type SimilarPlayer,
+} from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
+import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -36,6 +48,8 @@ export default function PlayerDetail() {
   const [gameLog, setGameLog] = useState<GameLogEntry[]>([]);
   const [leagueAvg, setLeagueAvg] = useState<LeagueAverages | null>(null);
   const [torvik, setTorvik] = useState<TorkvikStats | null>(null);
+  const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
+  const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -48,6 +62,14 @@ export default function PlayerDetail() {
         setGameLog(r.game_log);
         setLeagueAvg(r.league_averages);
         setTorvik(r.torvik_stats);
+        setArchetype(r.archetype);
+        if (r.archetype) {
+          fetchPlayerSimilar(id, 8)
+            .then((s) => setSimilar(s.players))
+            .catch(() => setSimilar([]));
+        } else {
+          setSimilar([]);
+        }
       })
       .finally(() => setLoading(false));
   }, [id]);
@@ -85,8 +107,11 @@ export default function PlayerDetail() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold">{player.name}</h1>
-          <div className="text-gray-400 flex gap-2 items-center flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-3xl font-bold">{player.name}</h1>
+            {archetype && <ArchetypeBadge archetype={archetype} />}
+          </div>
+          <div className="text-gray-400 flex gap-2 items-center flex-wrap mt-1">
             {player.jersey_number && <span>#{player.jersey_number}</span>}
             {player.position && <span>&middot; {player.position}</span>}
             {player.class_year && <span>&middot; {player.class_year}</span>}
@@ -196,6 +221,9 @@ export default function PlayerDetail() {
           )}
         </div>
       )}
+
+      {/* Similar Players */}
+      {similar.length > 0 && <SimilarPlayers players={similar} />}
 
       {/* Rolling Performance Chart */}
       {rollingData.length > 0 && (

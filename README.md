@@ -144,6 +144,32 @@ cargo clippy --workspace --all-targets -- -D warnings  # Lint
 cargo test --workspace               # Run tests (requires Postgres)
 ```
 
+## Production Sync
+
+The site has no user-generated data — every row in prod is derived from the
+local ingestion + compute pipeline, so local is the source of truth and prod
+is a deterministic mirror. Schema is owned by sqlx migrations (auto-applied
+at API startup); only data needs an explicit push.
+
+```bash
+# Get the connection string from Railway (dashboard or CLI)
+export PROD_DATABASE_URL="postgresql://..."
+
+# Preview what would be synced
+./scripts/sync_to_prod.sh --dry-run
+
+# Apply
+./scripts/sync_to_prod.sh
+```
+
+The script dumps locally with `pg_dump -Fc` (binary, compressed — typically
+~7× smaller than plain text), then in a single transaction TRUNCATEs every
+public table on prod (except `api_cache` and `_sqlx_migrations`) and
+restores via `COPY` statements from `pg_restore`. Atomic: prod readers see
+old data until the COMMIT, then new instantly. Falls back to running the
+psql tools inside the local Postgres container if the host doesn't have
+them installed.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |

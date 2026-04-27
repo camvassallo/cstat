@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, types::JsonValue};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -213,6 +213,8 @@ pub struct RosterEntry {
     pub gbpm: Option<f64>,
     pub offensive_rating: Option<f64>,
     pub defensive_rating: Option<f64>,
+    pub primary_class: Option<String>,
+    pub secondary_class: Option<String>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -553,10 +555,12 @@ pub async fn get_team_roster(
             pss.effective_fg_pct, pss.true_shooting_pct,
             pss.usage_rate,
             tps.gbpm,
-            pss.offensive_rating, pss.defensive_rating
+            pss.offensive_rating, pss.defensive_rating,
+            pa.primary_class, pa.secondary_class
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
+        LEFT JOIN player_archetypes pa ON pa.player_id = p.id AND pa.season = p.season
         WHERE p.team_id = $1 AND p.season = $2
         ORDER BY pss.minutes_per_game DESC NULLS LAST
         "#,
@@ -954,6 +958,244 @@ pub async fn get_games(
     .bind(team_id)
     .bind(limit)
     .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Player archetypes (Phase 5a)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct PlayerArchetypeRow {
+    pub primary_class: String,
+    pub secondary_class: Option<String>,
+    pub primary_score: f64,
+    pub secondary_score: Option<f64>,
+    pub affinity_scores: JsonValue,
+    pub cluster_id: i32,
+}
+
+pub async fn get_player_archetype(
+    pool: &PgPool,
+    player_id: Uuid,
+    season: i32,
+) -> Result<Option<PlayerArchetypeRow>, sqlx::Error> {
+    sqlx::query_as::<_, PlayerArchetypeRow>(
+        r#"
+        SELECT primary_class, secondary_class, primary_score, secondary_score,
+               affinity_scores, cluster_id
+        FROM player_archetypes
+        WHERE player_id = $1 AND season = $2
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct SimilarPlayerRow {
+    pub player_id: Uuid,
+    pub name: String,
+    pub team_id: Option<Uuid>,
+    pub team_name: Option<String>,
+    pub primary_class: String,
+    pub secondary_class: Option<String>,
+    /// Euclidean distance in standardized feature space (0 = identical).
+    pub distance: f64,
+    /// Convenience: 1 / (1 + distance) — 1.0 is identical, decays smoothly.
+    pub similarity: f64,
+}
+
+pub async fn get_similar_players(
+    pool: &PgPool,
+    player_id: Uuid,
+    season: i32,
+    limit: i64,
+) -> Result<Vec<SimilarPlayerRow>, sqlx::Error> {
+    sqlx::query_as::<_, SimilarPlayerRow>(
+        r#"
+        WITH target AS (
+            SELECT feature_vector AS fv
+            FROM player_archetypes
+            WHERE player_id = $1 AND season = $2
+        ),
+        candidates AS (
+            SELECT
+                pa.player_id,
+                pa.primary_class,
+                pa.secondary_class,
+                sqrt(SUM(POWER(pa_v::double precision - tg_v::double precision, 2))) AS distance
+            FROM player_archetypes pa
+            CROSS JOIN target
+            CROSS JOIN LATERAL unnest(pa.feature_vector, target.fv) AS u(pa_v, tg_v)
+            WHERE pa.season = $2 AND pa.player_id <> $1
+            GROUP BY pa.player_id, pa.primary_class, pa.secondary_class
+        )
+        SELECT
+            c.player_id,
+            p.name,
+            p.team_id,
+            t.name AS team_name,
+            c.primary_class,
+            c.secondary_class,
+            c.distance,
+            (1.0 / (1.0 + c.distance)) AS similarity
+        FROM candidates c
+        JOIN players p ON p.id = c.player_id
+        LEFT JOIN teams t ON t.id = p.team_id AND t.season = $2
+        ORDER BY c.distance ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct ArchetypeCount {
+    pub primary_class: String,
+    pub count: i64,
+    /// Sum of (minutes_per_game × games_played) across class members, scoped
+    /// to the team / season being queried. Used by the team page to weight
+    /// the distribution by who actually plays vs. who's on the bench.
+    /// May be NULL on queries that don't compute it (e.g. season-wide counts).
+    pub total_minutes: Option<f64>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct ArchetypeExemplar {
+    pub primary_class: String,
+    pub player_id: Uuid,
+    pub name: String,
+    pub team_id: Option<Uuid>,
+    pub team_name: Option<String>,
+    pub primary_score: f64,
+}
+
+pub async fn get_archetype_exemplars(
+    pool: &PgPool,
+    season: i32,
+    per_class: i64,
+) -> Result<Vec<ArchetypeExemplar>, sqlx::Error> {
+    // Rank within each class by impact (GBPM). The cluster assignment already
+    // ensures membership; ordering by GBPM surfaces the highest-impact (and
+    // most recognizable) representatives. Going by raw fit-purity instead
+    // returned obscure role players.
+    //
+    // Torvik can have multiple rows per (player_id, season) for transfer
+    // players (different torvik_pid per stint), so we pre-aggregate to one
+    // row per player before joining — otherwise ROW_NUMBER counts the
+    // duplicates and we end up with the same name twice in a class.
+    sqlx::query_as::<_, ArchetypeExemplar>(
+        r#"
+        WITH torvik_dedup AS (
+            SELECT player_id, MAX(gbpm) AS gbpm
+            FROM torvik_player_stats
+            WHERE season = $1 AND player_id IS NOT NULL
+            GROUP BY player_id
+        ),
+        ranked AS (
+            SELECT
+                pa.primary_class,
+                pa.primary_score,
+                p.id AS player_id,
+                p.name,
+                p.team_id,
+                t.name AS team_name,
+                ROW_NUMBER() OVER (
+                    PARTITION BY pa.primary_class
+                    ORDER BY tps.gbpm DESC NULLS LAST, pa.primary_score DESC
+                ) AS rn
+            FROM player_archetypes pa
+            JOIN players p ON p.id = pa.player_id
+            LEFT JOIN teams t ON t.id = p.team_id AND t.season = pa.season
+            LEFT JOIN torvik_dedup tps ON tps.player_id = p.id
+            WHERE pa.season = $1
+        )
+        SELECT primary_class, player_id, name, team_id, team_name, primary_score
+        FROM ranked
+        WHERE rn <= $2
+        ORDER BY primary_class, rn
+        "#,
+    )
+    .bind(season)
+    .bind(per_class)
+    .fetch_all(pool)
+    .await
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct ArchetypeClassSummary {
+    pub primary_class: String,
+    pub count: i64,
+    /// Mean GBPM (overall two-way impact) across cluster members. Used for
+    /// ordering archetypes from most to least impactful on the glossary page.
+    pub mean_gbpm: Option<f64>,
+}
+
+pub async fn get_archetype_class_summary(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<ArchetypeClassSummary>, sqlx::Error> {
+    // Pre-dedupe Torvik to one row per player_id — transfer players can have
+    // multiple torvik_pid stints for the same season, which would inflate
+    // COUNT(*) and skew AVG(gbpm) when joined directly.
+    sqlx::query_as::<_, ArchetypeClassSummary>(
+        r#"
+        WITH torvik_dedup AS (
+            SELECT player_id, AVG(gbpm) AS gbpm
+            FROM torvik_player_stats
+            WHERE season = $1 AND player_id IS NOT NULL
+            GROUP BY player_id
+        )
+        SELECT
+            pa.primary_class,
+            COUNT(*) AS count,
+            AVG(tps.gbpm) AS mean_gbpm
+        FROM player_archetypes pa
+        LEFT JOIN torvik_dedup tps ON tps.player_id = pa.player_id
+        WHERE pa.season = $1
+        GROUP BY pa.primary_class
+        ORDER BY mean_gbpm DESC NULLS LAST
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_team_archetype_distribution(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+) -> Result<Vec<ArchetypeCount>, sqlx::Error> {
+    // Order by total minutes (mpg × gp) so the team's actual rotation —
+    // not the deep bench — drives the visualization.
+    sqlx::query_as::<_, ArchetypeCount>(
+        r#"
+        SELECT
+            pa.primary_class,
+            COUNT(*) AS count,
+            SUM(COALESCE(pss.minutes_per_game * pss.games_played, 0)) AS total_minutes
+        FROM player_archetypes pa
+        JOIN players p ON p.id = pa.player_id
+        LEFT JOIN player_season_stats pss
+            ON pss.player_id = p.id
+           AND pss.season = pa.season
+           AND pss.team_id = p.team_id
+        WHERE p.team_id = $1 AND pa.season = $2
+        GROUP BY pa.primary_class
+        ORDER BY total_minutes DESC NULLS LAST
+        "#,
+    )
+    .bind(team_id)
+    .bind(season)
     .fetch_all(pool)
     .await
 }

@@ -87,6 +87,14 @@ export interface RosterEntry {
   gbpm: number | null;
   offensive_rating: number | null;
   defensive_rating: number | null;
+  primary_class: string | null;
+  secondary_class: string | null;
+}
+
+export interface ArchetypeCount {
+  primary_class: string;
+  count: number;
+  total_minutes: number | null;
 }
 
 export interface TeamProfile {
@@ -135,10 +143,12 @@ export function fetchTeamRankings(season?: number) {
 }
 
 export function fetchTeamDetail(id: string, season?: number) {
-  return fetchJson<{ team: TeamProfile; schedule: ScheduleEntry[]; roster: RosterEntry[] }>(
-    `/teams/${id}`,
-    { season: season?.toString() },
-  );
+  return fetchJson<{
+    team: TeamProfile;
+    schedule: ScheduleEntry[];
+    roster: RosterEntry[];
+    archetype_distribution: ArchetypeCount[];
+  }>(`/teams/${id}`, { season: season?.toString() });
 }
 
 // Players
@@ -346,6 +356,26 @@ export interface TorkvikStats {
   tp_pct_pct: number | null;
 }
 
+export interface PlayerArchetype {
+  primary_class: string;
+  secondary_class: string | null;
+  primary_score: number;
+  secondary_score: number | null;
+  affinity_scores: Record<string, number>;
+  cluster_id: number;
+}
+
+export interface SimilarPlayer {
+  player_id: string;
+  name: string;
+  team_id: string | null;
+  team_name: string | null;
+  primary_class: string;
+  secondary_class: string | null;
+  distance: number;
+  similarity: number;
+}
+
 export function fetchPlayerDetail(id: string, season?: number) {
   return fetchJson<{
     player: PlayerProfile;
@@ -354,7 +384,37 @@ export function fetchPlayerDetail(id: string, season?: number) {
     game_log: GameLogEntry[];
     league_averages: LeagueAverages | null;
     torvik_stats: TorkvikStats | null;
+    archetype: PlayerArchetype | null;
   }>(`/players/${id}`, { season: season?.toString() });
+}
+
+export function fetchPlayerSimilar(id: string, k = 8, season?: number) {
+  return fetchJson<{ season: number; players: SimilarPlayer[] }>(
+    `/players/${id}/similar`,
+    { k: k.toString(), season: season?.toString() },
+  );
+}
+
+export interface ArchetypeExemplar {
+  player_id: string;
+  name: string;
+  team_id: string | null;
+  team_name: string | null;
+  primary_score: number;
+}
+
+export interface ArchetypeClassInfo {
+  name: string;
+  count: number;
+  mean_gbpm: number | null;
+  exemplars: ArchetypeExemplar[];
+}
+
+export function fetchArchetypes(perClass = 5, season?: number) {
+  return fetchJson<{ season: number; classes: ArchetypeClassInfo[] }>(
+    '/archetypes',
+    { per_class: perClass.toString(), season: season?.toString() },
+  );
 }
 
 export interface ComparePlayer {

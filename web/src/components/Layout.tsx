@@ -31,6 +31,9 @@ export default function Layout() {
           <NavLink to="/players/compare" className={() => navLinkClass(compareActive)}>
             Compare
           </NavLink>
+          <NavLink to="/archetypes" className={({ isActive }) => navLinkClass(isActive)}>
+            Archetypes
+          </NavLink>
           <NavLink to="/predict" className={({ isActive }) => navLinkClass(isActive)}>
             Predict
           </NavLink>

@@ -6,6 +6,7 @@ import Players from './pages/Players';
 import PlayerDetail from './pages/PlayerDetail';
 import PlayerCompare from './pages/PlayerCompare';
 import Predict from './pages/Predict';
+import Archetypes from './pages/Archetypes';
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/players/compare" element={<PlayerCompare />} />
           <Route path="/players/:id" element={<PlayerDetail />} />
           <Route path="/predict" element={<Predict />} />
+          <Route path="/archetypes" element={<Archetypes />} />
         </Route>
       </Routes>
     </BrowserRouter>
