@@ -94,8 +94,6 @@ export interface RosterEntry {
   gbpm: number | null;
   campom: number | null;
   campom_pct: number | null;
-  offensive_rating: number | null;
-  defensive_rating: number | null;
   ppg_pct: number | null;
   rpg_pct: number | null;
   apg_pct: number | null;
@@ -110,8 +108,6 @@ export interface RosterEntry {
   drb_pct_pct: number | null;
   stl_pct_pct: number | null;
   blk_pct_pct: number | null;
-  offensive_rating_pct: number | null;
-  defensive_rating_pct: number | null;
   primary_class: string | null;
   secondary_class: string | null;
 }

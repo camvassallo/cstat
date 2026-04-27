@@ -222,8 +222,6 @@ pub struct RosterEntry {
     pub gbpm: Option<f64>,
     pub campom: Option<f64>,
     pub campom_pct: Option<f64>,
-    pub offensive_rating: Option<f64>,
-    pub defensive_rating: Option<f64>,
     pub ppg_pct: Option<f64>,
     pub rpg_pct: Option<f64>,
     pub apg_pct: Option<f64>,
@@ -238,8 +236,6 @@ pub struct RosterEntry {
     pub drb_pct_pct: Option<f64>,
     pub stl_pct_pct: Option<f64>,
     pub blk_pct_pct: Option<f64>,
-    pub offensive_rating_pct: Option<f64>,
-    pub defensive_rating_pct: Option<f64>,
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
 }
@@ -588,14 +584,11 @@ pub async fn get_team_roster(
             tps.gbpm,
             tps.cam_gbpm_v3_psos     AS campom,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
-            pss.offensive_rating, pss.defensive_rating,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
             pp.true_shooting_pct_pct,
             pp.usage_rate_pct,
             pp.ast_pct_pct, pp.tov_pct_pct,
             pp.orb_pct_pct, pp.drb_pct_pct, pp.stl_pct_pct, pp.blk_pct_pct,
-            pp.offensive_rating_pct,
-            pp.defensive_rating_pct,
             pa.primary_class, pa.secondary_class
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season

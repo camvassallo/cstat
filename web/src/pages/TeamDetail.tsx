@@ -405,10 +405,10 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 <td className="py-2 px-2 text-right">{p.games_played}</td>
                 <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
                 <td className="py-2 px-2 text-right">
-                  <ValueWithPctile value={pct(p.usage_rate)} pctile={p.usage_rate_pct} />
+                  <ValueWithPctile value={fracPct(p.usage_rate)} pctile={p.usage_rate_pct} />
                 </td>
                 <td className="py-2 px-2 text-right">
-                  <ValueWithPctile value={pct(p.true_shooting_pct)} pctile={p.true_shooting_pct_pct} />
+                  <ValueWithPctile value={fracPct(p.true_shooting_pct)} pctile={p.true_shooting_pct_pct} />
                 </td>
                 {view === 'raw' ? (
                   <>

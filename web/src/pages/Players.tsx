@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
@@ -107,7 +107,7 @@ export default function Players() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
-  const columns = buildColumns(navigate);
+  const columns = useMemo(() => buildColumns(navigate), [navigate]);
 
   const load = (q?: string) => {
     setLoading(true);
