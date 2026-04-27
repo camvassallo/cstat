@@ -208,7 +208,8 @@ export default function Archetypes() {
           classes based on their shot diet, rate stats, impact metrics, and minutes
           share. Clusters come from k-means in standardized feature space; each
           centroid is matched to the archetype it best resembles. Cards are ordered
-          by mean GBPM (overall two-way impact), highest to lowest.
+          by mean CamPom (the site's canonical player valuation), highest to lowest;
+          exemplars within each class are ranked the same way.
         </p>
         {!loading && season != null && (
           <p className="text-xs text-gray-500 mt-2">

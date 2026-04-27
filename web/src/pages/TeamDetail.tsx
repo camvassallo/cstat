@@ -5,7 +5,7 @@ import {
   type TeamProfile,
   type ScheduleEntry,
   type RosterEntry,
-  type ArchetypeCount,
+  type ArchetypeShare,
 } from '../api/client';
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
@@ -65,7 +65,7 @@ export default function TeamDetail() {
   const [team, setTeam] = useState<TeamProfile | null>(null);
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
-  const [archetypeDist, setArchetypeDist] = useState<ArchetypeCount[]>([]);
+  const [archetypeDist, setArchetypeDist] = useState<ArchetypeShare[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -80,33 +80,36 @@ export default function TeamDetail() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  // Minute-weighted distribution. Each class's "weight" is its share of total
-  // team minutes — a 5-min/game deep-bench Druid contributes far less than
-  // a 32-min/game Druid starter. Falls back to player count if minutes are
-  // missing (shouldn't happen in practice).
-  const distWeights = useMemo(() => {
-    const items = archetypeDist.map((a) => ({
-      primary_class: a.primary_class,
-      count: a.count,
-      weight: a.total_minutes != null && a.total_minutes > 0
-        ? a.total_minutes
-        : a.count,
-    }));
-    const total = items.reduce((s, x) => s + x.weight, 0);
-    return { items, total };
+  // Classes the team actually plays — sorted by team_share desc — drive the
+  // visualization bar and chip row.
+  const present = useMemo(
+    () => archetypeDist.filter((a) => a.team_share > 0),
+    [archetypeDist],
+  );
+
+  // "Identity": classes the team rosters meaningfully more than the D-I norm.
+  // Filter on `team_share >= 5%` so we don't surface 1-game noise.
+  const identity = useMemo(() => {
+    return archetypeDist
+      .filter((a) => a.index != null && a.index >= 1.3 && a.team_share >= 0.05)
+      .sort((a, b) => (b.index ?? 0) - (a.index ?? 0))
+      .slice(0, 3);
   }, [archetypeDist]);
 
-  // Balance score: normalized Shannon entropy of the minute-weighted
-  // distribution. 1.0 = maximally diverse rotation, 0 = single-style roster.
-  const balance = useMemo(() => {
-    const { items, total } = distWeights;
-    if (total <= 0 || items.length < 2) return null;
-    const entropy = items.reduce((s, a) => {
-      const p = a.weight / total;
-      return s + (p > 0 ? -p * Math.log(p) : 0);
-    }, 0);
-    return entropy / Math.log(items.length);
-  }, [distWeights]);
+  // "Gaps": classes that are common in D-I (>= 5% of league minutes) but
+  // either missing or underweighted on this team. Sorted ascending by index
+  // so missing classes (index = 0) come first.
+  const gaps = useMemo(() => {
+    return archetypeDist
+      .filter(
+        (a) =>
+          a.d1_share >= 0.05 &&
+          a.index != null &&
+          a.index <= 0.5,
+      )
+      .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+      .slice(0, 3);
+  }, [archetypeDist]);
 
   if (loading) return <div className="text-gray-400">Loading...</div>;
   if (!team) return <div className="text-red-400">Team not found</div>;
@@ -137,77 +140,125 @@ export default function TeamDetail() {
         <FourFactors team={team} label="Defense" />
       </div>
 
-      {/* Archetype Distribution (minute-weighted) */}
-      {archetypeDist.length > 0 && distWeights.total > 0 && (
+      {/* Archetype index vs D-I norm */}
+      {present.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+          <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
             <h2 className="text-lg font-bold">Roster Archetypes</h2>
-            {balance != null && (
-              <span className="text-xs text-gray-400">
-                Balance:{' '}
-                <span className="font-bold text-gray-200">
-                  {(balance * 100).toFixed(0)}%
-                </span>
-                <span className="text-gray-500 ml-1">
-                  ({balance >= 0.85 ? 'very diverse'
-                    : balance >= 0.7 ? 'diverse'
-                    : balance >= 0.5 ? 'balanced'
-                    : balance >= 0.3 ? 'narrow'
-                    : 'single-style'})
-                </span>
-              </span>
-            )}
+            <span className="text-xs text-gray-500">
+              Indexed vs D-I average · 1.0× = league norm
+            </span>
           </div>
           <p className="text-xs text-gray-500 mb-3">
-            Weighted by total minutes played, so the rotation drives the breakdown.
+            Minute-weighted share of each class on this roster (primary at full
+            weight, secondary at half), compared against the D-I cohort. Hover
+            the bar for counts.
           </p>
-          <div className="space-y-2">
-            <div className="flex h-3 rounded overflow-hidden bg-gray-900">
-              {distWeights.items.map((a) => {
-                const share = a.weight / distWeights.total;
-                return (
+
+          {/* Stacked bar — present classes only, sized by team_share */}
+          <div className="flex h-3 rounded overflow-hidden bg-gray-900">
+            {present.map((a) => (
+              <div
+                key={a.primary_class}
+                style={{ flexBasis: `${a.team_share * 100}%` }}
+              >
+                <ClassTooltip
+                  cls={a.primary_class}
+                  asBlock
+                  extra={
+                    <>
+                      {(a.team_share * 100).toFixed(1)}% of minutes ·{' '}
+                      {a.team_count} {a.team_count === 1 ? 'player' : 'players'}
+                      {a.index != null && (
+                        <>
+                          {' '}· {a.index.toFixed(2)}× vs D-I
+                        </>
+                      )}
+                    </>
+                  }
+                >
                   <div
-                    key={a.primary_class}
-                    style={{ flexBasis: `${share * 100}%` }}
-                  >
-                    <ClassTooltip
-                      cls={a.primary_class}
-                      asBlock
-                      extra={`${(share * 100).toFixed(1)}% of minutes · ${a.count} ${a.count === 1 ? 'player' : 'players'}`}
-                    >
-                      <div
-                        className="h-3 w-full"
-                        style={{ background: classColor(a.primary_class) }}
-                      />
-                    </ClassTooltip>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex flex-wrap gap-2 mt-2">
-              {distWeights.items.map((a) => {
-                const share = a.weight / distWeights.total;
-                return (
-                  <ClassTooltip
-                    key={a.primary_class}
-                    cls={a.primary_class}
-                    extra={`${(share * 100).toFixed(1)}% of minutes · ${a.count} ${a.count === 1 ? 'player' : 'players'}`}
-                  >
-                    <span className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
-                      <span
-                        className="inline-block w-2 h-2 rounded-full"
-                        style={{ background: classColor(a.primary_class) }}
-                      />
-                      <span style={{ color: classColor(a.primary_class) }} className="font-semibold">
-                        {a.primary_class}
-                      </span>
-                      <span className="text-gray-400">{(share * 100).toFixed(0)}%</span>
-                    </span>
-                  </ClassTooltip>
-                );
-              })}
-            </div>
+                    className="h-3 w-full"
+                    style={{ background: classColor(a.primary_class) }}
+                  />
+                </ClassTooltip>
+              </div>
+            ))}
           </div>
+
+          {/* Identity / Gaps callouts — the actual takeaway */}
+          {(identity.length > 0 || gaps.length > 0) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+              {identity.length > 0 && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
+                    Identity
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {identity.map((a) => (
+                      <ClassTooltip
+                        key={a.primary_class}
+                        cls={a.primary_class}
+                        extra={`${(a.team_share * 100).toFixed(1)}% team · ${(a.d1_share * 100).toFixed(1)}% D-I`}
+                      >
+                        <span className="inline-flex items-baseline gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
+                          <span
+                            className="inline-block w-2 h-2 rounded-full"
+                            style={{ background: classColor(a.primary_class) }}
+                          />
+                          <span
+                            className="font-semibold"
+                            style={{ color: classColor(a.primary_class) }}
+                          >
+                            {a.primary_class}
+                          </span>
+                          <span className="text-green-400 font-bold">
+                            {a.index != null ? `${a.index.toFixed(1)}×` : '—'}
+                          </span>
+                        </span>
+                      </ClassTooltip>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {gaps.length > 0 && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
+                    Gaps
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {gaps.map((a) => (
+                      <ClassTooltip
+                        key={a.primary_class}
+                        cls={a.primary_class}
+                        extra={`${(a.team_share * 100).toFixed(1)}% team · ${(a.d1_share * 100).toFixed(1)}% D-I`}
+                      >
+                        <span className="inline-flex items-baseline gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
+                          <span
+                            className="inline-block w-2 h-2 rounded-full opacity-50"
+                            style={{ background: classColor(a.primary_class) }}
+                          />
+                          <span
+                            className="font-semibold opacity-70"
+                            style={{ color: classColor(a.primary_class) }}
+                          >
+                            {a.primary_class}
+                          </span>
+                          <span className="text-red-400 font-bold">
+                            {a.index === 0
+                              ? 'missing'
+                              : a.index != null
+                                ? `${a.index.toFixed(1)}×`
+                                : '—'}
+                          </span>
+                        </span>
+                      </ClassTooltip>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -252,7 +303,7 @@ function ValueWithPctile({ value, pctile }: { value: string; pctile: number | nu
 function RosterTable({ roster }: { roster: RosterEntry[] }) {
   const [view, setView] = useState<RosterView>('raw');
   const [sort, setSort] = useState<{ key: RosterSortKey; dir: SortDir }>({
-    key: 'campom',
+    key: 'minutes_per_game',
     dir: 'desc',
   });
   const onSort = (key: RosterSortKey) => {
@@ -268,8 +319,8 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
     setView(next);
     const rawOnly: RosterSortKey[] = ['ppg', 'rpg', 'apg', 'spg', 'bpg', 'topg'];
     const rateOnly: RosterSortKey[] = ['ast_pct', 'tov_pct', 'orb_pct', 'drb_pct', 'stl_pct', 'blk_pct'];
-    if (next === 'rate' && rawOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
-    if (next === 'raw' && rateOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
+    if (next === 'rate' && rawOnly.includes(sort.key)) setSort({ key: 'minutes_per_game', dir: 'desc' });
+    if (next === 'raw' && rateOnly.includes(sort.key)) setSort({ key: 'minutes_per_game', dir: 'desc' });
   };
 
   const sorted = useMemo(() => {

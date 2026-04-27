@@ -112,10 +112,17 @@ export interface RosterEntry {
   secondary_class: string | null;
 }
 
-export interface ArchetypeCount {
+export interface ArchetypeShare {
   primary_class: string;
-  count: number;
-  total_minutes: number | null;
+  team_count: number;
+  team_minutes: number;
+  /// 0..1 — share of this class within the team's total rostered minutes.
+  team_share: number;
+  /// 0..1 — share of this class across all D-I qualified players (minute-weighted).
+  d1_share: number;
+  /// `team_share / d1_share`. 1.0 = league average; >1 loaded; <1 light.
+  /// `null` when totals are zero (not yet computed for this team/season).
+  index: number | null;
 }
 
 export interface TeamProfile {
@@ -168,7 +175,7 @@ export function fetchTeamDetail(id: string, season?: number) {
     team: TeamProfile;
     schedule: ScheduleEntry[];
     roster: RosterEntry[];
-    archetype_distribution: ArchetypeCount[];
+    archetype_distribution: ArchetypeShare[];
   }>(`/teams/${id}`, { season: season?.toString() });
 }
 
@@ -462,7 +469,7 @@ export interface ArchetypeExemplar {
 export interface ArchetypeClassInfo {
   name: string;
   count: number;
-  mean_gbpm: number | null;
+  mean_campom: number | null;
   exemplars: ArchetypeExemplar[];
 }
 

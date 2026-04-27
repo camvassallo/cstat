@@ -79,7 +79,7 @@ async fn team_detail(
     let (schedule, roster, archetype_distribution) = tokio::try_join!(
         queries::get_team_schedule(pool, id, season),
         queries::get_team_roster(pool, id, season),
-        queries::get_team_archetype_distribution(pool, id, season),
+        queries::get_team_archetype_index(pool, id, season),
     )
     .map_err(|e| {
         (
