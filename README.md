@@ -29,7 +29,7 @@ cd web && npm install && cd ..
 3. Start everything:
 
 ```bash
-./start.sh start
+./scripts/start.sh start
 ```
 
 This starts Postgres, the API server, and the Vite dev server. On first run, Cargo will compile the Rust workspace (this takes a few minutes).
@@ -43,13 +43,13 @@ This starts Postgres, the API server, and the Vite dev server. On first run, Car
 ### Managing Services
 
 ```bash
-./start.sh start        # Start all services
-./start.sh stop         # Stop all services
-./start.sh status       # Check what's running
-./start.sh logs         # Tail API + web logs
-./start.sh logs api     # Tail API logs only
-./start.sh logs web     # Tail web logs only
-./start.sh logs postgres # Tail Postgres container logs
+./scripts/start.sh start        # Start all services
+./scripts/start.sh stop         # Stop all services
+./scripts/start.sh status       # Check what's running
+./scripts/start.sh logs         # Tail API + web logs
+./scripts/start.sh logs api     # Tail API logs only
+./scripts/start.sh logs web     # Tail web logs only
+./scripts/start.sh logs postgres # Tail Postgres container logs
 ```
 
 The start script automatically cleans up stale processes on conflicting ports.
