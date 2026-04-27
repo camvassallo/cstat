@@ -193,8 +193,26 @@ This naturally enables:
   - [ ] *Stretch (lands with Phase 5a):* **Duel mode** — frame the comparison as a D&D-style combat where each stat row is a "round," winner takes the round, and the header shows the round count (e.g., "*Wizard 11, Ranger 7*"). Reuses the archetype names from 5a and gives the page a shareable summary line.
 - [x] Game prediction interface (pick two teams → predicted margin + win prob)
 - [ ] **Game prediction explainability**: per-prediction attribution panel showing top contributing features (e.g., "Duke +5 from GBPM gap, +3 from defense, −2 road game"). Export SHAP values from training, expose via API, render as a horizontal bar breakdown beneath the margin/win prob.
+- [ ] **Tables UI polish across the site**: extend the home-page rankings table treatment to other tables (Players list, TeamDetail roster, PlayerDetail game logs). Reference patterns from the home page:
+  - Clickable team/player names rendered as blue links (currently inconsistent)
+  - Subtle percentile/rank context alongside key stats — small chip, tint, or inline rank — without overwhelming the headline number
+  - Targeted color emphasis on important stats (sparing, not a full heatmap)
+  - Consistent sorting + filtering UX across tables (column sort affordances, filter inputs, empty/no-results states)
+  - Consistent typography, density, and sticky headers across surfaces
+  - Note: per-page default-sort tweaks (e.g., players page → `cam_gbpm_v3`) live in **4f Ship**, not here
+- [ ] **Spider/radar chart axis transparency**: surface what each prong of the player detail and compare-page radars actually represents — which underlying stat(s) + percentile feed each axis. Today the labels are opaque; a viewer can't tell whether "playmaking" is AST%, AST/TO, raw APG, or a blend. Work:
+  - Audit the current axis-to-stat mapping; confirm each prong reflects its label and that no axis double-counts a stat
+  - Hover/tap tooltip on each prong showing the contributing stat(s), the player's raw value, and the percentile feeding the spoke length
+  - Below-chart "How this is computed" panel listing the full mapping
+  - Apply consistently to PlayerDetail (single radar) and Compare (overlaid)
 - [ ] Score ticker / recent results
-- [ ] Mobile-responsive design
+- [ ] **Mobile-friendly responsive design** (still desktop-first; target mobile *web browsers*, not a native app). The site is table-heavy, so the main work is making wide tables usable on a phone:
+  - Pick a per-table strategy: horizontal scroll with a sticky leftmost column (team/player name) for ranking-style tables, OR card/stack layout on narrow viewports for detail views
+  - Hide low-signal columns at narrower breakpoints; expose them via row expand/tap
+  - Touch-friendly tap targets (header chevrons, sort/filter controls, pagination) and larger hit areas for clickable names
+  - Page chrome (nav, search, filters) collapses cleanly on small screens
+  - Charts (radar, rolling form) reflow rather than overflow; legends move below at narrow widths
+  - Verify on iPhone- and Android-sized viewports across the main pages (Rankings, TeamDetail, Players, PlayerDetail, Compare, Predict)
 
 ### 4c: Data Quality & Ingestion Hardening
 - [x] Fix USG% ingestion (divide NatStat `usgpct` by 100)
@@ -254,6 +272,58 @@ This naturally enables:
 - [ ] API endpoints for resume + bracket queries
 - [ ] Frontend: Resume tab on TeamDetail, dedicated Bracketology page
 
+### 4f: CamPom Composite Player Valuation
+> Port the methodology in `docs/campom_methodology.md` into the cstat compute pipeline, iterate on the formulas using the predict model as a fitness function, and surface the results on the site. Goal: a "better BPM" that's contextualized by role on the team and produces **separate offensive, defensive, and total composites** at each tier. All required inputs (`ogbpm`, `dgbpm`, `usg`, `Min_per`, `mp`, `GP`, `conf`) already live in `torvik_player_stats` — no new ingestion needed.
+>
+> Note: the predict model already uses raw Torvik OGBPM/DGBPM as its top features (`diff_w_gbpm`, `diff_w_ogbpm`, `diff_w_dgbpm`, `diff_star_*`). CamPom is the natural refinement of those features, which means **the predict model is both a downstream consumer and the calibration target**.
+
+#### Implement
+- [ ] **Compute layer**: port the methodology as a step in the cstat-core compute pipeline. Mirror the formulas exactly so the spreadsheet's numbers reproduce as a baseline.
+  - `adj_gbpm` (usage-adjusted GBPM)
+  - `min_factor` / `mp_factor` (sqrt-scaled volume factors)
+  - `gp_weight` (Bayesian shrinkage, k=8)
+  - `sos_adj` / `adj_gbpm_sos` (conference-strength adjustment computed from our own dataset, not hardcoded from the doc's table)
+  - Composites: `cam_gbpm`, `cam_gbpm_v2`, `cam_gbpm_v3`
+- [ ] **Offensive / defensive / total as first-class outputs**: the formula already computes o-side and d-side components separately. Store all three (`cam_o_gbpm`, `cam_d_gbpm`, `cam_gbpm`) at every tier (original / v2 / v3). Surface offensive and defensive composites independently across the site, not just the total.
+- [ ] **Schema**: store all intermediate + composite values (extend `torvik_player_stats` or add a `player_valuation` table keyed on `player_id, season`). Plan for ~12 composite columns once o/d splits land at all three tiers.
+- [ ] **Iteration hooks**: keep all tunable parameters as named constants (`offense_exponent=0.7`, `defense_discount=0.1`, `usg_ref=17.87`, `minutes_exponent=0.5`, `gp_k=8`, `sos_transfer_rate=0.5`) so each experiment is a one-PR change.
+
+#### Validate
+- [ ] **Parity gate**: join our computed composites against `docs/campom_2026_baseline.csv` on `torvik_pid` (~5,000 players, all CamPom intermediates + finals included). Tolerance <0.01 absolute on every composite. Lock parameters until parity is confirmed — the "iterate" phase needs a clean baseline so improvements are measurable, not a moving target.
+
+#### Iterate (with a real fitness function)
+- [ ] **Wire CamPom into the predict model as features**: in `crates/cstat-core/src/features.rs` and `training/features.py`, add CamPom-adjusted roster aggregates (`diff_w_cam_o_gbpm`, `diff_w_cam_d_gbpm`, `diff_star_cam_o_gbpm`, `diff_star_cam_d_gbpm`) alongside the existing raw Torvik features. Retrain.
+  - **If MAE / AUC improves**, CamPom is genuinely a better player metric — replace the raw GBPM features with the CamPom versions.
+  - **If MAE / AUC stays flat or regresses**, the adjustments are over-fit to hand-picked constants and need tuning (see grid search below).
+  - Either outcome is informative; this is the iteration loop the methodology doc lacks.
+- [ ] **Hyperparameter grid search against predict-model fitness**: sweep the 6 named constants (`offense_exponent ∈ [0.4, 1.0]`, `defense_discount ∈ [0.0, 0.3]`, `gp_k ∈ [4, 16]`, `minutes_exponent ∈ [0.3, 0.7]`, `sos_transfer_rate ∈ [0.0, 1.0]`, `usg_ref ∈ [16, 20]`). For each combo, recompute composites → retrain predict model → record 5-fold CV MAE. Pick the combo that minimizes error. Beats hand-picked parameters by definition. Coarse pass first (~3 levels per param), then refine around the winning region.
+- [ ] **Add role context beyond usage** (this is the "contextualized by role" half): usage is one axis of role. A 30%-usage primary scorer and a 30%-usage point guard play very different roles; usage alone treats them identically. Layer in:
+  - Shot diet (3PA rate, rim rate from Torvik) → spacer vs. driver context
+  - Playmaking (AST%, AST/TO) → creator multiplier independent of scoring usage
+  - Defensive specialty (BLK%, STL%) → role-specific weighting on dgbpm
+  - Each new context dimension gets its own constant and joins the grid search. This is what turns CamPom from "weighted GBPM" into a genuinely role-aware metric.
+- [ ] **Team-level SOS instead of conference-level**: the doc itself flags this. We already compute minutes-weighted opponent adj-efficiency per player (`player_strength_of_schedule` from Phase 2). Use that in place of `conf_sos × 0.5`. Strict upgrade — same machinery, finer signal.
+- [ ] **Other refinements** (lower priority, ordered by expected lift):
+  - Empirically calibrate `sos_transfer_rate` against historical transfer outcomes once we have ≥2 seasons of portal moves matched in our data
+  - Positional adjustment using class_year + height-derived position bucket
+  - Multi-season blend: weighted prior from prior season once 2+ seasons are fully ingested
+  - More aggressive defensive skepticism: tunable per-component weight on dgbpm beyond the current `(1 − 0.1 × usg_ratio)` haircut
+
+#### Validate (sanity-check the winner)
+- [ ] **External benchmarks**: once a tuned parameterization wins on the predict-model fitness, sanity-check the rankings against external consensus — does the top-50 by `cam_gbpm_v3` align with KenPom POY shortlist, AP all-American teams, projected NBA draft order? Names that look obviously wrong are a signal the optimizer found a degenerate local optimum.
+- [ ] **Train/serve parity check**: verify Rust-side computed composites match Python training-side composites on a sampled cohort (same trap that bit BPM pre-PR #25). Lock as a regression test.
+
+#### Ship
+- [ ] **API**: new `GET /api/players/valuation` (rankings, sortable by composite, filterable by conf/team/class); offensive / defensive / total composites included in `GET /api/players/:id`, `GET /api/players` (list), and `GET /api/teams/:id` (roster) so existing surfaces can render the column without bespoke queries
+- [ ] **Frontend — surface the composite everywhere players appear** (CamPom becomes the canonical player ranking):
+  - **Players tab**: add `cam_gbpm_v3` as a column and make it the **default sort** (descending). Closes the open "better default sort for the players page" item flagged in the 4b tables UI polish note.
+  - **TeamDetail roster table**: add the composite column; default sort by `cam_gbpm_v3` desc so the best player on the team is always at the top
+  - **PlayerCompare**: include the composite alongside name/team in each player's header panel (same panel as the archetype primary/secondary class from Phase 5a)
+  - **Most Similar Players carousel** (Phase 5a): show the composite on each tile so similarity is obviously contextualized by quality
+  - All columns: subtle percentile/rank tint per the 4b tables UI polish patterns
+- [ ] **Frontend — dedicated CamPom rankings page**: default sort by `cam_gbpm_v3`; toggle between v3 / v2 / original; toggle offensive-only / defensive-only / total view; conf/class filters
+- [ ] **Frontend — player detail panel**: surface all three composite ranks (offense / defense / total) with a breakdown row showing the chain (raw GBPM → usage-adj → minutes-scaled → GP-shrunk → SOS-adj → final). Per-composite tooltip explaining what it means (reuses the radar-prong tooltip pattern from 4b).
+
 ---
 
 ## Phase 5: Player Archetypes & Roster Composition
@@ -279,8 +349,11 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - **Fighter** — Balanced two-way wing (no specialty, solid all-around)
 - [ ] Migration: `player_archetypes` table (`player_id`, `season`, `primary_class`, `secondary_class`, `affinity_scores` JSONB, `feature_vector` REAL[])
 - [ ] API: `GET /api/players/:id/archetype`, `GET /api/players/:id/similar?k=10` (cosine similarity over normalized feature vectors, optionally filtered by team/conf/class year)
-- [ ] Player detail UI: archetype badge with hover-tooltip showing affinity bars; "Most Similar Players" carousel with similarity scores
+- [ ] Player detail UI: archetype badge with hover-tooltip surfacing **primary + secondary class** and affinity bars; "Most Similar Players" carousel with similarity scores
+  - Each tile in the carousel gets a selection checkbox (cap at 3 selections, since the existing compare page supports up to 4 players); a "Compare" button anchored beneath the carousel activates once ≥1 is selected and deep-links to `/compare` with the current player prepopulated as player #1 and the selected players filling slots 2–4
 - [ ] Team detail UI: roster archetype distribution (e.g., "this team rolls 3 Rangers, 1 Druid, 1 Sorcerer") and a balance score
+  - Roster table renders **secondary class alongside primary** on each row (e.g., "Wizard / Bard") for added flavor and storytelling; tooltip on the row shows both classes plus affinity scores
+- [ ] Compare page UI: each player's header panel (currently name + team) also shows **primary + secondary class** inline (e.g., "Wizard / Bard"), so the archetype framing carries through the whole comparison flow
 - [ ] Easter egg: D&D alignment grid placement on player profile (Lawful Good ≈ Monk/Paladin, Chaotic Evil ≈ Warlock/Sorcerer) — half joke, half discovery surface
 
 ### 5b: Roster Composition & Transfer Portal Sandbox
