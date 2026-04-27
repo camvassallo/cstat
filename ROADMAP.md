@@ -303,7 +303,7 @@ This naturally enables:
   - Playmaking (AST%, AST/TO) → creator multiplier independent of scoring usage
   - Defensive specialty (BLK%, STL%) → role-specific weighting on dgbpm
   - Each new context dimension gets its own constant and joins the grid search. This is what turns CamPom from "weighted GBPM" into a genuinely role-aware metric.
-- [ ] **Team-level SOS instead of conference-level**: the doc itself flags this. We already compute minutes-weighted opponent adj-efficiency per player (`player_strength_of_schedule` from Phase 2). Use that in place of `conf_sos × 0.5`. Strict upgrade — same machinery, finer signal.
+- [x] **Player-level SOS as a parallel Tier-3** (migration 015 + new `cam_gbpm_v3_psos` columns): swaps `conf_sos × 0.5` for `player_sos × 0.15` (transfer rate scaled because cstat's `player_sos` has ~2.5× the magnitude of conf SOS in GBPM units). Kept as a parallel tier — the original conf-SOS `cam_gbpm_v3` stays parity-locked against the baseline CSV; the predict-model iteration step will A/B both. r=0.994 between the two tiers across all 4,890 (2026) / 4,793 (2025) players. Disambiguation works as designed: Penn St's Josh Reed drops 571 ranks (B10 conf bonus +1.88 → personal SOS −1.0; he played mostly bottom-of-league), Texas Tech / Michigan / UNC players jump ~100 ranks because their personal opponent slate was tougher than the conf average.
 - [ ] **Other refinements** (lower priority, ordered by expected lift):
   - Empirically calibrate `sos_transfer_rate` against historical transfer outcomes once we have ≥2 seasons of portal moves matched in our data
   - Positional adjustment using class_year + height-derived position bucket

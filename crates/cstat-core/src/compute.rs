@@ -1126,6 +1126,12 @@ pub const CAMPOM_USG_REF: f64 = 17.873_577_08;
 pub const CAMPOM_MINUTES_EXPONENT: f64 = 0.5;
 pub const CAMPOM_GP_K: f64 = 8.0;
 pub const CAMPOM_SOS_TRANSFER_RATE: f64 = 0.5;
+/// Transfer rate applied to player-level SOS in the parallel `_psos` tier.
+/// Scaled down from the conference-SOS rate because `player_sos` (cstat
+/// minutes-weighted opponent adj-efficiency-margin) has ~2.5× the magnitude
+/// of `conf_sos` (CamPom GBPM units). 0.15 gives a Big Ten player roughly
+/// the same ±2 GBPM adjustment as the conf-SOS path.
+pub const CAMPOM_PLAYER_SOS_TRANSFER_RATE: f64 = 0.15;
 /// Minimum games-played threshold for a player to count toward conference
 /// quality (`conf_sos`). Filters out small-sample noise from the SOS table.
 pub const CAMPOM_SOS_MIN_GP: i32 = 20;
@@ -1149,6 +1155,9 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
              cam_gbpm = NULL, cam_o_gbpm = NULL, cam_d_gbpm = NULL, min_adj_gbpm = NULL,
              cam_gbpm_v2 = NULL, cam_o_gbpm_v2 = NULL, cam_d_gbpm_v2 = NULL, min_adj_gbpm_v2 = NULL,
              cam_gbpm_v3 = NULL, cam_o_gbpm_v3 = NULL, cam_d_gbpm_v3 = NULL, min_adj_gbpm_v3 = NULL,
+             psos_adj = NULL, adj_gbpm_psos = NULL,
+             cam_gbpm_v3_psos = NULL, cam_o_gbpm_v3_psos = NULL,
+             cam_d_gbpm_v3_psos = NULL, min_adj_gbpm_v3_psos = NULL,
              updated_at = now()
          WHERE season = $1",
     )
@@ -1307,9 +1316,57 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     .execute(pool)
     .await?;
 
+    // Parallel Tier-3: same machinery, but with cstat's player-level SOS
+    // (`player_season_stats.player_sos`, minutes-weighted opponent
+    // adj-efficiency-margin) instead of conference-level. Only populated for
+    // players with a `player_sos` row; others stay NULL.
+    let r_psos = sqlx::query(
+        "UPDATE torvik_player_stats t SET
+             psos_adj      = pss.player_sos * $2,
+             adj_gbpm_psos = t.adj_gbpm + pss.player_sos * $2,
+             cam_gbpm_v3_psos     = (t.adj_gbpm + pss.player_sos * $2)
+                                  * t.mp_factor * t.gp_weight,
+             min_adj_gbpm_v3_psos = (t.adj_gbpm + pss.player_sos * $2)
+                                  * t.min_factor * t.gp_weight,
+             cam_o_gbpm_v3_psos   = (
+                 t.ogbpm * power(t.usage_rate / $3, $4)
+                 + CASE
+                     WHEN abs(t.adj_gbpm) > 1e-9
+                       THEN (pss.player_sos * $2)
+                              * (t.ogbpm * power(t.usage_rate / $3, $4))
+                              / t.adj_gbpm
+                     ELSE (pss.player_sos * $2) * 0.5
+                   END
+               ) * t.mp_factor * t.gp_weight,
+             cam_d_gbpm_v3_psos   = (
+                 t.dgbpm * (1.0 - $5 * t.usage_rate / $3)
+                 + CASE
+                     WHEN abs(t.adj_gbpm) > 1e-9
+                       THEN (pss.player_sos * $2)
+                              * (t.dgbpm * (1.0 - $5 * t.usage_rate / $3))
+                              / t.adj_gbpm
+                     ELSE (pss.player_sos * $2) * 0.5
+                   END
+               ) * t.mp_factor * t.gp_weight
+           FROM player_season_stats pss
+          WHERE pss.player_id = t.player_id
+            AND pss.season = t.season
+            AND t.season = $1
+            AND t.adj_gbpm IS NOT NULL
+            AND pss.player_sos IS NOT NULL",
+    )
+    .bind(season) // $1
+    .bind(CAMPOM_PLAYER_SOS_TRANSFER_RATE) // $2
+    .bind(CAMPOM_USG_REF) // $3
+    .bind(CAMPOM_OFFENSE_EXPONENT) // $4
+    .bind(CAMPOM_DEFENSE_DISCOUNT) // $5
+    .execute(pool)
+    .await?;
+
     info!(
         per_player = r1.rows_affected(),
         with_sos = r4.rows_affected(),
+        with_psos = r_psos.rows_affected(),
         season,
         "computed CamPom composites"
     );
@@ -1412,11 +1469,11 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
     info!("step 7/13: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 8/13: computing CamPom composites");
-    report.campom = compute_campom(pool, season).await?;
-
-    info!("step 9/13: computing player SOS");
+    info!("step 8/13: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
+
+    info!("step 9/13: computing CamPom composites");
+    report.campom = compute_campom(pool, season).await?;
 
     info!("step 10/13: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
