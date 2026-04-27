@@ -293,10 +293,15 @@ This naturally enables:
   - Caught two latent column-naming bugs in `torvik_player_stats`: `total_minutes` actually stores MP (per-game minutes) and `minutes_per_game` actually stores Min% (share). Migration 014 backfilled the new `min_per` column from `minutes_per_game`; CamPom reads each column for what it truly contains. **Follow-up**: rename these columns to match their semantics (own PR, touches ingest + any consumer that reads them by name).
 
 #### Iterate (with a real fitness function)
-- [ ] **Wire CamPom into the predict model as features**: in `crates/cstat-core/src/features.rs` and `training/features.py`, add CamPom-adjusted roster aggregates (`diff_w_cam_o_gbpm`, `diff_w_cam_d_gbpm`, `diff_star_cam_o_gbpm`, `diff_star_cam_d_gbpm`) alongside the existing raw Torvik features. Retrain.
-  - **If MAE / AUC improves**, CamPom is genuinely a better player metric — replace the raw GBPM features with the CamPom versions.
-  - **If MAE / AUC stays flat or regresses**, the adjustments are over-fit to hand-picked constants and need tuning (see grid search below).
-  - Either outcome is informative; this is the iteration loop the methodology doc lacks.
+- [x] **Wire CamPom into the predict model as features** (negative result — raw GBPM stays). `training/features.py` now selects the GBPM source via `GBPM_VARIANT={raw, cam_v3, cam_v3_psos}` env var; `MODEL_DIR` is overridable per-experiment. Trained 3 variants on 2025+2026, all 49 features, same hyperparameters:
+
+  | variant | backtest MAE | win acc | AUC | 5-fold CV MAE | 5-fold CV AUC |
+  |---------|------:|------:|------:|------:|------:|
+  | **raw** (baseline) | **8.28** | **71.9%** | **0.790** | **8.46** | **0.803** |
+  | cam_v3 (conf-SOS)  | 8.44 | 71.5% | 0.781 | 8.62 | 0.791 |
+  | cam_v3_psos        | 8.46 | 71.2% | 0.783 | 8.66 | 0.793 |
+
+  Raw wins every metric. Both CamPom variants regressed by MAE +0.16 / AUC −0.009. **Hypothesis** for the negative result: the predict model is already team-aware via the roster aggregation (`cum_minutes`-weighted) plus standalone `diff_sos` / `diff_w_player_sos` features, so CamPom's per-player USG / mp_factor / SOS adjustments are partly double-counting what the model has already accounted for. Don't ship — production model stays raw GBPM. Production artifacts unchanged; experimental artifacts at `training/models_experiments/{raw,cam_v3,cam_v3_psos}/` for future reference. **Takeaway**: CamPom remains valuable as a *player-ranking metric* (the canonical site-wide ranking per the Ship section below), but isn't a better game-prediction feature than the raw signal it refines.
 - [ ] **Hyperparameter grid search against predict-model fitness**: sweep the 6 named constants (`offense_exponent ∈ [0.4, 1.0]`, `defense_discount ∈ [0.0, 0.3]`, `gp_k ∈ [4, 16]`, `minutes_exponent ∈ [0.3, 0.7]`, `sos_transfer_rate ∈ [0.0, 1.0]`, `usg_ref ∈ [16, 20]`). For each combo, recompute composites → retrain predict model → record 5-fold CV MAE. Pick the combo that minimizes error. Beats hand-picked parameters by definition. Coarse pass first (~3 levels per param), then refine around the winning region.
 - [ ] **Add role context beyond usage** (this is the "contextualized by role" half): usage is one axis of role. A 30%-usage primary scorer and a 30%-usage point guard play very different roles; usage alone treats them identically. Layer in:
   - Shot diet (3PA rate, rim rate from Torvik) → spacer vs. driver context

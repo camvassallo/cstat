@@ -12,6 +12,7 @@ Evaluation:
 """
 
 import json
+import os
 from pathlib import Path
 
 import lightgbm as lgb
@@ -28,10 +29,13 @@ from sklearn.metrics import (
 from sklearn.model_selection import KFold
 
 from db import get_engine
-from features import SEASONS, build_feature_matrix
+from features import GBPM_VARIANT, SEASONS, build_feature_matrix
 
-MODEL_DIR = Path(__file__).parent / "models"
-MODEL_DIR.mkdir(exist_ok=True)
+# Override target dir per-experiment with MODEL_DIR=...; default is the
+# production location. Used by run_experiments.py to keep raw / cam_v3 /
+# cam_v3_psos artifacts side by side without clobbering each other.
+MODEL_DIR = Path(os.environ.get("MODEL_DIR") or (Path(__file__).parent / "models"))
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def train_margin_model(X_train, y_train, X_test, y_test, feature_cols):
@@ -214,6 +218,8 @@ def print_feature_importance(model, feature_cols, top_n=15):
 
 def main():
     engine = get_engine()
+    print(f"GBPM variant: {GBPM_VARIANT}")
+    print(f"Model dir:    {MODEL_DIR}")
     print("Loading features...")
     df, feature_cols = build_feature_matrix(engine)
 
@@ -267,6 +273,7 @@ def main():
     # Save feature list and metrics
     meta = {
         "seasons": SEASONS,
+        "gbpm_variant": GBPM_VARIANT,
         "n_games": len(df),
         "n_features": len(feature_cols),
         "features": feature_cols,
