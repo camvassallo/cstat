@@ -260,7 +260,7 @@ This naturally enables:
 - [x] Deploy to Railway (managed Postgres plugin, public domain on `*.up.railway.app`, ONNX models bundled in image)
 - [x] Seed production DB via `pg_dump`/`psql` from local snapshot (full schema + computed tables + cache)
 - [x] Serve React build from cstat-api (static file fallback)
-- [ ] Custom domain on `campom.org` (Cloudflare CNAME → Railway, TLS via Railway/Let's Encrypt)
+- [x] Custom domain on `campom.org` (Cloudflare CNAME → Railway, TLS via Railway/Let's Encrypt)
 - [ ] **Auto data consumer (in-season cron)**: Railway cron service running `cstat-ingest update --year <YYYY> && cstat-ingest compute --year <YYYY>` nightly during the season to fetch new games and refresh derived metrics. Deferred until next season tips off — offseason has no new games to consume. Same Docker image as the API service, scheduled via Railway's cron, sharing the Postgres plugin and `NATSTAT_API_KEY` env. Rate-limit budget: ~57 forecast calls + per-team perfs, well under the 500/hr NatStat ceiling.
 
 ### 4e: Bracketology & Tournament Resume
@@ -278,18 +278,19 @@ This naturally enables:
 > Note: the predict model already uses raw Torvik OGBPM/DGBPM as its top features (`diff_w_gbpm`, `diff_w_ogbpm`, `diff_w_dgbpm`, `diff_star_*`). CamPom is the natural refinement of those features, which means **the predict model is both a downstream consumer and the calibration target**.
 
 #### Implement
-- [ ] **Compute layer**: port the methodology as a step in the cstat-core compute pipeline. Mirror the formulas exactly so the spreadsheet's numbers reproduce as a baseline.
+- [x] **Compute layer**: ported the methodology as `compute_campom` (step 8/13) in `cstat-core/src/compute.rs`. All formulas mirror the doc.
   - `adj_gbpm` (usage-adjusted GBPM)
   - `min_factor` / `mp_factor` (sqrt-scaled volume factors)
   - `gp_weight` (Bayesian shrinkage, k=8)
-  - `sos_adj` / `adj_gbpm_sos` (conference-strength adjustment computed from our own dataset, not hardcoded from the doc's table)
+  - `sos_adj` / `adj_gbpm_sos` (conference quality recomputed each run from the GP≥20 stable cohort, not hardcoded)
   - Composites: `cam_gbpm`, `cam_gbpm_v2`, `cam_gbpm_v3`
-- [ ] **Offensive / defensive / total as first-class outputs**: the formula already computes o-side and d-side components separately. Store all three (`cam_o_gbpm`, `cam_d_gbpm`, `cam_gbpm`) at every tier (original / v2 / v3). Surface offensive and defensive composites independently across the site, not just the total.
-- [ ] **Schema**: store all intermediate + composite values (extend `torvik_player_stats` or add a `player_valuation` table keyed on `player_id, season`). Plan for ~12 composite columns once o/d splits land at all three tiers.
-- [ ] **Iteration hooks**: keep all tunable parameters as named constants (`offense_exponent=0.7`, `defense_discount=0.1`, `usg_ref=17.87`, `minutes_exponent=0.5`, `gp_k=8`, `sos_transfer_rate=0.5`) so each experiment is a one-PR change.
+- [x] **Offensive / defensive / total as first-class outputs**: o-side and d-side components stored at every tier (`cam_o_gbpm` / `cam_d_gbpm` × original / v2 / v3). Tier-3 SOS is split between o/d proportional to each side's signed contribution to `adj_gbpm`.
+- [x] **Schema**: migration 014 extends `torvik_player_stats` with all intermediates (`min_factor`, `mp_factor`, `gp_weight`, `adj_gbpm`, `conf_sos`, `sos_adj`, `adj_gbpm_sos`) plus 12 composite columns (`cam_*` and `min_adj_*` at every tier). Indexed on `(season, cam_gbpm_v3 DESC)` for the rankings query path.
+- [x] **Iteration hooks**: 6 tunable constants exposed as `CAMPOM_*` consts at the top of `compute.rs` (`OFFENSE_EXPONENT=0.7`, `DEFENSE_DISCOUNT=0.1`, `USG_REF=17.87357708`, `MINUTES_EXPONENT=0.5`, `GP_K=8`, `SOS_TRANSFER_RATE=0.5`) so each grid-search experiment is a one-line change.
 
 #### Validate
-- [ ] **Parity gate**: join our computed composites against `docs/campom_2026_baseline.csv` on `torvik_pid` (~5,000 players, all CamPom intermediates + finals included). Tolerance <0.01 absolute on every composite. Lock parameters until parity is confirmed — the "iterate" phase needs a clean baseline so improvements are measurable, not a moving target.
+- [x] **Parity gate**: `cstat-ingest campom-parity --year 2026` joins computed composites against `docs/campom_2026_baseline.csv` on `torvik_pid` and diffs every intermediate + final. **PASS** — 4970 matched players, max abs diff 0.0005 across every column (just baseline-CSV truncation). Top of `cam_gbpm_v3` reproduces the doc's elite tier exactly (Boozer 29.17 → Dybantsa 20.76 → Lendeborg 20.59 → Ejiofor 19.68). 2025 also computed cleanly (5,046 players).
+  - Caught two latent column-naming bugs in `torvik_player_stats`: `total_minutes` actually stores MP (per-game minutes) and `minutes_per_game` actually stores Min% (share). Migration 014 backfilled the new `min_per` column from `minutes_per_game`; CamPom reads each column for what it truly contains. **Follow-up**: rename these columns to match their semantics (own PR, touches ingest + any consumer that reads them by name).
 
 #### Iterate (with a real fitness function)
 - [ ] **Wire CamPom into the predict model as features**: in `crates/cstat-core/src/features.rs` and `training/features.py`, add CamPom-adjusted roster aggregates (`diff_w_cam_o_gbpm`, `diff_w_cam_d_gbpm`, `diff_star_cam_o_gbpm`, `diff_star_cam_d_gbpm`) alongside the existing raw Torvik features. Retrain.

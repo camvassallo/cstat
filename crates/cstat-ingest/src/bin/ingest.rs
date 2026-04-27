@@ -122,6 +122,17 @@ enum Commands {
         rebounds: bool,
     },
 
+    /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
+    /// Pass condition: max abs diff < 0.01 across every CamPom intermediate and final.
+    CampomParity {
+        #[arg(short, long, default_value = "2026")]
+        year: i32,
+
+        /// Path to the baseline CSV. Defaults to docs/campom_2026_baseline.csv.
+        #[arg(long, default_value = "docs/campom_2026_baseline.csv")]
+        baseline: std::path::PathBuf,
+    },
+
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
     Explore {
         /// Endpoint (e.g., "teams", "players", "playerperfs")
@@ -298,6 +309,14 @@ async fn main() -> Result<()> {
                 )
                 .await?;
                 println!("Rebound backfill: {updated} game rows updated");
+            }
+        }
+
+        Commands::CampomParity { year, baseline } => {
+            let report = cstat_ingest::campom_parity::run(&db.pool, year, &baseline).await?;
+            report.print();
+            if !report.passed() {
+                std::process::exit(1);
             }
         }
 

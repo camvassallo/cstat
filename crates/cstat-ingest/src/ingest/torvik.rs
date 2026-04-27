@@ -64,7 +64,7 @@ pub async fn ingest_torvik_player_stats(
                     orb_pct, drb_pct, ast_pct, tov_pct, stl_pct, blk_pct,
                     personal_foul_rate, ast_to_tov,
                     ppg, oreb_pg, dreb_pg, treb_pg, ast_pg, stl_pg, blk_pg,
-                    nba_pick
+                    nba_pick, min_per
                ) VALUES (
                     $1, $2, $3, $4, $5,
                     $6, $7, $8, $9, $10,
@@ -80,7 +80,7 @@ pub async fn ingest_torvik_player_stats(
                     $49, $50, $51, $52, $53, $54,
                     $55, $56,
                     $57, $58, $59, $60, $61, $62, $63,
-                    $64
+                    $64, $65
                ) ON CONFLICT (torvik_pid, season) DO UPDATE SET
                     player_id = COALESCE(EXCLUDED.player_id, torvik_player_stats.player_id),
                     team_name = EXCLUDED.team_name, conf = EXCLUDED.conf,
@@ -118,6 +118,7 @@ pub async fn ingest_torvik_player_stats(
                     treb_pg = EXCLUDED.treb_pg, ast_pg = EXCLUDED.ast_pg,
                     stl_pg = EXCLUDED.stl_pg, blk_pg = EXCLUDED.blk_pg,
                     nba_pick = EXCLUDED.nba_pick,
+                    min_per = EXCLUDED.min_per,
                     updated_at = now()
             "#,
         )
@@ -185,6 +186,7 @@ pub async fn ingest_torvik_player_stats(
         .bind(p.stl_pg) // $62
         .bind(p.blk_pg) // $63
         .bind(p.nba_pick) // $64
+        .bind(p.min_per) // $65 — Torvik's Min% (share of team minutes 0–100)
         .execute(pool)
         .await?;
 
