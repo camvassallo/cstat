@@ -5,19 +5,75 @@ import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-communi
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
 import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
-import { pctileTextColorVivid } from '../components/pctile';
+import { pctileTextColor } from '../components/pctile';
+
+// AdjEM presentation tiers — same chip styling pattern as CamPom on the
+// Players tab. Thresholds use the conventional KenPom absolute scale where
+// +20 is roughly Final Four caliber and 0 is the league-average D-I team.
+type AdjEmTier =
+  | 'Elite'
+  | 'Strong'
+  | 'Above average'
+  | 'Average'
+  | 'Below average'
+  | 'Weak';
+
+function adjEmTier(em: number | null | undefined): AdjEmTier | null {
+  if (em == null) return null;
+  if (em >= 25) return 'Elite';
+  if (em >= 15) return 'Strong';
+  if (em >= 5) return 'Above average';
+  if (em >= -5) return 'Average';
+  if (em >= -15) return 'Below average';
+  return 'Weak';
+}
+
+function adjEmTierColor(tier: AdjEmTier | null): string {
+  switch (tier) {
+    case 'Elite':         return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
+    case 'Strong':        return 'bg-sky-500/20 text-sky-300 border-sky-500/40';
+    case 'Above average': return 'bg-blue-500/20 text-blue-300 border-blue-500/40';
+    case 'Average':       return 'bg-slate-500/20 text-slate-300 border-slate-500/40';
+    case 'Below average': return 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+    case 'Weak':          return 'bg-rose-500/20 text-rose-300 border-rose-500/40';
+    default:              return 'bg-slate-700/40 text-slate-400 border-slate-600/40';
+  }
+}
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
 
-/** Cell renderer that shows a formatted value with a subtle rank underneath. */
-function RankedCell({ value, rank, format }: { value: number | null; rank: number | null; format: (v: number | null) => string }) {
+/** Cell renderer that shows a formatted value with a subtle rank underneath.
+ *  The rank text is tinted by percentile when `totalTeams` is provided —
+ *  small enough to stay subtle, but gives an at-a-glance cue alongside the
+ *  precise rank number. AdjEM gets the vivid gradient on the value itself
+ *  (different column treatment); this helper is for the supporting columns. */
+function RankedCell({
+  value,
+  rank,
+  format,
+  totalTeams,
+}: {
+  value: number | null;
+  rank: number | null;
+  format: (v: number | null) => string;
+  totalTeams?: number;
+}) {
+  const pctile =
+    rank != null && totalTeams && totalTeams > 1
+      ? 1 - (rank - 1) / (totalTeams - 1)
+      : null;
+  const rankColor = pctile != null ? pctileTextColor(pctile) : '#6b7280';
   return (
     <div className="leading-tight py-0.5">
       <div>{format(value)}</div>
-      {rank != null && <div className="text-[10px] text-gray-500">#{rank}</div>}
+      {rank != null && (
+        <div className="text-[10px]" style={{ color: rankColor }}>
+          #{rank}
+        </div>
+      )}
     </div>
   );
 }
@@ -30,14 +86,6 @@ type RankingsView = 'standard' | 'offense' | 'defense';
 const CATEGORY_DIVIDER_STYLE = { borderLeft: '1px solid rgb(31 41 55)' } as const;
 
 function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRanking>[] {
-  // The page sorts by AdjEM, so the row's `rank` field IS its AdjEM rank.
-  // Convert to a percentile in [0, 1] for the gradient: rank 1 → 1.0,
-  // rank N → 0.0. Falls back to neutral when total isn't known yet.
-  const adjEmPctile = (rank: number | null | undefined) => {
-    if (rank == null || totalTeams <= 1) return null;
-    return 1 - (rank - 1) / (totalTeams - 1);
-  };
-
   // Helper for flex-distributed columns. AG Grid normalizes `flex` weights
   // so we can pass natural width values directly as the weight: a column
   // with flex=200 gets 2.5× the share of one with flex=80, preserving
@@ -77,43 +125,53 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
       field: 'adj_efficiency_margin',
       headerName: 'AdjEM',
       ...flexCol(85),
-      valueFormatter: (p) => fmt(p.value),
-      cellStyle: (p) => ({ color: pctileTextColorVivid(adjEmPctile(p.data?.rank)) }),
+      cellRenderer: (p: { value: number | null }) => {
+        if (p.value == null) return <span className="text-slate-500">—</span>;
+        const tier = adjEmTier(p.value);
+        return (
+          <span
+            className={`px-1.5 rounded border text-xs ${adjEmTierColor(tier)}`}
+            title={tier ?? ''}
+          >
+            {p.value.toFixed(1)}
+          </span>
+        );
+      },
     },
     {
       field: 'adj_offense',
       headerName: 'AdjO',
       ...flexCol(80),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.adj_offense} rank={p.data.adj_offense_rank} format={(v) => fmt(v)} />,
+        p.data && <RankedCell value={p.data.adj_offense} rank={p.data.adj_offense_rank} format={(v) => fmt(v)} totalTeams={totalTeams} />,
     },
     {
       field: 'adj_defense',
       headerName: 'AdjD',
       ...flexCol(80),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.adj_defense} rank={p.data.adj_defense_rank} format={(v) => fmt(v)} />,
+        p.data && <RankedCell value={p.data.adj_defense} rank={p.data.adj_defense_rank} format={(v) => fmt(v)} totalTeams={totalTeams} />,
     },
     {
       field: 'adj_tempo',
       headerName: 'Tempo',
       ...flexCol(80),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.adj_tempo} rank={p.data.adj_tempo_rank} format={(v) => fmt(v)} />,
+        p.data && <RankedCell value={p.data.adj_tempo} rank={p.data.adj_tempo_rank} format={(v) => fmt(v)} totalTeams={totalTeams} />,
     },
     {
       field: 'sos',
       headerName: 'SOS',
       ...flexCol(75),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.sos} rank={p.data.sos_rank} format={(v) => fmt(v, 2)} />,
+        p.data && <RankedCell value={p.data.sos} rank={p.data.sos_rank} format={(v) => fmt(v, 2)} totalTeams={totalTeams} />,
     },
     {
       field: 'elo_rating',
       headerName: 'ELO',
       ...flexCol(80),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.elo_rating} rank={p.data.elo_rank} format={(v) => fmt(v, 0)} />,
+        p.data && <RankedCell value={p.data.elo_rating} rank={p.data.elo_rank} format={(v) => fmt(v, 0)} totalTeams={totalTeams} />,
     },
   ];
 
@@ -128,28 +186,28 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
       headerStyle: CATEGORY_DIVIDER_STYLE,
       cellStyle: CATEGORY_DIVIDER_STYLE,
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.effective_fg_pct} rank={p.data.effective_fg_pct_rank} format={pct} />,
+        p.data && <RankedCell value={p.data.effective_fg_pct} rank={p.data.effective_fg_pct_rank} format={pct} totalTeams={totalTeams} />,
     },
     {
       field: 'turnover_pct',
       headerName: 'TOV%',
       ...flexCol(90),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.turnover_pct} rank={p.data.turnover_pct_rank} format={pct} />,
+        p.data && <RankedCell value={p.data.turnover_pct} rank={p.data.turnover_pct_rank} format={pct} totalTeams={totalTeams} />,
     },
     {
       field: 'off_rebound_pct',
       headerName: 'ORB%',
       ...flexCol(90),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.off_rebound_pct} rank={p.data.off_rebound_pct_rank} format={pct} />,
+        p.data && <RankedCell value={p.data.off_rebound_pct} rank={p.data.off_rebound_pct_rank} format={pct} totalTeams={totalTeams} />,
     },
     {
       field: 'ft_rate',
       headerName: 'FTR',
       ...flexCol(85),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.ft_rate} rank={p.data.ft_rate_rank} format={(v) => fmt(v, 2)} />,
+        p.data && <RankedCell value={p.data.ft_rate} rank={p.data.ft_rate_rank} format={(v) => fmt(v, 2)} totalTeams={totalTeams} />,
     },
   ];
 
@@ -163,7 +221,7 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
       cellStyle: CATEGORY_DIVIDER_STYLE,
       headerTooltip: 'Opponent eFG% — defense holds opponents to lower number = better',
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.opp_effective_fg_pct} rank={p.data.opp_effective_fg_pct_rank} format={pct} />,
+        p.data && <RankedCell value={p.data.opp_effective_fg_pct} rank={p.data.opp_effective_fg_pct_rank} format={pct} totalTeams={totalTeams} />,
     },
     {
       field: 'opp_turnover_pct',
@@ -171,14 +229,14 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
       ...flexCol(100, 80),
       headerTooltip: 'Opponent TOV% — defense forces turnovers; higher = better',
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.opp_turnover_pct} rank={p.data.opp_turnover_pct_rank} format={pct} />,
+        p.data && <RankedCell value={p.data.opp_turnover_pct} rank={p.data.opp_turnover_pct_rank} format={pct} totalTeams={totalTeams} />,
     },
     {
       field: 'def_rebound_pct',
       headerName: 'DRB%',
       ...flexCol(90),
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.def_rebound_pct} rank={p.data.def_rebound_pct_rank} format={pct} />,
+        p.data && <RankedCell value={p.data.def_rebound_pct} rank={p.data.def_rebound_pct_rank} format={pct} totalTeams={totalTeams} />,
     },
     {
       field: 'opp_ft_rate',
@@ -186,7 +244,7 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
       ...flexCol(90),
       headerTooltip: 'Opponent FT Rate — defense avoids fouling; lower = better',
       cellRenderer: (p: { data: TeamRanking }) =>
-        p.data && <RankedCell value={p.data.opp_ft_rate} rank={p.data.opp_ft_rate_rank} format={(v) => fmt(v, 2)} />,
+        p.data && <RankedCell value={p.data.opp_ft_rate} rank={p.data.opp_ft_rate_rank} format={(v) => fmt(v, 2)} totalTeams={totalTeams} />,
     },
   ];
 
