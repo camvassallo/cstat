@@ -368,6 +368,12 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 - [ ] Team detail UI: roster archetype distribution (e.g., "this team rolls 3 Rangers, 1 Druid, 1 Sorcerer") and a balance score
   - Roster table renders **secondary class alongside primary** on each row (e.g., "Wizard / Bard") for added flavor and storytelling; tooltip on the row shows both classes plus affinity scores
 - [ ] Compare page UI: each player's header panel (currently name + team) also shows **primary + secondary class** inline (e.g., "Wizard / Bard"), so the archetype framing carries through the whole comparison flow
+- [ ] **Archetype rankings drill-down**: from the archetype screen, clicking a class launches a rankings view scoped to that archetype (e.g., "Top Wizards"). The view should:
+  - Default sort by `cam_gbpm_v3_psos` (CamPom) descending, matching the site-wide canonical rank
+  - Allow re-sorting / filtering by other stats (PPG, AST%, OGBPM/DGBPM, USG%, TS%, rate stats, etc.) — same column set as the Players tab
+  - Toggle between **primary-class only** and **primary OR secondary class** scopes (a Wizard/Bard shows up under both Wizard and Bard when secondary is included), so users can see deep talent at a class even when it's a player's secondary
+  - Implementation options to evaluate: (a) preloaded `/players` view with an `archetype=wizard&include_secondary=true` query param driving the filter, or (b) a dedicated route on the archetype tree (`/archetypes/wizard`) that reuses the Players-tab table component. Lean toward (a) so we get column parity, sorting, and CamPom defaults for free
+  - Header on the scoped view shows the class name + flavor blurb + count of qualified players; secondary-class toggle lives in the header
 - [ ] Easter egg: D&D alignment grid placement on player profile (Lawful Good ≈ Monk/Paladin, Chaotic Evil ≈ Warlock/Sorcerer) — half joke, half discovery surface
 
 ### 5b: Roster Composition & Transfer Portal Sandbox
