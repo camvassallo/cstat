@@ -7,6 +7,7 @@ export function SortHeader<K extends string>({
   onSort,
   align = 'left',
   title,
+  className = '',
 }: {
   label: string;
   sortKey: K;
@@ -14,13 +15,14 @@ export function SortHeader<K extends string>({
   onSort: (key: K) => void;
   align?: 'left' | 'right' | 'center';
   title?: string;
+  className?: string;
 }) {
   const active = current.key === sortKey;
   const alignClass =
     align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
   return (
     <th
-      className={`sticky top-0 z-10 bg-gray-900 py-2 px-2 ${alignClass} cursor-pointer select-none hover:text-gray-200 transition-colors`}
+      className={`sticky top-0 z-10 bg-gray-900 py-2 px-2 ${alignClass} cursor-pointer select-none hover:text-gray-200 transition-colors ${className}`}
       onClick={() => onSort(sortKey)}
       title={title}
     >
