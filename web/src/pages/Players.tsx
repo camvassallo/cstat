@@ -26,38 +26,88 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
   );
 };
 
-const columns: ColDef<PlayerRow>[] = [
-  { field: 'name', headerName: 'Player', width: 180, pinned: 'left' },
-  { field: 'team_name', headerName: 'Team', width: 170 },
-  { field: 'conference', headerName: 'Conf', width: 90 },
-  {
-    field: 'campom',
-    headerName: 'CamPom',
-    headerTooltip: 'Composite player valuation. Hover the chip for tier.',
-    width: 120,
-    sort: 'desc',
-    cellRenderer: campomCellRenderer,
-  },
-  { field: 'games_played', headerName: 'GP', width: 60 },
-  { field: 'minutes_per_game', headerName: 'MPG', width: 70, valueFormatter: (p) => fmt(p.value) },
-  { field: 'ppg', headerName: 'PPG', width: 70, valueFormatter: (p) => fmt(p.value) },
-  { field: 'rpg', headerName: 'RPG', width: 70, valueFormatter: (p) => fmt(p.value) },
-  { field: 'apg', headerName: 'APG', width: 70, valueFormatter: (p) => fmt(p.value) },
-  { field: 'spg', headerName: 'SPG', width: 70, valueFormatter: (p) => fmt(p.value) },
-  { field: 'bpg', headerName: 'BPG', width: 70, valueFormatter: (p) => fmt(p.value) },
-  { field: 'effective_fg_pct', headerName: 'eFG%', width: 80, valueFormatter: (p) => pct(p.value) },
-  { field: 'true_shooting_pct', headerName: 'TS%', width: 75, valueFormatter: (p) => pct(p.value) },
-  { field: 'usage_rate', headerName: 'USG%', width: 80, valueFormatter: (p) => pct(p.value) },
-  { field: 'offensive_rating', headerName: 'ORTG', width: 75, valueFormatter: (p) => fmt(p.value) },
-  { field: 'defensive_rating', headerName: 'DRTG', width: 75, valueFormatter: (p) => fmt(p.value) },
-  { field: 'net_rating', headerName: 'NET', width: 70, valueFormatter: (p) => fmt(p.value) },
-];
+function buildColumns(navigate: (to: string) => void): ColDef<PlayerRow>[] {
+  return [
+    {
+      field: 'name',
+      headerName: 'Player',
+      width: 180,
+      pinned: 'left',
+      filter: 'agTextColumnFilter',
+      floatingFilter: true,
+      cellRenderer: (p: { value: string }) => (
+        <span className="text-blue-400 hover:underline cursor-pointer">{p.value}</span>
+      ),
+    },
+    {
+      field: 'team_name',
+      headerName: 'Team',
+      width: 170,
+      filter: 'agTextColumnFilter',
+      floatingFilter: true,
+      cellRenderer: (p: { value: string | null; data?: PlayerRow }) => {
+        if (!p.value) return <span className="text-gray-500">—</span>;
+        const teamId = p.data?.team_id;
+        if (!teamId) return <span>{p.value}</span>;
+        return (
+          <span
+            className="text-blue-400 hover:underline cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/teams/${teamId}`);
+            }}
+          >
+            {p.value}
+          </span>
+        );
+      },
+    },
+    {
+      field: 'conference',
+      headerName: 'Conf',
+      width: 110,
+      filter: 'agTextColumnFilter',
+      floatingFilter: true,
+    },
+    {
+      field: 'campom',
+      headerName: 'CamPom',
+      headerTooltip: 'Composite player valuation. Hover the chip for tier.',
+      width: 120,
+      sort: 'desc',
+      cellRenderer: campomCellRenderer,
+    },
+    { field: 'games_played', headerName: 'GP', width: 60 },
+    { field: 'minutes_per_game', headerName: 'MPG', width: 70, valueFormatter: (p) => fmt(p.value) },
+    { field: 'ppg', headerName: 'PPG', width: 70, valueFormatter: (p) => fmt(p.value) },
+    { field: 'rpg', headerName: 'RPG', width: 70, valueFormatter: (p) => fmt(p.value) },
+    { field: 'apg', headerName: 'APG', width: 70, valueFormatter: (p) => fmt(p.value) },
+    { field: 'spg', headerName: 'SPG', width: 70, valueFormatter: (p) => fmt(p.value) },
+    { field: 'bpg', headerName: 'BPG', width: 70, valueFormatter: (p) => fmt(p.value) },
+    { field: 'effective_fg_pct', headerName: 'eFG%', width: 80, valueFormatter: (p) => pct(p.value) },
+    { field: 'true_shooting_pct', headerName: 'TS%', width: 75, valueFormatter: (p) => pct(p.value) },
+    { field: 'usage_rate', headerName: 'USG%', width: 80, valueFormatter: (p) => pct(p.value) },
+    { field: 'offensive_rating', headerName: 'ORTG', width: 75, valueFormatter: (p) => fmt(p.value) },
+    { field: 'defensive_rating', headerName: 'DRTG', width: 75, valueFormatter: (p) => fmt(p.value) },
+    {
+      field: 'net_rating',
+      headerName: 'NET',
+      width: 70,
+      valueFormatter: (p) => fmt(p.value),
+      cellClassRules: {
+        'text-green-400': (p) => (p.value ?? 0) > 0,
+        'text-red-400': (p) => (p.value ?? 0) < 0,
+      },
+    },
+  ];
+}
 
 export default function Players() {
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
+  const columns = buildColumns(navigate);
 
   const load = (q?: string) => {
     setLoading(true);

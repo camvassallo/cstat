@@ -10,6 +10,8 @@ import {
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { campomTier, campomTierColor } from '../components/campom';
+import { compareValues, type SortDir } from '../components/tableSort';
+import { SortHeader, StickyHeader } from '../components/TableHeaders';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -209,121 +211,181 @@ export default function TeamDetail() {
       )}
 
       {/* Roster */}
-      <div>
-        <h2 className="text-xl font-bold mb-3">Roster</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-400 border-b border-gray-700 text-left">
-                <th className="py-2 px-2">Player</th>
-                <th className="py-2 px-2">Class</th>
-                <th className="py-2 px-2 text-right">GP</th>
-                <th className="py-2 px-2 text-right">MPG</th>
-                <th className="py-2 px-2 text-right">PPG</th>
-                <th className="py-2 px-2 text-right">RPG</th>
-                <th className="py-2 px-2 text-right">APG</th>
-                <th className="py-2 px-2 text-right">eFG%</th>
-                <th className="py-2 px-2 text-right">TS%</th>
-                <th className="py-2 px-2 text-right" title="Composite player valuation. Sorted by this column.">CamPom</th>
-                <th className="py-2 px-2 text-right">ORTG</th>
-              </tr>
-            </thead>
-            <tbody>
-              {roster.map((p) => (
-                <tr key={p.player_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                  <td className="py-2 px-2">
-                    <Link to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
-                      {p.name}
-                    </Link>
-                  </td>
-                  <td className="py-2 px-2">
-                    {p.primary_class ? (
-                      <ClassTooltip cls={p.primary_class}>
-                        <span
-                          className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
-                          style={{
-                            color: classColor(p.primary_class),
-                            background: classColor(p.primary_class) + '22',
-                          }}
-                        >
-                          {p.primary_class}
-                        </span>
-                      </ClassTooltip>
-                    ) : (
-                      <span className="text-gray-600 text-xs">—</span>
-                    )}
-                  </td>
-                  <td className="py-2 px-2 text-right">{p.games_played}</td>
-                  <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
-                  <td className="py-2 px-2 text-right">{fmt(p.ppg)}</td>
-                  <td className="py-2 px-2 text-right">{fmt(p.rpg)}</td>
-                  <td className="py-2 px-2 text-right">{fmt(p.apg)}</td>
-                  <td className="py-2 px-2 text-right">{pct(p.effective_fg_pct)}</td>
-                  <td className="py-2 px-2 text-right">{pct(p.true_shooting_pct)}</td>
-                  <td className="py-2 px-2 text-right">
-                    {p.campom != null ? (
-                      <span
-                        className={`px-1.5 rounded border text-xs ${campomTierColor(campomTier(p.campom))}`}
-                        title={campomTier(p.campom) ?? ''}
-                      >
-                        {p.campom.toFixed(1)}
-                      </span>
-                    ) : (
-                      <span className="text-gray-600">—</span>
-                    )}
-                  </td>
-                  <td className="py-2 px-2 text-right">{fmt(p.offensive_rating)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <RosterTable roster={roster} />
 
       {/* Schedule */}
-      <div>
-        <h2 className="text-xl font-bold mb-3">Schedule</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-gray-400 border-b border-gray-700 text-left">
-                <th className="py-2 px-2">Date</th>
-                <th className="py-2 px-2">Opponent</th>
-                <th className="py-2 px-2 text-center">Result</th>
-                <th className="py-2 px-2 text-center">Score</th>
+      <ScheduleTable schedule={schedule} />
+    </div>
+  );
+}
+
+type RosterSortKey =
+  | 'name'
+  | 'games_played'
+  | 'minutes_per_game'
+  | 'ppg'
+  | 'rpg'
+  | 'apg'
+  | 'effective_fg_pct'
+  | 'true_shooting_pct'
+  | 'campom'
+  | 'offensive_rating';
+
+function RosterTable({ roster }: { roster: RosterEntry[] }) {
+  const [sort, setSort] = useState<{ key: RosterSortKey; dir: SortDir }>({
+    key: 'campom',
+    dir: 'desc',
+  });
+  const onSort = (key: RosterSortKey) => {
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'name' ? 'asc' : 'desc' },
+    );
+  };
+  const sorted = useMemo(() => {
+    return [...roster].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir));
+  }, [roster, sort]);
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold mb-3">Roster</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-400 border-b border-gray-700">
+              <SortHeader label="Player" sortKey="name" current={sort} onSort={onSort} />
+              <StickyHeader>Class</StickyHeader>
+              <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="MPG" sortKey="minutes_per_game" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="PPG" sortKey="ppg" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="RPG" sortKey="rpg" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="APG" sortKey="apg" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="eFG%" sortKey="effective_fg_pct" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="TS%" sortKey="true_shooting_pct" current={sort} onSort={onSort} align="right" />
+              <SortHeader
+                label="CamPom"
+                sortKey="campom"
+                current={sort}
+                onSort={onSort}
+                align="right"
+                title="Composite player valuation."
+              />
+              <SortHeader label="ORTG" sortKey="offensive_rating" current={sort} onSort={onSort} align="right" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((p) => (
+              <tr key={p.player_id} className="border-b border-gray-800 hover:bg-gray-800/50">
+                <td className="py-2 px-2">
+                  <Link to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
+                    {p.name}
+                  </Link>
+                </td>
+                <td className="py-2 px-2">
+                  {p.primary_class ? (
+                    <ClassTooltip cls={p.primary_class}>
+                      <span
+                        className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+                        style={{
+                          color: classColor(p.primary_class),
+                          background: classColor(p.primary_class) + '22',
+                        }}
+                      >
+                        {p.primary_class}
+                      </span>
+                    </ClassTooltip>
+                  ) : (
+                    <span className="text-gray-600 text-xs">—</span>
+                  )}
+                </td>
+                <td className="py-2 px-2 text-right">{p.games_played}</td>
+                <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
+                <td className="py-2 px-2 text-right">{fmt(p.ppg)}</td>
+                <td className="py-2 px-2 text-right">{fmt(p.rpg)}</td>
+                <td className="py-2 px-2 text-right">{fmt(p.apg)}</td>
+                <td className="py-2 px-2 text-right">{pct(p.effective_fg_pct)}</td>
+                <td className="py-2 px-2 text-right">{pct(p.true_shooting_pct)}</td>
+                <td className="py-2 px-2 text-right">
+                  {p.campom != null ? (
+                    <span
+                      className={`px-1.5 rounded border text-xs ${campomTierColor(campomTier(p.campom))}`}
+                      title={campomTier(p.campom) ?? ''}
+                    >
+                      {p.campom.toFixed(1)}
+                    </span>
+                  ) : (
+                    <span className="text-gray-600">—</span>
+                  )}
+                </td>
+                <td className="py-2 px-2 text-right">{fmt(p.offensive_rating)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {schedule.map((g) => {
-                const won = g.team_score != null && g.opponent_score != null && g.team_score > g.opponent_score;
-                const lost = g.team_score != null && g.opponent_score != null && g.team_score < g.opponent_score;
-                return (
-                  <tr key={g.game_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                    <td className="py-2 px-2 text-gray-400">{g.game_date}</td>
-                    <td className="py-2 px-2">
-                      {g.is_home === false && '@ '}
-                      {g.opponent_id ? (
-                        <Link to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
-                          {g.opponent_name ?? 'Unknown'}
-                        </Link>
-                      ) : (
-                        g.opponent_name ?? 'Unknown'
-                      )}
-                      {g.is_neutral && ' (N)'}
-                      {g.is_conference && <span className="text-gray-500 ml-1">*</span>}
-                    </td>
-                    <td className={`py-2 px-2 text-center font-semibold ${won ? 'text-green-400' : lost ? 'text-red-400' : ''}`}>
-                      {g.team_score != null ? (won ? 'W' : 'L') : '—'}
-                    </td>
-                    <td className="py-2 px-2 text-center">
-                      {g.team_score != null ? `${g.team_score}-${g.opponent_score}` : '—'}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+            ))}
+            {sorted.length === 0 && (
+              <tr>
+                <td colSpan={11} className="py-6 text-center text-gray-500 text-sm">
+                  No roster data.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ScheduleTable({ schedule }: { schedule: ScheduleEntry[] }) {
+  return (
+    <div>
+      <h2 className="text-xl font-bold mb-3">Schedule</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-400 border-b border-gray-700">
+              <StickyHeader>Date</StickyHeader>
+              <StickyHeader>Opponent</StickyHeader>
+              <StickyHeader align="center">Result</StickyHeader>
+              <StickyHeader align="center">Score</StickyHeader>
+            </tr>
+          </thead>
+          <tbody>
+            {schedule.map((g) => {
+              const won = g.team_score != null && g.opponent_score != null && g.team_score > g.opponent_score;
+              const lost = g.team_score != null && g.opponent_score != null && g.team_score < g.opponent_score;
+              return (
+                <tr key={g.game_id} className="border-b border-gray-800 hover:bg-gray-800/50">
+                  <td className="py-2 px-2 text-gray-400">{g.game_date}</td>
+                  <td className="py-2 px-2">
+                    {g.is_home === false && '@ '}
+                    {g.opponent_id ? (
+                      <Link to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
+                        {g.opponent_name ?? 'Unknown'}
+                      </Link>
+                    ) : (
+                      g.opponent_name ?? 'Unknown'
+                    )}
+                    {g.is_neutral && ' (N)'}
+                    {g.is_conference && <span className="text-gray-500 ml-1">*</span>}
+                  </td>
+                  <td className={`py-2 px-2 text-center font-semibold ${won ? 'text-green-400' : lost ? 'text-red-400' : ''}`}>
+                    {g.team_score != null ? (won ? 'W' : 'L') : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    {g.team_score != null ? `${g.team_score}-${g.opponent_score}` : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+            {schedule.length === 0 && (
+              <tr>
+                <td colSpan={4} className="py-6 text-center text-gray-500 text-sm">
+                  No games scheduled.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

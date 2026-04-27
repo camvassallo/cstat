@@ -255,6 +255,7 @@ export interface Percentiles {
 export interface GameLogEntry {
   game_id: string;
   game_date: string;
+  opponent_id: string | null;
   opponent_name: string | null;
   is_home: boolean | null;
   minutes: number | null;

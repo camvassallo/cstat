@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
 import {
@@ -16,6 +16,8 @@ import {
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
 import { campomTier, campomTierColor } from '../components/campom';
+import { compareValues, type SortDir } from '../components/tableSort';
+import { SortHeader, StickyHeader } from '../components/TableHeaders';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -266,51 +268,114 @@ export default function PlayerDetail() {
 
       {/* Game Log */}
       {gameLog.length > 0 && (
-        <div>
-          <h2 className="text-xl font-bold mb-3">Game Log</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-gray-400 border-b border-gray-700 text-left">
-                  <th className="py-2 px-2">Date</th>
-                  <th className="py-2 px-2">Opponent</th>
-                  <th className="py-2 px-2 text-right">MIN</th>
-                  <th className="py-2 px-2 text-right">PTS</th>
-                  <th className="py-2 px-2 text-right">FG</th>
-                  <th className="py-2 px-2 text-right">3P</th>
-                  <th className="py-2 px-2 text-right">REB</th>
-                  <th className="py-2 px-2 text-right">AST</th>
-                  <th className="py-2 px-2 text-right">STL</th>
-                  <th className="py-2 px-2 text-right">BLK</th>
-                  <th className="py-2 px-2 text-right">TO</th>
-                  <th className="py-2 px-2 text-right">GmSc</th>
-                </tr>
-              </thead>
-              <tbody>
-                {gameLog.map((g) => (
-                  <tr key={g.game_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                    <td className="py-1.5 px-2 text-gray-400">{g.game_date}</td>
-                    <td className="py-1.5 px-2">
-                      {g.is_home === false && '@ '}
-                      {g.opponent_name ?? 'Unknown'}
-                    </td>
-                    <td className="py-1.5 px-2 text-right">{fmt(g.minutes, 0)}</td>
-                    <td className="py-1.5 px-2 text-right font-medium">{g.points ?? '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{g.fgm != null ? `${g.fgm}-${g.fga}` : '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{g.tpm != null ? `${g.tpm}-${g.tpa}` : '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{g.total_rebounds ?? '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{g.assists ?? '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{g.steals ?? '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{g.blocks ?? '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{g.turnovers ?? '—'}</td>
-                    <td className="py-1.5 px-2 text-right">{fmt(g.game_score)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <GameLogTable gameLog={gameLog} seasonPpg={stats?.ppg ?? null} />
       )}
+    </div>
+  );
+}
+
+type GameLogSortKey =
+  | 'game_date'
+  | 'opponent_name'
+  | 'minutes'
+  | 'points'
+  | 'total_rebounds'
+  | 'assists'
+  | 'steals'
+  | 'blocks'
+  | 'turnovers'
+  | 'game_score';
+
+function GameLogTable({
+  gameLog,
+  seasonPpg,
+}: {
+  gameLog: GameLogEntry[];
+  seasonPpg: number | null;
+}) {
+  const [sort, setSort] = useState<{ key: GameLogSortKey; dir: SortDir }>({
+    key: 'game_date',
+    dir: 'desc',
+  });
+  const onSort = (key: GameLogSortKey) => {
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'opponent_name' ? 'asc' : 'desc' },
+    );
+  };
+
+  // Standout thresholds: PTS ≥ 1.5× season PPG; GmSc ≥ 1.5× this player's mean game_score.
+  const meanGameScore = useMemo(() => {
+    const xs = gameLog.map((g) => g.game_score).filter((x): x is number => x != null);
+    if (xs.length === 0) return null;
+    return xs.reduce((s, x) => s + x, 0) / xs.length;
+  }, [gameLog]);
+  const ptsHi = seasonPpg != null ? seasonPpg * 1.5 : null;
+  const gmscHi = meanGameScore != null ? meanGameScore * 1.5 : null;
+
+  const sorted = useMemo(() => {
+    return [...gameLog].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir));
+  }, [gameLog, sort]);
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold mb-3">Game Log</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-400 border-b border-gray-700">
+              <SortHeader label="Date" sortKey="game_date" current={sort} onSort={onSort} />
+              <SortHeader label="Opponent" sortKey="opponent_name" current={sort} onSort={onSort} />
+              <SortHeader label="MIN" sortKey="minutes" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="PTS" sortKey="points" current={sort} onSort={onSort} align="right" />
+              <StickyHeader align="right">FG</StickyHeader>
+              <StickyHeader align="right">3P</StickyHeader>
+              <SortHeader label="REB" sortKey="total_rebounds" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="AST" sortKey="assists" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="STL" sortKey="steals" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="BLK" sortKey="blocks" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="TO" sortKey="turnovers" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="GmSc" sortKey="game_score" current={sort} onSort={onSort} align="right" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((g) => {
+              const ptsHot = ptsHi != null && g.points != null && g.points >= ptsHi;
+              const gmscHot = gmscHi != null && g.game_score != null && g.game_score >= gmscHi;
+              return (
+                <tr key={g.game_id} className="border-b border-gray-800 hover:bg-gray-800/50">
+                  <td className="py-1.5 px-2 text-gray-400">{g.game_date}</td>
+                  <td className="py-1.5 px-2">
+                    {g.is_home === false && '@ '}
+                    {g.opponent_id ? (
+                      <Link to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
+                        {g.opponent_name ?? 'Unknown'}
+                      </Link>
+                    ) : (
+                      g.opponent_name ?? 'Unknown'
+                    )}
+                  </td>
+                  <td className="py-1.5 px-2 text-right">{fmt(g.minutes, 0)}</td>
+                  <td className={`py-1.5 px-2 text-right font-medium ${ptsHot ? 'text-green-400' : ''}`}>
+                    {g.points ?? '—'}
+                  </td>
+                  <td className="py-1.5 px-2 text-right">{g.fgm != null ? `${g.fgm}-${g.fga}` : '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.tpm != null ? `${g.tpm}-${g.tpa}` : '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.total_rebounds ?? '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.assists ?? '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.steals ?? '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.blocks ?? '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.turnovers ?? '—'}</td>
+                  <td className={`py-1.5 px-2 text-right ${gmscHot ? 'text-green-400' : ''}`}>
+                    {fmt(g.game_score)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
