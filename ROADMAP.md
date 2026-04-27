@@ -200,6 +200,9 @@ This naturally enables:
   - Consistent sorting + filtering UX across tables (column sort affordances, filter inputs, empty/no-results states)
   - Consistent typography, density, and sticky headers across surfaces
   - Note: per-page default-sort tweaks (e.g., players page → `cam_gbpm_v3`) live in **4f Ship**, not here
+- [ ] **Sortable-table follow-ups** (small polish items uncovered during the table polish work):
+  - **Keyboard a11y on `SortHeader`**: the clickable `<th>` in `web/src/components/TableHeaders.tsx` has `cursor-pointer` and an `onClick` but no `role="button"`, `tabIndex={0}`, or keyboard activation — keyboard-only users can't trigger column sort. Add proper button semantics + `Enter`/`Space` handling. Apply consistently to the Roster, Schedule, and GameLog hand-rolled tables (AG Grid surfaces handle this themselves).
+  - **`pctileTextColor` input clamp**: the red → neutral → green lerp in `web/src/pages/TeamDetail.tsx` produces out-of-gamut RGB if a percentile ever lands outside [0, 1]. `PERCENT_RANK()` is bounded so this can't happen with current data, but a `Math.max(0, Math.min(1, p))` clamp at the function entry is defensive coding for free.
 - [ ] **Spider/radar chart axis transparency**: surface what each prong of the player detail and compare-page radars actually represents — which underlying stat(s) + percentile feed each axis. Today the labels are opaque; a viewer can't tell whether "playmaking" is AST%, AST/TO, raw APG, or a blend. Work:
   - Audit the current axis-to-stat mapping; confirm each prong reflects its label and that no axis double-counts a stat
   - Hover/tap tooltip on each prong showing the contributing stat(s), the player's raw value, and the percentile feeding the spoke length
@@ -368,6 +371,12 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 - [ ] Team detail UI: roster archetype distribution (e.g., "this team rolls 3 Rangers, 1 Druid, 1 Sorcerer") and a balance score
   - Roster table renders **secondary class alongside primary** on each row (e.g., "Wizard / Bard") for added flavor and storytelling; tooltip on the row shows both classes plus affinity scores
 - [ ] Compare page UI: each player's header panel (currently name + team) also shows **primary + secondary class** inline (e.g., "Wizard / Bard"), so the archetype framing carries through the whole comparison flow
+- [ ] **Archetype rankings drill-down**: from the archetype screen, clicking a class launches a rankings view scoped to that archetype (e.g., "Top Wizards"). The view should:
+  - Default sort by `cam_gbpm_v3_psos` (CamPom) descending, matching the site-wide canonical rank
+  - Allow re-sorting / filtering by other stats (PPG, AST%, OGBPM/DGBPM, USG%, TS%, rate stats, etc.) — same column set as the Players tab
+  - Toggle between **primary-class only** and **primary OR secondary class** scopes (a Wizard/Bard shows up under both Wizard and Bard when secondary is included), so users can see deep talent at a class even when it's a player's secondary
+  - Implementation options to evaluate: (a) preloaded `/players` view with an `archetype=wizard&include_secondary=true` query param driving the filter, or (b) a dedicated route on the archetype tree (`/archetypes/wizard`) that reuses the Players-tab table component. Lean toward (a) so we get column parity, sorting, and CamPom defaults for free
+  - Header on the scoped view shows the class name + flavor blurb + count of qualified players; secondary-class toggle lives in the header
 - [ ] Easter egg: D&D alignment grid placement on player profile (Lawful Good ≈ Monk/Paladin, Chaotic Evil ≈ Warlock/Sorcerer) — half joke, half discovery surface
 
 ### 5b: Roster Composition & Transfer Portal Sandbox

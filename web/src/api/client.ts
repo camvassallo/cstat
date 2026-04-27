@@ -78,17 +78,36 @@ export interface RosterEntry {
   apg: number | null;
   spg: number | null;
   bpg: number | null;
+  topg: number | null;
   fg_pct: number | null;
   tp_pct: number | null;
   ft_pct: number | null;
   effective_fg_pct: number | null;
   true_shooting_pct: number | null;
   usage_rate: number | null;
+  ast_pct: number | null;
+  tov_pct: number | null;
+  orb_pct: number | null;
+  drb_pct: number | null;
+  stl_pct: number | null;
+  blk_pct: number | null;
   gbpm: number | null;
   campom: number | null;
   campom_pct: number | null;
-  offensive_rating: number | null;
-  defensive_rating: number | null;
+  ppg_pct: number | null;
+  rpg_pct: number | null;
+  apg_pct: number | null;
+  spg_pct: number | null;
+  bpg_pct: number | null;
+  topg_pct: number | null;
+  true_shooting_pct_pct: number | null;
+  usage_rate_pct: number | null;
+  ast_pct_pct: number | null;
+  tov_pct_pct: number | null;
+  orb_pct_pct: number | null;
+  drb_pct_pct: number | null;
+  stl_pct_pct: number | null;
+  blk_pct_pct: number | null;
   primary_class: string | null;
   secondary_class: string | null;
 }
@@ -255,6 +274,7 @@ export interface Percentiles {
 export interface GameLogEntry {
   game_id: string;
   game_date: string;
+  opponent_id: string | null;
   opponent_name: string | null;
   is_home: boolean | null;
   minutes: number | null;
