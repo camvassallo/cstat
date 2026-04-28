@@ -144,7 +144,9 @@ export default function TeamDetail() {
       {present.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
           <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
-            <h2 className="text-lg font-bold">Roster Archetypes</h2>
+            <Link to="/archetypes" className="text-lg font-bold hover:underline">
+              Roster Archetypes
+            </Link>
             <span className="text-xs text-gray-500">
               Indexed vs D-I average · 1.0× = league norm
             </span>
