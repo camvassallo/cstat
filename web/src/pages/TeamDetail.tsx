@@ -144,8 +144,20 @@ export default function TeamDetail() {
       {present.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
           <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
-            <Link to="/archetypes" className="text-lg font-bold hover:underline">
+            <Link
+              to="/archetypes"
+              title="Learn about archetypes"
+              className="group inline-flex items-baseline gap-1.5 text-lg font-bold hover:underline"
+            >
               Roster Archetypes
+              <svg
+                viewBox="0 0 16 16"
+                className="w-3.5 h-3.5 self-center opacity-50 group-hover:opacity-100 transition-opacity"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm.75 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM7 7h1.5v5H10v1H6v-1h1V8H6V7h1z" />
+              </svg>
             </Link>
             <span className="text-xs text-gray-500">
               Indexed vs D-I average · 1.0× = league norm
