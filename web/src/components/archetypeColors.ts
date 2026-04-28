@@ -5,7 +5,7 @@
 export const CLASS_COLORS: Record<string, string> = {
   Wizard: '#7c3aed',     // violet — controllers
   Sorcerer: '#dc2626',   // crimson — volume scorers
-  Warlock: '#4c1d95',    // deep purple — eldritch / high-variance gunners
+  Warlock: '#c026d3',    // fuchsia — eldritch / high-variance gunners (lifted from violet-900 so it reads on dark mode and stays distinct from Wizard's violet)
   Bard: '#ec4899',       // pink — pass-first
   Ranger: '#16a34a',     // green — 3&D
   Barbarian: '#ea580c',  // orange — slashers

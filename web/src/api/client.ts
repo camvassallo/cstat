@@ -46,9 +46,11 @@ export interface TeamRanking {
   opp_effective_fg_pct: number | null;
   opp_effective_fg_pct_rank: number | null;
   opp_turnover_pct: number | null;
+  opp_turnover_pct_rank: number | null;
   def_rebound_pct: number | null;
   def_rebound_pct_rank: number | null;
   opp_ft_rate: number | null;
+  opp_ft_rate_rank: number | null;
 }
 
 export interface ScheduleEntry {
@@ -112,10 +114,17 @@ export interface RosterEntry {
   secondary_class: string | null;
 }
 
-export interface ArchetypeCount {
+export interface ArchetypeShare {
   primary_class: string;
-  count: number;
-  total_minutes: number | null;
+  team_count: number;
+  team_minutes: number;
+  /// 0..1 — share of this class within the team's total rostered minutes.
+  team_share: number;
+  /// 0..1 — share of this class across all D-I qualified players (minute-weighted).
+  d1_share: number;
+  /// `team_share / d1_share`. 1.0 = league average; >1 loaded; <1 light.
+  /// `null` when totals are zero (not yet computed for this team/season).
+  index: number | null;
 }
 
 export interface TeamProfile {
@@ -168,7 +177,7 @@ export function fetchTeamDetail(id: string, season?: number) {
     team: TeamProfile;
     schedule: ScheduleEntry[];
     roster: RosterEntry[];
-    archetype_distribution: ArchetypeCount[];
+    archetype_distribution: ArchetypeShare[];
   }>(`/teams/${id}`, { season: season?.toString() });
 }
 
@@ -180,6 +189,7 @@ export interface PlayerRow {
   team_name: string | null;
   conference: string | null;
   position: string | null;
+  class_year: string | null;
   season: number;
   games_played: number;
   minutes_per_game: number | null;
@@ -201,6 +211,30 @@ export interface PlayerRow {
   player_sos: number | null;
   campom: number | null;
   campom_pct: number | null;
+  ast_pct: number | null;
+  tov_pct: number | null;
+  orb_pct: number | null;
+  drb_pct: number | null;
+  stl_pct: number | null;
+  blk_pct: number | null;
+  ft_rate: number | null;
+  ppg_pct: number | null;
+  rpg_pct: number | null;
+  apg_pct: number | null;
+  spg_pct: number | null;
+  bpg_pct: number | null;
+  topg_pct: number | null;
+  mpg_pct: number | null;
+  usage_rate_pct: number | null;
+  true_shooting_pct_pct: number | null;
+  ast_pct_pct: number | null;
+  tov_pct_pct: number | null;
+  orb_pct_pct: number | null;
+  drb_pct_pct: number | null;
+  stl_pct_pct: number | null;
+  blk_pct_pct: number | null;
+  primary_class: string | null;
+  secondary_class: string | null;
 }
 
 export interface PlayerProfile {
@@ -301,6 +335,8 @@ export function fetchPlayers(params: {
   season?: number;
   sort?: string;
   order?: string;
+  archetype?: string;
+  includeSecondaryArchetype?: boolean;
   limit?: number;
   offset?: number;
 }) {
@@ -312,6 +348,8 @@ export function fetchPlayers(params: {
       season: params.season?.toString(),
       sort: params.sort,
       order: params.order,
+      archetype: params.archetype,
+      include_secondary_archetype: params.includeSecondaryArchetype ? 'true' : undefined,
       limit: params.limit?.toString(),
       offset: params.offset?.toString(),
     },
@@ -433,7 +471,7 @@ export interface ArchetypeExemplar {
 export interface ArchetypeClassInfo {
   name: string;
   count: number;
-  mean_gbpm: number | null;
+  mean_campom: number | null;
   exemplars: ArchetypeExemplar[];
 }
 
@@ -450,6 +488,7 @@ export interface ComparePlayer {
   percentiles: Percentiles | null;
   game_log: GameLogEntry[];
   torvik_stats: TorkvikStats | null;
+  archetype: PlayerArchetype | null;
 }
 
 export function fetchPlayerCompare(ids: string[], season?: number) {

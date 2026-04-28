@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import type { PlayerArchetype, SimilarPlayer } from '../api/client';
 import { classColor, classTagline, classTitle } from './archetypeColors';
 
@@ -134,32 +134,64 @@ export function ArchetypeBadge({
   );
 }
 
+// Compare flow caps at 4 players total (matches the API's MAX_COMPARE_PLAYERS).
+// One slot is reserved for the current player, leaving 3 for selection here.
+const MAX_SIMILAR_COMPARE_SELECTIONS = 3;
+
 export function SimilarPlayers({
   players,
   title = 'Most Similar Players',
+  currentPlayerId,
 }: {
   players: SimilarPlayer[];
   title?: string;
+  /// When provided, each tile gets a selection checkbox and a "Compare" button
+  /// appears below the carousel, deep-linking to /players/compare with this
+  /// player as slot 1 and the selected similar players filling slots 2-4.
+  currentPlayerId?: string;
 }) {
+  const navigate = useNavigate();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   if (players.length === 0) return null;
+
+  const compareEnabled = currentPlayerId != null;
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size < MAX_SIMILAR_COMPARE_SELECTIONS) {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+  const launchCompare = () => {
+    if (!currentPlayerId || selected.size === 0) return;
+    const ids = [currentPlayerId, ...selected];
+    navigate(`/players/compare?ids=${ids.join(',')}`);
+  };
+
   return (
     <div className="bg-gray-800 rounded-lg p-5">
       <h2 className="text-lg font-bold mb-1">{title}</h2>
       <p className="text-xs text-gray-500 mb-3">
         Closest in standardized feature space (rate stats, shot diet, impact, minutes share).
+        {compareEnabled && (
+          <> Tick up to {MAX_SIMILAR_COMPARE_SELECTIONS} to compare side-by-side.</>
+        )}
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         {players.map((p) => {
           const c = classColor(p.primary_class);
           const simPct = Math.round(p.similarity * 100);
-          return (
-            <Link
-              key={p.player_id}
-              to={`/players/${p.player_id}`}
-              className="bg-gray-900 hover:bg-gray-700/60 rounded p-3 transition-colors border-l-4 block"
-              style={{ borderLeftColor: c }}
-            >
-              <div className="font-medium text-sm truncate">{p.name}</div>
+          const isSelected = selected.has(p.player_id);
+          const atCap =
+            !isSelected && selected.size >= MAX_SIMILAR_COMPARE_SELECTIONS;
+
+          const tileBody = (
+            <>
+              <div className="font-medium text-sm truncate pr-6">{p.name}</div>
               <div className="text-xs text-gray-400 truncate">
                 {p.team_name ?? '—'}
               </div>
@@ -190,14 +222,77 @@ export function SimilarPlayers({
                     style={{ width: `${simPct}%`, background: c }}
                   />
                 </div>
-                <span className="text-[10px] text-gray-500">
-                  {simPct}%
-                </span>
+                <span className="text-[10px] text-gray-500">{simPct}%</span>
               </div>
-            </Link>
+            </>
+          );
+
+          return (
+            <div
+              key={p.player_id}
+              className={`relative bg-gray-900 rounded transition-colors border-l-4 ${
+                isSelected ? 'ring-1 ring-blue-500' : ''
+              }`}
+              style={{ borderLeftColor: c }}
+            >
+              {compareEnabled && (
+                <label
+                  className={`absolute top-2 right-2 z-10 flex items-center justify-center w-5 h-5 rounded border ${
+                    isSelected
+                      ? 'bg-blue-500 border-blue-500'
+                      : 'bg-gray-900/70 border-gray-600 hover:border-gray-400'
+                  } ${atCap ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+                  title={
+                    atCap
+                      ? `Cap of ${MAX_SIMILAR_COMPARE_SELECTIONS} selections reached`
+                      : isSelected
+                        ? 'Remove from compare'
+                        : 'Add to compare'
+                  }
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    disabled={atCap}
+                    onChange={() => toggle(p.player_id)}
+                    className="sr-only"
+                  />
+                  {isSelected && (
+                    <span className="text-[10px] font-bold text-white">✓</span>
+                  )}
+                </label>
+              )}
+              <Link
+                to={`/players/${p.player_id}`}
+                className="block p-3 hover:bg-gray-700/60 rounded transition-colors"
+              >
+                {tileBody}
+              </Link>
+            </div>
           );
         })}
       </div>
+      {compareEnabled && (
+        <div className="mt-4 flex items-center justify-between">
+          <span className="text-xs text-gray-500">
+            {selected.size === 0
+              ? `Select up to ${MAX_SIMILAR_COMPARE_SELECTIONS} players to compare`
+              : `${selected.size} of ${MAX_SIMILAR_COMPARE_SELECTIONS} selected`}
+          </span>
+          <button
+            onClick={launchCompare}
+            disabled={selected.size === 0}
+            className={`text-sm px-3 py-1.5 rounded font-medium transition-colors ${
+              selected.size === 0
+                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            }`}
+          >
+            Compare ({selected.size + 1})
+          </button>
+        </div>
+      )}
     </div>
   );
 }

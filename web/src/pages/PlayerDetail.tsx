@@ -241,7 +241,9 @@ export default function PlayerDetail() {
       )}
 
       {/* Similar Players */}
-      {similar.length > 0 && <SimilarPlayers players={similar} />}
+      {similar.length > 0 && (
+        <SimilarPlayers players={similar} currentPlayerId={player.id} />
+      )}
 
       {/* Rolling Performance Chart */}
       {rollingData.length > 0 && (

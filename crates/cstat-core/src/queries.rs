@@ -49,11 +49,24 @@ pub enum PlayerSortField {
     Ppg,
     Rpg,
     Apg,
+    Spg,
+    Bpg,
+    Topg,
     OffensiveRating,
+    DefensiveRating,
+    NetRating,
     MinutesPerGame,
+    EffectiveFgPct,
     TrueShootingPct,
     UsageRate,
     GamesPlayed,
+    AstPct,
+    TovPct,
+    OrbPct,
+    DrbPct,
+    StlPct,
+    BlkPct,
+    FtRate,
 }
 
 impl PlayerSortField {
@@ -63,11 +76,24 @@ impl PlayerSortField {
             Self::Ppg => "pss.ppg",
             Self::Rpg => "pss.rpg",
             Self::Apg => "pss.apg",
+            Self::Spg => "pss.spg",
+            Self::Bpg => "pss.bpg",
+            Self::Topg => "pss.topg",
             Self::OffensiveRating => "pss.offensive_rating",
+            Self::DefensiveRating => "pss.defensive_rating",
+            Self::NetRating => "pss.net_rating",
             Self::MinutesPerGame => "pss.minutes_per_game",
+            Self::EffectiveFgPct => "pss.effective_fg_pct",
             Self::TrueShootingPct => "pss.true_shooting_pct",
             Self::UsageRate => "pss.usage_rate",
             Self::GamesPlayed => "pss.games_played",
+            Self::AstPct => "pss.ast_pct",
+            Self::TovPct => "pss.tov_pct",
+            Self::OrbPct => "pss.orb_pct",
+            Self::DrbPct => "pss.drb_pct",
+            Self::StlPct => "pss.stl_pct",
+            Self::BlkPct => "pss.blk_pct",
+            Self::FtRate => "pss.ft_rate",
         }
     }
 }
@@ -128,9 +154,11 @@ pub struct TeamRanking {
     pub opp_effective_fg_pct: Option<f64>,
     pub opp_effective_fg_pct_rank: Option<i64>,
     pub opp_turnover_pct: Option<f64>,
+    pub opp_turnover_pct_rank: Option<i64>,
     pub def_rebound_pct: Option<f64>,
     pub def_rebound_pct_rank: Option<i64>,
     pub opp_ft_rate: Option<f64>,
+    pub opp_ft_rate_rank: Option<i64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -270,6 +298,33 @@ pub struct PlayerRow {
     pub player_sos: Option<f64>,
     pub campom: Option<f64>,
     pub campom_pct: Option<f64>,
+    // Rate stats — surfaced on the Players tab Rate view.
+    pub ast_pct: Option<f64>,
+    pub tov_pct: Option<f64>,
+    pub orb_pct: Option<f64>,
+    pub drb_pct: Option<f64>,
+    pub stl_pct: Option<f64>,
+    pub blk_pct: Option<f64>,
+    pub ft_rate: Option<f64>,
+    // Percentiles — drive the red→green gradient on each stat cell.
+    pub ppg_pct: Option<f64>,
+    pub rpg_pct: Option<f64>,
+    pub apg_pct: Option<f64>,
+    pub spg_pct: Option<f64>,
+    pub bpg_pct: Option<f64>,
+    pub topg_pct: Option<f64>,
+    pub mpg_pct: Option<f64>,
+    pub usage_rate_pct: Option<f64>,
+    pub true_shooting_pct_pct: Option<f64>,
+    pub ast_pct_pct: Option<f64>,
+    pub tov_pct_pct: Option<f64>,
+    pub orb_pct_pct: Option<f64>,
+    pub drb_pct_pct: Option<f64>,
+    pub stl_pct_pct: Option<f64>,
+    pub blk_pct_pct: Option<f64>,
+    // Archetype — surfaced when the page filters by class.
+    pub primary_class: Option<String>,
+    pub secondary_class: Option<String>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -441,9 +496,11 @@ pub async fn get_team_rankings(
             tss.opp_effective_fg_pct,
             RANK() OVER (ORDER BY tss.opp_effective_fg_pct ASC NULLS LAST) AS opp_effective_fg_pct_rank,
             tss.opp_turnover_pct,
+            RANK() OVER (ORDER BY tss.opp_turnover_pct DESC NULLS LAST) AS opp_turnover_pct_rank,
             tss.def_rebound_pct,
             RANK() OVER (ORDER BY tss.def_rebound_pct DESC NULLS LAST) AS def_rebound_pct_rank,
-            tss.opp_ft_rate
+            tss.opp_ft_rate,
+            RANK() OVER (ORDER BY tss.opp_ft_rate ASC NULLS LAST) AS opp_ft_rate_rank
         FROM teams t
         JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
         WHERE t.season = $1
@@ -617,11 +674,17 @@ pub async fn search_players(
     season: i32,
     sort: PlayerSortField,
     order: Option<SortOrder>,
+    archetype: Option<&str>,
+    include_secondary_archetype: bool,
     limit: i64,
     offset: i64,
 ) -> Result<(Vec<PlayerRow>, i64), sqlx::Error> {
     let order = order.unwrap_or(SortOrder::Desc);
     let search_pattern = search.map(|s| format!("%{s}%"));
+
+    // Archetype filter: $4 holds the class name (or NULL); $5 toggles whether
+    // a player matches via secondary_class as well as primary_class.
+    let archetype_param = archetype.map(str::to_string);
 
     // Count query
     let total: i64 = sqlx::query_scalar(
@@ -629,16 +692,25 @@ pub async fn search_players(
         SELECT COUNT(*)
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = pss.player_id AND pa.season = pss.season
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3)
+          AND (
+              $4::text IS NULL
+              OR pa.primary_class = $4
+              OR ($5::bool AND pa.secondary_class = $4)
+          )
         "#,
     )
     .bind(season)
     .bind(team_id)
     .bind(&search_pattern)
+    .bind(&archetype_param)
+    .bind(include_secondary_archetype)
     .fetch_one(pool)
     .await?;
 
@@ -662,18 +734,33 @@ pub async fn search_players(
             pss.offensive_rating, pss.defensive_rating, pss.net_rating,
             pss.player_sos,
             tps.cam_gbpm_v3_psos     AS campom,
-            tps.cam_gbpm_v3_psos_pct AS campom_pct
+            tps.cam_gbpm_v3_psos_pct AS campom_pct,
+            pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
+            pss.stl_pct, pss.blk_pct, pss.ft_rate,
+            pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
+            pp.mpg_pct, pp.usage_rate_pct, pp.true_shooting_pct_pct,
+            pp.ast_pct_pct, pp.tov_pct_pct, pp.orb_pct_pct, pp.drb_pct_pct,
+            pp.stl_pct_pct, pp.blk_pct_pct,
+            pa.primary_class, pa.secondary_class
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pss.season
+        LEFT JOIN player_percentiles pp ON pp.player_id = pss.player_id AND pp.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = pss.player_id AND pa.season = pss.season
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
           AND ($3::text IS NULL OR p.name ILIKE $3)
+          AND (
+              $4::text IS NULL
+              OR pa.primary_class = $4
+              OR ($5::bool AND pa.secondary_class = $4)
+          )
         ORDER BY {} {} NULLS LAST
-        LIMIT $4 OFFSET $5
+        LIMIT $6 OFFSET $7
         "#,
         sort.column(),
         order.sql(),
@@ -683,6 +770,8 @@ pub async fn search_players(
         .bind(season)
         .bind(team_id)
         .bind(&search_pattern)
+        .bind(&archetype_param)
+        .bind(include_secondary_archetype)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
@@ -1125,10 +1214,11 @@ pub async fn get_archetype_exemplars(
     season: i32,
     per_class: i64,
 ) -> Result<Vec<ArchetypeExemplar>, sqlx::Error> {
-    // Rank within each class by impact (GBPM). The cluster assignment already
-    // ensures membership; ordering by GBPM surfaces the highest-impact (and
-    // most recognizable) representatives. Going by raw fit-purity instead
-    // returned obscure role players.
+    // Rank within each class by CamPom — the site-wide canonical player
+    // valuation. Surfaces the highest-impact (and most recognizable)
+    // representatives, with the cluster `primary_score` as a tiebreaker so
+    // ties resolve toward the purest cluster fit. Going by raw fit-purity
+    // alone surfaced obscure role players.
     //
     // Torvik can have multiple rows per (player_id, season) for transfer
     // players (different torvik_pid per stint), so we pre-aggregate to one
@@ -1137,7 +1227,7 @@ pub async fn get_archetype_exemplars(
     sqlx::query_as::<_, ArchetypeExemplar>(
         r#"
         WITH torvik_dedup AS (
-            SELECT player_id, MAX(gbpm) AS gbpm
+            SELECT player_id, MAX(cam_gbpm_v3_psos) AS campom
             FROM torvik_player_stats
             WHERE season = $1 AND player_id IS NOT NULL
             GROUP BY player_id
@@ -1152,7 +1242,7 @@ pub async fn get_archetype_exemplars(
                 t.name AS team_name,
                 ROW_NUMBER() OVER (
                     PARTITION BY pa.primary_class
-                    ORDER BY tps.gbpm DESC NULLS LAST, pa.primary_score DESC
+                    ORDER BY tps.campom DESC NULLS LAST, pa.primary_score DESC
                 ) AS rn
             FROM player_archetypes pa
             JOIN players p ON p.id = pa.player_id
@@ -1176,9 +1266,9 @@ pub async fn get_archetype_exemplars(
 pub struct ArchetypeClassSummary {
     pub primary_class: String,
     pub count: i64,
-    /// Mean GBPM (overall two-way impact) across cluster members. Used for
-    /// ordering archetypes from most to least impactful on the glossary page.
-    pub mean_gbpm: Option<f64>,
+    /// Mean CamPom across cluster members. Used for ordering archetypes from
+    /// most to least impactful on the glossary page.
+    pub mean_campom: Option<f64>,
 }
 
 pub async fn get_archetype_class_summary(
@@ -1187,11 +1277,11 @@ pub async fn get_archetype_class_summary(
 ) -> Result<Vec<ArchetypeClassSummary>, sqlx::Error> {
     // Pre-dedupe Torvik to one row per player_id — transfer players can have
     // multiple torvik_pid stints for the same season, which would inflate
-    // COUNT(*) and skew AVG(gbpm) when joined directly.
+    // COUNT(*) and skew AVG(campom) when joined directly.
     sqlx::query_as::<_, ArchetypeClassSummary>(
         r#"
         WITH torvik_dedup AS (
-            SELECT player_id, AVG(gbpm) AS gbpm
+            SELECT player_id, AVG(cam_gbpm_v3_psos) AS campom
             FROM torvik_player_stats
             WHERE season = $1 AND player_id IS NOT NULL
             GROUP BY player_id
@@ -1199,12 +1289,12 @@ pub async fn get_archetype_class_summary(
         SELECT
             pa.primary_class,
             COUNT(*) AS count,
-            AVG(tps.gbpm) AS mean_gbpm
+            AVG(tps.campom) AS mean_campom
         FROM player_archetypes pa
         LEFT JOIN torvik_dedup tps ON tps.player_id = pa.player_id
         WHERE pa.season = $1
         GROUP BY pa.primary_class
-        ORDER BY mean_gbpm DESC NULLS LAST
+        ORDER BY mean_campom DESC NULLS LAST
         "#,
     )
     .bind(season)
@@ -1212,28 +1302,111 @@ pub async fn get_archetype_class_summary(
     .await
 }
 
-pub async fn get_team_archetype_distribution(
+/// Per-class roster breakdown for one team, indexed against the D-I-wide
+/// minute-weighted distribution.
+///
+/// `index = team_share / d1_share`: values above 1 mean the team is loaded
+/// with that class relative to the league, values below 1 mean light. All
+/// classes present in the season's clustering are returned, including ones
+/// the team has zero minutes of (so under-indexed and missing classes are
+/// detectable).
+#[derive(Debug, Serialize, FromRow)]
+pub struct ArchetypeShare {
+    pub primary_class: String,
+    pub team_count: i64,
+    pub team_minutes: f64,
+    pub team_share: f64,
+    pub d1_share: f64,
+    pub index: Option<f64>,
+}
+
+pub async fn get_team_archetype_index(
     pool: &PgPool,
     team_id: Uuid,
     season: i32,
-) -> Result<Vec<ArchetypeCount>, sqlx::Error> {
-    // Order by total minutes (mpg × gp) so the team's actual rotation —
-    // not the deep bench — drives the visualization.
-    sqlx::query_as::<_, ArchetypeCount>(
+) -> Result<Vec<ArchetypeShare>, sqlx::Error> {
+    // Each player contributes their minutes to two classes: their primary at
+    // 1.0× and their secondary at 0.5×. This captures hybrid players (e.g.
+    // a Druid clustered with Sorcerer secondary still pulls some weight to
+    // Sorcerer) without going all the way to a full affinity-vector mix.
+    // Both team and D-I aggregates use the same weighting so the comparison
+    // stays apples-to-apples.
+    sqlx::query_as::<_, ArchetypeShare>(
         r#"
+        WITH player_min AS (
+            SELECT
+                pa.player_id,
+                pa.primary_class,
+                pa.secondary_class,
+                p.team_id,
+                COALESCE(pss.minutes_per_game * pss.games_played, 0) AS minutes
+            FROM player_archetypes pa
+            JOIN players p ON p.id = pa.player_id
+            LEFT JOIN player_season_stats pss
+                ON pss.player_id = p.id
+               AND pss.season = pa.season
+               AND pss.team_id = p.team_id
+            WHERE pa.season = $2
+        ),
+        weighted AS (
+            SELECT player_id, primary_class AS class, team_id,
+                   minutes AS weighted_minutes
+            FROM player_min
+            UNION ALL
+            SELECT player_id, secondary_class AS class, team_id,
+                   minutes * 0.5 AS weighted_minutes
+            FROM player_min
+            WHERE secondary_class IS NOT NULL
+        ),
+        team_min AS (
+            SELECT
+                class AS primary_class,
+                COUNT(DISTINCT player_id) AS team_count,
+                SUM(weighted_minutes) AS team_minutes
+            FROM weighted
+            WHERE team_id = $1
+            GROUP BY class
+        ),
+        d1_min AS (
+            SELECT
+                class AS primary_class,
+                SUM(weighted_minutes) AS d1_minutes
+            FROM weighted
+            GROUP BY class
+        ),
+        joined AS (
+            SELECT
+                d.primary_class,
+                COALESCE(t.team_count, 0) AS team_count,
+                COALESCE(t.team_minutes, 0.0) AS team_minutes,
+                d.d1_minutes
+            FROM d1_min d
+            LEFT JOIN team_min t ON t.primary_class = d.primary_class
+        )
         SELECT
-            pa.primary_class,
-            COUNT(*) AS count,
-            SUM(COALESCE(pss.minutes_per_game * pss.games_played, 0)) AS total_minutes
-        FROM player_archetypes pa
-        JOIN players p ON p.id = pa.player_id
-        LEFT JOIN player_season_stats pss
-            ON pss.player_id = p.id
-           AND pss.season = pa.season
-           AND pss.team_id = p.team_id
-        WHERE p.team_id = $1 AND pa.season = $2
-        GROUP BY pa.primary_class
-        ORDER BY total_minutes DESC NULLS LAST
+            primary_class,
+            team_count,
+            team_minutes,
+            CASE
+                WHEN SUM(team_minutes) OVER () > 0
+                    THEN team_minutes / SUM(team_minutes) OVER ()
+                ELSE 0.0
+            END AS team_share,
+            CASE
+                WHEN SUM(d1_minutes) OVER () > 0
+                    THEN d1_minutes / SUM(d1_minutes) OVER ()
+                ELSE 0.0
+            END AS d1_share,
+            CASE
+                WHEN SUM(d1_minutes) OVER () > 0
+                     AND SUM(team_minutes) OVER () > 0
+                     AND d1_minutes > 0
+                    THEN (team_minutes / SUM(team_minutes) OVER ())
+                       / (d1_minutes / SUM(d1_minutes) OVER ())
+                ELSE NULL
+            END AS index
+        FROM joined
+        ORDER BY team_minutes DESC NULLS LAST
         "#,
     )
     .bind(team_id)

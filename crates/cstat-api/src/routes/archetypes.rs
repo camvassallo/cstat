@@ -51,8 +51,8 @@ async fn archetypes_index(
             .push(ex);
     }
 
-    // Summaries arrive sorted by mean_gbpm DESC — preserve that order so the
-    // glossary renders most-impactful → least-impactful.
+    // Summaries arrive sorted by mean_campom DESC — preserve that order so
+    // the glossary renders most-impactful → least-impactful.
     let classes: Vec<Value> = summaries
         .iter()
         .map(|c| {
@@ -75,7 +75,7 @@ async fn archetypes_index(
             json!({
                 "name": c.primary_class,
                 "count": c.count,
-                "mean_gbpm": c.mean_gbpm,
+                "mean_campom": c.mean_campom,
                 "exemplars": players,
             })
         })

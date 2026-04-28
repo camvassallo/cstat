@@ -29,18 +29,30 @@ struct PlayerListParams {
     season: Option<i32>,
     sort: Option<PlayerSortField>,
     order: Option<SortOrder>,
+    /// Filter to a single archetype class (e.g. "Wizard").
+    archetype: Option<String>,
+    /// When true and `archetype` is set, also match players whose
+    /// `secondary_class` equals the filter — used by the drill-down's
+    /// "primary or secondary" toggle.
+    include_secondary_archetype: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
 }
+
+// Page size cap. The Players tab uses AG Grid infinite-scroll which requests
+// 100 rows at a time; 500 leaves headroom for power users / scripted clients
+// without letting a single request scrape the whole season.
+const PLAYER_LIST_MAX_LIMIT: i64 = 500;
 
 async fn player_list(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PlayerListParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let season = params.season.unwrap_or_else(crate::default_season);
-    let limit = params.limit.unwrap_or(50).min(200);
-    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(50).clamp(1, PLAYER_LIST_MAX_LIMIT);
+    let offset = params.offset.unwrap_or(0).max(0);
     let sort = params.sort.unwrap_or_default();
+    let include_secondary = params.include_secondary_archetype.unwrap_or(false);
 
     let (players, total) = queries::search_players(
         &state.db.pool,
@@ -49,6 +61,8 @@ async fn player_list(
         season,
         sort,
         params.order,
+        params.archetype.as_deref(),
+        include_secondary,
         limit,
         offset,
     )
@@ -239,19 +253,21 @@ async fn player_compare(
 
     let mut players_data = Vec::with_capacity(ids.len());
     for id in &ids {
-        let (player, season_stats, percentiles, game_log, torvik_stats) = tokio::try_join!(
-            queries::get_player_by_id(pool, *id, season),
-            queries::get_player_season_stats(pool, *id, season),
-            queries::get_player_percentiles(pool, *id, season),
-            queries::get_player_game_log(pool, *id, season),
-            queries::get_torvik_stats(pool, *id, season),
-        )
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("query failed: {e}") })),
+        let (player, season_stats, percentiles, game_log, torvik_stats, archetype) =
+            tokio::try_join!(
+                queries::get_player_by_id(pool, *id, season),
+                queries::get_player_season_stats(pool, *id, season),
+                queries::get_player_percentiles(pool, *id, season),
+                queries::get_player_game_log(pool, *id, season),
+                queries::get_torvik_stats(pool, *id, season),
+                queries::get_player_archetype(pool, *id, season),
             )
-        })?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("query failed: {e}") })),
+                )
+            })?;
 
         let Some(player) = player else { continue };
 
@@ -261,6 +277,7 @@ async fn player_compare(
             "percentiles": percentiles,
             "game_log": game_log,
             "torvik_stats": torvik_stats,
+            "archetype": archetype,
         }));
     }
 

@@ -189,20 +189,25 @@ This naturally enables:
 - [x] Player stats table (sortable, with search)
 - [x] Player detail page (season stats, rolling form charts, percentile spider/radar)
 - [x] Player comparison view (side-by-side stats + visualizations) — picker, color-coded chips, per-stat percentile bars, overlaid radar + rolling game-score lines
-- [ ] **Player comparison advantage indicators**: percentile-aware advantage chips on the comparison page. Each row gets a tiered chip on the leading value — `EDGE` (small percentile gap), `ADVANTAGE` (medium), `DOMINANT` (large) — so a 2-PPG gap between the 95th and 80th percentile reads differently than a 2-PPG gap mid-pack. Direction-aware (lower-is-better for TOV%, fouls, etc.). Show raw delta alongside the chip; toggle to hide chips entirely.
+- [x] **Player comparison advantage indicators**: percentile-aware advantage chips on the comparison page. Each row gets a tiered chip on the leading value — `EDGE` (small percentile gap), `ADVANTAGE` (medium), `DOMINANT` (large) — so a 2-PPG gap between the 95th and 80th percentile reads differently than a 2-PPG gap mid-pack. Direction-aware (lower-is-better for TOV%, fouls, etc.). Show raw delta alongside the chip; toggle to hide chips entirely.
   - [ ] *Stretch (lands with Phase 5a):* **Duel mode** — frame the comparison as a D&D-style combat where each stat row is a "round," winner takes the round, and the header shows the round count (e.g., "*Wizard 11, Ranger 7*"). Reuses the archetype names from 5a and gives the page a shareable summary line.
 - [x] Game prediction interface (pick two teams → predicted margin + win prob)
 - [ ] **Game prediction explainability**: per-prediction attribution panel showing top contributing features (e.g., "Duke +5 from GBPM gap, +3 from defense, −2 road game"). Export SHAP values from training, expose via API, render as a horizontal bar breakdown beneath the margin/win prob.
-- [ ] **Tables UI polish across the site**: extend the home-page rankings table treatment to other tables (Players list, TeamDetail roster, PlayerDetail game logs). Reference patterns from the home page:
+- [x] **Tables UI polish across the site**: extended the home-page rankings table treatment to other tables (Players list, TeamDetail roster, PlayerDetail game logs). Shipped sticky headers, shared `SortHeader` component, Raw/Rate toggle, and percentile-tinted values via `pctileTextColor`. Reference patterns from the home page:
   - Clickable team/player names rendered as blue links (currently inconsistent)
   - Subtle percentile/rank context alongside key stats — small chip, tint, or inline rank — without overwhelming the headline number
   - Targeted color emphasis on important stats (sparing, not a full heatmap)
   - Consistent sorting + filtering UX across tables (column sort affordances, filter inputs, empty/no-results states)
   - Consistent typography, density, and sticky headers across surfaces
   - Note: per-page default-sort tweaks (e.g., players page → `cam_gbpm_v3`) live in **4f Ship**, not here
-- [ ] **Sortable-table follow-ups** (small polish items uncovered during the table polish work):
-  - **Keyboard a11y on `SortHeader`**: the clickable `<th>` in `web/src/components/TableHeaders.tsx` has `cursor-pointer` and an `onClick` but no `role="button"`, `tabIndex={0}`, or keyboard activation — keyboard-only users can't trigger column sort. Add proper button semantics + `Enter`/`Space` handling. Apply consistently to the Roster, Schedule, and GameLog hand-rolled tables (AG Grid surfaces handle this themselves).
-  - **`pctileTextColor` input clamp**: the red → neutral → green lerp in `web/src/pages/TeamDetail.tsx` produces out-of-gamut RGB if a percentile ever lands outside [0, 1]. `PERCENT_RANK()` is bounded so this can't happen with current data, but a `Math.max(0, Math.min(1, p))` clamp at the function entry is defensive coding for free.
+- [x] **Sortable-table follow-ups** (small polish items uncovered during the table polish work):
+  - [x] **Keyboard a11y on `SortHeader`**: added `role="button"`, `tabIndex={0}`, `aria-sort`, and `Enter`/`Space` handlers so keyboard-only users can trigger column sort. Hand-rolled tables (Roster, Schedule, GameLog) inherit it via the shared `SortHeader`; AG Grid surfaces handle this themselves.
+  - [x] **`pctileTextColor` input clamp**: defensive `Math.max(0, Math.min(1, p))` at the function entry in `web/src/components/pctile.ts` (extracted to a shared module so Players/TeamDetail/Rankings all use the same gradient).
+- [x] **Landing-page (Rankings) polish**: trimmed the column set to a KenPom-style standard view (Rk · Team · Conf · Record · AdjEM · AdjO · AdjD · Tempo · SOS · ELO) and added a **Standard / Offense / Defense** segmented toggle so the four-factor breakdowns are opt-in. AdjEM renders as a CamPom-style tier chip (Elite / Strong / Above average / Average / Below average / Weak). The supporting ranks (`#42` subscripts on AdjO/AdjD/Tempo/SOS/ELO/4F) are tinted by per-stat percentile via the muted `pctileTextColor`. Search wired into AG Grid `quickFilterText` so one input filters every column. Columns use AG Grid `flex` so the table fills the container width on first paint without imperative `sizeColumnsToFit` races. Defense view added the missing `OppTOV%` / `OppFTR` ranks (backend was returning 6 of 8 four-factor ranks; now 8 of 8). Shared `TableToolbar` + `TableSearchInput` components keep the page chrome consistent with the Players tab.
+- [ ] **Tables code-quality follow-ups** (deferred from the landing-page polish review — none load-bearing, all small):
+  - **Extract shared number formatters**: `TeamDetail.tsx` (inside `RosterTable`) and `Players.tsx` both define their own `fracPct` (×100 for fractions like AST%/TOV%) and `pointPct` (no scaling for ORB%/DRB%/STL%/BLK%) helpers — the same code in two places. Pull into `web/src/components/format.ts` (or extend `pctile.ts`) so the mixed-scale convention has one source of truth and a future schema rename only touches one file.
+  - **Rankings team-name as `<Link>`**: the cell currently renders a plain `<span className="text-blue-400 hover:underline">` and relies on AG Grid's row click to navigate. This works (AG Grid is keyboard-navigable via arrow keys + Enter), but a real `<Link>` would be better for screen readers, browser middle-click "open in new tab", and right-click context menus. Players.tsx already does this — match the pattern.
+  - **`gradientCellStyle` closure allocation**: the helper in `Players.tsx` returns a fresh closure on every `buildColumns` call. AG Grid handles it fine at our row counts, but if the page ever re-renders frequently (e.g. when we add filter chips, archetype-aware coloring, or a season selector), memoising the column defs or hoisting the cellStyle factories would avoid stale-closure pitfalls. Defer until there's a measurable issue.
 - [ ] **Spider/radar chart axis transparency**: surface what each prong of the player detail and compare-page radars actually represents — which underlying stat(s) + percentile feed each axis. Today the labels are opaque; a viewer can't tell whether "playmaking" is AST%, AST/TO, raw APG, or a blend. Work:
   - Audit the current axis-to-stat mapping; confirm each prong reflects its label and that no axis double-counts a stat
   - Hover/tap tooltip on each prong showing the contributing stat(s), the player's raw value, and the percentile feeding the spoke length
@@ -349,9 +354,10 @@ This naturally enables:
 ### 5a: Player Archetype Engine (D&D Classes)
 Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate stats, GBPM components, usage profile). Each player gets a primary class plus secondary-class affinity scores. The naming makes the surface fun and inherently shareable, while the underlying clusters power roster fit scoring in 5b.
 
-- [ ] Feature vector per player-season: shot zone share, AST%, USG%, ORB%/DRB%, STL%, BLK%, FT Rate, 3PA rate, OGBPM/DGBPM, MP%
-- [ ] K-means / GMM clustering with k=10-12; validate cluster stability across seasons via `adjusted_rand_score` between 2025/2026 cohorts
-- [ ] Archetype taxonomy (working set — names finalized once clusters land):
+- [x] Feature vector per player-season: shot zone share, AST%, USG%, ORB%/DRB%, STL%, BLK%, FT Rate, 3PA rate, OGBPM/DGBPM, MP%
+- [x] K-means clustering (k=12) shipped via `training/archetypes.py`; affinity scores stored in `archetype_models` per season
+  - [ ] Validate cluster stability across seasons via `adjusted_rand_score` between 2025/2026 cohorts
+- [x] Archetype taxonomy (12 classes — Wizard, Sorcerer, Warlock, Bard, Ranger, Barbarian, Paladin, Monk, Cleric, Druid, Rogue, Fighter):
   - **Wizard** — Pure floor general (high AST%, low TOV%, controls tempo)
   - **Sorcerer** — Star scorer / volume creator (high USG%, leads team in points, efficient)
   - **Warlock** — High-variance gunner (heavy 3PA, boom-or-bust efficiency)
@@ -364,19 +370,15 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - **Druid** — Positionless big (stretch + interior, plays inside/out)
   - **Rogue** — Event creator (high STL%/BLK%, off-ball opportunist)
   - **Fighter** — Balanced two-way wing (no specialty, solid all-around)
-- [ ] Migration: `player_archetypes` table (`player_id`, `season`, `primary_class`, `secondary_class`, `affinity_scores` JSONB, `feature_vector` REAL[])
-- [ ] API: `GET /api/players/:id/archetype`, `GET /api/players/:id/similar?k=10` (cosine similarity over normalized feature vectors, optionally filtered by team/conf/class year)
-- [ ] Player detail UI: archetype badge with hover-tooltip surfacing **primary + secondary class** and affinity bars; "Most Similar Players" carousel with similarity scores
-  - Each tile in the carousel gets a selection checkbox (cap at 3 selections, since the existing compare page supports up to 4 players); a "Compare" button anchored beneath the carousel activates once ≥1 is selected and deep-links to `/compare` with the current player prepopulated as player #1 and the selected players filling slots 2–4
-- [ ] Team detail UI: roster archetype distribution (e.g., "this team rolls 3 Rangers, 1 Druid, 1 Sorcerer") and a balance score
-  - Roster table renders **secondary class alongside primary** on each row (e.g., "Wizard / Bard") for added flavor and storytelling; tooltip on the row shows both classes plus affinity scores
-- [ ] Compare page UI: each player's header panel (currently name + team) also shows **primary + secondary class** inline (e.g., "Wizard / Bard"), so the archetype framing carries through the whole comparison flow
-- [ ] **Archetype rankings drill-down**: from the archetype screen, clicking a class launches a rankings view scoped to that archetype (e.g., "Top Wizards"). The view should:
-  - Default sort by `cam_gbpm_v3_psos` (CamPom) descending, matching the site-wide canonical rank
-  - Allow re-sorting / filtering by other stats (PPG, AST%, OGBPM/DGBPM, USG%, TS%, rate stats, etc.) — same column set as the Players tab
-  - Toggle between **primary-class only** and **primary OR secondary class** scopes (a Wizard/Bard shows up under both Wizard and Bard when secondary is included), so users can see deep talent at a class even when it's a player's secondary
-  - Implementation options to evaluate: (a) preloaded `/players` view with an `archetype=wizard&include_secondary=true` query param driving the filter, or (b) a dedicated route on the archetype tree (`/archetypes/wizard`) that reuses the Players-tab table component. Lean toward (a) so we get column parity, sorting, and CamPom defaults for free
-  - Header on the scoped view shows the class name + flavor blurb + count of qualified players; secondary-class toggle lives in the header
+- [x] Migration: `player_archetypes` table (`player_id`, `season`, `primary_class`, `secondary_class`, `affinity_scores` JSONB, `feature_vector` REAL[]) — migration 013, plus companion `archetype_models` table for centroids/feature stats
+- [x] API: `GET /api/players/:id/archetype`, `GET /api/players/:id/similar?k=10`, `GET /api/archetypes` (class glossary + exemplars). Both class ordering and exemplar ranking on the glossary use **CamPom** (the site-wide canonical player valuation) so the page matches what users see on the Players tab when they drill into a class — no more drift between "Top Wizards" on the glossary and the same scoped Players view.
+- [x] Player detail UI: archetype badge with hover-tooltip surfacing **primary + secondary class** and affinity bars; "Most Similar Players" carousel with similarity scores
+  - [x] Each tile in the carousel has a selection checkbox (cap at 3 selections, since compare supports 4 total); a "Compare" button beneath the carousel activates once ≥1 is selected and deep-links to `/players/compare?ids=<current>,<sel...>`.
+- [x] Team detail UI: roster archetype distribution (e.g., "this team rolls 3 Rangers, 1 Druid, 1 Sorcerer") with class-tinted chips
+  - [x] Roster table renders **primary + secondary class** on each row (e.g., "Wizard / Bard"); each chip has its own tooltip showing the class blurb.
+  - [x] **Identity / Gaps redesign**: replaced the entropy-based "Balance" score (didn't differentiate teams — every roster reads as "diverse") with a per-class index vs the D-I-wide minute-weighted distribution. `index = team_share / d1_share`; values >1.3 with team_share ≥5% surface as **Identity**, values ≤0.5 with D-I share ≥5% surface as **Gaps** (with explicit "missing" labeling at index = 0). Each player's minutes contribute to their primary class at 1.0× and secondary class at 0.5×, capturing hybrid players (a Druid/Sorcerer like Boozer registers Sorcerer presence) without going to full affinity-vector mixing. Implemented as `get_team_archetype_index` SQL with a single CTE-based query; both team and D-I aggregates use identical weighting so the index stays apples-to-apples.
+- [x] Compare page UI: each player's header panel shows **primary + secondary class** inline so the archetype framing carries through the whole comparison flow
+- [x] **Archetype rankings drill-down**: shipped as `/players?archetype=Wizard[&include_secondary=true]` — clicking a class on the Archetypes page deep-links to the Players tab with the filter applied. The Players tab now infinite-scrolls, defaults to CamPom desc, and lets users re-sort by any raw or rate stat. A class chip + "Include secondary class" toggle live in the page header when the filter is active. Picked option (a) from the original plan (query-param on existing `/players`) so we got column parity, infinite scroll, and the new Raw / Rate column toggle for free.
 - [ ] Easter egg: D&D alignment grid placement on player profile (Lawful Good ≈ Monk/Paladin, Chaotic Evil ≈ Warlock/Sorcerer) — half joke, half discovery surface
 
 ### 5b: Roster Composition & Transfer Portal Sandbox
@@ -392,7 +394,15 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 ## Phase 6: Expansion & Refinement
 > Historical depth, brackets, continuous improvement
 
-- [ ] Ingest historical seasons (NatStat perfs back to 2007, PBP from 2012+, per `/seasons` endpoint)
+- [ ] **Full historical data support across the site** (NatStat perfs back to 2007, ~20 seasons). Today only 2025 and 2026 are ingested; expanding to the full archive unlocks career-spanning player profiles, multi-season team trends, "all-time" leaderboards, and dramatically more training data for ML. Per Phase 3 notes, this is the single highest-leverage improvement available to the predict model — current training early-stops at 49-66 iterations, data-starved on two seasons.
+  - **Data availability**: `/seasons` confirms perfs for 2007-2026 (20 seasons), play-by-play from 2012+. Each season ≈ 6,200 games, ≈ 6,000 players, ≈ 110k box scores. Rate-limited at 500 API calls/hr → full backfill is a multi-day job leaning on the existing `api_cache` table.
+  - **Ingest**: extend `cstat-ingest season` to accept a year range and run the full pipeline (teams → games → perfs → teamperfs → forecasts → elo) per season. Handle historical conference realignment, team renames, and defunct programs without breaking FK constraints. Layer Torvik backfill on the same range (CSV is per-year).
+  - **Compute**: run the 13-step compute pipeline per historical season. CamPom, percentiles, adj efficiency, and archetypes are all already season-scoped, but worth sanity-checking early seasons where some advanced fields (e.g., shot zones from Torvik) may be missing.
+  - **Schema**: confirm `(season, …)` indices are present and effective at 20× current data volume; spot-check query plans for cross-season joins. Postgres should handle the size fine — main risk is unindexed fan-out on player career queries.
+  - **API**: add a `season` query param across all endpoints with a current-season default; new endpoints for career aggregates (`/api/players/:id/career`, `/api/teams/:id/history`); cross-season comparison support in `/api/players/compare`.
+  - **Frontend**: site-wide season selector in the nav; player detail shows a multi-season career table + per-season CamPom/archetype trajectory; team detail shows year-by-year record + adj efficiency trend; cross-season player comparison ("2023 UConn's Hurley-era guards vs 2025"); game prediction page lets you pick historical matchups and back-test the model.
+  - **ML**: retrain on all seasons (incremental: 2024 → 2023 → … to measure marginal lift per season added). Watch for distribution shift (rule changes, three-point line move in 2008, COVID-shortened 2021).
+  - **Stretch**: all-time leaderboards (best CamPom seasons ever, GOAT teams by adj efficiency margin), program-history pages, cross-era archetype distribution shifts.
 - [ ] Backtest models across multiple seasons
 - [ ] Tournament bracket simulator (Monte Carlo, inspired by gravity project)
 - [ ] Season simulation engine
