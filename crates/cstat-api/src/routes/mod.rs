@@ -3,6 +3,7 @@ pub mod games;
 pub mod players;
 pub mod predict;
 pub mod teams;
+pub mod transfers;
 
 use crate::AppState;
 use axum::Router;
@@ -15,4 +16,5 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(games::router())
         .merge(predict::router())
         .merge(archetypes::router())
+        .merge(transfers::router())
 }
