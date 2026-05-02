@@ -54,7 +54,11 @@ struct EnrichedTransfer {
     rating_247: Option<f64>,
     previous_team: Option<String>,
     previous_team_full: Option<String>,
+    previous_team_id: Option<Uuid>,
     next_team: Option<String>,
+    next_team_id: Option<Uuid>,
+    primary_class: Option<String>,
+    secondary_class: Option<String>,
     campom: Option<f64>,
     campom_pct: Option<f64>,
     minutes_per_game: Option<f64>,
@@ -68,11 +72,22 @@ struct EnrichedTransfer {
 struct DbCandidate {
     player_id: Uuid,
     name: String,
+    team_id: Option<Uuid>,
     team_name: Option<String>,
     minutes_per_game: Option<f64>,
     games_played: Option<i32>,
     campom: Option<f64>,
     campom_pct: Option<f64>,
+    primary_class: Option<String>,
+    secondary_class: Option<String>,
+}
+
+/// Subset of a row from the `teams` table — just enough to map a 247 short
+/// name to a cstat team_id for the previous/next team links.
+#[derive(sqlx::FromRow, Clone)]
+struct DbTeam {
+    id: Uuid,
+    name: String,
 }
 
 async fn transfer_list(
@@ -112,16 +127,21 @@ async fn transfer_list(
         SELECT
             p.id                     AS player_id,
             p.name                   AS name,
+            t.id                     AS team_id,
             t.name                   AS team_name,
             pss.minutes_per_game     AS minutes_per_game,
             pss.games_played         AS games_played,
             tps.cam_gbpm_v3_psos     AS campom,
-            tps.cam_gbpm_v3_psos_pct AS campom_pct
+            tps.cam_gbpm_v3_psos_pct AS campom_pct,
+            pa.primary_class         AS primary_class,
+            pa.secondary_class       AS secondary_class
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
         LEFT JOIN torvik_player_stats tps
             ON tps.player_id = p.id AND tps.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = p.id AND pa.season = pss.season
         WHERE pss.season = $1
         "#,
     )
@@ -134,6 +154,31 @@ async fn transfer_list(
             Json(json!({ "error": format!("query failed: {e}") })),
         )
     })?;
+
+    // Pull every team for the season so we can resolve 247 short names
+    // (e.g. "Kansas") to a cstat team_id for the previous/next team links.
+    let teams: Vec<DbTeam> = sqlx::query_as::<_, DbTeam>(
+        r#"SELECT id, name FROM teams WHERE season = $1"#,
+    )
+    .bind(year)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("teams query failed: {e}") })),
+        )
+    })?;
+
+    // Resolve a 247 short name ("Kansas", "UConn") to the team_id whose full
+    // name (e.g. "Kansas Jayhawks") matches via the same prefix/alias logic
+    // used to disambiguate player matches.
+    let resolve_team_id = |short: &str| -> Option<Uuid> {
+        teams
+            .iter()
+            .find(|t| team_matches(Some(&t.name), short))
+            .map(|t| t.id)
+    };
 
     // Group candidates by normalized name for O(1) per-transfer lookup.
     let mut by_name: HashMap<String, Vec<DbCandidate>> = HashMap::new();
@@ -166,6 +211,14 @@ async fn transfer_list(
                     })
             });
 
+            // Prefer the cstat team_id we already linked the player to;
+            // fall back to short-name lookup so unmatched players still get
+            // a clickable previous-team link.
+            let previous_team_id = best
+                .and_then(|c| c.team_id)
+                .or_else(|| t.previous_team.as_deref().and_then(resolve_team_id));
+            let next_team_id = t.next_team.as_deref().and_then(resolve_team_id);
+
             EnrichedTransfer {
                 rank_247: t.rank,
                 name: t.name,
@@ -177,7 +230,11 @@ async fn transfer_list(
                 rating_247: t.rating_247,
                 previous_team: t.previous_team,
                 previous_team_full: best.and_then(|c| c.team_name.clone()),
+                previous_team_id,
                 next_team: t.next_team,
+                next_team_id,
+                primary_class: best.and_then(|c| c.primary_class.clone()),
+                secondary_class: best.and_then(|c| c.secondary_class.clone()),
                 campom: best.and_then(|c| c.campom),
                 campom_pct: best.and_then(|c| c.campom_pct),
                 minutes_per_game: best.and_then(|c| c.minutes_per_game),

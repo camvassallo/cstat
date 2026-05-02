@@ -5,11 +5,16 @@ import type { ColDef } from 'ag-grid-community';
 import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
-import { pctileTextColor } from './pctile';
+import { classColor } from './archetypeColors';
 
 // Players ranked by 247Sports who carry one of our derived ranks (we have a
-// matching cstat player with a CamPom value).
-type RankedTransfer = TransferRow & { rank_cstat: number | null };
+// matching cstat player with a CamPom value). `rank_delta` is `rank_247 −
+// rank_cstat`: positive means CamPom values the player higher than 247 does
+// (best value), negative the opposite. Null when we couldn't rank the player.
+type RankedTransfer = TransferRow & {
+  rank_cstat: number | null;
+  rank_delta: number | null;
+};
 
 const fmtCampom = (v: number | null) => (v != null ? v.toFixed(1) : '—');
 
@@ -33,21 +38,28 @@ const campomRenderer = (p: { value: number | null; data?: RankedTransfer }) => {
   );
 };
 
-const teamMoveRenderer = (p: { data?: RankedTransfer }) => {
-  const prev = p.data?.previous_team;
-  const next = p.data?.next_team;
+// Renders a team cell as a link to /teams/:id when we resolved the 247 short
+// name to a cstat team_id, or as plain text when we didn't (rare; small
+// schools we don't carry, or "TBD" for an uncommitted next destination).
+function teamCellRenderer(opts: {
+  name: string | null;
+  id: string | null;
+  fallback?: string;
+  fallbackClass?: string;
+}) {
+  const { name, id, fallback = '—', fallbackClass = 'text-gray-500' } = opts;
+  if (!name) return <span className={fallbackClass}>{fallback}</span>;
+  if (!id) return <span className="text-gray-200">{name}</span>;
   return (
-    <span className="inline-flex items-center gap-1.5 text-sm">
-      <span className={prev ? 'text-gray-200' : 'text-gray-500'}>
-        {prev ?? '—'}
-      </span>
-      <span className="text-gray-500">→</span>
-      <span className={next ? 'text-blue-300' : 'text-gray-500 italic'}>
-        {next ?? 'TBD'}
-      </span>
-    </span>
+    <Link
+      to={`/teams/${id}`}
+      onClick={(e) => e.stopPropagation()}
+      className="text-blue-400 hover:underline"
+    >
+      {name}
+    </Link>
   );
-};
+}
 
 function buildColumns(): ColDef<RankedTransfer>[] {
   return [
@@ -63,46 +75,6 @@ function buildColumns(): ColDef<RankedTransfer>[] {
         ) : (
           <span className="text-gray-600">—</span>
         ),
-    },
-    {
-      headerName: '247',
-      field: 'rank_247',
-      width: 90,
-      headerTooltip:
-        '247Sports rank. Subscript = (247 rank − our rank): + green when we rank the player higher than 247 does, − red when lower.',
-      cellRenderer: (p: { value: number; data?: RankedTransfer }) => {
-        const ours = p.data?.rank_cstat;
-        // Delta only makes sense once we have an our-rank to compare against.
-        // Positive = CamPom rates the player better (lower rank number) than
-        // 247 does, so it gets the green "+N".
-        const delta = ours != null ? p.value - ours : null;
-        const deltaColor =
-          delta == null
-            ? ''
-            : delta > 0
-              ? 'text-emerald-400'
-              : delta < 0
-                ? 'text-rose-400'
-                : 'text-gray-500';
-        const deltaText =
-          delta == null
-            ? null
-            : delta > 0
-              ? `+${delta}`
-              : delta < 0
-                ? `${delta}`
-                : '0';
-        return (
-          <span className="inline-flex items-baseline gap-0.5">
-            <span className="text-gray-400 text-xs">{p.value}</span>
-            {deltaText && (
-              <sub className={`text-[9px] font-semibold ${deltaColor}`}>
-                {deltaText}
-              </sub>
-            )}
-          </span>
-        );
-      },
     },
     {
       headerName: 'Player',
@@ -130,14 +102,40 @@ function buildColumns(): ColDef<RankedTransfer>[] {
       },
     },
     {
-      headerName: 'Pos',
-      field: 'position',
-      width: 70,
+      headerName: 'Class',
+      colId: 'archetype',
+      // Mirrors the Players page column so users see the same primary /
+      // secondary archetype combo for each transfer.
+      flex: 2,
+      minWidth: 150,
       sortable: false,
+      cellRenderer: (p: { data?: RankedTransfer }) => {
+        const cls = p.data?.primary_class;
+        if (!cls) return <span className="text-gray-600 text-xs">—</span>;
+        const sec = p.data?.secondary_class;
+        return (
+          <span
+            className="text-[10px] font-bold uppercase tracking-wide whitespace-nowrap"
+            style={{ color: classColor(cls) }}
+            title={sec ? `${cls} / ${sec}` : cls}
+          >
+            {cls}
+            {sec && (
+              <span
+                className="ml-1 opacity-70"
+                style={{ color: classColor(sec) }}
+              >
+                / {sec}
+              </span>
+            )}
+          </span>
+        );
+      },
     },
     {
       headerName: 'Ht/Wt',
-      width: 90,
+      flex: 1,
+      minWidth: 80,
       sortable: false,
       valueGetter: (p) => {
         const h = p.data?.height;
@@ -150,47 +148,79 @@ function buildColumns(): ColDef<RankedTransfer>[] {
       ),
     },
     {
-      headerName: 'Previous → Next',
-      colId: 'team_move',
-      width: 320,
-      sortable: false,
-      cellRenderer: teamMoveRenderer,
+      headerName: 'Previous',
+      field: 'previous_team',
+      flex: 2,
+      minWidth: 150,
+      cellRenderer: (p: { data?: RankedTransfer }) =>
+        teamCellRenderer({
+          // Prefer the cstat full name ("Kansas Jayhawks") when we matched
+          // it; otherwise fall back to the 247 short name verbatim.
+          name: p.data?.previous_team_full ?? p.data?.previous_team ?? null,
+          id: p.data?.previous_team_id ?? null,
+        }),
     },
     {
-      headerName: 'Status',
-      field: 'status',
-      width: 120,
-      sortable: false,
-      cellRenderer: (p: { value: string }) => {
-        const v = p.value || 'Open';
-        const color =
-          v === 'Committed'
-            ? 'text-emerald-300'
-            : v === 'Withdrew'
-              ? 'text-rose-300'
-              : 'text-gray-400';
-        return <span className={`text-xs ${color}`}>{v}</span>;
-      },
+      headerName: 'Next',
+      field: 'next_team',
+      flex: 2,
+      minWidth: 150,
+      cellRenderer: (p: { data?: RankedTransfer }) =>
+        teamCellRenderer({
+          name: p.data?.next_team ?? null,
+          id: p.data?.next_team_id ?? null,
+          fallback: 'TBD',
+          fallbackClass: 'text-gray-500 italic',
+        }),
     },
     {
       headerName: 'CamPom',
       field: 'campom',
-      width: 110,
+      flex: 1,
+      minWidth: 100,
       sort: 'desc',
       headerTooltip: 'Our composite player valuation from prior season',
       cellRenderer: campomRenderer,
       valueFormatter: (p) => fmtCampom(p.value),
     },
     {
-      headerName: 'MPG',
-      field: 'minutes_per_game',
-      width: 70,
-      headerTooltip: 'Minutes per game in prior season',
-      valueFormatter: (p) => (p.value != null ? p.value.toFixed(1) : '—'),
-      cellStyle: (p) => ({
-        color: pctileTextColor(null),
-        opacity: p.value == null ? 0.4 : 1,
-      }),
+      headerName: '247',
+      field: 'rank_247',
+      flex: 1,
+      minWidth: 60,
+      headerTooltip: '247Sports rank',
+      cellRenderer: (p: { value: number }) => (
+        <span className="text-gray-400 text-xs">{p.value}</span>
+      ),
+    },
+    {
+      headerName: 'Δ',
+      field: 'rank_delta',
+      flex: 1,
+      minWidth: 70,
+      headerTooltip:
+        'Value vs. 247: 247 rank − our rank. Positive (green) means CamPom rates the player higher than 247 does — sort desc to find best values. Negative (red) means CamPom is lower on the player.',
+      comparator: (a: number | null, b: number | null) => {
+        // Push unranked rows to the bottom regardless of sort direction.
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null }) => {
+        if (p.value == null) return <span className="text-gray-600">—</span>;
+        const v = p.value;
+        const color =
+          v > 0
+            ? 'text-emerald-400'
+            : v < 0
+              ? 'text-rose-400'
+              : 'text-gray-500';
+        const text = v > 0 ? `+${v}` : `${v}`;
+        return (
+          <span className={`text-xs font-semibold ${color}`}>{text}</span>
+        );
+      },
     },
   ];
 }
@@ -219,10 +249,14 @@ export default function TransferPortal({ year }: Props) {
           return b.campom - a.campom;
         });
         let i = 0;
-        const withRank: RankedTransfer[] = ranked.map((t) => ({
-          ...t,
-          rank_cstat: t.campom != null ? ++i : null,
-        }));
+        const withRank: RankedTransfer[] = ranked.map((t) => {
+          const rank_cstat = t.campom != null ? ++i : null;
+          return {
+            ...t,
+            rank_cstat,
+            rank_delta: rank_cstat != null ? t.rank_247 - rank_cstat : null,
+          };
+        });
         setRows(withRank);
       })
       .catch((e) => {
@@ -237,9 +271,12 @@ export default function TransferPortal({ year }: Props) {
 
   const filtered = useMemo(() => {
     if (!rows) return null;
+    // Hide unranked rows (no CamPom). Players without prior-season cstat
+    // data don't carry a comparable rank, so they'd just clutter the bottom.
+    const ranked = rows.filter((t) => t.rank_cstat != null);
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
+    if (!q) return ranked;
+    return ranked.filter(
       (t) =>
         t.name.toLowerCase().includes(q) ||
         (t.previous_team ?? '').toLowerCase().includes(q) ||
@@ -253,8 +290,9 @@ export default function TransferPortal({ year }: Props) {
     );
   }
 
-  const matched = rows?.filter((r) => r.player_id != null).length ?? 0;
+  const ranked = rows?.filter((r) => r.rank_cstat != null).length ?? 0;
   const total = rows?.length ?? 0;
+  const hidden = total - ranked;
 
   return (
     <div>
@@ -267,7 +305,8 @@ export default function TransferPortal({ year }: Props) {
           className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-64"
         />
         <span className="text-xs text-gray-500">
-          {total} transfers · {matched} matched to cstat ·{' '}
+          {ranked} ranked transfers
+          {hidden > 0 && ` · ${hidden} hidden (no CamPom)`} ·{' '}
           <a
             href="https://247sports.com/season/2026-basketball/transferportaltop/"
             target="_blank"

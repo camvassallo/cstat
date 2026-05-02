@@ -369,7 +369,11 @@ export interface TransferRow {
   rating_247: number | null;
   previous_team: string | null;
   previous_team_full: string | null;
+  previous_team_id: string | null;
   next_team: string | null;
+  next_team_id: string | null;
+  primary_class: string | null;
+  secondary_class: string | null;
   campom: number | null;
   campom_pct: number | null;
   minutes_per_game: number | null;
