@@ -81,7 +81,7 @@ const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Druid',
     description:
-      'High-impact interior big. Owns the glass, finishes inside, blocks shots, posts positive two-way GBPM. Secondary class flags scoring-stretch (/Sorcerer) vs defense-first (/Paladin).',
+      'High-impact interior big. Owns the glass, finishes inside, blocks shots, posts positive two-way GBPM. Secondary class flags scoring-stretch (Sorcerer) vs defense-first (Paladin).',
     signature: ['high rim share', 'elite rebounding', 'two-way impact'],
     comparable: 'Modern frontcourt impact bigs',
   },
