@@ -276,10 +276,14 @@ export default function TransferPortal({ year }: Props) {
     const ranked = rows.filter((t) => t.rank_cstat != null);
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
+    // Also match the resolved full team name (e.g. searching "Jayhawks"
+    // should find a player whose previous_team is "Kansas") since that's
+    // what we render in the cell.
     return ranked.filter(
       (t) =>
         t.name.toLowerCase().includes(q) ||
         (t.previous_team ?? '').toLowerCase().includes(q) ||
+        (t.previous_team_full ?? '').toLowerCase().includes(q) ||
         (t.next_team ?? '').toLowerCase().includes(q),
     );
   }, [rows, search]);
@@ -308,7 +312,7 @@ export default function TransferPortal({ year }: Props) {
           {ranked} ranked transfers
           {hidden > 0 && ` · ${hidden} hidden (no CamPom)`} ·{' '}
           <a
-            href="https://247sports.com/season/2026-basketball/transferportaltop/"
+            href={`https://247sports.com/season/${year}-basketball/transferportaltop/`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-400 hover:underline"

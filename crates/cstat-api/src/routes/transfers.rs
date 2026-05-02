@@ -68,7 +68,7 @@ struct EnrichedTransfer {
 
 /// One DB candidate row pulled by name match. We may have several per name
 /// (common name, transfers within season) and disambiguate by previous team.
-#[derive(sqlx::FromRow, Clone)]
+#[derive(sqlx::FromRow)]
 struct DbCandidate {
     player_id: Uuid,
     name: String,
@@ -84,7 +84,7 @@ struct DbCandidate {
 
 /// Subset of a row from the `teams` table — just enough to map a 247 short
 /// name to a cstat team_id for the previous/next team links.
-#[derive(sqlx::FromRow, Clone)]
+#[derive(sqlx::FromRow)]
 struct DbTeam {
     id: Uuid,
     name: String,
@@ -172,12 +172,16 @@ async fn transfer_list(
 
     // Resolve a 247 short name ("Kansas", "UConn") to the team_id whose full
     // name (e.g. "Kansas Jayhawks") matches via the same prefix/alias logic
-    // used to disambiguate player matches.
+    // used to disambiguate player matches. Multiple teams can prefix-match
+    // (e.g. "Miami" hits both Miami (Fla.) and Miami (Ohio)); the score
+    // tiebreaker prefers an alias hit over a blind prefix hit so we land on
+    // the canonical school.
     let resolve_team_id = |short: &str| -> Option<Uuid> {
         teams
             .iter()
-            .find(|t| team_matches(Some(&t.name), short))
-            .map(|t| t.id)
+            .filter_map(|t| team_match_score(&t.name, short).map(|s| (s, t)))
+            .min_by_key(|(s, _)| *s)
+            .map(|(_, t)| t.id)
     };
 
     // Group candidates by normalized name for O(1) per-transfer lookup.
@@ -284,45 +288,53 @@ fn normalize(name: &str) -> String {
         .join(" ")
 }
 
-/// Does the cstat full team name (e.g. "Kansas Jayhawks") match the 247 short
-/// name (e.g. "Kansas")? Prefix match prevents "Arkansas" from matching
-/// "Arkansas State". Aliases cover the handful of schools where 247's short
-/// name doesn't prefix our DB name.
-fn team_matches(db_name: Option<&str>, short_name: &str) -> bool {
-    let Some(db) = db_name else {
-        return false;
-    };
+/// 247 short name → cstat team-name prefix that should appear at the start of
+/// `teams.name`. Listed only for cases the bare prefix branch can't catch
+/// (acronyms like "UConn" don't prefix "Connecticut Huskies"), or to nudge
+/// ambiguous prefix matches toward the canonical school (bare "Miami" should
+/// resolve to Miami (Fla.), not Miami (Ohio)). Add entries here as we spot
+/// misses.
+const TEAM_ALIASES: &[(&str, &str)] = &[
+    ("uconn", "connecticut"),
+    ("ole miss", "mississippi"),
+    ("usc", "southern california"),
+    ("nc state", "north carolina state"),
+    // Bare "Miami" prefix-matches both Florida and Ohio — anchor it to FL.
+    ("miami", "miami (fla.)"),
+    ("miami (fl)", "miami (fla.)"),
+    ("miami (oh)", "miami (ohio)"),
+];
+
+/// Score how well a cstat full team name matches a 247 short name. Lower is
+/// better; `None` means no match. Used both as a boolean test (via
+/// `team_matches`) and as a tiebreaker when several teams prefix-match the
+/// same short name (e.g. "Miami").
+fn team_match_score(db: &str, short: &str) -> Option<u32> {
     let db_lc = db.to_lowercase();
-    let short_lc = short_name.to_lowercase();
-    if db_lc == short_lc || db_lc.starts_with(&format!("{short_lc} ")) {
-        return true;
+    let short_lc = short.to_lowercase();
+    // 0 = exact match (rare, but the most specific signal).
+    if db_lc == short_lc {
+        return Some(0);
     }
-    // 247 short name → cstat team name fragment that should appear at the
-    // start of t.name. Add new entries here as we spot misses.
-    const ALIASES: &[(&str, &str)] = &[
-        ("uconn", "connecticut"),
-        ("ole miss", "mississippi"),
-        ("usc", "southern california"),
-        ("ucf", "ucf"),
-        ("smu", "smu"),
-        ("byu", "byu"),
-        ("vcu", "vcu"),
-        ("tcu", "tcu"),
-        ("lsu", "lsu"),
-        ("uab", "uab"),
-        ("unlv", "unlv"),
-        ("st. john's", "st. john's"),
-        ("saint mary's", "saint mary's"),
-        ("st. bonaventure", "st. bonaventure"),
-        ("nc state", "north carolina state"),
-        ("ole miss", "mississippi"),
-        ("miami (fl)", "miami"),
-        ("miami (oh)", "miami (oh)"),
-    ];
-    for (k, v) in ALIASES {
+    // 1 = alias hit. Beats a blind prefix match so ambiguous bare names
+    // ("Miami") resolve to the school the alias points at.
+    for (k, v) in TEAM_ALIASES {
         if short_lc == *k && (db_lc == *v || db_lc.starts_with(&format!("{v} "))) {
-            return true;
+            return Some(1);
         }
     }
-    false
+    // 2 = bare prefix match. Catches the common case ("Kansas" → "Kansas
+    // Jayhawks") while still rejecting "Arkansas" → "Arkansas State".
+    if db_lc.starts_with(&format!("{short_lc} ")) {
+        return Some(2);
+    }
+    None
+}
+
+/// Boolean wrapper around `team_match_score`, kept for callers that don't
+/// need the score (the player-disambiguation pass).
+fn team_matches(db_name: Option<&str>, short_name: &str) -> bool {
+    db_name
+        .map(|db| team_match_score(db, short_name).is_some())
+        .unwrap_or(false)
 }
