@@ -157,18 +157,17 @@ async fn transfer_list(
 
     // Pull every team for the season so we can resolve 247 short names
     // (e.g. "Kansas") to a cstat team_id for the previous/next team links.
-    let teams: Vec<DbTeam> = sqlx::query_as::<_, DbTeam>(
-        r#"SELECT id, name FROM teams WHERE season = $1"#,
-    )
-    .bind(year)
-    .fetch_all(&state.db.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("teams query failed: {e}") })),
-        )
-    })?;
+    let teams: Vec<DbTeam> =
+        sqlx::query_as::<_, DbTeam>(r#"SELECT id, name FROM teams WHERE season = $1"#)
+            .bind(year)
+            .fetch_all(&state.db.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("teams query failed: {e}") })),
+                )
+            })?;
 
     // Resolve a 247 short name ("Kansas", "UConn") to the team_id whose full
     // name (e.g. "Kansas Jayhawks") matches via the same prefix/alias logic
