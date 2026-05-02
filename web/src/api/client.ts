@@ -356,6 +356,37 @@ export function fetchPlayers(params: {
   );
 }
 
+// Transfer portal — one row per ranked 247Sports transfer, enriched with our
+// CamPom value when we can match the player to a row in the prior season.
+export interface TransferRow {
+  rank_247: number;
+  name: string;
+  player_id: string | null;
+  position: string;
+  height: string | null;
+  weight: number | null;
+  status: string;
+  rating_247: number | null;
+  previous_team: string | null;
+  previous_team_full: string | null;
+  previous_team_id: string | null;
+  next_team: string | null;
+  next_team_id: string | null;
+  primary_class: string | null;
+  secondary_class: string | null;
+  campom: number | null;
+  campom_pct: number | null;
+  minutes_per_game: number | null;
+  games_played: number | null;
+  url_247: string | null;
+}
+
+export function fetchTransfers(year: number) {
+  return fetchJson<{ year: number; transfers: TransferRow[]; total: number }>(
+    `/transfers/${year}`,
+  );
+}
+
 export interface LeagueAverages {
   avg_ppg: number | null;
   avg_game_score: number | null;

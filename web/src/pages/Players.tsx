@@ -14,6 +14,7 @@ import { campomTier, campomTierColor } from '../components/campom';
 import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
+import TransferPortal from '../components/TransferPortal';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -75,6 +76,12 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
 };
 
 type ColumnView = 'raw' | 'rate';
+type PageMode = 'all' | 'transfers';
+
+// 247Sports publishes one transfer-portal list per upcoming season. Bumping
+// this also requires dropping a `data/transfers/{YEAR}.json` file alongside
+// the route's loader; the API route picks up the file by year.
+const TRANSFER_YEAR = 2026;
 
 // Subtle vertical divider matching the roster table's `border-l border-gray-800`.
 // Applied via inline style so it survives AG Grid's themed cell borders.
@@ -248,6 +255,20 @@ export default function Players() {
   const [searchParams, setSearchParams] = useSearchParams();
   const archetype = searchParams.get('archetype');
   const includeSecondary = searchParams.get('include_secondary') === 'true';
+  const mode: PageMode =
+    searchParams.get('mode') === 'transfers' ? 'transfers' : 'all';
+
+  const setMode = useCallback(
+    (next: PageMode) => {
+      setSearchParams((prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === 'transfers') p.set('mode', 'transfers');
+        else p.delete('mode');
+        return p;
+      });
+    },
+    [setSearchParams],
+  );
 
   const [view, setView] = useState<ColumnView>('raw');
   const [searchInput, setSearchInput] = useState('');
@@ -329,8 +350,45 @@ export default function Players() {
   const archetypeColor = archetype ? classColor(archetype) : null;
   const archetypeBlurb = archetype ? classTagline(archetype) : null;
 
+  // Top-level page-mode tabs (Players ↔ Transfer Portal). Sits above the
+  // mode-specific toolbar so the two grids share a single chrome header.
+  const modeTabs = (
+    <div className="inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs mb-3">
+      <button
+        onClick={() => setMode('all')}
+        className={`px-3 py-1 ${
+          mode === 'all'
+            ? 'bg-blue-600 text-white'
+            : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+        }`}
+      >
+        Players
+      </button>
+      <button
+        onClick={() => setMode('transfers')}
+        className={`px-3 py-1 ${
+          mode === 'transfers'
+            ? 'bg-blue-600 text-white'
+            : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+        }`}
+      >
+        Transfer Portal
+      </button>
+    </div>
+  );
+
+  if (mode === 'transfers') {
+    return (
+      <div>
+        {modeTabs}
+        <TransferPortal year={TRANSFER_YEAR} />
+      </div>
+    );
+  }
+
   return (
     <div>
+      {modeTabs}
       <TableToolbar
         title="Player Stats"
         count={total}
