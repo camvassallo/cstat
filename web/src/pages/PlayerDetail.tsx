@@ -21,6 +21,7 @@ import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { SeasonLink } from '../components/SeasonLink';
 import { seasonHref, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
+import { useIsMobile } from '../components/useIsMobile';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -59,6 +60,7 @@ export default function PlayerDetail() {
   const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
   const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
   usePageTitle(player ? `${player.name} ${player.season}` : null);
 
   useEffect(() => {
@@ -196,7 +198,7 @@ export default function PlayerDetail() {
           {radarData.length > 0 && (
             <div className="bg-gray-800 rounded-lg p-5">
               <h2 className="text-lg font-bold mb-3">Percentile Profile</h2>
-              <ResponsiveContainer width="100%" height={300}>
+              <ResponsiveContainer width="100%" height={isMobile ? 240 : 300}>
                 <RadarChart data={radarData}>
                   <PolarGrid stroke="#475569" />
                   <PolarAngleAxis dataKey="stat" tick={{ fill: '#94a3b8', fontSize: 12 }} />
@@ -266,7 +268,7 @@ export default function PlayerDetail() {
       {rollingData.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
           <h2 className="text-lg font-bold mb-3">Rolling Performance (5-game avg)</h2>
-          <ResponsiveContainer width="100%" height={250}>
+          <ResponsiveContainer width="100%" height={isMobile ? 200 : 250}>
             <LineChart data={rollingData}>
               <CartesianGrid stroke="#334155" />
               <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} />

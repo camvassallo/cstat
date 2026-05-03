@@ -8,6 +8,7 @@ import { pctileTextColor } from '../components/pctile';
 import { useSeason } from '../components/season';
 import { SeasonLink } from '../components/SeasonLink';
 import { usePageTitle } from '../components/usePageTitle';
+import { useIsMobile } from '../components/useIsMobile';
 
 // AdjEM presentation tiers — same chip styling pattern as CamPom on the
 // Players tab. Thresholds use the conventional KenPom absolute scale where
@@ -87,7 +88,11 @@ type RankingsView = 'standard' | 'offense' | 'defense';
 // it survives AG Grid's themed cell borders.
 const CATEGORY_DIVIDER_STYLE = { borderLeft: '1px solid rgb(31 41 55)' } as const;
 
-function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRanking>[] {
+function buildColumns(
+  totalTeams: number,
+  view: RankingsView,
+  isMobile: boolean,
+): ColDef<TeamRanking>[] {
   // Helper for flex-distributed columns. AG Grid normalizes `flex` weights
   // so we can pass natural width values directly as the weight: a column
   // with flex=200 gets 2.5× the share of one with flex=80, preserving
@@ -106,11 +111,11 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
   const base: ColDef<TeamRanking>[] = [
     // Pinned identity columns stay at fixed width (don't flex with the
     // content area; AG Grid recommends fixed widths for pinned cols).
-    { field: 'rank', headerName: 'Rk', width: 60, pinned: 'left' },
+    { field: 'rank', headerName: 'Rk', width: isMobile ? 44 : 60, pinned: 'left' },
     {
       field: 'name',
       headerName: 'Team',
-      width: 200,
+      width: isMobile ? 130 : 200,
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: TeamRanking }) => {
         const id = p.data?.team_id;
@@ -264,13 +269,14 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
 export default function Rankings() {
   const { season } = useSeason();
   usePageTitle('Team Rankings');
+  const isMobile = useIsMobile();
   const [teams, setTeams] = useState<TeamRanking[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [view, setView] = useState<RankingsView>('standard');
   const columns = useMemo(
-    () => buildColumns(teams.length, view),
-    [teams.length, view],
+    () => buildColumns(teams.length, view, isMobile),
+    [teams.length, view, isMobile],
   );
 
   useEffect(() => {
@@ -324,7 +330,7 @@ export default function Rankings() {
           </>
         }
       />
-      <div style={{ height: 'calc(100vh - 160px)', width: '100%' }}>
+      <div style={{ height: 'calc(100dvh - 160px)', minHeight: '400px', width: '100%' }}>
         <AgGridReact<TeamRanking>
           theme={gridTheme}
           rowData={teams}

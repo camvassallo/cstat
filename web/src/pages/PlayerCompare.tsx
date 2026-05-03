@@ -28,6 +28,7 @@ import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { campomTier, campomTierColor } from '../components/campom';
 import { ClassTooltip } from '../components/Archetype';
 import { classColor } from '../components/archetypeColors';
+import { useIsMobile } from '../components/useIsMobile';
 
 const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
 const MAX_PLAYERS = 4;
@@ -86,7 +87,7 @@ function Chip({ tier, delta }: ChipInfo) {
   const cfg = CHIP_TIERS[tier];
   return (
     <span
-      className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded leading-none ${cfg.classes}`}
+      className={`inline-flex items-center gap-1 text-xs font-bold px-1.5 py-0.5 rounded leading-none ${cfg.classes}`}
       title={`${tier}${delta ? ` — +${delta} over runner-up` : ''}`}
     >
       {cfg.label}
@@ -239,7 +240,7 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {arch && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide">
+            <span className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide">
               <ClassTooltip cls={arch.primary_class}>
                 <span style={{ color: primaryClassColor ?? undefined }}>
                   {arch.primary_class}
@@ -374,6 +375,7 @@ export default function PlayerCompare() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showChips, setShowChips] = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     if (ids.length === 0) {
@@ -589,7 +591,7 @@ export default function PlayerCompare() {
           {radarData.length > 0 && (
             <div className="bg-gray-800 rounded-lg p-5">
               <h2 className="text-lg font-bold mb-3">Percentile Profile</h2>
-              <ResponsiveContainer width="100%" height={360}>
+              <ResponsiveContainer width="100%" height={isMobile ? 280 : 360}>
                 <RadarChart data={radarData}>
                   <PolarGrid stroke="#475569" />
                   <PolarAngleAxis dataKey="stat" tick={{ fill: '#94a3b8', fontSize: 12 }} />
@@ -645,7 +647,7 @@ export default function PlayerCompare() {
             <div className="bg-gray-800 rounded-lg p-5">
               <h2 className="text-lg font-bold mb-1">Rolling Game Score (5-game avg)</h2>
               <p className="text-xs text-gray-500 mb-3">X-axis is game number into the season.</p>
-              <ResponsiveContainer width="100%" height={280}>
+              <ResponsiveContainer width="100%" height={isMobile ? 220 : 280}>
                 <LineChart data={rollingData}>
                   <CartesianGrid stroke="#334155" />
                   <XAxis

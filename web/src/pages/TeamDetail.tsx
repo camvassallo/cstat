@@ -451,7 +451,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="inline-flex items-center gap-1">
                       <ClassTooltip cls={p.primary_class}>
                         <span
-                          className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+                          className="text-xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
                           style={{
                             color: classColor(p.primary_class),
                             background: classColor(p.primary_class) + '22',
@@ -463,7 +463,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                       {p.secondary_class && (
                         <ClassTooltip cls={p.secondary_class}>
                           <span
-                            className="text-[10px] uppercase tracking-wide opacity-75"
+                            className="text-xs uppercase tracking-wide opacity-75"
                             style={{ color: classColor(p.secondary_class) }}
                           >
                             / {p.secondary_class}
