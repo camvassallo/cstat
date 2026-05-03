@@ -17,6 +17,7 @@ import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
 import { SeasonLink } from '../components/SeasonLink';
 import { seasonHref, useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -250,6 +251,7 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
 export default function Players() {
   const navigate = useNavigate();
   const { season } = useSeason();
+  usePageTitle('Players');
   const [searchParams, setSearchParams] = useSearchParams();
   const archetype = searchParams.get('archetype');
   const includeSecondary = searchParams.get('include_secondary') === 'true';

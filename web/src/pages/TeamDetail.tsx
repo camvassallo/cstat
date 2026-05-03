@@ -15,6 +15,7 @@ import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
 import { SeasonLink } from '../components/SeasonLink';
 import { seasonHref, useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -71,6 +72,9 @@ export default function TeamDetail() {
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [archetypeDist, setArchetypeDist] = useState<ArchetypeShare[]>([]);
   const [loading, setLoading] = useState(true);
+  // Tab title tracks the loaded team and reflects the season selector so a
+  // shared `/teams/<id>?season=2025` link reads "Duke 2025 — CamPom".
+  usePageTitle(team ? `${team.name} ${team.season}` : null);
 
   useEffect(() => {
     if (!id) return;

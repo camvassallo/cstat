@@ -20,6 +20,7 @@ import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { SeasonLink } from '../components/SeasonLink';
 import { seasonHref, useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -58,6 +59,7 @@ export default function PlayerDetail() {
   const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
   const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
   const [loading, setLoading] = useState(true);
+  usePageTitle(player ? `${player.name} ${player.season}` : null);
 
   useEffect(() => {
     if (!id) return;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SeasonLink } from '../components/SeasonLink';
 import { useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 import {
   Radar,
   RadarChart,
@@ -361,6 +362,7 @@ function PlayerPicker({
 
 export default function PlayerCompare() {
   const { season } = useSeason();
+  usePageTitle('Compare Players');
   const [searchParams, setSearchParams] = useSearchParams();
   const idsCsv = searchParams.get('ids') ?? '';
   const ids = useMemo(

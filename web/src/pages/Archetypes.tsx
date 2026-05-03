@@ -3,6 +3,7 @@ import { fetchArchetypes, type ArchetypeClassInfo } from '../api/client';
 import { classColor, classTagline } from '../components/archetypeColors';
 import { SeasonLink } from '../components/SeasonLink';
 import { useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 interface ClassDef {
   name: string;
@@ -180,6 +181,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
 
 export default function Archetypes() {
   const { season: selectedSeason } = useSeason();
+  usePageTitle('Player Archetypes');
   const [classes, setClasses] = useState<ArchetypeClassInfo[]>([]);
   // The API echoes back the season it actually served (defends against drift
   // between the URL param and what the server resolves) — keep displaying

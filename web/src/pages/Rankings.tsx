@@ -7,6 +7,7 @@ import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import { pctileTextColor } from '../components/pctile';
 import { useSeason, seasonHref } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 // AdjEM presentation tiers — same chip styling pattern as CamPom on the
 // Players tab. Thresholds use the conventional KenPom absolute scale where
@@ -256,6 +257,7 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
 
 export default function Rankings() {
   const { season } = useSeason();
+  usePageTitle('Team Rankings');
   const [teams, setTeams] = useState<TeamRanking[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
