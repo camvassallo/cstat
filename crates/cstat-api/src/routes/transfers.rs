@@ -77,12 +77,16 @@ struct EnrichedTransfer {
 
 /// One DB candidate row pulled by name match. We may have several per name
 /// (common name, transfers within season) and disambiguate by previous team.
+/// We carry both the Torvik short_name (`team_name`, used for display) and
+/// the full NatStat name (`team_full_name`, used for alias matching against
+/// 247 prev_team strings like "NC State" → "North Carolina State Wolfpack").
 #[derive(sqlx::FromRow)]
 struct DbCandidate {
     player_id: Uuid,
     name: String,
     team_id: Option<Uuid>,
     team_name: Option<String>,
+    team_full_name: Option<String>,
     minutes_per_game: Option<f64>,
     games_played: Option<i32>,
     campom: Option<f64>,
@@ -150,6 +154,7 @@ async fn transfer_list(
             p.name                   AS name,
             t.id                     AS team_id,
             COALESCE(t.short_name, t.name) AS team_name,
+            t.name                   AS team_full_name,
             pss.minutes_per_game     AS minutes_per_game,
             pss.games_played         AS games_played,
             tps.cam_gbpm_v3_psos     AS campom,
@@ -222,9 +227,9 @@ async fn transfer_list(
                 t.previous_team
                     .as_deref()
                     .and_then(|prev| {
-                        cands
-                            .iter()
-                            .find(|c| team_matches(c.team_name.as_deref(), prev))
+                        cands.iter().find(|c| {
+                            team_matches(c.team_name.as_deref(), c.team_full_name.as_deref(), prev)
+                        })
                     })
                     // Fallback: most-played candidate (handles name collisions).
                     .or_else(|| {
@@ -361,11 +366,11 @@ fn team_match_score(db_short: Option<&str>, db_full: &str, short: &str) -> Optio
 }
 
 /// Boolean wrapper around `team_match_score`, kept for callers that don't
-/// need the score (the player-disambiguation pass). Here the candidate's
-/// `team_name` already comes from `COALESCE(short_name, name)`, so we pass
-/// it as both arguments.
-fn team_matches(db_name: Option<&str>, short_name: &str) -> bool {
-    db_name
-        .map(|db| team_match_score(Some(db), db, short_name).is_some())
+/// need the score (the player-disambiguation pass). Takes both the Torvik
+/// short_name and the full NatStat name so alias entries that target the
+/// full form (e.g. "nc state" → "north carolina state") still fire.
+fn team_matches(db_short: Option<&str>, db_full: Option<&str>, short_name: &str) -> bool {
+    db_full
+        .map(|full| team_match_score(db_short, full, short_name).is_some())
         .unwrap_or(false)
 }
