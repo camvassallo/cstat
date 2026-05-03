@@ -8,13 +8,6 @@ const navLinkClass = (active: boolean) =>
       : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
   }`;
 
-// Render a year as the conventional college-basketball "YY-YY" range so the
-// dropdown reads "2024-25" / "2025-26" instead of bare years that confuse
-// (does "2025" mean the season ending in 2025 or starting in 2025?).
-function seasonLabel(s: Season): string {
-  return `${s - 1}-${String(s).slice(2)}`;
-}
-
 function SeasonSelector() {
   const { season, setSeason } = useSeason();
   return (
@@ -27,7 +20,7 @@ function SeasonSelector() {
       >
         {AVAILABLE_SEASONS.map((s) => (
           <option key={s} value={s}>
-            {seasonLabel(s)}
+            {s}
           </option>
         ))}
       </select>
