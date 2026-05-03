@@ -71,7 +71,7 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 Postgres with SQLx. Migrations in `/migrations/` (16 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `player_archetypes`, `archetype_models`, `api_cache`.
 
-All season-scoped tables carry a `season` column; the API and frontend support arbitrary multi-year browsing via a site-wide `?season=` query param plumbed through `web/src/components/season.tsx::useSeason()`. Adding a new season needs: ingest + compute (`cargo run --bin cstat-ingest -- season --year YYYY && ... compute --year YYYY`), retrain archetypes on the new combined cohort (`python -m training.archetypes --seasons …`), and add the year to `AVAILABLE_SEASONS` in `season.tsx` so the nav selector exposes it.
+All season-scoped tables carry a `season` column; the API and frontend support arbitrary multi-year browsing via a site-wide `?season=` query param plumbed through `web/src/components/season.ts::useSeason()`. Adding a new season needs: ingest + compute (`cargo run --bin cstat-ingest -- season --year YYYY && ... compute --year YYYY`), retrain archetypes on the new combined cohort (`python -m training.archetypes --seasons …`), and add the year to `AVAILABLE_SEASONS` in `season.ts` so the nav selector exposes it.
 
 ## ML Inference
 
