@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
 import { classColor } from './archetypeColors';
+import { SeasonLink, seasonHref, useSeason } from './season';
 
 // Players ranked by 247Sports who carry one of our derived ranks (we have a
 // matching cstat player with a CamPom value). `rank_delta` is `rank_247 −
@@ -51,13 +52,13 @@ function teamCellRenderer(opts: {
   if (!name) return <span className={fallbackClass}>{fallback}</span>;
   if (!id) return <span className="text-gray-200">{name}</span>;
   return (
-    <Link
+    <SeasonLink
       to={`/teams/${id}`}
       onClick={(e) => e.stopPropagation()}
       className="text-blue-400 hover:underline"
     >
       {name}
-    </Link>
+    </SeasonLink>
   );
 }
 
@@ -91,13 +92,13 @@ function buildColumns(): ColDef<RankedTransfer>[] {
           );
         }
         return (
-          <Link
+          <SeasonLink
             to={`/players/${id}`}
             onClick={(e) => e.stopPropagation()}
             className="text-blue-400 hover:underline"
           >
             {p.value}
-          </Link>
+          </SeasonLink>
         );
       },
     },
@@ -231,6 +232,7 @@ interface Props {
 
 export default function TransferPortal({ year }: Props) {
   const navigate = useNavigate();
+  const { season } = useSeason();
   const [rows, setRows] = useState<RankedTransfer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -335,7 +337,7 @@ export default function TransferPortal({ year }: Props) {
             const target = e.event?.target as HTMLElement | undefined;
             if (target?.closest('a')) return;
             const id = e.data?.player_id;
-            if (id) navigate(`/players/${id}`);
+            if (id) navigate(seasonHref(`/players/${id}`, season));
           }}
         />
       </div>

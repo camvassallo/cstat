@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
 import {
   fetchPlayerDetail,
@@ -18,6 +18,7 @@ import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
 import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
+import { SeasonLink, useSeason } from '../components/season';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -45,6 +46,7 @@ function heightString(inches: number | null) {
 
 export default function PlayerDetail() {
   const { id } = useParams<{ id: string }>();
+  const { season } = useSeason();
   const [player, setPlayer] = useState<PlayerProfile | null>(null);
   const [stats, setStats] = useState<PlayerSeasonStats | null>(null);
   const [percentiles, setPercentiles] = useState<Percentiles | null>(null);
@@ -57,7 +59,8 @@ export default function PlayerDetail() {
 
   useEffect(() => {
     if (!id) return;
-    fetchPlayerDetail(id)
+    setLoading(true);
+    fetchPlayerDetail(id, season)
       .then((r) => {
         setPlayer(r.player);
         setStats(r.season_stats);
@@ -67,7 +70,7 @@ export default function PlayerDetail() {
         setTorvik(r.torvik_stats);
         setArchetype(r.archetype);
         if (r.archetype) {
-          fetchPlayerSimilar(id, 8)
+          fetchPlayerSimilar(id, 8, season)
             .then((s) => setSimilar(s.players))
             .catch(() => setSimilar([]));
         } else {
@@ -75,7 +78,7 @@ export default function PlayerDetail() {
         }
       })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, season]);
 
   if (loading) return <div className="text-gray-400">Loading...</div>;
   if (!player) return <div className="text-red-400">Player not found</div>;
@@ -137,9 +140,9 @@ export default function PlayerDetail() {
             {player.weight_lbs && <span>&middot; {player.weight_lbs} lbs</span>}
             <span>&middot;</span>
             {player.team_id ? (
-              <Link to={`/teams/${player.team_id}`} className="text-blue-400 hover:underline">
+              <SeasonLink to={`/teams/${player.team_id}`} className="text-blue-400 hover:underline">
                 {player.team_name}
-              </Link>
+              </SeasonLink>
             ) : (
               <span>{player.team_name ?? 'Unknown'}</span>
             )}
@@ -148,12 +151,12 @@ export default function PlayerDetail() {
             {torvik?.hometown && <><span>&middot;</span><span>{torvik.hometown}</span></>}
           </div>
         </div>
-        <Link
+        <SeasonLink
           to={`/players/compare?ids=${player.id}`}
           className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-medium"
         >
           Compare
-        </Link>
+        </SeasonLink>
       </div>
 
       {stats && (
@@ -351,9 +354,9 @@ function GameLogTable({
                   <td className="py-1.5 px-2">
                     {g.is_home === false && '@ '}
                     {g.opponent_id ? (
-                      <Link to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
+                      <SeasonLink to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
                         {g.opponent_name ?? 'Unknown'}
-                      </Link>
+                      </SeasonLink>
                     ) : (
                       g.opponent_name ?? 'Unknown'
                     )}

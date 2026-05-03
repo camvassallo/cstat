@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { AVAILABLE_SEASONS, useSeason, type Season } from './season';
 
 const navLinkClass = (active: boolean) =>
   `px-3 py-1.5 rounded text-sm font-medium transition-colors ${
@@ -6,6 +7,33 @@ const navLinkClass = (active: boolean) =>
       ? 'bg-blue-600 text-white'
       : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
   }`;
+
+// Render a year as the conventional college-basketball "YY-YY" range so the
+// dropdown reads "2024-25" / "2025-26" instead of bare years that confuse
+// (does "2025" mean the season ending in 2025 or starting in 2025?).
+function seasonLabel(s: Season): string {
+  return `${s - 1}-${String(s).slice(2)}`;
+}
+
+function SeasonSelector() {
+  const { season, setSeason } = useSeason();
+  return (
+    <label className="flex items-center gap-2 text-xs text-gray-400">
+      <span className="uppercase tracking-wide">Season</span>
+      <select
+        value={season}
+        onChange={(e) => setSeason(Number(e.target.value) as Season)}
+        className="bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded px-2 py-1 focus:outline-none focus:border-blue-500"
+      >
+        {AVAILABLE_SEASONS.map((s) => (
+          <option key={s} value={s}>
+            {seasonLabel(s)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 export default function Layout() {
   const { pathname } = useLocation();
@@ -37,6 +65,9 @@ export default function Layout() {
           <NavLink to="/predict" className={({ isActive }) => navLinkClass(isActive)}>
             Predict
           </NavLink>
+        </div>
+        <div className="ml-auto">
+          <SeasonSelector />
         </div>
       </nav>
       <main className="flex-1 px-6 py-6 max-w-7xl mx-auto w-full">

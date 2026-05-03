@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { fetchPrediction, type PredictionResult } from '../api/client';
+import { useSeason } from '../components/season';
 
 export default function Predict() {
+  const { season } = useSeason();
   const [home, setHome] = useState('');
   const [away, setAway] = useState('');
   const [neutral, setNeutral] = useState(false);
@@ -16,7 +18,7 @@ export default function Predict() {
     setError('');
     setResult(null);
     try {
-      const r = await fetchPrediction(home.trim(), away.trim(), neutral);
+      const r = await fetchPrediction(home.trim(), away.trim(), neutral, season);
       setResult(r);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Prediction failed');
@@ -29,7 +31,11 @@ export default function Predict() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Game Prediction</h1>
+      <h1 className="text-2xl font-bold mb-1">Game Prediction</h1>
+      <p className="text-xs text-gray-500 mb-5">
+        Predicting matchups in the <span className="text-gray-300">{season - 1}-{String(season).slice(2)}</span> season.
+        Switch the season selector in the nav to back-test historical games.
+      </p>
 
       <form onSubmit={handleSubmit} className="bg-gray-800 rounded-lg p-6 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

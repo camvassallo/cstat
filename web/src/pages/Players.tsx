@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
@@ -15,6 +15,7 @@ import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
+import { SeasonLink, seasonHref, useSeason } from '../components/season';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -78,11 +79,6 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
 type ColumnView = 'raw' | 'rate';
 type PageMode = 'all' | 'transfers';
 
-// 247Sports publishes one transfer-portal list per upcoming season. Bumping
-// this also requires dropping a `data/transfers/{YEAR}.json` file alongside
-// the route's loader; the API route picks up the file by year.
-const TRANSFER_YEAR = 2026;
-
 // Subtle vertical divider matching the roster table's `border-l border-gray-800`.
 // Applied via inline style so it survives AG Grid's themed cell borders.
 const CATEGORY_DIVIDER_STYLE = { borderLeft: '1px solid rgb(31 41 55)' } as const;
@@ -118,13 +114,13 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
         const id = p.data?.player_id;
         if (!id) return <span>{p.value}</span>;
         return (
-          <Link
+          <SeasonLink
             to={`/players/${id}`}
             onClick={(e) => e.stopPropagation()}
             className="text-blue-400 hover:underline"
           >
             {p.value}
-          </Link>
+          </SeasonLink>
         );
       },
     },
@@ -137,13 +133,13 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
         const teamId = p.data?.team_id;
         if (!teamId) return <span>{p.value}</span>;
         return (
-          <Link
+          <SeasonLink
             to={`/teams/${teamId}`}
             onClick={(e) => e.stopPropagation()}
             className="text-blue-400 hover:underline"
           >
             {p.value}
-          </Link>
+          </SeasonLink>
         );
       },
     },
@@ -252,6 +248,7 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
 
 export default function Players() {
   const navigate = useNavigate();
+  const { season } = useSeason();
   const [searchParams, setSearchParams] = useSearchParams();
   const archetype = searchParams.get('archetype');
   const includeSecondary = searchParams.get('include_secondary') === 'true';
@@ -299,6 +296,7 @@ export default function Players() {
           search: search || undefined,
           archetype: archetype || undefined,
           includeSecondaryArchetype: archetype != null && includeSecondary,
+          season,
           sort: sortField || undefined,
           order: sortModel?.sort?.toLowerCase(),
           limit: params.endRow - params.startRow,
@@ -318,7 +316,7 @@ export default function Players() {
           });
       },
     }),
-    [search, archetype, includeSecondary],
+    [search, archetype, includeSecondary, season],
   );
 
   // Repoint the grid at the new datasource whenever it changes.
@@ -378,10 +376,13 @@ export default function Players() {
   );
 
   if (mode === 'transfers') {
+    // The transfer portal is per-season — surface the current site-selected
+    // year so switching seasons in the nav repoints the list at the right
+    // portal class.
     return (
       <div>
         {modeTabs}
-        <TransferPortal year={TRANSFER_YEAR} />
+        <TransferPortal year={season} />
       </div>
     );
   }
@@ -487,7 +488,7 @@ export default function Players() {
             // player detail page.
             const target = e.event?.target as HTMLElement | undefined;
             if (target?.closest('a')) return;
-            if (e.data) navigate(`/players/${e.data.player_id}`);
+            if (e.data) navigate(seasonHref(`/players/${e.data.player_id}`, season));
           }}
           getRowId={(p) => p.data.player_id}
         />

@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { PlayerArchetype, SimilarPlayer } from '../api/client';
 import { classColor, classTagline, classTitle } from './archetypeColors';
+import { SeasonLink, seasonHref, useSeason } from './season';
 
 /// Styled hover tooltip for any class label — mirrors the look of the
 /// affinity popover on `ArchetypeBadge`. Wrap a chip / span with this and
@@ -151,6 +152,7 @@ export function SimilarPlayers({
   currentPlayerId?: string;
 }) {
   const navigate = useNavigate();
+  const { season } = useSeason();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   if (players.length === 0) return null;
 
@@ -169,7 +171,7 @@ export function SimilarPlayers({
   const launchCompare = () => {
     if (!currentPlayerId || selected.size === 0) return;
     const ids = [currentPlayerId, ...selected];
-    navigate(`/players/compare?ids=${ids.join(',')}`);
+    navigate(seasonHref(`/players/compare?ids=${ids.join(',')}`, season));
   };
 
   return (
@@ -263,12 +265,12 @@ export function SimilarPlayers({
                   )}
                 </label>
               )}
-              <Link
+              <SeasonLink
                 to={`/players/${p.player_id}`}
                 className="block p-3 hover:bg-gray-700/60 rounded transition-colors"
               >
                 {tileBody}
-              </Link>
+              </SeasonLink>
             </div>
           );
         })}

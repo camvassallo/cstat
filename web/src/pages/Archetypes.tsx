@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { fetchArchetypes, type ArchetypeClassInfo } from '../api/client';
 import { classColor, classTagline } from '../components/archetypeColors';
+import { SeasonLink, useSeason } from '../components/season';
 
 interface ClassDef {
   name: string;
@@ -110,21 +110,21 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
     >
       <div className="p-4 border-b border-gray-700/60">
         <div className="flex items-baseline justify-between gap-3">
-          <Link
+          <SeasonLink
             to={`/players?archetype=${encodeURIComponent(def.name)}`}
             className="text-xl font-bold hover:underline"
             style={{ color }}
             title={`See all ${def.name}s ranked by CamPom`}
           >
             {def.name}
-          </Link>
+          </SeasonLink>
           {info != null && (
-            <Link
+            <SeasonLink
               to={`/players?archetype=${encodeURIComponent(def.name)}`}
               className="text-xs text-gray-400 shrink-0 hover:text-gray-200 hover:underline"
             >
               {info.count.toLocaleString()} players →
-            </Link>
+            </SeasonLink>
           )}
         </div>
         <div className="text-sm text-gray-300 mt-0.5">{classTagline(def.name)}</div>
@@ -156,7 +156,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
             </div>
             <div className="space-y-1">
               {info.exemplars.map((ex) => (
-                <Link
+                <SeasonLink
                   key={ex.player_id}
                   to={`/players/${ex.player_id}`}
                   className="flex items-center justify-between text-xs hover:bg-gray-700/40 rounded px-1.5 py-1 -mx-1.5"
@@ -165,7 +165,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
                     <span className="font-medium">{ex.name}</span>
                     <span className="text-gray-500"> — {ex.team_name ?? '—'}</span>
                   </span>
-                </Link>
+                </SeasonLink>
               ))}
             </div>
           </div>
@@ -176,20 +176,25 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
 }
 
 export default function Archetypes() {
+  const { season: selectedSeason } = useSeason();
   const [classes, setClasses] = useState<ArchetypeClassInfo[]>([]);
+  // The API echoes back the season it actually served (defends against drift
+  // between the URL param and what the server resolves) — keep displaying
+  // that one in the page chrome.
   const [season, setSeason] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchArchetypes(5)
+    setLoading(true);
+    fetchArchetypes(5, selectedSeason)
       .then((r) => {
         setClasses(r.classes);
         setSeason(r.season);
       })
       .catch((e) => setError(e.message ?? 'Failed to load archetypes'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [selectedSeason]);
 
   const defsByName = new Map(CLASS_DEFS.map((d) => [d.name, d]));
   // API returns classes sorted by mean GBPM desc — render in that order so the

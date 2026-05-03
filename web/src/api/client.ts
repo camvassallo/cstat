@@ -542,11 +542,17 @@ export interface PredictionResult {
   predicted_winner: string;
 }
 
-export function fetchPrediction(home: string, away: string, neutral: boolean) {
+export function fetchPrediction(
+  home: string,
+  away: string,
+  neutral: boolean,
+  season?: number,
+) {
   return fetchJson<PredictionResult>('/predict', {
     home,
     away,
     neutral: neutral ? 'true' : undefined,
+    season: season?.toString(),
   });
 }
 

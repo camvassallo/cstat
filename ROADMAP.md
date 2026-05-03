@@ -382,12 +382,12 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 - [ ] Easter egg: D&D alignment grid placement on player profile (Lawful Good ≈ Monk/Paladin, Chaotic Evil ≈ Warlock/Sorcerer) — half joke, half discovery surface
 
 ### 5b: Roster Composition & Transfer Portal Sandbox
-- [ ] Player search and comparison across all teams
-- [ ] "What if Player X transfers to Team Y?" — recompose team strength
-- [ ] Roster fit scoring built on archetypes (redundancy detection: "team has 3 Sorcerers, missing a Cleric")
-- [ ] Portal player rankings by projected impact at destination (Δteam rating including archetype fit bonus/penalty)
-- [ ] API endpoints for all composition queries
-- [ ] Transfer portal sandbox UI
+- [x] **Transfer Portal v1 — 247 list × CamPom value delta**: scraped 247Sports' 2026 portal list to `data/transfers/2026.json` (embedded into the binary at compile time via `include_str!` so Railway deploys don't need a `data/` mount). New `GET /api/transfers/{year}` endpoint (`crates/cstat-api/src/routes/transfers.rs`) joins the 247 list to cstat players by normalized name + previous team and decorates each row with `player_id`, primary/secondary archetype, CamPom score + percentile, MPG, GP, and resolved `previous_team_id` / `next_team_id` for deep-linking. `TransferPortal.tsx` renders the AG Grid view with a `rank_delta = rank_247 − rank_cstat` "value" column (positive = CamPom values the player higher than 247 does), tier-colored CamPom chip, archetype chip, and team links to both old and new schools. Surfaced as a tab on `Players.tsx`. This is the foothold for the rest of 5b — same data plumbing will feed projected-impact rankings and the what-if sandbox.
+- [ ] **Projected impact at destination (Δteam rating)**: replace the raw 247 vs CamPom delta with a destination-aware projection. For each portal player with a committed `next_team`, recompute the destination's roster aggregates (minutes redistribution, archetype mix) with the player added; predict the new team rating via the existing model and surface ΔAdjEM. Falls back to "uncommitted" for `next_team = TBD`.
+- [ ] **Roster fit scoring built on archetypes**: redundancy detection ("team has 3 Sorcerers, missing a Cleric") layered on top of the Identity/Gaps index already shipped on TeamDetail. Score each portal player at each plausible destination by how much they fill a Gap vs add to an Identity stack. Combine with the impact projection above for a final "fit-adjusted Δrating."
+- [ ] **"What if Player X transfers to Team Y?" sandbox UI**: free-form picker — choose any current player, drop them onto any team, see the recomposed roster, archetype mix shift, and projected ΔAdjEM. Reuses the projection engine from above.
+- [ ] **Player search and comparison across all teams**: extend the existing Compare page to portal-aware comparisons (current team vs hypothetical destination); add a portal-only filter to the Players tab.
+- [ ] **API endpoints for all composition queries**: `GET /api/transfers/{year}/projections`, `GET /api/teams/{id}/portal-fits`, `POST /api/whatif` (player + destination → projected roster + Δrating).
 
 ---
 

@@ -21,8 +21,10 @@ pub fn router() -> Router<Arc<AppState>> {
 /// these inside the binary so the deployed container doesn't need a `data/`
 /// dir at runtime; local dev can still override by writing to
 /// `TRANSFERS_DIR` (defaults to `data/transfers`) for fast iteration.
-const EMBEDDED_TRANSFERS: &[(i32, &str)] =
-    &[(2026, include_str!("../../../../data/transfers/2026.json"))];
+const EMBEDDED_TRANSFERS: &[(i32, &str)] = &[
+    (2026, include_str!("../../../../data/transfers/2026.json")),
+    (2025, include_str!("../../../../data/transfers/2025.json")),
+];
 
 /// Raw row from the scraped 247Sports JSON.
 #[derive(Deserialize)]
