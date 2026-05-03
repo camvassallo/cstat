@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
 import {
   fetchPlayerDetail,
@@ -19,7 +19,7 @@ import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { SeasonLink } from '../components/SeasonLink';
-import { useSeason } from '../components/season';
+import { seasonHref, useSeason } from '../components/season';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -47,6 +47,7 @@ function heightString(inches: number | null) {
 
 export default function PlayerDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { season } = useSeason();
   const [player, setPlayer] = useState<PlayerProfile | null>(null);
   const [stats, setStats] = useState<PlayerSeasonStats | null>(null);
@@ -63,6 +64,13 @@ export default function PlayerDetail() {
     // No `setLoading(true)` here — see Rankings.tsx for the rationale.
     fetchPlayerDetail(id, season)
       .then((r) => {
+        // Player UUIDs are season-scoped. The API resolves cross-season via
+        // `natstat_id`; if the canonical UUID for this season differs, swap
+        // the URL so refresh/share/back lands on the right row.
+        if (r.player.id !== id) {
+          navigate(seasonHref(`/players/${r.player.id}`, season), { replace: true });
+          return;
+        }
         setPlayer(r.player);
         setStats(r.season_stats);
         setPercentiles(r.percentiles);
@@ -71,7 +79,7 @@ export default function PlayerDetail() {
         setTorvik(r.torvik_stats);
         setArchetype(r.archetype);
         if (r.archetype) {
-          fetchPlayerSimilar(id, 8, season)
+          fetchPlayerSimilar(r.player.id, 8, season)
             .then((s) => setSimilar(s.players))
             .catch(() => setSimilar([]));
         } else {
@@ -79,7 +87,7 @@ export default function PlayerDetail() {
         }
       })
       .finally(() => setLoading(false));
-  }, [id, season]);
+  }, [id, season, navigate]);
 
   if (loading) return <div className="text-gray-400">Loading...</div>;
   if (!player) return <div className="text-red-400">Player not found</div>;

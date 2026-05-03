@@ -517,6 +517,51 @@ pub async fn get_team_rankings(
         .await
 }
 
+/// Map a season-scoped team UUID to the equivalent UUID for `season`.
+/// If `team_id` already belongs to `season`, returns it unchanged. Otherwise
+/// looks up the team's `natstat_id` and finds the matching team in the
+/// requested season. Returns `None` only when no team exists for either input.
+pub async fn resolve_team_id_for_season(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        r#"
+        SELECT t2.id
+        FROM teams t1
+        JOIN teams t2 ON t2.natstat_id = t1.natstat_id AND t2.season = $2
+        WHERE t1.id = $1
+        "#,
+    )
+    .bind(team_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
+/// Same as `resolve_team_id_for_season` but for players.
+pub async fn resolve_player_id_for_season(
+    pool: &PgPool,
+    player_id: Uuid,
+    season: i32,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        r#"
+        SELECT p2.id
+        FROM players p1
+        JOIN players p2 ON p2.natstat_id = p1.natstat_id AND p2.season = $2
+        WHERE p1.id = $1
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 pub async fn get_team_by_id(
     pool: &PgPool,
     team_id: Uuid,

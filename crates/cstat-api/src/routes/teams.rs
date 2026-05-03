@@ -61,7 +61,29 @@ async fn team_detail(
     let season = params.season.unwrap_or_else(crate::default_season);
     let pool = &state.db.pool;
 
-    let team = queries::get_team_by_id(pool, id, season)
+    // Team UUIDs are season-scoped, so an `id` from season X plus `?season=Y`
+    // initially looks like a 404. Before giving up, resolve the team's
+    // `natstat_id` (cross-season identifier) and retry for the requested
+    // season. The frontend uses the returned `team.id` to redirect to the
+    // canonical URL when this fallback fires.
+    let resolved_id = match queries::resolve_team_id_for_season(pool, id, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })? {
+        Some(rid) => rid,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "team not found for this season" })),
+            ));
+        }
+    };
+
+    let team = queries::get_team_by_id(pool, resolved_id, season)
         .await
         .map_err(|e| {
             (
@@ -77,9 +99,9 @@ async fn team_detail(
         })?;
 
     let (schedule, roster, archetype_distribution) = tokio::try_join!(
-        queries::get_team_schedule(pool, id, season),
-        queries::get_team_roster(pool, id, season),
-        queries::get_team_archetype_index(pool, id, season),
+        queries::get_team_schedule(pool, resolved_id, season),
+        queries::get_team_roster(pool, resolved_id, season),
+        queries::get_team_archetype_index(pool, resolved_id, season),
     )
     .map_err(|e| {
         (
