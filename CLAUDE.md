@@ -69,9 +69,13 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 ## Database
 
-Postgres with SQLx. Migrations in `/migrations/` (16 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `player_archetypes`, `archetype_models`, `api_cache`.
+Postgres with SQLx. Migrations in `/migrations/` (18 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `player_archetypes`, `archetype_models`, `api_cache`.
 
 All season-scoped tables carry a `season` column; the API and frontend support arbitrary multi-year browsing via a site-wide `?season=` query param plumbed through `web/src/components/season.ts::useSeason()`. Adding a new season needs: ingest + compute (`cargo run --bin cstat-ingest -- season --year YYYY && ... compute --year YYYY`), retrain archetypes on the new combined cohort (`python -m training.archetypes --seasons …`), and add the year to `AVAILABLE_SEASONS` in `season.ts` so the nav selector exposes it.
+
+**UUIDs are season-scoped on `teams` and `players`** — Duke 2025 and Duke 2026 are different rows with different `id`s, joined by the cross-season `natstat_id` (UNIQUE on `(natstat_id, season)`). The detail-page API endpoints (`GET /api/teams/:id`, `GET /api/players/:id`) re-resolve via `natstat_id` when the requested season doesn't match the URL's UUID, so a cross-season URL like `/teams/<2026-uuid>?season=2025` returns Duke 2025 and the frontend redirects to the canonical UUID. See `queries::resolve_{team,player}_id_for_season`.
+
+**Roster ingest caveat**: NatStat's `/players/mbb/{TEAMCODE}` endpoint has no historical-season filter — it always returns the *current* roster. The box-score path (`games.rs`) is the sole authority for `players.team_id` per season; `players.rs::upsert_player` deliberately never overwrites `team_id` on conflict. Running `cstat-ingest players --year YYYY` against a non-current season warns once and only enriches metadata fields (height, weight, position, etc.). Box-score ingest auto-creates player rows with the correct team, so historical seasons are safe to add via `cstat-ingest season --year YYYY` alone.
 
 ## ML Inference
 
