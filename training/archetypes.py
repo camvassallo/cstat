@@ -78,79 +78,96 @@ FEATURE_NAMES = [
 # targets used only for relative scoring; they don't need to be calibrated.
 ARCHETYPE_SIGNATURES: dict[str, dict[str, float]] = {
     "Wizard": {
-        # Pure floor general — high AST, low TOV, controls tempo, plays heavy mins
+        # Elite lead-guard creator — high AST, low TOV, heaviest minutes,
+        # positive impact via assists rather than rim attacks.
         "ast_pct": 2.0, "tov_pct": -1.0, "usage_rate": 0.5, "min_share": 1.0,
         "rim_share": -0.3,
     },
     "Sorcerer": {
-        # Star scorer / volume creator, efficient
+        # High-volume star scorer — top-of-class USG, strong offensive impact,
+        # heavy minutes. The "team's leading scorer" archetype.
         "usage_rate": 2.0, "ogbpm": 1.5, "min_share": 1.0,
         "ast_pct": 0.5,
     },
     "Warlock": {
-        # High-variance gunner — heavy 3PA, high USG, boom-or-bust
+        # Three-point specialist — heaviest 3PA share, modest USG. Lives and
+        # dies from outside; lowest rim rate of any class.
         "three_share": 2.0, "usage_rate": 1.0, "tov_pct": 0.5,
         "rim_share": -1.0, "mid_share": -0.5,
     },
     "Bard": {
-        # Pass-first playmaker — high AST, lower USG, elevates teammates
+        # Pass-first distributor — high AST, low USG, modest impact. Sets up
+        # teammates rather than hunting shots; not a star-level contributor.
         "ast_pct": 1.5, "usage_rate": -0.5, "ogbpm": 0.5,
         "min_share": 0.5,
     },
     "Ranger": {
-        # 3-and-D wing — 3PA + STL, low USG
+        # Perimeter spacer — high 3PA share with steal rate, low USG. Often
+        # a role-player shooter rather than a true 3-and-D two-way starter
+        # (the cluster's defensive impact metrics are below average despite
+        # the steals).
         "three_share": 1.5, "stl_pct": 1.5, "usage_rate": -0.5,
         "ast_pct": -0.3, "blk_pct": -0.3,
     },
     "Barbarian": {
-        # Slasher / rim attacker — high FT rate, drives, physical
+        # Interior finisher — highest rim share, lowest 3PA share. A
+        # low-USG physical big rather than a wing slasher; the cluster
+        # centers on high-BLK% paint players who get fed at the rim.
         "ft_rate": 2.0, "rim_share": 1.0, "usage_rate": 0.5,
         "three_share": -1.0,
     },
     "Paladin": {
-        # Two-way anchor — BLK + def impact
+        # Defensive anchor — elite BLK%, highest DGBPM in the dataset. The
+        # rim protector; low offensive usage but the wall in the paint.
         "blk_pct": 1.5, "dgbpm": 1.5, "drb_pct": 1.0,
         "three_share": -1.0,
     },
     "Monk": {
-        # Efficient role player — clean game, low TOV
+        # Disciplined wing star — clean game (low TOV) at heavy minutes,
+        # strong OGBPM, leans 3-pt-heavy. The All-Conference scoring wing
+        # who shoots, plays defense, and doesn't waste possessions.
         "tov_pct": -1.5, "usage_rate": -0.5, "ogbpm": 0.5,
         "ft_rate": 0.3,
     },
     "Cleric": {
-        # Glue / connector — solid def, modest scoring volume, defensive boards
+        # Low-volume interior connector — modest scoring volume from rim
+        # and midrange, low USG. The cluster doesn't post strong defensive
+        # impact; it's a "doesn't dominate any column" backup big rather
+        # than a glue defender.
         "drb_pct": 1.0, "dgbpm": 0.5, "usage_rate": -0.5,
         "stl_pct": 0.3, "blk_pct": 0.3, "ast_pct": 0.3,
     },
     "Druid": {
-        # Frontcourt anchor — high-impact interior big who owns the glass at
-        # both ends, finishes through contact at the rim, and blocks shots.
-        # Originally framed as a "stretch big," but the data doesn't form a
-        # distinct stretch-big cluster (too rare in college); this signature
-        # now matches the actual rim-running impact-big cluster instead. Note
-        # the negative three_share weight: Druid in this dataset does NOT
-        # shoot from outside.
+        # Elite two-way big — highest combined OGBPM + DGBPM in the dataset.
+        # Owns the glass at both ends, finishes through contact at the rim,
+        # blocks shots. POY-shortlist / lottery-pick territory.
+        # Note the negative three_share weight: Druid does NOT shoot from
+        # outside in this dataset (the stretch-big cluster doesn't exist
+        # in college at the volume needed to form its own cluster).
         "rim_share": 1.0, "orb_pct": 1.0, "drb_pct": 1.0,
         "blk_pct": 0.5, "ogbpm": 1.5, "dgbpm": 0.5, "usage_rate": 1.0,
         "three_share": -0.3,
     },
     "Rogue": {
-        # Event creator — high STL/BLK, off-ball opportunist
+        # Disruptive two-way wing — high STL+BLK simultaneously, strong
+        # DGBPM. Off-ball event creator who plays heavy minutes.
         "stl_pct": 2.0, "blk_pct": 1.0, "usage_rate": -0.3,
     },
     "Fighter": {
-        # Balanced two-way wing — moderate positives across creation,
-        # defense, and impact, but not elite at any single axis. Defined
-        # by *positive contribution on multiple dimensions* rather than
-        # absence — earlier "near zero everywhere" framing made Fighter a
-        # residual sink that absorbed whatever the more-distinctive
-        # clusters didn't claim, and only ~4% of returning Fighters kept
-        # the class year-over-year. A multi-axis modest-positive
-        # signature anchors Fighter to a real player profile (the
-        # plug-and-play rotation wing) instead of "leftovers."
-        "ast_pct": 0.5, "stl_pct": 0.5,
-        "ogbpm": 0.5, "dgbpm": 0.5,
-        "min_share": 0.3,
+        # Balanced two-way rotation wing — modest positives across
+        # creation, defense, and impact, but not elite at any axis and
+        # not a heavy-minutes starter. The negative `usage_rate` and
+        # zero `min_share` are load-bearing: without them, Hungarian
+        # matching had Fighter scooping up an elite-perimeter-impact
+        # cluster (OGBPM +1.8, big minutes — basically a star scorer
+        # wing) which broke the D&D framing of Fighter as
+        # well-rounded-but-not-elite. Anchoring Fighter to a low-USG
+        # rotation profile keeps it distinct from Wizard (lead guards,
+        # heavy mins) and Sorcerer (high-USG volume scorers).
+        "ast_pct": 0.3, "stl_pct": 0.3,
+        "ogbpm": 0.3, "dgbpm": 0.3,
+        "min_share": 0.0,
+        "usage_rate": -0.3,
     },
 }
 

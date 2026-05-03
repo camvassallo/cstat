@@ -27,18 +27,18 @@ export function classColor(cls: string | null | undefined): string {
 // glossary. Keep these in sync with the longer descriptions in
 // `pages/Archetypes.tsx` so the tooltip and the glossary tell the same story.
 export const CLASS_TAGLINES: Record<string, string> = {
-  Wizard: 'Pure floor general.',
-  Sorcerer: 'Star scorer.',
-  Warlock: 'Chaos gunner.',
-  Bard: 'Pass-first playmaker.',
-  Ranger: '3-and-D wing.',
-  Barbarian: 'Rim attacker.',
-  Paladin: 'Two-way anchor.',
-  Monk: 'Efficient role player.',
-  Cleric: 'Glue connector.',
-  Druid: 'Frontcourt anchor.',
-  Rogue: 'Event creator.',
-  Fighter: 'Balanced two-way.',
+  Wizard: 'Elite floor general.',
+  Sorcerer: 'High-volume star scorer.',
+  Warlock: 'Three-point specialist.',
+  Bard: 'Pass-first distributor.',
+  Ranger: 'Perimeter spacer.',
+  Barbarian: 'Interior finisher.',
+  Paladin: 'Defensive anchor.',
+  Monk: 'Disciplined wing star.',
+  Cleric: 'Low-volume connector.',
+  Druid: 'Elite two-way big.',
+  Rogue: 'Disruptive two-way wing.',
+  Fighter: 'Balanced two-way rotation.',
 };
 
 export function classTagline(cls: string | null | undefined): string {

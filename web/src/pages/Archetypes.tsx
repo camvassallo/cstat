@@ -11,93 +11,95 @@ interface ClassDef {
 }
 
 // Hand-written descriptions paired with the signatures in
-// `training/archetypes.py`. Taglines come from the shared `classTagline()`
-// (single source of truth, also used by hover tooltips). Keep description
-// lengths roughly even so the cards line up.
+// `training/archetypes.py` and `archetypeColors.ts::CLASS_TAGLINES` (single
+// source of truth for the one-liners shown on hover tooltips). Keep all three
+// in sync — description lengths roughly even so cards line up. Numbers and
+// phrasing reflect the combined-cohort cluster centroids; rerun
+// `python -m training.archetypes --diagnostics` to see current means.
 const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Wizard',
     description:
-      'Elite assist rate paired with low turnovers and heavy minutes. Orchestrates every possession from the perimeter rather than hunting shots at the rim.',
-    signature: ['high AST%', 'low TOV%', 'heavy minutes'],
-    comparable: 'Steady starting point guards',
+      'Elite lead-guard creator. Heaviest minutes of any class, paired with strong assist rates and positive offensive impact — the team runs through them at the perimeter.',
+    signature: ['heavy minutes', 'high AST%', 'high OGBPM'],
+    comparable: 'All-American floor generals',
   },
   {
     name: 'Sorcerer',
     description:
-      'The team\'s primary creator and finisher. Highest-USG class in the dataset paired with strong OGBPM and big minutes — everything runs through them.',
+      'High-volume star scorer. Highest-USG class in the dataset paired with strong offensive impact and heavy minutes — they shoot, attack, and finish in roughly equal measure.',
     signature: ['highest USG%', 'high OGBPM', 'heavy minutes'],
     comparable: 'Lottery-pick alphas',
   },
   {
     name: 'Warlock',
     description:
-      'Lives and dies from beyond the arc. Heaviest three-point volume of any class, with above-average usage and below-average rim attacks. Boom-or-bust scoring.',
-    signature: ['heavy 3PA share', 'high USG%', 'low rim share'],
-    comparable: 'Microwave 6th men',
+      'Three-point specialist. Over 70% of their shots come from outside — the heaviest 3PA share of any class. Modest usage, lowest rim rate, boom-or-bust scoring.',
+    signature: ['heaviest 3PA share', 'lowest rim share', 'boom-or-bust'],
+    comparable: 'Microwave shooters / knockdown bombers',
   },
   {
     name: 'Bard',
     description:
-      'Distributes more than they hunt. High assist rate with modest usage — they\'d rather set up a teammate than take the shot themselves.',
-    signature: ['high AST%', 'low USG%', 'positive OGBPM'],
-    comparable: 'Backup point guards & connectors',
+      'Pass-first distributor. High assist rate paired with the lowest usage in the dataset — they\'d rather set up a teammate than score. Modest impact rather than star-level.',
+    signature: ['high AST%', 'low USG%', 'modest impact'],
+    comparable: 'Backup point guards',
   },
   {
     name: 'Ranger',
     description:
-      'The complementary perimeter piece. Lives behind the arc and racks up steals on the other end without dominating the ball or the offensive plan.',
-    signature: ['heavy 3PA share', 'high STL%', 'low USG%'],
-    comparable: 'Switchable wings',
+      'Perimeter spacer. Above-average 3PA share and steal rate at low usage — often a role-player shooter or rotation wing rather than a true two-way starter.',
+    signature: ['high 3PA share', 'high STL%', 'low USG%'],
+    comparable: 'Bench shooters / role wings',
   },
   {
     name: 'Barbarian',
     description:
-      'Drives, dunks, and gets fouled. The highest free-throw rate of any class — they earn their points by going through people instead of around them.',
-    signature: ['highest FT Rate', 'high rim share', 'low 3PA share'],
-    comparable: 'Bully-ball forwards',
+      'Interior finisher. Highest rim share of any class paired with the lowest 3PA — they live near the basket. Low usage, often a high-block-rate physical big.',
+    signature: ['highest rim share', 'lowest 3PA share', 'high BLK%'],
+    comparable: 'Energy bigs / dunker-spot finishers',
   },
   {
     name: 'Paladin',
     description:
-      'The rim protector and defensive leader. Elite block rate paired with strong DGBPM and defensive rebounding — the wall in the paint, low offensive usage.',
-    signature: ['elite BLK%', 'high DGBPM', 'strong DRB%'],
+      'Defensive anchor. Elite block rate plus the strongest DGBPM of any class — the rim protector. Low offensive usage, but the wall in the paint.',
+    signature: ['elite BLK%', 'highest DGBPM', 'rim defense'],
     comparable: 'Defensive bigs / shot-blockers',
   },
   {
     name: 'Monk',
     description:
-      'Doesn\'t make mistakes. Lowest TOV rate of any class, modest usage, positive impact. The "play 30 minutes, post a clean line" archetype.',
-    signature: ['lowest TOV%', 'modest USG%', 'positive OGBPM'],
-    comparable: 'Steady veterans',
+      'Disciplined wing star. High-floor scorer who shoots from outside, plays the heaviest minutes outside Wizard, posts strong OGBPM, and doesn\'t turn the ball over.',
+    signature: ['high OGBPM', 'heavy minutes', 'high 3PA share'],
+    comparable: 'All-Conference scoring wings',
   },
   {
     name: 'Cleric',
     description:
-      'Holds the rotation together without dominating any column. Defensive rebounds, occasional creation, low usage — the lineup just runs better with them on the floor.',
-    signature: ['solid DRB%', 'modest DGBPM', 'low USG%'],
-    comparable: 'High-IQ role players',
+      'Low-volume interior connector. Plays inside the arc — rim and midrange — at low usage. Doesn\'t dominate any category; modest contributor without standing out on either end.',
+    signature: ['rim/mid finisher', 'low USG%', 'modest impact'],
+    comparable: 'Backup bigs / glue forwards',
   },
   {
     name: 'Druid',
     description:
-      'High-impact interior big. Owns the glass, finishes inside, blocks shots, posts positive two-way GBPM. Secondary class flags scoring-stretch (Sorcerer) vs defense-first (Paladin).',
-    signature: ['high rim share', 'elite rebounding', 'two-way impact'],
-    comparable: 'Modern frontcourt impact bigs',
+      'Elite two-way big. The highest combined offensive and defensive impact in the dataset — owns the glass, finishes through contact at the rim, contributes on both ends. POY-shortlist territory.',
+    signature: ['highest OGBPM', 'high DGBPM', 'elite rebounding'],
+    comparable: 'POY-shortlist bigs / lottery picks',
   },
   {
     name: 'Rogue',
     description:
-      'Disruptive on defense. Above-average steal AND block rate simultaneously — opportunistic, off-ball, makes things happen without dominating possessions.',
-    signature: ['high STL%', 'high BLK%', 'low USG%'],
+      'Disruptive two-way wing. Strong DGBPM with above-average steal AND block rates simultaneously — opportunistic, off-ball, plays heavy minutes.',
+    signature: ['high STL%', 'high BLK%', 'high DGBPM'],
     comparable: 'Defensive Swiss-army wings',
   },
   {
     name: 'Fighter',
     description:
-      'No single specialty. Solid contributors across the board without elite production in any one area — the catch-all for players who don\'t fit a sharper mold.',
-    signature: ['no specialty', 'positive OGBPM/DGBPM', 'steady minutes'],
-    comparable: 'Plug-and-play rotation pieces',
+      'Balanced two-way rotation. Modest positives on creation, defense, and impact across multiple axes without elite production in any one — the plug-and-play rotation wing.',
+    signature: ['multi-axis positives', 'rotation minutes', 'no specialty'],
+    comparable: 'Rotation wings / utility players',
   },
 ];
 
