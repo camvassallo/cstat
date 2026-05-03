@@ -96,7 +96,28 @@ async fn player_detail(
     let season = params.season.unwrap_or_else(crate::default_season);
     let pool = &state.db.pool;
 
-    let player = queries::get_player_by_id(pool, id, season)
+    // Player UUIDs are season-scoped (natstat_id is the cross-season key), so
+    // a URL with last season's UUID + `?season=` switching to this season
+    // initially 404s. Resolve via natstat_id and retry. Returned `player.id`
+    // tells the frontend to redirect to the canonical URL.
+    let resolved_id = match queries::resolve_player_id_for_season(pool, id, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })? {
+        Some(rid) => rid,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "player not found for this season" })),
+            ));
+        }
+    };
+
+    let player = queries::get_player_by_id(pool, resolved_id, season)
         .await
         .map_err(|e| {
             (
@@ -113,12 +134,12 @@ async fn player_detail(
 
     let (season_stats, percentiles, game_log, league_averages, torvik_stats, archetype) =
         tokio::try_join!(
-            queries::get_player_season_stats(pool, id, season),
-            queries::get_player_percentiles(pool, id, season),
-            queries::get_player_game_log(pool, id, season),
+            queries::get_player_season_stats(pool, resolved_id, season),
+            queries::get_player_percentiles(pool, resolved_id, season),
+            queries::get_player_game_log(pool, resolved_id, season),
             queries::get_league_averages(pool, season),
-            queries::get_torvik_stats(pool, id, season),
-            queries::get_player_archetype(pool, id, season),
+            queries::get_torvik_stats(pool, resolved_id, season),
+            queries::get_player_archetype(pool, resolved_id, season),
         )
         .map_err(|e| {
             (

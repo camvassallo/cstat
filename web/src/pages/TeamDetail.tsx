@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   fetchTeamDetail,
   type TeamProfile,
@@ -14,7 +14,8 @@ import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
 import { SeasonLink } from '../components/SeasonLink';
-import { useSeason } from '../components/season';
+import { seasonHref, useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -64,25 +65,39 @@ function FourFactors({ team, label }: { team: TeamProfile; label: string }) {
 
 export default function TeamDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { season } = useSeason();
   const [team, setTeam] = useState<TeamProfile | null>(null);
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [archetypeDist, setArchetypeDist] = useState<ArchetypeShare[]>([]);
   const [loading, setLoading] = useState(true);
+  // Tab title tracks the loaded team and reflects the season selector so a
+  // shared `/teams/<id>?season=2025` link reads "Duke 2025 — CamPom".
+  usePageTitle(team ? `${team.name} ${team.season}` : null);
 
   useEffect(() => {
     if (!id) return;
     // No `setLoading(true)` here — see Rankings.tsx for the rationale.
     fetchTeamDetail(id, season)
       .then((r) => {
+        // Team UUIDs are season-scoped. The API resolves cross-season via
+        // `natstat_id`; if it returned a different UUID, swap the URL to the
+        // canonical one for this season so refresh/share/back work. Leave
+        // `loading` true through the redirect so the UI doesn't render the
+        // "Team not found" empty state in the gap before the next fetch.
+        if (r.team.id !== id) {
+          navigate(seasonHref(`/teams/${r.team.id}`, season), { replace: true });
+          return;
+        }
         setTeam(r.team);
         setSchedule(r.schedule);
         setRoster(r.roster);
         setArchetypeDist(r.archetype_distribution);
+        setLoading(false);
       })
-      .finally(() => setLoading(false));
-  }, [id, season]);
+      .catch(() => setLoading(false));
+  }, [id, season, navigate]);
 
   // Classes the team actually plays — sorted by team_share desc — drive the
   // visualization bar and chip row.

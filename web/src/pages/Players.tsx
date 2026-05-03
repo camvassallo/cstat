@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
@@ -16,7 +16,8 @@ import { pctileTextColor } from '../components/pctile';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
 import { SeasonLink } from '../components/SeasonLink';
-import { seasonHref, useSeason } from '../components/season';
+import { useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -248,8 +249,8 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
 }
 
 export default function Players() {
-  const navigate = useNavigate();
   const { season } = useSeason();
+  usePageTitle('Players');
   const [searchParams, setSearchParams] = useSearchParams();
   const archetype = searchParams.get('archetype');
   const includeSecondary = searchParams.get('include_secondary') === 'true';
@@ -482,14 +483,6 @@ export default function Players() {
           }}
           onGridReady={(e) => {
             gridApiRef.current = e.api;
-          }}
-          onRowClicked={(e) => {
-            // If the click landed on an explicit link (player or team name),
-            // let the Link handle navigation — don't double-navigate to the
-            // player detail page.
-            const target = e.event?.target as HTMLElement | undefined;
-            if (target?.closest('a')) return;
-            if (e.data) navigate(seasonHref(`/players/${e.data.player_id}`, season));
           }}
           getRowId={(p) => p.data.player_id}
         />

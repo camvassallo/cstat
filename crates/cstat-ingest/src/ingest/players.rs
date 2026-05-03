@@ -1,15 +1,55 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::extract_results;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+/// Season NatStat's `/players` endpoint returns when no filter is applied
+/// (Nov+ rolls forward to next year, matching the NCAA basketball calendar).
+fn current_natstat_season() -> i32 {
+    let today = Utc::now().naive_utc().date();
+    if today.month() >= 11 {
+        today.year() + 1
+    } else {
+        today.year()
+    }
+}
+
+/// Warn that NatStat's `/players` endpoint returns current-season rosters
+/// regardless of the `season` we'll stamp on them. Logged once per top-level
+/// command (the `team` subcommand or `ingest_all_rosters`) — the inner
+/// fetcher skips it so a 367-team batch doesn't print 367 identical lines.
+fn warn_if_historical_season(season: i32, scope: &'static str) {
+    let current = current_natstat_season();
+    if season != current {
+        warn!(
+            season,
+            current,
+            scope,
+            "/players endpoint has no historical-roster filter — \
+             it returns the current roster only. Box-score ingestion is the \
+             authority for historical team_id; roster ingest will only fill \
+             metadata fields on existing rows.",
+        );
+    }
+}
+
 /// Ingest players for a specific team using `/players/mbb/{TEAMCODE}`.
 /// Returns full roster with height, weight, hometown, nationality.
 pub async fn ingest_team_roster(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    team_code: &str,
+) -> Result<u64, NatStatError> {
+    warn_if_historical_season(season, "ingest_team_roster");
+    ingest_team_roster_inner(client, pool, season, team_code).await
+}
+
+async fn ingest_team_roster_inner(
     client: &NatStatClient,
     pool: &PgPool,
     season: i32,
@@ -43,6 +83,8 @@ pub async fn ingest_all_rosters(
     pool: &PgPool,
     season: i32,
 ) -> Result<u64, NatStatError> {
+    warn_if_historical_season(season, "ingest_all_rosters");
+
     let teams: Vec<(String,)> =
         sqlx::query_as("SELECT natstat_id FROM teams WHERE season = $1 ORDER BY natstat_id")
             .bind(season)
@@ -51,7 +93,7 @@ pub async fn ingest_all_rosters(
 
     let mut total = 0u64;
     for (team_code,) in &teams {
-        match ingest_team_roster(client, pool, season, team_code).await {
+        match ingest_team_roster_inner(client, pool, season, team_code).await {
             Ok(count) => total += count,
             Err(e) => warn!(team_code, error = %e, "failed to ingest roster, skipping"),
         }
@@ -123,13 +165,16 @@ async fn upsert_player(
         .filter(|d| *d != "0000-00-00")
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
+    // NatStat /players/mbb/{TEAMCODE} has no historical-roster filter — it returns
+    // the *current* roster regardless of the `season` we stamp these rows with.
+    // The box-score path (games.rs) is the authority for `team_id` per season, so
+    // never overwrite an existing `team_id` here; only fill it on first insert.
     sqlx::query(
         "INSERT INTO players (id, natstat_id, name, team_id, season, position, height_inches,
          weight_lbs, class_year, jersey_number, hometown, nationality, date_of_birth)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (natstat_id, season) DO UPDATE
          SET name = EXCLUDED.name,
-             team_id = COALESCE(EXCLUDED.team_id, players.team_id),
              position = COALESCE(EXCLUDED.position, players.position),
              height_inches = COALESCE(EXCLUDED.height_inches, players.height_inches),
              weight_lbs = COALESCE(EXCLUDED.weight_lbs, players.weight_lbs),

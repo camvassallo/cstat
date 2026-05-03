@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { fetchPrediction, type PredictionResult } from '../api/client';
 import { useSeason } from '../components/season';
+import { usePageTitle } from '../components/usePageTitle';
 
 export default function Predict() {
   const { season } = useSeason();
+  usePageTitle('Game Prediction');
   const [home, setHome] = useState('');
   const [away, setAway] = useState('');
   const [neutral, setNeutral] = useState(false);
