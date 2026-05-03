@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY migrations/ migrations/
+COPY data/ data/
 
 # Build release binaries, then stage them along with any onnxruntime shared
 # libs `ort` downloaded into target/. The libs are needed at runtime for
