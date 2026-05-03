@@ -2,6 +2,7 @@ pub mod elo;
 pub mod games;
 pub mod players;
 pub mod season;
+pub mod team_aliases;
 pub mod teams;
 pub mod torvik;
 pub mod utils;

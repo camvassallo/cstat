@@ -1,3 +1,4 @@
+use super::team_aliases;
 use super::utils::get_f64_from;
 use crate::NatStatClient;
 use crate::client::NatStatError;
@@ -43,7 +44,10 @@ async fn upsert_team(team: &Value, pool: &PgPool, season: i32) -> Result<bool, N
         .and_then(|n| n.as_str())
         .unwrap_or(natstat_id);
 
-    let short_name = team.get("short_name").and_then(|n| n.as_str());
+    // Prefer the bundled Torvik-style short name; fall back to whatever NatStat
+    // returns. Re-ingest is therefore idempotent and won't clobber the mapping.
+    let short_name = team_aliases::short_name(natstat_id)
+        .or_else(|| team.get("short_name").and_then(|n| n.as_str()));
     let conference = team
         .get("conference")
         .or_else(|| team.get("league"))

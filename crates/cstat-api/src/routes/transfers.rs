@@ -77,12 +77,16 @@ struct EnrichedTransfer {
 
 /// One DB candidate row pulled by name match. We may have several per name
 /// (common name, transfers within season) and disambiguate by previous team.
+/// We carry both the Torvik short_name (`team_name`, used for display) and
+/// the full NatStat name (`team_full_name`, used for alias matching against
+/// 247 prev_team strings like "NC State" → "North Carolina State Wolfpack").
 #[derive(sqlx::FromRow)]
 struct DbCandidate {
     player_id: Uuid,
     name: String,
     team_id: Option<Uuid>,
     team_name: Option<String>,
+    team_full_name: Option<String>,
     minutes_per_game: Option<f64>,
     games_played: Option<i32>,
     campom: Option<f64>,
@@ -97,6 +101,7 @@ struct DbCandidate {
 struct DbTeam {
     id: Uuid,
     name: String,
+    short_name: Option<String>,
 }
 
 async fn transfer_list(
@@ -148,7 +153,8 @@ async fn transfer_list(
             p.id                     AS player_id,
             p.name                   AS name,
             t.id                     AS team_id,
-            t.name                   AS team_name,
+            COALESCE(t.short_name, t.name) AS team_name,
+            t.name                   AS team_full_name,
             pss.minutes_per_game     AS minutes_per_game,
             pss.games_played         AS games_played,
             tps.cam_gbpm_v3_psos     AS campom,
@@ -178,7 +184,7 @@ async fn transfer_list(
     // Pull every team for the season so we can resolve 247 short names
     // (e.g. "Kansas") to a cstat team_id for the previous/next team links.
     let teams: Vec<DbTeam> =
-        sqlx::query_as::<_, DbTeam>(r#"SELECT id, name FROM teams WHERE season = $1"#)
+        sqlx::query_as::<_, DbTeam>(r#"SELECT id, name, short_name FROM teams WHERE season = $1"#)
             .bind(year)
             .fetch_all(&state.db.pool)
             .await
@@ -198,7 +204,9 @@ async fn transfer_list(
     let resolve_team_id = |short: &str| -> Option<Uuid> {
         teams
             .iter()
-            .filter_map(|t| team_match_score(&t.name, short).map(|s| (s, t)))
+            .filter_map(|t| {
+                team_match_score(t.short_name.as_deref(), &t.name, short).map(|s| (s, t))
+            })
             .min_by_key(|(s, _)| *s)
             .map(|(_, t)| t.id)
     };
@@ -219,9 +227,9 @@ async fn transfer_list(
                 t.previous_team
                     .as_deref()
                     .and_then(|prev| {
-                        cands
-                            .iter()
-                            .find(|c| team_matches(c.team_name.as_deref(), prev))
+                        cands.iter().find(|c| {
+                            team_matches(c.team_name.as_deref(), c.team_full_name.as_deref(), prev)
+                        })
                     })
                     // Fallback: most-played candidate (handles name collisions).
                     .or_else(|| {
@@ -324,26 +332,33 @@ const TEAM_ALIASES: &[(&str, &str)] = &[
     ("miami (oh)", "miami (ohio)"),
 ];
 
-/// Score how well a cstat full team name matches a 247 short name. Lower is
-/// better; `None` means no match. Used both as a boolean test (via
-/// `team_matches`) and as a tiebreaker when several teams prefix-match the
-/// same short name (e.g. "Miami").
-fn team_match_score(db: &str, short: &str) -> Option<u32> {
-    let db_lc = db.to_lowercase();
+/// Score how well a cstat team matches a 247 short name. Lower is better;
+/// `None` means no match. Tries the Torvik-style `short_name` first (which
+/// usually matches 247 directly, e.g. "Kansas" == "Kansas") and falls back
+/// to the full NatStat name with alias/prefix logic for legacy edge cases.
+fn team_match_score(db_short: Option<&str>, db_full: &str, short: &str) -> Option<u32> {
     let short_lc = short.to_lowercase();
-    // 0 = exact match (rare, but the most specific signal).
+    // 0 = exact short_name match. The common case now that teams.short_name is
+    // populated with Torvik names — "Kansas", "UConn", "Duke" all resolve here.
+    if let Some(s) = db_short
+        && s.to_lowercase() == short_lc
+    {
+        return Some(0);
+    }
+    let db_lc = db_full.to_lowercase();
     if db_lc == short_lc {
         return Some(0);
     }
-    // 1 = alias hit. Beats a blind prefix match so ambiguous bare names
-    // ("Miami") resolve to the school the alias points at.
+    // 1 = alias hit against the full name. Kept for 247-side aliases that
+    // don't equal the short_name (e.g. "miami" → "Miami FL"; "ole miss" →
+    // "Mississippi"; ambiguous bare names like "Miami").
     for (k, v) in TEAM_ALIASES {
         if short_lc == *k && (db_lc == *v || db_lc.starts_with(&format!("{v} "))) {
             return Some(1);
         }
     }
-    // 2 = bare prefix match. Catches the common case ("Kansas" → "Kansas
-    // Jayhawks") while still rejecting "Arkansas" → "Arkansas State".
+    // 2 = bare prefix match against the full name. Catches the case where
+    // short_name is missing — falls back to old behavior.
     if db_lc.starts_with(&format!("{short_lc} ")) {
         return Some(2);
     }
@@ -351,9 +366,11 @@ fn team_match_score(db: &str, short: &str) -> Option<u32> {
 }
 
 /// Boolean wrapper around `team_match_score`, kept for callers that don't
-/// need the score (the player-disambiguation pass).
-fn team_matches(db_name: Option<&str>, short_name: &str) -> bool {
-    db_name
-        .map(|db| team_match_score(db, short_name).is_some())
+/// need the score (the player-disambiguation pass). Takes both the Torvik
+/// short_name and the full NatStat name so alias entries that target the
+/// full form (e.g. "nc state" → "north carolina state") still fire.
+fn team_matches(db_short: Option<&str>, db_full: Option<&str>, short_name: &str) -> bool {
+    db_full
+        .map(|full| team_match_score(db_short, full, short_name).is_some())
         .unwrap_or(false)
 }

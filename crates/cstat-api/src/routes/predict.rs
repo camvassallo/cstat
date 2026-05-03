@@ -101,7 +101,7 @@ struct TeamLookup {
 async fn find_team(pool: &PgPool, query: &str, season: i32) -> Result<TeamLookup, sqlx::Error> {
     if let Ok(id) = query.parse::<Uuid>() {
         return sqlx::query_as::<_, TeamLookup>(
-            "SELECT id, name, conference FROM teams WHERE id = $1 AND season = $2",
+            "SELECT id, COALESCE(short_name, name) AS name, conference FROM teams WHERE id = $1 AND season = $2",
         )
         .bind(id)
         .bind(season)
@@ -109,8 +109,14 @@ async fn find_team(pool: &PgPool, query: &str, season: i32) -> Result<TeamLookup
         .await;
     }
 
+    // Exact match against either the Torvik short_name ("Duke") or the full
+    // NatStat name ("Duke Blue Devils"). short_name is the canonical input
+    // surface; the full name is kept for backwards compat with old links.
     if let Ok(team) = sqlx::query_as::<_, TeamLookup>(
-        "SELECT id, name, conference FROM teams WHERE LOWER(name) = LOWER($1) AND season = $2",
+        "SELECT id, COALESCE(short_name, name) AS name, conference
+         FROM teams
+         WHERE (LOWER(short_name) = LOWER($1) OR LOWER(name) = LOWER($1))
+           AND season = $2",
     )
     .bind(query)
     .bind(season)
@@ -121,7 +127,12 @@ async fn find_team(pool: &PgPool, query: &str, season: i32) -> Result<TeamLookup
     }
 
     sqlx::query_as::<_, TeamLookup>(
-        "SELECT id, name, conference FROM teams WHERE LOWER(name) LIKE LOWER($1) || '%' AND season = $2 ORDER BY LENGTH(name) LIMIT 1",
+        "SELECT id, COALESCE(short_name, name) AS name, conference
+         FROM teams
+         WHERE (LOWER(short_name) LIKE LOWER($1) || '%' OR LOWER(name) LIKE LOWER($1) || '%')
+           AND season = $2
+         ORDER BY LENGTH(COALESCE(short_name, name))
+         LIMIT 1",
     )
     .bind(query)
     .bind(season)

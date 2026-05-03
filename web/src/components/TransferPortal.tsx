@@ -156,8 +156,8 @@ function buildColumns(): ColDef<RankedTransfer>[] {
       minWidth: 150,
       cellRenderer: (p: { data?: RankedTransfer }) =>
         teamCellRenderer({
-          // Prefer the cstat full name ("Kansas Jayhawks") when we matched
-          // it; otherwise fall back to the 247 short name verbatim.
+          // Prefer the cstat Torvik short name ("Kansas") when we matched it;
+          // fall back to the 247 short name verbatim if no match.
           name: p.data?.previous_team_full ?? p.data?.previous_team ?? null,
           id: p.data?.previous_team_id ?? null,
         }),

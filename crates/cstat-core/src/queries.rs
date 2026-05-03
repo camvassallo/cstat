@@ -467,7 +467,7 @@ pub async fn get_team_rankings(
         SELECT
             ROW_NUMBER() OVER (ORDER BY tss.adj_efficiency_margin DESC NULLS LAST) AS rank,
             t.id AS team_id,
-            t.name,
+            COALESCE(t.short_name, t.name) AS name,
             t.conference,
             tss.wins,
             tss.losses,
@@ -558,7 +558,7 @@ pub async fn get_team_by_id(
             WHERE tss.season = $2
         )
         SELECT
-            t.id, t.name, t.short_name, t.conference, t.division, t.season,
+            t.id, COALESCE(t.short_name, t.name) AS name, t.short_name, t.conference, t.division, t.season,
             r.wins, r.losses,
             r.adj_offense, r.adj_offense_rank,
             r.adj_defense, r.adj_defense_rank,
@@ -596,7 +596,7 @@ pub async fn get_team_schedule(
             s.game_id,
             s.game_date,
             s.opponent_id,
-            opp.name AS opponent_name,
+            COALESCE(opp.short_name, opp.name) AS opponent_name,
             s.is_home,
             s.is_neutral,
             s.team_score,
@@ -720,7 +720,7 @@ pub async fn search_players(
             p.id AS player_id,
             p.name,
             p.team_id,
-            t.name AS team_name,
+            COALESCE(t.short_name, t.name) AS team_name,
             t.conference,
             p.position,
             p.class_year,
@@ -789,7 +789,7 @@ pub async fn get_player_by_id(
         r#"
         SELECT
             p.id, p.name, p.team_id,
-            t.name AS team_name,
+            COALESCE(t.short_name, t.name) AS team_name,
             t.conference,
             p.position, p.class_year,
             p.height_inches, p.weight_lbs, p.jersey_number,
@@ -867,7 +867,7 @@ pub async fn get_player_game_log(
             pgs.game_id,
             pgs.game_date,
             pgs.opponent_id,
-            opp.name AS opponent_name,
+            COALESCE(opp.short_name, opp.name) AS opponent_name,
             pgs.is_home,
             pgs.minutes,
             pgs.points, pgs.fgm, pgs.fga, pgs.fg_pct,
@@ -1065,9 +1065,9 @@ pub async fn get_games(
             g.game_date,
             g.season,
             g.home_team_id,
-            ht.name AS home_team_name,
+            COALESCE(ht.short_name, ht.name) AS home_team_name,
             g.away_team_id,
-            at.name AS away_team_name,
+            COALESCE(at.short_name, at.name) AS away_team_name,
             g.home_score,
             g.away_score,
             g.is_neutral_site,
@@ -1169,7 +1169,7 @@ pub async fn get_similar_players(
             c.player_id,
             p.name,
             p.team_id,
-            t.name AS team_name,
+            COALESCE(t.short_name, t.name) AS team_name,
             c.primary_class,
             c.secondary_class,
             c.distance,
@@ -1239,7 +1239,7 @@ pub async fn get_archetype_exemplars(
                 p.id AS player_id,
                 p.name,
                 p.team_id,
-                t.name AS team_name,
+                COALESCE(t.short_name, t.name) AS team_name,
                 ROW_NUMBER() OVER (
                     PARTITION BY pa.primary_class
                     ORDER BY tps.campom DESC NULLS LAST, pa.primary_score DESC
