@@ -1,11 +1,22 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::extract_results;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
+
+/// Season NatStat's `/players` endpoint returns when no filter is applied
+/// (Nov+ rolls forward to next year, matching the NCAA basketball calendar).
+fn current_natstat_season() -> i32 {
+    let today = Utc::now().naive_utc().date();
+    if today.month() >= 11 {
+        today.year() + 1
+    } else {
+        today.year()
+    }
+}
 
 /// Ingest players for a specific team using `/players/mbb/{TEAMCODE}`.
 /// Returns full roster with height, weight, hometown, nationality.
@@ -15,6 +26,18 @@ pub async fn ingest_team_roster(
     season: i32,
     team_code: &str,
 ) -> Result<u64, NatStatError> {
+    let current = current_natstat_season();
+    if season != current {
+        warn!(
+            season,
+            current,
+            team_code,
+            "/players endpoint has no historical-roster filter — \
+             it returns the current roster only. Box-score ingestion is the \
+             authority for historical team_id; roster ingest will only fill \
+             metadata fields on existing rows.",
+        );
+    }
     let response = client.get("players", Some(team_code), None, None).await?;
     let players = extract_results(&response);
 
@@ -123,13 +146,16 @@ async fn upsert_player(
         .filter(|d| *d != "0000-00-00")
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
+    // NatStat /players/mbb/{TEAMCODE} has no historical-roster filter — it returns
+    // the *current* roster regardless of the `season` we stamp these rows with.
+    // The box-score path (games.rs) is the authority for `team_id` per season, so
+    // never overwrite an existing `team_id` here; only fill it on first insert.
     sqlx::query(
         "INSERT INTO players (id, natstat_id, name, team_id, season, position, height_inches,
          weight_lbs, class_year, jersey_number, hometown, nationality, date_of_birth)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (natstat_id, season) DO UPDATE
          SET name = EXCLUDED.name,
-             team_id = COALESCE(EXCLUDED.team_id, players.team_id),
              position = COALESCE(EXCLUDED.position, players.position),
              height_inches = COALESCE(EXCLUDED.height_inches, players.height_inches),
              weight_lbs = COALESCE(EXCLUDED.weight_lbs, players.weight_lbs),
