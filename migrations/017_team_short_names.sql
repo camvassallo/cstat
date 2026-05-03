@@ -284,7 +284,7 @@ FROM (VALUES
   ('STNH', 'Stonehill'),
   ('SUU', 'Southern Utah'),
   ('SYR', 'Syracuse'),
-  ('TAMC', 'Texas A&M Corpus Christi'),
+  ('TAMC', 'Texas A&M Corpus Chris'),
   ('TAMU', 'Texas A&M'),
   ('TARL', 'Tarleton St.'),
   ('TCU', 'TCU'),
