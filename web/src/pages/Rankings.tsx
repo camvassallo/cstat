@@ -267,7 +267,11 @@ export default function Rankings() {
   );
 
   useEffect(() => {
-    setLoading(true);
+    // No `setLoading(true)` here — `react-hooks/set-state-in-effect`
+    // forbids it. The initial `useState(true)` covers first load; on
+    // subsequent season changes the previous data stays visible until
+    // the new fetch resolves, which is mild stale-flicker but no worse
+    // than what frameworks like Next.js do by default.
     fetchTeamRankings(season)
       .then((r) => setTeams(r.teams))
       .finally(() => setLoading(false));

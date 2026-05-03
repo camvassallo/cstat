@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { SeasonLink, useSeason } from '../components/season';
+import { SeasonLink } from '../components/SeasonLink';
+import { useSeason } from '../components/season';
 import {
   Radar,
   RadarChart,

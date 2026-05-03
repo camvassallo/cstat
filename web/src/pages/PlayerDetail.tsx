@@ -18,7 +18,8 @@ import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
 import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
-import { SeasonLink, useSeason } from '../components/season';
+import { SeasonLink } from '../components/SeasonLink';
+import { useSeason } from '../components/season';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -59,7 +60,7 @@ export default function PlayerDetail() {
 
   useEffect(() => {
     if (!id) return;
-    setLoading(true);
+    // No `setLoading(true)` here — see Rankings.tsx for the rationale.
     fetchPlayerDetail(id, season)
       .then((r) => {
         setPlayer(r.player);

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { fetchArchetypes, type ArchetypeClassInfo } from '../api/client';
 import { classColor, classTagline } from '../components/archetypeColors';
-import { SeasonLink, useSeason } from '../components/season';
+import { SeasonLink } from '../components/SeasonLink';
+import { useSeason } from '../components/season';
 
 interface ClassDef {
   name: string;
@@ -188,7 +189,7 @@ export default function Archetypes() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoading(true);
+    // No `setLoading(true)` here — see Rankings.tsx for the rationale.
     fetchArchetypes(5, selectedSeason)
       .then((r) => {
         setClasses(r.classes);

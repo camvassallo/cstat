@@ -15,7 +15,8 @@ import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
-import { SeasonLink, seasonHref, useSeason } from '../components/season';
+import { SeasonLink } from '../components/SeasonLink';
+import { seasonHref, useSeason } from '../components/season';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 

@@ -6,7 +6,8 @@ import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
 import { classColor } from './archetypeColors';
-import { SeasonLink, seasonHref, useSeason } from './season';
+import { SeasonLink } from './SeasonLink';
+import { seasonHref, useSeason } from './season';
 
 // Players ranked by 247Sports who carry one of our derived ranks (we have a
 // matching cstat player with a CamPom value). `rank_delta` is `rank_247 −

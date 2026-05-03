@@ -2,7 +2,8 @@ import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { PlayerArchetype, SimilarPlayer } from '../api/client';
 import { classColor, classTagline, classTitle } from './archetypeColors';
-import { SeasonLink, seasonHref, useSeason } from './season';
+import { SeasonLink } from './SeasonLink';
+import { seasonHref, useSeason } from './season';
 
 /// Styled hover tooltip for any class label — mirrors the look of the
 /// affinity popover on `ArchetypeBadge`. Wrap a chip / span with this and
