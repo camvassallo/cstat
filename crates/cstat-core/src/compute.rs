@@ -1458,10 +1458,37 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
     .execute(pool)
     .await?;
 
-    let total = r1.rows_affected() + r2.rows_affected();
+    // wins/losses: derive from team_game_stats.win, which is authoritative for
+    // the season (we already trust it for AdjEM, four factors, point_diff).
+    // Unconditional overwrite — the team-detail ingest (NatStat /teams) also
+    // writes these, but that path lags behind game ingest, so compute should
+    // always have the last word. Without this, a season ingested before the
+    // /teams call lands shows 0-0 records everywhere.
+    let r3 = sqlx::query(
+        "UPDATE team_season_stats tss SET
+            wins = sub.wins,
+            losses = sub.losses,
+            updated_at = now()
+        FROM (
+            SELECT team_id,
+                COUNT(*) FILTER (WHERE win IS TRUE)::int AS wins,
+                COUNT(*) FILTER (WHERE win IS FALSE)::int AS losses
+            FROM team_game_stats
+            WHERE season = $1
+            GROUP BY team_id
+        ) sub
+        WHERE tss.team_id = sub.team_id
+          AND tss.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    let total = r1.rows_affected() + r2.rows_affected() + r3.rows_affected();
     info!(
         is_conference = r1.rows_affected(),
         point_diff = r2.rows_affected(),
+        wins_losses = r3.rows_affected(),
         season,
         "computed derived game fields"
     );
