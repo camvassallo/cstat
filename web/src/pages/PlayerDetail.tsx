@@ -47,6 +47,16 @@ function heightString(inches: number | null) {
   return `${Math.floor(inches / 12)}'${inches % 12}"`;
 }
 
+// "2026-03-15" → "Mar 15". Falls back to the raw string on parse failure so
+// pre-formatted values pass through unchanged.
+function shortDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return iso;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[Number(m[2]) - 1];
+  return `${month} ${Number(m[3])}`;
+}
+
 export default function PlayerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -343,10 +353,16 @@ function GameLogTable({
     <div>
       <h2 className="text-xl font-bold mb-3">Game Log</h2>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="min-w-full text-sm whitespace-nowrap">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
-              <SortHeader label="Date" sortKey="game_date" current={sort} onSort={onSort} />
+              <SortHeader
+                label="Date"
+                sortKey="game_date"
+                current={sort}
+                onSort={onSort}
+                className="left-0 z-20 border-r border-gray-700"
+              />
               <SortHeader label="Opponent" sortKey="opponent_name" current={sort} onSort={onSort} />
               <SortHeader label="MIN" sortKey="minutes" current={sort} onSort={onSort} align="right" />
               <SortHeader label="PTS" sortKey="points" current={sort} onSort={onSort} align="right" />
@@ -365,8 +381,10 @@ function GameLogTable({
               const ptsHot = ptsHi != null && g.points != null && g.points >= ptsHi;
               const gmscHot = gmscHi != null && g.game_score != null && g.game_score >= gmscHi;
               return (
-                <tr key={g.game_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                  <td className="py-1.5 px-2 text-gray-400">{g.game_date}</td>
+                <tr key={g.game_id} className="group border-b border-gray-800 hover:bg-gray-800">
+                  <td className="py-1.5 px-2 text-gray-400 sticky left-0 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
+                    {shortDate(g.game_date)}
+                  </td>
                   <td className="py-1.5 px-2">
                     {g.is_home === false && '@ '}
                     {g.opponent_id ? (

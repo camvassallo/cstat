@@ -138,7 +138,11 @@ export default function Layout() {
           </NavLink>
         </div>
       )}
-      <main className="flex-1 px-3 sm:px-6 py-4 sm:py-6 max-w-7xl mx-auto w-full">
+      {/* `overflow-x-hidden` is a safety net for charts and sticky cells that
+          occasionally render 1–2px wider than their container on mobile.
+          Internal scroll regions (game log, roster, AG Grid) create their own
+          scroll context and remain swipeable. */}
+      <main className="flex-1 px-3 sm:px-6 py-4 sm:py-6 max-w-7xl mx-auto w-full overflow-x-hidden">
         <Outlet />
       </main>
     </div>
