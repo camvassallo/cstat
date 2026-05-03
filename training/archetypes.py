@@ -1,6 +1,10 @@
 """
 Player archetype clustering — Phase 5a.
 
+See `docs/archetypes_methodology.md` for the full retraining playbook,
+health-metric tripwires, and decision tree for "this drifted, now what."
+This module docstring is a summary; the doc is the source of truth.
+
 Pulls qualified player-seasons (>=10 GP, >=10 MPG) with Torvik shot-zone /
 impact data and cstat rate stats, standardizes the feature matrix, runs
 k-means with k=12 on a **combined multi-season cohort**, then assigns each

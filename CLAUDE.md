@@ -24,6 +24,12 @@ cargo run --bin cstat-ingest -- <subcommand>    # Ingestion CLI
 
 # Local Postgres
 docker compose up -d               # Postgres 17 on :5432
+
+# Archetype training (Python)
+cd training && python -m archetypes --seasons 2025,2026 [--diagnostics]
+
+# Push local data to prod (no schema migrations needed if migrations/ is unchanged)
+./scripts/sync_to_prod.sh [--dry-run]
 ```
 
 ## Environment Variables
@@ -39,7 +45,7 @@ Optional: `BIND_ADDR` (default `0.0.0.0:8080`), `RUST_LOG` (tracing filter)
 Three-crate Rust workspace:
 
 - **cstat-core** — Shared types, DB models (`models/`), query layer (`db.rs`), and compute pipeline (`compute.rs`). The `Database` struct wraps `PgPool` and handles migrations via SQLx.
-- **cstat-ingest** — NatStat API client (`client.rs`), response cache (`cache.rs`), token-bucket rate limiter (`rate_limiter.rs`), and ingestion pipeline (`ingest/`). CLI binary at `src/bin/ingest.rs` with subcommands: `season`, `teams`, `players`, `games`, `perfs`, `update`, `compute`, `status`, `clean-cache`, `torvik`, `explore`.
+- **cstat-ingest** — NatStat API client (`client.rs`), response cache (`cache.rs`), token-bucket rate limiter (`rate_limiter.rs`), and ingestion pipeline (`ingest/`). CLI binary at `src/bin/ingest.rs` with subcommands: `season`, `teams`, `players`, `team`, `games`, `perfs`, `update`, `elo`, `forecasts`, `compute`, `status`, `clean-cache`, `torvik`, `campom-parity`, `explore`.
 - **cstat-api** — Axum HTTP server. `AppState` holds `Database` + `NatStatClient` + `Predictor`. Routes under `/api/`.
 
 Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) → cstat-api → frontend/ML**
@@ -55,10 +61,17 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 - `compute_rolling_averages` — last-5-game rolling stats
 - `compute_individual_ratings` — populates `pss.offensive_rating` / `defensive_rating` / `net_rating` from `torvik_player_stats.o_rtg` / `d_rtg` (passthrough; cstat's prior heuristic was broken — see ROADMAP "Compute Pipeline Audit")
 - `compute_campom` — usage/minutes/sample/SOS-adjusted GBPM composites (`cam_gbpm`, `cam_gbpm_v2`, `cam_gbpm_v3` and o/d splits at every tier). Tunable constants live at the top of `compute.rs` as `CAMPOM_*` consts; methodology in `docs/campom_methodology.md`.
+- `compute_derived_game_fields` — derives `is_conference`, `point_diff`, and **`wins`/`losses`** on `team_season_stats` from the authoritative `team_game_stats` rows. W-L is unconditionally overwritten so it stays self-consistent with AdjEM and four factors (the team-detail NatStat ingest also writes W-L but lags game ingest; compute always has the last word).
+
+## Player Archetypes
+
+12 D&D-class archetypes assigned via combined-cohort k-means clustering. Pipeline lives in `training/archetypes.py`; methodology and retraining playbook in `docs/archetypes_methodology.md`. Run with `python -m training.archetypes --seasons 2025,2026 [--diagnostics]`. Default `--seasons` covers all currently-ingested seasons — clustering runs on the union and writes per-season rows to `player_archetypes` with shared centroids in `archetype_models`. Combined-cohort training is load-bearing for cross-season class stability (45.7% returning-player primary stability vs 28% for per-season fits) — read the doc before changing it.
 
 ## Database
 
-Postgres with SQLx. Migrations in `/migrations/` (12 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `api_cache`.
+Postgres with SQLx. Migrations in `/migrations/` (16 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `player_archetypes`, `archetype_models`, `api_cache`.
+
+All season-scoped tables carry a `season` column; the API and frontend support arbitrary multi-year browsing via a site-wide `?season=` query param plumbed through `web/src/components/season.tsx::useSeason()`. Adding a new season needs: ingest + compute (`cargo run --bin cstat-ingest -- season --year YYYY && ... compute --year YYYY`), retrain archetypes on the new combined cohort (`python -m training.archetypes --seasons …`), and add the year to `AVAILABLE_SEASONS` in `season.tsx` so the nav selector exposes it.
 
 ## ML Inference
 

@@ -356,20 +356,20 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 
 - [x] Feature vector per player-season: shot zone share, AST%, USG%, ORB%/DRB%, STL%, BLK%, FT Rate, 3PA rate, OGBPM/DGBPM, MP%
 - [x] K-means clustering (k=12) shipped via `training/archetypes.py`; affinity scores stored in `archetype_models` per season
-  - [ ] Validate cluster stability across seasons via `adjusted_rand_score` between 2025/2026 cohorts
-- [x] Archetype taxonomy (12 classes — Wizard, Sorcerer, Warlock, Bard, Ranger, Barbarian, Paladin, Monk, Cleric, Druid, Rogue, Fighter):
-  - **Wizard** — Pure floor general (high AST%, low TOV%, controls tempo)
-  - **Sorcerer** — Star scorer / volume creator (high USG%, leads team in points, efficient)
-  - **Warlock** — High-variance gunner (heavy 3PA, boom-or-bust efficiency)
-  - **Bard** — Pass-first playmaker (high AST%, lower USG, elevates teammates)
-  - **Ranger** — 3-and-D wing (3P% + STL%, perimeter sniper/defender)
-  - **Barbarian** — Slasher / rim attacker (high FT rate, drives, physical)
-  - **Paladin** — Two-way anchor (BLK% + high TS%, defensive leader)
-  - **Monk** — High-efficiency role player (elite TS%, low TOV%, disciplined)
-  - **Cleric** — Glue guy / connector (defensive intangibles, screens, hustle)
-  - **Druid** — Positionless big (stretch + interior, plays inside/out)
-  - **Rogue** — Event creator (high STL%/BLK%, off-ball opportunist)
-  - **Fighter** — Balanced two-way wing (no specialty, solid all-around)
+  - [x] **Combined-cohort training for cross-season stability**. Replaced per-season clustering (28% returning-player primary stability) with one k-means fit across the union of seasons (45.7% stability, 75.2% with secondary-class match). Same player → same cluster → same class regardless of which season we look at. Trade-off: doesn't track year-to-year evolution; revisit at the 5+ season horizon (Phase 6). Full methodology + retraining playbook in `docs/archetypes_methodology.md`.
+- [x] Archetype taxonomy (12 classes — descriptions reflect the actual cluster centroids after the combined-cohort refit; all three sources of class identity — `archetypeColors.ts::CLASS_TAGLINES`, `Archetypes.tsx::CLASS_DEFS`, and `archetypes.py::ARCHETYPE_SIGNATURES` — are kept in sync):
+  - **Wizard** — Elite lead-guard creator (heaviest minutes, high AST%, positive OGBPM)
+  - **Sorcerer** — High-volume star scorer (highest USG%, strong impact, heavy minutes)
+  - **Warlock** — Three-point specialist (heaviest 3PA share, lowest rim rate, boom-or-bust)
+  - **Bard** — Pass-first distributor (high AST%, low USG%, modest impact)
+  - **Ranger** — Perimeter spacer (high 3PA share, high STL%, low USG; not true 3-and-D)
+  - **Barbarian** — Interior finisher (highest rim share, lowest 3PA, high BLK%)
+  - **Paladin** — Defensive anchor (elite BLK%, highest DGBPM, rim defense)
+  - **Monk** — Disciplined wing star (high OGBPM, heavy minutes, high 3PA share)
+  - **Cleric** — Low-volume interior connector (rim/mid finisher, low USG%, modest impact)
+  - **Druid** — Elite two-way big (highest OGBPM + DGBPM combined, owns the glass)
+  - **Rogue** — Disruptive two-way wing (high STL%/BLK%, high DGBPM)
+  - **Fighter** — Balanced two-way rotation (multi-axis modest positives, rotation minutes)
 - [x] Migration: `player_archetypes` table (`player_id`, `season`, `primary_class`, `secondary_class`, `affinity_scores` JSONB, `feature_vector` REAL[]) — migration 013, plus companion `archetype_models` table for centroids/feature stats
 - [x] API: `GET /api/players/:id/archetype`, `GET /api/players/:id/similar?k=10`, `GET /api/archetypes` (class glossary + exemplars). Both class ordering and exemplar ranking on the glossary use **CamPom** (the site-wide canonical player valuation) so the page matches what users see on the Players tab when they drill into a class — no more drift between "Top Wizards" on the glossary and the same scoped Players view.
 - [x] Player detail UI: archetype badge with hover-tooltip surfacing **primary + secondary class** and affinity bars; "Most Similar Players" carousel with similarity scores
@@ -399,9 +399,10 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - **Ingest**: extend `cstat-ingest season` to accept a year range and run the full pipeline (teams → games → perfs → teamperfs → forecasts → elo) per season. Handle historical conference realignment, team renames, and defunct programs without breaking FK constraints. Layer Torvik backfill on the same range (CSV is per-year).
   - **Compute**: run the 13-step compute pipeline per historical season. CamPom, percentiles, adj efficiency, and archetypes are all already season-scoped, but worth sanity-checking early seasons where some advanced fields (e.g., shot zones from Torvik) may be missing.
   - **Schema**: confirm `(season, …)` indices are present and effective at 20× current data volume; spot-check query plans for cross-season joins. Postgres should handle the size fine — main risk is unindexed fan-out on player career queries.
-  - **API**: add a `season` query param across all endpoints with a current-season default; new endpoints for career aggregates (`/api/players/:id/career`, `/api/teams/:id/history`); cross-season comparison support in `/api/players/compare`.
-  - **Frontend**: site-wide season selector in the nav; player detail shows a multi-season career table + per-season CamPom/archetype trajectory; team detail shows year-by-year record + adj efficiency trend; cross-season player comparison ("2023 UConn's Hurley-era guards vs 2025"); game prediction page lets you pick historical matchups and back-test the model.
+  - [x] **API**: every endpoint already accepts a `season` query param with `default_season()` fallback (`crates/cstat-api/src/main.rs:24`). The `season` plumbs through `features.rs::build_game_features` so even the predict model handles arbitrary historical matchups. Career-aggregate endpoints (`/api/players/:id/career`, `/api/teams/:id/history`) and cross-season `/api/players/compare` are still future work — they need new query shapes once we have more seasons to compare across.
+  - [x] **Frontend**: site-wide season selector shipped in `web/src/components/Layout.tsx`; URL is the source of truth (`?season=YYYY`) via `useSeason()` in `web/src/components/season.tsx`; `<SeasonLink>` and `seasonHref()` preserve season across all in-app navigation. Predict page already supports historical back-testing via the same selector. Adding a new season is a one-line change to `AVAILABLE_SEASONS` in `season.tsx` once data lands. Multi-season *career trajectories* on player/team detail pages are still future work — they need the historical seasons ingested first.
   - **ML**: retrain on all seasons (incremental: 2024 → 2023 → … to measure marginal lift per season added). Watch for distribution shift (rule changes, three-point line move in 2008, COVID-shortened 2021).
+  - **Archetypes at scale**: combined-cohort training works at 2-3 seasons; degrades around 5+ when era effects (3PT volume, small-ball, rule changes) make players from different eras non-comparable. See `docs/archetypes_methodology.md` for trigger criteria and candidate strategies (sliding window, era-bucketed clustering, per-decade models).
   - **Stretch**: all-time leaderboards (best CamPom seasons ever, GOAT teams by adj efficiency margin), program-history pages, cross-era archetype distribution shifts.
 - [ ] Backtest models across multiple seasons
 - [ ] Tournament bracket simulator (Monte Carlo, inspired by gravity project)
