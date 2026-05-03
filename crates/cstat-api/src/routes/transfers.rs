@@ -17,6 +17,13 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/transfers/{year}", get(transfer_list))
 }
 
+/// Compile-time-embedded transfer rosters keyed by portal year. We ship
+/// these inside the binary so the deployed container doesn't need a `data/`
+/// dir at runtime; local dev can still override by writing to
+/// `TRANSFERS_DIR` (defaults to `data/transfers`) for fast iteration.
+const EMBEDDED_TRANSFERS: &[(i32, &str)] =
+    &[(2026, include_str!("../../../../data/transfers/2026.json"))];
+
 /// Raw row from the scraped 247Sports JSON.
 #[derive(Deserialize)]
 struct Transfer247 {
@@ -101,15 +108,26 @@ async fn transfer_list(
         ));
     }
 
+    // Prefer an on-disk override (set TRANSFERS_DIR for local dev so changes
+    // to the JSON take effect without a rebuild). Fall back to the binary's
+    // embedded copy so prod containers don't need a `data/` dir.
     let dir = std::env::var("TRANSFERS_DIR").unwrap_or_else(|_| "data/transfers".into());
     let path = format!("{dir}/{year}.json");
-    let bytes = tokio::fs::read(&path).await.map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("transfers file not found ({path}): {e}") })),
-        )
-    })?;
-    let transfers: Vec<Transfer247> = serde_json::from_slice(&bytes).map_err(|e| {
+    let raw: std::borrow::Cow<'_, [u8]> = match tokio::fs::read(&path).await {
+        Ok(b) => std::borrow::Cow::Owned(b),
+        Err(_) => match EMBEDDED_TRANSFERS.iter().find(|(y, _)| *y == year) {
+            Some((_, s)) => std::borrow::Cow::Borrowed(s.as_bytes()),
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "error": format!("no transfers data for year {year}"),
+                    })),
+                ));
+            }
+        },
+    };
+    let transfers: Vec<Transfer247> = serde_json::from_slice(&raw).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("transfers file invalid: {e}") })),
