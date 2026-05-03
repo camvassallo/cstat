@@ -18,6 +18,25 @@ fn current_natstat_season() -> i32 {
     }
 }
 
+/// Warn that NatStat's `/players` endpoint returns current-season rosters
+/// regardless of the `season` we'll stamp on them. Logged once per top-level
+/// command (the `team` subcommand or `ingest_all_rosters`) — the inner
+/// fetcher skips it so a 367-team batch doesn't print 367 identical lines.
+fn warn_if_historical_season(season: i32, scope: &'static str) {
+    let current = current_natstat_season();
+    if season != current {
+        warn!(
+            season,
+            current,
+            scope,
+            "/players endpoint has no historical-roster filter — \
+             it returns the current roster only. Box-score ingestion is the \
+             authority for historical team_id; roster ingest will only fill \
+             metadata fields on existing rows.",
+        );
+    }
+}
+
 /// Ingest players for a specific team using `/players/mbb/{TEAMCODE}`.
 /// Returns full roster with height, weight, hometown, nationality.
 pub async fn ingest_team_roster(
@@ -26,18 +45,16 @@ pub async fn ingest_team_roster(
     season: i32,
     team_code: &str,
 ) -> Result<u64, NatStatError> {
-    let current = current_natstat_season();
-    if season != current {
-        warn!(
-            season,
-            current,
-            team_code,
-            "/players endpoint has no historical-roster filter — \
-             it returns the current roster only. Box-score ingestion is the \
-             authority for historical team_id; roster ingest will only fill \
-             metadata fields on existing rows.",
-        );
-    }
+    warn_if_historical_season(season, "ingest_team_roster");
+    ingest_team_roster_inner(client, pool, season, team_code).await
+}
+
+async fn ingest_team_roster_inner(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    team_code: &str,
+) -> Result<u64, NatStatError> {
     let response = client.get("players", Some(team_code), None, None).await?;
     let players = extract_results(&response);
 
@@ -66,6 +83,8 @@ pub async fn ingest_all_rosters(
     pool: &PgPool,
     season: i32,
 ) -> Result<u64, NatStatError> {
+    warn_if_historical_season(season, "ingest_all_rosters");
+
     let teams: Vec<(String,)> =
         sqlx::query_as("SELECT natstat_id FROM teams WHERE season = $1 ORDER BY natstat_id")
             .bind(season)
@@ -74,7 +93,7 @@ pub async fn ingest_all_rosters(
 
     let mut total = 0u64;
     for (team_code,) in &teams {
-        match ingest_team_roster(client, pool, season, team_code).await {
+        match ingest_team_roster_inner(client, pool, season, team_code).await {
             Ok(count) => total += count,
             Err(e) => warn!(team_code, error = %e, "failed to ingest roster, skipping"),
         }

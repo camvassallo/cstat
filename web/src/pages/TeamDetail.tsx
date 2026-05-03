@@ -83,7 +83,9 @@ export default function TeamDetail() {
       .then((r) => {
         // Team UUIDs are season-scoped. The API resolves cross-season via
         // `natstat_id`; if it returned a different UUID, swap the URL to the
-        // canonical one for this season so refresh/share/back work.
+        // canonical one for this season so refresh/share/back work. Leave
+        // `loading` true through the redirect so the UI doesn't render the
+        // "Team not found" empty state in the gap before the next fetch.
         if (r.team.id !== id) {
           navigate(seasonHref(`/teams/${r.team.id}`, season), { replace: true });
           return;
@@ -92,8 +94,9 @@ export default function TeamDetail() {
         setSchedule(r.schedule);
         setRoster(r.roster);
         setArchetypeDist(r.archetype_distribution);
+        setLoading(false);
       })
-      .finally(() => setLoading(false));
+      .catch(() => setLoading(false));
   }, [id, season, navigate]);
 
   // Classes the team actually plays — sorted by team_share desc — drive the

@@ -68,7 +68,9 @@ export default function PlayerDetail() {
       .then((r) => {
         // Player UUIDs are season-scoped. The API resolves cross-season via
         // `natstat_id`; if the canonical UUID for this season differs, swap
-        // the URL so refresh/share/back lands on the right row.
+        // the URL so refresh/share/back lands on the right row. Leave
+        // `loading` true through the redirect so the UI doesn't render the
+        // "Player not found" empty state in the gap before the next fetch.
         if (r.player.id !== id) {
           navigate(seasonHref(`/players/${r.player.id}`, season), { replace: true });
           return;
@@ -87,8 +89,9 @@ export default function PlayerDetail() {
         } else {
           setSimilar([]);
         }
+        setLoading(false);
       })
-      .finally(() => setLoading(false));
+      .catch(() => setLoading(false));
   }, [id, season, navigate]);
 
   if (loading) return <div className="text-gray-400">Loading...</div>;

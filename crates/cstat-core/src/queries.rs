@@ -517,10 +517,11 @@ pub async fn get_team_rankings(
         .await
 }
 
-/// Map a season-scoped team UUID to the equivalent UUID for `season`.
-/// If `team_id` already belongs to `season`, returns it unchanged. Otherwise
-/// looks up the team's `natstat_id` and finds the matching team in the
-/// requested season. Returns `None` only when no team exists for either input.
+/// Map a season-scoped team UUID to the equivalent UUID for `season`, joining
+/// on the cross-season `natstat_id`. When `team_id` already belongs to
+/// `season` the join finds itself, so this is a safe no-op for the matching
+/// case. Returns `None` if `team_id` doesn't exist or no team carries the
+/// same `natstat_id` in the requested season.
 pub async fn resolve_team_id_for_season(
     pool: &PgPool,
     team_id: Uuid,
