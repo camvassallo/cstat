@@ -1,6 +1,6 @@
 # cstat
 
-College basketball analytics platform. Ingests data from the NatStat API and Barttorvik, computes advanced metrics (KenPom-style adjusted efficiency, player percentiles, rolling averages), and serves them through a REST API and React frontend. Includes ML-based game predictions using LightGBM models exported to ONNX.
+College basketball analytics platform. Ingests data from the NatStat API and Barttorvik, computes advanced metrics (KenPom-style adjusted efficiency, player percentiles, rolling averages, CamPom composite valuation), clusters players into D&D-class archetypes, and serves everything through a REST API and React frontend. Includes ML-based game predictions using LightGBM models exported to ONNX. Multi-season browsing via a `?season=` query param; back-test the predict model against historical games by switching seasons in the nav.
 
 ## Quick Start
 
@@ -81,6 +81,9 @@ Other ingest subcommands:
 | `status` | Show NatStat API rate limit status |
 | `clean-cache` | Remove expired API cache entries |
 | `torvik --year YYYY [--rebounds]` | Ingest Barttorvik player stats + optional rebound backfill |
+| `elo --year YYYY` | Ingest ELO ratings from `/elo` endpoint |
+| `forecasts --year YYYY` | Ingest per-game forecasts (pre/post-game ELO, win exp) from `/forecasts` |
+| `campom-parity --year YYYY` | Validate CamPom intermediates against an external reference CSV |
 | `explore ENDPOINT [--range PARAMS]` | Dump raw API JSON for exploration |
 
 ## Architecture
@@ -118,11 +121,16 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 
 - **Game stats** — defensive rebounds, assist-to-turnover ratio, game score
 - **Player season stats** — per-game averages across all stat categories
-- **Team season stats** — four factors, raw efficiency
+- **Team season stats** — four factors, raw efficiency, wins/losses (derived from authoritative `team_game_stats`)
 - **Adjusted efficiency** — KenPom-style iterative regression (ADJO/ADJD)
 - **Player percentiles** — PERCENT_RANK across all players
 - **Rolling averages** — last-5-game rolling stats
 - **Player rates** — AST%, ORB%, DRB%, STL%, BLK%, FT Rate (possession-based formulas)
+- **CamPom** — composite player valuation; methodology in `docs/campom_methodology.md`
+
+### Player Archetypes
+
+12 D&D-class archetypes (Wizard, Sorcerer, Warlock, …) assigned via combined-cohort k-means in `training/archetypes.py`. Run with `python -m training.archetypes --seasons 2025,2026 [--diagnostics]`. Methodology, retraining playbook, and health-metric tripwires are documented in `docs/archetypes_methodology.md` — read it before touching signatures or adding seasons.
 
 ### ML Predictions
 

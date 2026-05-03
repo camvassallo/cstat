@@ -6,6 +6,7 @@ import { fetchTeamRankings, type TeamRanking } from '../api/client';
 import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import { pctileTextColor } from '../components/pctile';
+import { useSeason, seasonHref } from '../components/season';
 
 // AdjEM presentation tiers — same chip styling pattern as CamPom on the
 // Players tab. Thresholds use the conventional KenPom absolute scale where
@@ -254,6 +255,7 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
 }
 
 export default function Rankings() {
+  const { season } = useSeason();
   const [teams, setTeams] = useState<TeamRanking[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -265,10 +267,15 @@ export default function Rankings() {
   );
 
   useEffect(() => {
-    fetchTeamRankings()
+    // No `setLoading(true)` here — `react-hooks/set-state-in-effect`
+    // forbids it. The initial `useState(true)` covers first load; on
+    // subsequent season changes the previous data stays visible until
+    // the new fetch resolves, which is mild stale-flicker but no worse
+    // than what frameworks like Next.js do by default.
+    fetchTeamRankings(season)
       .then((r) => setTeams(r.teams))
       .finally(() => setLoading(false));
-  }, []);
+  }, [season]);
 
   return (
     <div>
@@ -324,7 +331,7 @@ export default function Rankings() {
             suppressMovable: true,
           }}
           onRowClicked={(e) => {
-            if (e.data) navigate(`/teams/${e.data.team_id}`);
+            if (e.data) navigate(seasonHref(`/teams/${e.data.team_id}`, season));
           }}
           getRowId={(p) => p.data.team_id}
         />

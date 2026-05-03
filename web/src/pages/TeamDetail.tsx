@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   fetchTeamDetail,
   type TeamProfile,
@@ -13,6 +13,8 @@ import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
+import { SeasonLink } from '../components/SeasonLink';
+import { useSeason } from '../components/season';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -62,6 +64,7 @@ function FourFactors({ team, label }: { team: TeamProfile; label: string }) {
 
 export default function TeamDetail() {
   const { id } = useParams<{ id: string }>();
+  const { season } = useSeason();
   const [team, setTeam] = useState<TeamProfile | null>(null);
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -70,7 +73,8 @@ export default function TeamDetail() {
 
   useEffect(() => {
     if (!id) return;
-    fetchTeamDetail(id)
+    // No `setLoading(true)` here — see Rankings.tsx for the rationale.
+    fetchTeamDetail(id, season)
       .then((r) => {
         setTeam(r.team);
         setSchedule(r.schedule);
@@ -78,7 +82,7 @@ export default function TeamDetail() {
         setArchetypeDist(r.archetype_distribution);
       })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, season]);
 
   // Classes the team actually plays — sorted by team_share desc — drive the
   // visualization bar and chip row.
@@ -144,7 +148,7 @@ export default function TeamDetail() {
       {present.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
           <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
-            <Link
+            <SeasonLink
               to="/archetypes"
               title="Learn about archetypes"
               className="group inline-flex items-baseline gap-1.5 text-lg font-bold hover:underline"
@@ -158,7 +162,7 @@ export default function TeamDetail() {
               >
                 <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm.75 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM7 7h1.5v5H10v1H6v-1h1V8H6V7h1z" />
               </svg>
-            </Link>
+            </SeasonLink>
             <span className="text-xs text-gray-500">
               Indexed vs D-I average · 1.0× = league norm
             </span>
@@ -423,9 +427,9 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
             {sorted.map((p) => (
               <tr key={p.player_id} className="border-b border-gray-800 hover:bg-gray-800/50">
                 <td className="py-2 px-2">
-                  <Link to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
+                  <SeasonLink to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
                     {p.name}
-                  </Link>
+                  </SeasonLink>
                 </td>
                 <td className="py-2 px-2">
                   {p.primary_class ? (
@@ -558,9 +562,9 @@ function ScheduleTable({ schedule }: { schedule: ScheduleEntry[] }) {
                   <td className="py-2 px-2">
                     {g.is_home === false && '@ '}
                     {g.opponent_id ? (
-                      <Link to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
+                      <SeasonLink to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
                         {g.opponent_name ?? 'Unknown'}
-                      </Link>
+                      </SeasonLink>
                     ) : (
                       g.opponent_name ?? 'Unknown'
                     )}

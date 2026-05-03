@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
+import { SeasonLink } from '../components/SeasonLink';
+import { useSeason } from '../components/season';
 import {
   Radar,
   RadarChart,
@@ -208,17 +210,17 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
       style={{ borderLeftColor: color }}
     >
       <div className="min-w-0">
-        <Link
+        <SeasonLink
           to={`/players/${player.id}`}
           className="text-base font-bold hover:underline block truncate"
         >
           {player.name}
-        </Link>
+        </SeasonLink>
         <div className="text-xs text-gray-400 truncate">
           {player.team_id ? (
-            <Link to={`/teams/${player.team_id}`} className="hover:underline">
+            <SeasonLink to={`/teams/${player.team_id}`} className="hover:underline">
               {player.team_name}
-            </Link>
+            </SeasonLink>
           ) : (
             player.team_name ?? 'Unknown'
           )}
@@ -282,10 +284,12 @@ function PlayerPicker({
   onAdd,
   disabled,
   existingIds,
+  season,
 }: {
   onAdd: (id: string) => void;
   disabled: boolean;
   existingIds: string[];
+  season: number;
 }) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<PlayerRow[]>([]);
@@ -299,7 +303,7 @@ function PlayerPicker({
     if (term.length < 2) return;
     const handle = setTimeout(() => {
       setLoading(true);
-      fetchPlayers({ search: term, limit: 12 })
+      fetchPlayers({ search: term, limit: 12, season })
         .then((r) => {
           if (reqRef.current === reqId) setResults(r.players);
         })
@@ -308,7 +312,7 @@ function PlayerPicker({
         });
     }, 200);
     return () => clearTimeout(handle);
-  }, [search]);
+  }, [search, season]);
 
   const filtered =
     search.trim().length >= 2 ? results.filter((r) => !existingIds.includes(r.player_id)) : [];
@@ -356,6 +360,7 @@ function PlayerPicker({
 }
 
 export default function PlayerCompare() {
+  const { season } = useSeason();
   const [searchParams, setSearchParams] = useSearchParams();
   const idsCsv = searchParams.get('ids') ?? '';
   const ids = useMemo(
@@ -375,7 +380,7 @@ export default function PlayerCompare() {
     }
     setLoading(true);
     setError(null);
-    fetchPlayerCompare(ids)
+    fetchPlayerCompare(ids, season)
       .then((r) => {
         // Preserve URL order in case the API returns differently
         const byId = new Map(r.players.map((p) => [p.player.id, p]));
@@ -383,11 +388,16 @@ export default function PlayerCompare() {
       })
       .catch((e) => setError(e.message ?? 'Failed to load comparison'))
       .finally(() => setLoading(false));
-  }, [ids]);
+  }, [ids, season]);
 
+  // Preserve any other search params (notably `season`) when rewriting `ids`.
   const updateIds = (next: string[]) => {
-    if (next.length === 0) setSearchParams({});
-    else setSearchParams({ ids: next.join(',') });
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev);
+      if (next.length === 0) p.delete('ids');
+      else p.set('ids', next.join(','));
+      return p;
+    });
   };
 
   const addPlayer = (id: string) => {
@@ -503,6 +513,7 @@ export default function PlayerCompare() {
           onAdd={addPlayer}
           disabled={ids.length >= MAX_PLAYERS}
           existingIds={ids}
+          season={season}
         />
         {players.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
