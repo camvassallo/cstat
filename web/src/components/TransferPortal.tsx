@@ -6,6 +6,7 @@ import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
 import { classColor } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
+import { useIsMobile } from './useIsMobile';
 
 // Players ranked by 247Sports who carry one of our derived ranks (we have a
 // matching cstat player with a CamPom value). `rank_delta` is `rank_247 −
@@ -61,12 +62,12 @@ function teamCellRenderer(opts: {
   );
 }
 
-function buildColumns(): ColDef<RankedTransfer>[] {
+function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
   return [
     {
       headerName: 'Rank',
       field: 'rank_cstat',
-      width: 70,
+      width: isMobile ? 50 : 70,
       pinned: 'left',
       headerTooltip: 'Our rank by CamPom; players with no CamPom value are unranked',
       cellRenderer: (p: { value: number | null }) =>
@@ -79,7 +80,7 @@ function buildColumns(): ColDef<RankedTransfer>[] {
     {
       headerName: 'Player',
       field: 'name',
-      width: 200,
+      width: isMobile ? 130 : 200,
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: RankedTransfer }) => {
         const id = p.data?.player_id;
@@ -115,7 +116,7 @@ function buildColumns(): ColDef<RankedTransfer>[] {
         const sec = p.data?.secondary_class;
         return (
           <span
-            className="text-[10px] font-bold uppercase tracking-wide whitespace-nowrap"
+            className="text-xs font-bold uppercase tracking-wide whitespace-nowrap"
             style={{ color: classColor(cls) }}
             title={sec ? `${cls} / ${sec}` : cls}
           >
@@ -233,6 +234,7 @@ export default function TransferPortal({ year }: Props) {
   const [rows, setRows] = useState<RankedTransfer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     let canceled = false;
@@ -266,7 +268,7 @@ export default function TransferPortal({ year }: Props) {
     };
   }, [year]);
 
-  const columns = useMemo(() => buildColumns(), []);
+  const columns = useMemo(() => buildColumns(isMobile), [isMobile]);
 
   const filtered = useMemo(() => {
     if (!rows) return null;
@@ -320,7 +322,7 @@ export default function TransferPortal({ year }: Props) {
           </a>
         </span>
       </div>
-      <div style={{ height: 'calc(100vh - 220px)', width: '100%' }}>
+      <div style={{ height: 'calc(100dvh - 220px)', minHeight: '400px', width: '100%' }}>
         <AgGridReact<RankedTransfer>
           theme={gridTheme}
           columnDefs={columns}

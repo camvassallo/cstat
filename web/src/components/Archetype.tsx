@@ -1,13 +1,45 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { PlayerArchetype, SimilarPlayer } from '../api/client';
 import { classColor, classTagline, classTitle } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
 import { seasonHref, useSeason } from './season';
 
-/// Styled hover tooltip for any class label — mirrors the look of the
-/// affinity popover on `ArchetypeBadge`. Wrap a chip / span with this and
-/// the tooltip pops below the trigger on hover. Pass `extra` to append a
+/// Closes the popover when the user taps/clicks outside the wrapper, or
+/// presses Escape. Touch devices need this because there's no `mouseleave`
+/// to clear hover state.
+///
+/// `close` is held in a ref so callers can pass a fresh inline arrow each
+/// render without retriggering the effect — otherwise document listeners
+/// would be torn down and reattached on every parent re-render while open.
+function useDismissOnOutside(open: boolean, close: () => void) {
+  const ref = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(close);
+  useEffect(() => {
+    closeRef.current = close;
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) closeRef.current();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeRef.current();
+    };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return ref;
+}
+
+/// Styled tooltip for any class label — mirrors the look of the affinity
+/// popover on `ArchetypeBadge`. Tap (or hover, on pointer-fine devices) to
+/// open; tap outside or press Escape to dismiss. Pass `extra` to append a
 /// secondary line (e.g. "27.6% of minutes · 2 players").
 export function ClassTooltip({
   cls,
@@ -24,28 +56,60 @@ export function ClassTooltip({
 }) {
   const color = classColor(cls);
   const tagline = classTagline(cls);
-  const Wrap = asBlock ? 'div' : 'span';
-  return (
-    <Wrap className={`relative group ${asBlock ? 'block h-full' : 'inline-block'}`}>
-      <Wrap className="cursor-help block h-full">{children}</Wrap>
-      <span
-        className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-20 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl px-3 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity pointer-events-none text-left whitespace-normal"
-      >
-        <span className="block text-xs font-bold" style={{ color }}>
-          {cls}
-        </span>
-        {tagline && (
-          <span className="block text-[11px] text-gray-300 mt-0.5 normal-case font-normal tracking-normal">
-            {tagline}
-          </span>
-        )}
-        {extra && (
-          <span className="block text-[10px] text-gray-400 mt-1 normal-case font-normal tracking-normal">
-            {extra}
-          </span>
-        )}
+  const [open, setOpen] = useState(false);
+  const ref = useDismissOnOutside(open, () => setOpen(false));
+  // Use a div when the trigger is itself a block (avoids invalid
+  // span-wraps-div HTML). Callback ref accepts both element types.
+  const setRef = (node: HTMLElement | null) => {
+    ref.current = node;
+  };
+  const wrapperProps = {
+    ref: setRef,
+    className: `relative ${asBlock ? 'block h-full' : 'inline-block'}`,
+    onMouseEnter: () => setOpen(true),
+    onMouseLeave: () => setOpen(false),
+  };
+  const triggerProps = {
+    className: 'cursor-pointer block h-full',
+    onClick: (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setOpen((v) => !v);
+    },
+  };
+  const tooltip = (
+    <span
+      className={`absolute left-1/2 -translate-x-1/2 top-full mt-2 z-20 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl px-3 py-2 transition-opacity text-left whitespace-normal ${
+        open ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'
+      }`}
+    >
+      <span className="block text-xs font-bold" style={{ color }}>
+        {cls}
       </span>
-    </Wrap>
+      {tagline && (
+        <span className="block text-[11px] text-gray-300 mt-0.5 normal-case font-normal tracking-normal">
+          {tagline}
+        </span>
+      )}
+      {extra && (
+        <span className="block text-[10px] text-gray-400 mt-1 normal-case font-normal tracking-normal">
+          {extra}
+        </span>
+      )}
+    </span>
+  );
+  if (asBlock) {
+    return (
+      <div {...wrapperProps}>
+        <div {...triggerProps}>{children}</div>
+        {tooltip}
+      </div>
+    );
+  }
+  return (
+    <span {...wrapperProps}>
+      <span {...triggerProps}>{children}</span>
+      {tooltip}
+    </span>
   );
 }
 
@@ -71,10 +135,26 @@ export function ArchetypeBadge({
     ? `${classTitle(archetype.primary_class)} / ${classTitle(archetype.secondary_class)}`
     : classTitle(archetype.primary_class);
 
+  const [open, setOpen] = useState(false);
+  const ref = useDismissOnOutside(open, () => setOpen(false));
+  const setRef = (node: HTMLElement | null) => {
+    ref.current = node;
+  };
+
   return (
-    <div className="relative group inline-block">
-      <span
-        className={`inline-flex items-center gap-1.5 ${sizing} rounded-full font-bold uppercase tracking-wide ring-1 cursor-help`}
+    <div
+      ref={setRef}
+      className="relative inline-block"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        className={`inline-flex items-center gap-1.5 ${sizing} rounded-full font-bold uppercase tracking-wide ring-1 cursor-pointer`}
         style={{
           background: primaryColor + '22',
           color: primaryColor,
@@ -82,6 +162,7 @@ export function ArchetypeBadge({
           boxShadow: `inset 0 0 0 1px ${primaryColor}66`,
         }}
         title={titleStr}
+        aria-expanded={open}
       >
         <span
           className="inline-block w-1.5 h-1.5 rounded-full"
@@ -96,9 +177,11 @@ export function ArchetypeBadge({
             / {archetype.secondary_class}
           </span>
         )}
-      </span>
+      </button>
       <div
-        className="absolute left-0 top-full mt-2 z-20 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity pointer-events-none"
+        className={`absolute left-0 top-full mt-2 z-20 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-3 transition-opacity ${
+          open ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'
+        }`}
       >
         {primaryTagline && (
           <div className="text-xs font-bold mb-1" style={{ color: primaryColor }}>
@@ -201,7 +284,7 @@ export function SimilarPlayers({
               <div className="flex items-center gap-2 mt-2">
                 <ClassTooltip cls={p.primary_class}>
                   <span
-                    className="text-[10px] font-bold uppercase tracking-wide"
+                    className="text-xs font-bold uppercase tracking-wide"
                     style={{ color: c }}
                   >
                     {p.primary_class}
@@ -210,7 +293,7 @@ export function SimilarPlayers({
                 {p.secondary_class && (
                   <ClassTooltip cls={p.secondary_class}>
                     <span
-                      className="text-[10px] opacity-70"
+                      className="text-xs opacity-70"
                       style={{ color: classColor(p.secondary_class) }}
                     >
                       / {p.secondary_class}

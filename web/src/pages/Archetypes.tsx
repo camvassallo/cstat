@@ -140,7 +140,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
           {def.signature.map((trait) => (
             <span
               key={trait}
-              className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded"
+              className="text-xs font-bold uppercase tracking-wide px-2 py-0.5 rounded"
               style={{ background: color + '22', color }}
             >
               {trait}

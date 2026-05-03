@@ -385,10 +385,17 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
           </button>
         </div>
       </div>
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm whitespace-nowrap">
         <thead>
           <tr className="text-gray-400 border-b border-gray-700">
-            <SortHeader label="Player" sortKey="name" current={sort} onSort={onSort} />
+            <SortHeader
+              label="Player"
+              sortKey="name"
+              current={sort}
+              onSort={onSort}
+              className="left-0 z-20 border-r border-gray-700"
+            />
             <StickyHeader>Class</StickyHeader>
               <SortHeader
                 label="CamPom"
@@ -440,8 +447,8 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
           </thead>
           <tbody>
             {sorted.map((p) => (
-              <tr key={p.player_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                <td className="py-2 px-2">
+              <tr key={p.player_id} className="group border-b border-gray-800 hover:bg-gray-800">
+                <td className="py-2 px-2 sticky left-0 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
                   <SeasonLink to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
                     {p.name}
                   </SeasonLink>
@@ -451,7 +458,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="inline-flex items-center gap-1">
                       <ClassTooltip cls={p.primary_class}>
                         <span
-                          className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+                          className="text-xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
                           style={{
                             color: classColor(p.primary_class),
                             background: classColor(p.primary_class) + '22',
@@ -463,7 +470,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                       {p.secondary_class && (
                         <ClassTooltip cls={p.secondary_class}>
                           <span
-                            className="text-[10px] uppercase tracking-wide opacity-75"
+                            className="text-xs uppercase tracking-wide opacity-75"
                             style={{ color: classColor(p.secondary_class) }}
                           >
                             / {p.secondary_class}
@@ -549,6 +556,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
           )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

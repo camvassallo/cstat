@@ -18,6 +18,7 @@ import TransferPortal from '../components/TransferPortal';
 import { SeasonLink } from '../components/SeasonLink';
 import { useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
+import { useIsMobile } from '../components/useIsMobile';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -102,7 +103,7 @@ function gradientCellStyle(
   };
 }
 
-function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
+function buildColumns(view: ColumnView, isMobile: boolean): ColDef<PlayerRow>[] {
   // Pinned identity / context columns. Mirrors the roster table's first block
   // (Player | Class) plus team / conf which the roster doesn't need (already
   // scoped to one team).
@@ -110,7 +111,7 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
     {
       field: 'name',
       headerName: 'Player',
-      width: 180,
+      width: isMobile ? 130 : 180,
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: PlayerRow }) => {
         const id = p.data?.player_id;
@@ -165,7 +166,7 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
         const sec = p.data?.secondary_class;
         return (
           <span
-            className="text-[10px] font-bold uppercase tracking-wide whitespace-nowrap"
+            className="text-xs font-bold uppercase tracking-wide whitespace-nowrap"
             style={{ color: c }}
             title={sec ? `${cls} / ${sec}` : cls}
           >
@@ -274,8 +275,9 @@ export default function Players() {
   const [search, setSearch] = useState('');
   const [total, setTotal] = useState<number | null>(null);
   const gridApiRef = useRef<GridApi<PlayerRow> | null>(null);
+  const isMobile = useIsMobile();
 
-  const columns = useMemo(() => buildColumns(view), [view]);
+  const columns = useMemo(() => buildColumns(view, isMobile), [view, isMobile]);
 
   // Debounce keystroke → backend re-fetch so the API isn't hit on every
   // character. 250ms feels live without flooding the server.
@@ -467,7 +469,7 @@ export default function Players() {
         </div>
       )}
 
-      <div style={{ height: 'calc(100vh - 180px)', width: '100%' }}>
+      <div style={{ height: 'calc(100dvh - 180px)', minHeight: '400px', width: '100%' }}>
         <AgGridReact<PlayerRow>
           theme={gridTheme}
           columnDefs={columns}
