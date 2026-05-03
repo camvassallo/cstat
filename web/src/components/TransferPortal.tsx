@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchTransfers, type TransferRow } from '../api/client';
@@ -7,7 +6,6 @@ import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
 import { classColor } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
-import { seasonHref, useSeason } from './season';
 
 // Players ranked by 247Sports who carry one of our derived ranks (we have a
 // matching cstat player with a CamPom value). `rank_delta` is `rank_247 −
@@ -232,8 +230,6 @@ interface Props {
 }
 
 export default function TransferPortal({ year }: Props) {
-  const navigate = useNavigate();
-  const { season } = useSeason();
   const [rows, setRows] = useState<RankedTransfer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -333,12 +329,6 @@ export default function TransferPortal({ year }: Props) {
             sortable: true,
             resizable: true,
             suppressMovable: true,
-          }}
-          onRowClicked={(e) => {
-            const target = e.event?.target as HTMLElement | undefined;
-            if (target?.closest('a')) return;
-            const id = e.data?.player_id;
-            if (id) navigate(seasonHref(`/players/${id}`, season));
           }}
         />
       </div>

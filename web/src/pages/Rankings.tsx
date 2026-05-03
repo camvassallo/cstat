@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
 import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import { pctileTextColor } from '../components/pctile';
-import { useSeason, seasonHref } from '../components/season';
+import { useSeason } from '../components/season';
+import { SeasonLink } from '../components/SeasonLink';
 import { usePageTitle } from '../components/usePageTitle';
 
 // AdjEM presentation tiers — same chip styling pattern as CamPom on the
@@ -112,9 +112,15 @@ function buildColumns(totalTeams: number, view: RankingsView): ColDef<TeamRankin
       headerName: 'Team',
       width: 200,
       pinned: 'left',
-      cellRenderer: (p: { value: string }) => (
-        <span className="text-blue-400 hover:underline cursor-pointer">{p.value}</span>
-      ),
+      cellRenderer: (p: { value: string; data?: TeamRanking }) => {
+        const id = p.data?.team_id;
+        if (!id) return <span>{p.value}</span>;
+        return (
+          <SeasonLink to={`/teams/${id}`} className="text-blue-400 hover:underline">
+            {p.value}
+          </SeasonLink>
+        );
+      },
     },
     { field: 'conference', headerName: 'Conf', ...flexCol(120) },
     {
@@ -262,7 +268,6 @@ export default function Rankings() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [view, setView] = useState<RankingsView>('standard');
-  const navigate = useNavigate();
   const columns = useMemo(
     () => buildColumns(teams.length, view),
     [teams.length, view],
@@ -331,9 +336,6 @@ export default function Rankings() {
             sortable: true,
             resizable: true,
             suppressMovable: true,
-          }}
-          onRowClicked={(e) => {
-            if (e.data) navigate(seasonHref(`/teams/${e.data.team_id}`, season));
           }}
           getRowId={(p) => p.data.team_id}
         />
