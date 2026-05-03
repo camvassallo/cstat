@@ -45,7 +45,7 @@ export default function Predict() {
               type="text"
               value={home}
               onChange={(e) => setHome(e.target.value)}
-              placeholder="e.g. Duke Blue Devils"
+              placeholder="e.g. Duke"
               className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
             />
           </div>
@@ -55,7 +55,7 @@ export default function Predict() {
               type="text"
               value={away}
               onChange={(e) => setAway(e.target.value)}
-              placeholder="e.g. North Carolina Tar Heels"
+              placeholder="e.g. North Carolina"
               className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
             />
           </div>
