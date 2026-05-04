@@ -8,7 +8,42 @@ pub mod torvik;
 pub use client::NatStatClient;
 pub use torvik::TorkvikClient;
 
+use chrono::{Datelike, Utc};
 use serde_json::Value;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+/// Season the NCAA basketball calendar is currently in. November rolls
+/// forward to the next year's season (e.g. November 2025 → 2026 season).
+/// Used as the default for CLI commands so the binary doesn't go stale at
+/// season rollover.
+pub fn current_natstat_season() -> i32 {
+    let today = Utc::now().naive_utc().date();
+    if today.month() >= 11 {
+        today.year() + 1
+    } else {
+        today.year()
+    }
+}
+
+/// Resolve a NatStat team code to its cstat `teams.id` for a specific season.
+/// Returns `None` if the code is missing or the team isn't in the DB for that
+/// season. Centralized so every ingest path uses the same `(natstat_id, season)`
+/// lookup instead of inlining the SQL.
+pub async fn team_id_by_code_and_season(
+    pool: &PgPool,
+    code: Option<&str>,
+    season: i32,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let Some(code) = code else { return Ok(None) };
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
+            .bind(code)
+            .bind(season)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(id,)| id))
+}
 
 /// Extract the data payload from a NatStat API response.
 ///

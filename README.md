@@ -59,32 +59,58 @@ The start script automatically cleans up stale processes on conflicting ports.
 Before the app has anything to display, you need to ingest data from NatStat:
 
 ```bash
-# Full season ingest (teams, players, games, box scores)
-cargo run --bin cstat-ingest -- season --year 2026
-
-# Run the compute pipeline to derive advanced stats
-cargo run --bin cstat-ingest -- compute --year 2026
+# Full bootstrap: NatStat → Torvik → compute. Defaults to the current
+# NCAA basketball season; pass --year YYYY to target another.
+cargo run --bin cstat-ingest -- season
 ```
+
+`season` runs the seven NatStat ingest steps, then Barttorvik player stats,
+then the cstat-core compute pipeline. Pass `--no-torvik` or `--no-compute`
+to skip parts (e.g. when batching several updates first).
+
+`--year` defaults to the current NCAA basketball season (Nov+ rolls
+forward), so you don't have to re-edit the binary at season turnover.
 
 Other ingest subcommands:
 
 | Command | Description |
 |---------|-------------|
-| `season --year YYYY` | Full season ingest |
-| `teams --year YYYY` | Teams only |
-| `players --year YYYY` | Players only |
-| `team CODE --year YYYY` | Single team (roster, details, box scores) |
-| `games --year YYYY [--from DATE --to DATE]` | Games for a season or date range |
-| `perfs --year YYYY [--from DATE --to DATE]` | Box scores for a season or date range |
-| `update --year YYYY --from DATE --to DATE` | Incremental update for a date range |
-| `compute --year YYYY` | Derive season stats, percentiles, rolling averages |
+| `season [--year YYYY] [--no-torvik] [--no-compute]` | Full bootstrap: NatStat + Torvik + compute |
+| `teams [--year YYYY]` | Teams only |
+| `players [--year YYYY]` | Players only |
+| `team CODE [--year YYYY]` | Single team (roster, details, box scores) |
+| `games [--year YYYY] [--from DATE --to DATE]` | Games for a season or date range |
+| `perfs [--year YYYY] [--from DATE --to DATE]` | Box scores for a season or date range |
+| `update --from DATE --to DATE [--year YYYY] [--no-compute]` | Incremental refresh of recent games + perfs, runs compute by default |
+| `compute [--year YYYY]` | Derive season stats, percentiles, rolling averages |
 | `status` | Show NatStat API rate limit status |
 | `clean-cache` | Remove expired API cache entries |
-| `torvik --year YYYY [--rebounds]` | Ingest Barttorvik player stats + optional rebound backfill |
-| `elo --year YYYY` | Ingest ELO ratings from `/elo` endpoint |
-| `forecasts --year YYYY` | Ingest per-game forecasts (pre/post-game ELO, win exp) from `/forecasts` |
-| `campom-parity --year YYYY` | Validate CamPom intermediates against an external reference CSV |
+| `torvik [--year YYYY] [--rebounds]` | Ingest Barttorvik player stats + optional rebound backfill |
+| `elo [--year YYYY]` | Ingest ELO ratings from `/elo` endpoint |
+| `forecasts [--year YYYY]` | Ingest per-game forecasts (pre/post-game ELO, win exp) from `/forecasts` |
+| `campom-parity [--year YYYY]` | Validate CamPom intermediates against an external reference CSV |
 | `explore ENDPOINT [--range PARAMS]` | Dump raw API JSON for exploration |
+
+### Adding a New Season
+
+The frontend reads the season list from `GET /api/seasons` (which mirrors
+`SELECT DISTINCT season FROM games`), so adding a season is just data work —
+no source edits needed for the dropdown.
+
+```bash
+# 1. Bootstrap the season end-to-end (NatStat + Torvik + compute).
+cargo run --bin cstat-ingest -- season --year 2024
+
+# 2. Retrain archetypes on the combined cohort. Required to keep cross-season
+#    class stability — see docs/archetypes_methodology.md before deviating.
+cd training && python -m archetypes --seasons 2024,2025,2026
+```
+
+That's it. The next page load picks up `2024` in the season selector. If
+you want transfer-portal data for the new year, drop a scraped file at
+`data/transfers/2024.json` and add the entry to `EMBEDDED_TRANSFERS` in
+`crates/cstat-api/src/routes/transfers.rs` (see "Refactor Backlog" in the
+ROADMAP for a planned auto-discover replacement).
 
 ## Architecture
 
@@ -130,7 +156,7 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 
 ### Player Archetypes
 
-12 D&D-class archetypes (Wizard, Sorcerer, Warlock, …) assigned via combined-cohort k-means in `training/archetypes.py`. Run with `python -m training.archetypes --seasons 2025,2026 [--diagnostics]`. Methodology, retraining playbook, and health-metric tripwires are documented in `docs/archetypes_methodology.md` — read it before touching signatures or adding seasons.
+12 D&D-class archetypes (Wizard, Sorcerer, Warlock, …) assigned via combined-cohort k-means in `training/archetypes.py`. Run with `cd training && python -m archetypes --seasons 2025,2026 [--diagnostics]` (the module is loaded from inside `training/`, not as `training.archetypes`). Methodology, retraining playbook, and health-metric tripwires are documented in `docs/archetypes_methodology.md` — read it before touching signatures or adding seasons.
 
 ### ML Predictions
 

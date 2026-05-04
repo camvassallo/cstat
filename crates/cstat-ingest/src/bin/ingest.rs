@@ -1,9 +1,17 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use cstat_core::Database;
-use cstat_ingest::NatStatClient;
-use cstat_ingest::ingest::SeasonIngester;
+use cstat_ingest::current_natstat_season;
+use cstat_ingest::ingest::{BootstrapOptions, SeasonIngester};
+use cstat_ingest::{NatStatClient, TorkvikClient};
 use tracing::info;
+
+/// CLI default for `--year`. Resolved at parse time so the binary picks up
+/// the current NCAA basketball season automatically as the calendar rolls
+/// over (Nov+ → next year).
+fn default_season() -> i32 {
+    current_natstat_season()
+}
 
 #[derive(Parser)]
 #[command(name = "cstat-ingest", about = "NatStat data ingestion CLI for cstat")]
@@ -18,37 +26,48 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Ingest a full season (teams, players, games, box scores, team details).
+    /// Bootstrap a season end-to-end: NatStat ingest + Torvik + compute.
+    /// One command for "add a new season". Use `--no-torvik` / `--no-compute`
+    /// to skip parts (e.g. when you'll batch them yourself).
     Season {
-        /// Season year (e.g., 2026 for 2025-2026 season)
-        #[arg(short, long, default_value = "2026")]
+        /// Season year (e.g. 2026 for the 2025-26 season). Defaults to the
+        /// current NCAA basketball season.
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
+
+        /// Skip the Barttorvik player-stats step.
+        #[arg(long)]
+        no_torvik: bool,
+
+        /// Skip the compute pipeline.
+        #[arg(long)]
+        no_compute: bool,
     },
 
     /// Ingest only teams for a season.
     Teams {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
     },
 
     /// Ingest only players for a season.
     Players {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
     },
 
     /// Ingest everything for a single team: roster, details (TCR), and player performances.
     Team {
-        /// Team code (e.g., DUKE, UNC, KU)
+        /// Team code (e.g. DUKE, UNC, KU)
         code: String,
 
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
     },
 
     /// Ingest games (and optionally box scores) for a date range.
     Games {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
 
         /// Start date (YYYY-MM-DD). If omitted, fetches full season.
@@ -62,7 +81,7 @@ enum Commands {
 
     /// Ingest player performances (box scores) for a date range.
     Perfs {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
 
         /// Start date (YYYY-MM-DD). If omitted, fetches full season.
@@ -74,9 +93,11 @@ enum Commands {
         to: Option<String>,
     },
 
-    /// Incremental update: fetch recent games and performances.
+    /// Incremental update: fetch recent games and performances, then run
+    /// compute so derived stats stay fresh. Use `--no-compute` to skip the
+    /// post-step (e.g. when batching several updates).
     Update {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
 
         /// Start date (YYYY-MM-DD)
@@ -86,23 +107,27 @@ enum Commands {
         /// End date (YYYY-MM-DD)
         #[arg(long)]
         to: String,
+
+        /// Skip the compute pipeline at the end.
+        #[arg(long)]
+        no_compute: bool,
     },
 
     /// Ingest ELO ratings from /elo endpoint.
     Elo {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
     },
 
     /// Ingest per-game forecasts (ELO snapshots, win exp, betting lines) from /forecasts.
     Forecasts {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
     },
 
     /// Run compute pipeline: derive season stats, schedules, percentiles from raw data.
     Compute {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
     },
 
@@ -114,7 +139,7 @@ enum Commands {
 
     /// Ingest Barttorvik player season stats (advanced metrics, shot zones, bio).
     Torvik {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
 
         /// Also backfill missing rebounds from Torvik game-level data.
@@ -125,7 +150,7 @@ enum Commands {
     /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
     /// Pass condition: max abs diff < 0.01 across every CamPom intermediate and final.
     CampomParity {
-        #[arg(short, long, default_value = "2026")]
+        #[arg(short, long, default_value_t = default_season())]
         year: i32,
 
         /// Path to the baseline CSV. Defaults to docs/campom_2026_baseline.csv.
@@ -173,10 +198,19 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Season { year } => {
+        Commands::Season {
+            year,
+            no_torvik,
+            no_compute,
+        } => {
             let ingester = SeasonIngester::new(&client, &db.pool, year);
-            let report = ingester.ingest_full_season().await?;
-            println!("{report}");
+            let report = ingester
+                .bootstrap_season(BootstrapOptions {
+                    torvik: !no_torvik,
+                    compute: !no_compute,
+                })
+                .await?;
+            print!("{report}");
         }
 
         Commands::Teams { year } => {
@@ -191,45 +225,9 @@ async fn main() -> Result<()> {
         }
 
         Commands::Team { code, year } => {
-            let code = code.to_uppercase();
-            println!("Ingesting full data for {code} ({year})...");
-
-            // 1. Team roster (players with metadata)
-            let roster =
-                cstat_ingest::ingest::players::ingest_team_roster(&client, &db.pool, year, &code)
-                    .await?;
-            println!("  Roster: {roster} players");
-
-            // 2. Team details (TCR, ELO, W/L)
-            let team_row: Option<(uuid::Uuid,)> =
-                sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
-                    .bind(&code)
-                    .bind(year)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            if let Some((team_id,)) = team_row {
-                cstat_ingest::ingest::teams::ingest_single_team_details(
-                    &client, &db.pool, year, &team_id, &code,
-                )
-                .await?;
-                println!("  Team details: OK");
-            }
-
-            // 3. Player performances (box scores)
-            let perfs = cstat_ingest::ingest::games::ingest_player_performances_by_team(
-                &client, &db.pool, year, &code,
-            )
-            .await?;
-            println!("  Player performances: {perfs} box scores");
-
-            // 4. Team performances (team-level box scores)
-            let team_perfs = cstat_ingest::ingest::games::ingest_team_performances(
-                &client, &db.pool, year, &code,
-            )
-            .await?;
-            println!("  Team performances: {team_perfs} game stats");
-
-            println!("Done! {code} fully ingested.");
+            let ingester = SeasonIngester::new(&client, &db.pool, year);
+            let report = ingester.ingest_team(&code).await?;
+            print!("{report}");
         }
 
         Commands::Games { year, from, to } => {
@@ -278,10 +276,15 @@ async fn main() -> Result<()> {
             println!("{report}");
         }
 
-        Commands::Update { year, from, to } => {
+        Commands::Update {
+            year,
+            from,
+            to,
+            no_compute,
+        } => {
             let ingester = SeasonIngester::new(&client, &db.pool, year);
-            let report = ingester.ingest_recent(&from, &to).await?;
-            println!("{report}");
+            let report = ingester.ingest_recent(&from, &to, !no_compute).await?;
+            print!("{report}");
         }
 
         Commands::Status => {
@@ -295,7 +298,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Torvik { year, rebounds } => {
-            let torvik = cstat_ingest::TorkvikClient::new();
+            let torvik = TorkvikClient::new();
             let (upserted, matched) =
                 cstat_ingest::ingest::torvik::ingest_torvik_player_stats(&torvik, &db.pool, year)
                     .await?;

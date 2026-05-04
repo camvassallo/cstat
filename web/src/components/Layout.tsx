@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { AVAILABLE_SEASONS, useSeason, type Season } from './season';
+import { useAvailableSeasons, useSeason, type Season } from './season';
 
 const navLinkClass = (active: boolean) =>
   `px-3 py-2 rounded text-sm font-medium transition-colors ${
@@ -20,6 +20,7 @@ const mobileNavLinkClass = (active: boolean) =>
 
 function SeasonSelector() {
   const { season, setSeason } = useSeason();
+  const { seasons } = useAvailableSeasons();
   return (
     <label className="flex items-center gap-2 text-xs text-gray-400">
       <span className="uppercase tracking-wide hidden sm:inline">Season</span>
@@ -28,7 +29,7 @@ function SeasonSelector() {
         onChange={(e) => setSeason(Number(e.target.value) as Season)}
         className="bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:border-blue-500"
       >
-        {AVAILABLE_SEASONS.map((s) => (
+        {seasons.map((s) => (
           <option key={s} value={s}>
             {s}
           </option>

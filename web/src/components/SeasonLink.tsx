@@ -1,6 +1,6 @@
 import { type ComponentProps } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { DEFAULT_SEASON, parseSeason } from './season';
+import { getDefaultSeason, parseSeason } from './season';
 
 /** Drop-in replacement for `react-router` `Link` that preserves the current
  *  season query param on outbound navigation. So clicking a team name on the
@@ -19,7 +19,7 @@ export function SeasonLink({ to, ...rest }: LinkProps) {
   );
 
   // Default season uses no query param — outbound links match.
-  if (currentSeason === DEFAULT_SEASON) {
+  if (currentSeason === getDefaultSeason()) {
     return <Link to={to} {...rest} />;
   }
 

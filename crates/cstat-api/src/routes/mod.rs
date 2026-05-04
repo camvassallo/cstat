@@ -2,6 +2,7 @@ pub mod archetypes;
 pub mod games;
 pub mod players;
 pub mod predict;
+pub mod seasons;
 pub mod teams;
 pub mod transfers;
 
@@ -16,5 +17,6 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(games::router())
         .merge(predict::router())
         .merge(archetypes::router())
+        .merge(seasons::router())
         .merge(transfers::router())
 }

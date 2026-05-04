@@ -531,6 +531,63 @@ Upsert `ON CONFLICT` used `COALESCE(EXCLUDED.x, old.x)`, so NULL new values woul
 
 ---
 
+## Refactor Backlog
+
+Captured during the 2026-05-03 ingestion-pipeline checkup. These are
+deferred-but-considered items — not blocking, but worth picking up the next
+time someone is in the relevant area.
+
+### compute.rs modularization
+`crates/cstat-core/src/compute.rs` is ~1,800 lines containing every derivation
+step (game backfill, season stats, four factors, AdjO/AdjD, percentiles,
+rolling, individual ratings, CamPom, derived game fields, schedules). The
+file is cohesive but fat. Split into `compute/` submodules — one file per
+step, mirroring `ComputeReport` — once a step needs a meaningfully different
+shape (e.g., parameterized weights, per-step CLI invocation, parallel
+execution). Until then the single-file form keeps cross-step sharing of
+helpers cheap.
+
+### Transfers JSON embedding rework
+`crates/cstat-api/src/routes/transfers.rs` hardcodes `(year, include_str!(…))`
+pairs. Adding a new portal year requires editing the array. Replace with a
+build-time scan of `data/transfers/*.json` (e.g. via `include_dir!` or a
+`build.rs`) so new files in the directory get picked up automatically. Low
+priority — happens once a year.
+
+### Archetype training automation
+Adding a season today requires a manual `python -m training.archetypes
+--seasons …` after the Rust ingest. Wiring this into `cstat-ingest season`
+would close the loop (one command → site fully populated). Blockers: the
+training pipeline is Python and shells out from Rust would be brittle; the
+combined-cohort retraining policy in `docs/archetypes_methodology.md` is
+load-bearing and shouldn't be silently re-fit. Reasonable shape: an
+`--archetypes` flag that runs a subprocess and surfaces the diagnostics, or
+a small Python entrypoint the bootstrap script calls.
+
+### Per-team `Team` ingest doesn't run compute
+`SeasonIngester::ingest_team(code)` does NatStat ingest only — the resulting
+roster row won't have rate stats / percentiles until a season-wide compute
+pass runs. Fine for power users, surprising for first-time use. Consider
+adding an `--also-compute` flag; skipped for now because per-team compute
+isn't supported (compute_all is season-scoped).
+
+### Rate limiter unification
+`NatStatClient::new(..., 1500)` hardcodes the rate budget at the bin
+construction site. The budget is account-tier-dependent. Read it from
+`NATSTAT_MAX_PER_HOUR` (with 500 as the default standard-tier budget) so
+testers on different tiers don't have to recompile. Same change makes the
+README's "500 calls/hour" line accurate by default.
+
+### Sequenced ingest concurrency
+Every `for team_code in teams` loop in the ingest crate is strictly
+sequential. The rate limiter is the real bottleneck, not concurrency, but
+the per-team `teamperfs` path (now season-wide as of 2026-05-03) was the
+last big offender. If we ever add a per-team enrichment step, fan it out
+behind the rate limiter (e.g. `futures::stream::buffered`) rather than
+inlining another `for` loop.
+
+---
+
 ## Data Caching Strategy
 Given the 500 API calls/hour NatStat limit:
 1. **Response cache table** in Postgres: store raw API responses with TTL
