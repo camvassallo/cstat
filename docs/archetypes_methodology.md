@@ -31,7 +31,7 @@ archetype_models    (one row per season, all sharing centroids from this fit)
 
 The 14 features fed to k-means: `rim_share`, `mid_share`, `three_share`, `ast_pct`, `tov_pct`, `usage_rate`, `orb_pct`, `drb_pct`, `stl_pct`, `blk_pct`, `ft_rate`, `ogbpm`, `dgbpm`, `min_share` (= `minutes_per_game / 40`).
 
-**Run it:** `python -m training.archetypes --seasons 2025,2026 [--diagnostics]`
+**Run it:** `cd training && python -m archetypes --seasons 2025,2026 [--diagnostics]` — `training/` has no `__init__.py`, so the `training.archetypes` form fails; run from inside the dir.
 
 ## Why combined-cohort training
 
@@ -50,7 +50,7 @@ Run this checklist every time `--seasons` changes. The whole pass takes ~10 minu
 ### Step 1 — Run the training
 
 ```bash
-python -m training.archetypes --seasons 2024,2025,2026 --diagnostics 2>&1 | tee /tmp/archetypes-train.log
+cd training && python -m archetypes --seasons 2024,2025,2026 --diagnostics 2>&1 | tee /tmp/archetypes-train.log
 ```
 
 The `--diagnostics` flag prints per-cluster size, per-season size, and mean features per class in original (un-z-scored) units. Save the log; you'll diff against it next time.

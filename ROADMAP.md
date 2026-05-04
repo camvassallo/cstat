@@ -564,7 +564,7 @@ load-bearing and shouldn't be silently re-fit. Reasonable shape: an
 `--archetypes` flag that runs a subprocess and surfaces the diagnostics, or
 a small Python entrypoint the bootstrap script calls.
 
-### Per-team `Team` ingest also calls compute
+### Per-team `Team` ingest doesn't run compute
 `SeasonIngester::ingest_team(code)` does NatStat ingest only — the resulting
 roster row won't have rate stats / percentiles until a season-wide compute
 pass runs. Fine for power users, surprising for first-time use. Consider

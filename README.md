@@ -103,7 +103,7 @@ cargo run --bin cstat-ingest -- season --year 2024
 
 # 2. Retrain archetypes on the combined cohort. Required to keep cross-season
 #    class stability — see docs/archetypes_methodology.md before deviating.
-cd training && python -m training.archetypes --seasons 2024,2025,2026
+cd training && python -m archetypes --seasons 2024,2025,2026
 ```
 
 That's it. The next page load picks up `2024` in the season selector. If
@@ -156,7 +156,7 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 
 ### Player Archetypes
 
-12 D&D-class archetypes (Wizard, Sorcerer, Warlock, …) assigned via combined-cohort k-means in `training/archetypes.py`. Run with `python -m training.archetypes --seasons 2025,2026 [--diagnostics]`. Methodology, retraining playbook, and health-metric tripwires are documented in `docs/archetypes_methodology.md` — read it before touching signatures or adding seasons.
+12 D&D-class archetypes (Wizard, Sorcerer, Warlock, …) assigned via combined-cohort k-means in `training/archetypes.py`. Run with `cd training && python -m archetypes --seasons 2025,2026 [--diagnostics]` (the module is loaded from inside `training/`, not as `training.archetypes`). Methodology, retraining playbook, and health-metric tripwires are documented in `docs/archetypes_methodology.md` — read it before touching signatures or adding seasons.
 
 ### ML Predictions
 
