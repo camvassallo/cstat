@@ -1,6 +1,6 @@
 use super::utils::{parse_f64, parse_i32};
 use crate::NatStatClient;
-use crate::extract_results;
+use crate::{extract_results, team_id_by_code_and_season};
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
@@ -32,15 +32,8 @@ pub async fn ingest_elo_ratings(
                 continue;
             }
 
-            // Look up team by natstat_id + season
-            let team_row: Option<(Uuid,)> =
-                sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
-                    .bind(team_code)
-                    .bind(season)
-                    .fetch_optional(pool)
-                    .await?;
-
-            let Some((team_id,)) = team_row else {
+            let Some(team_id) = team_id_by_code_and_season(pool, Some(team_code), season).await?
+            else {
                 continue;
             };
 
@@ -122,23 +115,8 @@ pub async fn ingest_game_forecasts(
                 continue;
             };
 
-            // Look up team IDs
-            let home_row: Option<(Uuid,)> =
-                sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
-                    .bind(home_code)
-                    .bind(season)
-                    .fetch_optional(pool)
-                    .await?;
-
-            let away_row: Option<(Uuid,)> =
-                sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
-                    .bind(away_code)
-                    .bind(season)
-                    .fetch_optional(pool)
-                    .await?;
-
-            let home_team_id = home_row.map(|(id,)| id);
-            let away_team_id = away_row.map(|(id,)| id);
+            let home_team_id = team_id_by_code_and_season(pool, Some(home_code), season).await?;
+            let away_team_id = team_id_by_code_and_season(pool, Some(away_code), season).await?;
 
             // Find the game by matching teams and date
             let game_row: Option<(Uuid,)> = sqlx::query_as(
@@ -184,18 +162,7 @@ pub async fn ingest_game_forecasts(
             let spread_fav_code = spread_data
                 .and_then(|s| s.get("favourite"))
                 .and_then(|v| v.as_str());
-            // Look up spread favorite team ID
-            let spread_fav_id = if let Some(code) = spread_fav_code {
-                let row: Option<(Uuid,)> =
-                    sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
-                        .bind(code)
-                        .bind(season)
-                        .fetch_optional(pool)
-                        .await?;
-                row.map(|(id,)| id)
-            } else {
-                None
-            };
+            let spread_fav_id = team_id_by_code_and_season(pool, spread_fav_code, season).await?;
 
             let ou = forecast.and_then(|f| f.get("overunder"));
             let over_under = ou.and_then(|o| o.get("overunder")).and_then(parse_f64);

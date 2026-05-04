@@ -1,7 +1,7 @@
 use super::utils::{get_f64, get_i32, parse_i32};
 use crate::NatStatClient;
 use crate::client::NatStatError;
-use crate::extract_results;
+use crate::{extract_results, team_id_by_code_and_season};
 use chrono::NaiveDate;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -179,8 +179,8 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, N
         .or_else(|| game.get("away_code"))
         .and_then(|c| c.as_str());
 
-    let home_team_id = resolve_team_id(pool, home_code, season).await?;
-    let away_team_id = resolve_team_id(pool, away_code, season).await?;
+    let home_team_id = team_id_by_code_and_season(pool, home_code, season).await?;
+    let away_team_id = team_id_by_code_and_season(pool, away_code, season).await?;
 
     let home_score = game
         .get("score-home")
@@ -368,7 +368,7 @@ async fn upsert_player_game_stats(
         .or_else(|| perf.get("team_code"))
         .or_else(|| perf.get("team").and_then(|t| t.get("code")))
         .and_then(|c| c.as_str());
-    let Some(team_id) = resolve_team_id(pool, team_code, season).await? else {
+    let Some(team_id) = team_id_by_code_and_season(pool, team_code, season).await? else {
         return Ok(false);
     };
 
@@ -497,7 +497,7 @@ async fn upsert_player_game_stats(
         .and_then(|o| o.get("code"))
         .or_else(|| perf.get("opponent-code"))
         .and_then(|c| c.as_str());
-    let opponent_id = resolve_team_id(pool, opponent_code, season).await?;
+    let opponent_id = team_id_by_code_and_season(pool, opponent_code, season).await?;
 
     sqlx::query(
         "INSERT INTO player_game_stats (
@@ -595,52 +595,32 @@ async fn upsert_player_game_stats(
     Ok(true)
 }
 
-async fn resolve_team_id(
-    pool: &PgPool,
-    code: Option<&str>,
-    season: i32,
-) -> Result<Option<Uuid>, sqlx::Error> {
-    let Some(code) = code else { return Ok(None) };
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
-            .bind(code)
-            .bind(season)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|(id,)| id))
-}
-
-/// Ingest team performances for all teams in a season.
+/// Ingest team performances for every team in a season.
+///
+/// Uses the season-wide `teamperfs/mbb/{season}` endpoint (paginated) — one
+/// loop instead of 367 per-team calls. Cuts ingest time and rate-limit
+/// pressure dramatically; matches the shape of `ingest_player_performances`.
 pub async fn ingest_all_team_performances(
     client: &NatStatClient,
     pool: &PgPool,
     season: i32,
 ) -> Result<u64, NatStatError> {
-    let teams: Vec<(String,)> =
-        sqlx::query_as("SELECT natstat_id FROM teams WHERE season = $1 ORDER BY natstat_id")
-            .bind(season)
-            .fetch_all(pool)
-            .await?;
+    let pages = client
+        .get_all_pages("teamperfs", Some(&season.to_string()), None)
+        .await?;
 
-    let total_teams = teams.len();
-    let mut total = 0u64;
-    for (i, (team_code,)) in teams.iter().enumerate() {
-        if (i + 1) % 25 == 0 || i + 1 == total_teams {
-            info!(
-                progress = format!("{}/{}", i + 1, total_teams),
-                "ingesting team performances"
-            );
-        }
-        match ingest_team_performances(client, pool, season, team_code).await {
-            Ok(count) => total += count,
-            Err(e) => {
-                tracing::warn!(team_code, error = %e, "failed to ingest team performances, skipping")
+    let mut count = 0u64;
+    for page in &pages {
+        let perfs = extract_results(page);
+        for perf in perfs {
+            if upsert_team_game_stats(perf, pool, season).await? {
+                count += 1;
             }
         }
     }
 
-    info!(total, season, "all team performances ingested");
-    Ok(total)
+    info!(count, season, "team performances ingested (season-wide)");
+    Ok(count)
 }
 
 /// Ingest team performances (team-level box scores) for a specific team and season.
@@ -689,7 +669,7 @@ async fn upsert_team_game_stats(
         return Ok(false);
     };
 
-    let team_id = resolve_team_id(pool, team_code, season).await?;
+    let team_id = team_id_by_code_and_season(pool, team_code, season).await?;
     let Some(team_id) = team_id else {
         return Ok(false);
     };
@@ -708,7 +688,7 @@ async fn upsert_team_game_stats(
         .get("opponent")
         .and_then(|o| o.get("code"))
         .and_then(|c| c.as_str());
-    let opponent_id = resolve_team_id(pool, opponent_code, season).await?;
+    let opponent_id = team_id_by_code_and_season(pool, opponent_code, season).await?;
 
     let is_home = perf
         .get("game")

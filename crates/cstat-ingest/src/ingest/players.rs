@@ -1,22 +1,11 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
-use crate::extract_results;
-use chrono::{Datelike, NaiveDate, Utc};
+use crate::{current_natstat_season, extract_results, team_id_by_code_and_season};
+use chrono::NaiveDate;
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
-
-/// Season NatStat's `/players` endpoint returns when no filter is applied
-/// (Nov+ rolls forward to next year, matching the NCAA basketball calendar).
-fn current_natstat_season() -> i32 {
-    let today = Utc::now().naive_utc().date();
-    if today.month() >= 11 {
-        today.year() + 1
-    } else {
-        today.year()
-    }
-}
 
 /// Warn that NatStat's `/players` endpoint returns current-season rosters
 /// regardless of the `season` we'll stamp on them. Logged once per top-level
@@ -58,13 +47,7 @@ async fn ingest_team_roster_inner(
     let response = client.get("players", Some(team_code), None, None).await?;
     let players = extract_results(&response);
 
-    let team_id: Option<Uuid> =
-        sqlx::query_as("SELECT id FROM teams WHERE natstat_id = $1 AND season = $2")
-            .bind(team_code)
-            .bind(season)
-            .fetch_optional(pool)
-            .await?
-            .map(|(id,): (Uuid,)| id);
+    let team_id = team_id_by_code_and_season(pool, Some(team_code), season).await?;
 
     let mut count = 0u64;
     for player in &players {

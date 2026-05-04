@@ -556,6 +556,16 @@ export function fetchPrediction(
   });
 }
 
+// Seasons
+export interface SeasonsResponse {
+  seasons: number[];
+  default: number | null;
+}
+
+export function fetchSeasons() {
+  return fetchJson<SeasonsResponse>('/seasons');
+}
+
 // Games
 export interface GameResult {
   game_id: string;
