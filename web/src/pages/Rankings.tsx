@@ -115,8 +115,11 @@ function buildColumns(
     {
       field: 'name',
       headerName: 'Team',
-      width: isMobile ? 130 : 200,
+      width: isMobile ? 140 : 200,
       pinned: 'left',
+      // Let long team names wrap onto a second line on mobile rather than
+      // clipping with ellipsis. Row height of 48 fits two lines of text-sm.
+      wrapText: true,
       cellRenderer: (p: { value: string; data?: TeamRanking }) => {
         const id = p.data?.team_id;
         if (!id) return <span>{p.value}</span>;
@@ -342,6 +345,12 @@ export default function Rankings() {
             sortable: true,
             resizable: true,
             suppressMovable: true,
+            // Wrap header text instead of clipping with ellipsis. Critical on
+            // mobile where flex-distributed columns compress below natural
+            // width — headers like "Tempo" / "Record" / "OpFG%" otherwise lose
+            // characters to the right edge.
+            wrapHeaderText: true,
+            autoHeaderHeight: true,
           }}
           getRowId={(p) => p.data.team_id}
         />
