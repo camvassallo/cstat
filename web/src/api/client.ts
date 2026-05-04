@@ -178,6 +178,9 @@ export function fetchTeamDetail(id: string, season?: number) {
     schedule: ScheduleEntry[];
     roster: RosterEntry[];
     archetype_distribution: ArchetypeShare[];
+    /// Seasons in which this team (joined cross-season via natstat_id) has
+    /// any row. Drives the page-scoped season dropdown override.
+    available_seasons: number[];
   }>(`/teams/${id}`, { season: season?.toString() });
 }
 
@@ -481,6 +484,9 @@ export function fetchPlayerDetail(id: string, season?: number) {
     league_averages: LeagueAverages | null;
     torvik_stats: TorkvikStats | null;
     archetype: PlayerArchetype | null;
+    /// Seasons in which this player (joined cross-season via natstat_id) has
+    /// any row. Drives the page-scoped season dropdown override.
+    available_seasons: number[];
   }>(`/players/${id}`, { season: season?.toString() });
 }
 

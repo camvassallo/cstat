@@ -14,7 +14,7 @@ import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
 import { SeasonLink } from '../components/SeasonLink';
-import { seasonHref, useSeason } from '../components/season';
+import { seasonHref, setPageSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
@@ -79,8 +79,14 @@ export default function TeamDetail() {
   useEffect(() => {
     if (!id) return;
     // No `setLoading(true)` here — see Rankings.tsx for the rationale.
+    let cancelled = false;
     fetchTeamDetail(id, season)
       .then((r) => {
+        if (cancelled) return;
+        // Constrain the site-wide season selector to years where this team
+        // has data. Edge case: D-I promotions mean a team may not appear in
+        // every historical season — the dropdown reflects that.
+        setPageSeasons(r.available_seasons);
         // Team UUIDs are season-scoped. The API resolves cross-season via
         // `natstat_id`; if it returned a different UUID, swap the URL to the
         // canonical one for this season so refresh/share/back work. Leave
@@ -96,8 +102,28 @@ export default function TeamDetail() {
         setArchetypeDist(r.archetype_distribution);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        if (cancelled) return;
+        // Clear stale state so the "not found" path renders cleanly when
+        // the team has no row in the requested season. Mirrors PlayerDetail
+        // — without this reset, the previous season's data lingers because
+        // `team` is still set and the empty state never renders.
+        setTeam(null);
+        setSchedule([]);
+        setRoster([]);
+        setArchetypeDist([]);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id, season, navigate]);
+
+  // Release the season-selector override on unmount so the dropdown returns
+  // to the global list when the user navigates away.
+  useEffect(() => {
+    return () => setPageSeasons(null);
+  }, []);
 
   // Classes the team actually plays — sorted by team_share desc — drive the
   // visualization bar and chip row.

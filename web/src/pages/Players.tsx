@@ -111,8 +111,11 @@ function buildColumns(view: ColumnView, isMobile: boolean): ColDef<PlayerRow>[] 
     {
       field: 'name',
       headerName: 'Player',
-      width: isMobile ? 130 : 180,
+      width: isMobile ? 150 : 180,
       pinned: 'left',
+      // Long hyphenated names ("Olusegun-Kupono Aderoju") wrap to a second
+      // line rather than truncating with ellipsis on mobile.
+      wrapText: true,
       cellRenderer: (p: { value: string; data?: PlayerRow }) => {
         const id = p.data?.player_id;
         if (!id) return <span>{p.value}</span>;
@@ -130,7 +133,8 @@ function buildColumns(view: ColumnView, isMobile: boolean): ColDef<PlayerRow>[] 
     {
       field: 'team_name',
       headerName: 'Team',
-      width: 170,
+      width: isMobile ? 140 : 170,
+      wrapText: true,
       cellRenderer: (p: { value: string | null; data?: PlayerRow }) => {
         if (!p.value) return <span className="text-gray-500">—</span>;
         const teamId = p.data?.team_id;
@@ -478,10 +482,16 @@ export default function Players() {
           cacheBlockSize={PAGE_SIZE}
           maxBlocksInCache={10}
           infiniteInitialRowCount={50}
+          rowHeight={44}
           defaultColDef={{
             sortable: true,
             resizable: true,
             suppressMovable: true,
+            // Wrap header text rather than clipping. Header labels like
+            // "USG%" / "TOPG" / rate-stat columns otherwise lose characters
+            // when the column compresses on mobile.
+            wrapHeaderText: true,
+            autoHeaderHeight: true,
           }}
           onGridReady={(e) => {
             gridApiRef.current = e.api;

@@ -83,6 +83,55 @@ export function useSeason(): {
   return { season, setSeason };
 }
 
+// ---------------------------------------------------------------------------
+// Page-scoped season override
+// ---------------------------------------------------------------------------
+// Detail pages (player, team) call `setPageSeasons(...)` once they know which
+// seasons their entity has data in. The site-wide season selector reads this
+// value and constrains the dropdown to those years; null means "use the
+// global list". Stored as module state + a tiny pub/sub so the selector,
+// which lives in `<Layout>` outside the detail page's tree, can react.
+//
+// The page is responsible for calling `setPageSeasons(null)` on unmount to
+// release the override — done via the cleanup return of `useEffect`.
+
+let pageSeasons: readonly number[] | null = null;
+const pageSeasonsListeners = new Set<() => void>();
+
+export function setPageSeasons(seasons: readonly number[] | null): void {
+  // Compare by reference + length to avoid spamming subscribers on identical
+  // updates (e.g. same array re-set on every render of a detail page).
+  if (pageSeasons === seasons) return;
+  const prev = pageSeasons;
+  if (
+    seasons != null &&
+    prev != null &&
+    seasons.length === prev.length &&
+    seasons.every((s, i) => s === prev[i])
+  ) {
+    return;
+  }
+  pageSeasons = seasons;
+  pageSeasonsListeners.forEach((l) => l());
+}
+
+/** Subscribe to page-scoped season list changes. Returns the current
+ *  override or null when no page has set one. */
+export function usePageSeasons(): readonly number[] | null {
+  const [snapshot, setSnapshot] = useState<readonly number[] | null>(pageSeasons);
+  useEffect(() => {
+    const listener = () => setSnapshot(pageSeasons);
+    pageSeasonsListeners.add(listener);
+    // Sync up after subscribing in case the value changed between initial
+    // render and effect mount.
+    listener();
+    return () => {
+      pageSeasonsListeners.delete(listener);
+    };
+  }, []);
+  return snapshot;
+}
+
 /** Fetch the list of seasons present in the DB. Returns the cached list
  *  immediately and refreshes from the API on first mount. The fallback array
  *  is used until the API responds (or forever, if it doesn't). */

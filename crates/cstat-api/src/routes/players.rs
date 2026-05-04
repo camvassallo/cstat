@@ -132,21 +132,29 @@ async fn player_detail(
             )
         })?;
 
-    let (season_stats, percentiles, game_log, league_averages, torvik_stats, archetype) =
-        tokio::try_join!(
-            queries::get_player_season_stats(pool, resolved_id, season),
-            queries::get_player_percentiles(pool, resolved_id, season),
-            queries::get_player_game_log(pool, resolved_id, season),
-            queries::get_league_averages(pool, season),
-            queries::get_torvik_stats(pool, resolved_id, season),
-            queries::get_player_archetype(pool, resolved_id, season),
+    let (
+        season_stats,
+        percentiles,
+        game_log,
+        league_averages,
+        torvik_stats,
+        archetype,
+        available_seasons,
+    ) = tokio::try_join!(
+        queries::get_player_season_stats(pool, resolved_id, season),
+        queries::get_player_percentiles(pool, resolved_id, season),
+        queries::get_player_game_log(pool, resolved_id, season),
+        queries::get_league_averages(pool, season),
+        queries::get_torvik_stats(pool, resolved_id, season),
+        queries::get_player_archetype(pool, resolved_id, season),
+        queries::get_player_available_seasons(pool, resolved_id),
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("query failed: {e}") })),
         )
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("query failed: {e}") })),
-            )
-        })?;
+    })?;
 
     Ok(Json(json!({
         "player": player,
@@ -156,6 +164,7 @@ async fn player_detail(
         "league_averages": league_averages,
         "torvik_stats": torvik_stats,
         "archetype": archetype,
+        "available_seasons": available_seasons,
     })))
 }
 
