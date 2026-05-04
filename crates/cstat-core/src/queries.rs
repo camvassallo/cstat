@@ -563,6 +563,47 @@ pub async fn resolve_player_id_for_season(
     Ok(row.map(|(id,)| id))
 }
 
+/// Seasons in which the player carrying the same `natstat_id` as `player_id`
+/// has any row in `players`. Returned in descending order so the most recent
+/// season comes first. Used by the detail page to constrain the season
+/// selector to years where this player exists.
+pub async fn get_player_available_seasons(
+    pool: &PgPool,
+    player_id: Uuid,
+) -> Result<Vec<i32>, sqlx::Error> {
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT p.season
+        FROM players p
+        WHERE p.natstat_id = (SELECT natstat_id FROM players WHERE id = $1)
+        ORDER BY p.season DESC
+        "#,
+    )
+    .bind(player_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(s,)| s).collect())
+}
+
+/// Team analogue of `get_player_available_seasons`.
+pub async fn get_team_available_seasons(
+    pool: &PgPool,
+    team_id: Uuid,
+) -> Result<Vec<i32>, sqlx::Error> {
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT t.season
+        FROM teams t
+        WHERE t.natstat_id = (SELECT natstat_id FROM teams WHERE id = $1)
+        ORDER BY t.season DESC
+        "#,
+    )
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(s,)| s).collect())
+}
+
 pub async fn get_team_by_id(
     pool: &PgPool,
     team_id: Uuid,

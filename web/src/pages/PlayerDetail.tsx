@@ -19,7 +19,7 @@ import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { SeasonLink } from '../components/SeasonLink';
-import { seasonHref, useSeason } from '../components/season';
+import { seasonHref, setPageSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
 
@@ -76,8 +76,15 @@ export default function PlayerDetail() {
   useEffect(() => {
     if (!id) return;
     // No `setLoading(true)` here — see Rankings.tsx for the rationale.
+    let cancelled = false;
     fetchPlayerDetail(id, season)
       .then((r) => {
+        if (cancelled) return;
+        // Publish the player's eligible seasons so the site-wide selector
+        // limits the dropdown to years where this player has data. We do
+        // this even on the redirect path below — the seasons list is the
+        // same on both sides of the canonical-UUID swap.
+        setPageSeasons(r.available_seasons);
         // Player UUIDs are season-scoped. The API resolves cross-season via
         // `natstat_id`; if the canonical UUID for this season differs, swap
         // the URL so refresh/share/back lands on the right row. Leave
@@ -96,15 +103,43 @@ export default function PlayerDetail() {
         setArchetype(r.archetype);
         if (r.archetype) {
           fetchPlayerSimilar(r.player.id, 8, season)
-            .then((s) => setSimilar(s.players))
-            .catch(() => setSimilar([]));
+            .then((s) => {
+              if (!cancelled) setSimilar(s.players);
+            })
+            .catch(() => {
+              if (!cancelled) setSimilar([]);
+            });
         } else {
           setSimilar([]);
         }
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        if (cancelled) return;
+        // Clear stale state so the "not found" path renders cleanly when
+        // the player has no row in the requested season (e.g. switched to
+        // a year before they enrolled). Without this reset the previous
+        // season's data stays on screen because `player` is still set.
+        setPlayer(null);
+        setStats(null);
+        setPercentiles(null);
+        setGameLog([]);
+        setLeagueAvg(null);
+        setTorvik(null);
+        setArchetype(null);
+        setSimilar([]);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id, season, navigate]);
+
+  // Release the season-selector override on unmount so the dropdown returns
+  // to the global list when the user navigates away.
+  useEffect(() => {
+    return () => setPageSeasons(null);
+  }, []);
 
   if (loading) return <div className="text-gray-400">Loading...</div>;
   if (!player) return <div className="text-red-400">Player not found</div>;

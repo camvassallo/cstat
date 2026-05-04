@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { useAvailableSeasons, useSeason, type Season } from './season';
+import { useAvailableSeasons, usePageSeasons, useSeason, type Season } from './season';
 
 const navLinkClass = (active: boolean) =>
   `px-3 py-2 rounded text-sm font-medium transition-colors ${
@@ -20,7 +20,12 @@ const mobileNavLinkClass = (active: boolean) =>
 
 function SeasonSelector() {
   const { season, setSeason } = useSeason();
-  const { seasons } = useAvailableSeasons();
+  const { seasons: globalSeasons } = useAvailableSeasons();
+  const pageSeasons = usePageSeasons();
+  // Detail pages publish their entity's eligible seasons via `setPageSeasons`;
+  // when present, constrain the dropdown so the user can't pick a year the
+  // entity has no data in. Global list otherwise.
+  const seasons = pageSeasons ?? globalSeasons;
   return (
     <label className="flex items-center gap-2 text-xs text-gray-400">
       <span className="uppercase tracking-wide hidden sm:inline">Season</span>
