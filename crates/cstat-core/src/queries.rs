@@ -542,12 +542,17 @@ pub async fn resolve_team_id_for_season(
     Ok(row.map(|(id,)| id))
 }
 
-/// Same as `resolve_team_id_for_season` but for players.
+/// Map a season-scoped player UUID to the equivalent UUID for `season`.
+/// Tries the cross-season `natstat_id` first (the common case) and falls
+/// back to `torvik_pid` to handle transfers — NatStat issues a fresh
+/// `natstat_id` per (player, team), so without this fallback a season swap
+/// from a transfer's destination back to their prior school 404s.
 pub async fn resolve_player_id_for_season(
     pool: &PgPool,
     player_id: Uuid,
     season: i32,
 ) -> Result<Option<Uuid>, sqlx::Error> {
+    // 1. natstat_id match (handles the 90% non-transfer case and is faster).
     let row: Option<(Uuid,)> = sqlx::query_as(
         r#"
         SELECT p2.id
@@ -560,23 +565,73 @@ pub async fn resolve_player_id_for_season(
     .bind(season)
     .fetch_optional(pool)
     .await?;
+    if let Some((id,)) = row {
+        return Ok(Some(id));
+    }
+
+    // 2. torvik_pid fallback (transfers — same human, different natstat_id).
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        r#"
+        SELECT t2.player_id
+        FROM torvik_player_stats t1
+        JOIN torvik_player_stats t2
+          ON t2.torvik_pid = t1.torvik_pid AND t2.season = $2
+        WHERE t1.player_id = $1
+          AND t2.player_id IS NOT NULL
+        LIMIT 1
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(|(id,)| id))
 }
 
-/// Seasons in which the player carrying the same `natstat_id` as `player_id`
-/// has any row in `players`. Returned in descending order so the most recent
-/// season comes first. Used by the detail page to constrain the season
-/// selector to years where this player exists.
+/// Seasons in which this player has any row in `players`, joined across
+/// teams. Used by the detail page to constrain the season selector.
+///
+/// NatStat assigns a fresh `natstat_id` when a player changes teams, so a
+/// pure `natstat_id` join breaks for transfers (Lendeborg is `58189293` at
+/// UAB and `87905686` at Michigan). Torvik's `torvik_pid` is the stable
+/// cross-season+team identifier — same number for the same human regardless
+/// of school — so we UNION:
+///   1. all (natstat_id) seasons (covers the non-transfer 90%)
+///   2. all seasons sharing the player's `torvik_pid` (covers transfers and
+///      links the prior-team row to the new-team row)
+///
+/// 96% of player rows have a torvik link; the 4% without fall back to the
+/// natstat_id-only branch, which is the same behaviour as before — no
+/// regression for those edge cases.
 pub async fn get_player_available_seasons(
     pool: &PgPool,
     player_id: Uuid,
 ) -> Result<Vec<i32>, sqlx::Error> {
     let rows: Vec<(i32,)> = sqlx::query_as(
         r#"
-        SELECT DISTINCT p.season
-        FROM players p
-        WHERE p.natstat_id = (SELECT natstat_id FROM players WHERE id = $1)
-        ORDER BY p.season DESC
+        WITH this AS (
+            SELECT
+                p.natstat_id AS nat_id,
+                (
+                    SELECT t.torvik_pid
+                    FROM torvik_player_stats t
+                    WHERE t.player_id = p.id
+                    LIMIT 1
+                ) AS tor_pid
+            FROM players p
+            WHERE p.id = $1
+        )
+        SELECT DISTINCT season FROM (
+            SELECT p.season
+            FROM players p, this
+            WHERE p.natstat_id = this.nat_id
+            UNION
+            SELECT t.season
+            FROM torvik_player_stats t, this
+            WHERE this.tor_pid IS NOT NULL
+              AND t.torvik_pid = this.tor_pid
+        ) x
+        ORDER BY season DESC
         "#,
     )
     .bind(player_id)
