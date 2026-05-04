@@ -102,11 +102,12 @@ export function setPageSeasons(seasons: readonly number[] | null): void {
   // Compare by reference + length to avoid spamming subscribers on identical
   // updates (e.g. same array re-set on every render of a detail page).
   if (pageSeasons === seasons) return;
+  const prev = pageSeasons;
   if (
     seasons != null &&
-    pageSeasons != null &&
-    seasons.length === pageSeasons.length &&
-    seasons.every((s, i) => s === pageSeasons![i])
+    prev != null &&
+    seasons.length === prev.length &&
+    seasons.every((s, i) => s === prev[i])
   ) {
     return;
   }
