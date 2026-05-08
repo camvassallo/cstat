@@ -89,10 +89,10 @@
     "position": "SF",
     "height": "6-7",
     "weight": 200,
-    "status": "",
+    "status": "Committed",
     "rating_247": 0.97,
     "previous_team": "Wake Forest",
-    "next_team": null,
+    "next_team": "Tennessee",
     "url_247": "https://247sports.com/player/juke-harris-46135186/college-321593/"
   },
   {
@@ -1493,7 +1493,7 @@
     "position": "SF",
     "height": "6-6",
     "weight": 215,
-    "status": "",
+    "status": "Enrolled",
     "rating_247": 0.91,
     "previous_team": "Miami (OH)",
     "next_team": "Wisconsin",
@@ -1541,10 +1541,10 @@
     "position": "SG",
     "height": "6-7",
     "weight": 175,
-    "status": "",
+    "status": "Committed",
     "rating_247": 0.91,
     "previous_team": "Kansas State",
-    "next_team": null,
+    "next_team": "LSU",
     "url_247": "https://247sports.com/player/abdi-bashir-jr-46153674/college-345735/"
   },
   {
@@ -1649,10 +1649,10 @@
     "position": "SG",
     "height": "6-6",
     "weight": 209,
-    "status": "",
+    "status": "Committed",
     "rating_247": 0.9,
     "previous_team": "Arkansas State",
-    "next_team": null,
+    "next_team": "Virginia",
     "url_247": "https://247sports.com/player/christian-harmon-46165834/college-357103/"
   },
   {
@@ -1805,10 +1805,10 @@
     "position": "SG",
     "height": "6-4",
     "weight": 184,
-    "status": "",
+    "status": "Committed",
     "rating_247": 0.9,
     "previous_team": "Georgia Tech",
-    "next_team": null,
+    "next_team": "Cincinnati",
     "url_247": "https://247sports.com/player/akai-fleming-46134930/college-341096/"
   },
   {
@@ -1889,10 +1889,10 @@
     "position": "SF",
     "height": "6-6",
     "weight": 205,
-    "status": "",
+    "status": "Committed",
     "rating_247": 0.9,
     "previous_team": "Radford",
-    "next_team": null,
+    "next_team": "Kansas",
     "url_247": "https://247sports.com/player/dennis-parker-jr-46094903/college-353885/"
   },
   {
@@ -2345,10 +2345,10 @@
     "position": "PG",
     "height": "6-1",
     "weight": 175,
-    "status": "",
+    "status": "Committed",
     "rating_247": 0.89,
     "previous_team": "Oklahoma State",
-    "next_team": null,
+    "next_team": "Virginia Tech",
     "url_247": "https://247sports.com/player/jaylen-curry-46094824/college-345742/"
   },
   {
@@ -2669,10 +2669,10 @@
     "position": "PG",
     "height": "5-11",
     "weight": 146,
-    "status": "",
+    "status": "Committed",
     "rating_247": 0.88,
     "previous_team": "USC",
-    "next_team": null,
+    "next_team": "Temple",
     "url_247": "https://247sports.com/player/jordan-marsh-46140908/college-345878/"
   },
   {
