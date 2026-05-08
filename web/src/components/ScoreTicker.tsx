@@ -162,7 +162,13 @@ export function ScoreTicker() {
     );
 
   return (
-    <div className="bg-gray-950 border border-gray-800 rounded-md overflow-hidden">
+    // Container: `overflow-hidden` clips the marquee normally. Under reduced-
+    // motion the CSS keyframe is disabled (see `index.css`), so the track
+    // would sit frozen at translateX(0) and clip every tile past the first
+    // few. `motion-reduce:overflow-x-auto` flips to manual scroll for those
+    // users; the duplicate-track copy below is also hidden under reduced-
+    // motion so they don't see the same tile list twice.
+    <div className="bg-gray-950 border border-gray-800 rounded-md overflow-hidden motion-reduce:overflow-x-auto">
       <div
         className={`flex items-stretch gap-2 px-3 sm:px-6 py-2 w-max ${
           shouldAnimate ? 'ticker-track' : ''
@@ -170,8 +176,15 @@ export function ScoreTicker() {
         style={shouldAnimate ? ({ '--ticker-duration': duration } as React.CSSProperties) : undefined}
       >
         {entries.map((e, i) => renderEntry(e, `a-${i}`))}
-        {shouldAnimate &&
-          entries.map((e, i) => renderEntry(e, `b-${i}`))}
+        {shouldAnimate && (
+          // `display: contents` means this wrapper is invisible to flex
+          // layout (gap-2 still applies between each tile and its neighbors).
+          // `motion-reduce:hidden` collapses the wrapper to `display: none`
+          // under reduced-motion so the duplicate copy disappears entirely.
+          <div className="contents motion-reduce:hidden">
+            {entries.map((e, i) => renderEntry(e, `b-${i}`))}
+          </div>
+        )}
       </div>
     </div>
   );
