@@ -4,6 +4,7 @@ pub mod players;
 pub mod predict;
 pub mod seasons;
 pub mod teams;
+pub mod ticker;
 pub mod transfers;
 
 use crate::AppState;
@@ -18,5 +19,6 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(predict::router())
         .merge(archetypes::router())
         .merge(seasons::router())
+        .merge(ticker::router())
         .merge(transfers::router())
 }

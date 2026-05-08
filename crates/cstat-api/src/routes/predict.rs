@@ -288,6 +288,34 @@ async fn predict_neutral_symmetric(
     })
 }
 
+/// Convenience wrapper for surfaces that just need a single per-matchup
+/// margin + win probability (e.g. the score-ticker upcoming-games strip).
+/// Returns `(predicted_margin, home_win_probability)`. Skips the symmetric
+/// reverse-prediction used for neutral-site tournament games — a few-tenths
+/// directional bias on neutrals is fine for a glance surface.
+pub async fn predict_margin_and_winprob(
+    state: &Arc<AppState>,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    season: i32,
+    is_neutral: bool,
+    is_conference: bool,
+) -> Result<(f32, f64), String> {
+    let explained = run_predict(
+        state,
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+    )
+    .await?;
+    Ok((
+        explained.prediction.predicted_margin,
+        explained.prediction.home_win_probability,
+    ))
+}
+
 async fn run_predict(
     state: &Arc<AppState>,
     home_team_id: Uuid,

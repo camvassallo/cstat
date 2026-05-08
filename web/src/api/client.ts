@@ -630,3 +630,23 @@ export function fetchGames(params: { date?: string; team?: string; season?: numb
     },
   );
 }
+
+// Score ticker — recent completed + soonest upcoming with per-game predictions
+export interface UpcomingTile extends GameResult {
+  predicted_margin: number;
+  home_win_probability: number;
+}
+
+export interface TickerResponse {
+  season: number;
+  past: GameResult[];
+  upcoming: UpcomingTile[];
+}
+
+export function fetchTicker(params: { season?: number; past?: number; future?: number } = {}) {
+  return fetchJson<TickerResponse>('/ticker', {
+    season: params.season?.toString(),
+    past: params.past?.toString(),
+    future: params.future?.toString(),
+  });
+}

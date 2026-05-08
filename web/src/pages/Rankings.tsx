@@ -4,6 +4,7 @@ import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-communi
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
 import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
+import { ScoreTicker } from '../components/ScoreTicker';
 import { pctileTextColor } from '../components/pctile';
 import { useSeason } from '../components/season';
 import { SeasonLink } from '../components/SeasonLink';
@@ -93,29 +94,36 @@ function buildColumns(
   view: RankingsView,
   isMobile: boolean,
 ): ColDef<TeamRanking>[] {
-  // Helper for flex-distributed columns. AG Grid normalizes `flex` weights
-  // so we can pass natural width values directly as the weight: a column
-  // with flex=200 gets 2.5× the share of one with flex=80, preserving
-  // proportional sizing.
+  // Column sizing strategy differs by viewport:
   //
-  // `minWidth` is set ~20px below natural with a 65px absolute floor — this
-  // gives the 14-column Offense/Defense view room to compress without
-  // forcing horizontal scroll, while still keeping every header readable.
-  // Use the second argument for columns whose header text needs more room
-  // (e.g. "OpTOV%").
-  const flexCol = (w: number, min?: number) => ({
-    flex: w,
-    minWidth: min ?? Math.max(65, w - 20),
-  });
+  // - Desktop: flex-distributed so columns expand to fill the container. AG
+  //   Grid normalizes flex weights, so we pass natural-width values directly
+  //   (flex=200 gets 2.5× the share of flex=80). minWidth is ~20px below
+  //   natural with a 65px floor.
+  // - Mobile: fixed natural width. Container is narrower than the sum of
+  //   columns, so AG Grid horizontal-scrolls — cleaner than compressing
+  //   columns to a sub-natural minWidth and clipping headers/values.
+  const flexCol = (w: number, min?: number) =>
+    isMobile
+      ? { width: w }
+      : { flex: w, minWidth: min ?? Math.max(65, w - 20) };
 
   const base: ColDef<TeamRanking>[] = [
     // Pinned identity columns stay at fixed width (don't flex with the
     // content area; AG Grid recommends fixed widths for pinned cols).
-    { field: 'rank', headerName: 'Rk', width: isMobile ? 44 : 60, pinned: 'left' },
+    // Explicit `wrapHeaderText: false` so a tall header row caused by another
+    // column doesn't visually push "Rk" into a multi-line layout.
+    {
+      field: 'rank',
+      headerName: 'Rk',
+      width: 70,
+      pinned: 'left',
+      wrapHeaderText: false,
+    },
     {
       field: 'name',
       headerName: 'Team',
-      width: isMobile ? 140 : 200,
+      width: isMobile ? 160 : 200,
       pinned: 'left',
       // Let long team names wrap onto a second line on mobile rather than
       // clipping with ellipsis. Row height of 48 fits two lines of text-sm.
@@ -295,6 +303,9 @@ export default function Rankings() {
 
   return (
     <div>
+      <div className="mb-4">
+        <ScoreTicker />
+      </div>
       <TableToolbar
         title="Team Rankings"
         count={teams.length || null}
