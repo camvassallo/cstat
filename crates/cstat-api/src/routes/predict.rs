@@ -301,8 +301,15 @@ pub async fn predict_margin_and_winprob(
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<(f32, f64), String> {
-    let explained =
-        run_predict(state, home_team_id, away_team_id, season, is_neutral, is_conference).await?;
+    let explained = run_predict(
+        state,
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+    )
+    .await?;
     Ok((
         explained.prediction.predicted_margin,
         explained.prediction.home_win_probability,
