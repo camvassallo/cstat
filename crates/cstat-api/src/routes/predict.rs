@@ -8,12 +8,18 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use cstat_core::inference::Prediction;
+use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES, Prediction};
 
 use crate::AppState;
+
+/// How many individual features to list in `top_contributors`. Eight is
+/// roughly what fits in a horizontal-bar panel without becoming noise; the
+/// rest are still summarised in `contributions_by_group`.
+const TOP_CONTRIBUTORS: usize = 8;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/predict", get(predict))
@@ -87,8 +93,10 @@ async fn predict(
 
     // Run the predictor with explicit venue semantics. Neutral games are
     // symmetrised inside the helper so argument order doesn't change the
-    // answer.
-    let prediction = predict_with_venue(
+    // answer. The returned `Explained` carries both the headline numbers
+    // and per-feature ablation deltas + the input feature vector itself
+    // (already sign-flipped to the home perspective for the Away venue).
+    let explained = predict_with_venue(
         &state,
         home_team.id,
         away_team.id,
@@ -104,7 +112,7 @@ async fn predict(
         )
     })?;
 
-    let predicted_winner = if prediction.predicted_margin > 0.0 {
+    let predicted_winner = if explained.prediction.predicted_margin > 0.0 {
         &home_team.name
     } else {
         &away_team.name
@@ -116,20 +124,35 @@ async fn predict(
         Venue::Neutral => "neutral",
     };
 
+    let (top_contributors, contributions_by_group) =
+        build_contribution_payload(&explained.feature_values, &explained.contributions);
+
     Ok(Json(json!({
         "home_team": home_team.name,
         "away_team": away_team.name,
         "venue": venue_str,
-        "predicted_margin": (prediction.predicted_margin as f64 * 10.0).round() / 10.0,
-        "home_win_probability": (prediction.home_win_probability * 1000.0).round() / 1000.0,
+        "predicted_margin": (explained.prediction.predicted_margin as f64 * 10.0).round() / 10.0,
+        "home_win_probability": (explained.prediction.home_win_probability * 1000.0).round() / 1000.0,
         "predicted_winner": predicted_winner,
+        "top_contributors": top_contributors,
+        "contributions_by_group": contributions_by_group,
     })))
 }
 
+/// Headline prediction plus the inputs and ablation deltas needed to
+/// render the explainability panel. All values are from the caller's
+/// `home_team` perspective, regardless of venue (positive contribution =
+/// pushed margin toward home_team).
+struct Explained {
+    prediction: Prediction,
+    feature_values: [f32; NUM_FEATURES],
+    contributions: [f32; NUM_FEATURES],
+}
+
 /// Run the predictor with explicit venue semantics, including symmetric
-/// averaging for neutral games. Margins and win probabilities in the
-/// returned `Prediction` are always from the `home_team_id` perspective
-/// (positive margin = `home_team_id` wins).
+/// averaging for neutral games. All fields in the returned `Explained`
+/// are from the caller's `home_team_id` perspective (positive margin /
+/// contribution = pushed toward home_team).
 async fn predict_with_venue(
     state: &Arc<AppState>,
     home_team_id: Uuid,
@@ -137,7 +160,7 @@ async fn predict_with_venue(
     season: i32,
     venue: Venue,
     is_conference: bool,
-) -> Result<Prediction, String> {
+) -> Result<Explained, String> {
     match venue {
         Venue::Home => {
             run_predict(
@@ -153,8 +176,18 @@ async fn predict_with_venue(
         Venue::Away => {
             // Caller's "home" param is actually the visitor. Swap before
             // feature extraction (so the model sees the true host as home),
-            // then negate the margin / flip the win prob so the result is
-            // reported from the caller's `home_team_id` perspective.
+            // then flip the result back to the caller's home perspective.
+            //   - margin negates (m_home = -m_swap)
+            //   - win prob mirrors around 0.5
+            //   - contributions all negate (the entire margin frame flipped,
+            //     so "pushed toward swap-home" becomes "pushed toward
+            //     caller-away" with a sign flip — applies to flag features
+            //     too, since their contribution is measured against the
+            //     same margin)
+            //   - feature_values for diff_* features negate (the diff
+            //     reverses direction when teams swap), but the two flag
+            //     features stay (someone is still hosting; conference
+            //     match is symmetric).
             let swapped = run_predict(
                 state,
                 away_team_id,
@@ -164,9 +197,23 @@ async fn predict_with_venue(
                 is_conference,
             )
             .await?;
-            Ok(Prediction {
-                predicted_margin: -swapped.predicted_margin,
-                home_win_probability: 1.0 - swapped.home_win_probability,
+            let mut feature_values = swapped.feature_values;
+            let mut contributions = swapped.contributions;
+            for (i, v) in feature_values.iter_mut().enumerate() {
+                if !is_flag_feature(i) {
+                    *v = -*v;
+                }
+            }
+            for c in &mut contributions {
+                *c = -*c;
+            }
+            Ok(Explained {
+                prediction: Prediction {
+                    predicted_margin: -swapped.prediction.predicted_margin,
+                    home_win_probability: 1.0 - swapped.prediction.home_win_probability,
+                },
+                feature_values,
+                contributions,
             })
         }
         Venue::Neutral => {
@@ -196,7 +243,7 @@ async fn predict_neutral_symmetric(
     away_team_id: Uuid,
     season: i32,
     is_conference: bool,
-) -> Result<Prediction, String> {
+) -> Result<Explained, String> {
     let (fwd, rev) = tokio::try_join!(
         run_predict(
             state,
@@ -216,10 +263,33 @@ async fn predict_neutral_symmetric(
         ),
     )?;
 
-    let symmetric_margin = 0.5 * (fwd.predicted_margin - rev.predicted_margin);
-    Ok(Prediction {
-        predicted_margin: symmetric_margin,
-        home_win_probability: margin_to_win_prob(symmetric_margin),
+    let symmetric_margin =
+        0.5 * (fwd.prediction.predicted_margin - rev.prediction.predicted_margin);
+
+    // Symmetrise feature values and contributions the same way: each is
+    // averaged against its sign-flipped counterpart from the reverse
+    // call, except flag features (venue, is_conference_game) whose
+    // values stay the same regardless of team order. Contributions
+    // always flip uniformly because the margin frame flips.
+    let mut feature_values = [0.0_f32; NUM_FEATURES];
+    let mut contributions = [0.0_f32; NUM_FEATURES];
+    for i in 0..NUM_FEATURES {
+        let fv_rev_in_home_frame = if is_flag_feature(i) {
+            rev.feature_values[i]
+        } else {
+            -rev.feature_values[i]
+        };
+        feature_values[i] = 0.5 * (fwd.feature_values[i] + fv_rev_in_home_frame);
+        contributions[i] = 0.5 * (fwd.contributions[i] - rev.contributions[i]);
+    }
+
+    Ok(Explained {
+        prediction: Prediction {
+            predicted_margin: symmetric_margin,
+            home_win_probability: margin_to_win_prob(symmetric_margin),
+        },
+        feature_values,
+        contributions,
     })
 }
 
@@ -230,7 +300,7 @@ async fn run_predict(
     season: i32,
     is_neutral: bool,
     is_conference: bool,
-) -> Result<Prediction, String> {
+) -> Result<Explained, String> {
     let features = cstat_core::features::build_game_features(
         &state.db.pool,
         home_team_id,
@@ -242,9 +312,10 @@ async fn run_predict(
     .await
     .map_err(|e| format!("feature extraction failed: {e}"))?;
 
-    let mut p = state
+    // Single batched call covers full prediction + ablation deltas.
+    let attributed = state
         .predictor
-        .predict(&features)
+        .predict_with_contributions(&features)
         .map_err(|e| format!("prediction failed: {e}"))?;
 
     // Override the standalone win-classifier output with a margin-derived
@@ -254,8 +325,95 @@ async fn run_predict(
     // winner = X" alongside "X has 49% win probability". Tying the win
     // probability to margin via a calibrated logistic guarantees the two
     // signals always agree on direction.
-    p.home_win_probability = margin_to_win_prob(p.predicted_margin);
-    Ok(p)
+    Ok(Explained {
+        prediction: Prediction {
+            predicted_margin: attributed.predicted_margin,
+            home_win_probability: margin_to_win_prob(attributed.predicted_margin),
+        },
+        feature_values: features,
+        contributions: attributed.contributions,
+    })
+}
+
+/// Whether the feature at `i` is a 0/1 indicator (venue, conference
+/// game) rather than a `home − away` diff. Flag features don't reverse
+/// sign when the teams swap, so they need special handling in venue
+/// transforms.
+fn is_flag_feature(i: usize) -> bool {
+    matches!(FEATURE_NAMES[i], "venue" | "is_conference_game")
+}
+
+/// Build the JSON-shaped contribution panel from raw ablation deltas.
+///
+/// Returns `(top_contributors, by_group)`. `top_contributors` lists the
+/// individual features with the largest |contribution|, capped at
+/// [`TOP_CONTRIBUTORS`]. `by_group` sums contributions inside each
+/// human-readable group (e.g. "Roster impact", "Adjusted efficiency"),
+/// sorted by total |contribution| desc — handy for a stacked-bar UI.
+fn build_contribution_payload(
+    feature_values: &[f32; NUM_FEATURES],
+    contributions: &[f32; NUM_FEATURES],
+) -> (Vec<Value>, Vec<Value>) {
+    // Per-feature details, sorted by |contribution| desc.
+    let mut details: Vec<(usize, f32)> = contributions
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i, *c))
+        .collect();
+    details.sort_by(|a, b| {
+        b.1.abs()
+            .partial_cmp(&a.1.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let top_contributors = details
+        .iter()
+        .take(TOP_CONTRIBUTORS)
+        .map(|(i, c)| {
+            json!({
+                "name": FEATURE_NAMES[*i],
+                "label": FEATURE_META[*i].label,
+                "group": FEATURE_META[*i].group,
+                "value": round1(feature_values[*i] as f64),
+                "contribution": round1(*c as f64),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Group totals.
+    let mut group_sums: BTreeMap<&'static str, (f32, usize)> = BTreeMap::new();
+    for (i, c) in contributions.iter().enumerate() {
+        let g = FEATURE_META[i].group;
+        let entry = group_sums.entry(g).or_insert((0.0, 0));
+        entry.0 += c;
+        entry.1 += 1;
+    }
+    let mut group_vec: Vec<(&'static str, f32, usize)> = group_sums
+        .into_iter()
+        .map(|(g, (sum, n))| (g, sum, n))
+        .collect();
+    group_vec.sort_by(|a, b| {
+        b.1.abs()
+            .partial_cmp(&a.1.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let by_group = group_vec
+        .into_iter()
+        .map(|(g, sum, n)| {
+            json!({
+                "group": g,
+                "contribution": round1(sum as f64),
+                "feature_count": n,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    (top_contributors, by_group)
+}
+
+fn round1(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
 }
 
 /// Standard deviation of college basketball game-margin residuals. Sourced
