@@ -344,12 +344,20 @@ export default function Rankings() {
           </>
         }
       />
-      <div style={{ height: 'calc(100dvh - 160px)', minHeight: '400px', width: '100%' }}>
+      {/* `domLayout="autoHeight"` lets the grid grow to fit all ~360 D-I
+          teams in the page flow rather than living inside a viewport-bound
+          internal-scroll container. The page itself becomes the only scroll
+          surface, which avoids the nested-scroll UX where you have to scroll
+          the page until the table is in view, then scroll the table to see
+          lower-ranked teams. AG Grid still handles horizontal scroll
+          internally when columns exceed container width. */}
+      <div style={{ width: '100%' }}>
         <AgGridReact<TeamRanking>
           theme={gridTheme}
           rowData={teams}
           columnDefs={columns}
           loading={loading}
+          domLayout="autoHeight"
           rowHeight={48}
           quickFilterText={search}
           defaultColDef={{
