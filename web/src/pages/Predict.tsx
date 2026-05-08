@@ -321,8 +321,20 @@ function KeyItem({ k }: { k: Key }) {
   );
 }
 
-/// Format the headline feature's value as a phrase from the leading team's
-/// perspective: "+7.40 in Duke's favor" or "0.10 lower (Duke's defense)".
+/// Render the parenthetical that follows the headline feature label
+/// (e.g. "Headlined by Adj efficiency margin <here>").
+///
+/// Returns one of:
+///   - "(home court factor)" / "(neutral site)" / "(conference matchup)" /
+///     "(non-conference matchup)" for the two flag features
+///   - "(teams essentially tied on this stat)" when the rounded value is
+///     near zero
+///   - "(gap of 7.40 in Duke's favor)" — the common case
+///   - "(gap of 0.10 the other way — outweighed by other Duke edges in
+///     this group)" when the headline feature's data direction conflicts
+///     with the group-level signed importance (rare, but possible when
+///     several features in the same group disagree)
+///
 /// We avoid showing the model's signed contribution here — that's where
 /// ablation artifacts produced the original bug ("Purdue +0.10 worth -0.9
 /// on the spread" was nonsensical to readers).
