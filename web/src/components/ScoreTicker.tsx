@@ -72,9 +72,17 @@ function UpcomingTileView({ g, season }: { g: UpcomingTile; season: number }) {
   const spread = `−${Math.abs(g.predicted_margin).toFixed(1)}`;
   const winProb = homeFavored ? g.home_win_probability : 1 - g.home_win_probability;
   const winPct = `${Math.round(winProb * 100)}%`;
-  const predictTo = `/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`;
-  return (
-    <Link to={seasonHref(predictTo, season)} className={TILE_CLASSES}>
+  // Build the deep link only when both team names resolved — Predict looks
+  // teams up by name and would 404 on the placeholder "—". Pass `venue=neutral`
+  // through to Predict when the schedule says so; otherwise the page would
+  // default to home venue and disagree with the ticker's prediction.
+  const canDeepLink = g.home_team_name != null && g.away_team_name != null;
+  const venueParam = g.is_neutral_site ? '&venue=neutral' : '';
+  const predictTo = canDeepLink
+    ? `/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}${venueParam}`
+    : null;
+  const body = (
+    <>
       <div className="text-xs text-gray-300 truncate">
         {home} <span className="text-gray-500">vs</span> {away}
       </div>
@@ -84,6 +92,12 @@ function UpcomingTileView({ g, season }: { g: UpcomingTile; season: number }) {
         <span className="text-gray-500">({winPct})</span>
       </div>
       <div className="text-[10px] text-gray-500 mt-0.5">UPCOMING · {shortDate(g.game_date)}</div>
+    </>
+  );
+  if (!predictTo) return <div className={TILE_CLASSES}>{body}</div>;
+  return (
+    <Link to={seasonHref(predictTo, season)} className={TILE_CLASSES}>
+      {body}
     </Link>
   );
 }
@@ -92,11 +106,13 @@ type TickerEntry =
   | { kind: 'past'; data: GameResult }
   | { kind: 'upcoming'; data: UpcomingTile };
 
-/** Sticky auto-scrolling marquee rendered in `Layout` between the top nav
- *  and main content. Upcoming games come first (more news-worthy), then
- *  recent finals. Hovering the strip pauses the animation so users can read.
- *  Hidden if there's nothing to show; auto-scroll disables when content fits
- *  the viewport (< 1.5× width) so a small tile count doesn't loop weirdly. */
+/** Auto-scrolling marquee at the top of the Rankings homepage. Upcoming
+ *  games come first (more news-worthy), then recent finals. Hovering the
+ *  strip pauses the animation so users can read; honors `prefers-reduced-
+ *  motion` via the keyframe in `index.css`. Animates whenever there are at
+ *  least 2 tiles regardless of viewport — the duplicated-track marquee
+ *  loops seamlessly even when content fits. Hidden entirely if there's
+ *  nothing to show. */
 export function ScoreTicker() {
   const { season } = useSeason();
   const [data, setData] = useState<TickerResponse | null>(null);
