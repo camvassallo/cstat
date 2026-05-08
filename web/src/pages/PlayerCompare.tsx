@@ -29,6 +29,10 @@ import { campomTier, campomTierColor } from '../components/campom';
 import { ClassTooltip } from '../components/Archetype';
 import { classColor } from '../components/archetypeColors';
 import { useIsMobile } from '../components/useIsMobile';
+import { resolveAxes } from '../components/radarAxes';
+import { RadarAxisTooltip } from '../components/RadarAxisTooltip';
+import { RadarTick } from '../components/RadarTick';
+import { useDismissOnOutside } from '../components/useDismissOnOutside';
 
 const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
 const MAX_PLAYERS = 4;
@@ -375,6 +379,10 @@ export default function PlayerCompare() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showChips, setShowChips] = useState(true);
+  const [selectedAxis, setSelectedAxis] = useState<string | null>(null);
+  const radarRef = useDismissOnOutside(selectedAxis !== null, () =>
+    setSelectedAxis(null),
+  );
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -464,27 +472,32 @@ export default function PlayerCompare() {
       ];
 
   // ---------- radar overlay ----------
+  // Resolve each player once; the radar reads `.value`, the tooltip reads
+  // the matched axis entry for the active spoke.
+  const resolvedPerPlayer = useMemo(
+    () =>
+      players.map((p) =>
+        resolveAxes({
+          season_stats: p.season_stats,
+          percentiles: p.percentiles,
+          torvik_stats: p.torvik_stats,
+        }),
+      ),
+    [players],
+  );
   const radarData = useMemo(() => {
-    if (players.length === 0) return [];
-    const axes = [
-      { stat: 'Scoring', get: (p: ComparePlayer) => p.percentiles?.ppg_pct ?? 0 },
-      { stat: 'Efficiency', get: (p: ComparePlayer) => p.percentiles?.true_shooting_pct_pct ?? 0 },
-      { stat: '3PT', get: (p: ComparePlayer) => p.percentiles?.tp_pct_pct ?? 0 },
-      { stat: 'Playmaking', get: (p: ComparePlayer) => p.percentiles?.ast_pct_pct ?? p.percentiles?.apg_pct ?? 0 },
-      { stat: 'Usage', get: (p: ComparePlayer) => p.percentiles?.usage_rate_pct ?? 0 },
-      { stat: 'Steals', get: (p: ComparePlayer) => p.percentiles?.stl_pct_pct ?? p.torvik_stats?.stl_pct_pct ?? p.percentiles?.spg_pct ?? 0 },
-      { stat: 'Blocks', get: (p: ComparePlayer) => p.percentiles?.blk_pct_pct ?? p.torvik_stats?.blk_pct_pct ?? p.percentiles?.bpg_pct ?? 0 },
-      { stat: 'Rebounding', get: (p: ComparePlayer) => p.percentiles?.drb_pct_pct ?? p.torvik_stats?.drb_pct_pct ?? p.percentiles?.rpg_pct ?? 0 },
-      { stat: 'Def Rating', get: (p: ComparePlayer) => p.torvik_stats?.adj_de_pct ?? p.percentiles?.defensive_rating_pct ?? 0 },
-    ];
-    return axes.map((axis) => {
-      const row: Record<string, number | string> = { stat: axis.stat };
-      players.forEach((p, i) => {
-        row[`p${i}`] = (axis.get(p) ?? 0) * 100;
+    if (resolvedPerPlayer.length === 0) return [];
+    const axisCount = resolvedPerPlayer[0]?.length ?? 0;
+    return Array.from({ length: axisCount }, (_, axisIdx) => {
+      const row: Record<string, number | string> = {
+        stat: resolvedPerPlayer[0][axisIdx].stat,
+      };
+      resolvedPerPlayer.forEach((axes, i) => {
+        row[`p${i}`] = axes[axisIdx]?.value ?? 0;
       });
       return row;
     });
-  }, [players]);
+  }, [resolvedPerPlayer]);
 
   // ---------- rolling form overlay ----------
   const rollingData = useMemo(() => {
@@ -589,12 +602,26 @@ export default function PlayerCompare() {
           </div>
 
           {radarData.length > 0 && (
-            <div className="bg-gray-800 rounded-lg p-5">
+            <div
+              ref={radarRef as React.RefObject<HTMLDivElement>}
+              className="bg-gray-800 rounded-lg p-5 relative"
+            >
               <h2 className="text-lg font-bold mb-3">Percentile Profile</h2>
               <ResponsiveContainer width="100%" height={isMobile ? 280 : 360}>
                 <RadarChart data={radarData}>
                   <PolarGrid stroke="#475569" />
-                  <PolarAngleAxis dataKey="stat" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <PolarAngleAxis
+                    dataKey="stat"
+                    tick={(props) => (
+                      <RadarTick
+                        {...props}
+                        selected={selectedAxis === props.payload?.value}
+                        onSelect={(s) =>
+                          setSelectedAxis((prev) => (prev === s ? null : s))
+                        }
+                      />
+                    )}
+                  />
                   <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
                   {players.map((p, i) => (
                     <Radar
@@ -609,6 +636,24 @@ export default function PlayerCompare() {
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                 </RadarChart>
               </ResponsiveContainer>
+              {selectedAxis &&
+                (() => {
+                  const axisIdx = resolvedPerPlayer[0]?.findIndex(
+                    (a) => a.stat === selectedAxis,
+                  );
+                  if (axisIdx == null || axisIdx < 0) return null;
+                  const resolutions = resolvedPerPlayer.map((axes, i) => ({
+                    ...axes[axisIdx],
+                    playerLabel: players[i].player.name,
+                    playerColor: PLAYER_COLORS[i],
+                  }));
+                  return (
+                    <RadarAxisTooltip
+                      resolutions={resolutions}
+                      onClose={() => setSelectedAxis(null)}
+                    />
+                  );
+                })()}
             </div>
           )}
 

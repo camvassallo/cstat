@@ -22,6 +22,10 @@ import { SeasonLink } from '../components/SeasonLink';
 import { seasonHref, setPageSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
+import { resolveAxes } from '../components/radarAxes';
+import { RadarAxisTooltip } from '../components/RadarAxisTooltip';
+import { RadarTick } from '../components/RadarTick';
+import { useDismissOnOutside } from '../components/useDismissOnOutside';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
@@ -70,6 +74,10 @@ export default function PlayerDetail() {
   const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
   const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedAxis, setSelectedAxis] = useState<string | null>(null);
+  const radarRef = useDismissOnOutside(selectedAxis !== null, () =>
+    setSelectedAxis(null),
+  );
   const isMobile = useIsMobile();
   usePageTitle(player ? `${player.name} ${player.season}` : null);
 
@@ -144,19 +152,13 @@ export default function PlayerDetail() {
   if (loading) return <div className="text-gray-400">Loading...</div>;
   if (!player) return <div className="text-red-400">Player not found</div>;
 
-  const radarData = percentiles
-    ? [
-        { stat: 'Scoring', value: (percentiles.ppg_pct ?? 0) * 100 },
-        { stat: 'Efficiency', value: (percentiles.true_shooting_pct_pct ?? 0) * 100 },
-        { stat: '3PT', value: (percentiles.tp_pct_pct ?? 0) * 100 },
-        { stat: 'Playmaking', value: (percentiles.ast_pct_pct ?? percentiles.apg_pct ?? 0) * 100 },
-        { stat: 'Usage', value: (percentiles.usage_rate_pct ?? 0) * 100 },
-        { stat: 'Steals', value: (percentiles.stl_pct_pct ?? torvik?.stl_pct_pct ?? percentiles.spg_pct ?? 0) * 100 },
-        { stat: 'Blocks', value: (percentiles.blk_pct_pct ?? torvik?.blk_pct_pct ?? percentiles.bpg_pct ?? 0) * 100 },
-        { stat: 'Rebounding', value: (percentiles.drb_pct_pct ?? torvik?.drb_pct_pct ?? percentiles.rpg_pct ?? 0) * 100 },
-        { stat: 'Def Rating', value: (torvik?.adj_de_pct ?? percentiles.defensive_rating_pct ?? 0) * 100 },
-      ]
+  const resolvedAxes = percentiles
+    ? resolveAxes({ season_stats: stats, percentiles, torvik_stats: torvik })
     : [];
+  const radarData = resolvedAxes.map((a) => ({ stat: a.stat, value: a.value }));
+  const selectedResolved = selectedAxis
+    ? resolvedAxes.find((a) => a.stat === selectedAxis)
+    : null;
 
   const rollingData = gameLog
     .filter((g) => g.rolling_game_score != null)
@@ -241,16 +243,36 @@ export default function PlayerDetail() {
 
           {/* Radar Chart */}
           {radarData.length > 0 && (
-            <div className="bg-gray-800 rounded-lg p-5">
+            <div
+              ref={radarRef as React.RefObject<HTMLDivElement>}
+              className="bg-gray-800 rounded-lg p-5 relative"
+            >
               <h2 className="text-lg font-bold mb-3">Percentile Profile</h2>
               <ResponsiveContainer width="100%" height={isMobile ? 240 : 300}>
                 <RadarChart data={radarData}>
                   <PolarGrid stroke="#475569" />
-                  <PolarAngleAxis dataKey="stat" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <PolarAngleAxis
+                    dataKey="stat"
+                    tick={(props) => (
+                      <RadarTick
+                        {...props}
+                        selected={selectedAxis === props.payload?.value}
+                        onSelect={(s) =>
+                          setSelectedAxis((prev) => (prev === s ? null : s))
+                        }
+                      />
+                    )}
+                  />
                   <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
                   <Radar dataKey="value" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} />
                 </RadarChart>
               </ResponsiveContainer>
+              {selectedResolved && (
+                <RadarAxisTooltip
+                  resolutions={[selectedResolved]}
+                  onClose={() => setSelectedAxis(null)}
+                />
+              )}
             </div>
           )}
         </div>
