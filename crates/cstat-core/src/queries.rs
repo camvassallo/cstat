@@ -1192,6 +1192,80 @@ pub async fn get_torvik_stats(
 // Game queries
 // ---------------------------------------------------------------------------
 
+/// Most-recent completed games for the score ticker. Ordered date DESC.
+pub async fn get_recent_games(
+    pool: &PgPool,
+    season: i32,
+    limit: i64,
+) -> Result<Vec<GameResult>, sqlx::Error> {
+    sqlx::query_as::<_, GameResult>(
+        r#"
+        SELECT
+            g.id AS game_id,
+            g.game_date,
+            g.season,
+            g.home_team_id,
+            COALESCE(ht.short_name, ht.name) AS home_team_name,
+            g.away_team_id,
+            COALESCE(at.short_name, at.name) AS away_team_name,
+            g.home_score,
+            g.away_score,
+            g.is_neutral_site,
+            g.is_conference,
+            g.is_postseason
+        FROM games g
+        LEFT JOIN teams ht ON ht.id = g.home_team_id AND ht.season = g.season
+        LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
+        WHERE g.season = $1 AND g.home_score IS NOT NULL
+        ORDER BY g.game_date DESC, g.id
+        LIMIT $2
+        "#,
+    )
+    .bind(season)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Soonest upcoming games (scheduled, not yet played) for the score ticker.
+/// Returns rows when `games` has unplayed entries dated today or later — in
+/// the offseason this is empty until next season's schedule is ingested.
+pub async fn get_upcoming_games(
+    pool: &PgPool,
+    season: i32,
+    limit: i64,
+) -> Result<Vec<GameResult>, sqlx::Error> {
+    sqlx::query_as::<_, GameResult>(
+        r#"
+        SELECT
+            g.id AS game_id,
+            g.game_date,
+            g.season,
+            g.home_team_id,
+            COALESCE(ht.short_name, ht.name) AS home_team_name,
+            g.away_team_id,
+            COALESCE(at.short_name, at.name) AS away_team_name,
+            g.home_score,
+            g.away_score,
+            g.is_neutral_site,
+            g.is_conference,
+            g.is_postseason
+        FROM games g
+        LEFT JOIN teams ht ON ht.id = g.home_team_id AND ht.season = g.season
+        LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
+        WHERE g.season = $1
+          AND g.home_score IS NULL
+          AND g.game_date >= CURRENT_DATE
+        ORDER BY g.game_date ASC, g.id
+        LIMIT $2
+        "#,
+    )
+    .bind(season)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_games(
     pool: &PgPool,
     date: Option<NaiveDate>,

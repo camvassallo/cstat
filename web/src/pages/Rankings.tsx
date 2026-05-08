@@ -4,6 +4,7 @@ import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-communi
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
 import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
+import { ScoreTicker } from '../components/ScoreTicker';
 import { pctileTextColor } from '../components/pctile';
 import { useSeason } from '../components/season';
 import { SeasonLink } from '../components/SeasonLink';
@@ -302,6 +303,9 @@ export default function Rankings() {
 
   return (
     <div>
+      <div className="mb-4">
+        <ScoreTicker />
+      </div>
       <TableToolbar
         title="Team Rankings"
         count={teams.length || null}

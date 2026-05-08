@@ -6,3 +6,29 @@ body {
   color: #e5e7eb;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
+
+/* Score-ticker marquee. The track holds two back-to-back copies of the tile
+ * list and translates from 0 → -50% over a fixed duration so the second copy
+ * lands exactly where the first started — seamless loop. Pauses on hover so
+ * users can read; honors the user's reduced-motion preference. Speed is the
+ * `--ticker-duration` custom property on the track so the component can
+ * dial it from React without redefining the keyframe. */
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.ticker-track {
+  animation: ticker-scroll var(--ticker-duration, 60s) linear infinite;
+  will-change: transform;
+}
+
+.ticker-track:hover {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track {
+    animation: none;
+  }
+}
