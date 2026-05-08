@@ -13,23 +13,16 @@ import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from '../components/campom';
 import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
+import { fracPct, pointPct } from '../components/format';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
 import { SeasonLink } from '../components/SeasonLink';
 import { useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
-import { useIsMobile } from '../components/useIsMobile';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');
-// pss stores rate stats with mixed scale conventions:
-//   ast_pct / tov_pct / ft_rate / usage_rate / true_shooting_pct / eFG%:
-//     fractions (0–1) — need ×100 for display
-//   orb_pct / drb_pct / stl_pct / blk_pct:
-//     already in percent points (0–100) — no scaling
-const fracPct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
-const pointPct = (v: number | null) => (v != null ? v.toFixed(1) : '—');
 
 const PAGE_SIZE = 100;
 
@@ -103,7 +96,7 @@ function gradientCellStyle(
   };
 }
 
-function buildColumns(view: ColumnView, isMobile: boolean): ColDef<PlayerRow>[] {
+function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
   // Pinned identity / context columns. Mirrors the roster table's first block
   // (Player | Class) plus team / conf which the roster doesn't need (already
   // scoped to one team).
@@ -111,10 +104,13 @@ function buildColumns(view: ColumnView, isMobile: boolean): ColDef<PlayerRow>[] 
     {
       field: 'name',
       headerName: 'Player',
-      width: isMobile ? 150 : 180,
+      // Use the same natural width on mobile and desktop. Horizontal scroll
+      // (AG Grid default) handles overflow rather than compressing the column
+      // and clipping long names with ellipsis.
+      width: 180,
       pinned: 'left',
-      // Long hyphenated names ("Olusegun-Kupono Aderoju") wrap to a second
-      // line rather than truncating with ellipsis on mobile.
+      // Long hyphenated names ("Olusegun-Kupono Aderoju") still wrap to a
+      // second line at the natural width rather than truncating.
       wrapText: true,
       cellRenderer: (p: { value: string; data?: PlayerRow }) => {
         const id = p.data?.player_id;
@@ -133,7 +129,7 @@ function buildColumns(view: ColumnView, isMobile: boolean): ColDef<PlayerRow>[] 
     {
       field: 'team_name',
       headerName: 'Team',
-      width: isMobile ? 140 : 170,
+      width: 170,
       wrapText: true,
       cellRenderer: (p: { value: string | null; data?: PlayerRow }) => {
         if (!p.value) return <span className="text-gray-500">—</span>;
@@ -279,9 +275,8 @@ export default function Players() {
   const [search, setSearch] = useState('');
   const [total, setTotal] = useState<number | null>(null);
   const gridApiRef = useRef<GridApi<PlayerRow> | null>(null);
-  const isMobile = useIsMobile();
 
-  const columns = useMemo(() => buildColumns(view, isMobile), [view, isMobile]);
+  const columns = useMemo(() => buildColumns(view), [view]);
 
   // Debounce keystroke → backend re-fetch so the API isn't hit on every
   // character. 250ms feels live without flooding the server.

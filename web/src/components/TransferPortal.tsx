@@ -63,11 +63,17 @@ function teamCellRenderer(opts: {
 }
 
 function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
+  // Mobile: fixed natural width (= the existing minWidth) so AG Grid
+  // horizontal-scrolls instead of compressing content. Desktop: keep the
+  // original flex distribution.
+  const flexCol = (flex: number, min: number) =>
+    isMobile ? { width: min } : { flex, minWidth: min };
+
   return [
     {
       headerName: 'Rank',
       field: 'rank_cstat',
-      width: isMobile ? 50 : 70,
+      width: 70,
       pinned: 'left',
       headerTooltip: 'Our rank by CamPom; players with no CamPom value are unranked',
       cellRenderer: (p: { value: number | null }) =>
@@ -80,7 +86,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
     {
       headerName: 'Player',
       field: 'name',
-      width: isMobile ? 130 : 200,
+      width: 200,
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: RankedTransfer }) => {
         const id = p.data?.player_id;
@@ -107,8 +113,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
       colId: 'archetype',
       // Mirrors the Players page column so users see the same primary /
       // secondary archetype combo for each transfer.
-      flex: 2,
-      minWidth: 150,
+      ...flexCol(2, 150),
       sortable: false,
       cellRenderer: (p: { data?: RankedTransfer }) => {
         const cls = p.data?.primary_class;
@@ -135,8 +140,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
     },
     {
       headerName: 'Ht/Wt',
-      flex: 1,
-      minWidth: 80,
+      ...flexCol(1, 80),
       sortable: false,
       valueGetter: (p) => {
         const h = p.data?.height;
@@ -151,8 +155,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
     {
       headerName: 'Previous',
       field: 'previous_team',
-      flex: 2,
-      minWidth: 150,
+      ...flexCol(2, 150),
       cellRenderer: (p: { data?: RankedTransfer }) =>
         teamCellRenderer({
           // Prefer the cstat Torvik short name ("Kansas") when we matched it;
@@ -164,8 +167,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
     {
       headerName: 'Next',
       field: 'next_team',
-      flex: 2,
-      minWidth: 150,
+      ...flexCol(2, 150),
       cellRenderer: (p: { data?: RankedTransfer }) =>
         teamCellRenderer({
           name: p.data?.next_team ?? null,
@@ -177,8 +179,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
     {
       headerName: 'CamPom',
       field: 'campom',
-      flex: 1,
-      minWidth: 100,
+      ...flexCol(1, 100),
       sort: 'desc',
       headerTooltip: 'Our composite player valuation from prior season',
       cellRenderer: campomRenderer,
@@ -187,8 +188,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
     {
       headerName: '247',
       field: 'rank_247',
-      flex: 1,
-      minWidth: 60,
+      ...flexCol(1, 70),
       headerTooltip: '247Sports rank',
       cellRenderer: (p: { value: number }) => (
         <span className="text-gray-400 text-xs">{p.value}</span>
@@ -197,8 +197,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
     {
       headerName: 'Δ',
       field: 'rank_delta',
-      flex: 1,
-      minWidth: 70,
+      ...flexCol(1, 80),
       headerTooltip:
         'Value vs. 247: 247 rank − our rank. Positive (green) means CamPom rates the player higher than 247 does — sort desc to find best values. Negative (red) means CamPom is lower on the player.',
       comparator: (a: number | null, b: number | null) => {

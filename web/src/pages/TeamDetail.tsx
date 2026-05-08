@@ -13,6 +13,7 @@ import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
+import { fracPct, pointPct } from '../components/format';
 import { SeasonLink } from '../components/SeasonLink';
 import { seasonHref, setPageSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
@@ -385,12 +386,6 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
   const sorted = useMemo(() => {
     return [...roster].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir));
   }, [roster, sort]);
-
-  // pss stores rate stats with mixed conventions:
-  //   ast_pct / tov_pct: fractions (0–1), need ×100 for display
-  //   orb_pct / drb_pct / stl_pct / blk_pct: already percent-points (0–100)
-  const fracPct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) : '—');
-  const pointPct = (v: number | null | undefined) => (v != null ? v.toFixed(1) : '—');
 
   return (
     <div>
