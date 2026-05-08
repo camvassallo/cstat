@@ -417,7 +417,7 @@ function GameLogTable({
               const gmscHot = gmscHi != null && g.game_score != null && g.game_score >= gmscHi;
               return (
                 <tr key={g.game_id} className="group border-b border-gray-800 hover:bg-gray-800">
-                  <td className="py-1.5 px-2 text-gray-400 sticky left-0 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
+                  <td className="py-1.5 px-2 text-gray-400 sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
                     {shortDate(g.game_date)}
                   </td>
                   <td className="py-1.5 px-2">

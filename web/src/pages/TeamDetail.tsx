@@ -469,7 +469,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
           <tbody>
             {sorted.map((p) => (
               <tr key={p.player_id} className="group border-b border-gray-800 hover:bg-gray-800">
-                <td className="py-2 px-2 sticky left-0 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
+                <td className="py-2 px-2 sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800 border-r border-gray-700">
                   <SeasonLink to={`/players/${p.player_id}`} className="text-blue-400 hover:underline">
                     {p.name}
                   </SeasonLink>
