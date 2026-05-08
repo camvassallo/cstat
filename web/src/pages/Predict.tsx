@@ -164,10 +164,6 @@ interface Key {
   importance: number;
   tier: 'slight' | 'clear' | 'meaningful' | 'decisive';
   headline?: FeatureContribution;
-  /// Whether the headline feature's stat sign agrees with the group-level
-  /// direction. When false, the model is splitting in a way that doesn't
-  /// match the headline stat — surface a small caveat in the UI.
-  headlineMatchesDirection: boolean;
 }
 
 const TIER_PHRASE: Record<Key['tier'], string> = {
@@ -246,9 +242,6 @@ function generateKeys(result: PredictionResult): Key[] {
     const headline = agg.features.reduce((best, f) =>
       Math.abs(f.contribution) > Math.abs(best.contribution) ? f : best,
     );
-    const headlineSign = homeAdvantageSign(headline.name, headline.value);
-    const headlineMatchesDirection =
-      headlineSign === 0 || (headlineSign > 0) === towardHome;
     keys.push({
       group,
       team: towardHome ? result.home_team : result.away_team,
@@ -256,7 +249,6 @@ function generateKeys(result: PredictionResult): Key[] {
       importance: agg.importance,
       tier,
       headline,
-      headlineMatchesDirection,
     });
   }
   keys.sort((a, b) => b.importance - a.importance);
