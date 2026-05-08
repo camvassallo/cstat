@@ -102,7 +102,7 @@ def load_player_game_stats(engine, seasons=None) -> pd.DataFrame:
                pgs.off_rebounds, pgs.def_rebounds, pgs.total_rebounds,
                pgs.assists, pgs.turnovers, pgs.steals, pgs.blocks,
                pgs.game_score, pgs.usage_rate,
-               pgs.team_fga, pgs.team_fgm, pgs.team_fta, pgs.team_turnovers,
+               pgs.team_fga, tgs.fgm AS team_fgm, pgs.team_fta, pgs.team_turnovers,
                COALESCE(tgs.minutes, 200) AS team_minutes,
                pgs.rolling_ppg, pgs.rolling_rpg, pgs.rolling_apg,
                pgs.rolling_fg_pct, pgs.rolling_ts_pct, pgs.rolling_game_score

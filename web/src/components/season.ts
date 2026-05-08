@@ -10,7 +10,7 @@ import { fetchSeasons } from '../api/client';
 // File-shape note: keep this module .ts (no JSX), separate from
 // `SeasonLink.tsx`. Vite's `react-refresh/only-export-components` lint rule
 // rejects mixing component + non-component exports in a `.tsx` file.
-export const AVAILABLE_SEASONS_FALLBACK: readonly number[] = [2026, 2025];
+export const AVAILABLE_SEASONS_FALLBACK: readonly number[] = [2026, 2025, 2024];
 
 export type Season = number;
 
