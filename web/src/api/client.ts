@@ -542,6 +542,26 @@ export function fetchPlayerCompare(ids: string[], season?: number) {
 // Predict
 export type Venue = 'home' | 'away' | 'neutral';
 
+export interface FeatureContribution {
+  /// Raw feature name (e.g. `diff_w_gbpm`) for keying / debugging.
+  name: string;
+  /// Human-readable label rendered in the UI ("Roster GBPM").
+  label: string;
+  /// Group bucket ("Roster impact", "Adjusted efficiency", …).
+  group: string;
+  /// The diff feature value (home − away) at prediction time.
+  value: number;
+  /// Ablation delta: how much this feature pushed the margin off zero.
+  /// Positive = pushed toward home_team, negative = toward away_team.
+  contribution: number;
+}
+
+export interface GroupContribution {
+  group: string;
+  contribution: number;
+  feature_count: number;
+}
+
 export interface PredictionResult {
   home_team: string;
   away_team: string;
@@ -549,6 +569,8 @@ export interface PredictionResult {
   predicted_margin: number;
   home_win_probability: number;
   predicted_winner: string;
+  top_contributors: FeatureContribution[];
+  contributions_by_group: GroupContribution[];
 }
 
 export function fetchPrediction(
