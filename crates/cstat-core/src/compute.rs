@@ -394,11 +394,14 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
                 ELSE NULL END,
             -- AST% (Basketball Reference): AST / ((MP / (Team_MP / 5)) × Team_FGM − Player_FGM)
             -- Stored as a fraction (multiply by 100 for percent).
-            CASE WHEN (5.0 * SUM(pgs.minutes)::float * SUM(COALESCE(pgs.team_fgm, 0))::float
+            -- Reads team FGM from team_game_stats (authoritative, populated for every
+            -- ingested season) instead of pgs.team_fgm (NatStat playerperfs passthrough,
+            -- which 2024 and earlier seasons may be missing).
+            CASE WHEN (5.0 * SUM(pgs.minutes)::float * SUM(COALESCE(tgs.fgm, 0))::float
                        / NULLIF(SUM(COALESCE(tgs.minutes, 200))::float, 0)
                        - SUM(pgs.fgm)::float) > 0
                 THEN ROUND((SUM(pgs.assists)::float / (
-                    5.0 * SUM(pgs.minutes)::float * SUM(COALESCE(pgs.team_fgm, 0))::float
+                    5.0 * SUM(pgs.minutes)::float * SUM(COALESCE(tgs.fgm, 0))::float
                         / NULLIF(SUM(COALESCE(tgs.minutes, 200))::float, 0)
                     - SUM(pgs.fgm)::float
                 ))::numeric, 3)
