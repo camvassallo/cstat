@@ -16,11 +16,6 @@ use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES, Predictio
 
 use crate::AppState;
 
-/// How many individual features to list in `top_contributors`. Eight is
-/// roughly what fits in a horizontal-bar panel without becoming noise; the
-/// rest are still summarised in `contributions_by_group`.
-const TOP_CONTRIBUTORS: usize = 8;
-
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/predict", get(predict))
 }
@@ -124,7 +119,7 @@ async fn predict(
         Venue::Neutral => "neutral",
     };
 
-    let (top_contributors, contributions_by_group) =
+    let (feature_contributions, contributions_by_group) =
         build_contribution_payload(&explained.feature_values, &explained.contributions);
 
     Ok(Json(json!({
@@ -134,7 +129,7 @@ async fn predict(
         "predicted_margin": (explained.prediction.predicted_margin as f64 * 10.0).round() / 10.0,
         "home_win_probability": (explained.prediction.home_win_probability * 1000.0).round() / 1000.0,
         "predicted_winner": predicted_winner,
-        "top_contributors": top_contributors,
+        "feature_contributions": feature_contributions,
         "contributions_by_group": contributions_by_group,
     })))
 }
@@ -345,11 +340,16 @@ fn is_flag_feature(i: usize) -> bool {
 
 /// Build the JSON-shaped contribution panel from raw ablation deltas.
 ///
-/// Returns `(top_contributors, by_group)`. `top_contributors` lists the
-/// individual features with the largest |contribution|, capped at
-/// [`TOP_CONTRIBUTORS`]. `by_group` sums contributions inside each
-/// human-readable group (e.g. "Roster impact", "Adjusted efficiency"),
-/// sorted by total |contribution| desc — handy for a stacked-bar UI.
+/// Returns `(feature_contributions, by_group)`. `feature_contributions`
+/// lists every feature (all NUM_FEATURES of them) with name, label, group,
+/// raw value, and ablation contribution — sorted by |contribution| desc.
+/// The frontend slices for top-N display and aggregates per-group as
+/// needed; returning the full list lets the keys panel mix the model's
+/// importance with the data-side stat direction without needing a separate
+/// per-feature endpoint. `by_group` is the model's signed sum per group,
+/// kept around for any future "raw model breakdown" surface but currently
+/// unused on the frontend (keys recompute their own group sums to flip
+/// the direction sign onto the data-faithful axis).
 fn build_contribution_payload(
     feature_values: &[f32; NUM_FEATURES],
     contributions: &[f32; NUM_FEATURES],
@@ -366,15 +366,18 @@ fn build_contribution_payload(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let top_contributors = details
+    let feature_contributions = details
         .iter()
-        .take(TOP_CONTRIBUTORS)
         .map(|(i, c)| {
             json!({
                 "name": FEATURE_NAMES[*i],
                 "label": FEATURE_META[*i].label,
                 "group": FEATURE_META[*i].group,
-                "value": round1(feature_values[*i] as f64),
+                // Round value to 3 decimals — fraction-scaled features
+                // (AST%, eFG%, TOV%, FT rate) routinely have diffs in
+                // the 0.01–0.05 range, and rounding to 1 decimal would
+                // collapse them all to 0.0 and obscure real direction.
+                "value": round3(feature_values[*i] as f64),
                 "contribution": round1(*c as f64),
             })
         })
@@ -409,7 +412,11 @@ fn build_contribution_payload(
         })
         .collect::<Vec<_>>();
 
-    (top_contributors, by_group)
+    (feature_contributions, by_group)
+}
+
+fn round3(x: f64) -> f64 {
+    (x * 1000.0).round() / 1000.0
 }
 
 fn round1(x: f64) -> f64 {

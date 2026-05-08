@@ -9,8 +9,7 @@ import {
 } from '../api/client';
 import { useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
-import { InfoIcon, InfoTooltip } from '../components/InfoTooltip';
-import { FEATURE_EXPLANATIONS, GROUP_EXPLANATIONS } from '../components/featureExplanations';
+import { FLAG_FEATURES, homeAdvantageSign } from '../components/featureExplanations';
 
 const TEAM_1_COLOR = '#3b82f6'; // blue (matches PlayerCompare PLAYER_COLORS[0])
 const TEAM_2_COLOR = '#ef4444'; // red
@@ -159,9 +158,16 @@ interface Key {
   group: string;
   team: string;
   towardHome: boolean;
-  contribution: number;
+  /// Sum of |contribution| across all features in this group — how much
+  /// the model leaned on this group of stats overall, ignoring direction.
+  /// Used for tier classification and ranking.
+  importance: number;
   tier: 'slight' | 'clear' | 'meaningful' | 'decisive';
   headline?: FeatureContribution;
+  /// Whether the headline feature's stat sign agrees with the group-level
+  /// direction. When false, the model is splitting in a way that doesn't
+  /// match the headline stat — surface a small caveat in the UI.
+  headlineMatchesDirection: boolean;
 }
 
 const TIER_PHRASE: Record<Key['tier'], string> = {
@@ -186,25 +192,74 @@ function tierFor(mag: number): Key['tier'] | null {
   return 'decisive';
 }
 
+/// Build the keys panel from the per-feature contributions.
+///
+/// Direction (which team has the edge) comes from the **data**: each
+/// feature's diff sign, mapped through `homeAdvantageSign` to handle
+/// "lower is better" stats and 0/1 flags. Importance (how much it
+/// matters) comes from the **model**: sum of |contribution| across the
+/// group's features. This split avoids the sign artifacts that pure
+/// ablation produces — a feature whose raw value clearly favors team A
+/// can still get a contribution toward team B due to tree interactions,
+/// and we don't want the keys to mislabel the leader because of that.
+/// Proper TreeSHAP would resolve this without the workaround; queued in
+/// ROADMAP §4b.
 function generateKeys(result: PredictionResult): Key[] {
+  // Aggregate per-group: signed importance (data direction × model
+  // magnitude) for who-wins, raw |contribution| sum for how-much-matters.
+  const groupAgg = new Map<
+    string,
+    {
+      signedImportance: number;
+      importance: number;
+      features: FeatureContribution[];
+    }
+  >();
+  for (const f of result.feature_contributions) {
+    const advantage = homeAdvantageSign(f.name, f.value);
+    const mag = Math.abs(f.contribution);
+    const entry = groupAgg.get(f.group) ?? {
+      signedImportance: 0,
+      importance: 0,
+      features: [],
+    };
+    entry.signedImportance += advantage * mag;
+    entry.importance += mag;
+    entry.features.push(f);
+    groupAgg.set(f.group, entry);
+  }
+
   const keys: Key[] = [];
-  for (const g of result.contributions_by_group) {
-    const tier = tierFor(Math.abs(g.contribution));
+  for (const [group, agg] of groupAgg.entries()) {
+    const tier = tierFor(agg.importance);
     if (!tier) continue;
-    const towardHome = g.contribution > 0;
-    const headline = result.top_contributors
-      .filter((c) => c.group === g.group)
-      .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution))[0];
+    // signedImportance sign tells which team the group's data leans toward,
+    // weighted by how much the model cares about each feature. A pure
+    // 0 (no team has any edge) is rare but possible — fall back to model
+    // contribution sign for tie-breaking.
+    const towardHome = agg.signedImportance !== 0
+      ? agg.signedImportance > 0
+      : agg.features.reduce((s, f) => s + f.contribution, 0) > 0;
+    // Headline = the single feature in this group with the largest
+    // |contribution|. The model's pick — keeps the explanation consistent
+    // with what drove the prediction.
+    const headline = agg.features.reduce((best, f) =>
+      Math.abs(f.contribution) > Math.abs(best.contribution) ? f : best,
+    );
+    const headlineSign = homeAdvantageSign(headline.name, headline.value);
+    const headlineMatchesDirection =
+      headlineSign === 0 || (headlineSign > 0) === towardHome;
     keys.push({
-      group: g.group,
+      group,
       team: towardHome ? result.home_team : result.away_team,
       towardHome,
-      contribution: g.contribution,
+      importance: agg.importance,
       tier,
       headline,
+      headlineMatchesDirection,
     });
   }
-  keys.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+  keys.sort((a, b) => b.importance - a.importance);
   return keys.slice(0, 4);
 }
 
@@ -236,9 +291,13 @@ function KeysToGame({ result }: { result: PredictionResult }) {
 
 function KeyItem({ k }: { k: Key }) {
   const teamColor = k.towardHome ? TEAM_1_COLOR : TEAM_2_COLOR;
-  const groupExplanation = GROUP_EXPLANATIONS[k.group];
-  const headlineExplanation = k.headline ? FEATURE_EXPLANATIONS[k.headline.name] : undefined;
-  const sign = k.contribution > 0 ? '+' : '';
+  // Phrase the headline gap from the leading team's perspective, so the
+  // sign of the displayed gap always matches the team named above. Most
+  // features: positive value = home edge. Inverted features (TOV-related)
+  // are flipped via `homeAdvantageSign`.
+  const headlineGapText = k.headline
+    ? formatHeadlineGap(k.headline, k.team, k.towardHome)
+    : null;
 
   return (
     <li className="flex items-start gap-3">
@@ -246,15 +305,7 @@ function KeyItem({ k }: { k: Key }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline justify-between gap-2 flex-wrap">
           <div className="text-sm">
-            {groupExplanation ? (
-              <InfoTooltip title={k.group} body={groupExplanation}>
-                <span className="text-gray-200 font-medium hover:text-white transition-colors">
-                  {k.group}
-                </span>
-              </InfoTooltip>
-            ) : (
-              <span className="text-gray-200 font-medium">{k.group}</span>
-            )}
+            <span className="text-gray-200 font-medium">{k.group}</span>
             <span className="text-gray-500">: </span>
             <span style={{ color: teamColor }} className="font-medium">
               {k.team}
@@ -264,34 +315,62 @@ function KeyItem({ k }: { k: Key }) {
           <span
             className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded ${TIER_BADGE[k.tier]}`}
           >
-            {k.tier} · {sign}
-            {k.contribution.toFixed(1)}
+            {k.tier}
           </span>
         </div>
         {k.headline && (
           <div className="text-xs text-gray-400 mt-1 leading-snug">
-            Headlined by{' '}
-            {headlineExplanation ? (
-              <InfoTooltip title={k.headline.label} body={headlineExplanation}>
-                <span className="text-gray-300 hover:text-white transition-colors">
-                  {k.headline.label}
-                </span>
-              </InfoTooltip>
-            ) : (
-              <span className="text-gray-300">{k.headline.label}</span>
-            )}{' '}
-            (gap of {k.headline.value > 0 ? '+' : ''}
-            {k.headline.value.toFixed(2)}, worth{' '}
-            <span style={{ color: teamColor }}>
-              {sign}
-              {k.headline.contribution.toFixed(1)}
-            </span>{' '}
-            on the spread)
+            Headlined by <span className="text-gray-300">{k.headline.label}</span>
+            {headlineGapText && <> {headlineGapText}</>}
           </div>
         )}
       </div>
     </li>
   );
+}
+
+/// Format the headline feature's value as a phrase from the leading team's
+/// perspective: "+7.40 in Duke's favor" or "0.10 lower (Duke's defense)".
+/// We avoid showing the model's signed contribution here — that's where
+/// ablation artifacts produced the original bug ("Purdue +0.10 worth -0.9
+/// on the spread" was nonsensical to readers).
+function formatHeadlineGap(
+  headline: FeatureContribution,
+  team: string,
+  towardHome: boolean,
+): string | null {
+  // True flag features (venue, is_conference_game) get their own phrasing.
+  if (FLAG_FEATURES.has(headline.name)) {
+    if (headline.name === 'venue') {
+      return headline.value > 0 ? '(home court factor)' : '(neutral site)';
+    }
+    if (headline.name === 'is_conference_game') {
+      return headline.value > 0 ? '(conference matchup)' : '(non-conference matchup)';
+    }
+    return null;
+  }
+
+  // Continuous feature with a value at or near zero — teams are essentially
+  // tied, so don't pretend there's a gap. Skip the parenthetical entirely.
+  if (Math.abs(headline.value) < 0.005) {
+    return '(teams essentially tied on this stat)';
+  }
+
+  const advantageSign = homeAdvantageSign(headline.name, headline.value);
+  // Show absolute gap; the team name above already encodes the direction.
+  const absVal = Math.abs(headline.value);
+  const gap =
+    absVal >= 10 ? absVal.toFixed(1) : absVal >= 1 ? absVal.toFixed(2) : absVal.toFixed(3);
+  // Sanity check: did the diff actually favor the leading team? In
+  // virtually every case it should (we computed `team` from the
+  // group-level signed importance, which weights this very feature). If
+  // not, soften the phrasing — it means another feature in the same
+  // group dominated the group's direction.
+  const matches = (advantageSign > 0) === towardHome;
+  if (matches) {
+    return `(gap of ${gap} in ${team}'s favor)`;
+  }
+  return `(gap of ${gap} the other way — outweighed by other ${team} edges in this group)`;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +393,6 @@ interface StatRow {
   homeNum?: number;
   awayNum?: number;
   format?: (v: number) => string;
-  tooltip?: string;
 }
 
 function SideBySideStats({
@@ -351,8 +429,6 @@ function SideBySideStats({
       away: away.adj_efficiency_margin,
       better: 'high',
       format: fmt1,
-      tooltip:
-        'Adjusted efficiency margin: net points per 100 possessions, opponent-adjusted. The headline KenPom-style rating.',
     },
     {
       label: 'AdjO',
@@ -360,7 +436,6 @@ function SideBySideStats({
       away: away.adj_offense,
       better: 'high',
       format: (v) => v.toFixed(1),
-      tooltip: 'Adjusted offensive efficiency — points scored per 100 possessions, opponent-adjusted.',
     },
     {
       label: 'AdjD',
@@ -368,7 +443,6 @@ function SideBySideStats({
       away: away.adj_defense,
       better: 'low',
       format: (v) => v.toFixed(1),
-      tooltip: 'Adjusted defensive efficiency — points allowed per 100 possessions, opponent-adjusted (lower = better).',
     },
     {
       label: 'Tempo',
@@ -376,7 +450,6 @@ function SideBySideStats({
       away: away.adj_tempo,
       better: 'neither',
       format: (v) => v.toFixed(1),
-      tooltip: 'Adjusted possessions per 40 minutes. Higher = faster game; not inherently good or bad.',
     },
     {
       label: 'SOS',
@@ -384,7 +457,6 @@ function SideBySideStats({
       away: away.sos,
       better: 'high',
       format: fmt1,
-      tooltip: 'Strength of schedule from team-level adjusted efficiencies of opponents faced.',
     },
     {
       label: 'ELO',
@@ -392,7 +464,6 @@ function SideBySideStats({
       away: away.elo_rating,
       better: 'high',
       format: fmt0,
-      tooltip: 'NatStat ELO rating — head-to-head + margin-of-victory power rating.',
     },
   ];
 
@@ -445,16 +516,7 @@ function StatComparisonRow({ row }: { row: StatRow }) {
         {renderValue(row.home, homeBetter, TEAM_1_COLOR)}
       </div>
       <div className="w-20 text-center text-[11px] text-gray-500 uppercase tracking-wide">
-        {row.tooltip ? (
-          <InfoTooltip title={row.label} body={row.tooltip}>
-            <span className="hover:text-gray-300 transition-colors">{row.label}</span>
-            <span className="ml-1">
-              <InfoIcon />
-            </span>
-          </InfoTooltip>
-        ) : (
-          row.label
-        )}
+        {row.label}
       </div>
       <div className="text-left">{renderValue(row.away, awayBetter, TEAM_2_COLOR)}</div>
     </div>
@@ -490,7 +552,6 @@ const LEAGUE_AVG = {
 
 interface MatchupRow {
   label: string;
-  tooltip: string;
   /// Offensive team's value for this factor (e.g. team1's eFG% on offense).
   offValue: number | null;
   /// Defensive team's allowed/forced value (e.g. team2's opp_eFG% allowed).
@@ -570,8 +631,6 @@ function MatchupSubpanel({
   const rows: MatchupRow[] = [
     {
       label: 'eFG%',
-      tooltip:
-        'Effective FG% advantage: how much better the offense shoots, relative to what the defense usually allows. Positive = offense wins this matchup.',
       offValue: offTeam.effective_fg_pct,
       defValue: defTeam.opp_effective_fg_pct,
       advantage:
@@ -584,8 +643,6 @@ function MatchupSubpanel({
     },
     {
       label: 'TOV%',
-      tooltip:
-        'Turnover advantage: how much the offense protects the ball relative to how often the defense forces turnovers. Positive = offense wins (commits fewer than defense forces on average).',
       offValue: offTeam.turnover_pct,
       defValue: defTeam.opp_turnover_pct,
       advantage:
@@ -598,8 +655,6 @@ function MatchupSubpanel({
     },
     {
       label: 'Rebounding',
-      tooltip:
-        'Rebounding advantage on the offensive boards: the offense\'s ORB% above league average, less the defense\'s DRB% above league average. Positive = offense wins extra possessions.',
       offValue: offTeam.off_rebound_pct,
       defValue: defTeam.def_rebound_pct,
       advantage:
@@ -613,8 +668,6 @@ function MatchupSubpanel({
     },
     {
       label: 'FT Rate',
-      tooltip:
-        'Free throw rate advantage: how much more often the offense gets to the line, relative to what the defense usually allows. Positive = offense wins.',
       offValue: offTeam.ft_rate,
       defValue: defTeam.opp_ft_rate,
       advantage:
@@ -677,14 +730,7 @@ function MatchupRowView({
     <div>
       {/* Factor label */}
       <div className="text-sm mb-1.5">
-        <InfoTooltip title={row.label} body={row.tooltip}>
-          <span className="text-gray-200 font-medium hover:text-white transition-colors">
-            {row.label}
-          </span>
-          <span className="ml-1">
-            <InfoIcon />
-          </span>
-        </InfoTooltip>
+        <span className="text-gray-200 font-medium">{row.label}</span>
       </div>
 
       {/* Centered winner chip above the bar */}

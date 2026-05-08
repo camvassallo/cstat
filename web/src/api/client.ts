@@ -569,7 +569,13 @@ export interface PredictionResult {
   predicted_margin: number;
   home_win_probability: number;
   predicted_winner: string;
-  top_contributors: FeatureContribution[];
+  /// Every feature, sorted by |contribution| desc. The frontend slices and
+  /// aggregates as needed (per-group keys, top-N display, etc.).
+  feature_contributions: FeatureContribution[];
+  /// Model's signed group sums, kept for any future raw-breakdown UI.
+  /// Not used by the keys panel — keys recompute their own per-group
+  /// signed sums using the data-faithful direction (see
+  /// `homeAdvantageSign` in `featureExplanations.ts`).
   contributions_by_group: GroupContribution[];
 }
 
