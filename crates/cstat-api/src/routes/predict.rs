@@ -258,12 +258,17 @@ async fn run_predict(
     Ok(p)
 }
 
-/// Standard deviation of college basketball game-margin residuals. KenPom
-/// uses 11; the cstat 2025+2026 backtest MAE is 8.28, which gives a
-/// residual stddev of ~10.4 (Gaussian assumption: σ ≈ MAE × √(π/2)). Round
-/// to 11 for cleaner calibration; re-tune with held-out residuals after
-/// the next model retrain.
-const PREDICT_SIGMA: f64 = 11.0;
+/// Standard deviation of college basketball game-margin residuals. Sourced
+/// from the trained margin model's chronological-backtest residuals — see
+/// `backtest_residual_stddev` in `training/models/model_meta.json`.
+/// Re-measure and update this constant whenever the model is retrained;
+/// the value materially affects how aggressively `home_win_probability`
+/// moves away from 0.5 per point of predicted margin.
+///
+/// Current value: 10.3, fit on the 2024+2025+2026 cohort. KenPom uses 11.0
+/// as a cross-era constant; cstat's narrower σ reflects tighter residuals
+/// on the backtest window plus the model's reliance on Torvik GBPM.
+const PREDICT_SIGMA: f64 = 10.3;
 
 /// Logistic approximation of `Φ(margin / σ)` — the probability that the
 /// actual margin exceeds zero given a predicted margin and a residual
