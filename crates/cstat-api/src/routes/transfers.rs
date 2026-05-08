@@ -24,6 +24,7 @@ pub fn router() -> Router<Arc<AppState>> {
 const EMBEDDED_TRANSFERS: &[(i32, &str)] = &[
     (2026, include_str!("../../../../data/transfers/2026.json")),
     (2025, include_str!("../../../../data/transfers/2025.json")),
+    (2024, include_str!("../../../../data/transfers/2024.json")),
 ];
 
 /// Raw row from the scraped 247Sports JSON.
