@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import {
   AllCommunityModule,
   ModuleRegistry,
   type ColDef,
-  type IDatasource,
-  type GridApi,
 } from 'ag-grid-community';
 import { fetchPlayers, type PlayerRow } from '../api/client';
 import { gridTheme } from '../theme';
@@ -24,38 +22,10 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');
 
-const PAGE_SIZE = 100;
-
-// Map AG Grid sort column id → backend sort field. Returning null for any
-// column we don't sort on the server falls back to the default Campom sort.
-function sortFieldFor(colId: string | undefined): string | null {
-  if (!colId) return null;
-  const map: Record<string, string> = {
-    campom: 'campom',
-    games_played: 'games_played',
-    minutes_per_game: 'minutes_per_game',
-    ppg: 'ppg',
-    rpg: 'rpg',
-    apg: 'apg',
-    spg: 'spg',
-    bpg: 'bpg',
-    topg: 'topg',
-    effective_fg_pct: 'effective_fg_pct',
-    true_shooting_pct: 'true_shooting_pct',
-    usage_rate: 'usage_rate',
-    offensive_rating: 'offensive_rating',
-    defensive_rating: 'defensive_rating',
-    net_rating: 'net_rating',
-    ast_pct: 'ast_pct',
-    tov_pct: 'tov_pct',
-    orb_pct: 'orb_pct',
-    drb_pct: 'drb_pct',
-    stl_pct: 'stl_pct',
-    blk_pct: 'blk_pct',
-    ft_rate: 'ft_rate',
-  };
-  return map[colId] ?? null;
-}
+// Match the API cap (`PLAYER_LIST_MAX_LIMIT` in `crates/cstat-api/src/routes/
+// players.rs`). The qualified pool (5+ GP, 10+ MPG) is ~2-3k for a typical
+// season, so a single fetch covers it with headroom.
+const PAGE_FETCH_LIMIT = 5000;
 
 const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
   if (p.value == null) return <span className="text-slate-500">—</span>;
@@ -272,60 +242,45 @@ export default function Players() {
 
   const [view, setView] = useState<ColumnView>('raw');
   const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  const [rows, setRows] = useState<PlayerRow[]>([]);
   const [total, setTotal] = useState<number | null>(null);
-  const gridApiRef = useRef<GridApi<PlayerRow> | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const columns = useMemo(() => buildColumns(view), [view]);
 
-  // Debounce keystroke → backend re-fetch so the API isn't hit on every
-  // character. 250ms feels live without flooding the server.
+  // Single fetch loads the entire qualified pool; sort + search run client-
+  // side via AG Grid's built-in sorting and `quickFilterText`. Pagination
+  // (set on the grid below) keeps DOM small without bringing back the
+  // viewport-bound nested-scroll UX. Re-fetches only when the server-side
+  // filter dimensions change (archetype, season).
+  //
+  // No `setLoading(true)` here — `react-hooks/set-state-in-effect` forbids
+  // it. The initial `useState(true)` covers first load; on subsequent
+  // archetype/season changes the previous data stays visible until the new
+  // fetch resolves. Mild stale-flicker, matches the Rankings page pattern.
   useEffect(() => {
-    const handle = setTimeout(() => {
-      setSearch(searchInput.trim());
-    }, 250);
-    return () => clearTimeout(handle);
-  }, [searchInput]);
-
-  // Build a fresh datasource whenever the filters change. AG Grid's infinite
-  // row model caches blocks keyed by start row; swapping the datasource (or
-  // calling `purgeInfiniteCache()`) is what forces a refetch.
-  const datasource = useMemo<IDatasource>(
-    () => ({
-      getRows: (params) => {
-        const sortModel = params.sortModel?.[0];
-        const sortField = sortFieldFor(sortModel?.colId);
-        fetchPlayers({
-          search: search || undefined,
-          archetype: archetype || undefined,
-          includeSecondaryArchetype: archetype != null && includeSecondary,
-          season,
-          sort: sortField || undefined,
-          order: sortModel?.sort?.toLowerCase(),
-          limit: params.endRow - params.startRow,
-          offset: params.startRow,
-        })
-          .then((r) => {
-            setTotal(r.total);
-            // When this is the last block, pass the absolute total so AG Grid
-            // can stop asking for more rows.
-            const lastRow =
-              params.startRow + r.players.length >= r.total ? r.total : undefined;
-            params.successCallback(r.players, lastRow);
-          })
-          .catch((err) => {
-            console.error('fetchPlayers failed', err);
-            params.failCallback();
-          });
-      },
-    }),
-    [search, archetype, includeSecondary, season],
-  );
-
-  // Repoint the grid at the new datasource whenever it changes.
-  useEffect(() => {
-    gridApiRef.current?.setGridOption('datasource', datasource);
-  }, [datasource]);
+    let cancelled = false;
+    fetchPlayers({
+      archetype: archetype || undefined,
+      includeSecondaryArchetype: archetype != null && includeSecondary,
+      season,
+      limit: PAGE_FETCH_LIMIT,
+    })
+      .then((r) => {
+        if (cancelled) return;
+        setRows(r.players);
+        setTotal(r.total);
+      })
+      .catch((err) => {
+        console.error('fetchPlayers failed', err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [archetype, includeSecondary, season]);
 
   const clearArchetype = useCallback(() => {
     setSearchParams((prev) => {
@@ -468,16 +423,25 @@ export default function Players() {
         </div>
       )}
 
-      <div style={{ height: 'calc(100dvh - 180px)', minHeight: '400px', width: '100%' }}>
+      {/* Same `domLayout="autoHeight"` strategy as Rankings — the grid grows
+          to fit one page of rows, and the page itself is the only vertical
+          scroll surface. With ~2-3k qualified players a single page in DOM
+          would be too heavy, so AG Grid's built-in pagination caps the
+          rendered page to 100 rows; the user clicks next/prev or jumps to
+          a page via the pagination footer. Sort + search are client-side
+          across the full dataset so the qualified pool stays one fetch. */}
+      <div style={{ width: '100%' }}>
         <AgGridReact<PlayerRow>
           theme={gridTheme}
+          rowData={rows}
           columnDefs={columns}
-          rowModelType="infinite"
-          datasource={datasource}
-          cacheBlockSize={PAGE_SIZE}
-          maxBlocksInCache={10}
-          infiniteInitialRowCount={50}
+          loading={loading}
+          domLayout="autoHeight"
+          pagination
+          paginationPageSize={100}
+          paginationPageSizeSelector={[50, 100, 200]}
           rowHeight={44}
+          quickFilterText={searchInput}
           defaultColDef={{
             sortable: true,
             resizable: true,
@@ -487,9 +451,6 @@ export default function Players() {
             // when the column compresses on mobile.
             wrapHeaderText: true,
             autoHeaderHeight: true,
-          }}
-          onGridReady={(e) => {
-            gridApiRef.current = e.api;
           }}
           getRowId={(p) => p.data.player_id}
         />

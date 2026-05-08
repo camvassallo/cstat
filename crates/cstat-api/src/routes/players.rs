@@ -39,10 +39,11 @@ struct PlayerListParams {
     offset: Option<i64>,
 }
 
-// Page size cap. The Players tab uses AG Grid infinite-scroll which requests
-// 100 rows at a time; 500 leaves headroom for power users / scripted clients
-// without letting a single request scrape the whole season.
-const PLAYER_LIST_MAX_LIMIT: i64 = 500;
+// Page size cap. The Players tab loads the entire qualified pool in one
+// request (~2-3k players for a typical season) and paginates client-side via
+// AG Grid; 5000 leaves headroom for that plus scripted callers without
+// letting a single request scrape an entire database scan.
+const PLAYER_LIST_MAX_LIMIT: i64 = 5000;
 
 async fn player_list(
     State(state): State<Arc<AppState>>,
