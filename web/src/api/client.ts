@@ -540,9 +540,12 @@ export function fetchPlayerCompare(ids: string[], season?: number) {
 }
 
 // Predict
+export type Venue = 'home' | 'away' | 'neutral';
+
 export interface PredictionResult {
   home_team: string;
   away_team: string;
+  venue: Venue;
   predicted_margin: number;
   home_win_probability: number;
   predicted_winner: string;
@@ -551,13 +554,13 @@ export interface PredictionResult {
 export function fetchPrediction(
   home: string,
   away: string,
-  neutral: boolean,
+  venue: Venue,
   season?: number,
 ) {
   return fetchJson<PredictionResult>('/predict', {
     home,
     away,
-    neutral: neutral ? 'true' : undefined,
+    venue,
     season: season?.toString(),
   });
 }
