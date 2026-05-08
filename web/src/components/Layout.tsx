@@ -144,11 +144,16 @@ export default function Layout() {
           </NavLink>
         </div>
       )}
-      {/* `overflow-x-hidden` is a safety net for charts and sticky cells that
+      {/* `overflow-x-clip` is a safety net for charts and sticky cells that
           occasionally render 1–2px wider than their container on mobile.
-          Internal scroll regions (game log, roster, AG Grid) create their own
-          scroll context and remain swipeable. */}
-      <main className="flex-1 px-3 sm:px-6 py-4 sm:py-6 max-w-7xl mx-auto w-full overflow-x-hidden">
+          We use `clip` rather than `hidden` because per the CSS spec, setting
+          one axis to `hidden` forces the other axis's computed `overflow` to
+          `auto`, silently turning `<main>` into a nested vertical scroll
+          container as soon as page content exceeds the viewport. `clip`
+          performs the same horizontal clipping without creating a scroll
+          context. Internal scroll regions (game log, roster, AG Grid) still
+          create their own scroll context and remain swipeable. */}
+      <main className="flex-1 px-3 sm:px-6 py-4 sm:py-6 max-w-7xl mx-auto w-full overflow-x-clip">
         <Outlet />
       </main>
     </div>
