@@ -5,6 +5,215 @@ use std::sync::Mutex;
 /// Number of input features expected by the ONNX models.
 pub const NUM_FEATURES: usize = 49;
 
+/// Per-feature display label and group for the explainability UI. Stored
+/// in the same index order as `FEATURE_NAMES` so a contribution at
+/// `contributions[i]` directly addresses `FEATURE_META[i]`. Tweak labels
+/// here when adjusting how the contribution panel reads — never reorder
+/// (the indices are wire-locked to the trained ONNX).
+pub struct FeatureMeta {
+    pub label: &'static str,
+    pub group: &'static str,
+}
+
+pub const FEATURE_META: [FeatureMeta; NUM_FEATURES] = [
+    FeatureMeta {
+        label: "Home court",
+        group: "Context",
+    },
+    FeatureMeta {
+        label: "Conference game",
+        group: "Context",
+    },
+    FeatureMeta {
+        label: "Win pct",
+        group: "Context",
+    },
+    FeatureMeta {
+        label: "Adj offense",
+        group: "Adjusted efficiency",
+    },
+    FeatureMeta {
+        label: "Adj defense",
+        group: "Adjusted efficiency",
+    },
+    FeatureMeta {
+        label: "Adj efficiency margin",
+        group: "Adjusted efficiency",
+    },
+    FeatureMeta {
+        label: "eFG%",
+        group: "Four factors (offense)",
+    },
+    FeatureMeta {
+        label: "Turnover%",
+        group: "Four factors (offense)",
+    },
+    FeatureMeta {
+        label: "Off rebound%",
+        group: "Four factors (offense)",
+    },
+    FeatureMeta {
+        label: "FT rate",
+        group: "Four factors (offense)",
+    },
+    FeatureMeta {
+        label: "Opp eFG%",
+        group: "Four factors (defense)",
+    },
+    FeatureMeta {
+        label: "Opp turnover%",
+        group: "Four factors (defense)",
+    },
+    FeatureMeta {
+        label: "Def rebound%",
+        group: "Four factors (defense)",
+    },
+    FeatureMeta {
+        label: "Opp FT rate",
+        group: "Four factors (defense)",
+    },
+    FeatureMeta {
+        label: "Tempo",
+        group: "Pace",
+    },
+    FeatureMeta {
+        label: "SOS",
+        group: "Strength of schedule",
+    },
+    FeatureMeta {
+        label: "ELO",
+        group: "Power ratings",
+    },
+    FeatureMeta {
+        label: "Point diff",
+        group: "Power ratings",
+    },
+    FeatureMeta {
+        label: "Pythag win%",
+        group: "Power ratings",
+    },
+    FeatureMeta {
+        label: "Road win%",
+        group: "Power ratings",
+    },
+    FeatureMeta {
+        label: "Roster size",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster PPG",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster RPG",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster APG",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster SPG",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster BPG",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster TOPG",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster TS%",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster eFG%",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster usage",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Player SOS",
+        group: "Strength of schedule",
+    },
+    FeatureMeta {
+        label: "Roster ORTG",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster AST%",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster TOV%",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster STL%",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster BLK%",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Roster GBPM",
+        group: "Roster impact",
+    },
+    FeatureMeta {
+        label: "Roster OGBPM",
+        group: "Roster impact",
+    },
+    FeatureMeta {
+        label: "Roster DGBPM",
+        group: "Roster impact",
+    },
+    FeatureMeta {
+        label: "Star PPG",
+        group: "Star player",
+    },
+    FeatureMeta {
+        label: "Star GBPM",
+        group: "Star player",
+    },
+    FeatureMeta {
+        label: "Star OGBPM",
+        group: "Star player",
+    },
+    FeatureMeta {
+        label: "Star DGBPM",
+        group: "Star player",
+    },
+    FeatureMeta {
+        label: "Star ORTG",
+        group: "Star player",
+    },
+    FeatureMeta {
+        label: "Minutes spread",
+        group: "Roster aggregate",
+    },
+    FeatureMeta {
+        label: "Recent game score",
+        group: "Recent form",
+    },
+    FeatureMeta {
+        label: "Recent TS%",
+        group: "Recent form",
+    },
+    FeatureMeta {
+        label: "PPG trend",
+        group: "Recent form",
+    },
+    FeatureMeta {
+        label: "GS trend",
+        group: "Recent form",
+    },
+];
+
 /// Feature names in the exact order expected by the ONNX models.
 pub const FEATURE_NAMES: [&str; NUM_FEATURES] = [
     "venue",
@@ -67,6 +276,22 @@ pub struct Prediction {
     pub home_win_probability: f64,
 }
 
+/// Prediction plus per-feature ablation contributions.
+///
+/// `contributions[i]` is `full_pred − pred_with_features[i]_zeroed`. Since
+/// every feature in `FEATURE_NAMES` is a diff (home − away) or a
+/// 0/1 indicator, "feature zeroed" reads as "teams equal on this
+/// dimension", and the contribution reads as "how much did this dimension
+/// push the margin off zero". Positive = pushed toward home, negative =
+/// toward away. Contributions don't necessarily sum to `predicted_margin`
+/// (tree models have feature interactions); they rank-order which inputs
+/// drove the prediction.
+#[derive(Debug, Clone)]
+pub struct PredictionWithContributions {
+    pub predicted_margin: f32,
+    pub contributions: [f32; NUM_FEATURES],
+}
+
 /// Holds loaded ONNX model sessions for margin and win prediction.
 pub struct Predictor {
     margin_session: Mutex<Session>,
@@ -122,6 +347,58 @@ impl Predictor {
         Ok(Prediction {
             predicted_margin,
             home_win_probability,
+        })
+    }
+
+    /// Run the margin model with ablation-based feature attribution.
+    ///
+    /// Builds a single batched `(NUM_FEATURES + 1, NUM_FEATURES)` input
+    /// where row 0 is the full feature vector and row `i+1` has feature
+    /// `i` set to 0. One ONNX call returns all `NUM_FEATURES + 1`
+    /// predictions; the contribution of feature `i` is then
+    /// `output[0] − output[i+1]`.
+    ///
+    /// Win probability is intentionally omitted — derive it from the
+    /// returned margin via the calibrated logistic in the API layer
+    /// (`PREDICT_SIGMA`) so the headline numbers stay self-consistent.
+    pub fn predict_with_contributions(
+        &self,
+        features: &[f32; NUM_FEATURES],
+    ) -> Result<PredictionWithContributions, ort::Error> {
+        use ort::value::TensorRef;
+
+        const ROWS: usize = NUM_FEATURES + 1;
+
+        // Build the batched input. Row 0 is the full vector; row i+1 has
+        // feature i zeroed. Layout is row-major (axum/ort default).
+        let mut batch = vec![0.0_f32; ROWS * NUM_FEATURES];
+        for (i, val) in features.iter().enumerate() {
+            batch[i] = *val; // row 0
+        }
+        for i in 0..NUM_FEATURES {
+            let row_offset = (i + 1) * NUM_FEATURES;
+            for (j, val) in features.iter().enumerate() {
+                batch[row_offset + j] = *val;
+            }
+            batch[row_offset + i] = 0.0; // ablate feature i
+        }
+
+        let shape = [ROWS, NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, batch.as_slice()))?;
+        let mut session = self.margin_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, preds) = outputs[0].try_extract_tensor::<f32>()?;
+
+        // First output = full prediction, rest = ablated.
+        let full = preds[0];
+        let mut contributions = [0.0_f32; NUM_FEATURES];
+        for i in 0..NUM_FEATURES {
+            contributions[i] = full - preds[i + 1];
+        }
+
+        Ok(PredictionWithContributions {
+            predicted_margin: full,
+            contributions,
         })
     }
 }
@@ -270,6 +547,93 @@ mod tests {
             "home-favored win prob ({}) should exceed away-favored ({})",
             pred_home.home_win_probability,
             pred_away.home_win_probability
+        );
+    }
+
+    #[test]
+    fn feature_meta_aligned_with_feature_names() {
+        // Smoke check the parallel arrays. FEATURE_META is indexed by the
+        // same offset as FEATURE_NAMES; if anyone reorders FEATURE_NAMES
+        // without touching FEATURE_META the explainability UI silently
+        // mislabels every contribution. Spot-check the few cases where
+        // mislabeling would be most visible (venue, GBPM cluster, star).
+        let by_name = |name: &str| -> &FeatureMeta {
+            let i = FEATURE_NAMES.iter().position(|n| *n == name).unwrap();
+            &FEATURE_META[i]
+        };
+        assert_eq!(by_name("venue").group, "Context");
+        assert_eq!(by_name("diff_w_gbpm").group, "Roster impact");
+        assert_eq!(by_name("diff_star_gbpm").group, "Star player");
+        assert_eq!(
+            by_name("diff_adj_efficiency_margin").group,
+            "Adjusted efficiency"
+        );
+        assert_eq!(by_name("diff_w_rolling_gs").group, "Recent form");
+    }
+
+    #[test]
+    fn predict_with_contributions_matches_full_predict() {
+        let dir = model_dir();
+        if !dir.join("margin_model.onnx").exists() {
+            return;
+        }
+
+        let predictor = Predictor::load(&dir).unwrap();
+
+        let idx = |name: &str| {
+            FEATURE_NAMES
+                .iter()
+                .position(|n| *n == name)
+                .unwrap_or_else(|| panic!("feature {name} missing from FEATURE_NAMES"))
+        };
+
+        // Build a non-trivial feature vector so several features contribute.
+        let mut features = [0.0_f32; NUM_FEATURES];
+        features[idx("venue")] = 1.0;
+        features[idx("diff_adj_efficiency_margin")] = 12.0;
+        features[idx("diff_elo")] = 80.0;
+        features[idx("diff_w_gbpm")] = 3.0;
+        features[idx("diff_w_ogbpm")] = 1.5;
+        features[idx("diff_w_dgbpm")] = 1.5;
+
+        let baseline = predictor.predict(&features).unwrap();
+        let attributed = predictor.predict_with_contributions(&features).unwrap();
+
+        // The batched margin must match the single-row margin to floating
+        // tolerance — same model, same inputs, same answer.
+        assert!(
+            (attributed.predicted_margin - baseline.predicted_margin).abs() < 1e-3,
+            "batched margin {} ≠ single-row margin {}",
+            attributed.predicted_margin,
+            baseline.predicted_margin,
+        );
+
+        // Features that are zero in the input must have zero contribution
+        // (ablating zero is a no-op).
+        for (i, name) in FEATURE_NAMES.iter().enumerate() {
+            if features[i] == 0.0 {
+                assert!(
+                    attributed.contributions[i].abs() < 1e-4,
+                    "feature {name} is 0 in input but contribution is {}",
+                    attributed.contributions[i],
+                );
+            }
+        }
+
+        // The biggest non-zero feature (`diff_elo` at 80, vs the trained
+        // model's heavy reliance on the GBPM cluster) should produce a
+        // non-trivial contribution. Don't assert the exact ranking — that
+        // depends on the trained model — just that *some* set feature has
+        // a meaningfully non-zero attribution, so we know ablation is
+        // wired up.
+        let max_abs = attributed
+            .contributions
+            .iter()
+            .map(|c| c.abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_abs > 0.1,
+            "no feature contributed > 0.1 points; ablation likely broken (max |c| = {max_abs})",
         );
     }
 }

@@ -540,24 +540,55 @@ export function fetchPlayerCompare(ids: string[], season?: number) {
 }
 
 // Predict
+export type Venue = 'home' | 'away' | 'neutral';
+
+export interface FeatureContribution {
+  /// Raw feature name (e.g. `diff_w_gbpm`) for keying / debugging.
+  name: string;
+  /// Human-readable label rendered in the UI ("Roster GBPM").
+  label: string;
+  /// Group bucket ("Roster impact", "Adjusted efficiency", …).
+  group: string;
+  /// The diff feature value (home − away) at prediction time.
+  value: number;
+  /// Ablation delta: how much this feature pushed the margin off zero.
+  /// Positive = pushed toward home_team, negative = toward away_team.
+  contribution: number;
+}
+
+export interface GroupContribution {
+  group: string;
+  contribution: number;
+  feature_count: number;
+}
+
 export interface PredictionResult {
   home_team: string;
   away_team: string;
+  venue: Venue;
   predicted_margin: number;
   home_win_probability: number;
   predicted_winner: string;
+  /// Every feature, sorted by |contribution| desc. The frontend slices and
+  /// aggregates as needed (per-group keys, top-N display, etc.).
+  feature_contributions: FeatureContribution[];
+  /// Model's signed group sums, kept for any future raw-breakdown UI.
+  /// Not used by the keys panel — keys recompute their own per-group
+  /// signed sums using the data-faithful direction (see
+  /// `homeAdvantageSign` in `featureExplanations.ts`).
+  contributions_by_group: GroupContribution[];
 }
 
 export function fetchPrediction(
   home: string,
   away: string,
-  neutral: boolean,
+  venue: Venue,
   season?: number,
 ) {
   return fetchJson<PredictionResult>('/predict', {
     home,
     away,
-    neutral: neutral ? 'true' : undefined,
+    venue,
     season: season?.toString(),
   });
 }

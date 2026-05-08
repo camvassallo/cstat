@@ -25,4 +25,5 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 
 [dev-dependencies]
+serde_urlencoded = "0.7.1"
 tokio-test = { workspace = true }
