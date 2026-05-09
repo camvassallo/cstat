@@ -644,25 +644,36 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
     predictTo = `/predict?home=${encodeURIComponent(host)}&away=${encodeURIComponent(visitor)}${venueParam}`;
   }
 
-  // Render the projected cell. For unplayed games show the predicted margin
-  // from the requested team's perspective (positive = this team favored)
-  // plus the win probability. Completed games leave this column blank — the
-  // actual result is already in the Score column.
+  // Render the projected cell. Always show when a projection is available —
+  // upcoming games get the current model's pre-game forecast; completed
+  // games show what we'd project *today* (current team state, not pre-game),
+  // muted so it doesn't compete with the actual result. Proper pre-game
+  // predictions for historical games are queued as a future roadmap item
+  // (point-in-time historical predictions in `game_forecasts`).
   const projected = (() => {
-    if (g.team_score != null) return null;
     if (g.projected_margin == null) return null;
+    const completed = g.team_score != null;
     const m = g.projected_margin;
     const fav = m > 0;
     const spread = `${fav ? '−' : '+'}${Math.abs(m).toFixed(1)}`;
     const winPct =
       g.projected_win_prob != null ? Math.round(g.projected_win_prob * 100) : null;
+    const colorClass = completed
+      ? 'text-gray-500'
+      : fav
+        ? 'text-green-400'
+        : 'text-gray-300';
+    const title = completed
+      ? `If we replayed this matchup today: ${teamName} ${spread}. Not a pre-game prediction.`
+      : `Predicted from ${teamName}'s perspective`;
     return (
-      <span
-        className={`font-mono ${fav ? 'text-green-400' : 'text-gray-300'}`}
-        title={`Predicted from ${teamName}'s perspective`}
-      >
+      <span className={`font-mono ${colorClass}`} title={title}>
         {spread}
-        {winPct != null && <span className="text-gray-500 ml-1">({winPct}%)</span>}
+        {winPct != null && (
+          <span className={completed ? 'text-gray-600 ml-1' : 'text-gray-500 ml-1'}>
+            ({winPct}%)
+          </span>
+        )}
       </span>
     );
   })();
@@ -703,7 +714,7 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
         )}
       </td>
       <td className="py-2 px-2 text-center">
-        {g.team_score == null && predictTo ? (
+        {predictTo ? (
           <SeasonLink to={predictTo} className="hover:underline">
             {projected ?? <span className="text-gray-500">—</span>}
           </SeasonLink>

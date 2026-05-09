@@ -112,16 +112,19 @@ async fn team_detail(
         )
     })?;
 
-    // Project unplayed games using the existing predictor. Inference is fast
+    // Project every game using the existing predictor. Inference is fast
     // (sub-ms per call) so doing it inline keeps the team-detail endpoint a
     // single round-trip surface. Failures per-game are silently dropped —
     // the schedule still renders, just without a projection on that row.
     // Sign convention: `projected_margin` is from the *requested team's*
     // perspective (positive = requested team favored), regardless of host.
+    //
+    // We project completed games too (not just upcoming) so the column is
+    // useful in the offseason and on historical browsing. The caveat is
+    // that for completed games the projection uses *current* team state,
+    // not pre-game state — true pre-game predictions are tracked as a
+    // future roadmap item (see "point-in-time historical predictions").
     for entry in schedule.iter_mut() {
-        if entry.team_score.is_some() {
-            continue; // completed game, actual result speaks for itself
-        }
         let opp_id = match entry.opponent_id {
             Some(id) => id,
             None => continue,
