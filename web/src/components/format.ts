@@ -10,3 +10,18 @@ export const fracPct = (v: number | null | undefined) =>
 
 export const pointPct = (v: number | null | undefined) =>
   v != null ? v.toFixed(1) : '—';
+
+const MONTH_ABBREV = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// Format an ISO date (YYYY-MM-DD) as "Mon D" (e.g. "Feb 21"). Used by the
+/// score ticker and Previous Matchups card so date display stays consistent
+/// across surfaces. Leaves the input untouched if it doesn't match the
+/// expected shape.
+export function shortDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return iso;
+  return `${MONTH_ABBREV[Number(m[2]) - 1]} ${Number(m[3])}`;
+}

@@ -1,15 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   fetchPrediction,
   fetchTeamRankings,
   type FeatureContribution,
+  type PlayerGameBox,
   type PredictionResult,
+  type PriorMeeting,
+  type RosterEntry,
+  type TeamGameBox,
   type TeamRanking,
   type Venue,
 } from '../api/client';
-import { useSeason } from '../components/season';
+import { useSeason, seasonHref } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { FLAG_FEATURES, homeAdvantageSign } from '../components/featureExplanations';
+import { campomTier, campomTierColor } from '../components/campom';
+import { classColor, classTitle } from '../components/archetypeColors';
+import { shortDate } from '../components/format';
+import { Link } from 'react-router-dom';
 
 const TEAM_1_COLOR = '#3b82f6'; // blue (matches PlayerCompare PLAYER_COLORS[0])
 const TEAM_2_COLOR = '#ef4444'; // red
@@ -17,9 +26,16 @@ const TEAM_2_COLOR = '#ef4444'; // red
 export default function Predict() {
   const { season } = useSeason();
   usePageTitle('Game Prediction');
-  const [team1, setTeam1] = useState('');
-  const [team2, setTeam2] = useState('');
-  const [venue, setVenue] = useState<Venue>('home');
+  const [searchParams] = useSearchParams();
+  const urlHome = searchParams.get('home') ?? '';
+  const urlAway = searchParams.get('away') ?? '';
+  const urlVenue = searchParams.get('venue') as Venue | null;
+  const initialVenue: Venue =
+    urlVenue === 'home' || urlVenue === 'away' || urlVenue === 'neutral' ? urlVenue : 'home';
+
+  const [team1, setTeam1] = useState(urlHome);
+  const [team2, setTeam2] = useState(urlAway);
+  const [venue, setVenue] = useState<Venue>(initialVenue);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -41,6 +57,40 @@ export default function Predict() {
       alive = false;
     };
   }, [season]);
+
+  // When teams arrive via URL params (deep-link from a schedule row, ticker
+  // tile, or shared link), kick off the prediction automatically. Re-fires
+  // when the URL or season changes so /predict?home=A&away=B remains a
+  // first-class destination.
+  useEffect(() => {
+    if (!urlHome.trim() || !urlAway.trim()) return;
+    setTeam1(urlHome);
+    setTeam2(urlAway);
+    setVenue(initialVenue);
+    let alive = true;
+    setLoading(true);
+    setError('');
+    setResult(null);
+    fetchPrediction(urlHome.trim(), urlAway.trim(), initialVenue, season)
+      .then((r) => {
+        if (alive) setResult(r);
+      })
+      .catch((err) => {
+        if (alive) setError(err instanceof Error ? err.message : 'Prediction failed');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+    // The early-return on empty `urlHome`/`urlAway` short-circuits the first
+    // render before pickers have any value. `initialVenue` is intentionally
+    // omitted from the deps — it's recomputed each render from `urlVenue`
+    // (which is in the deps), so reading its current value inside the effect
+    // is correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlHome, urlAway, urlVenue, season]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -67,7 +117,7 @@ export default function Predict() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold mb-1">Game Prediction</h1>
       <p className="text-xs text-gray-500 mb-5">
         Predicting matchups in the{' '}
@@ -141,11 +191,419 @@ export default function Predict() {
       {result && (
         <div className="mt-6 space-y-4">
           <ResultHeadline result={result} team1Prob={team1Prob} />
+          <RosterCompare result={result} />
           <KeysToGame result={result} />
           <SideBySideStats result={result} teams={teams} />
           <FourFactorsPanel result={result} teams={teams} />
+          <PreviousMatchups result={result} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Roster Compare panel — embedded TeamCompare. Shipped before the §5b radial
+// plot lands, so for now it's a side-by-side roster table (top 8 by CamPom
+// per team) with archetype chips and rate stats. The radial-roster overlay
+// from §5b drops into this same component when it ships.
+// ---------------------------------------------------------------------------
+
+const ROSTER_PANEL_LIMIT = 8;
+
+function RosterCompare({ result }: { result: PredictionResult }) {
+  const homeTop = useMemo(
+    () => result.roster_home.slice(0, ROSTER_PANEL_LIMIT),
+    [result.roster_home],
+  );
+  const awayTop = useMemo(
+    () => result.roster_away.slice(0, ROSTER_PANEL_LIMIT),
+    [result.roster_away],
+  );
+
+  if (homeTop.length === 0 && awayTop.length === 0) return null;
+
+  return (
+    <div className="bg-gray-800 rounded-lg p-6">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
+          Roster Compare
+        </h2>
+        <div className="text-[11px] text-gray-500">Top {ROSTER_PANEL_LIMIT} by CamPom</div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+        <RosterColumn
+          teamName={result.home_team}
+          teamId={result.home_team_id}
+          season={result.season}
+          color={TEAM_1_COLOR}
+          roster={homeTop}
+        />
+        <RosterColumn
+          teamName={result.away_team}
+          teamId={result.away_team_id}
+          season={result.season}
+          color={TEAM_2_COLOR}
+          roster={awayTop}
+        />
+      </div>
+    </div>
+  );
+}
+
+function RosterColumn({
+  teamName,
+  teamId,
+  season,
+  color,
+  roster,
+}: {
+  teamName: string;
+  teamId: string;
+  season: number;
+  color: string;
+  roster: RosterEntry[];
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2 pb-2 border-b border-gray-700">
+        <Link
+          to={seasonHref(`/teams/${teamId}`, season)}
+          className="text-base font-semibold hover:underline"
+          style={{ color }}
+        >
+          {teamName}
+        </Link>
+        <span className="text-[11px] text-gray-500 uppercase tracking-wide">
+          {roster.length} {roster.length === 1 ? 'player' : 'players'}
+        </span>
+      </div>
+      <ul className="space-y-1.5">
+        {roster.map((p) => (
+          <RosterRow key={p.player_id} p={p} season={season} />
+        ))}
+        {roster.length === 0 && (
+          <li className="text-xs text-gray-500">No qualified roster data.</li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
+  const tier = campomTier(p.campom);
+  const tierColor = campomTierColor(tier);
+  const mpg = p.minutes_per_game != null ? p.minutes_per_game.toFixed(1) : '—';
+  const campomScore = p.campom != null ? p.campom.toFixed(1) : '—';
+  return (
+    <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 text-sm">
+      <div className="min-w-0 truncate">
+        <Link
+          to={seasonHref(`/players/${p.player_id}`, season)}
+          className="text-gray-100 hover:underline truncate"
+        >
+          {p.name}
+        </Link>
+        {p.primary_class && (
+          <span
+            title={classTitle(p.primary_class)}
+            className="ml-1.5 text-[10px] uppercase tracking-wide font-semibold"
+            style={{ color: classColor(p.primary_class) }}
+          >
+            {p.primary_class.slice(0, 3)}
+          </span>
+        )}
+      </div>
+      <div className="text-[11px] text-gray-500 font-mono whitespace-nowrap">
+        {mpg} mpg · {p.games_played} gp
+      </div>
+      <div
+        className={`text-[11px] font-mono px-1.5 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
+        title={tier ? `${tier}` : undefined}
+      >
+        {campomScore}
+      </div>
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Previous Matchups — embedded section. When the two teams have already
+// played this season, render one card per meeting: headline (final, top
+// performer per side) + collapsible full box score.
+// ---------------------------------------------------------------------------
+
+function PreviousMatchups({ result }: { result: PredictionResult }) {
+  if (result.prior_meetings.length === 0) return null;
+  return (
+    <div className="bg-gray-800 rounded-lg p-6">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
+          Previous Matchups
+        </h2>
+        <div className="text-[11px] text-gray-500">
+          {result.prior_meetings.length}{' '}
+          {result.prior_meetings.length === 1 ? 'meeting' : 'meetings'} this season
+        </div>
+      </div>
+      <div className="space-y-3">
+        {result.prior_meetings.map((m) => (
+          <MeetingCard key={m.headline.game_id} meeting={m} result={result} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MeetingCard({
+  meeting,
+  result,
+}: {
+  meeting: PriorMeeting;
+  result: PredictionResult;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const h = meeting.headline;
+
+  // Color sides by which team they correspond to in the *current* prediction
+  // (home_team_id vs away_team_id), not by which team hosted the prior game.
+  // Keeps the visual frame consistent with the headline / probability bar at
+  // the top of the page.
+  const headIsResultHome = h.home_team_id === result.home_team_id;
+  const homeColor = headIsResultHome ? TEAM_1_COLOR : TEAM_2_COLOR;
+  const awayColor = headIsResultHome ? TEAM_2_COLOR : TEAM_1_COLOR;
+
+  const homeWon =
+    h.home_score != null && h.away_score != null && h.home_score > h.away_score;
+  const awayWon =
+    h.home_score != null && h.away_score != null && h.away_score > h.home_score;
+
+  const venueText = h.is_neutral_site
+    ? 'Neutral site'
+    : `at ${h.home_team_name ?? '—'}`;
+
+  // Top performer per side: highest game_score among players who logged
+  // minutes for that team. Falls back to highest points if game_score is
+  // unpopulated (legacy rows).
+  const topHome = topPerformer(meeting.player_box, h.home_team_id);
+  const topAway = topPerformer(meeting.player_box, h.away_team_id);
+
+  return (
+    <div className="bg-gray-900 rounded border border-gray-700 overflow-hidden">
+      <div className="p-4 space-y-2">
+        <div className="flex items-baseline justify-between text-[11px] text-gray-500 uppercase tracking-wide">
+          <span>{shortDate(h.game_date)}</span>
+          <span>
+            {venueText}
+            {h.is_postseason && ' · Postseason'}
+          </span>
+        </div>
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+          <div className="text-right">
+            <div className="font-semibold" style={{ color: awayColor }}>
+              {h.away_team_name ?? '—'}
+            </div>
+            {topAway && (
+              <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+                {topAway.player_name} · {statLine(topAway)}
+              </div>
+            )}
+          </div>
+          <div className="font-mono text-lg whitespace-nowrap">
+            <span className={awayWon ? 'text-gray-100 font-bold' : 'text-gray-400'}>
+              {h.away_score ?? '—'}
+            </span>
+            <span className="text-gray-600 mx-1.5">–</span>
+            <span className={homeWon ? 'text-gray-100 font-bold' : 'text-gray-400'}>
+              {h.home_score ?? '—'}
+            </span>
+          </div>
+          <div className="text-left">
+            <div className="font-semibold" style={{ color: homeColor }}>
+              {h.home_team_name ?? '—'}
+            </div>
+            {topHome && (
+              <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+                {topHome.player_name} · {statLine(topHome)}
+              </div>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          className="text-[11px] text-blue-400 hover:text-blue-300 hover:underline"
+        >
+          {expanded ? 'Hide full box score' : 'Show full box score'}
+        </button>
+      </div>
+      {expanded && <BoxScore meeting={meeting} homeColor={homeColor} awayColor={awayColor} />}
+    </div>
+  );
+}
+
+function topPerformer(
+  players: PlayerGameBox[],
+  teamId: string | null,
+): PlayerGameBox | null {
+  if (!teamId) return null;
+  const eligible = players.filter((p) => p.team_id === teamId && (p.minutes ?? 0) > 0);
+  if (eligible.length === 0) return null;
+  // Pick a single key for the whole team so we never compare game_score on
+  // one player to points on another (different scales). Use game_score if
+  // every player has it (the common case — compute populates it for all
+  // rows); otherwise fall back to points uniformly.
+  const useGameScore = eligible.every((p) => p.game_score != null);
+  const sortKey = (p: PlayerGameBox): number =>
+    (useGameScore ? p.game_score : p.points) ?? -Infinity;
+  return eligible.reduce((best, p) => (sortKey(p) > sortKey(best) ? p : best));
+}
+
+/// Compact "P / R / A" line for the top-performer chip on a Previous Matchup
+/// card. Renders `—` for null fields so a row doesn't claim a real "0" stat
+/// line when the underlying data is missing.
+function statLine(p: PlayerGameBox): string {
+  const fmt = (v: number | null) => (v == null ? '—' : v.toString());
+  return `${fmt(p.points)}p / ${fmt(p.total_rebounds)}r / ${fmt(p.assists)}a`;
+}
+
+function BoxScore({
+  meeting,
+  homeColor,
+  awayColor,
+}: {
+  meeting: PriorMeeting;
+  homeColor: string;
+  awayColor: string;
+}) {
+  const h = meeting.headline;
+  const homeId = h.home_team_id;
+  const awayId = h.away_team_id;
+  const homePlayers = meeting.player_box.filter(
+    (p) => p.team_id === homeId && (p.minutes ?? 0) > 0,
+  );
+  const awayPlayers = meeting.player_box.filter(
+    (p) => p.team_id === awayId && (p.minutes ?? 0) > 0,
+  );
+  const homeTeamBox = meeting.team_box.find((b) => b.team_id === homeId);
+  const awayTeamBox = meeting.team_box.find((b) => b.team_id === awayId);
+
+  return (
+    <div className="border-t border-gray-700 bg-gray-950/40 p-4 space-y-4">
+      <BoxScoreSide
+        teamName={h.away_team_name ?? '—'}
+        color={awayColor}
+        players={awayPlayers}
+        teamBox={awayTeamBox}
+      />
+      <BoxScoreSide
+        teamName={h.home_team_name ?? '—'}
+        color={homeColor}
+        players={homePlayers}
+        teamBox={homeTeamBox}
+      />
+    </div>
+  );
+}
+
+function BoxScoreSide({
+  teamName,
+  color,
+  players,
+  teamBox,
+}: {
+  teamName: string;
+  color: string;
+  players: PlayerGameBox[];
+  teamBox?: TeamGameBox;
+}) {
+  return (
+    <div>
+      <div className="text-sm font-semibold mb-2" style={{ color }}>
+        {teamName}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs font-mono">
+          <thead>
+            <tr className="text-gray-500 border-b border-gray-700">
+              <th className="text-left py-1.5 px-2 font-medium">Player</th>
+              <th className="text-right py-1.5 px-1 font-medium">MIN</th>
+              <th className="text-right py-1.5 px-1 font-medium">PTS</th>
+              <th className="text-right py-1.5 px-1 font-medium">FG</th>
+              <th className="text-right py-1.5 px-1 font-medium">3P</th>
+              <th className="text-right py-1.5 px-1 font-medium">FT</th>
+              <th className="text-right py-1.5 px-1 font-medium">REB</th>
+              <th className="text-right py-1.5 px-1 font-medium">AST</th>
+              <th className="text-right py-1.5 px-1 font-medium">STL</th>
+              <th className="text-right py-1.5 px-1 font-medium">BLK</th>
+              <th className="text-right py-1.5 px-1 font-medium">TO</th>
+            </tr>
+          </thead>
+          <tbody>
+            {players.map((p) => (
+              <tr key={p.player_id} className="border-b border-gray-800/60">
+                <td className="text-left py-1 px-2 text-gray-200 font-sans">
+                  {p.player_name}
+                  {p.starter && (
+                    <span
+                      className="text-gray-500 ml-1"
+                      title="Starter"
+                      aria-label="Starter"
+                    >
+                      *
+                    </span>
+                  )}
+                </td>
+                <td className="text-right py-1 px-1 text-gray-300">
+                  {p.minutes != null ? Math.round(p.minutes) : '—'}
+                </td>
+                <td className="text-right py-1 px-1 text-gray-100">{p.points ?? '—'}</td>
+                <td className="text-right py-1 px-1 text-gray-300">
+                  {p.fgm ?? '—'}-{p.fga ?? '—'}
+                </td>
+                <td className="text-right py-1 px-1 text-gray-300">
+                  {p.tpm ?? '—'}-{p.tpa ?? '—'}
+                </td>
+                <td className="text-right py-1 px-1 text-gray-300">
+                  {p.ftm ?? '—'}-{p.fta ?? '—'}
+                </td>
+                <td className="text-right py-1 px-1 text-gray-300">{p.total_rebounds ?? '—'}</td>
+                <td className="text-right py-1 px-1 text-gray-300">{p.assists ?? '—'}</td>
+                <td className="text-right py-1 px-1 text-gray-300">{p.steals ?? '—'}</td>
+                <td className="text-right py-1 px-1 text-gray-300">{p.blocks ?? '—'}</td>
+                <td className="text-right py-1 px-1 text-gray-300">{p.turnovers ?? '—'}</td>
+              </tr>
+            ))}
+            {teamBox && (
+              <tr className="bg-gray-900/60 font-semibold">
+                <td className="text-left py-1.5 px-2 text-gray-200 uppercase tracking-wide text-[10px] font-sans">
+                  Team
+                </td>
+                <td />
+                <td className="text-right py-1.5 px-1 text-gray-100">{teamBox.points ?? '—'}</td>
+                <td className="text-right py-1.5 px-1 text-gray-300">
+                  {teamBox.fgm ?? '—'}-{teamBox.fga ?? '—'}
+                </td>
+                <td className="text-right py-1.5 px-1 text-gray-300">
+                  {teamBox.tpm ?? '—'}-{teamBox.tpa ?? '—'}
+                </td>
+                <td className="text-right py-1.5 px-1 text-gray-300">
+                  {teamBox.ftm ?? '—'}-{teamBox.fta ?? '—'}
+                </td>
+                <td className="text-right py-1.5 px-1 text-gray-300">
+                  {teamBox.total_rebounds ?? '—'}
+                </td>
+                <td className="text-right py-1.5 px-1 text-gray-300">{teamBox.assists ?? '—'}</td>
+                <td className="text-right py-1.5 px-1 text-gray-300">{teamBox.steals ?? '—'}</td>
+                <td className="text-right py-1.5 px-1 text-gray-300">{teamBox.blocks ?? '—'}</td>
+                <td className="text-right py-1.5 px-1 text-gray-300">
+                  {teamBox.turnovers ?? '—'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

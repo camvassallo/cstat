@@ -6,6 +6,7 @@ import {
   type UpcomingTile,
 } from '../api/client';
 import { useSeason, seasonHref } from './season';
+import { shortDate } from './format';
 import { Link } from 'react-router-dom';
 
 // Per-tile width including the gap between tiles. Used to estimate marquee
@@ -13,17 +14,6 @@ import { Link } from 'react-router-dom';
 // (~50 px/s — ESPN-pace, leisurely enough to read on hover).
 const TILE_WIDTH_PX = 184;
 const SCROLL_SPEED_PX_PER_SEC = 50;
-
-// "2026-03-15" → "Mar 15".
-function shortDate(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  if (!m) return iso;
-  const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
-  return `${months[Number(m[2]) - 1]} ${Number(m[3])}`;
-}
 
 const TILE_CLASSES =
   'flex flex-col flex-shrink-0 w-44 px-3 py-1.5 rounded bg-gray-900 hover:bg-gray-800 border border-gray-800 transition-colors no-underline';
@@ -56,9 +46,17 @@ function PastTile({ g, season }: { g: GameResult; season: number }) {
       <div className="text-[10px] text-gray-500 mt-0.5">FINAL · {shortDate(g.game_date)}</div>
     </>
   );
-  if (!g.home_team_id) return <div className={TILE_CLASSES}>{body}</div>;
+  // Deep-link past tiles to Predict so the user lands on the matchup view —
+  // the prior box score auto-surfaces in the Previous Matchups section. Falls
+  // back to a static tile when team names are missing (Predict looks teams
+  // up by name and would 404 on the placeholder "—"). team_id isn't needed
+  // because the deep-link uses names, not IDs.
+  const canDeepLink = g.home_team_name != null && g.away_team_name != null;
+  if (!canDeepLink) return <div className={TILE_CLASSES}>{body}</div>;
+  const venueParam = g.is_neutral_site ? '&venue=neutral' : '';
+  const predictTo = `/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}${venueParam}`;
   return (
-    <Link to={seasonHref(`/teams/${g.home_team_id}`, season)} className={TILE_CLASSES}>
+    <Link to={seasonHref(predictTo, season)} className={TILE_CLASSES}>
       {body}
     </Link>
   );

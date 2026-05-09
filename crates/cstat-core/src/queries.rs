@@ -217,6 +217,19 @@ pub struct ScheduleEntry {
     pub opponent_score: Option<i32>,
     pub is_conference: Option<bool>,
     pub is_postseason: Option<bool>,
+    /// Predicted margin **from the requested team's perspective** (positive =
+    /// requested team favored). Populated by the API layer for every game on
+    /// the schedule — upcoming games get the model's pre-game forecast,
+    /// completed games get a "what we'd predict today" projection (current
+    /// team state, not pre-game; muted in the UI). Left null only when
+    /// prediction inputs are missing (no opponent UUID resolved, feature
+    /// extraction failed). Pre-game predictions for historical games are a
+    /// future roadmap item (point-in-time `game_forecasts` backfill).
+    #[sqlx(default)]
+    pub projected_margin: Option<f64>,
+    /// Probability the requested team wins, derived from `projected_margin`.
+    #[sqlx(default)]
+    pub projected_win_prob: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -1627,6 +1640,174 @@ pub async fn get_team_archetype_index(
     )
     .bind(team_id)
     .bind(season)
+    .fetch_all(pool)
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Prior meetings between two teams (Phase 4b — Predict page Previous Matchups)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct PriorMeetingHeadline {
+    pub game_id: Uuid,
+    pub game_date: NaiveDate,
+    pub home_team_id: Option<Uuid>,
+    pub home_team_name: Option<String>,
+    pub away_team_id: Option<Uuid>,
+    pub away_team_name: Option<String>,
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
+    pub is_neutral_site: bool,
+    pub is_postseason: Option<bool>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct TeamGameBox {
+    pub game_id: Uuid,
+    pub team_id: Uuid,
+    pub points: Option<i32>,
+    pub fgm: Option<i32>,
+    pub fga: Option<i32>,
+    pub tpm: Option<i32>,
+    pub tpa: Option<i32>,
+    pub ftm: Option<i32>,
+    pub fta: Option<i32>,
+    pub off_rebounds: Option<i32>,
+    pub total_rebounds: Option<i32>,
+    pub assists: Option<i32>,
+    pub steals: Option<i32>,
+    pub blocks: Option<i32>,
+    pub turnovers: Option<i32>,
+    pub fouls: Option<i32>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct PlayerGameBox {
+    pub game_id: Uuid,
+    pub player_id: Uuid,
+    pub player_name: String,
+    pub team_id: Uuid,
+    pub starter: Option<bool>,
+    pub minutes: Option<f64>,
+    pub points: Option<i32>,
+    pub fgm: Option<i32>,
+    pub fga: Option<i32>,
+    pub tpm: Option<i32>,
+    pub tpa: Option<i32>,
+    pub ftm: Option<i32>,
+    pub fta: Option<i32>,
+    pub off_rebounds: Option<i32>,
+    pub def_rebounds: Option<i32>,
+    pub total_rebounds: Option<i32>,
+    pub assists: Option<i32>,
+    pub steals: Option<i32>,
+    pub blocks: Option<i32>,
+    pub turnovers: Option<i32>,
+    pub fouls: Option<i32>,
+    pub game_score: Option<f64>,
+}
+
+/// Completed games between `team_a` and `team_b` in the given season,
+/// regardless of which side hosted. Newest first. Returns the headline only —
+/// box-score details are fetched separately so the caller can skip them when
+/// the meeting list is empty.
+pub async fn get_prior_meetings(
+    pool: &PgPool,
+    team_a: Uuid,
+    team_b: Uuid,
+    season: i32,
+) -> Result<Vec<PriorMeetingHeadline>, sqlx::Error> {
+    sqlx::query_as::<_, PriorMeetingHeadline>(
+        r#"
+        SELECT
+            g.id AS game_id,
+            g.game_date,
+            g.home_team_id,
+            COALESCE(ht.short_name, ht.name) AS home_team_name,
+            g.away_team_id,
+            COALESCE(at.short_name, at.name) AS away_team_name,
+            g.home_score,
+            g.away_score,
+            g.is_neutral_site,
+            g.is_postseason
+        FROM games g
+        LEFT JOIN teams ht ON ht.id = g.home_team_id AND ht.season = g.season
+        LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
+        WHERE g.season = $3
+          AND g.home_score IS NOT NULL
+          AND (
+              (g.home_team_id = $1 AND g.away_team_id = $2)
+              OR (g.home_team_id = $2 AND g.away_team_id = $1)
+          )
+        ORDER BY g.game_date DESC, g.id
+        "#,
+    )
+    .bind(team_a)
+    .bind(team_b)
+    .bind(season)
+    .fetch_all(pool)
+    .await
+}
+
+/// Team-level box-score rows for a set of game IDs. Both sides of each game
+/// are returned (so the caller groups by `game_id` to assemble per-game
+/// pairs). Empty input → empty result, no DB round-trip.
+pub async fn get_team_game_boxes(
+    pool: &PgPool,
+    game_ids: &[Uuid],
+) -> Result<Vec<TeamGameBox>, sqlx::Error> {
+    if game_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as::<_, TeamGameBox>(
+        r#"
+        SELECT
+            game_id, team_id,
+            points, fgm, fga, tpm, tpa, ftm, fta,
+            off_rebounds, total_rebounds, assists, steals, blocks, turnovers, fouls
+        FROM team_game_stats
+        WHERE game_id = ANY($1)
+        "#,
+    )
+    .bind(game_ids)
+    .fetch_all(pool)
+    .await
+}
+
+/// Player-level box-score rows for a set of game IDs. Includes every player
+/// who appears in `player_game_stats` for those games (both teams, all
+/// minutes). Caller filters by team and minutes as needed.
+pub async fn get_player_game_boxes(
+    pool: &PgPool,
+    game_ids: &[Uuid],
+) -> Result<Vec<PlayerGameBox>, sqlx::Error> {
+    if game_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as::<_, PlayerGameBox>(
+        r#"
+        SELECT
+            pgs.game_id,
+            pgs.player_id,
+            p.name AS player_name,
+            pgs.team_id,
+            pgs.starter,
+            pgs.minutes,
+            pgs.points,
+            pgs.fgm, pgs.fga,
+            pgs.tpm, pgs.tpa,
+            pgs.ftm, pgs.fta,
+            pgs.off_rebounds, pgs.def_rebounds, pgs.total_rebounds,
+            pgs.assists, pgs.steals, pgs.blocks, pgs.turnovers, pgs.fouls,
+            pgs.game_score
+        FROM player_game_stats pgs
+        JOIN players p ON p.id = pgs.player_id
+        WHERE pgs.game_id = ANY($1)
+        ORDER BY pgs.team_id, pgs.minutes DESC NULLS LAST
+        "#,
+    )
+    .bind(game_ids)
     .fetch_all(pool)
     .await
 }

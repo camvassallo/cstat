@@ -12,6 +12,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::routes::predict::predict_margin_and_winprob;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -98,7 +99,7 @@ async fn team_detail(
             )
         })?;
 
-    let (schedule, roster, archetype_distribution, available_seasons) = tokio::try_join!(
+    let (mut schedule, roster, archetype_distribution, available_seasons) = tokio::try_join!(
         queries::get_team_schedule(pool, resolved_id, season),
         queries::get_team_roster(pool, resolved_id, season),
         queries::get_team_archetype_index(pool, resolved_id, season),
@@ -110,6 +111,56 @@ async fn team_detail(
             Json(json!({ "error": format!("query failed: {e}") })),
         )
     })?;
+
+    // Project every game using the existing predictor. Inference is fast
+    // (sub-ms per call) so doing it inline keeps the team-detail endpoint a
+    // single round-trip surface. Failures per-game are silently dropped —
+    // the schedule still renders, just without a projection on that row.
+    // Sign convention: `projected_margin` is from the *requested team's*
+    // perspective (positive = requested team favored), regardless of host.
+    //
+    // We project completed games too (not just upcoming) so the column is
+    // useful in the offseason and on historical browsing. The caveat is
+    // that for completed games the projection uses *current* team state,
+    // not pre-game state — true pre-game predictions are tracked as a
+    // future roadmap item (see "point-in-time historical predictions").
+    for entry in schedule.iter_mut() {
+        let opp_id = match entry.opponent_id {
+            Some(id) => id,
+            None => continue,
+        };
+        let is_neutral = entry.is_neutral.unwrap_or(false);
+        let is_conference = entry.is_conference.unwrap_or(false);
+        // Sort home/away for the predictor's frame, then flip the sign back
+        // to the requested team's perspective if the requested team is
+        // visiting. Neutral games predict symmetric to argument order so the
+        // sign flip is purely semantic.
+        let requested_is_home = entry.is_home.unwrap_or(false);
+        let (host_id, visitor_id) = if requested_is_home {
+            (resolved_id, opp_id)
+        } else {
+            (opp_id, resolved_id)
+        };
+        if let Ok((margin, p_home)) = predict_margin_and_winprob(
+            &state,
+            host_id,
+            visitor_id,
+            season,
+            is_neutral,
+            is_conference,
+        )
+        .await
+        {
+            let (margin_team, p_team) = if requested_is_home {
+                (margin as f64, p_home)
+            } else {
+                (-margin as f64, 1.0 - p_home)
+            };
+            // Round to 1 decimal / 3 decimals to match the rest of the API.
+            entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
+            entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
+        }
+    }
 
     Ok(Json(json!({
         "team": team,

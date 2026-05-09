@@ -13,6 +13,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES, Prediction};
+use cstat_core::queries;
 
 use crate::AppState;
 
@@ -122,15 +123,70 @@ async fn predict(
     let (feature_contributions, contributions_by_group) =
         build_contribution_payload(&explained.feature_values, &explained.contributions);
 
+    // Roster summaries + prior meetings travel in the same response so the
+    // Predict page stays a one-round-trip view. Both run in parallel with
+    // each other (the prediction has already resolved before this point —
+    // it's the slowest step and gates the response shape via venue+team
+    // perspective). Failures here downgrade to empty arrays rather than
+    // tanking the prediction; the page degrades gracefully.
+    let pool = &state.db.pool;
+    let (roster_home, roster_away, prior_meetings_raw) = tokio::join!(
+        queries::get_team_roster(pool, home_team.id, season),
+        queries::get_team_roster(pool, away_team.id, season),
+        queries::get_prior_meetings(pool, home_team.id, away_team.id, season),
+    );
+    let roster_home = roster_home.unwrap_or_default();
+    let roster_away = roster_away.unwrap_or_default();
+    let prior_meetings_raw = prior_meetings_raw.unwrap_or_default();
+
+    // Box score data: only fetch when there's at least one prior meeting.
+    // Saves two empty-array round-trips on the common case (no rematch yet).
+    let prior_meetings = if prior_meetings_raw.is_empty() {
+        Vec::new()
+    } else {
+        let game_ids: Vec<Uuid> = prior_meetings_raw.iter().map(|m| m.game_id).collect();
+        let (team_boxes, player_boxes) = tokio::join!(
+            queries::get_team_game_boxes(pool, &game_ids),
+            queries::get_player_game_boxes(pool, &game_ids),
+        );
+        let team_boxes = team_boxes.unwrap_or_default();
+        let player_boxes = player_boxes.unwrap_or_default();
+
+        prior_meetings_raw
+            .into_iter()
+            .map(|m| {
+                let team_box: Vec<&queries::TeamGameBox> = team_boxes
+                    .iter()
+                    .filter(|b| b.game_id == m.game_id)
+                    .collect();
+                let player_box: Vec<&queries::PlayerGameBox> = player_boxes
+                    .iter()
+                    .filter(|b| b.game_id == m.game_id)
+                    .collect();
+                json!({
+                    "headline": m,
+                    "team_box": team_box,
+                    "player_box": player_box,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
     Ok(Json(json!({
         "home_team": home_team.name,
+        "home_team_id": home_team.id,
         "away_team": away_team.name,
+        "away_team_id": away_team.id,
+        "season": season,
         "venue": venue_str,
         "predicted_margin": (explained.prediction.predicted_margin as f64 * 10.0).round() / 10.0,
         "home_win_probability": (explained.prediction.home_win_probability * 1000.0).round() / 1000.0,
         "predicted_winner": predicted_winner,
         "feature_contributions": feature_contributions,
         "contributions_by_group": contributions_by_group,
+        "roster_home": roster_home,
+        "roster_away": roster_away,
+        "prior_meetings": prior_meetings,
     })))
 }
 
@@ -289,10 +345,18 @@ async fn predict_neutral_symmetric(
 }
 
 /// Convenience wrapper for surfaces that just need a single per-matchup
-/// margin + win probability (e.g. the score-ticker upcoming-games strip).
-/// Returns `(predicted_margin, home_win_probability)`. Skips the symmetric
-/// reverse-prediction used for neutral-site tournament games — a few-tenths
-/// directional bias on neutrals is fine for a glance surface.
+/// margin + win probability (e.g. the score-ticker upcoming-games strip and
+/// the TeamDetail schedule's Projected column). Returns
+/// `(predicted_margin, home_win_probability)` from `home_team_id`'s
+/// perspective.
+///
+/// Neutral games go through `predict_neutral_symmetric` so the answer is
+/// invariant to argument order — without it, the same matchup queried from
+/// Team A's schedule (host=B, visitor=A) and Team B's schedule (host=A,
+/// visitor=B) returns slightly different magnitudes because LightGBM tree
+/// ensembles aren't antisymmetric in diff features. The extra inference
+/// per neutral game costs ~0.5ms and eliminates a user-visible inconsistency
+/// across surfaces.
 pub async fn predict_margin_and_winprob(
     state: &Arc<AppState>,
     home_team_id: Uuid,
@@ -301,15 +365,19 @@ pub async fn predict_margin_and_winprob(
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<(f32, f64), String> {
-    let explained = run_predict(
-        state,
-        home_team_id,
-        away_team_id,
-        season,
-        is_neutral,
-        is_conference,
-    )
-    .await?;
+    let explained = if is_neutral {
+        predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference).await?
+    } else {
+        run_predict(
+            state,
+            home_team_id,
+            away_team_id,
+            season,
+            false,
+            is_conference,
+        )
+        .await?
+    };
     Ok((
         explained.prediction.predicted_margin,
         explained.prediction.home_win_probability,
