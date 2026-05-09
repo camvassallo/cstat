@@ -14,7 +14,7 @@ import {
 } from '../api/client';
 import { useSeason, seasonHref } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
-import { FLAG_FEATURES, homeAdvantageSign } from '../components/featureExplanations';
+import { FLAG_FEATURES } from '../components/featureExplanations';
 import { campomTier, campomTierColor } from '../components/campom';
 import { classColor, classTitle } from '../components/archetypeColors';
 import { shortDate } from '../components/format';
@@ -648,19 +648,16 @@ function tierFor(mag: number): Key['tier'] | null {
 
 /// Build the keys panel from the per-feature contributions.
 ///
-/// Direction (which team has the edge) comes from the **data**: each
-/// feature's diff sign, mapped through `homeAdvantageSign` to handle
-/// "lower is better" stats and 0/1 flags. Importance (how much it
-/// matters) comes from the **model**: sum of |contribution| across the
-/// group's features. This split avoids the sign artifacts that pure
-/// ablation produces — a feature whose raw value clearly favors team A
-/// can still get a contribution toward team B due to tree interactions,
-/// and we don't want the keys to mislabel the leader because of that.
-/// Proper TreeSHAP would resolve this without the workaround; queued in
-/// ROADMAP §4b.
+/// Both direction (which team has the edge) and importance (how much it
+/// matters) come from the model's TreeSHAP contributions. SHAP values are
+/// signed and additive — positive = pushed toward home, negative = toward
+/// away — so summing them per group gives the group's net push, and
+/// summing |contribution| gives the magnitude. (Earlier ablation-based
+/// attribution produced wrong-direction sign artifacts and forced a
+/// hand-coded data-side direction lookup; TreeSHAP retired it.)
 function generateKeys(result: PredictionResult): Key[] {
-  // Aggregate per-group: signed importance (data direction × model
-  // magnitude) for who-wins, raw |contribution| sum for how-much-matters.
+  // Aggregate per-group: signed sum of contributions (who the group
+  // pushes toward) and sum of |contribution| (how much the model cares).
   const groupAgg = new Map<
     string,
     {
@@ -670,15 +667,13 @@ function generateKeys(result: PredictionResult): Key[] {
     }
   >();
   for (const f of result.feature_contributions) {
-    const advantage = homeAdvantageSign(f.name, f.value);
-    const mag = Math.abs(f.contribution);
     const entry = groupAgg.get(f.group) ?? {
       signedImportance: 0,
       importance: 0,
       features: [],
     };
-    entry.signedImportance += advantage * mag;
-    entry.importance += mag;
+    entry.signedImportance += f.contribution;
+    entry.importance += Math.abs(f.contribution);
     entry.features.push(f);
     groupAgg.set(f.group, entry);
   }
@@ -687,13 +682,10 @@ function generateKeys(result: PredictionResult): Key[] {
   for (const [group, agg] of groupAgg.entries()) {
     const tier = tierFor(agg.importance);
     if (!tier) continue;
-    // signedImportance sign tells which team the group's data leans toward,
-    // weighted by how much the model cares about each feature. A pure
-    // 0 (no team has any edge) is rare but possible — fall back to model
-    // contribution sign for tie-breaking.
-    const towardHome = agg.signedImportance !== 0
-      ? agg.signedImportance > 0
-      : agg.features.reduce((s, f) => s + f.contribution, 0) > 0;
+    // Net signed contribution > 0 ⇒ this group's features collectively
+    // push the prediction toward the home team. (Pure-zero ties default
+    // to home; only happens in degenerate cases.)
+    const towardHome = agg.signedImportance >= 0;
     // Headline = the single feature in this group with the largest
     // |contribution|. The model's pick — keeps the explanation consistent
     // with what drove the prediction.
@@ -741,10 +733,9 @@ function KeysToGame({ result }: { result: PredictionResult }) {
 
 function KeyItem({ k }: { k: Key }) {
   const teamColor = k.towardHome ? TEAM_1_COLOR : TEAM_2_COLOR;
-  // Phrase the headline gap from the leading team's perspective, so the
-  // sign of the displayed gap always matches the team named above. Most
-  // features: positive value = home edge. Inverted features (TOV-related)
-  // are flipped via `homeAdvantageSign`.
+  // Phrase the headline gap from the leading team's perspective. The
+  // headline feature's signed SHAP contribution tells us which team it
+  // pushed toward; the raw value gives the gap magnitude.
   const headlineGapText = k.headline
     ? formatHeadlineGap(k.headline, k.team, k.towardHome)
     : null;
@@ -789,13 +780,9 @@ function KeyItem({ k }: { k: Key }) {
 ///     near zero
 ///   - "(gap of 7.40 in Duke's favor)" — the common case
 ///   - "(gap of 0.10 the other way — outweighed by other Duke edges in
-///     this group)" when the headline feature's data direction conflicts
-///     with the group-level signed importance (rare, but possible when
-///     several features in the same group disagree)
-///
-/// We avoid showing the model's signed contribution here — that's where
-/// ablation artifacts produced the original bug ("Purdue +0.10 worth -0.9
-/// on the spread" was nonsensical to readers).
+///     this group)" when the headline feature's SHAP sign disagrees with
+///     the group-level direction (rare; happens when several features in
+///     the same group push opposite ways)
 function formatHeadlineGap(
   headline: FeatureContribution,
   team: string,
@@ -818,17 +805,15 @@ function formatHeadlineGap(
     return '(teams essentially tied on this stat)';
   }
 
-  const advantageSign = homeAdvantageSign(headline.name, headline.value);
   // Show absolute gap; the team name above already encodes the direction.
   const absVal = Math.abs(headline.value);
   const gap =
     absVal >= 10 ? absVal.toFixed(1) : absVal >= 1 ? absVal.toFixed(2) : absVal.toFixed(3);
-  // Sanity check: did the diff actually favor the leading team? In
-  // virtually every case it should (we computed `team` from the
-  // group-level signed importance, which weights this very feature). If
-  // not, soften the phrasing — it means another feature in the same
-  // group dominated the group's direction.
-  const matches = (advantageSign > 0) === towardHome;
+  // Direction comes from the SHAP sign: positive contribution ⇒ pushed
+  // toward home. If that disagrees with the group's net direction (rare),
+  // the headline feature is fighting its group, so soften the phrasing.
+  const headlineFavorsHome = headline.contribution >= 0;
+  const matches = headlineFavorsHome === towardHome;
   if (matches) {
     return `(gap of ${gap} in ${team}'s favor)`;
   }

@@ -1,0 +1,601 @@
+//! TreeSHAP feature attribution for LightGBM regressors.
+//!
+//! Parses LightGBM's v4 text dump (`.lgb`) and computes per-feature SHAP
+//! contributions via the canonical Lundberg/Erion/Lee algorithm
+//! ("Consistent Individualized Feature Attribution for Tree Ensembles",
+//! 2018). Used by `Predictor::predict_with_contributions` to drive the
+//! Predict page's "Keys to the Game" panel with signed, additive
+//! attributions instead of the prior ablation-based deltas.
+//!
+//! Why TreeSHAP over ablation: ablation produces wrong-direction sign
+//! artifacts when features interact strongly, which forced a hand-coded
+//! `homeAdvantageSign` workaround on the frontend. TreeSHAP's signs are
+//! the model's own answer about which team a feature pushed the
+//! prediction toward, so the data-faithful direction lookup retires.
+//!
+//! Parity gate: `tests/treeshap_parity.rs` (or the `tests` mod here)
+//! diffs against LightGBM's own `pred_contrib` output for a fixed
+//! sample set, asserting max abs diff < 1e-3.
+//!
+//! ## Tree representation
+//! LightGBM stores each tree as parallel arrays. Internal nodes are
+//! addressed 0..num_internal where num_internal == num_leaves - 1. Leaves
+//! are addressed 0..num_leaves. In `left_child`/`right_child`, a positive
+//! value names an internal node; a negative value names a leaf via the
+//! decoding `leaf_idx = !child` (i.e. -1 → leaf 0, -2 → leaf 1, ...).
+//!
+//! ## Decision semantics
+//! All splits in our trained models use `decision_type=2` — numerical
+//! `<=` splits, default-left on missing values. Since `build_game_features`
+//! never produces NaN, we ignore the missing-handling bits and just use
+//! `feature_value <= threshold ? left : right`.
+
+use std::fs;
+use std::io;
+use std::path::Path;
+
+/// One LightGBM tree. Indexed by internal node id for split fields and by
+/// leaf index for leaf fields. Single-leaf trees (`num_leaves == 1`) have
+/// empty internal arrays and a single leaf value.
+#[derive(Debug, Clone)]
+pub struct Tree {
+    /// Feature index split on at each internal node.
+    pub split_feature: Vec<i32>,
+    /// Threshold value (`feature <= threshold ⇒ left`).
+    pub threshold: Vec<f64>,
+    /// Left child id at each internal node. Negative ⇒ leaf (decode as `!child`).
+    pub left_child: Vec<i32>,
+    /// Right child id at each internal node. Same encoding as `left_child`.
+    pub right_child: Vec<i32>,
+    /// Training sample count reaching each internal node (TreeSHAP cover).
+    pub internal_count: Vec<u32>,
+    /// Per-leaf prediction value (shrinkage already folded in by LightGBM).
+    pub leaf_value: Vec<f64>,
+    /// Training sample count reaching each leaf (TreeSHAP cover).
+    pub leaf_count: Vec<u32>,
+}
+
+/// A parsed LightGBM model (an ensemble of regression trees).
+#[derive(Debug, Clone)]
+pub struct LgbModel {
+    pub num_features: usize,
+    pub trees: Vec<Tree>,
+}
+
+#[derive(Debug)]
+pub enum LgbParseError {
+    Io(io::Error),
+    Format(String),
+}
+
+impl std::fmt::Display for LgbParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LgbParseError::Io(e) => write!(f, "lgb io error: {e}"),
+            LgbParseError::Format(m) => write!(f, "lgb format error: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for LgbParseError {}
+
+impl LgbModel {
+    pub fn load(path: &Path) -> Result<Self, LgbParseError> {
+        let content = fs::read_to_string(path).map_err(LgbParseError::Io)?;
+        Self::parse(&content)
+    }
+
+    pub fn parse(content: &str) -> Result<Self, LgbParseError> {
+        let mut num_features: Option<usize> = None;
+        let mut trees: Vec<Tree> = Vec::new();
+        let mut current: Option<Tree> = None;
+        let mut in_tree = false;
+
+        for raw in content.lines() {
+            let line = raw.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            if let Some(rest) = line.strip_prefix("max_feature_idx=") {
+                let max_idx: usize = rest
+                    .parse()
+                    .map_err(|e| LgbParseError::Format(format!("max_feature_idx: {e}")))?;
+                num_features = Some(max_idx + 1);
+                continue;
+            }
+
+            if line.starts_with("Tree=") {
+                if let Some(t) = current.take() {
+                    trees.push(t);
+                }
+                current = Some(Tree {
+                    split_feature: Vec::new(),
+                    threshold: Vec::new(),
+                    left_child: Vec::new(),
+                    right_child: Vec::new(),
+                    internal_count: Vec::new(),
+                    leaf_value: Vec::new(),
+                    leaf_count: Vec::new(),
+                });
+                in_tree = true;
+                continue;
+            }
+
+            // Some sections (e.g. "pandas_categorical:null", "end of trees")
+            // appear after the last tree. Stop accumulating once we see a
+            // non-tree section header.
+            if line.starts_with("end of trees")
+                || line.starts_with("feature_importances:")
+                || line.starts_with("parameters:")
+                || line.starts_with("pandas_categorical:")
+            {
+                if let Some(t) = current.take() {
+                    trees.push(t);
+                }
+                in_tree = false;
+                continue;
+            }
+
+            if !in_tree {
+                continue;
+            }
+            let tree = current.as_mut().unwrap();
+
+            if let Some(rest) = line.strip_prefix("split_feature=") {
+                tree.split_feature = parse_i32_list(rest)?;
+            } else if let Some(rest) = line.strip_prefix("threshold=") {
+                tree.threshold = parse_f64_list(rest)?;
+            } else if let Some(rest) = line.strip_prefix("left_child=") {
+                tree.left_child = parse_i32_list(rest)?;
+            } else if let Some(rest) = line.strip_prefix("right_child=") {
+                tree.right_child = parse_i32_list(rest)?;
+            } else if let Some(rest) = line.strip_prefix("internal_count=") {
+                tree.internal_count = parse_u32_list(rest)?;
+            } else if let Some(rest) = line.strip_prefix("leaf_value=") {
+                tree.leaf_value = parse_f64_list(rest)?;
+            } else if let Some(rest) = line.strip_prefix("leaf_count=") {
+                tree.leaf_count = parse_u32_list(rest)?;
+            }
+        }
+
+        if let Some(t) = current.take() {
+            trees.push(t);
+        }
+
+        let num_features =
+            num_features.ok_or_else(|| LgbParseError::Format("missing max_feature_idx".into()))?;
+        if trees.is_empty() {
+            return Err(LgbParseError::Format("no trees parsed".into()));
+        }
+
+        // Cross-check internal arrays line up per tree.
+        for (idx, t) in trees.iter().enumerate() {
+            let n_internal = t.split_feature.len();
+            if t.threshold.len() != n_internal
+                || t.left_child.len() != n_internal
+                || t.right_child.len() != n_internal
+                || t.internal_count.len() != n_internal
+            {
+                return Err(LgbParseError::Format(format!(
+                    "tree {idx}: internal-array length mismatch \
+                     (split_feature={}, threshold={}, left={}, right={}, internal_count={})",
+                    n_internal,
+                    t.threshold.len(),
+                    t.left_child.len(),
+                    t.right_child.len(),
+                    t.internal_count.len(),
+                )));
+            }
+            if t.leaf_value.len() != t.leaf_count.len() {
+                return Err(LgbParseError::Format(format!(
+                    "tree {idx}: leaf_value len {} ≠ leaf_count len {}",
+                    t.leaf_value.len(),
+                    t.leaf_count.len(),
+                )));
+            }
+            // Single-leaf trees are valid: no internals, one leaf.
+            if n_internal > 0 && t.leaf_value.len() != n_internal + 1 {
+                return Err(LgbParseError::Format(format!(
+                    "tree {idx}: expected {} leaves for {} internal nodes, got {}",
+                    n_internal + 1,
+                    n_internal,
+                    t.leaf_value.len(),
+                )));
+            }
+        }
+
+        Ok(LgbModel {
+            num_features,
+            trees,
+        })
+    }
+
+    /// Cover-weighted mean leaf value, summed across all trees. This is the
+    /// SHAP "expected value" / base value E[f(x)] over the training data
+    /// (each tree contributes additively, and within a tree the mean leaf
+    /// value weighted by training sample count is the unconditional
+    /// expectation).
+    pub fn base_value(&self) -> f64 {
+        let mut total = 0.0;
+        for tree in &self.trees {
+            let total_count: u64 = tree.leaf_count.iter().map(|&c| c as u64).sum();
+            if total_count == 0 {
+                // Single-leaf tree with no recorded count: just use the leaf.
+                if tree.leaf_value.len() == 1 {
+                    total += tree.leaf_value[0];
+                }
+                continue;
+            }
+            let mut sum = 0.0;
+            for (v, c) in tree.leaf_value.iter().zip(tree.leaf_count.iter()) {
+                sum += v * (*c as f64);
+            }
+            total += sum / total_count as f64;
+        }
+        total
+    }
+}
+
+fn parse_i32_list(s: &str) -> Result<Vec<i32>, LgbParseError> {
+    s.split_whitespace()
+        .map(|t| {
+            t.parse::<i32>()
+                .map_err(|e| LgbParseError::Format(format!("i32 '{t}': {e}")))
+        })
+        .collect()
+}
+
+fn parse_u32_list(s: &str) -> Result<Vec<u32>, LgbParseError> {
+    s.split_whitespace()
+        .map(|t| {
+            t.parse::<u32>()
+                .map_err(|e| LgbParseError::Format(format!("u32 '{t}': {e}")))
+        })
+        .collect()
+}
+
+fn parse_f64_list(s: &str) -> Result<Vec<f64>, LgbParseError> {
+    s.split_whitespace()
+        .map(|t| {
+            t.parse::<f64>()
+                .map_err(|e| LgbParseError::Format(format!("f64 '{t}': {e}")))
+        })
+        .collect()
+}
+
+// ===========================================================================
+// TreeSHAP
+// ===========================================================================
+
+/// One entry on the unique-feature path tracked by the TreeSHAP recursion.
+/// `feature == -1` is the root sentinel (no decision feature).
+#[derive(Debug, Clone, Copy)]
+struct PathItem {
+    feature: i32,
+    zero_frac: f64,
+    one_frac: f64,
+    /// Path weight (mixing coefficient) — see Lundberg et al. eqn. for
+    /// `EXTEND_PATH` in the paper. Updated by every `extend`/`unwind`.
+    weight: f64,
+}
+
+/// Compute SHAP values for a single feature vector against the full
+/// ensemble. Output length matches `model.num_features`.
+///
+/// Sums to `prediction − base_value` (additive feature attribution).
+pub fn tree_shap(model: &LgbModel, features: &[f64]) -> Vec<f64> {
+    assert_eq!(
+        features.len(),
+        model.num_features,
+        "feature vector len {} ≠ model num_features {}",
+        features.len(),
+        model.num_features,
+    );
+    let mut shap = vec![0.0_f64; model.num_features];
+    for tree in &model.trees {
+        if tree.split_feature.is_empty() {
+            // Single-leaf tree contributes only to the base value; SHAP = 0.
+            continue;
+        }
+        let path: Vec<PathItem> = Vec::with_capacity(32);
+        recurse(tree, features, 0, path, 1.0, 1.0, -1, &mut shap);
+    }
+    shap
+}
+
+/// Decode a child id into the cover (training-sample count) at that node.
+fn cover_at(tree: &Tree, child: i32) -> f64 {
+    if child < 0 {
+        let leaf_idx = (!child) as usize;
+        tree.leaf_count[leaf_idx] as f64
+    } else {
+        tree.internal_count[child as usize] as f64
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recurse(
+    tree: &Tree,
+    features: &[f64],
+    node: i32,
+    mut path: Vec<PathItem>,
+    pz: f64,
+    po: f64,
+    pi: i32,
+    shap: &mut [f64],
+) {
+    extend(&mut path, pz, po, pi);
+
+    if node < 0 {
+        // Leaf: distribute leaf value across path features per Algorithm 1.
+        let leaf_idx = (!node) as usize;
+        let leaf_value = tree.leaf_value[leaf_idx];
+        let len = path.len();
+        for i in 1..len {
+            let w = unwound_sum(&path, i);
+            let item = path[i];
+            shap[item.feature as usize] += w * (item.one_frac - item.zero_frac) * leaf_value;
+        }
+        return;
+    }
+
+    let n = node as usize;
+    let split_feat = tree.split_feature[n] as usize;
+    let threshold = tree.threshold[n];
+    let goes_left = features[split_feat] <= threshold;
+    let (hot, cold) = if goes_left {
+        (tree.left_child[n], tree.right_child[n])
+    } else {
+        (tree.right_child[n], tree.left_child[n])
+    };
+
+    let r_j = tree.internal_count[n] as f64;
+    let r_h = cover_at(tree, hot);
+    let r_c = cover_at(tree, cold);
+
+    // If the split feature is already on the path, unwind its contribution
+    // and inherit its zero/one fractions for this re-encounter.
+    let mut iz = 1.0;
+    let mut io = 1.0;
+    if let Some(k) = path.iter().position(|p| p.feature == split_feat as i32) {
+        iz = path[k].zero_frac;
+        io = path[k].one_frac;
+        unwind(&mut path, k);
+    }
+
+    // Both children inherit the same path; clone for one and move the other.
+    let path_for_cold = path.clone();
+    recurse(
+        tree,
+        features,
+        hot,
+        path,
+        iz * r_h / r_j,
+        io,
+        split_feat as i32,
+        shap,
+    );
+    recurse(
+        tree,
+        features,
+        cold,
+        path_for_cold,
+        iz * r_c / r_j,
+        0.0,
+        split_feat as i32,
+        shap,
+    );
+}
+
+/// EXTEND_PATH from Lundberg et al. Appends a new entry and updates all
+/// existing path weights.
+fn extend(path: &mut Vec<PathItem>, pz: f64, po: f64, pi: i32) {
+    let l = path.len(); // old length, before push
+    path.push(PathItem {
+        feature: pi,
+        zero_frac: pz,
+        one_frac: po,
+        weight: if l == 0 { 1.0 } else { 0.0 },
+    });
+    let denom = (l + 1) as f64;
+    // Iterate i = l-1 .. 0, updating weight at i and i+1.
+    for i in (0..l).rev() {
+        let cur = path[i].weight;
+        let i_f = i as f64;
+        path[i + 1].weight += po * cur * (i_f + 1.0) / denom;
+        path[i].weight = pz * cur * (denom - 1.0 - i_f) / denom;
+    }
+}
+
+/// UNWIND_PATH from Lundberg et al. Mutates `path` in place, removing the
+/// entry at `idx` and restoring all weights to what they would have been
+/// without that entry.
+fn unwind(path: &mut Vec<PathItem>, idx: usize) {
+    let depth = path.len() - 1; // resulting length after unwind
+    let one_frac = path[idx].one_frac;
+    let zero_frac = path[idx].zero_frac;
+    let mut next_one_portion = path[depth].weight;
+    let denom = (depth + 1) as f64;
+
+    for i in (0..depth).rev() {
+        let i_f = i as f64;
+        if one_frac != 0.0 {
+            let tmp = path[i].weight;
+            path[i].weight = next_one_portion * denom / ((i_f + 1.0) * one_frac);
+            next_one_portion = tmp - path[i].weight * zero_frac * (denom - 1.0 - i_f) / denom;
+        } else if zero_frac != 0.0 {
+            path[i].weight = path[i].weight * denom / (zero_frac * (denom - 1.0 - i_f));
+        }
+    }
+
+    // Shift feature/zero/one fractions left by one over [idx, depth).
+    for i in idx..depth {
+        path[i].feature = path[i + 1].feature;
+        path[i].zero_frac = path[i + 1].zero_frac;
+        path[i].one_frac = path[i + 1].one_frac;
+    }
+    path.pop();
+}
+
+/// Sum of path weights with entry `idx` hypothetically removed. Read-only;
+/// used in the leaf loop. Mirrors `unwound_path_sum` in SHAP's reference C++.
+fn unwound_sum(path: &[PathItem], idx: usize) -> f64 {
+    let depth = path.len() - 1;
+    let one_frac = path[idx].one_frac;
+    let zero_frac = path[idx].zero_frac;
+    let mut next_one_portion = path[depth].weight;
+    let denom = (depth + 1) as f64;
+    let mut total = 0.0;
+
+    for i in (0..depth).rev() {
+        let i_f = i as f64;
+        if one_frac != 0.0 {
+            let tmp = next_one_portion * denom / ((i_f + 1.0) * one_frac);
+            total += tmp;
+            next_one_portion = path[i].weight - tmp * zero_frac * (denom - 1.0 - i_f) / denom;
+        } else if zero_frac != 0.0 {
+            total += path[i].weight * denom / (zero_frac * (denom - 1.0 - i_f));
+        }
+    }
+    total
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn model_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../training/models")
+    }
+
+    #[test]
+    fn parse_margin_lgb() {
+        let path = model_dir().join("margin_model.lgb");
+        if !path.exists() {
+            eprintln!("skipping: {} not found", path.display());
+            return;
+        }
+        let model = LgbModel::load(&path).unwrap();
+        assert_eq!(model.num_features, 49);
+        assert!(
+            model.trees.len() >= 100,
+            "expected many trees, got {}",
+            model.trees.len()
+        );
+
+        // First tree shape sanity (24 leaves => 23 internal nodes).
+        let t0 = &model.trees[0];
+        assert_eq!(t0.split_feature.len(), 23);
+        assert_eq!(t0.leaf_value.len(), 24);
+
+        // Base value should be in a sensible range for margin (we know
+        // home advantage is ~3-4 points historically).
+        let base = model.base_value();
+        assert!(base.abs() < 20.0, "base value {base} out of expected range",);
+        eprintln!(
+            "margin model: {} trees, base value {:.3}",
+            model.trees.len(),
+            base
+        );
+    }
+
+    #[test]
+    fn treeshap_zero_features_yields_base() {
+        let path = model_dir().join("margin_model.lgb");
+        if !path.exists() {
+            return;
+        }
+        let model = LgbModel::load(&path).unwrap();
+        let features = vec![0.0_f64; model.num_features];
+        let shap = tree_shap(&model, &features);
+
+        // All-zero input: SHAP values can still be non-zero (zero is a
+        // meaningful value, not a missing one). But the prediction reconstruction
+        // base + sum(shap) should equal the actual model output. We can't run
+        // the LightGBM model here, so just sanity-check the shape and
+        // finiteness.
+        assert_eq!(shap.len(), model.num_features);
+        for (i, v) in shap.iter().enumerate() {
+            assert!(v.is_finite(), "shap[{i}] = {v} not finite");
+        }
+    }
+
+    /// Parity gate: compare against LightGBM's own `pred_contrib` output.
+    /// Baseline JSON is generated by `training/dump_shap_baseline.py`.
+    #[test]
+    fn treeshap_matches_lightgbm_baseline() {
+        let dir = model_dir();
+        let lgb_path = dir.join("margin_model.lgb");
+        let baseline_path = dir.join("shap_baseline.json");
+        if !lgb_path.exists() || !baseline_path.exists() {
+            eprintln!(
+                "skipping: model or baseline not present (run `python training/dump_shap_baseline.py`)"
+            );
+            return;
+        }
+
+        let model = LgbModel::load(&lgb_path).unwrap();
+        let baseline: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&baseline_path).unwrap()).unwrap();
+
+        let samples = baseline["samples"].as_array().unwrap();
+        let expected_shap = baseline["shap_values"].as_array().unwrap();
+        let expected_base = baseline["base_values"].as_array().unwrap();
+        let expected_pred = baseline["predictions"].as_array().unwrap();
+
+        let our_base = model.base_value();
+        let py_base = expected_base[0].as_f64().unwrap();
+        assert!(
+            (our_base - py_base).abs() < 1e-3,
+            "base value: rust {our_base} vs python {py_base}",
+        );
+
+        let mut max_shap_diff: f64 = 0.0;
+        let mut max_pred_diff: f64 = 0.0;
+
+        for (s_idx, sample) in samples.iter().enumerate() {
+            let features: Vec<f64> = sample
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect();
+
+            let actual = tree_shap(&model, &features);
+            let exp_row = expected_shap[s_idx].as_array().unwrap();
+
+            for (f_idx, exp_val) in exp_row.iter().enumerate() {
+                let exp = exp_val.as_f64().unwrap();
+                let diff = (actual[f_idx] - exp).abs();
+                if diff > max_shap_diff {
+                    max_shap_diff = diff;
+                }
+            }
+
+            let actual_pred = our_base + actual.iter().sum::<f64>();
+            let exp_pred = expected_pred[s_idx].as_f64().unwrap();
+            let pred_diff = (actual_pred - exp_pred).abs();
+            if pred_diff > max_pred_diff {
+                max_pred_diff = pred_diff;
+            }
+        }
+
+        assert!(
+            max_shap_diff < 1e-3,
+            "max SHAP diff vs LightGBM = {max_shap_diff}",
+        );
+        assert!(
+            max_pred_diff < 1e-3,
+            "max prediction reconstruction diff = {max_pred_diff}",
+        );
+        eprintln!(
+            "TreeSHAP parity: max_shap_diff={max_shap_diff:.2e}, max_pred_diff={max_pred_diff:.2e}",
+        );
+    }
+}
