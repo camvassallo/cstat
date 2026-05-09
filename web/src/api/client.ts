@@ -64,6 +64,11 @@ export interface ScheduleEntry {
   opponent_score: number | null;
   is_conference: boolean | null;
   is_postseason: boolean | null;
+  /// Predicted margin from the requested team's perspective (positive =
+  /// requested team favored). Populated for upcoming games only.
+  projected_margin: number | null;
+  /// Probability the requested team wins, derived from `projected_margin`.
+  projected_win_prob: number | null;
 }
 
 export interface RosterEntry {
@@ -564,7 +569,10 @@ export interface GroupContribution {
 
 export interface PredictionResult {
   home_team: string;
+  home_team_id: string;
   away_team: string;
+  away_team_id: string;
+  season: number;
   venue: Venue;
   predicted_margin: number;
   home_win_probability: number;
@@ -577,6 +585,76 @@ export interface PredictionResult {
   /// signed sums using the data-faithful direction (see
   /// `homeAdvantageSign` in `featureExplanations.ts`).
   contributions_by_group: GroupContribution[];
+  /// Roster summary per team (full RosterEntry shape). Sorted CamPom desc
+  /// by the underlying query — slice top N on the frontend for display.
+  roster_home: RosterEntry[];
+  roster_away: RosterEntry[];
+  /// Completed games between these two teams this season, newest first.
+  /// Empty when they haven't played yet.
+  prior_meetings: PriorMeeting[];
+}
+
+export interface PriorMeetingHeadline {
+  game_id: string;
+  game_date: string;
+  home_team_id: string | null;
+  home_team_name: string | null;
+  away_team_id: string | null;
+  away_team_name: string | null;
+  home_score: number | null;
+  away_score: number | null;
+  is_neutral_site: boolean;
+  is_postseason: boolean | null;
+}
+
+export interface TeamGameBox {
+  game_id: string;
+  team_id: string;
+  points: number | null;
+  fgm: number | null;
+  fga: number | null;
+  tpm: number | null;
+  tpa: number | null;
+  ftm: number | null;
+  fta: number | null;
+  off_rebounds: number | null;
+  total_rebounds: number | null;
+  assists: number | null;
+  steals: number | null;
+  blocks: number | null;
+  turnovers: number | null;
+  fouls: number | null;
+}
+
+export interface PlayerGameBox {
+  game_id: string;
+  player_id: string;
+  player_name: string;
+  team_id: string;
+  starter: boolean | null;
+  minutes: number | null;
+  points: number | null;
+  fgm: number | null;
+  fga: number | null;
+  tpm: number | null;
+  tpa: number | null;
+  ftm: number | null;
+  fta: number | null;
+  off_rebounds: number | null;
+  def_rebounds: number | null;
+  total_rebounds: number | null;
+  assists: number | null;
+  steals: number | null;
+  blocks: number | null;
+  turnovers: number | null;
+  fouls: number | null;
+  game_score: number | null;
+}
+
+export interface PriorMeeting {
+  headline: PriorMeetingHeadline;
+  team_box: TeamGameBox[];
+  player_box: PlayerGameBox[];
 }
 
 export function fetchPrediction(

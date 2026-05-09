@@ -56,9 +56,17 @@ function PastTile({ g, season }: { g: GameResult; season: number }) {
       <div className="text-[10px] text-gray-500 mt-0.5">FINAL · {shortDate(g.game_date)}</div>
     </>
   );
-  if (!g.home_team_id) return <div className={TILE_CLASSES}>{body}</div>;
+  // Deep-link past tiles to Predict so the user lands on the matchup view —
+  // the prior box score auto-surfaces in the Previous Matchups section. Falls
+  // back to a static tile when team names are missing (Predict looks teams
+  // up by name and would 404 on the placeholder "—").
+  const canDeepLink =
+    g.home_team_name != null && g.away_team_name != null && g.home_team_id != null;
+  if (!canDeepLink) return <div className={TILE_CLASSES}>{body}</div>;
+  const venueParam = g.is_neutral_site ? '&venue=neutral' : '';
+  const predictTo = `/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}${venueParam}`;
   return (
-    <Link to={seasonHref(`/teams/${g.home_team_id}`, season)} className={TILE_CLASSES}>
+    <Link to={seasonHref(predictTo, season)} className={TILE_CLASSES}>
       {body}
     </Link>
   );
