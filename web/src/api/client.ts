@@ -65,7 +65,10 @@ export interface ScheduleEntry {
   is_conference: boolean | null;
   is_postseason: boolean | null;
   /// Predicted margin from the requested team's perspective (positive =
-  /// requested team favored). Populated for upcoming games only.
+  /// requested team favored). Populated for every game on the schedule —
+  /// upcoming games get the model's pre-game forecast, completed games get
+  /// a "what we'd predict today" projection (current team state, not
+  /// pre-game; muted in the UI). Null when prediction inputs are missing.
   projected_margin: number | null;
   /// Probability the requested team wins, derived from `projected_margin`.
   projected_win_prob: number | null;

@@ -61,8 +61,7 @@ export default function Predict() {
   // When teams arrive via URL params (deep-link from a schedule row, ticker
   // tile, or shared link), kick off the prediction automatically. Re-fires
   // when the URL or season changes so /predict?home=A&away=B remains a
-  // first-class destination. The `?` after `urlHome` short-circuits the
-  // initial render before pickers have any value.
+  // first-class destination.
   useEffect(() => {
     if (!urlHome.trim() || !urlAway.trim()) return;
     setTeam1(urlHome);
