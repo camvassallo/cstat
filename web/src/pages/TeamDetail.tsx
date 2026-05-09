@@ -326,7 +326,7 @@ export default function TeamDetail() {
       <RosterTable roster={roster} />
 
       {/* Schedule */}
-      <ScheduleTable schedule={schedule} />
+      <ScheduleTable schedule={schedule} teamName={team.name} />
     </div>
   );
 }
@@ -582,7 +582,13 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
   );
 }
 
-function ScheduleTable({ schedule }: { schedule: ScheduleEntry[] }) {
+function ScheduleTable({
+  schedule,
+  teamName,
+}: {
+  schedule: ScheduleEntry[];
+  teamName: string;
+}) {
   return (
     <div>
       <h2 className="text-xl font-bold mb-3">Schedule</h2>
@@ -594,39 +600,16 @@ function ScheduleTable({ schedule }: { schedule: ScheduleEntry[] }) {
               <StickyHeader>Opponent</StickyHeader>
               <StickyHeader align="center">Result</StickyHeader>
               <StickyHeader align="center">Score</StickyHeader>
+              <StickyHeader align="center">Projected</StickyHeader>
             </tr>
           </thead>
           <tbody>
-            {schedule.map((g) => {
-              const won = g.team_score != null && g.opponent_score != null && g.team_score > g.opponent_score;
-              const lost = g.team_score != null && g.opponent_score != null && g.team_score < g.opponent_score;
-              return (
-                <tr key={g.game_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                  <td className="py-2 px-2 text-gray-400">{g.game_date}</td>
-                  <td className="py-2 px-2">
-                    {g.is_home === false && '@ '}
-                    {g.opponent_id ? (
-                      <SeasonLink to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
-                        {g.opponent_name ?? 'Unknown'}
-                      </SeasonLink>
-                    ) : (
-                      g.opponent_name ?? 'Unknown'
-                    )}
-                    {g.is_neutral && ' (N)'}
-                    {g.is_conference && <span className="text-gray-500 ml-1">*</span>}
-                  </td>
-                  <td className={`py-2 px-2 text-center font-semibold ${won ? 'text-green-400' : lost ? 'text-red-400' : ''}`}>
-                    {g.team_score != null ? (won ? 'W' : 'L') : '—'}
-                  </td>
-                  <td className="py-2 px-2 text-center">
-                    {g.team_score != null ? `${g.team_score}-${g.opponent_score}` : '—'}
-                  </td>
-                </tr>
-              );
-            })}
+            {schedule.map((g) => (
+              <ScheduleRow key={g.game_id} g={g} teamName={teamName} />
+            ))}
             {schedule.length === 0 && (
               <tr>
-                <td colSpan={4} className="py-6 text-center text-gray-500 text-sm">
+                <td colSpan={5} className="py-6 text-center text-gray-500 text-sm">
                   No games scheduled.
                 </td>
               </tr>
@@ -635,5 +618,99 @@ function ScheduleTable({ schedule }: { schedule: ScheduleEntry[] }) {
         </table>
       </div>
     </div>
+  );
+}
+
+function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
+  const won =
+    g.team_score != null && g.opponent_score != null && g.team_score > g.opponent_score;
+  const lost =
+    g.team_score != null && g.opponent_score != null && g.team_score < g.opponent_score;
+
+  // "View matchup" link: routes to /predict pre-loaded with these two teams
+  // and the correct venue (host=this team if is_home, opponent if not, neutral
+  // overrides). Only active when the opponent name is populated — Predict
+  // resolves teams by name, so a missing opponent_name would 404.
+  const opponentName = g.opponent_name;
+  let predictTo: string | null = null;
+  if (opponentName) {
+    let host = teamName;
+    let visitor = opponentName;
+    if (g.is_home === false && !g.is_neutral) {
+      host = opponentName;
+      visitor = teamName;
+    }
+    const venueParam = g.is_neutral ? '&venue=neutral' : '';
+    predictTo = `/predict?home=${encodeURIComponent(host)}&away=${encodeURIComponent(visitor)}${venueParam}`;
+  }
+
+  // Render the projected cell. For unplayed games show the predicted margin
+  // from the requested team's perspective (positive = this team favored)
+  // plus the win probability. Completed games leave this column blank — the
+  // actual result is already in the Score column.
+  const projected = (() => {
+    if (g.team_score != null) return null;
+    if (g.projected_margin == null) return null;
+    const m = g.projected_margin;
+    const fav = m > 0;
+    const spread = `${fav ? '−' : '+'}${Math.abs(m).toFixed(1)}`;
+    const winPct =
+      g.projected_win_prob != null ? Math.round(g.projected_win_prob * 100) : null;
+    return (
+      <span
+        className={`font-mono ${fav ? 'text-green-400' : 'text-gray-300'}`}
+        title={`Predicted from ${teamName}'s perspective`}
+      >
+        {spread}
+        {winPct != null && <span className="text-gray-500 ml-1">({winPct}%)</span>}
+      </span>
+    );
+  })();
+
+  return (
+    <tr className="border-b border-gray-800 hover:bg-gray-800/50">
+      <td className="py-2 px-2 text-gray-400">{g.game_date}</td>
+      <td className="py-2 px-2">
+        {g.is_home === false && '@ '}
+        {g.opponent_id ? (
+          <SeasonLink to={`/teams/${g.opponent_id}`} className="text-blue-400 hover:underline">
+            {g.opponent_name ?? 'Unknown'}
+          </SeasonLink>
+        ) : (
+          g.opponent_name ?? 'Unknown'
+        )}
+        {g.is_neutral && ' (N)'}
+        {g.is_conference && <span className="text-gray-500 ml-1">*</span>}
+      </td>
+      <td
+        className={`py-2 px-2 text-center font-semibold ${
+          won ? 'text-green-400' : lost ? 'text-red-400' : ''
+        }`}
+      >
+        {g.team_score != null ? (won ? 'W' : 'L') : '—'}
+      </td>
+      <td className="py-2 px-2 text-center">
+        {g.team_score != null ? (
+          predictTo ? (
+            <SeasonLink to={predictTo} className="hover:underline">
+              {g.team_score}-{g.opponent_score}
+            </SeasonLink>
+          ) : (
+            `${g.team_score}-${g.opponent_score}`
+          )
+        ) : (
+          '—'
+        )}
+      </td>
+      <td className="py-2 px-2 text-center">
+        {g.team_score == null && predictTo ? (
+          <SeasonLink to={predictTo} className="hover:underline">
+            {projected ?? <span className="text-gray-500">—</span>}
+          </SeasonLink>
+        ) : (
+          projected ?? <span className="text-gray-500">—</span>
+        )}
+      </td>
+    </tr>
   );
 }
