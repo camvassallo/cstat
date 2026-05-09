@@ -218,9 +218,13 @@ pub struct ScheduleEntry {
     pub is_conference: Option<bool>,
     pub is_postseason: Option<bool>,
     /// Predicted margin **from the requested team's perspective** (positive =
-    /// requested team favored). Populated by the API layer for upcoming games
-    /// only; left null for completed games (the result speaks for itself) and
-    /// when prediction inputs are missing (no team UUID resolved, etc.).
+    /// requested team favored). Populated by the API layer for every game on
+    /// the schedule — upcoming games get the model's pre-game forecast,
+    /// completed games get a "what we'd predict today" projection (current
+    /// team state, not pre-game; muted in the UI). Left null only when
+    /// prediction inputs are missing (no opponent UUID resolved, feature
+    /// extraction failed). Pre-game predictions for historical games are a
+    /// future roadmap item (point-in-time `game_forecasts` backfill).
     #[sqlx(default)]
     pub projected_margin: Option<f64>,
     /// Probability the requested team wins, derived from `projected_margin`.

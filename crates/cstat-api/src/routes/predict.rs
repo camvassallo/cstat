@@ -366,10 +366,17 @@ pub async fn predict_margin_and_winprob(
     is_conference: bool,
 ) -> Result<(f32, f64), String> {
     let explained = if is_neutral {
-        predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference)
-            .await?
+        predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference).await?
     } else {
-        run_predict(state, home_team_id, away_team_id, season, false, is_conference).await?
+        run_predict(
+            state,
+            home_team_id,
+            away_team_id,
+            season,
+            false,
+            is_conference,
+        )
+        .await?
     };
     Ok((
         explained.prediction.predicted_margin,

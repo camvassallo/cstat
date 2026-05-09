@@ -17,6 +17,7 @@ import { usePageTitle } from '../components/usePageTitle';
 import { FLAG_FEATURES, homeAdvantageSign } from '../components/featureExplanations';
 import { campomTier, campomTierColor } from '../components/campom';
 import { classColor, classTitle } from '../components/archetypeColors';
+import { shortDate } from '../components/format';
 import { Link } from 'react-router-dom';
 
 const TEAM_1_COLOR = '#3b82f6'; // blue (matches PlayerCompare PLAYER_COLORS[0])
@@ -84,8 +85,11 @@ export default function Predict() {
     return () => {
       alive = false;
     };
-    // urlVenue intentionally not deduped via initialVenue — the latter is
-    // recomputed each render but only its current value matters per fetch.
+    // The early-return on empty `urlHome`/`urlAway` short-circuits the first
+    // render before pickers have any value. `initialVenue` is intentionally
+    // omitted from the deps — it's recomputed each render from `urlVenue`
+    // (which is in the deps), so reading its current value inside the effect
+    // is correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlHome, urlAway, urlVenue, season]);
 
@@ -389,7 +393,7 @@ function MeetingCard({
     <div className="bg-gray-900 rounded border border-gray-700 overflow-hidden">
       <div className="p-4 space-y-2">
         <div className="flex items-baseline justify-between text-[11px] text-gray-500 uppercase tracking-wide">
-          <span>{h.game_date}</span>
+          <span>{shortDate(h.game_date)}</span>
           <span>
             {venueText}
             {h.is_postseason && ' · Postseason'}
@@ -402,8 +406,7 @@ function MeetingCard({
             </div>
             {topAway && (
               <div className="text-[11px] text-gray-400 mt-0.5 truncate">
-                {topAway.player_name} · {topAway.points ?? 0}p / {topAway.total_rebounds ?? 0}r /{' '}
-                {topAway.assists ?? 0}a
+                {topAway.player_name} · {statLine(topAway)}
               </div>
             )}
           </div>
@@ -422,8 +425,7 @@ function MeetingCard({
             </div>
             {topHome && (
               <div className="text-[11px] text-gray-400 mt-0.5 truncate">
-                {topHome.player_name} · {topHome.points ?? 0}p / {topHome.total_rebounds ?? 0}r /{' '}
-                {topHome.assists ?? 0}a
+                {topHome.player_name} · {statLine(topHome)}
               </div>
             )}
           </div>
@@ -448,12 +450,22 @@ function topPerformer(
   if (!teamId) return null;
   const eligible = players.filter((p) => p.team_id === teamId && (p.minutes ?? 0) > 0);
   if (eligible.length === 0) return null;
-  // Prefer game_score; fall back to points so the field is always populated.
-  return eligible.reduce((best, p) => {
-    const bestKey = best.game_score ?? best.points ?? -Infinity;
-    const pKey = p.game_score ?? p.points ?? -Infinity;
-    return pKey > bestKey ? p : best;
-  });
+  // Pick a single key for the whole team so we never compare game_score on
+  // one player to points on another (different scales). Use game_score if
+  // every player has it (the common case — compute populates it for all
+  // rows); otherwise fall back to points uniformly.
+  const useGameScore = eligible.every((p) => p.game_score != null);
+  const sortKey = (p: PlayerGameBox): number =>
+    (useGameScore ? p.game_score : p.points) ?? -Infinity;
+  return eligible.reduce((best, p) => (sortKey(p) > sortKey(best) ? p : best));
+}
+
+/// Compact "P / R / A" line for the top-performer chip on a Previous Matchup
+/// card. Renders `—` for null fields so a row doesn't claim a real "0" stat
+/// line when the underlying data is missing.
+function statLine(p: PlayerGameBox): string {
+  const fmt = (v: number | null) => (v == null ? '—' : v.toString());
+  return `${fmt(p.points)}p / ${fmt(p.total_rebounds)}r / ${fmt(p.assists)}a`;
 }
 
 function BoxScore({
@@ -533,7 +545,15 @@ function BoxScoreSide({
               <tr key={p.player_id} className="border-b border-gray-800/60">
                 <td className="text-left py-1 px-2 text-gray-200 font-sans">
                   {p.player_name}
-                  {p.starter && <span className="text-gray-500 ml-1">·</span>}
+                  {p.starter && (
+                    <span
+                      className="text-gray-500 ml-1"
+                      title="Starter"
+                      aria-label="Starter"
+                    >
+                      *
+                    </span>
+                  )}
                 </td>
                 <td className="text-right py-1 px-1 text-gray-300">
                   {p.minutes != null ? Math.round(p.minutes) : '—'}
