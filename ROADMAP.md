@@ -602,6 +602,64 @@ last big offender. If we ever add a per-team enrichment step, fan it out
 behind the rate limiter (e.g. `futures::stream::buffered`) rather than
 inlining another `for` loop.
 
+### Deprecate TreeSHAP infrastructure (no current consumer)
+The TreeSHAP plumbing shipped in PR #47 to drive the Keys to the Game
+panel's per-feature attribution. PR #49 reframed Keys around four-factor
+gaps from `team_season_stats` and removed the SHAP-driven version, then
+removed the panel entirely after deciding it didn't earn its real estate
+(four factors duplicate Team Stats, star/talent gaps duplicate Roster
+Compare). **Result: no frontend surface currently consumes
+`feature_contributions` or `contributions_by_group`** — they're computed
+on every `/api/predict` call and serialised into the response, and
+nothing reads them.
+
+Currently shipped but dead:
+- `crates/cstat-core/src/treeshap.rs` (~500 lines, pure-Rust
+  Lundberg/Erion/Lee TreeSHAP, parses LightGBM v4 text dump). Includes
+  the `treeshap_matches_lightgbm_baseline` parity gate against
+  `pred_contrib` (max abs diff 7.11e-15).
+- `Predictor::predict_with_contributions` in `inference.rs` — runs both
+  ONNX margin + TreeSHAP per call.
+- `FEATURE_META` table in `inference.rs` (per-feature labels + groups,
+  only consumed by `build_contribution_payload`).
+- `build_contribution_payload` + the `feature_contributions` /
+  `contributions_by_group` keys in `routes/predict.rs`.
+- `margin_model.lgb` (~460 KB) shipped in `training/models/` and copied
+  into the Docker image.
+- `web/src/components/featureExplanations.ts` (`FLAG_FEATURES`,
+  `homeAdvantageSign`) — already orphaned on the frontend.
+- `FeatureContribution` / `GroupContribution` types in
+  `web/src/api/client.ts`.
+
+Cost of keeping it as-is: per-request CPU for the TreeSHAP eval, ~5 KB
+of unused response payload per prediction, 460 KB in the Docker image,
+and ongoing maintenance load (the LightGBM text-dump parser ties the
+Rust crate to a specific dump format — every retrain has to re-emit it).
+
+Cost of removing: tearing out working code that the API contract still
+exposes. Future use cases that would justify keeping it: a calibration
+dashboard (§6 model accuracy item), a per-prediction debug tooltip, or
+a separate "why this prediction" page.
+
+**Gate before removal**: confirm there's no future feature that wants
+per-feature SHAP attribution at request time. If we want SHAP for
+*offline* analysis (calibration plots, model audits), that can run
+straight from `oof_predictions.csv` in Python — doesn't require keeping
+the runtime Rust path.
+
+**If/when removed**:
+1. Drop `treeshap.rs`, `predict_with_contributions`, the parity test.
+2. Strip `feature_contributions` / `contributions_by_group` from the
+   `/api/predict` response (breaking API change — bump the response
+   shape or just delete the keys; no consumer reads them).
+3. Drop `FEATURE_META`, `build_contribution_payload`,
+   `featureExplanations.ts`, the unused frontend types.
+4. Stop emitting `margin_model.lgb` from `train.py` / copying it in
+   `Dockerfile`.
+
+Estimated savings: ~700 lines of code, ~460 KB image size, small
+per-request CPU. Defer until clearly no consumer is on the horizon.
+
 ---
 
 ## Data Caching Strategy
