@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::routes::predict::predict_margin_and_winprob;
+use crate::routes::predict::predict_projection;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/ticker", get(ticker))
@@ -42,6 +42,9 @@ struct UpcomingTile {
     predicted_margin: f32,
     /// Probability the home team wins, derived from `predicted_margin`.
     home_win_probability: f64,
+    /// Projected integer scores (rounded so they reconcile with margin).
+    predicted_home_score: i32,
+    predicted_away_score: i32,
 }
 
 async fn ticker(
@@ -77,7 +80,7 @@ async fn ticker(
             _ => continue,
         };
         let is_conference = g.is_conference.unwrap_or(false);
-        if let Ok((margin, p)) = predict_margin_and_winprob(
+        if let Ok(proj) = predict_projection(
             &state,
             home_id,
             away_id,
@@ -89,8 +92,10 @@ async fn ticker(
         {
             upcoming.push(UpcomingTile {
                 game: g,
-                predicted_margin: margin,
-                home_win_probability: p,
+                predicted_margin: proj.margin,
+                home_win_probability: proj.home_win_prob,
+                predicted_home_score: proj.home_score,
+                predicted_away_score: proj.away_score,
             });
         }
     }

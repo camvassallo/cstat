@@ -98,6 +98,10 @@ def main():
         meta = json.load(f)
 
     n_features = meta["n_features"]
+    # Totals model has its own feature count (49 diffs + sum_* level
+    # signals); falls back to n_features for backwards-compat with old
+    # meta files (pre-totals).
+    total_n_features = meta.get("total_n_features", n_features)
 
     export_model(
         str(MODEL_DIR / "margin_model.lgb"),
@@ -113,7 +117,19 @@ def main():
         is_classifier=True,
     )
 
-    print(f"\nONNX models ready for Rust inference ({n_features} features)")
+    total_lgb = MODEL_DIR / "total_model.lgb"
+    if total_lgb.exists():
+        export_model(
+            str(total_lgb),
+            str(MODEL_DIR / "total_model.onnx"),
+            total_n_features,
+            is_classifier=False,
+        )
+
+    print(
+        f"\nONNX models ready for Rust inference "
+        f"({n_features} margin/win features, {total_n_features} total features)"
+    )
 
 
 if __name__ == "__main__":

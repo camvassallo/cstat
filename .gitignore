@@ -40,6 +40,7 @@ __pycache__/
 !/training/models/margin_model.onnx
 !/training/models/win_model.onnx
 !/training/models/margin_model.lgb
+!/training/models/total_model.onnx
 
 # Training experiment side-by-side outputs. Results live in ROADMAP §4f;
 # artifacts here are reproducible from the GBPM_VARIANT env var.
@@ -49,9 +50,19 @@ __pycache__/
 # evaluating a retrain; git history holds the canonical "before" copy.
 /training/models_*_backup/
 
+# Training-pipeline CSV outputs (e.g. OOF predictions). Generated artifacts,
+# not source — re-derivable from `python train.py`. Seed data for downstream
+# work like the historical-prediction `game_forecasts` backfill.
+/training/models/*.csv
+
 # Hand-generated PR diff dumps (e.g. `git diff main > pr.diff`) — useful
 # for review locally, never meant to ship.
 pr.diff
+
+# Railway / deploy runtime logs downloaded for debugging. Refreshed each
+# time the container restarts, so committing them creates noisy diffs.
+build.log
+deploy.log
 
 # Claude Code runtime state — machine-local, not part of the project.
 /.claude/scheduled_tasks.lock

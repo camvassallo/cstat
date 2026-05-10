@@ -70,6 +70,12 @@ function UpcomingTileView({ g, season }: { g: UpcomingTile; season: number }) {
   const spread = `−${Math.abs(g.predicted_margin).toFixed(1)}`;
   const winProb = homeFavored ? g.home_win_probability : 1 - g.home_win_probability;
   const winPct = `${Math.round(winProb * 100)}%`;
+  // Projected final, winner first, matching the post-game tile shape so
+  // upcoming and past read with the same visual structure.
+  const winnerName = homeFavored ? home : away;
+  const loserName = homeFavored ? away : home;
+  const winnerScore = homeFavored ? g.predicted_home_score : g.predicted_away_score;
+  const loserScore = homeFavored ? g.predicted_away_score : g.predicted_home_score;
   // Build the deep link only when both team names resolved — Predict looks
   // teams up by name and would 404 on the placeholder "—". Pass `venue=neutral`
   // through to Predict when the schedule says so; otherwise the page would
@@ -82,10 +88,14 @@ function UpcomingTileView({ g, season }: { g: UpcomingTile; season: number }) {
   const body = (
     <>
       <div className="text-xs text-gray-300 truncate">
-        {home} <span className="text-gray-500">vs</span> {away}
+        <span className="font-semibold">{winnerName}</span>{' '}
+        <span className="font-mono text-gray-100">{winnerScore}</span>
+        <span className="text-gray-600 mx-1">—</span>
+        <span>{loserName}</span>{' '}
+        <span className="font-mono text-gray-400">{loserScore}</span>
       </div>
-      <div className="text-[11px] text-gray-100 mt-0.5 truncate">
-        <span className="font-semibold">{favorite}</span>{' '}
+      <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+        <span className="font-medium">{favorite}</span>{' '}
         <span className="font-mono text-blue-300">{spread}</span>{' '}
         <span className="text-gray-500">({winPct})</span>
       </div>

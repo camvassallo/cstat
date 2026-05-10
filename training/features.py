@@ -745,7 +745,7 @@ def compute_player_sos(pgs: pd.DataFrame, adj_eff_snapshots: dict):
 # Main feature matrix builder
 # ---------------------------------------------------------------------------
 
-def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]:
+def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str], list[str]]:
     """
     Build the full feature matrix with point-in-time features.
 
@@ -1004,9 +1004,41 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
         if col in df.columns:
             df[col] = -df[col]
 
+    # Sum features for the totals model only. The margin/win models work on
+    # diffs (asymmetry signal); totals need *level* — diff_tempo=0 is
+    # ambiguous between two slow teams (low total) and two fast teams (high
+    # total). Sums are computed on the unflipped raw home_/away_ columns so
+    # sum_adj_defense reads as "combined porosity" (higher → both defenses
+    # allow more, total trends up). Kept narrow on purpose: 7 level
+    # primaries that map to the physical model
+    # `total ≈ (avg_tempo / 100) × (avg_off + avg_def_allowed)`. The margin
+    # feature matrix stays at 49 — the existing Rust Predictor's
+    # NUM_FEATURES contract is unchanged.
+    sum_pairs = {
+        "adj_tempo": "cum_tempo",
+        "adj_offense": "adj_offense",
+        "adj_defense": "adj_defense",
+        "effective_fg_pct": "cum_efg_pct",
+        "opp_effective_fg_pct": "cum_opp_efg_pct",
+        "w_ppg": "w_ppg",
+        "w_ortg": "w_ortg",
+        # Possession-creating signals (rebounds → extra possessions → more
+        # points). Both teams crashing the offensive glass tends to push
+        # totals up; both teams locking down defensive rebounds caps
+        # second-chance points.
+        "off_rebound_pct": "cum_orb_pct",
+        "def_rebound_pct": "cum_def_reb_pct",
+    }
+    for name, col in sum_pairs.items():
+        home_col = f"home_{col}"
+        away_col = f"away_{col}"
+        if home_col in df.columns and away_col in df.columns:
+            df[f"sum_{name}"] = df[home_col] + df[away_col]
+
     # Targets
     df["margin"] = df["home_score"] - df["away_score"]
     df["home_win"] = (df["margin"] > 0).astype(int)
+    df["total"] = df["home_score"] + df["away_score"]
 
     # NatStat win expectancy for benchmarking only (NOT a training feature)
     df["natstat_home_win_exp"] = df["game_id"].map(natstat_win_exp)
@@ -1016,21 +1048,23 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str]]
         ["venue", "is_conference_game", "diff_win_pct"]
         + [c for c in df.columns if c.startswith("diff_") and c != "diff_win_pct"]
     )
+    sum_cols = [c for c in df.columns if c.startswith("sum_")]
 
-    print(f"  Features: {len(feature_cols)}")
-    return df, feature_cols
+    print(f"  Features: {len(feature_cols)} diff (margin/win), +{len(sum_cols)} sum (total only)")
+    return df, feature_cols, sum_cols
 
 
 if __name__ == "__main__":
     engine = get_engine()
-    df, feature_cols = build_feature_matrix(engine)
+    df, feature_cols, sum_cols = build_feature_matrix(engine)
     print(f"\nGames: {len(df)}")
-    print(f"Features: {len(feature_cols)}")
+    print(f"Features: {len(feature_cols)} diff (margin/win), +{len(sum_cols)} sum (total only)")
     print(f"Home win rate: {df['home_win'].mean():.3f}")
     print(f"Avg margin: {df['margin'].mean():.1f}")
-    print(f"\nFeature columns:\n{feature_cols}")
-    print(f"\nNull counts:\n{df[feature_cols].isnull().sum().to_string()}")
-    print(f"\nSample:\n{df[feature_cols + ['margin', 'home_win']].head()}")
+    print(f"Avg total:  {df['total'].mean():.1f}")
+    print(f"\nDiff feature columns:\n{feature_cols}")
+    print(f"\nSum feature columns:\n{sum_cols}")
+    print(f"\nNull counts:\n{df[feature_cols + sum_cols].isnull().sum().to_string()}")
 
     # NatStat win_exp benchmark
     has_exp = df["natstat_home_win_exp"].notna()

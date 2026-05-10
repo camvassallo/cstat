@@ -230,6 +230,13 @@ pub struct ScheduleEntry {
     /// Probability the requested team wins, derived from `projected_margin`.
     #[sqlx(default)]
     pub projected_win_prob: Option<f64>,
+    /// Projected score for the *requested team*. Integer; rounded so
+    /// `projected_score_team + projected_score_opp == round(predicted_total)`.
+    #[sqlx(default)]
+    pub projected_score_team: Option<i32>,
+    /// Projected score for the opponent.
+    #[sqlx(default)]
+    pub projected_score_opp: Option<i32>,
 }
 
 #[derive(Debug, Serialize, FromRow)]

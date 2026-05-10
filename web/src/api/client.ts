@@ -72,6 +72,11 @@ export interface ScheduleEntry {
   projected_margin: number | null;
   /// Probability the requested team wins, derived from `projected_margin`.
   projected_win_prob: number | null;
+  /// Projected integer score for the requested team. Null when projection
+  /// inputs are missing.
+  projected_score_team: number | null;
+  /// Projected integer score for the opponent.
+  projected_score_opp: number | null;
 }
 
 export interface RosterEntry {
@@ -579,6 +584,12 @@ export interface PredictionResult {
   venue: Venue;
   predicted_margin: number;
   home_win_probability: number;
+  /// Total points (home + away). Materially less precise than margin
+  /// (backtest MAE ~13.6 vs ~8.2) — frame as KenPom-style approximation.
+  predicted_total: number;
+  /// Integer projected scores. Rounded so home + away == round(total).
+  predicted_home_score: number;
+  predicted_away_score: number;
   predicted_winner: string;
   /// Every feature, sorted by |contribution| desc. The frontend slices and
   /// aggregates as needed (per-group keys, top-N display, etc.).
@@ -717,6 +728,8 @@ export function fetchGames(params: { date?: string; team?: string; season?: numb
 export interface UpcomingTile extends GameResult {
   predicted_margin: number;
   home_win_probability: number;
+  predicted_home_score: number;
+  predicted_away_score: number;
 }
 
 export interface TickerResponse {

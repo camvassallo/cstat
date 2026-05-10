@@ -198,12 +198,16 @@ export default function Predict() {
 
       {result && (
         <div className="mt-6 space-y-4">
+          {/* Previous Matchups sits above the prediction so the user
+              sees recent reality before the model's projection. Only
+              renders when the two teams have already played this
+              season — `PreviousMatchups` returns null otherwise. */}
+          <PreviousMatchups result={result} />
           <ResultHeadline result={result} team1Prob={team1Prob} />
           <RosterCompare result={result} />
           <KeysToGame result={result} />
           <SideBySideStats result={result} teams={teams} />
           <FourFactorsPanel result={result} teams={teams} />
-          <PreviousMatchups result={result} />
         </div>
       )}
     </div>
@@ -1402,9 +1406,22 @@ function ResultHeadline({
   const margin = result.predicted_margin;
   const winnerIsHome = margin > 0;
   const winnerColor = winnerIsHome ? TEAM_1_COLOR : TEAM_2_COLOR;
+  const loserColor = winnerIsHome ? TEAM_2_COLOR : TEAM_1_COLOR;
   // Display the spread from the *winner's* perspective, KenPom-style:
   // "Duke -3.5" reads naturally regardless of which team was passed first.
   const winnerSpread = -Math.abs(margin);
+  const winPct = (
+    Math.max(result.home_win_probability, 1 - result.home_win_probability) * 100
+  ).toFixed(0);
+
+  const winnerName = winnerIsHome ? result.home_team : result.away_team;
+  const loserName = winnerIsHome ? result.away_team : result.home_team;
+  const winnerScore = winnerIsHome
+    ? result.predicted_home_score
+    : result.predicted_away_score;
+  const loserScore = winnerIsHome
+    ? result.predicted_away_score
+    : result.predicted_home_score;
 
   const venueText =
     result.venue === 'neutral'
@@ -1417,15 +1434,19 @@ function ResultHeadline({
     <div className="bg-gray-800 rounded-lg p-6 space-y-5">
       <div className="text-center">
         <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">{venueText}</div>
-        <div className="text-3xl font-bold" style={{ color: winnerColor }}>
-          {result.predicted_winner}{' '}
-          <span className="text-2xl text-gray-300 font-semibold">
-            {winnerSpread.toFixed(1)}
-          </span>
+        {/* Projected final score, winner first. KenPom-style approximation
+            (totals model backtest MAE ~13.6 vs margin ~8.2). */}
+        <div className="text-3xl font-bold leading-tight">
+          <span style={{ color: winnerColor }}>{winnerName} {winnerScore}</span>
+          <span className="text-gray-500 mx-3">—</span>
+          <span style={{ color: loserColor }}>{loserName} {loserScore}</span>
         </div>
-        <div className="text-sm text-gray-400 mt-1">
-          {(Math.max(result.home_win_probability, 1 - result.home_win_probability) * 100).toFixed(0)}
-          % win probability
+        <div className="text-sm text-gray-400 mt-2">
+          <span style={{ color: winnerColor }} className="font-semibold">
+            {result.predicted_winner} {winnerSpread.toFixed(1)}
+          </span>
+          <span className="mx-2 text-gray-600">·</span>
+          <span>{winPct}% win probability</span>
         </div>
       </div>
 

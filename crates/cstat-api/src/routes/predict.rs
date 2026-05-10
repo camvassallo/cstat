@@ -172,6 +172,20 @@ async fn predict(
             .collect::<Vec<_>>()
     };
 
+    // Derive integer team scores from (total ± margin) / 2. Rounded
+    // independently — `home + away` may differ from `round(total)` by
+    // ±1 in edge cases where (total ± margin) / 2 lands on .5 (e.g.
+    // total=146.0, margin=3.0 → 75-72, sum 147 ≠ round(total) 146).
+    // We accept this because `predicted_total` isn't currently
+    // displayed in the UI; only the integer scores and the
+    // 1-decimal `predicted_margin` are. If the totals number ever
+    // gets surfaced alongside the score pair, switch to
+    // `away_score = round(total) - home_score` for sum reconciliation.
+    let total = explained.prediction.predicted_total as f64;
+    let margin = explained.prediction.predicted_margin as f64;
+    let predicted_home_score = ((total + margin) / 2.0).round() as i32;
+    let predicted_away_score = ((total - margin) / 2.0).round() as i32;
+
     Ok(Json(json!({
         "home_team": home_team.name,
         "home_team_id": home_team.id,
@@ -181,6 +195,9 @@ async fn predict(
         "venue": venue_str,
         "predicted_margin": (explained.prediction.predicted_margin as f64 * 10.0).round() / 10.0,
         "home_win_probability": (explained.prediction.home_win_probability * 1000.0).round() / 1000.0,
+        "predicted_total": (total * 10.0).round() / 10.0,
+        "predicted_home_score": predicted_home_score,
+        "predicted_away_score": predicted_away_score,
         "predicted_winner": predicted_winner,
         "feature_contributions": feature_contributions,
         "contributions_by_group": contributions_by_group,
@@ -262,6 +279,10 @@ async fn predict_with_venue(
                 prediction: Prediction {
                     predicted_margin: -swapped.prediction.predicted_margin,
                     home_win_probability: 1.0 - swapped.prediction.home_win_probability,
+                    // Totals are invariant under team swap (home + away
+                    // = away + home), so no flip — the model output
+                    // travels through unchanged.
+                    predicted_total: swapped.prediction.predicted_total,
                 },
                 feature_values,
                 contributions,
@@ -316,6 +337,12 @@ async fn predict_neutral_symmetric(
 
     let symmetric_margin =
         0.5 * (fwd.prediction.predicted_margin - rev.prediction.predicted_margin);
+    // Totals symmetrize *additively* — total(A,B) and total(B,A) should
+    // agree (the same game's combined points, regardless of how we
+    // labelled "home"). LightGBM tree ensembles aren't perfectly
+    // symmetric in features though, so even at venue=0 the two calls
+    // disagree by a few tenths. Average them to force exact equality.
+    let symmetric_total = 0.5 * (fwd.prediction.predicted_total + rev.prediction.predicted_total);
 
     // Symmetrise feature values and contributions the same way: each is
     // averaged against its sign-flipped counterpart from the reverse
@@ -338,17 +365,33 @@ async fn predict_neutral_symmetric(
         prediction: Prediction {
             predicted_margin: symmetric_margin,
             home_win_probability: margin_to_win_prob(symmetric_margin),
+            predicted_total: symmetric_total,
         },
         feature_values,
         contributions,
     })
 }
 
-/// Convenience wrapper for surfaces that just need a single per-matchup
-/// margin + win probability (e.g. the score-ticker upcoming-games strip and
-/// the TeamDetail schedule's Projected column). Returns
-/// `(predicted_margin, home_win_probability)` from `home_team_id`'s
-/// perspective.
+/// Per-matchup projection summary for surfaces that don't need the full
+/// explainability payload — the score-ticker upcoming-games strip and
+/// the TeamDetail schedule's Projected column. All values are from
+/// `home_team_id`'s perspective.
+///
+/// Score derivation: `home + away` is the model's `predicted_total`,
+/// `home - away` is the model's `predicted_margin`. Rounded once at
+/// the end so the two integers reconcile (`home + away ==
+/// round(total)` exactly).
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectionSummary {
+    pub margin: f32,
+    pub home_win_prob: f64,
+    pub home_score: i32,
+    pub away_score: i32,
+}
+
+/// Convenience wrapper for surfaces that just need a per-matchup
+/// projection. Returns margin + win probability + integer projected
+/// scores from `home_team_id`'s perspective.
 ///
 /// Neutral games go through `predict_neutral_symmetric` so the answer is
 /// invariant to argument order — without it, the same matchup queried from
@@ -357,14 +400,14 @@ async fn predict_neutral_symmetric(
 /// ensembles aren't antisymmetric in diff features. The extra inference
 /// per neutral game costs ~0.5ms and eliminates a user-visible inconsistency
 /// across surfaces.
-pub async fn predict_margin_and_winprob(
+pub async fn predict_projection(
     state: &Arc<AppState>,
     home_team_id: Uuid,
     away_team_id: Uuid,
     season: i32,
     is_neutral: bool,
     is_conference: bool,
-) -> Result<(f32, f64), String> {
+) -> Result<ProjectionSummary, String> {
     let explained = if is_neutral {
         predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference).await?
     } else {
@@ -378,10 +421,14 @@ pub async fn predict_margin_and_winprob(
         )
         .await?
     };
-    Ok((
-        explained.prediction.predicted_margin,
-        explained.prediction.home_win_probability,
-    ))
+    let total = explained.prediction.predicted_total as f64;
+    let margin = explained.prediction.predicted_margin as f64;
+    Ok(ProjectionSummary {
+        margin: explained.prediction.predicted_margin,
+        home_win_prob: explained.prediction.home_win_probability,
+        home_score: ((total + margin) / 2.0).round() as i32,
+        away_score: ((total - margin) / 2.0).round() as i32,
+    })
 }
 
 async fn run_predict(
@@ -392,7 +439,10 @@ async fn run_predict(
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<Explained, String> {
-    let features = cstat_core::features::build_game_features(
+    // Single DB-fetch pass produces both the 49-element diff vector
+    // (margin/win input) and the 58-element diff+sum vector (totals
+    // input). The feature extraction is the expensive step.
+    let f = cstat_core::features::build_all_features(
         &state.db.pool,
         home_team_id,
         away_team_id,
@@ -403,11 +453,16 @@ async fn run_predict(
     .await
     .map_err(|e| format!("feature extraction failed: {e}"))?;
 
-    // Single batched call covers full prediction + ablation deltas.
+    // Margin + TreeSHAP from the diff vector; totals from the diff+sum
+    // vector. Two ONNX sessions (+ TreeSHAP), one DB round-trip.
     let attributed = state
         .predictor
-        .predict_with_contributions(&features)
+        .predict_with_contributions(&f.diff)
         .map_err(|e| format!("prediction failed: {e}"))?;
+    let predicted_total = state
+        .predictor
+        .predict_total(&f.diff_and_sum)
+        .map_err(|e| format!("totals prediction failed: {e}"))?;
 
     // Override the standalone win-classifier output with a margin-derived
     // win probability. The two LightGBM models (margin + win) are trained
@@ -420,8 +475,9 @@ async fn run_predict(
         prediction: Prediction {
             predicted_margin: attributed.predicted_margin,
             home_win_probability: margin_to_win_prob(attributed.predicted_margin),
+            predicted_total,
         },
-        feature_values: features,
+        feature_values: f.diff,
         contributions: attributed.contributions,
     })
 }
@@ -698,28 +754,39 @@ mod tests {
     #[test]
     fn neutral_symmetry_combination_is_exact() {
         // Sanity-check the math: the symmetric averaging must guarantee
-        // margin(A,B) + margin(B,A) == 0 and p(A,B) + p(B,A) == 1.0
-        // for any pair of forward/reverse Prediction values.
+        // margin(A,B) + margin(B,A) == 0, p(A,B) + p(B,A) == 1.0, and
+        // total(A,B) == total(B,A) for any pair of forward/reverse
+        // Prediction values. Margin/win-prob average antisymmetrically;
+        // totals average additively (the same game's combined points
+        // shouldn't change based on which side we labelled "home").
         let fwd = Prediction {
             predicted_margin: 7.3,
             home_win_probability: 0.78,
+            predicted_total: 148.4,
         };
         let rev = Prediction {
             predicted_margin: -7.1, // not perfectly antisymmetric (the bug we're fixing)
             home_win_probability: 0.21,
+            predicted_total: 148.6, // not perfectly symmetric either
         };
 
         let m_ab = 0.5 * (fwd.predicted_margin - rev.predicted_margin);
         let p_ab = 0.5 * (fwd.home_win_probability + (1.0 - rev.home_win_probability));
+        let t_ab = 0.5 * (fwd.predicted_total + rev.predicted_total);
 
         // Now reversed call: forward becomes the original reverse, and vice versa.
         let m_ba = 0.5 * (rev.predicted_margin - fwd.predicted_margin);
         let p_ba = 0.5 * (rev.home_win_probability + (1.0 - fwd.home_win_probability));
+        let t_ba = 0.5 * (rev.predicted_total + fwd.predicted_total);
 
         assert!((m_ab + m_ba).abs() < 1e-9, "margins should sum to 0");
         assert!(
             (p_ab + p_ba - 1.0).abs() < 1e-9,
             "win probs should sum to 1"
+        );
+        assert!(
+            (t_ab - t_ba).abs() < 1e-9,
+            "totals should be equal under team swap"
         );
     }
 }

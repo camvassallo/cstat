@@ -12,7 +12,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::routes::predict::predict_margin_and_winprob;
+use crate::routes::predict::predict_projection;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -141,7 +141,7 @@ async fn team_detail(
         } else {
             (opp_id, resolved_id)
         };
-        if let Ok((margin, p_home)) = predict_margin_and_winprob(
+        if let Ok(proj) = predict_projection(
             &state,
             host_id,
             visitor_id,
@@ -151,14 +151,26 @@ async fn team_detail(
         )
         .await
         {
-            let (margin_team, p_team) = if requested_is_home {
-                (margin as f64, p_home)
+            let (margin_team, p_team, score_team, score_opp) = if requested_is_home {
+                (
+                    proj.margin as f64,
+                    proj.home_win_prob,
+                    proj.home_score,
+                    proj.away_score,
+                )
             } else {
-                (-margin as f64, 1.0 - p_home)
+                (
+                    -proj.margin as f64,
+                    1.0 - proj.home_win_prob,
+                    proj.away_score,
+                    proj.home_score,
+                )
             };
             // Round to 1 decimal / 3 decimals to match the rest of the API.
             entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
             entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
+            entry.projected_score_team = Some(score_team);
+            entry.projected_score_opp = Some(score_opp);
         }
     }
 
