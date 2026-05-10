@@ -207,7 +207,6 @@ export default function Predict() {
           <RosterCompare result={result} />
           <KeysToGame result={result} />
           <SideBySideStats result={result} teams={teams} />
-          <FourFactorsPanel result={result} teams={teams} />
         </div>
       )}
     </div>
@@ -1113,6 +1112,179 @@ function SideBySideStats({
           <StatComparisonRow key={r.label} row={r} />
         ))}
       </div>
+
+      {/* Four factors by possession — same row formatting as the team
+          stats above, but split into two side-by-side panels: one per
+          "side of the ball." Each row compares the offense's stat to
+          the defense's allowed-stat, with the winner highlighted.
+          Stacks on mobile so the rows don't go unreadably narrow. */}
+      <div className="mt-6 pt-4 border-t border-gray-700 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <PossessionPanel
+          offTeam={home}
+          defTeam={away}
+          offColor={TEAM_1_COLOR}
+          defColor={TEAM_2_COLOR}
+        />
+        <PossessionPanel
+          offTeam={away}
+          defTeam={home}
+          offColor={TEAM_2_COLOR}
+          defColor={TEAM_1_COLOR}
+        />
+      </div>
+    </div>
+  );
+}
+
+/// Approximate D-I averages, used to decompose each side's strength as
+/// deviation from league. Without this the highlighting falls into a
+/// trap: e.g. Duke 13.4% TOV vs Illinois 11.7% opp-TOV reads as "Illinois
+/// wins" by raw comparison, but both teams are well below the ~17% league
+/// average — Duke is *strong on offense* (avoids TOs), Illinois is *weak
+/// on defense* (rarely forces them), and the actual matchup is a Duke
+/// offensive edge. Tuned by inspection of recent seasons; relative
+/// ordering matters more than precision.
+const POSSESSION_LEAGUE_AVG = {
+  eFG: 0.5,
+  TOV: 0.17,
+  // ORB% league avg (≈ DRB% complement, both panels' ORB% rows compare in
+  // ORB% units after converting DRB% → 1 − DRB%).
+  ORB: 0.3,
+  FT: 0.3,
+} as const;
+
+interface PossessionRowSpec {
+  label: string;
+  /// Offensive team's stat (e.g. their eFG%).
+  offValue: number | null | undefined;
+  /// Defensive team's allowed/forced stat in the same units as `offValue`,
+  /// so the two are directly comparable. For rebounding the caller passes
+  /// `1 − DRB%` so both sides read as ORB% (raw DRB% would be the
+  /// complement-by-definition and just show the same stat twice).
+  defValue: number | null | undefined;
+  /// League-average baseline in the same units as off/def. The highlight
+  /// goes to whichever side's deviation from this average is larger
+  /// (signed in their favor — see `PossessionRow`).
+  leagueAvg: number;
+  /// `'high'` = higher is better for offense (eFG%, ORB%, FT Rate);
+  /// `'low'` = lower is better for offense (TOV%). Direction flips for
+  /// the defense — lower-allowed eFG% is good for defense; higher-forced
+  /// TOV% is good for defense.
+  better: 'high' | 'low';
+  format: (v: number) => string;
+}
+
+function PossessionPanel({
+  offTeam,
+  defTeam,
+  offColor,
+  defColor,
+}: {
+  offTeam: TeamRanking;
+  defTeam: TeamRanking;
+  offColor: string;
+  defColor: string;
+}) {
+  const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  const fmtRatio = (v: number) => v.toFixed(3);
+
+  const rows: PossessionRowSpec[] = [
+    {
+      label: 'eFG%',
+      offValue: offTeam.effective_fg_pct,
+      defValue: defTeam.opp_effective_fg_pct,
+      leagueAvg: POSSESSION_LEAGUE_AVG.eFG,
+      better: 'high',
+      format: fmtPct,
+    },
+    {
+      label: 'TOV%',
+      offValue: offTeam.turnover_pct,
+      defValue: defTeam.opp_turnover_pct,
+      leagueAvg: POSSESSION_LEAGUE_AVG.TOV,
+      better: 'low',
+      format: fmtPct,
+    },
+    {
+      label: 'ORB%',
+      offValue: offTeam.off_rebound_pct,
+      // Convert DRB% to "ORB% allowed" so both sides are in the same
+      // direction (offensive rebound rate) — pairing raw ORB% with raw
+      // DRB% is a complement-by-definition trap that exaggerates the
+      // gap visually (33% vs 72% reads as huge but is just two views
+      // of the same coin).
+      defValue: defTeam.def_rebound_pct == null ? null : 1 - defTeam.def_rebound_pct,
+      leagueAvg: POSSESSION_LEAGUE_AVG.ORB,
+      better: 'high',
+      format: fmtPct,
+    },
+    {
+      label: 'FT Rate',
+      offValue: offTeam.ft_rate,
+      defValue: defTeam.opp_ft_rate,
+      leagueAvg: POSSESSION_LEAGUE_AVG.FT,
+      better: 'high',
+      format: fmtRatio,
+    },
+  ];
+
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-gray-500 mb-3 text-center">
+        When <span style={{ color: offColor }}>{offTeam.name}</span> has the ball
+      </div>
+      <div className="space-y-1.5">
+        {rows.map((r) => (
+          <PossessionRow key={r.label} row={r} offColor={offColor} defColor={defColor} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PossessionRow({
+  row,
+  offColor,
+  defColor,
+}: {
+  row: PossessionRowSpec;
+  offColor: string;
+  defColor: string;
+}) {
+  // Decompose each side's strength as deviation from league average, signed
+  // in their favor. For TOV% specifically: low offensive TOV% is GOOD for
+  // the offense (off_strength = league - off_value); low defensive forced
+  // TOV% is BAD for the defense (def_strength = def_value - league). So
+  // Duke 13.4% TOV vs Illinois 11.7% opp-TOV — both well below the ~17%
+  // league average — is a Duke offensive edge: Duke is strong at the
+  // thing Illinois is weak at, even though 13.4 > 11.7 in raw terms.
+  let offBetter = false;
+  let defBetter = false;
+  if (row.offValue != null && row.defValue != null) {
+    const offStrength =
+      row.better === 'high' ? row.offValue - row.leagueAvg : row.leagueAvg - row.offValue;
+    const defStrength =
+      row.better === 'high' ? row.leagueAvg - row.defValue : row.defValue - row.leagueAvg;
+    if (offStrength > defStrength) offBetter = true;
+    else if (defStrength > offStrength) defBetter = true;
+  }
+
+  const renderValue = (v: number | null | undefined, better: boolean, color: string) => {
+    if (v == null) return <span className="text-gray-500">—</span>;
+    return (
+      <span className={better ? 'font-semibold' : 'text-gray-400'} style={better ? { color } : {}}>
+        {row.format(v)}
+      </span>
+    );
+  };
+
+  return (
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-sm">
+      <div className="text-right">{renderValue(row.offValue, offBetter, offColor)}</div>
+      <div className="w-20 text-center text-[11px] text-gray-500 uppercase tracking-wide">
+        {row.label}
+      </div>
+      <div className="text-left">{renderValue(row.defValue, defBetter, defColor)}</div>
     </div>
   );
 }
@@ -1154,247 +1326,6 @@ function computeWinner(row: StatRow): 'home' | 'away' | null {
   return h > a ? 'home' : 'away';
 }
 
-// ---------------------------------------------------------------------------
-// Four factors — split into two panels, one per "side of the ball". Each row
-// is a single tug-of-war bar showing the matchup-specific advantage between
-// the offensive team and the defensive team for that factor.
-// ---------------------------------------------------------------------------
-
-/// Approximate D-I averages — used to decompose each side's strength
-/// (deviation from league average) so per-matchup advantages compose
-/// cleanly. Tuned by inspection of recent seasons; precision matters less
-/// than relative ordering for the visual.
-const LEAGUE_AVG = {
-  EFG: 0.50,
-  TOV: 0.17,
-  ORB: 0.30, // offensive rebound rate
-  DRB: 0.70, // defensive rebound rate (1 - opponent ORB)
-  FT_RATE: 0.30,
-} as const;
-
-interface MatchupRow {
-  label: string;
-  /// Offensive team's value for this factor (e.g. team1's eFG% on offense).
-  offValue: number | null;
-  /// Defensive team's allowed/forced value (e.g. team2's opp_eFG% allowed).
-  defValue: number | null;
-  /// Net advantage in factor units. Positive = offense wins, negative =
-  /// defense wins. Computed from off_strength − def_strength so each side's
-  /// deviation from league average composes correctly.
-  advantage: number | null;
-  /// Display formatter for raw values (e.g. "55.0%" for percentages).
-  formatRaw: (v: number) => string;
-  /// Display formatter for the advantage chip (e.g. "+5.2pp").
-  formatAdvantage: (v: number) => string;
-  /// Bar cap (in advantage units) at which the tug-of-war fills one half.
-  /// Tuned per factor so a decisive matchup edge fills the bar.
-  barCap: number;
-}
-
-function FourFactorsPanel({
-  result,
-  teams,
-}: {
-  result: PredictionResult;
-  teams: TeamRanking[];
-}) {
-  const home = lookupTeam(result.home_team, teams);
-  const away = lookupTeam(result.away_team, teams);
-  if (!home || !away) return null;
-
-  return (
-    <div className="bg-gray-800 rounded-lg p-6">
-      <div className="flex items-baseline justify-between mb-4">
-        <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
-          Four Factors
-        </h2>
-        <div className="text-[11px] text-gray-500">Per-matchup advantage</div>
-      </div>
-      <div className="space-y-6">
-        <MatchupSubpanel
-          offTeam={home}
-          defTeam={away}
-          offColor={TEAM_1_COLOR}
-          defColor={TEAM_2_COLOR}
-        />
-        <MatchupSubpanel
-          offTeam={away}
-          defTeam={home}
-          offColor={TEAM_2_COLOR}
-          defColor={TEAM_1_COLOR}
-        />
-      </div>
-    </div>
-  );
-}
-
-function MatchupSubpanel({
-  offTeam,
-  defTeam,
-  offColor,
-  defColor,
-}: {
-  offTeam: TeamRanking;
-  defTeam: TeamRanking;
-  offColor: string;
-  defColor: string;
-}) {
-  const fmtPp = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}pp`;
-  const fmtRatio = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
-  const pctStr = (v: number) => `${(v * 100).toFixed(1)}%`;
-  const ratioStr = (v: number) => v.toFixed(3);
-
-  // Each factor's advantage formula is:
-  //   off_strength = (off_value − league_avg) signed in offense's favor
-  //   def_strength = (def_value − league_avg) signed in defense's favor
-  //   advantage = off_strength − def_strength
-  // Signs are baked into the formulas below so each one resolves to a
-  // single signed scalar where positive = offense wins.
-  const rows: MatchupRow[] = [
-    {
-      label: 'eFG%',
-      offValue: offTeam.effective_fg_pct,
-      defValue: defTeam.opp_effective_fg_pct,
-      advantage:
-        offTeam.effective_fg_pct == null || defTeam.opp_effective_fg_pct == null
-          ? null
-          : (offTeam.effective_fg_pct + defTeam.opp_effective_fg_pct - 2 * LEAGUE_AVG.EFG) * 100,
-      formatRaw: pctStr,
-      formatAdvantage: fmtPp,
-      barCap: 8,
-    },
-    {
-      label: 'TOV%',
-      offValue: offTeam.turnover_pct,
-      defValue: defTeam.opp_turnover_pct,
-      advantage:
-        offTeam.turnover_pct == null || defTeam.opp_turnover_pct == null
-          ? null
-          : (2 * LEAGUE_AVG.TOV - offTeam.turnover_pct - defTeam.opp_turnover_pct) * 100,
-      formatRaw: pctStr,
-      formatAdvantage: fmtPp,
-      barCap: 5,
-    },
-    {
-      label: 'Rebounding',
-      offValue: offTeam.off_rebound_pct,
-      defValue: defTeam.def_rebound_pct,
-      advantage:
-        offTeam.off_rebound_pct == null || defTeam.def_rebound_pct == null
-          ? null
-          : (offTeam.off_rebound_pct - LEAGUE_AVG.ORB - (defTeam.def_rebound_pct - LEAGUE_AVG.DRB)) *
-            100,
-      formatRaw: pctStr,
-      formatAdvantage: fmtPp,
-      barCap: 8,
-    },
-    {
-      label: 'FT Rate',
-      offValue: offTeam.ft_rate,
-      defValue: defTeam.opp_ft_rate,
-      advantage:
-        offTeam.ft_rate == null || defTeam.opp_ft_rate == null
-          ? null
-          : offTeam.ft_rate + defTeam.opp_ft_rate - 2 * LEAGUE_AVG.FT_RATE,
-      formatRaw: ratioStr,
-      formatAdvantage: fmtRatio,
-      barCap: 0.06,
-    },
-  ];
-
-  return (
-    <div>
-      <div className="text-xs uppercase tracking-wide text-gray-500 mb-3">
-        When <span style={{ color: offColor }}>{offTeam.name}</span> has the ball
-      </div>
-      <div className="space-y-3">
-        {rows.map((r) => (
-          <MatchupRowView
-            key={r.label}
-            row={r}
-            offTeam={offTeam.name}
-            defTeam={defTeam.name}
-            offColor={offColor}
-            defColor={defColor}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MatchupRowView({
-  row,
-  offTeam,
-  defTeam,
-  offColor,
-  defColor,
-}: {
-  row: MatchupRow;
-  offTeam: string;
-  defTeam: string;
-  offColor: string;
-  defColor: string;
-}) {
-  if (row.advantage == null || row.offValue == null || row.defValue == null) {
-    return <div className="text-xs text-gray-500">{row.label}: —</div>;
-  }
-
-  const offWins = row.advantage > 0;
-  const winnerColor = offWins ? offColor : defColor;
-  const winnerName = offWins ? offTeam : defTeam;
-  // Cap at 50 because the bar represents one half of the container (the
-  // half-width on either side of the centerline). `Math.min(50, …)` keeps
-  // the bar from extending past its container edge on extreme matchups.
-  const barPct = Math.min(50, (Math.abs(row.advantage) / row.barCap) * 50);
-
-  return (
-    <div>
-      {/* Factor label */}
-      <div className="text-sm mb-1.5">
-        <span className="text-gray-200 font-medium">{row.label}</span>
-      </div>
-
-      {/* Centered winner chip above the bar */}
-      <div className="grid grid-cols-[80px_1fr_80px] gap-3 mb-0.5">
-        <div />
-        <div className="text-center text-xs">
-          <span style={{ color: winnerColor }} className="font-semibold">
-            {winnerName} {row.formatAdvantage(Math.abs(row.advantage))}
-          </span>
-        </div>
-        <div />
-      </div>
-
-      {/* Raw offense / defense values flanking the tug-of-war bar */}
-      <div className="grid grid-cols-[80px_1fr_80px] items-center gap-3 text-xs">
-        <div className="text-right">
-          <span style={{ color: offColor }}>{row.formatRaw(row.offValue)}</span>
-        </div>
-        <div className="relative h-3 bg-gray-900 rounded">
-          <div className="absolute inset-y-0 left-1/2 w-px bg-gray-700" />
-          <div
-            className="absolute inset-y-0 rounded"
-            style={
-              offWins
-                ? { left: `${50 - barPct}%`, width: `${barPct}%`, backgroundColor: offColor }
-                : { left: '50%', width: `${barPct}%`, backgroundColor: defColor }
-            }
-          />
-        </div>
-        <div className="text-left">
-          <span style={{ color: defColor }}>{row.formatRaw(row.defValue)}</span>
-        </div>
-      </div>
-
-      {/* Tiny under-line clarifying which side is which */}
-      <div className="grid grid-cols-2 gap-3 mt-0.5 text-[10px] text-gray-500">
-        <div className="text-right">offense</div>
-        <div className="text-left">defense</div>
-      </div>
-    </div>
-  );
-}
 
 function ResultHeadline({
   result,

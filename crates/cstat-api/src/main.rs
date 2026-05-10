@@ -72,10 +72,21 @@ async fn main() -> Result<()> {
         predictor,
     });
 
-    // Static file serving for React SPA
+    // Static file serving for React SPA. ServeDir handles asset paths
+    // that map to real files on disk (`/assets/*`, `/favicon.svg`,
+    // `/index.html`); anything else falls through to ServeFile on
+    // index.html so React Router can take over on hard navigation,
+    // share links, and refresh.
+    //
+    // Important: use `ServeDir::fallback(…)`, NOT `.not_found_service(…)`.
+    // tower-http's `not_found_service` wraps its argument in
+    // `SetStatus(404)`, which forces every fallback response to 404
+    // regardless of the inner service's status — so direct navigation
+    // to `/predict`, `/teams/<id>`, etc. served the right HTML body
+    // but with a 404 status, and browsers bailed before React Router
+    // could mount. `fallback(…)` skips that wrapper.
     let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
-    let spa =
-        ServeDir::new(&spa_dir).not_found_service(ServeFile::new(format!("{spa_dir}/index.html")));
+    let spa = ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
 
     let app = Router::new()
         .route("/api/health", get(health_check))
