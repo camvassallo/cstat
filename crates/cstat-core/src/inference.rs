@@ -444,8 +444,12 @@ impl Predictor {
 
         // SHAP attributions via TreeSHAP on the parsed .lgb. Promote to
         // f64 for the recursion (LightGBM stores thresholds in f64);
-        // demote results back to f32 for the return type.
-        let features_f64: Vec<f64> = features.iter().map(|&v| v as f64).collect();
+        // demote results back to f32 for the return type. Stack-allocate
+        // the f64 view so this stays alloc-free on the hot path.
+        let mut features_f64 = [0.0_f64; NUM_FEATURES];
+        for (i, &v) in features.iter().enumerate() {
+            features_f64[i] = v as f64;
+        }
         let shap = tree_shap(&self.margin_lgb, &features_f64);
 
         let mut contributions = [0.0_f32; NUM_FEATURES];
