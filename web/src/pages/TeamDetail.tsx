@@ -658,21 +658,27 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
     const spread = `${fav ? '−' : '+'}${Math.abs(m).toFixed(1)}`;
     const winPct =
       g.projected_win_prob != null ? Math.round(g.projected_win_prob * 100) : null;
+    // Score pair, requested team first. Null if either side missing
+    // (totals model could fail independently of margin in edge cases).
+    const scorePair =
+      g.projected_score_team != null && g.projected_score_opp != null
+        ? `${g.projected_score_team}–${g.projected_score_opp}`
+        : null;
     const colorClass = completed
       ? 'text-gray-500'
       : fav
         ? 'text-green-400'
         : 'text-gray-300';
+    const subdued = completed ? 'text-gray-600' : 'text-gray-500';
     const title = completed
       ? `If we replayed this matchup today: ${teamName} ${spread}. Not a pre-game prediction.`
       : `Predicted from ${teamName}'s perspective`;
     return (
       <span className={`font-mono ${colorClass}`} title={title}>
-        {spread}
+        {scorePair && <span className="mr-1.5">{scorePair}</span>}
+        <span className={subdued}>{spread}</span>
         {winPct != null && (
-          <span className={completed ? 'text-gray-600 ml-1' : 'text-gray-500 ml-1'}>
-            ({winPct}%)
-          </span>
+          <span className={`${subdued} ml-1`}>({winPct}%)</span>
         )}
       </span>
     );

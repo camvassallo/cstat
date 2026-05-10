@@ -172,6 +172,16 @@ async fn predict(
             .collect::<Vec<_>>()
     };
 
+    // Derive integer team scores from (total, margin). Rounded once at
+    // the end so home + away exactly equals the rounded total — the UI
+    // shows "Duke 75 — UNC 72" which the user reads as `75 + 72 = 147
+    // total, 75 - 72 = 3 margin`. If we rounded total and margin
+    // independently, the displayed numbers wouldn't reconcile.
+    let total = explained.prediction.predicted_total as f64;
+    let margin = explained.prediction.predicted_margin as f64;
+    let predicted_home_score = ((total + margin) / 2.0).round() as i32;
+    let predicted_away_score = ((total - margin) / 2.0).round() as i32;
+
     Ok(Json(json!({
         "home_team": home_team.name,
         "home_team_id": home_team.id,
@@ -181,6 +191,9 @@ async fn predict(
         "venue": venue_str,
         "predicted_margin": (explained.prediction.predicted_margin as f64 * 10.0).round() / 10.0,
         "home_win_probability": (explained.prediction.home_win_probability * 1000.0).round() / 1000.0,
+        "predicted_total": (total * 10.0).round() / 10.0,
+        "predicted_home_score": predicted_home_score,
+        "predicted_away_score": predicted_away_score,
         "predicted_winner": predicted_winner,
         "feature_contributions": feature_contributions,
         "contributions_by_group": contributions_by_group,
@@ -355,11 +368,26 @@ async fn predict_neutral_symmetric(
     })
 }
 
-/// Convenience wrapper for surfaces that just need a single per-matchup
-/// margin + win probability (e.g. the score-ticker upcoming-games strip and
-/// the TeamDetail schedule's Projected column). Returns
-/// `(predicted_margin, home_win_probability)` from `home_team_id`'s
-/// perspective.
+/// Per-matchup projection summary for surfaces that don't need the full
+/// explainability payload — the score-ticker upcoming-games strip and
+/// the TeamDetail schedule's Projected column. All values are from
+/// `home_team_id`'s perspective.
+///
+/// Score derivation: `home + away` is the model's `predicted_total`,
+/// `home - away` is the model's `predicted_margin`. Rounded once at
+/// the end so the two integers reconcile (`home + away ==
+/// round(total)` exactly).
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectionSummary {
+    pub margin: f32,
+    pub home_win_prob: f64,
+    pub home_score: i32,
+    pub away_score: i32,
+}
+
+/// Convenience wrapper for surfaces that just need a per-matchup
+/// projection. Returns margin + win probability + integer projected
+/// scores from `home_team_id`'s perspective.
 ///
 /// Neutral games go through `predict_neutral_symmetric` so the answer is
 /// invariant to argument order — without it, the same matchup queried from
@@ -368,14 +396,14 @@ async fn predict_neutral_symmetric(
 /// ensembles aren't antisymmetric in diff features. The extra inference
 /// per neutral game costs ~0.5ms and eliminates a user-visible inconsistency
 /// across surfaces.
-pub async fn predict_margin_and_winprob(
+pub async fn predict_projection(
     state: &Arc<AppState>,
     home_team_id: Uuid,
     away_team_id: Uuid,
     season: i32,
     is_neutral: bool,
     is_conference: bool,
-) -> Result<(f32, f64), String> {
+) -> Result<ProjectionSummary, String> {
     let explained = if is_neutral {
         predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference).await?
     } else {
@@ -389,10 +417,14 @@ pub async fn predict_margin_and_winprob(
         )
         .await?
     };
-    Ok((
-        explained.prediction.predicted_margin,
-        explained.prediction.home_win_probability,
-    ))
+    let total = explained.prediction.predicted_total as f64;
+    let margin = explained.prediction.predicted_margin as f64;
+    Ok(ProjectionSummary {
+        margin: explained.prediction.predicted_margin,
+        home_win_prob: explained.prediction.home_win_probability,
+        home_score: ((total + margin) / 2.0).round() as i32,
+        away_score: ((total - margin) / 2.0).round() as i32,
+    })
 }
 
 async fn run_predict(
