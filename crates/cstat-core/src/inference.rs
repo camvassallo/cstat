@@ -721,6 +721,21 @@ mod tests {
             "win probability {} out of range",
             pred.home_win_probability
         );
+        // Totals plausibility — D1 men's basketball totals cluster
+        // around ~145 with σ≈19, real games span roughly 90–230. Zero
+        // features should land near the mean. NaN or absurd values
+        // indicate the totals session loaded but isn't producing
+        // meaningful output (e.g. wrong feature count, broken ONNX).
+        assert!(
+            pred.predicted_total.is_finite(),
+            "total {} is NaN or infinite",
+            pred.predicted_total,
+        );
+        assert!(
+            (50.0..=250.0).contains(&pred.predicted_total),
+            "total {} is outside plausible D1 range",
+            pred.predicted_total
+        );
     }
 
     #[test]

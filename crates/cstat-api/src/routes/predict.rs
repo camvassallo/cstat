@@ -172,11 +172,15 @@ async fn predict(
             .collect::<Vec<_>>()
     };
 
-    // Derive integer team scores from (total, margin). Rounded once at
-    // the end so home + away exactly equals the rounded total — the UI
-    // shows "Duke 75 — UNC 72" which the user reads as `75 + 72 = 147
-    // total, 75 - 72 = 3 margin`. If we rounded total and margin
-    // independently, the displayed numbers wouldn't reconcile.
+    // Derive integer team scores from (total ± margin) / 2. Rounded
+    // independently — `home + away` may differ from `round(total)` by
+    // ±1 in edge cases where (total ± margin) / 2 lands on .5 (e.g.
+    // total=146.0, margin=3.0 → 75-72, sum 147 ≠ round(total) 146).
+    // We accept this because `predicted_total` isn't currently
+    // displayed in the UI; only the integer scores and the
+    // 1-decimal `predicted_margin` are. If the totals number ever
+    // gets surfaced alongside the score pair, switch to
+    // `away_score = round(total) - home_score` for sum reconciliation.
     let total = explained.prediction.predicted_total as f64;
     let margin = explained.prediction.predicted_margin as f64;
     let predicted_home_score = ((total + margin) / 2.0).round() as i32;
