@@ -284,8 +284,12 @@ pub struct Prediction {
 /// (the cover-weighted mean leaf value across the ensemble). Positive =
 /// pushed toward home, negative = toward away. SHAP values are additive:
 /// `base_value + Σ contributions = predicted_margin` to floating-point
-/// precision, so signs are the model's own answer about direction (no
-/// data-side `homeAdvantageSign` workaround needed).
+/// precision. Note that SHAP signs are the *model's* answer about
+/// direction — they can legitimately disagree with the data on
+/// non-monotonic features (the model has interactions). The frontend
+/// keys panel uses `|contribution|` for importance and a separate
+/// data-direction lookup (`homeAdvantageSign`) for the leader name to
+/// keep the user-facing narrative stats-faithful.
 #[derive(Debug, Clone)]
 pub struct PredictionWithContributions {
     pub predicted_margin: f32,

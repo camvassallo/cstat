@@ -14,7 +14,7 @@ import {
 } from '../api/client';
 import { useSeason, seasonHref } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
-import { FLAG_FEATURES } from '../components/featureExplanations';
+import { FLAG_FEATURES, homeAdvantageSign } from '../components/featureExplanations';
 import { campomTier, campomTierColor } from '../components/campom';
 import { classColor, classTitle } from '../components/archetypeColors';
 import { shortDate } from '../components/format';
@@ -22,6 +22,14 @@ import { Link } from 'react-router-dom';
 
 const TEAM_1_COLOR = '#3b82f6'; // blue (matches PlayerCompare PLAYER_COLORS[0])
 const TEAM_2_COLOR = '#ef4444'; // red
+
+/// |feature value| below this counts as "essentially tied" — the underlying
+/// stat is too close between the two teams to point at as a concrete
+/// advantage. Tied features can't be keys-panel headlines (we'd be
+/// announcing an edge with no stat to back it up) and `formatHeadlineGap`
+/// uses the same threshold to decide when to print "(teams essentially
+/// tied on this stat)" instead of a numeric gap.
+const TIED_VALUE_THRESHOLD = 0.005;
 
 export default function Predict() {
   const { season } = useSeason();
@@ -648,16 +656,20 @@ function tierFor(mag: number): Key['tier'] | null {
 
 /// Build the keys panel from the per-feature contributions.
 ///
-/// Both direction (which team has the edge) and importance (how much it
-/// matters) come from the model's TreeSHAP contributions. SHAP values are
-/// signed and additive — positive = pushed toward home, negative = toward
-/// away — so summing them per group gives the group's net push, and
-/// summing |contribution| gives the magnitude. (Earlier ablation-based
-/// attribution produced wrong-direction sign artifacts and forced a
-/// hand-coded data-side direction lookup; TreeSHAP retired it.)
+/// **Direction** (which team has the edge) comes from the **data**: each
+/// feature's diff sign mapped through `homeAdvantageSign` to handle
+/// "lower is better" stats and 0/1 flags. **Importance** (how much it
+/// matters) comes from the **model** as `|SHAP contribution|`. The split
+/// keeps the panel a stats-narrative — the named leader is always the
+/// team with the better underlying stat, even when the model has learned
+/// a non-monotonic interaction that flips the SHAP sign for that feature
+/// (e.g. Purdue vs Michigan's opp eFG%, where Michigan's data edge of
+/// 0.079 ought to be credited to Michigan even if SHAP attributes that
+/// feature toward Purdue). TreeSHAP gives us cleaner additive importances
+/// than ablation, but it doesn't replace the data-direction lookup.
 function generateKeys(result: PredictionResult): Key[] {
-  // Aggregate per-group: signed sum of contributions (who the group
-  // pushes toward) and sum of |contribution| (how much the model cares).
+  // Aggregate per-group: data direction × |SHAP| → signed importance for
+  // who-leads, |SHAP| → magnitude for how-much-matters.
   const groupAgg = new Map<
     string,
     {
@@ -667,13 +679,15 @@ function generateKeys(result: PredictionResult): Key[] {
     }
   >();
   for (const f of result.feature_contributions) {
+    const advantage = homeAdvantageSign(f.name, f.value);
+    const mag = Math.abs(f.contribution);
     const entry = groupAgg.get(f.group) ?? {
       signedImportance: 0,
       importance: 0,
       features: [],
     };
-    entry.signedImportance += f.contribution;
-    entry.importance += Math.abs(f.contribution);
+    entry.signedImportance += advantage * mag;
+    entry.importance += mag;
     entry.features.push(f);
     groupAgg.set(f.group, entry);
   }
@@ -682,16 +696,27 @@ function generateKeys(result: PredictionResult): Key[] {
   for (const [group, agg] of groupAgg.entries()) {
     const tier = tierFor(agg.importance);
     if (!tier) continue;
-    // Net signed contribution > 0 ⇒ this group's features collectively
-    // push the prediction toward the home team. (Pure-zero ties default
-    // to home; only happens in degenerate cases.)
-    const towardHome = agg.signedImportance >= 0;
-    // Headline = the single feature in this group with the largest
-    // |contribution|. The model's pick — keeps the explanation consistent
-    // with what drove the prediction.
-    const headline = agg.features.reduce((best, f) =>
+    // Headline = the largest-|SHAP| feature with a non-tied stat. If
+    // every feature in this group is essentially tied (|value| <
+    // TIED_VALUE_THRESHOLD), we have no concrete stat to point at —
+    // drop the group rather than confidently announce an edge headlined
+    // by a tied feature. Flag features (venue, conference) are always
+    // eligible: their narrative phrasing in `formatHeadlineGap` doesn't
+    // depend on having a meaningful diff value.
+    const candidates = agg.features.filter(
+      (f) => FLAG_FEATURES.has(f.name) || Math.abs(f.value) >= TIED_VALUE_THRESHOLD,
+    );
+    if (candidates.length === 0) continue;
+    const headline = candidates.reduce((best, f) =>
       Math.abs(f.contribution) > Math.abs(best.contribution) ? f : best,
     );
+    // signedImportance sign tells which team the group's data leans
+    // toward, weighted by how much the model cares about each feature.
+    // A pure 0 (no team has any edge) is rare — fall back to the model's
+    // signed contribution sum for tie-breaking.
+    const towardHome = agg.signedImportance !== 0
+      ? agg.signedImportance > 0
+      : agg.features.reduce((s, f) => s + f.contribution, 0) > 0;
     keys.push({
       group,
       team: towardHome ? result.home_team : result.away_team,
@@ -733,9 +758,11 @@ function KeysToGame({ result }: { result: PredictionResult }) {
 
 function KeyItem({ k }: { k: Key }) {
   const teamColor = k.towardHome ? TEAM_1_COLOR : TEAM_2_COLOR;
-  // Phrase the headline gap from the leading team's perspective. The
-  // headline feature's signed SHAP contribution tells us which team it
-  // pushed toward; the raw value gives the gap magnitude.
+  // Phrase the headline gap from the leading team's perspective, using
+  // the data direction (`homeAdvantageSign`) so the named team is always
+  // the side with the better underlying stat — never the side the model
+  // happened to credit a feature toward (those can disagree on
+  // non-monotonic features).
   const headlineGapText = k.headline
     ? formatHeadlineGap(k.headline, k.team, k.towardHome)
     : null;
@@ -800,8 +827,10 @@ function formatHeadlineGap(
   }
 
   // Continuous feature with a value at or near zero — teams are essentially
-  // tied, so don't pretend there's a gap. Skip the parenthetical entirely.
-  if (Math.abs(headline.value) < 0.005) {
+  // tied, so don't pretend there's a gap. (Should be unreachable now that
+  // `generateKeys` filters tied features out as headline candidates, but
+  // keep the fallback so the function stays self-contained.)
+  if (Math.abs(headline.value) < TIED_VALUE_THRESHOLD) {
     return '(teams essentially tied on this stat)';
   }
 
@@ -809,11 +838,11 @@ function formatHeadlineGap(
   const absVal = Math.abs(headline.value);
   const gap =
     absVal >= 10 ? absVal.toFixed(1) : absVal >= 1 ? absVal.toFixed(2) : absVal.toFixed(3);
-  // Direction comes from the SHAP sign: positive contribution ⇒ pushed
-  // toward home. If that disagrees with the group's net direction (rare),
-  // the headline feature is fighting its group, so soften the phrasing.
-  const headlineFavorsHome = headline.contribution >= 0;
-  const matches = headlineFavorsHome === towardHome;
+  // Direction comes from the data via `homeAdvantageSign`. If that
+  // disagrees with the group's net direction (one feature fighting its
+  // group), soften the phrasing.
+  const advantageSign = homeAdvantageSign(headline.name, headline.value);
+  const matches = (advantageSign > 0) === towardHome;
   if (matches) {
     return `(gap of ${gap} in ${team}'s favor)`;
   }

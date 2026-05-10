@@ -7,11 +7,16 @@
 //! Predict page's "Keys to the Game" panel with signed, additive
 //! attributions instead of the prior ablation-based deltas.
 //!
-//! Why TreeSHAP over ablation: ablation produces wrong-direction sign
-//! artifacts when features interact strongly, which forced a hand-coded
-//! `homeAdvantageSign` workaround on the frontend. TreeSHAP's signs are
-//! the model's own answer about which team a feature pushed the
-//! prediction toward, so the data-faithful direction lookup retires.
+//! Why TreeSHAP over ablation: SHAP values are additive and exact —
+//! `base + Σ contributions = prediction` to floating-point precision —
+//! and per-feature magnitudes don't suffer from ablation's interaction
+//! artifacts (where ablating one feature can produce a wrong-magnitude
+//! delta because correlated features pick up the slack). The keys panel
+//! consumes `|SHAP|` for importance weighting, then layers a separate
+//! data-direction lookup (`homeAdvantageSign` on the frontend) for the
+//! user-facing stats narrative — SHAP signs themselves are the model's
+//! answer about direction, which can legitimately disagree with the data
+//! on non-monotonic interactions.
 //!
 //! Parity gate: `tests/treeshap_parity.rs` (or the `tests` mod here)
 //! diffs against LightGBM's own `pred_contrib` output for a fixed
