@@ -1025,6 +1025,11 @@ function SideBySideStats({
 }) {
   const home = lookupTeam(result.home_team, teams);
   const away = lookupTeam(result.away_team, teams);
+  // Compute season-aware league averages from the rankings list we already
+  // fetched, so the possession panels' league-baseline highlighting tracks
+  // the actual era's stats instead of frozen 2008-vintage Dean Oliver
+  // figures. `useMemo` because `teams` is stable across renders.
+  const leagueAvg = useMemo(() => computeLeagueAverages(teams), [teams]);
   if (!home || !away) return null;
 
   const fmt1 = (v: number) => (v > 0 ? '+' : '') + v.toFixed(1);
@@ -1051,20 +1056,9 @@ function SideBySideStats({
       better: 'high',
       format: fmt1,
     },
-    {
-      label: 'AdjO',
-      home: home.adj_offense,
-      away: away.adj_offense,
-      better: 'high',
-      format: (v) => v.toFixed(1),
-    },
-    {
-      label: 'AdjD',
-      home: home.adj_defense,
-      away: away.adj_defense,
-      better: 'low',
-      format: (v) => v.toFixed(1),
-    },
+    // AdjO/AdjD intentionally omitted here — they live as the headline
+    // row of each possession panel below, where they pair naturally with
+    // the four factors that decompose them.
     {
       label: 'Tempo',
       home: home.adj_tempo,
@@ -1095,63 +1089,110 @@ function SideBySideStats({
           Side by Side
         </h2>
       </div>
-      <div className="space-y-1.5">
-        {/* Header */}
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 pb-2 border-b border-gray-700">
-          <div className="text-right text-sm font-medium" style={{ color: TEAM_1_COLOR }}>
-            {home.name}
+      {/* Three-column layout on desktop: general team stats | offense
+          when team1 has the ball | offense when team2 has the ball.
+          Each column has 5 rows (Record/AdjEM/Tempo/SOS/ELO on the left,
+          Pts/100 + four factors on the right two) so heights line up.
+          Stacks to a single column on mobile where horizontal density
+          would be unreadable. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Column 1: general stats */}
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 pb-2 border-b border-gray-700">
+            <div className="text-right text-sm font-medium" style={{ color: TEAM_1_COLOR }}>
+              {home.name}
+            </div>
+            <div className="w-20 text-center text-[11px] uppercase tracking-wide text-gray-500">
+              stat
+            </div>
+            <div className="text-left text-sm font-medium" style={{ color: TEAM_2_COLOR }}>
+              {away.name}
+            </div>
           </div>
-          <div className="w-20 text-center text-[11px] uppercase tracking-wide text-gray-500">
-            stat
-          </div>
-          <div className="text-left text-sm font-medium" style={{ color: TEAM_2_COLOR }}>
-            {away.name}
-          </div>
+          {rows.map((r) => (
+            <StatComparisonRow key={r.label} row={r} />
+          ))}
         </div>
-        {rows.map((r) => (
-          <StatComparisonRow key={r.label} row={r} />
-        ))}
-      </div>
 
-      {/* Four factors by possession — same row formatting as the team
-          stats above, but split into two side-by-side panels: one per
-          "side of the ball." Each row compares the offense's stat to
-          the defense's allowed-stat, with the winner highlighted.
-          Stacks on mobile so the rows don't go unreadably narrow. */}
-      <div className="mt-6 pt-4 border-t border-gray-700 grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Column 2: when home team has the ball */}
         <PossessionPanel
           offTeam={home}
           defTeam={away}
           offColor={TEAM_1_COLOR}
           defColor={TEAM_2_COLOR}
+          leagueAvg={leagueAvg}
         />
+
+        {/* Column 3: when away team has the ball */}
         <PossessionPanel
           offTeam={away}
           defTeam={home}
           offColor={TEAM_2_COLOR}
           defColor={TEAM_1_COLOR}
+          leagueAvg={leagueAvg}
         />
       </div>
     </div>
   );
 }
 
-/// Approximate D-I averages, used to decompose each side's strength as
-/// deviation from league. Without this the highlighting falls into a
-/// trap: e.g. Duke 13.4% TOV vs Illinois 11.7% opp-TOV reads as "Illinois
-/// wins" by raw comparison, but both teams are well below the ~17% league
-/// average — Duke is *strong on offense* (avoids TOs), Illinois is *weak
-/// on defense* (rarely forces them), and the actual matchup is a Duke
-/// offensive edge. Tuned by inspection of recent seasons; relative
-/// ordering matters more than precision.
-const POSSESSION_LEAGUE_AVG = {
+interface PossessionLeagueAvg {
+  /// Adjusted-efficiency league avg in pts/100 possessions. AdjO and
+  /// AdjD share one baseline — every team's `adj_offense` mean equals
+  /// every team's `adj_defense` mean by construction (every point
+  /// scored is a point allowed somewhere).
+  EFF: number;
+  eFG: number;
+  TOV: number;
+  /// ORB% league avg (≈ DRB% complement; both panels' ORB% rows compare
+  /// in ORB% units after converting DRB% → 1 − DRB%).
+  ORB: number;
+  FT: number;
+}
+
+/// Conservative D-I averages used as a fallback when the rankings list
+/// isn't loaded. The live league averages are computed per-season from
+/// the actual rankings via `computeLeagueAverages`; these constants only
+/// fire on the empty-list edge case so the UI doesn't divide-by-zero.
+const POSSESSION_LEAGUE_AVG_FALLBACK: PossessionLeagueAvg = {
+  EFF: 105,
   eFG: 0.5,
   TOV: 0.17,
-  // ORB% league avg (≈ DRB% complement, both panels' ORB% rows compare in
-  // ORB% units after converting DRB% → 1 − DRB%).
   ORB: 0.3,
   FT: 0.3,
-} as const;
+};
+
+/// Compute simple (per-team) means of the four-factor stats from the
+/// season's full rankings list. Each TeamRanking percentage is already
+/// per-possession-normalized, so per-team mean is a reasonable league
+/// baseline — possession-weighting would shift the answer by a hair but
+/// requires possession totals we don't have here. Drives the highlighting
+/// in `PossessionPanel` so the comparison reflects the era you're viewing
+/// (modern D-I ORB% is ~28%, not the 30% Dean Oliver coined in 2008).
+function computeLeagueAverages(teams: TeamRanking[]): PossessionLeagueAvg {
+  if (teams.length === 0) return POSSESSION_LEAGUE_AVG_FALLBACK;
+
+  const mean = (extract: (t: TeamRanking) => number | null | undefined): number => {
+    let sum = 0;
+    let count = 0;
+    for (const t of teams) {
+      const v = extract(t);
+      if (v != null && Number.isFinite(v)) {
+        sum += v;
+        count += 1;
+      }
+    }
+    return count > 0 ? sum / count : 0;
+  };
+
+  return {
+    EFF: mean((t) => t.adj_offense),
+    eFG: mean((t) => t.effective_fg_pct),
+    TOV: mean((t) => t.turnover_pct),
+    ORB: mean((t) => t.off_rebound_pct),
+    FT: mean((t) => t.ft_rate),
+  };
+}
 
 interface PossessionRowSpec {
   label: string;
@@ -1179,21 +1220,39 @@ function PossessionPanel({
   defTeam,
   offColor,
   defColor,
+  leagueAvg,
 }: {
   offTeam: TeamRanking;
   defTeam: TeamRanking;
   offColor: string;
   defColor: string;
+  leagueAvg: PossessionLeagueAvg;
 }) {
   const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
   const fmtRatio = (v: number) => v.toFixed(3);
 
+  const fmtEff = (v: number) => v.toFixed(1);
+
   const rows: PossessionRowSpec[] = [
+    // Headline row: AdjO (offense's pts/100) vs AdjD (defense's pts
+    // allowed/100). Higher AdjO is better for offense; lower AdjD is
+    // better for defense — the `better: 'high'` decomposition handles
+    // both directions correctly via league-baseline math (off_strength
+    // = off − league; def_strength = league − def). The four factors
+    // below decompose what's driving this number.
+    {
+      label: 'Pts/100',
+      offValue: offTeam.adj_offense,
+      defValue: defTeam.adj_defense,
+      leagueAvg: leagueAvg.EFF,
+      better: 'high',
+      format: fmtEff,
+    },
     {
       label: 'eFG%',
       offValue: offTeam.effective_fg_pct,
       defValue: defTeam.opp_effective_fg_pct,
-      leagueAvg: POSSESSION_LEAGUE_AVG.eFG,
+      leagueAvg: leagueAvg.eFG,
       better: 'high',
       format: fmtPct,
     },
@@ -1201,7 +1260,7 @@ function PossessionPanel({
       label: 'TOV%',
       offValue: offTeam.turnover_pct,
       defValue: defTeam.opp_turnover_pct,
-      leagueAvg: POSSESSION_LEAGUE_AVG.TOV,
+      leagueAvg: leagueAvg.TOV,
       better: 'low',
       format: fmtPct,
     },
@@ -1214,7 +1273,7 @@ function PossessionPanel({
       // gap visually (33% vs 72% reads as huge but is just two views
       // of the same coin).
       defValue: defTeam.def_rebound_pct == null ? null : 1 - defTeam.def_rebound_pct,
-      leagueAvg: POSSESSION_LEAGUE_AVG.ORB,
+      leagueAvg: leagueAvg.ORB,
       better: 'high',
       format: fmtPct,
     },
@@ -1222,7 +1281,7 @@ function PossessionPanel({
       label: 'FT Rate',
       offValue: offTeam.ft_rate,
       defValue: defTeam.opp_ft_rate,
-      leagueAvg: POSSESSION_LEAGUE_AVG.FT,
+      leagueAvg: leagueAvg.FT,
       better: 'high',
       format: fmtRatio,
     },
