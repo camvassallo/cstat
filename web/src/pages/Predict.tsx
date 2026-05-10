@@ -940,12 +940,18 @@ function KeyItem({ k }: { k: Key }) {
 ///   - "(home court factor)" / "(neutral site)" / "(conference matchup)" /
 ///     "(non-conference matchup)" for the two flag features
 ///   - "(teams essentially tied on this stat)" when the rounded value is
-///     near zero
+///     near zero (unreachable in practice — `generateKeys` filters tied
+///     candidates upstream — kept as a defensive fallback)
 ///   - "(gap of 7.40 in Duke's favor)" — the common case
 ///   - "(gap of 0.10 the other way — outweighed by other Duke edges in
-///     this group)" when the headline feature's SHAP sign disagrees with
-///     the group-level direction (rare; happens when several features in
-///     the same group push opposite ways)
+///     this group)" when the headline feature's *data direction*
+///     (`homeAdvantageSign`) disagrees with the group's net direction.
+///     Rare under the current selection rule: `pickHeadline` already
+///     prefers a concordant alternative when one is within
+///     `CONCORDANT_HEADLINE_TOLERANCE` of the max |SHAP|, so this branch
+///     only fires when one feature genuinely dominates the group's
+///     |SHAP| but bucks the data narrative (e.g. Purdue vs Michigan
+///     opp eFG%).
 function formatHeadlineGap(
   headline: FeatureContribution,
   team: string,
