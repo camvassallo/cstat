@@ -610,7 +610,6 @@ function BoxScoreSide({
   );
 }
 
-
 // ---------------------------------------------------------------------------
 // Side-by-side stats — uses the rankings data we already fetched for the picker
 // ---------------------------------------------------------------------------
@@ -718,9 +717,11 @@ function SideBySideStats({
           when team1 has the ball | offense when team2 has the ball.
           Each column has 5 rows (Record/AdjEM/Tempo/SOS/ELO on the left,
           Pts/100 + four factors on the right two) so heights line up.
-          Stacks to a single column on mobile where horizontal density
-          would be unreadable. */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          `lg:` (≥1024px) is the right breakpoint here — at `md:` (768px)
+          the page's `max-w-4xl` cap leaves ~240px per column and team
+          names like "Northern Illinois" wrap. Tablets stack to a single
+          column gracefully. */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Column 1: general stats */}
         <div className="space-y-1.5">
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 pb-2 border-b border-gray-700">
@@ -1016,7 +1017,6 @@ function computeWinner(row: StatRow): 'home' | 'away' | null {
   if (row.better === 'low') return h < a ? 'home' : 'away';
   return h > a ? 'home' : 'away';
 }
-
 
 function ResultHeadline({
   result,
