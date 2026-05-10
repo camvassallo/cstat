@@ -355,6 +355,9 @@ pub struct Prediction {
     pub predicted_margin: f32,
     /// Probability that the home team wins (0.0–1.0).
     pub home_win_probability: f64,
+    /// Predicted total points (home + away). The API derives the two
+    /// team scores from `(total ± margin) / 2`.
+    pub predicted_total: f32,
 }
 
 /// Prediction plus per-feature TreeSHAP contributions.
@@ -424,21 +427,24 @@ impl From<crate::treeshap::LgbParseError> for LoadError {
     }
 }
 
-/// Holds loaded models for margin and win prediction. ONNX powers the
-/// fast prediction path; the parsed LightGBM `.lgb` mirror powers
-/// TreeSHAP attribution for the Predict page's keys panel.
+/// Holds loaded models for margin, win, and total prediction. ONNX
+/// powers the fast prediction path; the parsed LightGBM `.lgb` mirror of
+/// the margin model powers TreeSHAP attribution for the Predict page's
+/// keys panel. Totals don't get attribution — the keys panel narrative
+/// is margin-only.
 pub struct Predictor {
     margin_session: Mutex<Session>,
     win_session: Mutex<Session>,
+    total_session: Mutex<Session>,
     margin_lgb: LgbModel,
 }
 
 impl Predictor {
     /// Load models from the given directory.
     ///
-    /// Expects `margin_model.onnx`, `win_model.onnx`, and
-    /// `margin_model.lgb` in `model_dir`. The `.lgb` is the LightGBM text
-    /// dump that backs TreeSHAP attribution.
+    /// Expects `margin_model.onnx`, `win_model.onnx`,
+    /// `total_model.onnx`, and `margin_model.lgb` in `model_dir`. The
+    /// `.lgb` is the LightGBM text dump that backs TreeSHAP attribution.
     pub fn load(model_dir: &Path) -> Result<Self, LoadError> {
         let margin_session = Session::builder()?
             .with_intra_threads(1)?
@@ -447,6 +453,10 @@ impl Predictor {
         let win_session = Session::builder()?
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("win_model.onnx"))?;
+
+        let total_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("total_model.onnx"))?;
 
         let margin_lgb = LgbModel::load(&model_dir.join("margin_model.lgb"))?;
         if margin_lgb.num_features != NUM_FEATURES {
@@ -459,18 +469,29 @@ impl Predictor {
         Ok(Self {
             margin_session: Mutex::new(margin_session),
             win_session: Mutex::new(win_session),
+            total_session: Mutex::new(total_session),
             margin_lgb,
         })
     }
 
-    /// Run both models on a feature vector and return predictions.
-    pub fn predict(&self, features: &[f32; NUM_FEATURES]) -> Result<Prediction, ort::Error> {
+    /// Run all three models and return predictions.
+    ///
+    /// Margin and win consume the 49-element diff feature vector; total
+    /// consumes the 58-element diff+sum vector. The two are produced
+    /// together by `features::build_all_features` so the API issues one
+    /// DB-fetch pass per matchup.
+    pub fn predict(
+        &self,
+        diff: &[f32; NUM_FEATURES],
+        diff_and_sum: &[f32; TOTAL_NUM_FEATURES],
+    ) -> Result<Prediction, ort::Error> {
         use ort::value::TensorRef;
 
-        let shape = [1_usize, NUM_FEATURES];
+        let diff_shape = [1_usize, NUM_FEATURES];
+        let total_shape = [1_usize, TOTAL_NUM_FEATURES];
 
         // Margin model: single float output
-        let margin_input = TensorRef::from_array_view((shape, features.as_slice()))?;
+        let margin_input = TensorRef::from_array_view((diff_shape, diff.as_slice()))?;
         let mut margin_session = self.margin_session.lock().unwrap();
         let margin_outputs = margin_session.run(ort::inputs![margin_input])?;
         let (_, margin_data) = margin_outputs[0].try_extract_tensor::<f32>()?;
@@ -479,7 +500,7 @@ impl Predictor {
         drop(margin_session);
 
         // Win model: outputs [label (int64), probabilities (float32, shape [1, 2])]
-        let win_input = TensorRef::from_array_view((shape, features.as_slice()))?;
+        let win_input = TensorRef::from_array_view((diff_shape, diff.as_slice()))?;
         let mut win_session = self.win_session.lock().unwrap();
         let win_outputs = win_session.run(ort::inputs![win_input])?;
         let (_, probs) = win_outputs[1].try_extract_tensor::<f32>()?;
@@ -489,11 +510,38 @@ impl Predictor {
         } else {
             probs[0] as f64
         };
+        drop(win_outputs);
+        drop(win_session);
+
+        // Total model: single float output, 58-feature input
+        let total_input = TensorRef::from_array_view((total_shape, diff_and_sum.as_slice()))?;
+        let mut total_session = self.total_session.lock().unwrap();
+        let total_outputs = total_session.run(ort::inputs![total_input])?;
+        let (_, total_data) = total_outputs[0].try_extract_tensor::<f32>()?;
+        let predicted_total = total_data[0];
 
         Ok(Prediction {
             predicted_margin,
             home_win_probability,
+            predicted_total,
         })
+    }
+
+    /// Run only the totals model. Used by the API alongside
+    /// `predict_with_contributions` (margin path) so the two model
+    /// outputs ride the same DB-fetch round-trip without paying for
+    /// margin twice.
+    pub fn predict_total(
+        &self,
+        diff_and_sum: &[f32; TOTAL_NUM_FEATURES],
+    ) -> Result<f32, ort::Error> {
+        use ort::value::TensorRef;
+        let shape = [1_usize, TOTAL_NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, diff_and_sum.as_slice()))?;
+        let mut session = self.total_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+        Ok(data[0])
     }
 
     /// Run the margin model and return TreeSHAP feature attributions.
@@ -646,14 +694,17 @@ mod tests {
     #[test]
     fn load_models_and_predict_zeros() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() {
+        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() || !dir.join("total_model.onnx").exists() {
             eprintln!("skipping: model files not found at {}", dir.display());
             return;
         }
 
         let predictor = Predictor::load(&dir).expect("failed to load models");
         let features = [0.0_f32; NUM_FEATURES];
-        let pred = predictor.predict(&features).expect("prediction failed");
+        let total_features = [0.0_f32; TOTAL_NUM_FEATURES];
+        let pred = predictor
+            .predict(&features, &total_features)
+            .expect("prediction failed");
 
         // With all-zero features (neutral matchup), margin should be near zero
         // and win probability near 0.5
@@ -672,7 +723,7 @@ mod tests {
     #[test]
     fn predict_responds_to_feature_direction() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() {
+        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() || !dir.join("total_model.onnx").exists() {
             return;
         }
 
@@ -706,8 +757,19 @@ mod tests {
         away_favored[i_elo] = -200.0;
         away_favored[i_gbpm] = -5.0;
 
-        let pred_home = predictor.predict(&home_favored).unwrap();
-        let pred_away = predictor.predict(&away_favored).unwrap();
+        // Pad to the totals model's feature count — sums stay 0 since
+        // this test only asserts on margin/win behavior, not totals.
+        let mut home_favored_total = [0.0_f32; TOTAL_NUM_FEATURES];
+        home_favored_total[..NUM_FEATURES].copy_from_slice(&home_favored);
+        let mut away_favored_total = [0.0_f32; TOTAL_NUM_FEATURES];
+        away_favored_total[..NUM_FEATURES].copy_from_slice(&away_favored);
+
+        let pred_home = predictor
+            .predict(&home_favored, &home_favored_total)
+            .unwrap();
+        let pred_away = predictor
+            .predict(&away_favored, &away_favored_total)
+            .unwrap();
 
         assert!(
             pred_home.predicted_margin > pred_away.predicted_margin,
@@ -747,7 +809,7 @@ mod tests {
     #[test]
     fn predict_with_contributions_matches_full_predict() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() {
+        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() || !dir.join("total_model.onnx").exists() {
             return;
         }
 
@@ -769,7 +831,12 @@ mod tests {
         features[idx("diff_w_ogbpm")] = 1.5;
         features[idx("diff_w_dgbpm")] = 1.5;
 
-        let baseline = predictor.predict(&features).unwrap();
+        // Build the totals input by appending zero sums — totals model
+        // isn't checked in this test, only margin attribution.
+        let mut total_features = [0.0_f32; TOTAL_NUM_FEATURES];
+        total_features[..NUM_FEATURES].copy_from_slice(&features);
+
+        let baseline = predictor.predict(&features, &total_features).unwrap();
         let attributed = predictor.predict_with_contributions(&features).unwrap();
 
         // The TreeSHAP-attributed margin must match the standalone ONNX

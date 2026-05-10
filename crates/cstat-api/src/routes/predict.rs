@@ -262,6 +262,10 @@ async fn predict_with_venue(
                 prediction: Prediction {
                     predicted_margin: -swapped.prediction.predicted_margin,
                     home_win_probability: 1.0 - swapped.prediction.home_win_probability,
+                    // Totals are invariant under team swap (home + away
+                    // = away + home), so no flip — the model output
+                    // travels through unchanged.
+                    predicted_total: swapped.prediction.predicted_total,
                 },
                 feature_values,
                 contributions,
@@ -316,6 +320,13 @@ async fn predict_neutral_symmetric(
 
     let symmetric_margin =
         0.5 * (fwd.prediction.predicted_margin - rev.prediction.predicted_margin);
+    // Totals symmetrize *additively* — total(A,B) and total(B,A) should
+    // agree (the same game's combined points, regardless of how we
+    // labelled "home"). LightGBM tree ensembles aren't perfectly
+    // symmetric in features though, so even at venue=0 the two calls
+    // disagree by a few tenths. Average them to force exact equality.
+    let symmetric_total =
+        0.5 * (fwd.prediction.predicted_total + rev.prediction.predicted_total);
 
     // Symmetrise feature values and contributions the same way: each is
     // averaged against its sign-flipped counterpart from the reverse
@@ -338,6 +349,7 @@ async fn predict_neutral_symmetric(
         prediction: Prediction {
             predicted_margin: symmetric_margin,
             home_win_probability: margin_to_win_prob(symmetric_margin),
+            predicted_total: symmetric_total,
         },
         feature_values,
         contributions,
@@ -392,7 +404,10 @@ async fn run_predict(
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<Explained, String> {
-    let features = cstat_core::features::build_game_features(
+    // Single DB-fetch pass produces both the 49-element diff vector
+    // (margin/win input) and the 58-element diff+sum vector (totals
+    // input). The feature extraction is the expensive step.
+    let f = cstat_core::features::build_all_features(
         &state.db.pool,
         home_team_id,
         away_team_id,
@@ -403,11 +418,16 @@ async fn run_predict(
     .await
     .map_err(|e| format!("feature extraction failed: {e}"))?;
 
-    // Single batched call covers full prediction + ablation deltas.
+    // Margin + TreeSHAP from the diff vector; totals from the diff+sum
+    // vector. Two ONNX sessions (+ TreeSHAP), one DB round-trip.
     let attributed = state
         .predictor
-        .predict_with_contributions(&features)
+        .predict_with_contributions(&f.diff)
         .map_err(|e| format!("prediction failed: {e}"))?;
+    let predicted_total = state
+        .predictor
+        .predict_total(&f.diff_and_sum)
+        .map_err(|e| format!("totals prediction failed: {e}"))?;
 
     // Override the standalone win-classifier output with a margin-derived
     // win probability. The two LightGBM models (margin + win) are trained
@@ -420,8 +440,9 @@ async fn run_predict(
         prediction: Prediction {
             predicted_margin: attributed.predicted_margin,
             home_win_probability: margin_to_win_prob(attributed.predicted_margin),
+            predicted_total,
         },
-        feature_values: features,
+        feature_values: f.diff,
         contributions: attributed.contributions,
     })
 }
@@ -703,10 +724,12 @@ mod tests {
         let fwd = Prediction {
             predicted_margin: 7.3,
             home_win_probability: 0.78,
+            predicted_total: 148.4,
         };
         let rev = Prediction {
             predicted_margin: -7.1, // not perfectly antisymmetric (the bug we're fixing)
             home_win_probability: 0.21,
+            predicted_total: 148.6, // not perfectly symmetric either
         };
 
         let m_ab = 0.5 * (fwd.predicted_margin - rev.predicted_margin);

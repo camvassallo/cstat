@@ -40,6 +40,7 @@ __pycache__/
 !/training/models/margin_model.onnx
 !/training/models/win_model.onnx
 !/training/models/margin_model.lgb
+!/training/models/total_model.onnx
 
 # Training experiment side-by-side outputs. Results live in ROADMAP §4f;
 # artifacts here are reproducible from the GBPM_VARIANT env var.

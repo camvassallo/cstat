@@ -1,0 +1,16 @@
+2026-05-10T02:02:35.673655537Z [inf]  Starting Container
+2026-05-10T02:02:36.408930450Z [inf]  [2m2026-05-10T02:02:36.134575Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m connected to database
+2026-05-10T02:02:36.408935468Z [inf]  [2m2026-05-10T02:02:36.171729Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m migrations complete
+2026-05-10T02:02:36.408940584Z [err]  Error: failed to load ONNX models from training/models: LightGBM .lgb parse: lgb io error: No such file or directory (os error 2)
+2026-05-10T02:02:37.407242102Z [inf]  [2m2026-05-10T02:02:37.165976Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m connected to database
+2026-05-10T02:02:37.407248714Z [inf]  [2m2026-05-10T02:02:37.205456Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m migrations complete
+2026-05-10T02:02:37.407253240Z [err]  Error: failed to load ONNX models from training/models: LightGBM .lgb parse: lgb io error: No such file or directory (os error 2)
+2026-05-10T02:02:38.393152458Z [inf]  [2m2026-05-10T02:02:38.027631Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m connected to database
+2026-05-10T02:02:38.393159011Z [inf]  [2m2026-05-10T02:02:38.066670Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m migrations complete
+2026-05-10T02:02:38.393165088Z [err]  Error: failed to load ONNX models from training/models: LightGBM .lgb parse: lgb io error: No such file or directory (os error 2)
+2026-05-10T02:02:38.867437000Z [inf]  [2m2026-05-10T02:02:38.864708Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m connected to database
+2026-05-10T02:02:38.903812409Z [inf]  [2m2026-05-10T02:02:38.903325Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m migrations complete
+2026-05-10T02:02:38.981336261Z [err]  Error: failed to load ONNX models from training/models: LightGBM .lgb parse: lgb io error: No such file or directory (os error 2)
+2026-05-10T02:02:39.658606056Z [inf]  [2m2026-05-10T02:02:39.657175Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m connected to database
+2026-05-10T02:02:39.700469247Z [inf]  [2m2026-05-10T02:02:39.696278Z[0m [32m INFO[0m [2mcstat_api[0m[2m:[0m migrations complete
+2026-05-10T02:02:39.758911499Z [err]  Error: failed to load ONNX models from training/models: LightGBM .lgb parse: lgb io error: No such file or directory (os error 2)
