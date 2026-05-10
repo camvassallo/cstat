@@ -1065,8 +1065,9 @@ function SideBySideStats({
       // average gives users immediate context: `+2.4 / −0.4` reads as
       // "Duke fast, Illinois slow", `+5 / +5` reads "track meet",
       // `−3 / −3` reads "grinder". Raw numbers (66.4 / 65.4) carry the
-      // same info but only if you've memorised the baseline.
-      label: 'Tempo',
+      // same info but only if you've memorised the baseline. Label
+      // includes Δ so the values aren't mistaken for raw possessions.
+      label: 'Tempo Δ',
       home: home.adj_tempo == null ? null : home.adj_tempo - leagueAvg.TEMPO,
       away: away.adj_tempo == null ? null : away.adj_tempo - leagueAvg.TEMPO,
       better: 'neither',
