@@ -863,7 +863,6 @@ function PossessionPanel({
 }) {
   const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
   const fmtRatio = (v: number) => v.toFixed(3);
-
   const fmtEff = (v: number) => v.toFixed(1);
 
   const rows: PossessionRowSpec[] = [
