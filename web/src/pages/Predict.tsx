@@ -1060,11 +1060,17 @@ function SideBySideStats({
     // row of each possession panel below, where they pair naturally with
     // the four factors that decompose them.
     {
+      // Tempo isn't directionally good or bad — fast teams aren't better
+      // teams. Showing each team's pace as a signed delta from league
+      // average gives users immediate context: `+2.4 / −0.4` reads as
+      // "Duke fast, Illinois slow", `+5 / +5` reads "track meet",
+      // `−3 / −3` reads "grinder". Raw numbers (66.4 / 65.4) carry the
+      // same info but only if you've memorised the baseline.
       label: 'Tempo',
-      home: home.adj_tempo,
-      away: away.adj_tempo,
+      home: home.adj_tempo == null ? null : home.adj_tempo - leagueAvg.TEMPO,
+      away: away.adj_tempo == null ? null : away.adj_tempo - leagueAvg.TEMPO,
       better: 'neither',
-      format: (v) => v.toFixed(1),
+      format: fmt1,
     },
     {
       label: 'SOS',
@@ -1148,6 +1154,11 @@ interface PossessionLeagueAvg {
   /// in ORB% units after converting DRB% → 1 − DRB%).
   ORB: number;
   FT: number;
+  /// Adjusted-tempo league avg in possessions/40min. Used by the Tempo
+  /// row in the general column to render each team's pace as a signed
+  /// delta from average — gives users immediate context for "fast vs
+  /// slow" without forcing them to memorise a baseline.
+  TEMPO: number;
 }
 
 /// Conservative D-I averages used as a fallback when the rankings list
@@ -1160,6 +1171,7 @@ const POSSESSION_LEAGUE_AVG_FALLBACK: PossessionLeagueAvg = {
   TOV: 0.17,
   ORB: 0.3,
   FT: 0.3,
+  TEMPO: 67,
 };
 
 /// Compute simple (per-team) means of the four-factor stats from the
@@ -1191,6 +1203,7 @@ function computeLeagueAverages(teams: TeamRanking[]): PossessionLeagueAvg {
     TOV: mean((t) => t.turnover_pct),
     ORB: mean((t) => t.off_rebound_pct),
     FT: mean((t) => t.ft_rate),
+    TEMPO: mean((t) => t.adj_tempo),
   };
 }
 
