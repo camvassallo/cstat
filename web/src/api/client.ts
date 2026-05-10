@@ -591,14 +591,16 @@ export interface PredictionResult {
   predicted_home_score: number;
   predicted_away_score: number;
   predicted_winner: string;
-  /// Every feature, sorted by |contribution| desc. The frontend slices and
-  /// aggregates as needed (per-group keys, top-N display, etc.).
+  /// Every feature, sorted by |contribution| desc. **No current consumer**
+  /// — the Keys panel that used to render these was removed (see the
+  /// "Deprecate TreeSHAP infrastructure" entry in ROADMAP.md). Field
+  /// stays in the response to avoid breaking the API contract; can be
+  /// dropped together with the rest of the SHAP path when that work
+  /// lands.
   feature_contributions: FeatureContribution[];
-  /// Model's signed group sums, kept for any future raw-breakdown UI.
-  /// Not used by the keys panel — keys recompute their own per-group
-  /// signed sums using the data-faithful direction (see
-  /// `homeAdvantageSign` in `featureExplanations.ts`) weighted by SHAP
-  /// magnitude.
+  /// Model's signed group sums. Same status as `feature_contributions`
+  /// above — no current consumer, kept for API stability, slated for
+  /// removal alongside the rest of the SHAP path.
   contributions_by_group: GroupContribution[];
   /// Roster summary per team (full RosterEntry shape). Sorted CamPom desc
   /// by the underlying query — slice top N on the frontend for display.
