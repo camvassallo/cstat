@@ -1,7 +1,23 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::inference::NUM_FEATURES;
+use crate::inference::{NUM_FEATURES, TOTAL_NUM_FEATURES};
+
+/// Feature vectors for both the margin/win path (49 diffs) and the totals
+/// path (49 diffs + 9 level-sensitive sums). Built in a single DB-fetch
+/// pass so the API can call all three models off one round-trip without
+/// re-querying team/roster/form data.
+///
+/// Invariant: `diff_and_sum[..NUM_FEATURES] == diff` byte-for-byte.
+/// Verified by `total_features_share_diff_prefix` test.
+pub struct GameFeatures {
+    /// Margin/win model input (49 features). Wire-locked to
+    /// `model_meta.json::features`.
+    pub diff: [f32; NUM_FEATURES],
+    /// Totals model input (58 features). Wire-locked to
+    /// `model_meta.json::total_features`.
+    pub diff_and_sum: [f32; TOTAL_NUM_FEATURES],
+}
 
 /// Team-level stats pulled from `team_season_stats`.
 #[derive(Debug, sqlx::FromRow)]
@@ -222,9 +238,9 @@ async fn get_rolling_form(
     .await
 }
 
-/// Build the 47-element feature vector for a matchup.
-///
-/// Features are home − away differences, matching the order in `model_meta.json`.
+/// Build the 49-element diff feature vector for a matchup (margin/win
+/// model input). Thin wrapper over `build_all_features` for callers that
+/// only need the margin path.
 pub async fn build_game_features(
     pool: &PgPool,
     home_team_id: Uuid,
@@ -233,6 +249,32 @@ pub async fn build_game_features(
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<[f32; NUM_FEATURES], sqlx::Error> {
+    let f = build_all_features(
+        pool,
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+    )
+    .await?;
+    Ok(f.diff)
+}
+
+/// Build both the diff (margin/win) and diff+sum (totals) feature
+/// vectors in a single DB-fetch pass.
+///
+/// Features are home − away differences for the diff path, plus
+/// home + away sums on the unflipped raw columns for the totals path.
+/// Order matches `model_meta.json::features` and `::total_features`.
+pub async fn build_all_features(
+    pool: &PgPool,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    season: i32,
+    is_neutral: bool,
+    is_conference: bool,
+) -> Result<GameFeatures, sqlx::Error> {
     // Fetch all data in parallel
     let (home_ts, away_ts, home_roster, away_roster, home_form, away_form) = tokio::try_join!(
         get_team_stats(pool, home_team_id, season),
@@ -246,8 +288,14 @@ pub async fn build_game_features(
     let d = |home: Option<f64>, away: Option<f64>| -> f32 {
         (home.unwrap_or(0.0) - away.unwrap_or(0.0)) as f32
     };
+    // Sum helper for level-sensitive totals features. Mirrors `s` from
+    // `training/features.py` — no sign flips on defense (the diff path's
+    // flip is on the *diff column*, not the source values).
+    let s = |home: Option<f64>, away: Option<f64>| -> f32 {
+        (home.unwrap_or(0.0) + away.unwrap_or(0.0)) as f32
+    };
 
-    let features: [f32; NUM_FEATURES] = [
+    let diff: [f32; NUM_FEATURES] = [
         // Context
         if is_neutral { 0.0 } else { 1.0 },             // venue
         if is_conference { 1.0 } else { 0.0 },          // is_conference_game
@@ -313,7 +361,21 @@ pub async fn build_game_features(
         d(home_form.w_gs_trend, away_form.w_gs_trend),
     ];
 
-    Ok(features)
+    // Totals input: diff prefix + 9 level-sensitive sums. Order locked to
+    // `model_meta.json::total_features` indices NUM_FEATURES..58.
+    let mut diff_and_sum = [0.0_f32; TOTAL_NUM_FEATURES];
+    diff_and_sum[..NUM_FEATURES].copy_from_slice(&diff);
+    diff_and_sum[NUM_FEATURES] = s(home_ts.adj_tempo, away_ts.adj_tempo);
+    diff_and_sum[NUM_FEATURES + 1] = s(home_ts.adj_offense, away_ts.adj_offense);
+    diff_and_sum[NUM_FEATURES + 2] = s(home_ts.adj_defense, away_ts.adj_defense);
+    diff_and_sum[NUM_FEATURES + 3] = s(home_ts.effective_fg_pct, away_ts.effective_fg_pct);
+    diff_and_sum[NUM_FEATURES + 4] = s(home_ts.opp_effective_fg_pct, away_ts.opp_effective_fg_pct);
+    diff_and_sum[NUM_FEATURES + 5] = s(home_roster.w_ppg, away_roster.w_ppg);
+    diff_and_sum[NUM_FEATURES + 6] = s(home_roster.w_ortg, away_roster.w_ortg);
+    diff_and_sum[NUM_FEATURES + 7] = s(home_ts.off_rebound_pct, away_ts.off_rebound_pct);
+    diff_and_sum[NUM_FEATURES + 8] = s(home_ts.def_rebound_pct, away_ts.def_rebound_pct);
+
+    Ok(GameFeatures { diff, diff_and_sum })
 }
 
 #[cfg(test)]
@@ -414,5 +476,51 @@ mod tests {
         assert!((d(Some(5.0), None) - 5.0).abs() < 0.001);
         assert!((d(None, Some(5.0)) - (-5.0)).abs() < 0.001);
         assert!((d(None, None) - 0.0).abs() < 0.001);
+    }
+
+    /// Lock the sum_* feature order in `TOTAL_FEATURE_NAMES` against the
+    /// hand-coded indices in `build_all_features`. If someone reorders
+    /// the names array (or the assignments below `diff_and_sum.copy_from`),
+    /// this test fails before the totals model returns garbage in prod.
+    #[test]
+    fn total_feature_names_sum_order() {
+        use crate::inference::TOTAL_FEATURE_NAMES;
+        let expected_sums = [
+            "sum_adj_tempo",
+            "sum_adj_offense",
+            "sum_adj_defense",
+            "sum_effective_fg_pct",
+            "sum_opp_effective_fg_pct",
+            "sum_w_ppg",
+            "sum_w_ortg",
+            "sum_off_rebound_pct",
+            "sum_def_rebound_pct",
+        ];
+        for (i, expected) in expected_sums.iter().enumerate() {
+            assert_eq!(
+                TOTAL_FEATURE_NAMES[NUM_FEATURES + i], *expected,
+                "sum slot {i} mismatch",
+            );
+        }
+    }
+
+    /// `GameFeatures.diff_and_sum[..NUM_FEATURES]` is required to equal
+    /// `GameFeatures.diff` byte-for-byte — both models share the diff
+    /// prefix so the API can fetch DB data once and feed both sessions.
+    #[test]
+    fn total_features_share_diff_prefix() {
+        let diff: [f32; NUM_FEATURES] = std::array::from_fn(|i| (i as f32) * 0.5);
+        let mut diff_and_sum = [0.0_f32; TOTAL_NUM_FEATURES];
+        diff_and_sum[..NUM_FEATURES].copy_from_slice(&diff);
+        // Assign sentinel sums so we can verify they don't bleed into
+        // the diff prefix.
+        diff_and_sum[NUM_FEATURES..].fill(-42.0);
+        let f = GameFeatures { diff, diff_and_sum };
+        for i in 0..NUM_FEATURES {
+            assert_eq!(f.diff_and_sum[i], f.diff[i], "prefix mismatch at {i}");
+        }
+        for i in NUM_FEATURES..TOTAL_NUM_FEATURES {
+            assert_eq!(f.diff_and_sum[i], -42.0, "sum slot {i} clobbered");
+        }
     }
 }

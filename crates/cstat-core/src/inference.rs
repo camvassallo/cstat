@@ -3,8 +3,22 @@ use ort::session::Session;
 use std::path::Path;
 use std::sync::Mutex;
 
-/// Number of input features expected by the ONNX models.
+/// Number of input features expected by the margin/win ONNX models.
+///
+/// The totals model takes `TOTAL_NUM_FEATURES` (49 diffs + 9 level-sensitive
+/// sums) — diff-only features can't predict totals because they throw away
+/// absolute level (`diff_tempo=0` is ambiguous between two slow teams and
+/// two fast teams). See ROADMAP "Predict follow-up — totals / tempo model"
+/// and `training/features.py` for methodology.
 pub const NUM_FEATURES: usize = 49;
+
+/// Number of input features expected by the totals ONNX model.
+///
+/// Layout: indices 0..NUM_FEATURES are the same diff features the
+/// margin/win models consume (so the same fetched team data feeds both
+/// paths); indices NUM_FEATURES..TOTAL_NUM_FEATURES are 9 sum_* features
+/// computed as `home + away` on the unflipped raw columns.
+pub const TOTAL_NUM_FEATURES: usize = NUM_FEATURES + 9;
 
 /// Per-feature display label and group for the explainability UI. Stored
 /// in the same index order as `FEATURE_NAMES` so a contribution at
@@ -268,6 +282,72 @@ pub const FEATURE_NAMES: [&str; NUM_FEATURES] = [
     "diff_w_gs_trend",
 ];
 
+/// Feature names in the exact order expected by the totals ONNX model.
+/// Indices 0..NUM_FEATURES match `FEATURE_NAMES` byte-for-byte; indices
+/// NUM_FEATURES.. carry the 9 sum_* level-sensitive companions. Order
+/// here is wire-locked to `model_meta.json::total_features` — never
+/// reorder without retraining.
+pub const TOTAL_FEATURE_NAMES: [&str; TOTAL_NUM_FEATURES] = [
+    "venue",
+    "is_conference_game",
+    "diff_win_pct",
+    "diff_adj_offense",
+    "diff_adj_defense",
+    "diff_adj_efficiency_margin",
+    "diff_effective_fg_pct",
+    "diff_turnover_pct",
+    "diff_off_rebound_pct",
+    "diff_ft_rate",
+    "diff_opp_effective_fg_pct",
+    "diff_opp_turnover_pct",
+    "diff_def_rebound_pct",
+    "diff_opp_ft_rate",
+    "diff_adj_tempo",
+    "diff_sos",
+    "diff_elo",
+    "diff_point_diff",
+    "diff_pythag_win_pct",
+    "diff_road_win_pct",
+    "diff_roster_size",
+    "diff_w_ppg",
+    "diff_w_rpg",
+    "diff_w_apg",
+    "diff_w_spg",
+    "diff_w_bpg",
+    "diff_w_topg",
+    "diff_w_ts_pct",
+    "diff_w_efg_pct",
+    "diff_w_usage",
+    "diff_w_player_sos",
+    "diff_w_ortg",
+    "diff_w_ast_pct",
+    "diff_w_tov_pct",
+    "diff_w_stl_pct",
+    "diff_w_blk_pct",
+    "diff_w_gbpm",
+    "diff_w_ogbpm",
+    "diff_w_dgbpm",
+    "diff_star_ppg",
+    "diff_star_gbpm",
+    "diff_star_ogbpm",
+    "diff_star_dgbpm",
+    "diff_star_ortg",
+    "diff_minutes_stddev",
+    "diff_w_rolling_gs",
+    "diff_w_rolling_ts",
+    "diff_w_ppg_trend",
+    "diff_w_gs_trend",
+    "sum_adj_tempo",
+    "sum_adj_offense",
+    "sum_adj_defense",
+    "sum_effective_fg_pct",
+    "sum_opp_effective_fg_pct",
+    "sum_w_ppg",
+    "sum_w_ortg",
+    "sum_off_rebound_pct",
+    "sum_def_rebound_pct",
+];
+
 /// Prediction output from the ONNX models.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Prediction {
@@ -498,6 +578,38 @@ mod tests {
         assert_eq!(meta_features.len(), NUM_FEATURES);
         for (i, (expected, actual)) in meta_features.iter().zip(FEATURE_NAMES.iter()).enumerate() {
             assert_eq!(expected, actual, "feature mismatch at index {i}");
+        }
+    }
+
+    #[test]
+    fn total_feature_names_match_model_meta() {
+        let meta_path = model_dir().join("model_meta.json");
+        let content = match std::fs::read_to_string(&meta_path) {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!(
+                    "skipping: model_meta.json not found at {}",
+                    meta_path.display()
+                );
+                return;
+            }
+        };
+        let meta: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        let meta_features: Vec<String> = meta["total_features"]
+            .as_array()
+            .expect("model_meta.json missing total_features — retrain with totals model")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        assert_eq!(meta_features.len(), TOTAL_NUM_FEATURES);
+        for (i, (expected, actual)) in meta_features
+            .iter()
+            .zip(TOTAL_FEATURE_NAMES.iter())
+            .enumerate()
+        {
+            assert_eq!(expected, actual, "total feature mismatch at index {i}");
         }
     }
 
