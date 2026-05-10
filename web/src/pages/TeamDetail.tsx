@@ -675,7 +675,12 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
       : `Predicted from ${teamName}'s perspective`;
     return (
       <span className={`font-mono ${colorClass}`} title={title}>
-        {scorePair && <span className="mr-1.5">{scorePair}</span>}
+        {scorePair && (
+          <>
+            <span>{scorePair}</span>
+            <span className="text-gray-600 mx-2">·</span>
+          </>
+        )}
         <span className={subdued}>{spread}</span>
         {winPct != null && (
           <span className={`${subdued} ml-1`}>({winPct}%)</span>

@@ -198,12 +198,16 @@ export default function Predict() {
 
       {result && (
         <div className="mt-6 space-y-4">
+          {/* Previous Matchups sits above the prediction so the user
+              sees recent reality before the model's projection. Only
+              renders when the two teams have already played this
+              season — `PreviousMatchups` returns null otherwise. */}
+          <PreviousMatchups result={result} />
           <ResultHeadline result={result} team1Prob={team1Prob} />
           <RosterCompare result={result} />
           <KeysToGame result={result} />
           <SideBySideStats result={result} teams={teams} />
           <FourFactorsPanel result={result} teams={teams} />
-          <PreviousMatchups result={result} />
         </div>
       )}
     </div>
