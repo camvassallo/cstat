@@ -30,13 +30,16 @@ __pycache__/
 *.pyc
 
 # ML models — training intermediates are noise, but the production ONNX
-# models ship with the repo so the deploy image can bundle them.
+# models ship with the repo so the deploy image can bundle them. The
+# margin .lgb mirror also ships: `Predictor::load` parses it for TreeSHAP
+# attribution on the Predict page (see `crates/cstat-core/src/treeshap.rs`).
 *.lgb
 *.pkl
 *.joblib
 *.onnx
 !/training/models/margin_model.onnx
 !/training/models/win_model.onnx
+!/training/models/margin_model.lgb
 
 # Training experiment side-by-side outputs. Results live in ROADMAP §4f;
 # artifacts here are reproducible from the GBPM_VARIANT env var.
