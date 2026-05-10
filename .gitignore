@@ -49,6 +49,11 @@ __pycache__/
 # evaluating a retrain; git history holds the canonical "before" copy.
 /training/models_*_backup/
 
+# Training-pipeline CSV outputs (e.g. OOF predictions). Generated artifacts,
+# not source — re-derivable from `python train.py`. Seed data for downstream
+# work like the historical-prediction `game_forecasts` backfill.
+/training/models/*.csv
+
 # Hand-generated PR diff dumps (e.g. `git diff main > pr.diff`) — useful
 # for review locally, never meant to ship.
 pr.diff
