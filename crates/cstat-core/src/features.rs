@@ -498,7 +498,8 @@ mod tests {
         ];
         for (i, expected) in expected_sums.iter().enumerate() {
             assert_eq!(
-                TOTAL_FEATURE_NAMES[NUM_FEATURES + i], *expected,
+                TOTAL_FEATURE_NAMES[NUM_FEATURES + i],
+                *expected,
                 "sum slot {i} mismatch",
             );
         }

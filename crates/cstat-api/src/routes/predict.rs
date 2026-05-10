@@ -325,8 +325,7 @@ async fn predict_neutral_symmetric(
     // labelled "home"). LightGBM tree ensembles aren't perfectly
     // symmetric in features though, so even at venue=0 the two calls
     // disagree by a few tenths. Average them to force exact equality.
-    let symmetric_total =
-        0.5 * (fwd.prediction.predicted_total + rev.prediction.predicted_total);
+    let symmetric_total = 0.5 * (fwd.prediction.predicted_total + rev.prediction.predicted_total);
 
     // Symmetrise feature values and contributions the same way: each is
     // averaged against its sign-flipped counterpart from the reverse

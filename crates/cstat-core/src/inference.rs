@@ -694,7 +694,10 @@ mod tests {
     #[test]
     fn load_models_and_predict_zeros() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() || !dir.join("total_model.onnx").exists() {
+        if !dir.join("margin_model.onnx").exists()
+            || !dir.join("margin_model.lgb").exists()
+            || !dir.join("total_model.onnx").exists()
+        {
             eprintln!("skipping: model files not found at {}", dir.display());
             return;
         }
@@ -723,7 +726,10 @@ mod tests {
     #[test]
     fn predict_responds_to_feature_direction() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() || !dir.join("total_model.onnx").exists() {
+        if !dir.join("margin_model.onnx").exists()
+            || !dir.join("margin_model.lgb").exists()
+            || !dir.join("total_model.onnx").exists()
+        {
             return;
         }
 
@@ -809,7 +815,10 @@ mod tests {
     #[test]
     fn predict_with_contributions_matches_full_predict() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() || !dir.join("total_model.onnx").exists() {
+        if !dir.join("margin_model.onnx").exists()
+            || !dir.join("margin_model.lgb").exists()
+            || !dir.join("total_model.onnx").exists()
+        {
             return;
         }
 
