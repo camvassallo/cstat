@@ -1,3 +1,4 @@
+use crate::treeshap::{LgbModel, tree_shap};
 use ort::session::Session;
 use std::path::Path;
 use std::sync::Mutex;
@@ -276,33 +277,89 @@ pub struct Prediction {
     pub home_win_probability: f64,
 }
 
-/// Prediction plus per-feature ablation contributions.
+/// Prediction plus per-feature TreeSHAP contributions.
 ///
-/// `contributions[i]` is `full_pred − pred_with_features[i]_zeroed`. Since
-/// every feature in `FEATURE_NAMES` is a diff (home − away) or a
-/// 0/1 indicator, "feature zeroed" reads as "teams equal on this
-/// dimension", and the contribution reads as "how much did this dimension
-/// push the margin off zero". Positive = pushed toward home, negative =
-/// toward away. Contributions don't necessarily sum to `predicted_margin`
-/// (tree models have feature interactions); they rank-order which inputs
-/// drove the prediction.
+/// `contributions[i]` is the SHAP value for feature `i`: how much that
+/// feature pushed the prediction relative to the model's expected output
+/// (the cover-weighted mean leaf value across the ensemble). Positive =
+/// pushed toward home, negative = toward away. SHAP values are additive:
+/// `base_value + Σ contributions = predicted_margin` to floating-point
+/// precision. Note that SHAP signs are the *model's* answer about
+/// direction — they can legitimately disagree with the data on
+/// non-monotonic features (the model has interactions). The frontend
+/// keys panel uses `|contribution|` for importance and a separate
+/// data-direction lookup (`homeAdvantageSign`) for the leader name to
+/// keep the user-facing narrative stats-faithful.
 #[derive(Debug, Clone)]
 pub struct PredictionWithContributions {
     pub predicted_margin: f32,
     pub contributions: [f32; NUM_FEATURES],
 }
 
-/// Holds loaded ONNX model sessions for margin and win prediction.
+/// Failure mode loading the predictor (ONNX session error or LightGBM
+/// `.lgb` parse error). Wraps the underlying error so callers can still
+/// `Display` it through `anyhow!` / `?`.
+#[derive(Debug)]
+pub enum LoadError {
+    Ort(ort::Error),
+    Lgb(crate::treeshap::LgbParseError),
+    /// `.lgb` file's feature count disagrees with the compiled `NUM_FEATURES`.
+    FeatureCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadError::Ort(e) => write!(f, "ONNX load: {e}"),
+            LoadError::Lgb(e) => write!(f, "LightGBM .lgb parse: {e}"),
+            LoadError::FeatureCountMismatch { expected, actual } => write!(
+                f,
+                "margin .lgb feature count {actual} ≠ compiled NUM_FEATURES {expected}",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+// Generic over `ort::Error<R>`'s phantom marker so any builder-stage
+// failure (`Error<SessionBuilder>`, `Error<()>`, etc.) propagates through
+// `?` without per-stage `.map_err`. ort's own `From<Error<X>> for Error<()>`
+// chains the conversion.
+impl<R> From<ort::Error<R>> for LoadError
+where
+    ort::Error<()>: From<ort::Error<R>>,
+{
+    fn from(e: ort::Error<R>) -> Self {
+        LoadError::Ort(e.into())
+    }
+}
+
+impl From<crate::treeshap::LgbParseError> for LoadError {
+    fn from(e: crate::treeshap::LgbParseError) -> Self {
+        LoadError::Lgb(e)
+    }
+}
+
+/// Holds loaded models for margin and win prediction. ONNX powers the
+/// fast prediction path; the parsed LightGBM `.lgb` mirror powers
+/// TreeSHAP attribution for the Predict page's keys panel.
 pub struct Predictor {
     margin_session: Mutex<Session>,
     win_session: Mutex<Session>,
+    margin_lgb: LgbModel,
 }
 
 impl Predictor {
-    /// Load ONNX models from the given directory.
+    /// Load models from the given directory.
     ///
-    /// Expects `margin_model.onnx` and `win_model.onnx` in `model_dir`.
-    pub fn load(model_dir: &Path) -> Result<Self, ort::Error> {
+    /// Expects `margin_model.onnx`, `win_model.onnx`, and
+    /// `margin_model.lgb` in `model_dir`. The `.lgb` is the LightGBM text
+    /// dump that backs TreeSHAP attribution.
+    pub fn load(model_dir: &Path) -> Result<Self, LoadError> {
         let margin_session = Session::builder()?
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("margin_model.onnx"))?;
@@ -311,9 +368,18 @@ impl Predictor {
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("win_model.onnx"))?;
 
+        let margin_lgb = LgbModel::load(&model_dir.join("margin_model.lgb"))?;
+        if margin_lgb.num_features != NUM_FEATURES {
+            return Err(LoadError::FeatureCountMismatch {
+                expected: NUM_FEATURES,
+                actual: margin_lgb.num_features,
+            });
+        }
+
         Ok(Self {
             margin_session: Mutex::new(margin_session),
             win_session: Mutex::new(win_session),
+            margin_lgb,
         })
     }
 
@@ -350,13 +416,12 @@ impl Predictor {
         })
     }
 
-    /// Run the margin model with ablation-based feature attribution.
+    /// Run the margin model and return TreeSHAP feature attributions.
     ///
-    /// Builds a single batched `(NUM_FEATURES + 1, NUM_FEATURES)` input
-    /// where row 0 is the full feature vector and row `i+1` has feature
-    /// `i` set to 0. One ONNX call returns all `NUM_FEATURES + 1`
-    /// predictions; the contribution of feature `i` is then
-    /// `output[0] − output[i+1]`.
+    /// Margin comes from the ONNX session (fast, well-tested path); SHAP
+    /// values come from the parsed `.lgb` mirror via the canonical
+    /// Lundberg/Erion/Lee algorithm. Both are reading the same trained
+    /// LightGBM model — they agree to floating-point precision.
     ///
     /// Win probability is intentionally omitted — derive it from the
     /// returned margin via the calibrated logistic in the API layer
@@ -367,37 +432,33 @@ impl Predictor {
     ) -> Result<PredictionWithContributions, ort::Error> {
         use ort::value::TensorRef;
 
-        const ROWS: usize = NUM_FEATURES + 1;
-
-        // Build the batched input. Row 0 is the full vector; row i+1 has
-        // feature i zeroed. Layout is row-major (axum/ort default).
-        let mut batch = vec![0.0_f32; ROWS * NUM_FEATURES];
-        for (i, val) in features.iter().enumerate() {
-            batch[i] = *val; // row 0
-        }
-        for i in 0..NUM_FEATURES {
-            let row_offset = (i + 1) * NUM_FEATURES;
-            for (j, val) in features.iter().enumerate() {
-                batch[row_offset + j] = *val;
-            }
-            batch[row_offset + i] = 0.0; // ablate feature i
-        }
-
-        let shape = [ROWS, NUM_FEATURES];
-        let input = TensorRef::from_array_view((shape, batch.as_slice()))?;
+        // Margin via ONNX (single-row prediction).
+        let shape = [1_usize, NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, features.as_slice()))?;
         let mut session = self.margin_session.lock().unwrap();
         let outputs = session.run(ort::inputs![input])?;
         let (_, preds) = outputs[0].try_extract_tensor::<f32>()?;
+        let predicted_margin = preds[0];
+        drop(outputs);
+        drop(session);
 
-        // First output = full prediction, rest = ablated.
-        let full = preds[0];
+        // SHAP attributions via TreeSHAP on the parsed .lgb. Promote to
+        // f64 for the recursion (LightGBM stores thresholds in f64);
+        // demote results back to f32 for the return type. Stack-allocate
+        // the f64 view so this stays alloc-free on the hot path.
+        let mut features_f64 = [0.0_f64; NUM_FEATURES];
+        for (i, &v) in features.iter().enumerate() {
+            features_f64[i] = v as f64;
+        }
+        let shap = tree_shap(&self.margin_lgb, &features_f64);
+
         let mut contributions = [0.0_f32; NUM_FEATURES];
-        for i in 0..NUM_FEATURES {
-            contributions[i] = full - preds[i + 1];
+        for (i, v) in shap.iter().enumerate() {
+            contributions[i] = *v as f32;
         }
 
         Ok(PredictionWithContributions {
-            predicted_margin: full,
+            predicted_margin,
             contributions,
         })
     }
@@ -473,8 +534,8 @@ mod tests {
     #[test]
     fn load_models_and_predict_zeros() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() {
-            eprintln!("skipping: ONNX models not found at {}", dir.display());
+        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() {
+            eprintln!("skipping: model files not found at {}", dir.display());
             return;
         }
 
@@ -499,7 +560,7 @@ mod tests {
     #[test]
     fn predict_responds_to_feature_direction() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() {
+        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() {
             return;
         }
 
@@ -574,7 +635,7 @@ mod tests {
     #[test]
     fn predict_with_contributions_matches_full_predict() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists() {
+        if !dir.join("margin_model.onnx").exists() || !dir.join("margin_model.lgb").exists() {
             return;
         }
 
@@ -599,33 +660,30 @@ mod tests {
         let baseline = predictor.predict(&features).unwrap();
         let attributed = predictor.predict_with_contributions(&features).unwrap();
 
-        // The batched margin must match the single-row margin to floating
-        // tolerance — same model, same inputs, same answer.
+        // The TreeSHAP-attributed margin must match the standalone ONNX
+        // prediction — both are reading the same trained model.
         assert!(
             (attributed.predicted_margin - baseline.predicted_margin).abs() < 1e-3,
-            "batched margin {} ≠ single-row margin {}",
+            "attributed margin {} ≠ single-row margin {}",
             attributed.predicted_margin,
             baseline.predicted_margin,
         );
 
-        // Features that are zero in the input must have zero contribution
-        // (ablating zero is a no-op).
-        for (i, name) in FEATURE_NAMES.iter().enumerate() {
-            if features[i] == 0.0 {
-                assert!(
-                    attributed.contributions[i].abs() < 1e-4,
-                    "feature {name} is 0 in input but contribution is {}",
-                    attributed.contributions[i],
-                );
-            }
-        }
+        // SHAP additivity invariant: base + Σ contributions = predicted
+        // margin to floating-point precision. (Unlike ablation, SHAP
+        // values reconstruct the prediction exactly.)
+        let base = predictor.margin_lgb.base_value() as f32;
+        let sum_contrib: f32 = attributed.contributions.iter().sum();
+        let reconstructed = base + sum_contrib;
+        assert!(
+            (reconstructed - baseline.predicted_margin).abs() < 1e-2,
+            "base ({base}) + Σ shap ({sum_contrib}) = {reconstructed} ≠ predicted {} (Δ {})",
+            baseline.predicted_margin,
+            reconstructed - baseline.predicted_margin,
+        );
 
-        // The biggest non-zero feature (`diff_elo` at 80, vs the trained
-        // model's heavy reliance on the GBPM cluster) should produce a
-        // non-trivial contribution. Don't assert the exact ranking — that
-        // depends on the trained model — just that *some* set feature has
-        // a meaningfully non-zero attribution, so we know ablation is
-        // wired up.
+        // At least one feature should have a non-trivial SHAP value given
+        // the strong inputs (high ELO diff, big efficiency margin, etc).
         let max_abs = attributed
             .contributions
             .iter()
@@ -633,7 +691,7 @@ mod tests {
             .fold(0.0_f32, f32::max);
         assert!(
             max_abs > 0.1,
-            "no feature contributed > 0.1 points; ablation likely broken (max |c| = {max_abs})",
+            "no feature contributed > 0.1 points; TreeSHAP likely broken (max |c| = {max_abs})",
         );
     }
 }

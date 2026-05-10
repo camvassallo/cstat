@@ -586,7 +586,8 @@ export interface PredictionResult {
   /// Model's signed group sums, kept for any future raw-breakdown UI.
   /// Not used by the keys panel — keys recompute their own per-group
   /// signed sums using the data-faithful direction (see
-  /// `homeAdvantageSign` in `featureExplanations.ts`).
+  /// `homeAdvantageSign` in `featureExplanations.ts`) weighted by SHAP
+  /// magnitude.
   contributions_by_group: GroupContribution[];
   /// Roster summary per team (full RosterEntry shape). Sorted CamPom desc
   /// by the underlying query — slice top N on the frontend for display.

@@ -23,6 +23,14 @@ import { Link } from 'react-router-dom';
 const TEAM_1_COLOR = '#3b82f6'; // blue (matches PlayerCompare PLAYER_COLORS[0])
 const TEAM_2_COLOR = '#ef4444'; // red
 
+/// |feature value| below this counts as "essentially tied" — the underlying
+/// stat is too close between the two teams to point at as a concrete
+/// advantage. Tied features can't be keys-panel headlines (we'd be
+/// announcing an edge with no stat to back it up) and `formatHeadlineGap`
+/// uses the same threshold to decide when to print "(teams essentially
+/// tied on this stat)" instead of a numeric gap.
+const TIED_VALUE_THRESHOLD = 0.005;
+
 export default function Predict() {
   const { season } = useSeason();
   usePageTitle('Game Prediction');
@@ -638,29 +646,169 @@ const TIER_BADGE: Record<Key['tier'], string> = {
   decisive: 'bg-rose-900/50 text-rose-200 ring-1 ring-rose-500/60',
 };
 
-function tierFor(mag: number): Key['tier'] | null {
-  if (mag < 0.3) return null;
-  if (mag < 0.6) return 'slight';
-  if (mag < 1.2) return 'clear';
-  if (mag < 2.0) return 'meaningful';
+/// Per-group tier thresholds [hidden→slight, slight→clear, clear→meaningful,
+/// meaningful→decisive]. Base thresholds [0.3, 0.6, 1.2, 2.0] were
+/// calibrated against typical |SHAP|-sums of ~0.3–1.0, the regime most
+/// groups actually live in.
+///
+/// **Roster impact** (the GBPM family — w_gbpm, w_ogbpm, w_dgbpm) is
+/// special: the model leans on it heavily and its |SHAP|-sums routinely
+/// land 5–15. Under base thresholds it would tier `decisive` on
+/// virtually every matchup and drown out the rest of the keys. Custom
+/// thresholds spread the tier ladder across its actual distribution,
+/// reserving `decisive` for true talent blowouts.
+///
+/// Calibration data: 80-matchup random-pair sample on 2026 (neutral).
+/// Roster impact distribution: p25=3.72, median=8.15, p75=13.97,
+/// p90=24.05, max=26.6. Custom thresholds map roughly to:
+///   `slight` ≈ below-p25 (close matchups where roster impact is small)
+///   `clear` ≈ p25–p50 (typical talent gap)
+///   `meaningful` ≈ p50–p75 (above-typical, real gap)
+///   `decisive` ≈ p75+ (blowout-level talent gap)
+const TIER_THRESHOLDS: Record<string, readonly [number, number, number, number]> = {
+  default: [0.3, 0.6, 1.2, 2.0],
+  'Roster impact': [1.0, 4.0, 8.0, 14.0],
+};
+
+function tierFor(group: string, mag: number): Key['tier'] | null {
+  const [t1, t2, t3, t4] = TIER_THRESHOLDS[group] ?? TIER_THRESHOLDS.default;
+  if (mag < t1) return null;
+  if (mag < t2) return 'slight';
+  if (mag < t3) return 'clear';
+  if (mag < t4) return 'meaningful';
   return 'decisive';
+}
+
+/// Coarse "nature" of each feature group for the diversity rerank in
+/// `selectTopKeys`. The keys panel reads better when its 4 cards span
+/// different angles of the matchup (talent, tactical, situational,
+/// synthesis) rather than three roster-flavored cards in a row. Anything
+/// not listed here defaults to 'other' and gets no diversity penalty.
+type Nature = 'talent' | 'tactical' | 'situational' | 'synthesis' | 'other';
+const GROUP_NATURE: Record<string, Nature> = {
+  'Roster impact': 'talent',
+  'Roster aggregate': 'talent',
+  'Star player': 'talent',
+  'Four factors (offense)': 'tactical',
+  'Four factors (defense)': 'tactical',
+  Pace: 'tactical',
+  Context: 'situational',
+  'Recent form': 'situational',
+  'Strength of schedule': 'situational',
+  'Adjusted efficiency': 'synthesis',
+  'Power ratings': 'synthesis',
+};
+
+/// Pick the top `maxKeys` keys with a soft diversity penalty: each pick
+/// discounts remaining same-nature candidates by `DIVERSITY_DECAY^seen`.
+/// When natures don't conflict (every key is from a different bucket),
+/// this reduces to plain importance ranking. When several keys cluster in
+/// one nature (typical: 2–3 talent groups in the top of the list), the
+/// penalty pulls in a key from an under-represented nature instead.
+///
+/// 0.5 was tuned by replaying ~10 sample matchups: aggressive enough to
+/// swap an under-tier tactical/situational key in over a same-nature
+/// duplicate when the magnitudes are within ~2x; gentle enough that a
+/// dominant nature (e.g. blowout-tier Roster impact at importance 20+)
+/// keeps multiple slots if it genuinely outranks everything else.
+const DIVERSITY_DECAY = 0.5;
+
+/// When the largest-|SHAP| candidate in a group disagrees with the
+/// group's net direction, look for a concordant alternative whose
+/// |SHAP| is at least `(1 - this)` of the max. If found, prefer the
+/// concordant one as headline.
+///
+/// Why: on close groups where many features have similar |SHAP|, the
+/// "max wins" rule degenerates into picking a noise-driven headline
+/// that often happens to disagree with the group's direction, producing
+/// awkward "(gap of X the other way)" phrasings. When the model isn't
+/// strongly differentiating among features, breaking ties by direction
+/// concordance gives a cleaner narrative without hiding genuine signal:
+/// if one feature really dominates the group's |SHAP| (more than ~33%
+/// larger than the next), the discordant headline still wins and the
+/// "(the other way)" framing fires — flagging that the model's biggest
+/// signal in this group bucks the data narrative.
+const CONCORDANT_HEADLINE_TOLERANCE = 0.25;
+
+/// Pick the headline feature for a key. Default = max |SHAP|. When that
+/// candidate's data direction disagrees with the group's net direction
+/// AND another candidate within `CONCORDANT_HEADLINE_TOLERANCE` of its
+/// magnitude agrees, prefer the concordant one. Flag features (no
+/// directional concept) are eligible as the max-|SHAP| pick but never
+/// swap in as concordant alternatives.
+function pickHeadline(
+  candidates: FeatureContribution[],
+  towardHome: boolean,
+): FeatureContribution {
+  const max = candidates.reduce((best, f) =>
+    Math.abs(f.contribution) > Math.abs(best.contribution) ? f : best,
+  );
+  const maxSign = homeAdvantageSign(max.name, max.value);
+  // maxSign === 0 ⇒ flag feature; keep it (formatHeadlineGap special-cases it).
+  if (maxSign === 0 || (maxSign > 0) === towardHome) return max;
+
+  const threshold = (1 - CONCORDANT_HEADLINE_TOLERANCE) * Math.abs(max.contribution);
+  let bestConcordant: FeatureContribution | null = null;
+  for (const f of candidates) {
+    if (Math.abs(f.contribution) < threshold) continue;
+    const sign = homeAdvantageSign(f.name, f.value);
+    if (sign === 0) continue; // flags don't count as concordant alternatives
+    if ((sign > 0) !== towardHome) continue;
+    if (
+      bestConcordant === null ||
+      Math.abs(f.contribution) > Math.abs(bestConcordant.contribution)
+    ) {
+      bestConcordant = f;
+    }
+  }
+  return bestConcordant ?? max;
+}
+
+function selectTopKeys(allKeys: Key[], maxKeys = 4): Key[] {
+  const remaining = [...allKeys];
+  const picked: Key[] = [];
+  const natureCount: Partial<Record<Nature, number>> = {};
+
+  while (picked.length < maxKeys && remaining.length > 0) {
+    let bestIdx = -1;
+    let bestScore = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const nature: Nature = GROUP_NATURE[remaining[i].group] ?? 'other';
+      const seen = natureCount[nature] ?? 0;
+      const score = remaining[i].importance * Math.pow(DIVERSITY_DECAY, seen);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx < 0) break;
+    const [pick] = remaining.splice(bestIdx, 1);
+    picked.push(pick);
+    const nature: Nature = GROUP_NATURE[pick.group] ?? 'other';
+    natureCount[nature] = (natureCount[nature] ?? 0) + 1;
+  }
+
+  // Display order: by raw importance desc — keep the strongest key
+  // visually first regardless of selection order.
+  return picked.sort((a, b) => b.importance - a.importance);
 }
 
 /// Build the keys panel from the per-feature contributions.
 ///
-/// Direction (which team has the edge) comes from the **data**: each
-/// feature's diff sign, mapped through `homeAdvantageSign` to handle
-/// "lower is better" stats and 0/1 flags. Importance (how much it
-/// matters) comes from the **model**: sum of |contribution| across the
-/// group's features. This split avoids the sign artifacts that pure
-/// ablation produces — a feature whose raw value clearly favors team A
-/// can still get a contribution toward team B due to tree interactions,
-/// and we don't want the keys to mislabel the leader because of that.
-/// Proper TreeSHAP would resolve this without the workaround; queued in
-/// ROADMAP §4b.
+/// **Direction** (which team has the edge) comes from the **data**: each
+/// feature's diff sign mapped through `homeAdvantageSign` to handle
+/// "lower is better" stats and 0/1 flags. **Importance** (how much it
+/// matters) comes from the **model** as `|SHAP contribution|`. The split
+/// keeps the panel a stats-narrative — the named leader is always the
+/// team with the better underlying stat, even when the model has learned
+/// a non-monotonic interaction that flips the SHAP sign for that feature
+/// (e.g. Purdue vs Michigan's opp eFG%, where Michigan's data edge of
+/// 0.079 ought to be credited to Michigan even if SHAP attributes that
+/// feature toward Purdue). TreeSHAP gives us cleaner additive importances
+/// than ablation, but it doesn't replace the data-direction lookup.
 function generateKeys(result: PredictionResult): Key[] {
-  // Aggregate per-group: signed importance (data direction × model
-  // magnitude) for who-wins, raw |contribution| sum for how-much-matters.
+  // Aggregate per-group: data direction × |SHAP| → signed importance for
+  // who-leads, |SHAP| → magnitude for how-much-matters.
   const groupAgg = new Map<
     string,
     {
@@ -685,21 +833,27 @@ function generateKeys(result: PredictionResult): Key[] {
 
   const keys: Key[] = [];
   for (const [group, agg] of groupAgg.entries()) {
-    const tier = tierFor(agg.importance);
+    const tier = tierFor(group, agg.importance);
     if (!tier) continue;
-    // signedImportance sign tells which team the group's data leans toward,
-    // weighted by how much the model cares about each feature. A pure
-    // 0 (no team has any edge) is rare but possible — fall back to model
-    // contribution sign for tie-breaking.
+    // Filter headline candidates to non-tied features. If every feature
+    // in this group is essentially tied (|value| < TIED_VALUE_THRESHOLD),
+    // we have no concrete stat to point at — drop the group rather than
+    // confidently announce an edge headlined by a tied feature. Flag
+    // features (venue, conference) are always eligible: their narrative
+    // phrasing in `formatHeadlineGap` doesn't depend on having a
+    // meaningful diff value.
+    const candidates = agg.features.filter(
+      (f) => FLAG_FEATURES.has(f.name) || Math.abs(f.value) >= TIED_VALUE_THRESHOLD,
+    );
+    if (candidates.length === 0) continue;
+    // signedImportance sign tells which team the group's data leans
+    // toward, weighted by how much the model cares about each feature.
+    // A pure 0 (no team has any edge) is rare — fall back to the model's
+    // signed contribution sum for tie-breaking.
     const towardHome = agg.signedImportance !== 0
       ? agg.signedImportance > 0
       : agg.features.reduce((s, f) => s + f.contribution, 0) > 0;
-    // Headline = the single feature in this group with the largest
-    // |contribution|. The model's pick — keeps the explanation consistent
-    // with what drove the prediction.
-    const headline = agg.features.reduce((best, f) =>
-      Math.abs(f.contribution) > Math.abs(best.contribution) ? f : best,
-    );
+    const headline = pickHeadline(candidates, towardHome);
     keys.push({
       group,
       team: towardHome ? result.home_team : result.away_team,
@@ -709,8 +863,7 @@ function generateKeys(result: PredictionResult): Key[] {
       headline,
     });
   }
-  keys.sort((a, b) => b.importance - a.importance);
-  return keys.slice(0, 4);
+  return selectTopKeys(keys, 4);
 }
 
 function KeysToGame({ result }: { result: PredictionResult }) {
@@ -741,10 +894,11 @@ function KeysToGame({ result }: { result: PredictionResult }) {
 
 function KeyItem({ k }: { k: Key }) {
   const teamColor = k.towardHome ? TEAM_1_COLOR : TEAM_2_COLOR;
-  // Phrase the headline gap from the leading team's perspective, so the
-  // sign of the displayed gap always matches the team named above. Most
-  // features: positive value = home edge. Inverted features (TOV-related)
-  // are flipped via `homeAdvantageSign`.
+  // Phrase the headline gap from the leading team's perspective, using
+  // the data direction (`homeAdvantageSign`) so the named team is always
+  // the side with the better underlying stat — never the side the model
+  // happened to credit a feature toward (those can disagree on
+  // non-monotonic features).
   const headlineGapText = k.headline
     ? formatHeadlineGap(k.headline, k.team, k.towardHome)
     : null;
@@ -786,16 +940,18 @@ function KeyItem({ k }: { k: Key }) {
 ///   - "(home court factor)" / "(neutral site)" / "(conference matchup)" /
 ///     "(non-conference matchup)" for the two flag features
 ///   - "(teams essentially tied on this stat)" when the rounded value is
-///     near zero
+///     near zero (unreachable in practice — `generateKeys` filters tied
+///     candidates upstream — kept as a defensive fallback)
 ///   - "(gap of 7.40 in Duke's favor)" — the common case
 ///   - "(gap of 0.10 the other way — outweighed by other Duke edges in
-///     this group)" when the headline feature's data direction conflicts
-///     with the group-level signed importance (rare, but possible when
-///     several features in the same group disagree)
-///
-/// We avoid showing the model's signed contribution here — that's where
-/// ablation artifacts produced the original bug ("Purdue +0.10 worth -0.9
-/// on the spread" was nonsensical to readers).
+///     this group)" when the headline feature's *data direction*
+///     (`homeAdvantageSign`) disagrees with the group's net direction.
+///     Rare under the current selection rule: `pickHeadline` already
+///     prefers a concordant alternative when one is within
+///     `CONCORDANT_HEADLINE_TOLERANCE` of the max |SHAP|, so this branch
+///     only fires when one feature genuinely dominates the group's
+///     |SHAP| but bucks the data narrative (e.g. Purdue vs Michigan
+///     opp eFG%).
 function formatHeadlineGap(
   headline: FeatureContribution,
   team: string,
@@ -813,21 +969,21 @@ function formatHeadlineGap(
   }
 
   // Continuous feature with a value at or near zero — teams are essentially
-  // tied, so don't pretend there's a gap. Skip the parenthetical entirely.
-  if (Math.abs(headline.value) < 0.005) {
+  // tied, so don't pretend there's a gap. (Should be unreachable now that
+  // `generateKeys` filters tied features out as headline candidates, but
+  // keep the fallback so the function stays self-contained.)
+  if (Math.abs(headline.value) < TIED_VALUE_THRESHOLD) {
     return '(teams essentially tied on this stat)';
   }
 
-  const advantageSign = homeAdvantageSign(headline.name, headline.value);
   // Show absolute gap; the team name above already encodes the direction.
   const absVal = Math.abs(headline.value);
   const gap =
     absVal >= 10 ? absVal.toFixed(1) : absVal >= 1 ? absVal.toFixed(2) : absVal.toFixed(3);
-  // Sanity check: did the diff actually favor the leading team? In
-  // virtually every case it should (we computed `team` from the
-  // group-level signed importance, which weights this very feature). If
-  // not, soften the phrasing — it means another feature in the same
-  // group dominated the group's direction.
+  // Direction comes from the data via `homeAdvantageSign`. If that
+  // disagrees with the group's net direction (one feature fighting its
+  // group), soften the phrasing.
+  const advantageSign = homeAdvantageSign(headline.name, headline.value);
   const matches = (advantageSign > 0) === towardHome;
   if (matches) {
     return `(gap of ${gap} in ${team}'s favor)`;
