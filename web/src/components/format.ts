@@ -25,30 +25,3 @@ export function shortDate(iso: string): string {
   if (!m) return iso;
   return `${MONTH_ABBREV[Number(m[2]) - 1]} ${Number(m[3])}`;
 }
-
-/// Format a projected matchup score as `Winner W — Loser L`, with the
-/// winner first regardless of which side hosted. Used by Predict.tsx,
-/// ScoreTicker upcoming tiles, and TeamDetail Projected column so all
-/// three surfaces read identically.
-///
-/// Caveat: totals model has backtest MAE ~13.6 (vs ~8.2 for margin), so
-/// these are KenPom-style approximations, not Vegas-precision picks.
-export function formatProjectedScore(
-  homeScore: number,
-  awayScore: number,
-  homeName: string,
-  awayName: string,
-): string {
-  if (homeScore >= awayScore) {
-    return `${homeName} ${homeScore} — ${awayName} ${awayScore}`;
-  }
-  return `${awayName} ${awayScore} — ${homeName} ${homeScore}`;
-}
-
-/// Compact form of `formatProjectedScore` for tight cells (TeamDetail
-/// Projected column). Always orders by team perspective: returns
-/// `team-team_score, opp-opp_score` separated by an em-dash. Caller's
-/// own perspective (the team whose schedule this is) goes first.
-export function formatScorePair(teamScore: number, oppScore: number): string {
-  return `${teamScore}–${oppScore}`;
-}

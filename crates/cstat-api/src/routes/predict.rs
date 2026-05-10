@@ -750,8 +750,11 @@ mod tests {
     #[test]
     fn neutral_symmetry_combination_is_exact() {
         // Sanity-check the math: the symmetric averaging must guarantee
-        // margin(A,B) + margin(B,A) == 0 and p(A,B) + p(B,A) == 1.0
-        // for any pair of forward/reverse Prediction values.
+        // margin(A,B) + margin(B,A) == 0, p(A,B) + p(B,A) == 1.0, and
+        // total(A,B) == total(B,A) for any pair of forward/reverse
+        // Prediction values. Margin/win-prob average antisymmetrically;
+        // totals average additively (the same game's combined points
+        // shouldn't change based on which side we labelled "home").
         let fwd = Prediction {
             predicted_margin: 7.3,
             home_win_probability: 0.78,
@@ -765,15 +768,21 @@ mod tests {
 
         let m_ab = 0.5 * (fwd.predicted_margin - rev.predicted_margin);
         let p_ab = 0.5 * (fwd.home_win_probability + (1.0 - rev.home_win_probability));
+        let t_ab = 0.5 * (fwd.predicted_total + rev.predicted_total);
 
         // Now reversed call: forward becomes the original reverse, and vice versa.
         let m_ba = 0.5 * (rev.predicted_margin - fwd.predicted_margin);
         let p_ba = 0.5 * (rev.home_win_probability + (1.0 - fwd.home_win_probability));
+        let t_ba = 0.5 * (rev.predicted_total + fwd.predicted_total);
 
         assert!((m_ab + m_ba).abs() < 1e-9, "margins should sum to 0");
         assert!(
             (p_ab + p_ba - 1.0).abs() < 1e-9,
             "win probs should sum to 1"
+        );
+        assert!(
+            (t_ab - t_ba).abs() < 1e-9,
+            "totals should be equal under team swap"
         );
     }
 }

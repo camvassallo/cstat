@@ -59,6 +59,11 @@ __pycache__/
 # for review locally, never meant to ship.
 pr.diff
 
+# Railway / deploy runtime logs downloaded for debugging. Refreshed each
+# time the container restarts, so committing them creates noisy diffs.
+build.log
+deploy.log
+
 # Claude Code runtime state — machine-local, not part of the project.
 /.claude/scheduled_tasks.lock
 
