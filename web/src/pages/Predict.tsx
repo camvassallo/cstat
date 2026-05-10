@@ -646,11 +646,36 @@ const TIER_BADGE: Record<Key['tier'], string> = {
   decisive: 'bg-rose-900/50 text-rose-200 ring-1 ring-rose-500/60',
 };
 
-function tierFor(mag: number): Key['tier'] | null {
-  if (mag < 0.3) return null;
-  if (mag < 0.6) return 'slight';
-  if (mag < 1.2) return 'clear';
-  if (mag < 2.0) return 'meaningful';
+/// Per-group tier thresholds [hidden→slight, slight→clear, clear→meaningful,
+/// meaningful→decisive]. Base thresholds [0.3, 0.6, 1.2, 2.0] were
+/// calibrated against typical |SHAP|-sums of ~0.3–1.0, the regime most
+/// groups actually live in.
+///
+/// **Roster impact** (the GBPM family — w_gbpm, w_ogbpm, w_dgbpm) is
+/// special: the model leans on it heavily and its |SHAP|-sums routinely
+/// land 5–15. Under base thresholds it would tier `decisive` on
+/// virtually every matchup and drown out the rest of the keys. Custom
+/// thresholds spread the tier ladder across its actual distribution,
+/// reserving `decisive` for true talent blowouts.
+///
+/// Calibration data: 80-matchup random-pair sample on 2026 (neutral).
+/// Roster impact distribution: p25=3.72, median=8.15, p75=13.97,
+/// p90=24.05, max=26.6. Custom thresholds map roughly to:
+///   `slight` ≈ below-p25 (close matchups where roster impact is small)
+///   `clear` ≈ p25–p50 (typical talent gap)
+///   `meaningful` ≈ p50–p75 (above-typical, real gap)
+///   `decisive` ≈ p75+ (blowout-level talent gap)
+const TIER_THRESHOLDS: Record<string, readonly [number, number, number, number]> = {
+  default: [0.3, 0.6, 1.2, 2.0],
+  'Roster impact': [1.0, 4.0, 8.0, 14.0],
+};
+
+function tierFor(group: string, mag: number): Key['tier'] | null {
+  const [t1, t2, t3, t4] = TIER_THRESHOLDS[group] ?? TIER_THRESHOLDS.default;
+  if (mag < t1) return null;
+  if (mag < t2) return 'slight';
+  if (mag < t3) return 'clear';
+  if (mag < t4) return 'meaningful';
   return 'decisive';
 }
 
@@ -694,7 +719,7 @@ function generateKeys(result: PredictionResult): Key[] {
 
   const keys: Key[] = [];
   for (const [group, agg] of groupAgg.entries()) {
-    const tier = tierFor(agg.importance);
+    const tier = tierFor(group, agg.importance);
     if (!tier) continue;
     // Headline = the largest-|SHAP| feature with a non-tied stat. If
     // every feature in this group is essentially tied (|value| <
