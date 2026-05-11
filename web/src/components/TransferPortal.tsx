@@ -283,9 +283,13 @@ export default function TransferPortal({ year }: Props) {
 
   const filtered = useMemo(() => {
     if (!rows) return null;
-    // Hide unranked rows (no CamPom). Players without prior-season cstat
-    // data don't carry a comparable rank, so they'd just clutter the bottom.
-    const ranked = rows.filter((t) => t.rank_cstat != null);
+    // Rankings page is the 247-vs-CamPom value-delta view, so we need both
+    // sides of the comparison. Unranked-by-247 portal entries (the long tail
+    // the DB endpoint serves for the 2027-projection roster aggregator) and
+    // rows without CamPom both drop out here.
+    const ranked = rows.filter(
+      (t) => t.rank_cstat != null && t.rank_247 != null,
+    );
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
     // Also match the resolved full team name (e.g. searching "Jayhawks"
@@ -306,7 +310,9 @@ export default function TransferPortal({ year }: Props) {
     );
   }
 
-  const ranked = rows?.filter((r) => r.rank_cstat != null).length ?? 0;
+  const ranked =
+    rows?.filter((r) => r.rank_cstat != null && r.rank_247 != null).length ??
+    0;
   const total = rows?.length ?? 0;
   const hidden = total - ranked;
 
@@ -322,7 +328,7 @@ export default function TransferPortal({ year }: Props) {
         />
         <span className="text-xs text-gray-500">
           {ranked} ranked transfers
-          {hidden > 0 && ` · ${hidden} hidden (no CamPom)`} ·{' '}
+          {hidden > 0 && ` · ${hidden} hidden (unranked by 247 or no CamPom)`} ·{' '}
           <a
             href={`https://247sports.com/season/${year}-basketball/transferportaltop/`}
             target="_blank"
