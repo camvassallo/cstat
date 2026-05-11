@@ -5,6 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use cstat_core::team_name_match::{team_match_score, team_matches};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -324,64 +325,4 @@ fn normalize(name: &str) -> String {
         .filter(|w| !matches!(*w, "jr" | "sr" | "ii" | "iii" | "iv" | "v" | "lll"))
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// 247 short name → cstat team-name prefix that should appear at the start of
-/// `teams.name`. Listed only for cases the bare prefix branch can't catch
-/// (acronyms like "UConn" don't prefix "Connecticut Huskies"), or to nudge
-/// ambiguous prefix matches toward the canonical school (bare "Miami" should
-/// resolve to Miami (Fla.), not Miami (Ohio)). Add entries here as we spot
-/// misses.
-const TEAM_ALIASES: &[(&str, &str)] = &[
-    ("uconn", "connecticut"),
-    ("ole miss", "mississippi"),
-    ("usc", "southern california"),
-    ("nc state", "north carolina state"),
-    // Bare "Miami" prefix-matches both Florida and Ohio — anchor it to FL.
-    ("miami", "miami (fla.)"),
-    ("miami (fl)", "miami (fla.)"),
-    ("miami (oh)", "miami (ohio)"),
-];
-
-/// Score how well a cstat team matches a 247 short name. Lower is better;
-/// `None` means no match. Tries the Torvik-style `short_name` first (which
-/// usually matches 247 directly, e.g. "Kansas" == "Kansas") and falls back
-/// to the full NatStat name with alias/prefix logic for legacy edge cases.
-fn team_match_score(db_short: Option<&str>, db_full: &str, short: &str) -> Option<u32> {
-    let short_lc = short.to_lowercase();
-    // 0 = exact short_name match. The common case now that teams.short_name is
-    // populated with Torvik names — "Kansas", "UConn", "Duke" all resolve here.
-    if let Some(s) = db_short
-        && s.to_lowercase() == short_lc
-    {
-        return Some(0);
-    }
-    let db_lc = db_full.to_lowercase();
-    if db_lc == short_lc {
-        return Some(0);
-    }
-    // 1 = alias hit against the full name. Kept for 247-side aliases that
-    // don't equal the short_name (e.g. "miami" → "Miami FL"; "ole miss" →
-    // "Mississippi"; ambiguous bare names like "Miami").
-    for (k, v) in TEAM_ALIASES {
-        if short_lc == *k && (db_lc == *v || db_lc.starts_with(&format!("{v} "))) {
-            return Some(1);
-        }
-    }
-    // 2 = bare prefix match against the full name. Catches the case where
-    // short_name is missing — falls back to old behavior.
-    if db_lc.starts_with(&format!("{short_lc} ")) {
-        return Some(2);
-    }
-    None
-}
-
-/// Boolean wrapper around `team_match_score`, kept for callers that don't
-/// need the score (the player-disambiguation pass). Takes both the Torvik
-/// short_name and the full NatStat name so alias entries that target the
-/// full form (e.g. "nc state" → "north carolina state") still fire.
-fn team_matches(db_short: Option<&str>, db_full: Option<&str>, short_name: &str) -> bool {
-    db_full
-        .map(|full| team_match_score(db_short, full, short_name).is_some())
-        .unwrap_or(false)
 }

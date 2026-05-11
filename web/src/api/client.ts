@@ -403,6 +403,40 @@ export function fetchTransfers(year: number) {
   );
 }
 
+export interface ProjectedTeam {
+  team_id: string;
+  team_name: string;
+  team_full_name: string;
+  /// AdjEM if every declared NBA-draft player withdraws and returns.
+  /// Shrunk 50% toward `baseline_adj_em`.
+  ceiling_adj_em: number | null;
+  /// AdjEM if every declared NBA-draft player is gone.
+  /// Shrunk 50% toward `baseline_adj_em`.
+  floor_adj_em: number | null;
+  /// (ceiling + floor) / 2, or null when the prediction is gated out.
+  midpoint_adj_em: number | null;
+  returning_count: number;
+  arrivals_count: number;
+  uncertain_count: number;
+  departures_count: number;
+  /// True when (returning + arrivals) is below the projection threshold —
+  /// render '—' instead of the prediction columns.
+  too_thin: boolean;
+  /// Team's AdjEM at the end of the base season (= year-1, the
+  /// just-completed season). Used as the shrinkage anchor and the
+  /// reference for the 'Δ vs last' column.
+  baseline_adj_em: number | null;
+}
+
+export function fetchProjections(year: number) {
+  return fetchJson<{
+    year: number;
+    base_season: number;
+    teams: ProjectedTeam[];
+    total: number;
+  }>(`/projections/${year}`);
+}
+
 export interface LeagueAverages {
   avg_ppg: number | null;
   avg_game_score: number | null;

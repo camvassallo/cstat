@@ -109,7 +109,7 @@ pub const QUAL_FILTER_STRING: &str = "games_played >= 5 AND minutes_per_game >= 
 /// `None` as missing (excluded from the minutes-weighted denominator) so
 /// rosters with one player missing a single rate stat don't NaN-poison the
 /// whole feature.
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
 pub struct PlayerRow {
     pub player_id: Uuid,
     /// `minutes_per_game * games_played`. The minutes-weighted aggregator's
