@@ -1,10 +1,19 @@
 //! Roster-only AdjEM model: feature builder + transfer-swap helper.
 //!
-//! Mirrors `training/train_roster_model.py::aggregate_team_season` exactly.
+//! Mirrors `training/train_roster_model.py::aggregate_team_season` for the
+//! production (box-score-only, `include_impact_features=false`) variant.
+//! Two intentional behavioral differences vs the Python aggregator: (1)
+//! missing rate stats are emitted as `0.0` (Python lets LightGBM see `NaN`)
+//! — for qualified players the gp/mpg gate keeps box stats populated, so it
+//! rarely matters, and for archetype shares `0.0` is semantically correct
+//! ("no players in this class"); (2) star tie-break uses an explicit loop
+//! to match pandas' `idxmax` first-occurrence semantics (Rust's
+//! `Iterator::max_by` picks the last tied element).
+//!
 //! The Python script and this module share one contract via
 //! `training/models/roster_model_meta.json` — the loader in `inference.rs`
-//! hard-fails if `player_filter` or `include_impact_features` drift from
-//! what the trained model expects.
+//! hard-fails if `player_filter`, `include_impact_features`, or feature
+//! order drift from what the trained model expects.
 //!
 //! Swap semantics: see `swap_player` — rank-slot MPG. Ranks the incoming
 //! player against the destination roster by CamPom v3 (`cam_v3`), gives
@@ -104,8 +113,9 @@ pub const QUAL_FILTER_STRING: &str = "games_played >= 5 AND minutes_per_game >= 
 pub struct PlayerRow {
     pub player_id: Uuid,
     /// `minutes_per_game * games_played`. The minutes-weighted aggregator's
-    /// weight column — kept as a field rather than recomputed so the swap
-    /// helper can scale it directly without re-deriving from mpg/gp.
+    /// weight column. The rank-slot `swap_player` back-derives games_played
+    /// as `total_min / mpg` (safe because the `mpg >= 5` gate keeps mpg
+    /// strictly positive).
     pub total_min: f64,
     pub mpg: f64,
     pub ppg: Option<f64>,
@@ -248,17 +258,19 @@ pub fn build_roster_features(roster: &[PlayerRow]) -> [f32; ROSTER_NUM_FEATURES]
     };
 
     // Star = top player by minutes (box-score-only variant; the impact-features
-    // variant uses CamPom for the star pick — see Python script). `idxmax` on
-    // ties picks the first occurrence; we do the same.
-    let (star_idx, _) = roster
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            a.total_min
-                .partial_cmp(&b.total_min)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .expect("non-empty roster");
+    // variant uses CamPom for the star pick — see Python script). Match
+    // pandas `idxmax` semantics: on ties, the *first* occurrence wins.
+    // `Iterator::max_by` returns the last maximum (per its spec), which
+    // would silently drift from the trained Python aggregator on ties.
+    let star_idx = {
+        let mut best = 0_usize;
+        for (i, p) in roster.iter().enumerate().skip(1) {
+            if p.total_min > roster[best].total_min {
+                best = i;
+            }
+        }
+        best
+    };
     let star = &roster[star_idx];
 
     let wm = |sel: fn(&PlayerRow) -> Option<f64>| -> f32 {
@@ -332,10 +344,15 @@ pub fn build_roster_features(roster: &[PlayerRow]) -> [f32; ROSTER_NUM_FEATURES]
 /// the post-swap roster look like a real team's rotation, which is the
 /// distribution the model was trained on.
 ///
-/// Total-minute invariant: the set of MPG slots is unchanged (just
-/// reassigned), so `Σ mpg_new = Σ mpg_old` and the level-sensitive
-/// `total_minutes` feature is preserved. `total_min` is recomputed per
-/// player from `new_mpg × old_games_played`.
+/// Minutes-envelope invariant: the set of MPG slots is unchanged (just
+/// reassigned), so `Σ mpg_new = Σ mpg_old`. `total_min` is recomputed per
+/// player from `new_mpg × old_games_played`, which means the model's
+/// level-sensitive `total_minutes` feature is preserved exactly only when
+/// every roster slot has the same games_played; in real data
+/// games_played varies by ~3-5 games across the rotation (injuries,
+/// redshirts), so `Σ total_min` drifts by single-digit percent. The Δ
+/// signal — what this engine actually surfaces — cancels out the drift
+/// since both baseline and swap predictions inherit the same skew.
 ///
 /// Fallback: if `incoming.cam_v3` is `None`, the player slots at the
 /// bottom of the rotation and effectively gets ~0 MPG. Callers should
@@ -579,6 +596,27 @@ mod tests {
         assert!((feats[21] - 22.0).abs() < 1e-3);
         // star_usg is index 23
         assert!((feats[23] - 28.0).abs() < 1e-3);
+    }
+
+    /// On total_min ties, the *first* occurrence wins (matches Python
+    /// pandas `idxmax`). Rust's `Iterator::max_by` returns the last
+    /// element on ties, which would silently drift from the trained
+    /// aggregator. Pin the first-occurrence behavior here.
+    #[test]
+    fn star_breaks_ties_by_first_occurrence() {
+        let mut first = mk(Uuid::new_v4(), 28.0, 30.0, Some("Wizard"));
+        first.ppg = Some(18.0);
+        let mut second = mk(Uuid::new_v4(), 28.0, 30.0, Some("Sorcerer"));
+        second.ppg = Some(22.0);
+        let feats = build_roster_features(&[first, second]);
+        // Both have total_min = 840. Python `idxmax` returns the first
+        // index → first.ppg = 18.0. If we accidentally used Rust max_by,
+        // we'd see second.ppg = 22.0.
+        assert!(
+            (feats[21] - 18.0).abs() < 1e-3,
+            "star_ppg should be first-occurrence's ppg (18.0), got {}",
+            feats[21],
+        );
     }
 
     #[test]

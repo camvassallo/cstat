@@ -1,4 +1,4 @@
-use crate::roster_features::{QUAL_FILTER_STRING, ROSTER_NUM_FEATURES};
+use crate::roster_features::{QUAL_FILTER_STRING, ROSTER_FEATURE_NAMES, ROSTER_NUM_FEATURES};
 use crate::treeshap::{LgbModel, tree_shap};
 use ort::session::Session;
 use std::path::Path;
@@ -667,6 +667,30 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
         return Err(LoadError::RosterMetaMismatch(format!(
             "n_features {n_features} ≠ compiled ROSTER_NUM_FEATURES {ROSTER_NUM_FEATURES}",
         )));
+    }
+
+    // Feature-name order is wire-locked to the ONNX input layout. A test
+    // already pins this, but tests run locally — production boot has to
+    // fail fast too, or a meta-only edit silently mislabels every column
+    // the API serves.
+    let features = meta["features"]
+        .as_array()
+        .ok_or_else(|| LoadError::RosterMetaMismatch("features array missing".into()))?;
+    if features.len() != ROSTER_NUM_FEATURES {
+        return Err(LoadError::RosterMetaMismatch(format!(
+            "features array length {} ≠ ROSTER_NUM_FEATURES {ROSTER_NUM_FEATURES}",
+            features.len(),
+        )));
+    }
+    for (i, (meta_name, expected)) in features.iter().zip(ROSTER_FEATURE_NAMES.iter()).enumerate() {
+        let s = meta_name
+            .as_str()
+            .ok_or_else(|| LoadError::RosterMetaMismatch(format!("features[{i}] not a string")))?;
+        if s != *expected {
+            return Err(LoadError::RosterMetaMismatch(format!(
+                "features[{i}] = {s:?}, ROSTER_FEATURE_NAMES[{i}] = {expected:?}",
+            )));
+        }
     }
 
     Ok(())
