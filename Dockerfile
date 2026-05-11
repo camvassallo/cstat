@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates libssl3 \
     && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --home-dir /app cstat \
- && mkdir -p /app/web /app/training/models \
+ && mkdir -p /app/web /app/training/models /app/data/draft \
  && chown -R cstat:cstat /app
 
 COPY --from=rust-build /artifacts/bin/cstat-api  /usr/local/bin/cstat-api
@@ -56,6 +56,12 @@ COPY training/models/margin_model.onnx \
      training/models/model_meta.json \
      training/models/roster_model_meta.json \
      /app/training/models/
+
+# Draft early-entrants + big-board JSONs. The projections route reads
+# `data/draft/{year}_early_entrants.json` at request time to drive the
+# floor/ceiling band — without these, every team's uncertain cohort is
+# empty and the band collapses to a single number.
+COPY data/draft/ /app/data/draft/
 
 USER cstat
 EXPOSE 8080

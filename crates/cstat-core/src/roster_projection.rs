@@ -211,13 +211,14 @@ struct TeamRow {
     short_name: Option<String>,
 }
 
-/// One row from `transfers` for the base year. We carry the resolved
-/// `cstat_player_id` (per the ingest resolver) plus the raw 247 short
-/// names so we can resolve source/destination to team_ids.
+/// One row from `transfers` for the base year. We only need the
+/// resolved `cstat_player_id` (per the ingest resolver) and the raw
+/// 247 destination name; the source team is back-derived from the
+/// player's PSS row, and the audit-trail name comes from the same
+/// `roster_rows` query that built the rest of the projection.
 #[derive(sqlx::FromRow)]
 struct TransferLink {
     cstat_player_id: Option<Uuid>,
-    full_name: String,
     destination_institution: Option<String>,
 }
 
@@ -339,7 +340,7 @@ pub async fn compose_all_projections(
 
     let transfers: Vec<TransferLink> = sqlx::query_as::<_, TransferLink>(
         r#"
-        SELECT cstat_player_id, full_name, destination_institution
+        SELECT cstat_player_id, destination_institution
         FROM transfers WHERE year = $1
         "#,
     )
@@ -348,22 +349,23 @@ pub async fn compose_all_projections(
     .await?;
 
     // --- Bucket the inputs by team_id. ----------------------------------
-    // Roster + audit metadata per team.
+    // Roster + audit metadata per team. The String alongside RosterRow
+    // is a clone of the player's cstat name — used downstream for
+    // DepartureReason audit messages without re-borrowing the row.
     let mut roster_by_team: HashMap<Uuid, Vec<(RosterRow, String)>> = HashMap::new();
-    // For draft-entrant name matching.
+    // Normalized-name → [(player_id, team_id)] for draft-entrant matching.
     let mut players_by_name: HashMap<String, Vec<(Uuid, Uuid)>> = HashMap::new();
-    // For senior + outbound detection lookups.
-    let mut player_meta: HashMap<Uuid, (String, Uuid, Option<String>)> = HashMap::new();
+    // player_id → source_team_id for outbound transfer attribution.
+    let mut player_team: HashMap<Uuid, Uuid> = HashMap::new();
     for row in roster_rows {
         let pid = row.player_id;
         let name = row.player_name.clone();
         let team_id = row.team_id;
-        let class_year = row.class_year.clone();
         players_by_name
             .entry(normalize_player_name(&name))
             .or_default()
             .push((pid, team_id));
-        player_meta.insert(pid, (name.clone(), team_id, class_year));
+        player_team.insert(pid, team_id);
         roster_by_team.entry(team_id).or_default().push((row, name));
     }
 
@@ -372,22 +374,22 @@ pub async fn compose_all_projections(
     // team is gaining one). The route's existing ingestion populated
     // `cstat_player_id` per row; we use it both as the "outbound
     // player to remove from returning" identity AND as the PlayerRow
-    // key to clone into the destination's `arrivals`.
-    let mut outbound_by_team: HashMap<Uuid, Vec<(Uuid, String, Option<String>)>> = HashMap::new();
+    // key to clone into the destination's `arrivals`. Audit display
+    // names come from `roster_by_team` (cstat-canonical), not from
+    // the 247-side string on the transfer row.
+    let mut outbound_by_team: HashMap<Uuid, Vec<(Uuid, Option<String>)>> = HashMap::new();
     let mut incoming_by_team: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for t in &transfers {
         let Some(pid) = t.cstat_player_id else {
             continue;
         };
-        let (_, source_team_id, _) = match player_meta.get(&pid) {
-            Some(m) => m.clone(),
-            None => continue, // resolved cstat_player_id but the player no longer in our roster fetch
+        let Some(&source_team_id) = player_team.get(&pid) else {
+            continue; // resolved cstat_player_id but the player no longer in our roster fetch
         };
-        outbound_by_team.entry(source_team_id).or_default().push((
-            pid,
-            t.full_name.clone(),
-            t.destination_institution.clone(),
-        ));
+        outbound_by_team
+            .entry(source_team_id)
+            .or_default()
+            .push((pid, t.destination_institution.clone()));
 
         if let Some(dest_str) = t.destination_institution.as_deref()
             && let Some(dest_team_id) = resolve_team_id(&teams, dest_str)
@@ -439,7 +441,7 @@ pub async fn compose_all_projections(
         };
         let outbound_pids: HashSet<Uuid> = outbound_by_team
             .get(&team.id)
-            .map(|v| v.iter().map(|(p, _, _)| *p).collect())
+            .map(|v| v.iter().map(|(p, _)| *p).collect())
             .unwrap_or_default();
 
         let mut returning: Vec<PlayerRow> = Vec::new();
@@ -465,8 +467,8 @@ pub async fn compose_all_projections(
             if outbound_pids.contains(&pid) {
                 let dest = outbound_by_team.get(&team.id).and_then(|v| {
                     v.iter()
-                        .find(|(p, _, _)| *p == pid)
-                        .and_then(|(_, _, d)| d.clone())
+                        .find(|(p, _)| *p == pid)
+                        .and_then(|(_, d)| d.clone())
                 });
                 departures.push(DepartureReason::Transferred {
                     player_id: pid,
