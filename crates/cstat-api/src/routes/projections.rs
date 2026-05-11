@@ -10,6 +10,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use cstat_core::inference::Predictor;
 use cstat_core::roster_features::build_roster_features;
 use cstat_core::roster_projection::{
     DraftScenario, ProjectedRoster, compose_all_projections, load_draft_entrants,
@@ -196,7 +197,7 @@ async fn projection_list(
 /// whole response.
 fn predict_team(
     p: &ProjectedRoster,
-    predictor: &cstat_core::inference::Predictor,
+    predictor: &Predictor,
     baseline: Option<f32>,
 ) -> Option<ProjectedTeam> {
     let qualifying = p.returning.len() + p.arrivals.len();
@@ -285,4 +286,35 @@ async fn fetch_baseline_adj_em(
         .into_iter()
         .map(|r| (r.team_id, r.adj_efficiency_margin as f32))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shrink_is_50_50_midpoint_with_baseline() {
+        // Model says +30, last year was +25 → display +27.5.
+        let v = shrink(30.0, Some(25.0));
+        assert!((v - 27.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn shrink_passes_through_when_baseline_missing() {
+        // No baseline (new D-I program) → raw model output unchanged.
+        let v = shrink(12.3, None);
+        assert!((v - 12.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn shrink_preserves_negative_spread() {
+        // Floor > Ceiling at the raw model layer (declared cohort is a
+        // net drag); the shrinkage halves the spread but keeps the sign.
+        let f = shrink(50.0, Some(25.0)); // 37.5
+        let c = shrink(20.0, Some(25.0)); // 22.5
+        assert!(c < f, "negative-spread anomaly should survive shrinkage");
+        let raw_spread = 20.0_f32 - 50.0; // -30
+        let shrunk_spread = c - f; // -15
+        assert!((shrunk_spread - raw_spread / 2.0).abs() < 1e-5);
+    }
 }

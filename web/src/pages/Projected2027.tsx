@@ -134,7 +134,9 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
         const baseline = p.data?.baseline_adj_em;
         if (p.value == null || baseline == null) return chip;
         return (
-          <span title={`Last year (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}) shrunk 50% toward this season's projection`}>
+          <span
+            title={`Halfway between the model's projected roster output and last year's actual AdjEM (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)})`}
+          >
             {chip}
           </span>
         );
