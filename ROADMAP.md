@@ -394,9 +394,120 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 
 ### 5b: Roster Composition & Transfer Portal Sandbox
 - [x] **Transfer Portal v1 — 247 list × CamPom value delta**: scraped 247Sports' 2026 portal list to `data/transfers/2026.json` (embedded into the binary at compile time via `include_str!` so Railway deploys don't need a `data/` mount). New `GET /api/transfers/{year}` endpoint (`crates/cstat-api/src/routes/transfers.rs`) joins the 247 list to cstat players by normalized name + previous team and decorates each row with `player_id`, primary/secondary archetype, CamPom score + percentile, MPG, GP, and resolved `previous_team_id` / `next_team_id` for deep-linking. `TransferPortal.tsx` renders the AG Grid view with a `rank_delta = rank_247 − rank_cstat` "value" column (positive = CamPom values the player higher than 247 does), tier-colored CamPom chip, archetype chip, and team links to both old and new schools. Surfaced as a tab on `Players.tsx`. This is the foothold for the rest of 5b — same data plumbing will feed projected-impact rankings and the what-if sandbox.
+- [ ] **DB-backed transfers ingest pipeline** *(prereq for "Projected impact" below)*. The portal is permanent in college basketball post-2021 NCAA rule change, so treating each year as a committed JSON file scales poorly: PR diff churn on every refresh, full Cargo re-link on data changes, binary grows linearly with seasons, no incremental refresh, no SQL joins to cstat `players`. Move to a `transfers` table + nightly ingest, mirroring the NatStat / Torvik pattern.
+
+  **Bootstrap data**: a one-shot full fetch was performed 2026-05-10 → `data/transfers/2026_raw.json` (5.6 MB, 2,620 players across 105 pages, zero failures, matches the API's `expected_count` exactly). Used as the seed for the first DB load and as a reference snapshot; can be deleted (or gitignored) after the ingest path is verified.
+
+  **Status enum confirmed from the full fetch** (3 values, not 2): `Entered` (1,517), `Committed` (1,081), `Withdrawn` (22). Eligibility is a separate enum: `Immediate` (2,570), `Withdrawn` (46), `PendingAppeal` (3), `TBD` (1). `institutionStatus` is `HS` / `T`. Multi-destination edge case: 4 of 2,620 rows have 2 destinations (likely crystal-ball predictions); 2,164 have 1; 452 have 0 (uncommitted).
+
+  **Migration** — shipped as `migrations/019_transfers.sql`:
+  - One row per `(year, tfs_key)`. `tfs_key` is 247's stable player ID (`player.key`).
+  - **Enums stored as `TEXT` + `CHECK` constraints**, not native PostgreSQL `ENUM`. Reason: the vocab belongs to 247; native `ENUM` requires `ALTER TYPE ADD VALUE` + deploy when they add a state. CHECK lets us widen the allowed set with a one-line migration. SQLx still gets Rust-side type safety via a manual `#[derive(sqlx::Type)] enum`.
+  - **Source** (always exactly one school) and **primary destination** (NULL when uncommitted; for multi-destination rows, pick the one with `transferred = true`, else highest `percentage`) are flattened into top-level columns.
+  - **`raw_player JSONB`** preserves the full API response: the full `destination[]` array (for the 4 multi-commit cases), all image asset variants, and any field 247 adds in the future without requiring a re-fetch.
+  - Generated `full_name` column (STORED) + `lower(full_name)` index for the join-to-cstat surface.
+  - Indexes on `(year, rank)`, `(year, status)`, `(year, source_institution_key)`, `(year, destination_institution_key)`, `(year, last_update_date DESC)`.
+  - `cstat_player_id UUID REFERENCES players(id)` resolved post-ingest via the same name-normalization helper `scripts/parse_247_transfer_html.py` uses; NULL for un-matched rows (walk-ons, mid-majors who never appeared in cstat).
+
+  **Ingest module sketch** — `crates/cstat-ingest/src/clients/tfs.rs` (new client) + `crates/cstat-ingest/src/ingest/transfers.rs` (new module):
+  ```rust
+  // clients/tfs.rs — mirrors NatStatClient ergonomics: token bucket + cache-friendly.
+  pub struct TfsClient {
+      http: reqwest::Client,
+      jwt: String,                       // from TFS_247_JWT env var
+      rate_limiter: TokenBucket,         // ~1 req/sec, configurable
+  }
+  impl TfsClient {
+      pub fn from_env() -> Result<Self, TfsError> { /* read JWT, build polite UA */ }
+      pub async fn fetch_transfers_page(
+          &self, year: i32, page: u32, page_size: u32,
+      ) -> Result<TransfersPage, TfsError> { /* GET ipa.247sports.com/rdb/v1/transfers/ */ }
+  }
+
+  // ingest/transfers.rs
+  pub async fn ingest_transfers(
+      client: &TfsClient, pool: &PgPool, year: i32,
+      incremental: bool,                 // skip pages whose lastUpdated <= last cursor
+  ) -> Result<TransferIngestReport, TfsError> {
+      let first = client.fetch_transfers_page(year, 1, 25).await?;
+      let total_pages = first.pagination.page_count;
+      let cursor = if incremental { db::last_update_cursor(pool, year).await? } else { None };
+
+      let mut upserts = 0u64;
+      for page_num in 1..=total_pages {
+          let page = if page_num == 1 { first.clone() } else {
+              client.fetch_transfers_page(year, page_num, 25).await?
+          };
+          // Bail early: if all players on this page predate our cursor, we're done.
+          if incremental && page.players.iter().all(|p| p.player.last_update_date <= cursor) {
+              break;
+          }
+          for entry in &page.players {
+              upserts += upsert_transfer(&entry.player, pool, year).await? as u64;
+          }
+      }
+      Ok(TransferIngestReport { upserts, total_pages, /* … */ })
+  }
+
+  async fn upsert_transfer(p: &TfsPlayer, pool: &PgPool, year: i32) -> Result<bool, TfsError> {
+      // Pick primary destination: transferred=true wins; else highest percentage; else first.
+      let primary_dest = p.transfer.destination.iter()
+          .find(|d| d.transferred)
+          .or_else(|| p.transfer.destination.iter().max_by_key(|d| d.percentage))
+          .or_else(|| p.transfer.destination.first());
+
+      sqlx::query(
+          "INSERT INTO transfers (year, tfs_key, first_name, last_name, /* … */, raw_player)
+           VALUES ($1, $2, $3, $4, /* … */, $N)
+           ON CONFLICT (year, tfs_key) DO UPDATE SET
+               status = EXCLUDED.status,
+               rank = EXCLUDED.rank,
+               /* refresh all fields except id/fetched_at/cstat_player_id */
+               last_update_date = EXCLUDED.last_update_date,
+               raw_player = EXCLUDED.raw_player"
+      ).bind(year).bind(p.key) /* … */.execute(pool).await?;
+      Ok(true)
+  }
+  ```
+
+  **CLI subcommand** — wire in `crates/cstat-ingest/src/bin/ingest.rs`:
+  ```rust
+  /// Ingest the 247Sports transfer portal for a given class year.
+  Transfers {
+      #[arg(short, long, default_value_t = current_portal_class_year())]
+      year: i32,
+      /// Skip pages whose lastUpdated is older than our cursor (default: full refresh).
+      #[arg(long)]
+      incremental: bool,
+      /// Resolve cstat_player_id joins after upsert.
+      #[arg(long, default_value_t = true)]
+      resolve_players: bool,
+  }
+  // …
+  Commands::Transfers { year, incremental, resolve_players } => {
+      let tfs = TfsClient::from_env()?;
+      let report = ingest::transfers::ingest_transfers(&tfs, &db.pool, year, incremental).await?;
+      println!("transfers: {} upserted across {} pages", report.upserts, report.total_pages);
+      if resolve_players {
+          let resolved = ingest::transfers::resolve_cstat_joins(&db.pool, year).await?;
+          println!("cstat_player_id resolved on {} rows", resolved);
+      }
+  }
+  ```
+
+  **Route migration** (`crates/cstat-api/src/routes/transfers.rs`): swap `include_str!`/`serde_json::from_str` for a `sqlx::query_as` against the new table. Response shape stays the same so the frontend is untouched; the route gains the option of serving the richer fields (`eligibility_type`, `transfer_date`, `rank_trend`) when the frontend wants them.
+
+  **Migration path**:
+  1. Run `019_transfers.sql` against local DB.
+  2. Seed: write a one-shot `cstat-ingest transfers --year 2026 --bootstrap-from data/transfers/2026_raw.json` flag that loads the local snapshot without hitting the API (useful for dev + reproducible CI).
+  3. Run the live ingest (`--year 2026` no bootstrap) to verify network path + JWT handling.
+  4. Switch the route to read from DB; smoke-test the frontend page.
+  5. Apply on prod, then delete `data/transfers/{year}.json` + the embedded `include_str!`.
+
+  **Future** *(out of scope for this PR but worth knowing)*: same DB-backing applies cleanly to the draft tables (`draft_early_entrants`, `draft_big_board`) once those have a regular refresh cadence rather than the current TSV-paste-once flow.
 - [ ] **Projected impact at destination (Δteam rating)**: replace the raw 247 vs CamPom delta with a destination-aware projection. Two framings, sharing one projection engine:
   - **Per-player Δ (current-cycle view)**: for each portal player with a committed `next_team`, recompute the destination's roster aggregates (minutes redistribution, archetype mix) with the player added; predict the new team rating via the existing model and surface ΔAdjEM. Falls back to "uncommitted" for `next_team = null`. Surfaces as a new column on the existing `TransferPortal` grid.
-  - **Per-team 2027 projection (forward-looking view)**: expand the existing `data/transfers/2026.json` (which already covers the spring-2026 portal cycle, by file-naming convention — see below) from its current ~247-entry headline list to the full portal so we can project ratings for the upcoming 2026-27 college season (cstat-season 2027). **Naming convention nuance**: the projection year (`2027`) uses cstat-season end-year, but the *source file* year matches the transfer-class year (= the spring calendar year the player enters the portal). So `data/transfers/2026.json` = spring-2026 portal cycle = moves into cstat-season 2027. The two file naming conventions live side-by-side on purpose because they match the upstream sources (247 and srating both use class year). **Primary scrape path — 247Sports API**: smoke-tested 2026-05-10 and confirmed to expose the full portal at `GET https://ipa.247sports.com/rdb/v1/transfers/?listType=1&page=N&pageSize=25&param1=college&param2=transfer-portal&sport=basketball&sportKey=2&year=2026` — returns `{lastUpdated, pagination: {count, currentPage, pageCount}, players: [{player: {…}}]}`. **Coverage**: 2,620 players / 105 pages for 2026 (~10× our current top-247 list). **Response fields richer than current JSON**: `eligibility.type` (`Immediate` vs `Sit-One`), `transferDate`, `transferCommitDateTime`, `rankTrend`, `key` (stable 247 player ID), `institutionKey` (numeric IDs for cleaner joins than name strings), `avatar`/`logo` URLs. **Auth**: Bearer JWT in `authorization` header — account-bound to the user's 247 subscription, expires ~6 hours after issue, captured manually from DevTools and stored as `TFS_247_JWT` env var (never committed). Manual re-capture each portal-refresh cycle. **Respectful API practices** (mirror NatStat pattern): token-bucket rate limiter at ~1 req/sec (~2 min for full 105-page refresh), sequential not parallel, response caching with TTL (extend `api_cache` or sibling table, 6 hr matches 247's `lastUpdated` resolution), polite User-Agent (`cstat-ingest/<ver> (+https://campom.org)`), conditional refresh via per-player `lastUpdateDate`, nightly refresh during portal season (Mar–Jun) and on-demand otherwise. **Fallback source** (if 247 access lapses — your sub is in cancelled-grace state per JWT `ss: "Monthly+Cancelled"`): [srating.io transfer ranking](https://srating.io/cbb/ranking?view=transfer&season=2026) at `POST https://srating.io/api` returns the full portal in one ~13 MB response, but the smoke test showed `x-kryptos-id` / `x-secret-id` alone are insufficient (got `{"error":"access denied","code":103}`) — would need a full Copy-as-cURL replay including session cookies, or Playwright. Cross-reference against On3 / Verbal Commits as needed for walk-on / mid-major gaps. Layer NBA draft early entrants from a second JSON (`data/draft/2026_early_entrants.json` — 60 entries shipped from `docs/early_paste.txt`) keyed by `(name, current_team)`, with a `status` field of `declared` / `withdrawn` / `staying` / `gone` and a `?` rendering for anything still `declared` (withdrawal deadline is ~late May / early June; everything declared today is genuinely uncertain). **Source**: NBA.com's official early-entry list ([2026 list](https://www.nba.com/news/2026-nba-draft-early-entry-candidates)) — the page is JS-heavy and timed out under WebFetch; fallback is a copy-paste into `docs/early_paste.txt` and a small TSV → JSON converter (`Player\tSchool or Team\tHeight\tStatus` columns). **Senior exclusion is automatic**: NBA's "early entry" definition excludes seniors by construction (they're automatic entries, not "early"), so the list contains only Fr / So / Jr — no need to filter. **Cross-reference rule with `data/transfers/2026.json`**: portal commitment supersedes current school. If a player appears in both the early-entrant list and the portal file with a committed `next_team`, the `?` attaches to `next_team` (e.g., John Blackwell shows on the list as Wisconsin/Jr but committed to Duke, so he's on Duke's projected roster with a `?`). If they only appear in the entrant list, the `?` attaches to their current school. If they appear in the portal file with `next_team: null` and on the entrant list, they're a homeless `?` until they pick a school. Each team's projected 2027 roster is then built from:
+  - **Per-team 2027 projection (forward-looking view)**: project ratings for the upcoming 2026-27 college season (cstat-season 2027) using the full portal data from the **DB-backed transfers pipeline above** (`SELECT … FROM transfers WHERE year = 2026`). **Naming convention nuance**: the projection year (`2027`) uses cstat-season end-year, but the *transfers* table's `year` matches the transfer-class year (= the spring calendar year the player enters the portal). So `transfers.year = 2026` = spring-2026 portal cycle = moves into cstat-season 2027. The two naming conventions live side-by-side on purpose because they match the upstream sources (247 and srating both use class year). **Fallback source** (documented in case 247 access lapses — your sub is in cancelled-grace state per JWT `ss: "Monthly+Cancelled"`): [srating.io transfer ranking](https://srating.io/cbb/ranking?view=transfer&season=2026) at `POST https://srating.io/api` returns the full portal in one ~13 MB response, but the smoke test showed `x-kryptos-id` / `x-secret-id` alone are insufficient (got `{"error":"access denied","code":103}`) — would need a full Copy-as-cURL replay including session cookies, or Playwright. Cross-reference against On3 / Verbal Commits as needed for walk-on / mid-major gaps. Layer NBA draft early entrants from a second JSON (`data/draft/2026_early_entrants.json` — 60 entries shipped from `docs/early_paste.txt`) keyed by `(name, current_team)`, with a `status` field of `declared` / `withdrawn` / `staying` / `gone` and a `?` rendering for anything still `declared` (withdrawal deadline is ~late May / early June; everything declared today is genuinely uncertain). **Source**: NBA.com's official early-entry list ([2026 list](https://www.nba.com/news/2026-nba-draft-early-entry-candidates)) — the page is JS-heavy and timed out under WebFetch; fallback is a copy-paste into `docs/early_paste.txt` and a small TSV → JSON converter (`Player\tSchool or Team\tHeight\tStatus` columns). **Senior exclusion is automatic**: NBA's "early entry" definition excludes seniors by construction (they're automatic entries, not "early"), so the list contains only Fr / So / Jr — no need to filter. **Cross-reference rule with `data/transfers/2026.json`**: portal commitment supersedes current school. If a player appears in both the early-entrant list and the portal file with a committed `next_team`, the `?` attaches to `next_team` (e.g., John Blackwell shows on the list as Wisconsin/Jr but committed to Duke, so he's on Duke's projected roster with a `?`). If they only appear in the entrant list, the `?` attaches to their current school. If they appear in the portal file with `next_team: null` and on the entrant list, they're a homeless `?` until they pick a school. Each team's projected 2027 roster is then built from:
     1. **Returning players** — cstat-season-2026 roster minus graduating seniors (`class_year = 'Sr'`), minus outbound portal, minus draft entrants flagged `gone` or unresolved `declared` (the `?` cohort).
     2. **Incoming portal** — `data/transfers/2026.json` arrivals matched to their just-completed cstat-season-2026 (2025-26 college season) stats by `(name, previous_team)`.
     3. **Incoming recruits** — out of scope for v1 (no prior box-score signal; would need a recruit-rank → freshman-impact prior trained from history; leave as a separate roadmap item under Phase 6's recruiting work).

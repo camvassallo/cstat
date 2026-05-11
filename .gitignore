@@ -55,6 +55,11 @@ __pycache__/
 # work like the historical-prediction `game_forecasts` backfill.
 /training/models/*.csv
 
+# Raw API snapshots from `cstat-ingest transfers` — bootstrap data dumped
+# locally for repeatable seeds and offline dev. Re-derivable from the live
+# 247 API. The canonical store is the `transfers` DB table.
+/data/transfers/*_raw.json
+
 # Hand-generated PR diff dumps (e.g. `git diff main > pr.diff`) — useful
 # for review locally, never meant to ship.
 pr.diff
