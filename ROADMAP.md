@@ -464,6 +464,16 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 
 ---
 
+## Phase 5c: Player Career Trajectory
+> Multi-year stats view on PlayerDetail + a forecast model that turns "year N stats" into "year N+1 expected stats."
+
+- [ ] **Multi-year stats view on PlayerDetail**. Cross-season aggregation on `torvik_pid` (per memory: `natstat_id` breaks on transfers; `torvik_pid` is the stable cross-season key, 96% coverage, zero collisions). Join `player_season_stats` × `torvik_player_stats` × `player_archetypes` for every season the player appears, render as a sparkline grid for the headline rates (PPG, TS%, USG%, AST%, TOV%, ORB%, DRB%, STL%, BLK%) plus a CamPom v3 + GBPM trend line for the headline impact arc. Archetype-class evolution shows as a row of class chips (e.g., "2024 Bard → 2025 Ranger → 2026 Wizard") — `player_archetypes.primary_class` already carries the per-season assignment. Backed by a new `GET /api/players/{pid}/trajectory` endpoint keyed by `torvik_pid` (resolve `players.id → torvik_pid` then fan out). Surface only when ≥2 seasons exist; ≤1-season players keep today's PlayerDetail layout.
+- [ ] **Returning-player growth model**. Train a LightGBM regressor on `(season N stats) → (season N+1 CamPom v3)` pairs across every consecutive-season player in the DB. Inputs: prior-season rate stats, archetype, minutes share, class year (freshman→sophomore is the steepest growth bucket; senior→grad-transfer flattens), prior-season Torvik composite. Output: predicted next-season CamPom v3 (and a confidence band from quantile regression). Sanity-check honest framing: ~3 seasons of paired data → ~10k returning-player rows after gating on min-games qualified in both years, enough for a baseline but the per-class-year sample is thin and the model should not be over-sold. **Acceptance**: MAE per class-year bucket better than naive "year N+1 ≈ year N" baseline; for transferring players, factor in destination-team archetype mix to avoid systematically over- or under-projecting role changes.
+- [ ] **Surfaces**: (a) "projected 2026-27" badge on PlayerDetail next to current-season headline; (b) a season-flip filter on the Players rankings page that swaps current-season CamPom for projected next-season CamPom (load-bearing for "who'll be best next year" discovery, with prominent honesty framing about MAE); (c) a "biggest projected risers/fallers" panel on the homepage during offseason. The transfer-portal Δ engine plugs into this naturally — once we have a next-season projection per player, the Δ becomes "with this player's *projected* 2026-27 line, what does the destination roster look like" instead of "with their 2025-26 line frozen in time."
+- [ ] **Train/serve contract**: same pattern as `roster_model_meta.json` — a `trajectory_model_meta.json` lists features, qualification gate, and the seasons trained on; the Rust inference path hard-fails on drift at boot.
+
+---
+
 ## Phase 6: Expansion & Refinement
 > Historical depth, brackets, continuous improvement
 

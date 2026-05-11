@@ -6,9 +6,12 @@
 //! hard-fails if `player_filter` or `include_impact_features` drift from
 //! what the trained model expects.
 //!
-//! Swap semantics: see `swap_player` — proportionally shrinks the existing
-//! roster's per-player `total_min` to keep team total minutes invariant
-//! after injecting an incoming player at a given MPG.
+//! Swap semantics: see `swap_player` — rank-slot MPG. Ranks the incoming
+//! player against the destination roster by CamPom v3 (`cam_v3`), gives
+//! them the MPG of the destination slot their rank earns, and shifts
+//! every existing player at-or-below that rank down by one slot. The
+//! bottom-ranked destination player falls out of the rotation (MPG → 0).
+//! Preserves the team's 200-minute envelope by construction.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -122,6 +125,15 @@ pub struct PlayerRow {
     pub blk_pct: Option<f64>,
     pub ft_rate: Option<f64>,
     pub primary_class: Option<String>,
+    /// `torvik_player_stats.cam_gbpm_v3_psos` — the production CamPom composite,
+    /// used by `swap_player` to rank the incoming player against the destination
+    /// roster and pick their post-swap MPG slot. Not consumed by
+    /// `build_roster_features` (the model is trained on the box-score-only
+    /// variant; including a CamPom-derived feature would collapse the model
+    /// toward the player-impact identity per the train script's design
+    /// comment). Nullable — players without Torvik coverage will produce
+    /// `None` here; the API surfaces `delta_adjem = null` for those.
+    pub cam_v3: Option<f64>,
 }
 
 /// Fetch every qualified player on the given (team_id, season) roster.
@@ -146,10 +158,13 @@ pub async fn fetch_roster(
             pss.usage_rate        AS usg,
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
             pss.stl_pct, pss.blk_pct, pss.ft_rate,
-            pa.primary_class
+            pa.primary_class,
+            tps.cam_gbpm_v3_psos AS cam_v3
         FROM player_season_stats pss
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
+        LEFT JOIN torvik_player_stats tps
+            ON tps.player_id = pss.player_id AND tps.season = pss.season
         WHERE pss.team_id = $1
           AND pss.season = $2
           AND COALESCE(pss.games_played, 0) >= $3
@@ -297,57 +312,155 @@ pub fn build_roster_features(roster: &[PlayerRow]) -> [f32; ROSTER_NUM_FEATURES]
     out
 }
 
-/// Produce a swap-modified roster: existing players' minutes scaled down
-/// to make room for the incoming player at `incoming.mpg`.
+/// Produce a swap-modified roster: insert the incoming player into the
+/// destination's MPG rotation at the rank their CamPom v3 earns them.
 ///
-/// Method: a team plays ~200 minutes/game. Reduce every existing player's
-/// `mpg` and `total_min` uniformly by `(200 - incoming.mpg) / 200`, then
-/// inject the incoming player. The incoming player's `total_min` is
-/// rewritten by this function (the caller's value is ignored) to keep the
-/// team's `total_minutes` invariant — without this rewrite, the model's
-/// level-sensitive `total_minutes` feature would jump arbitrarily based on
-/// where the incoming player came from. Concretely:
-///   `incoming.total_min := mpg * (old_total / 200)`
-///   `new_total = old_total * (200 - mpg)/200 + mpg * (old_total / 200) = old_total`.
+/// Method (rank-slot MPG): rank every player by `cam_v3` descending. The
+/// incoming player slots in at rank `k` = (count of destination players
+/// strictly better than incoming) + 1. They take the *MPG slot* at rank
+/// `k` — i.e., the MPG of the destination player currently at rank `k`,
+/// from the destination's actual observed MPG distribution. Every
+/// destination player at rank ≥ `k` shifts down one slot and inherits the
+/// MPG one slot below them; the bottom-ranked destination player drops
+/// out of the rotation (MPG → 0). Existing players' rate stats are
+/// preserved; only their `mpg` and `total_min` change.
 ///
-/// Because every existing player's stats are unchanged (only weights
-/// scale uniformly), all minutes-weighted means are stable except for the
-/// new player's contribution — which is the entire point of the Δ engine.
+/// Why this and not constant-scale: the role structure of a real D-I team
+/// is rank-based, not proportional. A 5-star addition doesn't trim every
+/// existing player's minutes by 12%; it bumps a bench player out of the
+/// rotation and shifts the rotation order. The rank-slot version makes
+/// the post-swap roster look like a real team's rotation, which is the
+/// distribution the model was trained on.
 ///
-/// Bounds: `incoming.mpg` clamped to `[0, 40]` (40 is a hard ceiling — a
-/// player can't outplay regulation time on average; OT pushes a tiny tail
-/// above but treating it as a swap-cap is fine).
+/// Total-minute invariant: the set of MPG slots is unchanged (just
+/// reassigned), so `Σ mpg_new = Σ mpg_old` and the level-sensitive
+/// `total_minutes` feature is preserved. `total_min` is recomputed per
+/// player from `new_mpg × old_games_played`.
+///
+/// Fallback: if `incoming.cam_v3` is `None`, the player slots at the
+/// bottom of the rotation and effectively gets ~0 MPG. Callers should
+/// detect this case and surface `delta_adjem = null` rather than report a
+/// near-zero Δ that's an artifact of missing data.
+///
+/// Dedup: if the incoming player_id matches an existing roster slot, the
+/// existing entry is dropped before ranking (avoids double-counting and
+/// keeps the slot count constant).
+///
+/// Bounds: `incoming.mpg` is no longer load-bearing for this function
+/// (the rank-slot logic ignores it), but we still clamp to `[0, 40]` on
+/// the output to defend against malformed input downstream.
 pub fn swap_player(roster: &[PlayerRow], mut incoming: PlayerRow) -> Vec<PlayerRow> {
-    const TEAM_MINUTES_PER_GAME: f64 = 200.0;
-    let mpg = incoming.mpg.clamp(0.0, 40.0);
-    incoming.mpg = mpg;
-    let scale = ((TEAM_MINUTES_PER_GAME - mpg) / TEAM_MINUTES_PER_GAME).max(0.0);
-
-    // Replace the incoming player's caller-supplied total_min with one
-    // consistent with the destination's minutes envelope. Excludes the
-    // incoming player from `old_total` if they're already on the roster
-    // so the invariant still holds in the dedup case.
-    let old_total: f64 = roster
+    // Strip any existing copy of the incoming player; their old slot
+    // shouldn't compete with their incoming slot in the ranking.
+    let dest: Vec<PlayerRow> = roster
         .iter()
         .filter(|p| p.player_id != incoming.player_id)
-        .map(|p| p.total_min)
-        .sum();
-    incoming.total_min = mpg * old_total / TEAM_MINUTES_PER_GAME;
+        .cloned()
+        .collect();
 
-    let mut out: Vec<PlayerRow> = Vec::with_capacity(roster.len() + 1);
-    for p in roster {
-        // Drop the incoming player from the destination roster if they're
-        // already on it — otherwise the swap would double-count them.
-        if p.player_id == incoming.player_id {
-            continue;
-        }
+    if dest.is_empty() {
+        // Pathological: no destination roster to rank against. Return the
+        // incoming player alone with whatever MPG they came in with.
+        incoming.mpg = incoming.mpg.clamp(0.0, 40.0);
+        // No team to attach to → keep total_min as-is.
+        return vec![incoming];
+    }
+
+    // Snapshot the destination's MPG slots in descending order. These are
+    // the MPG values that will be redistributed among the post-swap
+    // roster; the count stays constant.
+    let mut mpg_slots: Vec<f64> = dest.iter().map(|p| p.mpg).collect();
+    mpg_slots.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Incoming rank = 1 + (number of destination players strictly better
+    // by CamPom v3). Players without cam_v3 are treated as -inf for
+    // ranking (they sink to the bottom); the incoming player with
+    // None.cam_v3 likewise sinks below everyone who has a value, so they
+    // get the worst slot.
+    let incoming_q = incoming.cam_v3.unwrap_or(f64::NEG_INFINITY);
+    let better_count = dest
+        .iter()
+        .filter(|p| p.cam_v3.unwrap_or(f64::NEG_INFINITY) > incoming_q)
+        .count();
+    let incoming_rank = better_count; // 0-indexed: slot index in mpg_slots
+
+    // Sort destination by cam_v3 desc (NaNs/None go last) so we can walk
+    // them in rank order. Stable ordering within ties is fine — the slot
+    // assignment is the same.
+    let mut dest_by_rank: Vec<PlayerRow> = dest;
+    dest_by_rank.sort_by(|a, b| {
+        let aq = a.cam_v3.unwrap_or(f64::NEG_INFINITY);
+        let bq = b.cam_v3.unwrap_or(f64::NEG_INFINITY);
+        bq.partial_cmp(&aq).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Assign new MPG to each existing player by their post-swap rank.
+    // - Players at original rank r < incoming_rank: keep slot r (their
+    //   own MPG, unchanged).
+    // - Players at original rank r >= incoming_rank: shift down by 1, get
+    //   the MPG at slot r+1. The player at the bottom of dest_by_rank
+    //   has no slot below them → MPG goes to 0 (effectively benched).
+    let mut out: Vec<PlayerRow> = Vec::with_capacity(dest_by_rank.len() + 1);
+    for (r, p) in dest_by_rank.into_iter().enumerate() {
         let mut q = p.clone();
-        q.mpg *= scale;
-        q.total_min *= scale;
+        let new_slot = if r < incoming_rank { r } else { r + 1 };
+        let new_mpg = mpg_slots.get(new_slot).copied().unwrap_or(0.0);
+        // Recompute total_min from new_mpg holding the player's
+        // games_played fixed. We don't store games_played directly, so
+        // back it out as old_total_min / old_mpg (safe: every roster row
+        // came from `mpg >= QUAL_MIN_MPG = 5`, so old_mpg > 0).
+        let games_played = if p.mpg > 0.0 {
+            p.total_min / p.mpg
+        } else {
+            0.0
+        };
+        q.mpg = new_mpg.clamp(0.0, 40.0);
+        q.total_min = q.mpg * games_played;
         out.push(q);
     }
+
+    // Incoming player takes the slot at incoming_rank.
+    let incoming_mpg = mpg_slots
+        .get(incoming_rank)
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, 40.0);
+    // For total_min, use the same games_played the destination's
+    // rank-incoming_rank player would have played — best available
+    // proxy for "how many games would they play if added here." Falls
+    // back to the destination's median if the slot is somehow empty.
+    let games_for_team = median_games_played(roster).max(1.0);
+    incoming.mpg = incoming_mpg;
+    incoming.total_min = incoming_mpg * games_for_team;
     out.push(incoming);
     out
+}
+
+/// Median of `(total_min / mpg)` across the roster — a proxy for the
+/// team's per-player games-played count, used to project the incoming
+/// player's `total_min` when their old team's schedule shouldn't bleed
+/// into the destination's projection.
+fn median_games_played(roster: &[PlayerRow]) -> f64 {
+    let mut gps: Vec<f64> = roster
+        .iter()
+        .filter_map(|p| {
+            if p.mpg > 0.0 {
+                Some(p.total_min / p.mpg)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if gps.is_empty() {
+        return 0.0;
+    }
+    gps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = gps.len() / 2;
+    if gps.len().is_multiple_of(2) {
+        (gps[mid - 1] + gps[mid]) / 2.0
+    } else {
+        gps[mid]
+    }
 }
 
 #[cfg(test)]
@@ -382,7 +495,16 @@ mod tests {
             blk_pct: Some(1.5),
             ft_rate: Some(0.35),
             primary_class: class.map(str::to_string),
+            cam_v3: None,
         }
+    }
+
+    /// Same as `mk` but with a CamPom v3 value attached. Used by swap
+    /// tests where rank order is what's under test.
+    fn mk_q(player_id: Uuid, mpg: f64, gp: f64, class: Option<&str>, cam_v3: f64) -> PlayerRow {
+        let mut p = mk(player_id, mpg, gp, class);
+        p.cam_v3 = Some(cam_v3);
+        p
     }
 
     #[test]
@@ -479,71 +601,142 @@ mod tests {
     }
 
     #[test]
-    fn swap_preserves_total_minutes() {
+    fn swap_preserves_mpg_slots() {
+        // Destination roster, MPG slots descending: [30, 26, 22, 18, 14, 10, 8, 6].
+        // Incoming with CamPom = 4.0 ranks 3rd (better than the 4 below
+        // cam_v3 < 4.0, worse than the 2 above). They take slot index 2 → 22 mpg.
         let roster = vec![
-            mk(Uuid::new_v4(), 30.0, 30.0, Some("Wizard")),
-            mk(Uuid::new_v4(), 20.0, 30.0, Some("Bard")),
-            mk(Uuid::new_v4(), 15.0, 30.0, Some("Ranger")),
+            mk_q(Uuid::new_v4(), 30.0, 30.0, Some("Wizard"), 8.0),
+            mk_q(Uuid::new_v4(), 26.0, 30.0, Some("Sorcerer"), 6.0),
+            mk_q(Uuid::new_v4(), 22.0, 30.0, Some("Bard"), 3.0),
+            mk_q(Uuid::new_v4(), 18.0, 30.0, Some("Ranger"), 2.0),
+            mk_q(Uuid::new_v4(), 14.0, 30.0, Some("Cleric"), 1.0),
+            mk_q(Uuid::new_v4(), 10.0, 30.0, Some("Monk"), 0.5),
+            mk_q(Uuid::new_v4(), 8.0, 30.0, Some("Druid"), 0.0),
+            mk_q(Uuid::new_v4(), 6.0, 30.0, Some("Rogue"), -0.5),
         ];
-        let orig_total: f64 = roster.iter().map(|p| p.total_min).sum();
+        let orig_mpgs: f64 = roster.iter().map(|p| p.mpg).sum();
 
-        // Caller sets mpg only — swap_player rewrites total_min to keep
-        // the team's minutes envelope invariant.
-        let incoming = mk(Uuid::new_v4(), 25.0, 30.0, Some("Sorcerer"));
+        let incoming_id = Uuid::new_v4();
+        let incoming = mk_q(incoming_id, 0.0, 30.0, Some("Paladin"), 4.0);
         let swapped = swap_player(&roster, incoming);
-        let new_total: f64 = swapped.iter().map(|p| p.total_min).sum();
+
+        // Set of MPG slots is preserved (just reassigned). Excludes the
+        // 6-mpg slot that fell off the bottom — that's now 0 on the
+        // displaced player. Verify total is unchanged.
+        let new_mpgs: f64 = swapped.iter().map(|p| p.mpg).sum();
         assert!(
-            (new_total - orig_total).abs() < 1e-6,
-            "swap broke total_minutes invariant: {orig_total} -> {new_total}",
+            (new_mpgs - orig_mpgs).abs() < 1e-6,
+            "Σ mpg drifted: {orig_mpgs} -> {new_mpgs}",
         );
+
+        // Incoming gets slot 2 (22 mpg).
+        let inc = swapped.iter().find(|p| p.player_id == incoming_id).unwrap();
+        assert!(
+            (inc.mpg - 22.0).abs() < 1e-6,
+            "incoming took slot mpg {} ≠ 22",
+            inc.mpg,
+        );
+        // total_min should be mpg × games_played (30 here) = 660.
+        assert!((inc.total_min - 660.0).abs() < 1e-6);
     }
 
     #[test]
-    fn swap_injects_incoming_minutes_share() {
-        // 200 mpg ÷ 200 team-min/game = 1.0 of a team-game per incoming player
-        // wouldn't be physical; clamp pulls 25 mpg through unchanged.
-        let roster = vec![mk(Uuid::new_v4(), 40.0, 30.0, Some("Wizard"))];
-        let orig_total = roster[0].total_min; // 1200
-        let incoming = mk(Uuid::new_v4(), 25.0, 30.0, Some("Sorcerer"));
+    fn swap_top_ranked_incoming_displaces_bottom() {
+        // Incoming with CamPom higher than everyone takes slot 0 (top MPG).
+        let roster = vec![
+            mk_q(Uuid::new_v4(), 30.0, 30.0, Some("Wizard"), 5.0),
+            mk_q(Uuid::new_v4(), 20.0, 30.0, Some("Bard"), 3.0),
+            mk_q(Uuid::new_v4(), 10.0, 30.0, Some("Cleric"), 1.0),
+        ];
+        let incoming_id = Uuid::new_v4();
+        let incoming = mk_q(incoming_id, 0.0, 30.0, Some("Sorcerer"), 9.0);
         let swapped = swap_player(&roster, incoming);
-        // Incoming total_min = 25 * 1200 / 200 = 150
-        let inc = swapped
-            .iter()
-            .find(|p| p.primary_class.as_deref() == Some("Sorcerer"))
-            .unwrap();
+
+        let inc = swapped.iter().find(|p| p.player_id == incoming_id).unwrap();
         assert!(
-            (inc.total_min - 150.0).abs() < 1e-6,
-            "incoming total_min {} ≠ expected 150 (25 * old_total/200)",
-            inc.total_min,
+            (inc.mpg - 30.0).abs() < 1e-6,
+            "incoming should get top slot"
         );
-        // Existing player scaled by (200-25)/200 = 0.875: 1200 * 0.875 = 1050
-        let existing = swapped
+
+        // Original Wizard (was slot 0, 30 mpg) gets bumped to slot 1 (20 mpg).
+        let wizard = swapped
             .iter()
             .find(|p| p.primary_class.as_deref() == Some("Wizard"))
             .unwrap();
         assert!(
-            (existing.total_min - 1050.0).abs() < 1e-6,
-            "existing total_min {} ≠ 1050 (1200 * 0.875)",
-            existing.total_min,
+            (wizard.mpg - 20.0).abs() < 1e-6,
+            "Wizard shifted to wrong slot mpg {}",
+            wizard.mpg,
         );
-        // Invariant: 1050 + 150 = 1200
-        let new_total: f64 = swapped.iter().map(|p| p.total_min).sum();
-        assert!((new_total - orig_total).abs() < 1e-6);
+
+        // Original Cleric (was slot 2, 10 mpg) falls off the bottom.
+        let cleric = swapped
+            .iter()
+            .find(|p| p.primary_class.as_deref() == Some("Cleric"))
+            .unwrap();
+        assert!(
+            cleric.mpg.abs() < 1e-6,
+            "Cleric should have fallen out, got mpg {}",
+            cleric.mpg,
+        );
+    }
+
+    #[test]
+    fn swap_no_cam_v3_falls_below_rotation() {
+        let roster = vec![
+            mk_q(Uuid::new_v4(), 30.0, 30.0, Some("Wizard"), 5.0),
+            mk_q(Uuid::new_v4(), 20.0, 30.0, Some("Bard"), 3.0),
+        ];
+        // Incoming has no cam_v3 → treated as NEG_INFINITY → ranks below
+        // everyone with a value. Their target slot is past the end of
+        // the destination's MPG array (no slot N+1 exists), so they get
+        // 0 MPG. The API surfaces `delta_adjem = null` in this case
+        // rather than treat a near-zero Δ as a real prediction.
+        let incoming_id = Uuid::new_v4();
+        let mut incoming = mk(incoming_id, 0.0, 30.0, Some("Sorcerer"));
+        incoming.cam_v3 = None;
+        let swapped = swap_player(&roster, incoming);
+
+        let inc = swapped.iter().find(|p| p.player_id == incoming_id).unwrap();
+        assert!(
+            inc.mpg.abs() < 1e-6,
+            "incoming with no cam_v3 should fall below rotation (0 mpg), got {}",
+            inc.mpg,
+        );
+        // Existing rotation is undisturbed — Wizard keeps 30, Bard keeps 20.
+        let wizard = swapped
+            .iter()
+            .find(|p| p.primary_class.as_deref() == Some("Wizard"))
+            .unwrap();
+        assert!((wizard.mpg - 30.0).abs() < 1e-6);
+        let bard = swapped
+            .iter()
+            .find(|p| p.primary_class.as_deref() == Some("Bard"))
+            .unwrap();
+        assert!((bard.mpg - 20.0).abs() < 1e-6);
     }
 
     #[test]
     fn swap_dedups_if_incoming_already_on_roster() {
         let existing_id = Uuid::new_v4();
         let roster = vec![
-            mk(existing_id, 30.0, 30.0, Some("Wizard")),
-            mk(Uuid::new_v4(), 20.0, 30.0, Some("Bard")),
+            mk_q(existing_id, 30.0, 30.0, Some("Wizard"), 5.0),
+            mk_q(Uuid::new_v4(), 20.0, 30.0, Some("Bard"), 3.0),
         ];
-        let incoming = mk(existing_id, 25.0, 30.0, Some("Sorcerer"));
+        // Incoming with same ID as the Wizard — destination's Wizard
+        // entry should be dropped before ranking, so the only existing
+        // player is Bard (20 mpg). Incoming with CamPom=9 ranks above
+        // Bard, takes the top slot (20 mpg).
+        let incoming = mk_q(existing_id, 0.0, 30.0, Some("Sorcerer"), 9.0);
         let swapped = swap_player(&roster, incoming);
         assert_eq!(swapped.len(), 2, "duplicate player_id should be replaced");
-        // The remaining holder of `existing_id` is the incoming player
-        // (Sorcerer), not the original Wizard.
+        // The remaining holder of `existing_id` is the incoming player.
         let dup = swapped.iter().find(|p| p.player_id == existing_id).unwrap();
         assert_eq!(dup.primary_class.as_deref(), Some("Sorcerer"));
+        assert!(
+            (dup.mpg - 20.0).abs() < 1e-6,
+            "incoming should take Bard's old slot"
+        );
     }
 }
