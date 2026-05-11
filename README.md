@@ -107,10 +107,10 @@ cd training && python -m archetypes --seasons 2024,2025,2026
 ```
 
 That's it. The next page load picks up `2024` in the season selector. If
-you want transfer-portal data for the new year, drop a scraped file at
-`data/transfers/2024.json` and add the entry to `EMBEDDED_TRANSFERS` in
-`crates/cstat-api/src/routes/transfers.rs` (see "Refactor Backlog" in the
-ROADMAP for a planned auto-discover replacement).
+you want transfer-portal data for the new year, ingest it via the DB-backed
+pipeline: `cargo run --bin cstat-ingest -- transfers --year YYYY` (needs
+`TFS_247_JWT`; pass `--bootstrap-from path/to/snapshot.json` to load from a
+local capture instead of hitting the API).
 
 ## Architecture
 

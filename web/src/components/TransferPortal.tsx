@@ -189,10 +189,19 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
       headerName: '247',
       field: 'rank_247',
       ...flexCol(1, 70),
-      headerTooltip: '247Sports rank',
-      cellRenderer: (p: { value: number }) => (
-        <span className="text-gray-400 text-xs">{p.value}</span>
-      ),
+      headerTooltip: '247Sports rank (— for unranked portal entries)',
+      comparator: (a: number | null, b: number | null) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null }) =>
+        p.value != null ? (
+          <span className="text-gray-400 text-xs">{p.value}</span>
+        ) : (
+          <span className="text-gray-600 text-xs">—</span>
+        ),
     },
     {
       headerName: 'Δ',
@@ -254,7 +263,10 @@ export default function TransferPortal({ year }: Props) {
           return {
             ...t,
             rank_cstat,
-            rank_delta: rank_cstat != null ? t.rank_247 - rank_cstat : null,
+            rank_delta:
+              rank_cstat != null && t.rank_247 != null
+                ? t.rank_247 - rank_cstat
+                : null,
           };
         });
         setRows(withRank);

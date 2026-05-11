@@ -5,7 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,44 +17,36 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/transfers/{year}", get(transfer_list))
 }
 
-/// Compile-time-embedded transfer rosters keyed by portal year. We ship
-/// these inside the binary so the deployed container doesn't need a `data/`
-/// dir at runtime; local dev can still override by writing to
-/// `TRANSFERS_DIR` (defaults to `data/transfers`) for fast iteration.
-const EMBEDDED_TRANSFERS: &[(i32, &str)] = &[
-    (2026, include_str!("../../../../data/transfers/2026.json")),
-    (2025, include_str!("../../../../data/transfers/2025.json")),
-    (2024, include_str!("../../../../data/transfers/2024.json")),
-];
-
-/// Raw row from the scraped 247Sports JSON.
-#[derive(Deserialize)]
-struct Transfer247 {
-    rank: i32,
-    name: String,
-    #[serde(default)]
-    position: String,
-    #[serde(default)]
+/// One row pulled from the `transfers` table. Schema in `migrations/019_transfers.sql`.
+/// Pre-PR #51 this struct came from the scraped JSON; the field-set is now
+/// driven by the DB columns we want to surface, but the response shape it
+/// feeds into (see `EnrichedTransfer`) is unchanged save for `rank_247` going
+/// nullable (the JSON-era top-N scrape was always ranked; the full DB
+/// includes the unranked tail).
+#[derive(sqlx::FromRow)]
+struct TransferRow {
+    /// 247's within-portal rank (their `transferRank` field), not the
+    /// composite cross-class rank. The pre-DB embedded JSON was a scrape of
+    /// transferRank, so this column is what gives bit-for-bit parity with the
+    /// old `rank_247` values. ~340 of 1497 rows carry one; the rest are the
+    /// unranked tail.
+    transfer_rank: Option<i32>,
+    full_name: String,
+    position: Option<String>,
     height: Option<String>,
-    #[serde(default)]
     weight: Option<i32>,
-    #[serde(default)]
     status: String,
-    #[serde(default)]
-    rating_247: Option<f64>,
-    #[serde(default)]
-    previous_team: Option<String>,
-    #[serde(default)]
-    next_team: Option<String>,
-    #[serde(default)]
-    url_247: Option<String>,
+    rating: Option<f64>,
+    source_institution: Option<String>,
+    destination_institution: Option<String>,
+    player_profile_url: Option<String>,
 }
 
 /// Enriched row returned to the frontend — base 247 fields plus the cstat
 /// player match (if any) and CamPom value.
 #[derive(Serialize)]
 struct EnrichedTransfer {
-    rank_247: i32,
+    rank_247: Option<i32>,
     name: String,
     player_id: Option<Uuid>,
     position: String,
@@ -116,31 +108,46 @@ async fn transfer_list(
         ));
     }
 
-    // Prefer an on-disk override (set TRANSFERS_DIR for local dev so changes
-    // to the JSON take effect without a rebuild). Fall back to the binary's
-    // embedded copy so prod containers don't need a `data/` dir.
-    let dir = std::env::var("TRANSFERS_DIR").unwrap_or_else(|_| "data/transfers".into());
-    let path = format!("{dir}/{year}.json");
-    let raw: std::borrow::Cow<'_, [u8]> = match tokio::fs::read(&path).await {
-        Ok(b) => std::borrow::Cow::Owned(b),
-        Err(_) => match EMBEDDED_TRANSFERS.iter().find(|(y, _)| *y == year) {
-            Some((_, s)) => std::borrow::Cow::Borrowed(s.as_bytes()),
-            None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    Json(json!({
-                        "error": format!("no transfers data for year {year}"),
-                    })),
-                ));
-            }
-        },
-    };
-    let transfers: Vec<Transfer247> = serde_json::from_slice(&raw).map_err(|e| {
+    // Pull every row for the requested portal class year. Ranked rows first
+    // (so the response is rank-ordered like the old top-N JSON), then the
+    // unranked tail by name. Frontend re-sorts by CamPom, so this ordering
+    // only matters for parity with the embedded-JSON era.
+    let transfers: Vec<TransferRow> = sqlx::query_as::<_, TransferRow>(
+        r#"
+        SELECT
+            transfer_rank,
+            full_name,
+            position,
+            height,
+            weight,
+            status,
+            rating::float8 AS rating,
+            source_institution,
+            destination_institution,
+            player_profile_url
+        FROM transfers
+        WHERE year = $1
+        ORDER BY transfer_rank NULLS LAST, full_name
+        "#,
+    )
+    .bind(year)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("transfers file invalid: {e}") })),
+            Json(json!({ "error": format!("transfers query failed: {e}") })),
         )
     })?;
+
+    if transfers.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!("no transfers data for year {year}"),
+            })),
+        ));
+    }
 
     // Pull every season player so we can match in Rust against our normalized
     // 247-side names. The DB stores names with mixed punctuation/suffixes
@@ -221,11 +228,11 @@ async fn transfer_list(
     let enriched: Vec<EnrichedTransfer> = transfers
         .into_iter()
         .map(|t| {
-            let key = normalize(&t.name);
+            let key = normalize(&t.full_name);
             let pool = by_name.get(&key);
             let best: Option<&DbCandidate> = pool.and_then(|cands| {
                 // Prefer the candidate whose team matches the 247 previous_team.
-                t.previous_team
+                t.source_institution
                     .as_deref()
                     .and_then(|prev| {
                         cands.iter().find(|c| {
@@ -248,22 +255,25 @@ async fn transfer_list(
             // a clickable previous-team link.
             let previous_team_id = best
                 .and_then(|c| c.team_id)
-                .or_else(|| t.previous_team.as_deref().and_then(resolve_team_id));
-            let next_team_id = t.next_team.as_deref().and_then(resolve_team_id);
+                .or_else(|| t.source_institution.as_deref().and_then(resolve_team_id));
+            let next_team_id = t
+                .destination_institution
+                .as_deref()
+                .and_then(resolve_team_id);
 
             EnrichedTransfer {
-                rank_247: t.rank,
-                name: t.name,
+                rank_247: t.transfer_rank,
+                name: t.full_name,
                 player_id: best.map(|c| c.player_id),
-                position: t.position,
+                position: t.position.unwrap_or_default(),
                 height: t.height,
                 weight: t.weight,
                 status: t.status,
-                rating_247: t.rating_247,
-                previous_team: t.previous_team,
+                rating_247: t.rating,
+                previous_team: t.source_institution,
                 previous_team_full: best.and_then(|c| c.team_name.clone()),
                 previous_team_id,
-                next_team: t.next_team,
+                next_team: t.destination_institution,
                 next_team_id,
                 primary_class: best.and_then(|c| c.primary_class.clone()),
                 secondary_class: best.and_then(|c| c.secondary_class.clone()),
@@ -271,7 +281,7 @@ async fn transfer_list(
                 campom_pct: best.and_then(|c| c.campom_pct),
                 minutes_per_game: best.and_then(|c| c.minutes_per_game),
                 games_played: best.and_then(|c| c.games_played),
-                url_247: t.url_247,
+                url_247: t.player_profile_url,
             }
         })
         .collect();
