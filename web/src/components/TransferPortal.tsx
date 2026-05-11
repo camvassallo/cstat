@@ -75,7 +75,8 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
       field: 'rank_cstat',
       width: 70,
       pinned: 'left',
-      headerTooltip: 'Our rank by CamPom; players with no CamPom value are unranked',
+      headerTooltip:
+        'Our rank by CamPom among 247-ranked transfers with a CamPom value',
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="font-bold">{p.value}</span>
@@ -189,10 +190,19 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
       headerName: '247',
       field: 'rank_247',
       ...flexCol(1, 70),
-      headerTooltip: '247Sports rank',
-      cellRenderer: (p: { value: number }) => (
-        <span className="text-gray-400 text-xs">{p.value}</span>
-      ),
+      headerTooltip: '247Sports rank (— for unranked portal entries)',
+      comparator: (a: number | null, b: number | null) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null }) =>
+        p.value != null ? (
+          <span className="text-gray-400 text-xs">{p.value}</span>
+        ) : (
+          <span className="text-gray-600 text-xs">—</span>
+        ),
     },
     {
       headerName: 'Δ',
@@ -240,21 +250,27 @@ export default function TransferPortal({ year }: Props) {
     fetchTransfers(year)
       .then((r) => {
         if (canceled) return;
-        // Assign our rank: sort by CamPom desc; null CamPom values stay
-        // unranked (rank_cstat = null) and fall to the bottom by default.
-        const ranked = [...r.transfers].sort((a, b) => {
+        // Sort everything by CamPom desc first; rows lacking either CamPom
+        // or a 247 rank stay in the array but skip the rank counter so the
+        // displayed `rank_cstat` matches on-screen position. The endpoint
+        // returns the full portal (including unranked-by-247 entries) for
+        // the 2027-projection roster aggregator; those don't compete for
+        // a rank here.
+        const sorted = [...r.transfers].sort((a, b) => {
           if (a.campom == null && b.campom == null) return 0;
           if (a.campom == null) return 1;
           if (b.campom == null) return -1;
           return b.campom - a.campom;
         });
         let i = 0;
-        const withRank: RankedTransfer[] = ranked.map((t) => {
-          const rank_cstat = t.campom != null ? ++i : null;
+        const withRank: RankedTransfer[] = sorted.map((t) => {
+          const rank_cstat =
+            t.campom != null && t.rank_247 != null ? ++i : null;
           return {
             ...t,
             rank_cstat,
-            rank_delta: rank_cstat != null ? t.rank_247 - rank_cstat : null,
+            rank_delta:
+              rank_cstat != null ? t.rank_247! - rank_cstat : null,
           };
         });
         setRows(withRank);
@@ -271,8 +287,9 @@ export default function TransferPortal({ year }: Props) {
 
   const filtered = useMemo(() => {
     if (!rows) return null;
-    // Hide unranked rows (no CamPom). Players without prior-season cstat
-    // data don't carry a comparable rank, so they'd just clutter the bottom.
+    // `rank_cstat` is only assigned when both CamPom and 247 rank are
+    // present (see useEffect above), so this single check drops the
+    // unranked-by-247 long tail and the no-CamPom rows in one pass.
     const ranked = rows.filter((t) => t.rank_cstat != null);
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
@@ -310,7 +327,7 @@ export default function TransferPortal({ year }: Props) {
         />
         <span className="text-xs text-gray-500">
           {ranked} ranked transfers
-          {hidden > 0 && ` · ${hidden} hidden (no CamPom)`} ·{' '}
+          {hidden > 0 && ` · ${hidden} hidden (unranked by 247 or no CamPom)`} ·{' '}
           <a
             href={`https://247sports.com/season/${year}-basketball/transferportaltop/`}
             target="_blank"

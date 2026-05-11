@@ -375,7 +375,7 @@ export function fetchPlayers(params: {
 // Transfer portal — one row per ranked 247Sports transfer, enriched with our
 // CamPom value when we can match the player to a row in the prior season.
 export interface TransferRow {
-  rank_247: number;
+  rank_247: number | null;
   name: string;
   player_id: string | null;
   position: string;
