@@ -1,4 +1,4 @@
-pandas>=2.0
+pandas>=2.2  # train_roster_model.py uses GroupBy.apply(include_groups=...)
 psycopg2-binary>=2.9
 sqlalchemy>=2.0
 scikit-learn>=1.3

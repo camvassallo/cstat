@@ -17,9 +17,11 @@ use crate::tfs::{TfsClient, TfsError};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 /// Allowed values for `transfers.status`. Mirrors the CHECK constraint in
 /// `migrations/019_transfers.sql`. If 247 introduces a new value, widen the
@@ -438,49 +440,231 @@ async fn last_update_cursor(
     Ok(row.and_then(|(v,)| v))
 }
 
-/// Resolve `cstat_player_id` on transfer rows by joining to cstat `players`
-/// on `(year = season, lower(full_name) = lower(name), lower(source) = lower(team))`.
+/// Resolve `cstat_player_id` on transfer rows by matching each 247 portal
+/// entry to the cstat `players` row that played the previous college season
+/// at the same source school.
 ///
-/// v1: case-insensitive exact match. v2 should reuse the suffix-stripping /
-/// punctuation-normalization logic from `scripts/parse_247_transfer_html.py`
-/// for the ~few-percent of rows where suffixes ("Jr.", "III") differ between
-/// 247 and cstat.
+/// `t.year` (247's transfer class year — spring-2026 portal = 2026) and
+/// `p.season` (cstat-season end-year — 2025-26 academic year = season 2026)
+/// bind to the same integer by construction: spring-2026 portal entries played
+/// their last completed season in 2025-26.
+///
+/// Matching is done in Rust rather than via SQL JOIN because the route handler
+/// already established the correct join logic and a plain `lower(tm.name) =
+/// lower(t.source_institution)` against the full NatStat name (e.g. "Kansas
+/// Jayhawks" vs 247's "Kansas") resolved 0/4,357 rows. We mirror the route's
+/// `normalize` + `team_match_score` so SQL-side and route-side reach identical
+/// answers for the same (player, source) pair. If a third consumer appears,
+/// promote these helpers to a shared crate.
 pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, TransferIngestError> {
-    // Both `t.year` and `p.season` bind to the same `$1`. Different concepts
-    // that numerically coincide:
-    //   - `t.year` is the *transfer class year* (calendar year of the spring
-    //     portal cycle). 247's `year=2026` = spring-2026 portal.
-    //   - `p.season` is the *cstat-season end-year* (NCAA academic year's
-    //     spring half). 2025-26 academic year = season 2026.
-    // Spring 2026 portal → players whose last completed season was 2025-26
-    // → both labelled `2026`. The semantics differ; the integer matches.
-    let result = sqlx::query(
+    #[derive(sqlx::FromRow)]
+    struct PortalRow {
+        tfs_key: i64,
+        full_name: String,
+        source_institution: Option<String>,
+    }
+    #[derive(sqlx::FromRow)]
+    struct CandRow {
+        player_id: Uuid,
+        name: String,
+        team_short: Option<String>,
+        team_full: Option<String>,
+    }
+
+    // Only consider rows that have a source school to disambiguate against —
+    // a portal row with NULL source can't be matched safely.
+    let portal: Vec<PortalRow> = sqlx::query_as(
         r#"
-        UPDATE transfers t
-        SET cstat_player_id = p.id
-        FROM players p
-        JOIN teams tm ON tm.id = p.team_id
-        WHERE t.year = $1
-          AND p.season = $1
-          AND tm.season = $1
-          AND lower(p.name) = lower(t.full_name)
-          AND lower(tm.name) = lower(t.source_institution)
-          AND t.cstat_player_id IS DISTINCT FROM p.id
+        SELECT tfs_key, full_name, source_institution
+        FROM transfers
+        WHERE year = $1 AND source_institution IS NOT NULL
         "#,
     )
     .bind(year)
+    .fetch_all(pool)
+    .await?;
+
+    // One candidate row per (player, team) stint in the season. Mid-season
+    // transfers appear twice (once per team) via `player_season_stats`, which
+    // is what lets us disambiguate when the 247 source names the *first*
+    // team.
+    let candidates: Vec<CandRow> = sqlx::query_as(
+        r#"
+        SELECT
+            p.id          AS player_id,
+            p.name        AS name,
+            t.short_name  AS team_short,
+            t.name        AS team_full
+        FROM player_season_stats pss
+        JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+        LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
+        WHERE pss.season = $1
+        "#,
+    )
+    .bind(year)
+    .fetch_all(pool)
+    .await?;
+
+    // Bucket by normalized name for O(1) per-portal-row lookup. Same
+    // normalization the route uses (accent fold + suffix strip).
+    let mut by_name: HashMap<String, Vec<&CandRow>> = HashMap::new();
+    for c in &candidates {
+        by_name.entry(normalize_name(&c.name)).or_default().push(c);
+    }
+
+    let mut tfs_keys: Vec<i64> = Vec::new();
+    let mut player_ids: Vec<Uuid> = Vec::new();
+    let mut unmatched_name = 0u64;
+    let mut unmatched_team = 0u64;
+    let mut single_bucket_fallback = 0u64;
+
+    for row in &portal {
+        let Some(cands) = by_name.get(&normalize_name(&row.full_name)) else {
+            unmatched_name += 1;
+            continue;
+        };
+        let source = row.source_institution.as_deref().unwrap_or_default();
+        // Score every candidate's team against the 247 source string and pick
+        // the lowest score (best match; see `team_match_score`).
+        let scored = cands
+            .iter()
+            .filter_map(|c| {
+                team_match_score(c.team_short.as_deref(), c.team_full.as_deref()?, source)
+                    .map(|s| (s, *c))
+            })
+            .min_by_key(|(s, _)| *s)
+            .map(|(_, c)| c);
+        let best = match scored {
+            Some(c) => Some(c),
+            None => {
+                unmatched_team += 1;
+                // Fallback only when there's exactly one same-name candidate.
+                // Multi-candidate fallback was the previous behavior and the
+                // dangerous case — it would silently bind two different players
+                // who share a name. With a single candidate there's no other
+                // person it could be, so the worst case is "we attached a
+                // player who happens to share a name with the portal entry,"
+                // which a downstream 2027 projection aggregator can still
+                // sanity-check against `previous_team`.
+                if cands.len() == 1 {
+                    single_bucket_fallback += 1;
+                    Some(cands[0])
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(c) = best {
+            tfs_keys.push(row.tfs_key);
+            player_ids.push(c.player_id);
+        }
+    }
+
+    // Batched UPDATE via UNNEST — one round-trip regardless of match count.
+    // `IS DISTINCT FROM` avoids a no-op write when the row is already
+    // resolved to the same player.
+    let result = sqlx::query(
+        r#"
+        UPDATE transfers t
+        SET cstat_player_id = m.player_id
+        FROM UNNEST($2::bigint[], $3::uuid[]) AS m(tfs_key, player_id)
+        WHERE t.year = $1
+          AND t.tfs_key = m.tfs_key
+          AND t.cstat_player_id IS DISTINCT FROM m.player_id
+        "#,
+    )
+    .bind(year)
+    .bind(&tfs_keys)
+    .bind(&player_ids)
     .execute(pool)
     .await?;
     let n = result.rows_affected();
-    if n > 0 {
-        info!(year, resolved = n, "cstat_player_id resolved");
-    } else {
+    info!(
+        year,
+        portal_rows = portal.len(),
+        candidates = candidates.len(),
+        matched = tfs_keys.len(),
+        updated = n,
+        unmatched_name,
+        team_score_miss = unmatched_team,
+        single_bucket_fallback,
+        "cstat_player_id resolution complete"
+    );
+    if tfs_keys.is_empty() {
         warn!(
             year,
             "no cstat_player_id matches found — check naming normalization"
         );
     }
     Ok(n)
+}
+
+/// Normalize a player name for cross-source matching: lowercase, fold the
+/// diacritics we actually see in cstat / 247 data, strip generational
+/// suffixes. Mirrors `normalize` in `cstat-api`'s `routes/transfers.rs` so
+/// the post-ingest resolution and the runtime enrichment join reach the same
+/// answer for the same name. Keep the two copies in sync until extracted.
+fn normalize_name(name: &str) -> String {
+    let folded: String = name
+        .chars()
+        .flat_map(|c| match c {
+            'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' | 'Á' | 'À' | 'Â' | 'Ä' | 'Ã' | 'Å' => {
+                Some('a')
+            }
+            'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => Some('e'),
+            'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => Some('i'),
+            'ó' | 'ò' | 'ô' | 'ö' | 'õ' | 'Ó' | 'Ò' | 'Ô' | 'Ö' | 'Õ' => Some('o'),
+            'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => Some('u'),
+            'ñ' | 'Ñ' => Some('n'),
+            'ç' | 'Ç' => Some('c'),
+            _ if c.is_alphabetic() || c.is_whitespace() => Some(c.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+    folded
+        .split_whitespace()
+        // "lll" appears in our DB for "Ace Glass III" (typo, three lowercase
+        // L's instead of three capital I's); strip like a suffix so 247 matches.
+        .filter(|w| !matches!(*w, "jr" | "sr" | "ii" | "iii" | "iv" | "v" | "lll"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 247 short name → cstat team-name prefix that should appear at the start of
+/// `teams.name`. Mirrors `TEAM_ALIASES` in `cstat-api`'s `routes/transfers.rs`.
+const TEAM_ALIASES: &[(&str, &str)] = &[
+    ("uconn", "connecticut"),
+    ("ole miss", "mississippi"),
+    ("usc", "southern california"),
+    ("nc state", "north carolina state"),
+    ("miami", "miami (fla.)"),
+    ("miami (fl)", "miami (fla.)"),
+    ("miami (oh)", "miami (ohio)"),
+];
+
+/// Score how well a cstat team matches a 247 short name. Lower is better;
+/// `None` means no match. Mirrors `team_match_score` in `cstat-api`'s
+/// `routes/transfers.rs`.
+fn team_match_score(db_short: Option<&str>, db_full: &str, short: &str) -> Option<u32> {
+    let short_lc = short.to_lowercase();
+    if let Some(s) = db_short
+        && s.to_lowercase() == short_lc
+    {
+        return Some(0);
+    }
+    let db_lc = db_full.to_lowercase();
+    if db_lc == short_lc {
+        return Some(0);
+    }
+    for (k, v) in TEAM_ALIASES {
+        if short_lc == *k && (db_lc == *v || db_lc.starts_with(&format!("{v} "))) {
+            return Some(1);
+        }
+    }
+    if db_lc.starts_with(&format!("{short_lc} ")) {
+        return Some(2);
+    }
+    None
 }
 
 // --- Small JSON-extraction helpers ----------------------------------------
@@ -614,5 +798,64 @@ mod tests {
     fn parse_dt_returns_none_for_non_string() {
         let v = json!(1234567890);
         assert!(parse_dt(Some(&v)).is_none());
+    }
+
+    #[test]
+    fn normalize_lowercases_and_strips_suffixes() {
+        assert_eq!(normalize_name("LeBron James Jr."), "lebron james");
+        assert_eq!(normalize_name("Ace Glass III"), "ace glass");
+        assert_eq!(normalize_name("Ace Glass lll"), "ace glass");
+        assert_eq!(normalize_name("Freddie Dilione V"), "freddie dilione");
+    }
+
+    #[test]
+    fn normalize_folds_accents_and_drops_punctuation() {
+        assert_eq!(normalize_name("José Álvarez"), "jose alvarez");
+        assert_eq!(normalize_name("A'lahn Sumler"), "alahn sumler");
+        assert_eq!(normalize_name("D'Angelo  Russell"), "dangelo russell");
+    }
+
+    #[test]
+    fn team_match_score_prefers_short_name_exact() {
+        assert_eq!(
+            team_match_score(Some("Kansas"), "Kansas Jayhawks", "Kansas"),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn team_match_score_handles_uconn_via_alias() {
+        // teams.short_name is "Connecticut", 247 sends "UConn".
+        assert_eq!(
+            team_match_score(Some("Connecticut"), "Connecticut Huskies", "UConn"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn team_match_score_disambiguates_miami() {
+        // Both Miami (Fla.) and Miami (Ohio) score against bare "Miami" — FL
+        // via the alias (Some(1)) and OH via the bare-prefix fallback
+        // (Some(2)). Disambiguation is by the lower score, which
+        // `resolve_cstat_joins` selects via `min_by_key`.
+        let fl = team_match_score(Some("Miami FL"), "Miami (Fla.) Hurricanes", "Miami");
+        let oh = team_match_score(Some("Miami OH"), "Miami (Ohio) Redhawks", "Miami");
+        assert_eq!(fl, Some(1));
+        assert_eq!(oh, Some(2));
+        assert!(fl < oh, "FL alias must outrank OH bare-prefix fallback");
+    }
+
+    #[test]
+    fn team_match_score_falls_back_to_prefix() {
+        // No short_name on this row: legacy fallback should still match.
+        assert_eq!(
+            team_match_score(None, "Alabama State Hornets", "Alabama State"),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn team_match_score_returns_none_on_unrelated() {
+        assert!(team_match_score(Some("Duke"), "Duke Blue Devils", "Kansas").is_none());
     }
 }
