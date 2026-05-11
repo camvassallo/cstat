@@ -15,6 +15,7 @@
 
 use crate::tfs::{TfsClient, TfsError};
 use chrono::{DateTime, Utc};
+use cstat_core::team_name_match::team_match_score;
 use serde_json::Value;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -628,43 +629,6 @@ fn normalize_name(name: &str) -> String {
         .filter(|w| !matches!(*w, "jr" | "sr" | "ii" | "iii" | "iv" | "v" | "lll"))
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// 247 short name → cstat team-name prefix that should appear at the start of
-/// `teams.name`. Mirrors `TEAM_ALIASES` in `cstat-api`'s `routes/transfers.rs`.
-const TEAM_ALIASES: &[(&str, &str)] = &[
-    ("uconn", "connecticut"),
-    ("ole miss", "mississippi"),
-    ("usc", "southern california"),
-    ("nc state", "north carolina state"),
-    ("miami", "miami (fla.)"),
-    ("miami (fl)", "miami (fla.)"),
-    ("miami (oh)", "miami (ohio)"),
-];
-
-/// Score how well a cstat team matches a 247 short name. Lower is better;
-/// `None` means no match. Mirrors `team_match_score` in `cstat-api`'s
-/// `routes/transfers.rs`.
-fn team_match_score(db_short: Option<&str>, db_full: &str, short: &str) -> Option<u32> {
-    let short_lc = short.to_lowercase();
-    if let Some(s) = db_short
-        && s.to_lowercase() == short_lc
-    {
-        return Some(0);
-    }
-    let db_lc = db_full.to_lowercase();
-    if db_lc == short_lc {
-        return Some(0);
-    }
-    for (k, v) in TEAM_ALIASES {
-        if short_lc == *k && (db_lc == *v || db_lc.starts_with(&format!("{v} "))) {
-            return Some(1);
-        }
-    }
-    if db_lc.starts_with(&format!("{short_lc} ")) {
-        return Some(2);
-    }
-    None
 }
 
 // --- Small JSON-extraction helpers ----------------------------------------

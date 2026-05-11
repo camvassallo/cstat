@@ -109,7 +109,7 @@ pub const QUAL_FILTER_STRING: &str = "games_played >= 5 AND minutes_per_game >= 
 /// `None` as missing (excluded from the minutes-weighted denominator) so
 /// rosters with one player missing a single rate stat don't NaN-poison the
 /// whole feature.
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
 pub struct PlayerRow {
     pub player_id: Uuid,
     /// `minutes_per_game * games_played`. The minutes-weighted aggregator's
@@ -329,6 +329,60 @@ pub fn build_roster_features(roster: &[PlayerRow]) -> [f32; ROSTER_NUM_FEATURES]
     }
 
     out
+}
+
+/// Sort the roster by `cam_v3` descending and reassign each player to the
+/// MPG slot at their rank position. The set of MPG slot values stays the
+/// same; only the (player → slot) mapping is rewritten.
+///
+/// Why this exists: `swap_player` does this same reassignment as a side
+/// effect of inserting the incoming player. If the API computes baseline
+/// features over the raw destination roster but swap features over the
+/// reassigned post-swap roster, `Δ = swap_pred − baseline_pred` inherits a
+/// rotation-correction artifact that has nothing to do with the incoming
+/// player. Running both baseline *and* swap through `normalize_rotation`
+/// first cancels that artifact: any pre-existing mismatch between the
+/// destination's actual rotation and a cam_v3-meritocratic rotation
+/// affects both predictions identically, leaving Δ to reflect the
+/// incoming player only.
+///
+/// Players with `cam_v3 = None` sort to the bottom (NEG_INFINITY); they
+/// inherit the smallest MPG slots, which means a roster with several
+/// missing-cam_v3 players will see those players bunched at the bottom of
+/// the rotation. That's the right behavior for the Δ surface — we have no
+/// signal to rank them differently — but it does mean rosters with broad
+/// Torvik coverage gaps will see larger normalization shifts.
+pub fn normalize_rotation(roster: Vec<PlayerRow>) -> Vec<PlayerRow> {
+    if roster.len() < 2 {
+        return roster;
+    }
+
+    let mut mpg_slots: Vec<f64> = roster.iter().map(|p| p.mpg).collect();
+    mpg_slots.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut by_rank = roster;
+    by_rank.sort_by(|a, b| {
+        let aq = a.cam_v3.unwrap_or(f64::NEG_INFINITY);
+        let bq = b.cam_v3.unwrap_or(f64::NEG_INFINITY);
+        bq.partial_cmp(&aq).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (r, p) in by_rank.iter_mut().enumerate() {
+        // Back out games_played from the original `total_min / mpg` and
+        // hold it fixed when reassigning MPG — same convention as
+        // `swap_player`. Safe because the qualification gate keeps
+        // `mpg >= 5` strictly positive on every row.
+        let games_played = if p.mpg > 0.0 {
+            p.total_min / p.mpg
+        } else {
+            0.0
+        };
+        let new_mpg = mpg_slots[r];
+        p.mpg = new_mpg;
+        p.total_min = new_mpg * games_played;
+    }
+
+    by_rank
 }
 
 /// Produce a swap-modified roster: insert the incoming player into the
@@ -774,6 +828,74 @@ mod tests {
             .find(|p| p.primary_class.as_deref() == Some("Bard"))
             .unwrap();
         assert!((bard.mpg - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_rotation_preserves_mpg_set() {
+        // Destination's actual rotation is anti-meritocratic: lower-cam_v3
+        // players have more minutes. normalize_rotation should reshuffle
+        // so high-cam_v3 players take the top MPG slots.
+        let roster = vec![
+            mk_q(Uuid::new_v4(), 30.0, 30.0, Some("Wizard"), 1.0),
+            mk_q(Uuid::new_v4(), 20.0, 30.0, Some("Bard"), 5.0),
+            mk_q(Uuid::new_v4(), 10.0, 30.0, Some("Cleric"), 3.0),
+        ];
+        let orig_mpgs: f64 = roster.iter().map(|p| p.mpg).sum();
+        let normalized = normalize_rotation(roster);
+
+        // Σ mpg unchanged — only assignments shuffled.
+        let new_mpgs: f64 = normalized.iter().map(|p| p.mpg).sum();
+        assert!((new_mpgs - orig_mpgs).abs() < 1e-9);
+
+        // Bard (cam=5) now gets top MPG (30), Cleric (cam=3) gets 20,
+        // Wizard (cam=1) gets bottom slot (10).
+        let bard = normalized
+            .iter()
+            .find(|p| p.primary_class.as_deref() == Some("Bard"))
+            .unwrap();
+        assert!((bard.mpg - 30.0).abs() < 1e-9);
+        let wizard = normalized
+            .iter()
+            .find(|p| p.primary_class.as_deref() == Some("Wizard"))
+            .unwrap();
+        assert!((wizard.mpg - 10.0).abs() < 1e-9);
+    }
+
+    /// Symmetric-normalization invariant: when the incoming player has
+    /// no cam_v3 (or is below the rotation), they take 0 mpg, so
+    /// `swap_player(normalize_rotation(r), incoming)` produces the same
+    /// feature vector as `normalize_rotation(r)` plus a bench seat. The
+    /// roster_size differs by 1; everything else matches. Locks in the
+    /// API-layer baseline-normalization contract.
+    #[test]
+    fn normalized_no_op_swap_matches_baseline_features() {
+        let roster = vec![
+            mk_q(Uuid::new_v4(), 30.0, 30.0, Some("Wizard"), 5.0),
+            mk_q(Uuid::new_v4(), 20.0, 30.0, Some("Bard"), 3.0),
+            mk_q(Uuid::new_v4(), 10.0, 30.0, Some("Cleric"), 1.0),
+        ];
+        let normalized = normalize_rotation(roster);
+        let baseline = build_roster_features(&normalized);
+
+        // Incoming with no cam_v3 falls below rotation → 0 mpg.
+        let mut incoming = mk(Uuid::new_v4(), 0.0, 30.0, Some("Sorcerer"));
+        incoming.cam_v3 = None;
+        let swapped = swap_player(&normalized, incoming);
+        let swap_feats = build_roster_features(&swapped);
+
+        // roster_size goes from 3 → 4 (incoming counts even at 0 mpg).
+        assert!((swap_feats[0] - 4.0).abs() < 1e-3);
+        assert!((baseline[0] - 3.0).abs() < 1e-3);
+        // Minutes-weighted aggregates (indices 5..21) should be
+        // *unchanged* — the incoming player contributes zero weight.
+        for i in 5..=20 {
+            assert!(
+                (swap_feats[i] - baseline[i]).abs() < 1e-3,
+                "feature {i} drifted under no-op swap: {} -> {}",
+                baseline[i],
+                swap_feats[i],
+            );
+        }
     }
 
     #[test]
