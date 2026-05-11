@@ -5,8 +5,13 @@ use axum::{
     response::Json,
     routing::get,
 };
+use cstat_core::inference::Predictor;
+use cstat_core::roster_features::{
+    PlayerRow, build_roster_features, fetch_roster, normalize_rotation, swap_player,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -66,6 +71,15 @@ struct EnrichedTransfer {
     minutes_per_game: Option<f64>,
     games_played: Option<i32>,
     url_247: Option<String>,
+    /// Projected ΔAdjEM for adding this player to the destination's
+    /// prior-season roster: `swap_pred − baseline_pred` over the
+    /// rank-slot swap engine. `null` when we can't compute it — no
+    /// resolved cstat player, no committed destination, no prior-season
+    /// stats for the player (freshmen), no prior-season roster for the
+    /// destination team, or no CamPom v3 to rank them by. See
+    /// `roster_features::swap_player` for the projection methodology
+    /// and absolute-AdjEM honesty caveats.
+    delta_adjem: Option<f32>,
 }
 
 /// One DB candidate row pulled by name match. We may have several per name
@@ -225,7 +239,7 @@ async fn transfer_list(
         by_name.entry(normalize(&c.name)).or_default().push(c);
     }
 
-    let enriched: Vec<EnrichedTransfer> = transfers
+    let mut enriched: Vec<EnrichedTransfer> = transfers
         .into_iter()
         .map(|t| {
             let key = normalize(&t.full_name);
@@ -282,9 +296,20 @@ async fn transfer_list(
                 minutes_per_game: best.and_then(|c| c.minutes_per_game),
                 games_played: best.and_then(|c| c.games_played),
                 url_247: t.player_profile_url,
+                delta_adjem: None,
             }
         })
         .collect();
+
+    // Δ pipeline: project each transfer's value-add at their committed
+    // destination by passing baseline + swap features through the same
+    // rotation-normalization, so the Δ reflects only the incoming player
+    // (not a meritocratic-rotation artifact). Failure modes set
+    // `delta_adjem = None` per row rather than failing the response —
+    // partial coverage is the expected state for years that lack
+    // prior-season data (2024 portal has no 2023 cstat data to project
+    // against, so every 2024 Δ is null by construction).
+    compute_deltas(&state.db.pool, &state.predictor, year, &mut enriched).await;
 
     Ok(Json(json!({
         "year": year,
@@ -384,4 +409,311 @@ fn team_matches(db_short: Option<&str>, db_full: Option<&str>, short_name: &str)
     db_full
         .map(|full| team_match_score(db_short, full, short_name).is_some())
         .unwrap_or(false)
+}
+
+// ─── Δ AdjEM pipeline ───────────────────────────────────────────────────────
+//
+// Projects each portal entry's value-add at their committed destination by
+// running the destination's *prior-season* roster through baseline + swap
+// predictions and reporting the difference. Prior-season is the cleanest
+// framing: the destination's roster is fully known and the player wasn't on
+// it yet, so the answer to "what would have happened if you'd added this
+// player" doesn't suffer from forward-looking data leakage. Year-1 data is
+// also a stable evaluation surface; current-season would shift under
+// in-progress ingestion.
+//
+// Cross-season UUID resolution uses `torvik_pid` (stable across team
+// changes per memory) for players and `teams.natstat_id` (unique per
+// (season, natstat_id)) for teams. Players who weren't ingested at year-1
+// (freshmen, non-D-I transfers) produce no resolved prior-season row and
+// land with `delta_adjem = null`.
+
+/// Helper struct for the prior-season PlayerRow batch fetch. Carries the
+/// CURRENT-season player_id so the caller can rebuild a
+/// (current_id → prior PlayerRow) map; everything else mirrors
+/// `roster_features::PlayerRow` field-for-field.
+#[derive(sqlx::FromRow)]
+struct PriorPlayerRow {
+    current_player_id: Uuid,
+    player_id: Uuid,
+    total_min: f64,
+    mpg: f64,
+    ppg: Option<f64>,
+    rpg: Option<f64>,
+    apg: Option<f64>,
+    spg: Option<f64>,
+    bpg: Option<f64>,
+    topg: Option<f64>,
+    ts: Option<f64>,
+    efg: Option<f64>,
+    usg: Option<f64>,
+    ast_pct: Option<f64>,
+    tov_pct: Option<f64>,
+    orb_pct: Option<f64>,
+    drb_pct: Option<f64>,
+    stl_pct: Option<f64>,
+    blk_pct: Option<f64>,
+    ft_rate: Option<f64>,
+    primary_class: Option<String>,
+    cam_v3: Option<f64>,
+}
+
+impl PriorPlayerRow {
+    fn into_player_row(self) -> PlayerRow {
+        PlayerRow {
+            player_id: self.player_id,
+            total_min: self.total_min,
+            mpg: self.mpg,
+            ppg: self.ppg,
+            rpg: self.rpg,
+            apg: self.apg,
+            spg: self.spg,
+            bpg: self.bpg,
+            topg: self.topg,
+            ts: self.ts,
+            efg: self.efg,
+            usg: self.usg,
+            ast_pct: self.ast_pct,
+            tov_pct: self.tov_pct,
+            orb_pct: self.orb_pct,
+            drb_pct: self.drb_pct,
+            stl_pct: self.stl_pct,
+            blk_pct: self.blk_pct,
+            ft_rate: self.ft_rate,
+            primary_class: self.primary_class,
+            cam_v3: self.cam_v3,
+        }
+    }
+}
+
+/// Resolve current-season player UUIDs → prior-season `PlayerRow`s via
+/// `torvik_pid` (stable cross-season identity per memory; `natstat_id`
+/// breaks on team changes). Honors the same qualification gate as
+/// `roster_features::fetch_roster` so train/serve features stay aligned.
+async fn fetch_prior_player_rows(
+    pool: &PgPool,
+    current_player_ids: &[Uuid],
+    current_season: i32,
+) -> Result<HashMap<Uuid, PlayerRow>, sqlx::Error> {
+    if current_player_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<PriorPlayerRow> = sqlx::query_as::<_, PriorPlayerRow>(
+        r#"
+        SELECT
+            curr.player_id           AS current_player_id,
+            pss.player_id,
+            (COALESCE(pss.minutes_per_game, 0) * COALESCE(pss.games_played, 0))::float8 AS total_min,
+            COALESCE(pss.minutes_per_game, 0)::float8 AS mpg,
+            pss.ppg, pss.rpg, pss.apg, pss.spg, pss.bpg, pss.topg,
+            pss.true_shooting_pct AS ts,
+            pss.effective_fg_pct  AS efg,
+            pss.usage_rate        AS usg,
+            pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
+            pss.stl_pct, pss.blk_pct, pss.ft_rate,
+            pa.primary_class,
+            prior.cam_gbpm_v3_psos AS cam_v3
+        FROM torvik_player_stats curr
+        JOIN torvik_player_stats prior
+            ON prior.torvik_pid = curr.torvik_pid
+            AND prior.season = $2
+        JOIN player_season_stats pss
+            ON pss.player_id = prior.player_id
+            AND pss.season = $2
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = pss.player_id
+            AND pa.season = $2
+        WHERE curr.player_id = ANY($1)
+          AND curr.season = $3
+          AND COALESCE(pss.games_played, 0) >= 5
+          AND COALESCE(pss.minutes_per_game, 0) >= 5
+        "#,
+    )
+    .bind(current_player_ids)
+    .bind(current_season - 1)
+    .bind(current_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.current_player_id, r.into_player_row()))
+        .collect())
+}
+
+/// Map current-season team UUIDs → prior-season team UUIDs via the cross-
+/// season-stable `teams.natstat_id` (UNIQUE on `(natstat_id, season)` per
+/// migration 001). Used to look up the destination's prior-season roster
+/// from the current-season `next_team_id` we already have.
+async fn resolve_prior_team_ids(
+    pool: &PgPool,
+    current_team_ids: &[Uuid],
+    current_season: i32,
+) -> Result<HashMap<Uuid, Uuid>, sqlx::Error> {
+    if current_team_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        current_id: Uuid,
+        prior_id: Uuid,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT t_current.id AS current_id, t_prior.id AS prior_id
+        FROM teams t_current
+        JOIN teams t_prior
+            ON t_prior.natstat_id = t_current.natstat_id
+            AND t_prior.season = $2
+        WHERE t_current.id = ANY($1) AND t_current.season = $3
+        "#,
+    )
+    .bind(current_team_ids)
+    .bind(current_season - 1)
+    .bind(current_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.current_id, r.prior_id))
+        .collect())
+}
+
+/// Compute `delta_adjem` for every eligible transfer and patch it into
+/// `enriched` in place. Eligible = has `player_id` (resolved cstat match)
+/// AND `next_team_id` (committed destination). Within the eligible set
+/// each row may still produce `None` if any of: prior-season player row
+/// missing (freshman, non-D-I source), prior-season destination team
+/// missing, prior-season roster empty (rare; small school under the
+/// qualification gate), or incoming player has no CamPom v3 to rank by.
+///
+/// Single round-trip cost: two batch queries (prior players + prior
+/// teams), one roster fetch per unique destination, two ONNX inferences
+/// per eligible row (baseline cached per destination, swap unique per
+/// row). For a 1500-row portal with ~300 unique destinations, that's
+/// ~300 baseline + ~1500 swap predictions, all sub-millisecond.
+///
+/// Errors during the pipeline (DB failure, ONNX error) log and leave the
+/// affected rows at `None` rather than failing the response — partial
+/// coverage is the documented contract.
+async fn compute_deltas(
+    pool: &PgPool,
+    predictor: &Predictor,
+    year: i32,
+    enriched: &mut [EnrichedTransfer],
+) {
+    // Step 1: collect eligible rows by index.
+    let eligible: Vec<(usize, Uuid, Uuid)> = enriched
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let pid = t.player_id?;
+            let dest = t.next_team_id?;
+            Some((i, pid, dest))
+        })
+        .collect();
+    if eligible.is_empty() {
+        return;
+    }
+
+    // Step 2: batch-resolve prior-season players + teams. Dedup before
+    // hitting the DB so re-entrants (same player listed twice) and
+    // popular destinations (many transfers committed to the same school)
+    // don't pay the round-trip more than once.
+    let mut player_ids: Vec<Uuid> = eligible.iter().map(|(_, p, _)| *p).collect();
+    player_ids.sort();
+    player_ids.dedup();
+    let mut team_ids: Vec<Uuid> = eligible.iter().map(|(_, _, t)| *t).collect();
+    team_ids.sort();
+    team_ids.dedup();
+
+    let prior_players = match fetch_prior_player_rows(pool, &player_ids, year).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "delta_adjem: prior-player fetch failed; leaving deltas null");
+            return;
+        }
+    };
+    let prior_teams = match resolve_prior_team_ids(pool, &team_ids, year).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "delta_adjem: prior-team resolution failed; leaving deltas null");
+            return;
+        }
+    };
+
+    // Step 3: fetch prior-season rosters per unique destination. Memoize
+    // so popular destinations only hit the DB once and only get
+    // normalize_rotation'd + baseline-predicted once.
+    let mut roster_cache: HashMap<Uuid, Vec<PlayerRow>> = HashMap::new();
+    let unique_prior_dests: Vec<Uuid> = {
+        let mut v: Vec<Uuid> = prior_teams.values().copied().collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    for prior_dest in unique_prior_dests {
+        match fetch_roster(pool, prior_dest, year - 1).await {
+            Ok(roster) => {
+                roster_cache.insert(prior_dest, roster);
+            }
+            Err(e) => {
+                tracing::warn!(team_id = %prior_dest, error = %e, "delta_adjem: roster fetch failed");
+            }
+        }
+    }
+
+    // Step 4: precompute baseline AdjEM per destination over the
+    // *normalized* roster (the symmetric-normalization contract that
+    // keeps Δ honest — see `roster_features::normalize_rotation` doc).
+    let mut baseline_cache: HashMap<Uuid, f32> = HashMap::new();
+    for (team_id, roster) in &roster_cache {
+        if roster.is_empty() {
+            continue;
+        }
+        let normalized = normalize_rotation(roster.clone());
+        let feats = build_roster_features(&normalized);
+        match predictor.predict_adj_em(&feats) {
+            Ok(p) => {
+                baseline_cache.insert(*team_id, p);
+            }
+            Err(e) => {
+                tracing::warn!(team_id = %team_id, error = ?e, "delta_adjem: baseline predict failed");
+            }
+        }
+    }
+
+    // Step 5: for each eligible row, compose normalized baseline + swap
+    // and patch in the delta.
+    for (i, current_pid, current_dest_id) in eligible {
+        let Some(&prior_dest_id) = prior_teams.get(&current_dest_id) else {
+            continue;
+        };
+        let Some(roster) = roster_cache.get(&prior_dest_id) else {
+            continue;
+        };
+        let Some(&baseline_pred) = baseline_cache.get(&prior_dest_id) else {
+            continue;
+        };
+        let Some(incoming) = prior_players.get(&current_pid) else {
+            continue;
+        };
+        // Without cam_v3 the rank-slot logic sinks the incoming player
+        // to the bottom of the rotation → 0 mpg → near-zero Δ that's an
+        // artifact of missing data, not a real prediction. Surface as
+        // null to keep the column honest. See `swap_player` doc.
+        if incoming.cam_v3.is_none() {
+            continue;
+        }
+        let normalized = normalize_rotation(roster.clone());
+        let swapped = swap_player(&normalized, incoming.clone());
+        let feats = build_roster_features(&swapped);
+        match predictor.predict_adj_em(&feats) {
+            Ok(swap_pred) => {
+                enriched[i].delta_adjem = Some(swap_pred - baseline_pred);
+            }
+            Err(e) => {
+                tracing::warn!(player_id = %current_pid, error = ?e, "delta_adjem: swap predict failed");
+            }
+        }
+    }
 }

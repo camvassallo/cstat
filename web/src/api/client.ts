@@ -395,6 +395,10 @@ export interface TransferRow {
   minutes_per_game: number | null;
   games_played: number | null;
   url_247: string | null;
+  /// Projected ΔAdjEM for adding this player to the destination's
+  /// prior-season roster. Null when unresolvable — see route doc on
+  /// `EnrichedTransfer.delta_adjem` for the gating conditions.
+  delta_adjem: number | null;
 }
 
 export function fetchTransfers(year: number) {
