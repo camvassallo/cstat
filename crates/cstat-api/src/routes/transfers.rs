@@ -36,7 +36,7 @@ struct TransferRow {
     height: Option<String>,
     weight: Option<i32>,
     status: String,
-    rating: Option<f64>,
+    rating: Option<f32>,
     source_institution: Option<String>,
     destination_institution: Option<String>,
     player_profile_url: Option<String>,
@@ -53,7 +53,7 @@ struct EnrichedTransfer {
     height: Option<String>,
     weight: Option<i32>,
     status: String,
-    rating_247: Option<f64>,
+    rating_247: Option<f32>,
     previous_team: Option<String>,
     previous_team_full: Option<String>,
     previous_team_id: Option<Uuid>,
@@ -121,7 +121,7 @@ async fn transfer_list(
             height,
             weight,
             status,
-            rating::float8 AS rating,
+            rating,
             source_institution,
             destination_institution,
             player_profile_url
@@ -185,7 +185,7 @@ async fn transfer_list(
     .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("query failed: {e}") })),
+            Json(json!({ "error": format!("candidates query failed: {e}") })),
         )
     })?;
 

@@ -75,7 +75,8 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
       field: 'rank_cstat',
       width: 70,
       pinned: 'left',
-      headerTooltip: 'Our rank by CamPom; players with no CamPom value are unranked',
+      headerTooltip:
+        'Our rank by CamPom among 247-ranked transfers with a CamPom value',
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="font-bold">{p.value}</span>
@@ -249,24 +250,27 @@ export default function TransferPortal({ year }: Props) {
     fetchTransfers(year)
       .then((r) => {
         if (canceled) return;
-        // Assign our rank: sort by CamPom desc; null CamPom values stay
-        // unranked (rank_cstat = null) and fall to the bottom by default.
-        const ranked = [...r.transfers].sort((a, b) => {
+        // Sort everything by CamPom desc first; rows lacking either CamPom
+        // or a 247 rank stay in the array but skip the rank counter so the
+        // displayed `rank_cstat` matches on-screen position. The endpoint
+        // returns the full portal (including unranked-by-247 entries) for
+        // the 2027-projection roster aggregator; those don't compete for
+        // a rank here.
+        const sorted = [...r.transfers].sort((a, b) => {
           if (a.campom == null && b.campom == null) return 0;
           if (a.campom == null) return 1;
           if (b.campom == null) return -1;
           return b.campom - a.campom;
         });
         let i = 0;
-        const withRank: RankedTransfer[] = ranked.map((t) => {
-          const rank_cstat = t.campom != null ? ++i : null;
+        const withRank: RankedTransfer[] = sorted.map((t) => {
+          const rank_cstat =
+            t.campom != null && t.rank_247 != null ? ++i : null;
           return {
             ...t,
             rank_cstat,
             rank_delta:
-              rank_cstat != null && t.rank_247 != null
-                ? t.rank_247 - rank_cstat
-                : null,
+              rank_cstat != null ? t.rank_247! - rank_cstat : null,
           };
         });
         setRows(withRank);
@@ -283,13 +287,10 @@ export default function TransferPortal({ year }: Props) {
 
   const filtered = useMemo(() => {
     if (!rows) return null;
-    // Rankings page is the 247-vs-CamPom value-delta view, so we need both
-    // sides of the comparison. Unranked-by-247 portal entries (the long tail
-    // the DB endpoint serves for the 2027-projection roster aggregator) and
-    // rows without CamPom both drop out here.
-    const ranked = rows.filter(
-      (t) => t.rank_cstat != null && t.rank_247 != null,
-    );
+    // `rank_cstat` is only assigned when both CamPom and 247 rank are
+    // present (see useEffect above), so this single check drops the
+    // unranked-by-247 long tail and the no-CamPom rows in one pass.
+    const ranked = rows.filter((t) => t.rank_cstat != null);
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
     // Also match the resolved full team name (e.g. searching "Jayhawks"
@@ -310,9 +311,7 @@ export default function TransferPortal({ year }: Props) {
     );
   }
 
-  const ranked =
-    rows?.filter((r) => r.rank_cstat != null && r.rank_247 != null).length ??
-    0;
+  const ranked = rows?.filter((r) => r.rank_cstat != null).length ?? 0;
   const total = rows?.length ?? 0;
   const hidden = total - ranked;
 
