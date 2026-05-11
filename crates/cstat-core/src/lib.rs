@@ -4,6 +4,7 @@ pub mod features;
 pub mod inference;
 pub mod models;
 pub mod queries;
+pub mod roster_features;
 pub mod treeshap;
 
 pub use db::Database;
