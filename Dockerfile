@@ -51,8 +51,10 @@ COPY --from=web-build  /web/dist /app/web/dist
 COPY training/models/margin_model.onnx \
      training/models/win_model.onnx \
      training/models/total_model.onnx \
+     training/models/roster_model.onnx \
      training/models/margin_model.lgb \
      training/models/model_meta.json \
+     training/models/roster_model_meta.json \
      /app/training/models/
 
 USER cstat

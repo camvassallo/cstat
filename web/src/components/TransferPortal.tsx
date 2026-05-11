@@ -187,45 +187,6 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
       valueFormatter: (p) => fmtCampom(p.value),
     },
     {
-      headerName: 'ΔAdjEM',
-      field: 'delta_adjem',
-      ...flexCol(1, 90),
-      headerTooltip:
-        'Projected change to the destination team\'s AdjEM from adding this player to their prior-season roster (rank-slot swap engine). Calibrated for Δ — absolute AdjEM is ~7.4 MAE per the LOSO backtest. Null when we lack prior-season data (e.g., freshmen, 2024 portal year).',
-      comparator: (a: number | null, b: number | null) => {
-        // Push nulls to the bottom regardless of sort direction.
-        if (a == null && b == null) return 0;
-        if (a == null) return 1;
-        if (b == null) return -1;
-        return a - b;
-      },
-      cellRenderer: (p: { value: number | null }) => {
-        if (p.value == null) return <span className="text-gray-600">—</span>;
-        const v = p.value;
-        // Tier-tinted chip: emerald for net-positive add, rose for
-        // net-negative (rare for committed-portal players but happens
-        // when the model thinks the destination already has better
-        // options at the player's rank slot), neutral for ≈0.
-        const tone =
-          v > 1.5
-            ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
-            : v > 0
-              ? 'bg-emerald-950/40 border-emerald-800 text-emerald-300'
-              : v > -1.5
-                ? 'bg-slate-800/40 border-slate-700 text-slate-300'
-                : 'bg-rose-950/40 border-rose-800 text-rose-300';
-        const text = v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1);
-        return (
-          <span
-            className={`px-1.5 rounded border text-xs font-semibold ${tone}`}
-            title={`Adding to destination's prior-season roster: ${text} AdjEM`}
-          >
-            {text}
-          </span>
-        );
-      },
-    },
-    {
       headerName: '247',
       field: 'rank_247',
       ...flexCol(1, 70),
