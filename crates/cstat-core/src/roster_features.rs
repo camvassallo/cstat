@@ -192,9 +192,11 @@ pub async fn fetch_roster(
 /// Minutes-weighted mean over `Option<f64>` values. Mirrors
 /// `weighted_mean` in `train_roster_model.py`: rows where either value or
 /// weight is missing (or weight <= 0) are dropped from numerator and
-/// denominator alike. Returns `None` when no row contributes — surfaced
-/// as `0.0` in the final feature vector to match Python's `np.nan → 0`
-/// path the model was trained on.
+/// denominator alike. Returns `None` when no row contributes; the caller
+/// in `build_roster_features` surfaces that as `0.0` — see that function's
+/// doc for the train/serve-drift caveat (training passed NaN to LightGBM;
+/// we emit 0). For qualified rosters (gp/mpg gate) every numerator stat is
+/// populated, so the drift bites only on truly empty selections.
 fn weighted_mean(values: &[Option<f64>], weights: &[f64]) -> Option<f64> {
     let mut num = 0.0;
     let mut den = 0.0;
@@ -226,10 +228,15 @@ fn mpg_stddev(roster: &[PlayerRow]) -> f64 {
 /// Aggregate one team-season's qualified player rows into the 36-feature
 /// vector consumed by `roster_model.onnx`.
 ///
-/// Feature order is locked to `ROSTER_FEATURE_NAMES`. Missing values become
-/// `0.0` (matches Python training's `np.nan → 0` LightGBM behavior — LightGBM
-/// natively handles NaN, but ONNX export squashes to zero, and the Rust path
-/// must match that to stay consistent with what the model learned).
+/// Feature order is locked to `ROSTER_FEATURE_NAMES`. Missing rate stats
+/// become `0.0` — note this is a known train/serve drift: the Python
+/// aggregator passes `NaN` to LightGBM at fit time, and ONNX LightGBM
+/// trees route NaN inputs down their default-comparison branch rather
+/// than squashing to 0. In practice the drift is small: the gp/mpg
+/// qualification gate keeps box-score numerators populated, and the
+/// archetype-share columns are *correctly* 0 when no roster member
+/// matches a class (not missing data). The remaining risk is truly
+/// rate-stat-missing players, which is rare for qualified rosters.
 ///
 /// Empty rosters return all zeros. `Predictor::predict_adj_em` will still
 /// produce a number, but the result is meaningless — callers should
@@ -343,6 +350,20 @@ pub fn build_roster_features(roster: &[PlayerRow]) -> [f32; ROSTER_NUM_FEATURES]
 /// rotation and shifts the rotation order. The rank-slot version makes
 /// the post-swap roster look like a real team's rotation, which is the
 /// distribution the model was trained on.
+///
+/// Important assumption — meritocratic rotation projection: existing
+/// players are sorted by `cam_v3` and paired with the destination's actual
+/// MPG slots in that order. So if the destination's pre-swap rotation
+/// isn't already aligned with `cam_v3` (e.g., a coach plays a freshman
+/// over a higher-cam_v3 senior for development reasons), running
+/// `swap_player` reshuffles the existing players' MPG assignments — not
+/// just the slot the incoming player took. For the Δ surface to stay
+/// honest, the API layer should compute the baseline by passing the
+/// destination through the same rank-sort (i.e., baseline features =
+/// `build_roster_features` over a `cam_v3`-rotation-normalized roster),
+/// so that any pre-existing rotation suboptimality cancels out and
+/// `Δ ≈ 0` for a no-op swap. Without that normalization the Δ inherits
+/// part of the rotation-correction artifact.
 ///
 /// Minutes-envelope invariant: the set of MPG slots is unchanged (just
 /// reassigned), so `Σ mpg_new = Σ mpg_old`. `total_min` is recomputed per
