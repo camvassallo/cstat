@@ -127,6 +127,19 @@ pub async fn bootstrap_from_snapshot(
             path: path.display().to_string(),
         })?;
 
+    // Footgun guard: if the snapshot wrapper labels itself with a year and it
+    // disagrees with the CLI --year, warn loudly. Don't hard-fail — the user
+    // may have a reason (e.g. re-ingesting an old file with a fresh year tag).
+    if let Some(snap_year) = body.get("year").and_then(|v| v.as_i64())
+        && snap_year as i32 != year
+    {
+        warn!(
+            cli_year = year,
+            snapshot_year = snap_year,
+            "snapshot's year metadata disagrees with --year; proceeding with --year"
+        );
+    }
+
     info!(
         year,
         count = players.len(),
@@ -150,8 +163,8 @@ pub async fn bootstrap_from_snapshot(
 }
 
 /// Apply a slice of player objects to the DB. Returns the number of rows
-/// upserted (skipped rows — e.g. predating the incremental cursor — don't
-/// count).
+/// upserted (skipped rows — predating the incremental cursor, or malformed —
+/// don't count).
 async fn apply_page(
     players: &[Value],
     pool: &PgPool,
@@ -170,19 +183,33 @@ async fn apply_page(
         {
             continue;
         }
-        upsert_player(player, pool, year).await?;
-        applied += 1;
+        if upsert_player(player, pool, year).await? {
+            applied += 1;
+        }
     }
     Ok(applied)
 }
 
 /// Insert or update one transfers row from a single player JSON object.
-pub async fn upsert_player(p: &Value, pool: &PgPool, year: i32) -> Result<(), TransferIngestError> {
-    let tfs_key = p.get("key").and_then(|v| v.as_i64()).ok_or_else(|| {
-        TransferIngestError::InvalidSnapshot {
-            path: format!("player missing `key`: {p}"),
-        }
-    })?;
+///
+/// Returns `Ok(true)` on a successful upsert, `Ok(false)` if the row was
+/// skipped (e.g. missing the required `key` field). DB errors propagate; a
+/// single malformed JSON row warns and skips so that one bad apple in 247's
+/// data doesn't kill the whole 2,000+ row ingest.
+pub async fn upsert_player(
+    p: &Value,
+    pool: &PgPool,
+    year: i32,
+) -> Result<bool, TransferIngestError> {
+    let Some(tfs_key) = p.get("key").and_then(|v| v.as_i64()) else {
+        warn!(
+            year,
+            first_name = ?p.get("firstName").and_then(|v| v.as_str()),
+            last_name = ?p.get("lastName").and_then(|v| v.as_str()),
+            "skipping player row: missing `key` field"
+        );
+        return Ok(false);
+    };
 
     let first_name = string(p.get("firstName")).unwrap_or_default();
     let last_name = string(p.get("lastName")).unwrap_or_default();
@@ -333,7 +360,7 @@ pub async fn upsert_player(p: &Value, pool: &PgPool, year: i32) -> Result<(), Tr
     .execute(pool)
     .await?;
 
-    Ok(())
+    Ok(true)
 }
 
 /// Pick the primary destination from `transfer.destination[]`. Tie-breaker:
@@ -378,6 +405,14 @@ async fn last_update_cursor(
 /// for the ~few-percent of rows where suffixes ("Jr.", "III") differ between
 /// 247 and cstat.
 pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, TransferIngestError> {
+    // Both `t.year` and `p.season` bind to the same `$1`. Different concepts
+    // that numerically coincide:
+    //   - `t.year` is the *transfer class year* (calendar year of the spring
+    //     portal cycle). 247's `year=2026` = spring-2026 portal.
+    //   - `p.season` is the *cstat-season end-year* (NCAA academic year's
+    //     spring half). 2025-26 academic year = season 2026.
+    // Spring 2026 portal → players whose last completed season was 2025-26
+    // → both labelled `2026`. The semantics differ; the integer matches.
     let result = sqlx::query(
         r#"
         UPDATE transfers t

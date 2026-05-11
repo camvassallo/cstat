@@ -109,6 +109,9 @@ impl TfsClient {
             http: Client::builder()
                 .user_agent(USER_AGENT)
                 .gzip(true)
+                // 247 responses are normally ~200ms; a 30s ceiling stops a
+                // single stalled request from blocking the whole ingest.
+                .timeout(Duration::from_secs(30))
                 .build()
                 .expect("failed to build HTTP client"),
             jwt,

@@ -175,9 +175,10 @@ enum Commands {
         #[arg(long)]
         bootstrap_from: Option<std::path::PathBuf>,
 
-        /// After ingest, resolve cstat_player_id joins by name + source-team match.
-        #[arg(long, default_value_t = true)]
-        resolve_players: bool,
+        /// Skip the cstat_player_id resolution pass after ingest. By default
+        /// we resolve `(full_name, source_institution)` → `players.id` joins.
+        #[arg(long)]
+        no_resolve_players: bool,
     },
 
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
@@ -349,7 +350,7 @@ async fn main() -> Result<()> {
             year,
             incremental,
             bootstrap_from,
-            resolve_players,
+            no_resolve_players,
         } => {
             let report = if let Some(path) = bootstrap_from {
                 info!("bootstrapping transfers from {}", path.display());
@@ -365,7 +366,7 @@ async fn main() -> Result<()> {
                 report.year, report.upserts, report.total_pages
             );
 
-            if resolve_players {
+            if !no_resolve_players {
                 let n =
                     cstat_ingest::ingest::transfers::resolve_cstat_joins(&db.pool, year).await?;
                 println!("cstat_player_id resolved on {n} row(s)");

@@ -120,3 +120,11 @@ CREATE INDEX IF NOT EXISTS transfers_full_name_lower_idx
 -- Incremental-refresh driver: SELECT WHERE last_update_date > <our last cursor>.
 CREATE INDEX IF NOT EXISTS transfers_last_update_idx
     ON transfers (year, last_update_date DESC);
+
+-- Reverse-join index for queries like `players p JOIN transfers t ON
+-- t.cstat_player_id = p.id` (player detail page surfaces "this player is in
+-- the portal"). Postgres doesn't auto-index the referencing side of a FK,
+-- only the referenced PK. Partial — most rows stay NULL until resolve_cstat_joins runs.
+CREATE INDEX IF NOT EXISTS transfers_cstat_player_id_idx
+    ON transfers (cstat_player_id)
+    WHERE cstat_player_id IS NOT NULL;
