@@ -3,9 +3,11 @@ pub mod campom_parity;
 pub mod client;
 pub mod ingest;
 pub mod rate_limiter;
+pub mod tfs;
 pub mod torvik;
 
 pub use client::NatStatClient;
+pub use tfs::TfsClient;
 pub use torvik::TorkvikClient;
 
 use chrono::{Datelike, Utc};

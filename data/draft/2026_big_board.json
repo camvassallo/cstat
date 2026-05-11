@@ -1,0 +1,2322 @@
+[
+  {
+    "rank": 1,
+    "name": "Cameron Boozer",
+    "current_team": "Duke",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 250,
+    "class_year": "Freshman",
+    "age": 18.9,
+    "tier": "lottery",
+    "stats": {
+      "pts": 24.2,
+      "reb": 11.0,
+      "ast": 4.4,
+      "blk": 0.7,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 2,
+    "name": "Darryn Peterson",
+    "current_team": "Kansas",
+    "position": "SG/PG",
+    "height": "6-6",
+    "weight": 205,
+    "class_year": "Freshman",
+    "age": 19.4,
+    "tier": "lottery",
+    "stats": {
+      "pts": 25.0,
+      "reb": 5.2,
+      "ast": 2.0,
+      "blk": 0.8,
+      "stl": 1.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 3,
+    "name": "AJ Dybantsa",
+    "current_team": "BYU",
+    "position": "SF",
+    "height": "6-9",
+    "weight": 210,
+    "class_year": "Freshman",
+    "age": 19.4,
+    "tier": "lottery",
+    "stats": {
+      "pts": 26.4,
+      "reb": 7.1,
+      "ast": 3.8,
+      "blk": 0.4,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 4,
+    "name": "Caleb Wilson",
+    "current_team": "North Carolina",
+    "position": "SF/PF",
+    "height": "6-10",
+    "weight": 215,
+    "class_year": "Freshman",
+    "age": 19.9,
+    "tier": "lottery",
+    "stats": {
+      "pts": 22.8,
+      "reb": 10.8,
+      "ast": 3.1,
+      "blk": 1.6,
+      "stl": 1.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 5,
+    "name": "Kingston Flemings",
+    "current_team": "Houston",
+    "position": "PG",
+    "height": "6-4",
+    "weight": 190,
+    "class_year": "Freshman",
+    "age": 19.5,
+    "tier": "lottery",
+    "stats": {
+      "pts": 18.2,
+      "reb": 4.6,
+      "ast": 5.9,
+      "blk": 0.4,
+      "stl": 1.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 6,
+    "name": "Darius Acuff Jr.",
+    "current_team": "Arkansas",
+    "position": "PG",
+    "height": "6-3",
+    "weight": 190,
+    "class_year": "Freshman",
+    "age": 19.6,
+    "tier": "lottery",
+    "stats": {
+      "pts": 24.1,
+      "reb": 3.2,
+      "ast": 6.6,
+      "blk": 0.3,
+      "stl": 0.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 7,
+    "name": "Keaton Wagler",
+    "current_team": "Illinois",
+    "position": "SG/PG",
+    "height": "6-6",
+    "weight": 185,
+    "class_year": "Freshman",
+    "age": 19.4,
+    "tier": "lottery",
+    "stats": {
+      "pts": 19.0,
+      "reb": 5.4,
+      "ast": 4.5,
+      "blk": 0.4,
+      "stl": 1.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 8,
+    "name": "Brayden Burries",
+    "current_team": "Arizona",
+    "position": "SG/PG",
+    "height": "6-4",
+    "weight": 205,
+    "class_year": "Freshman",
+    "age": 20.8,
+    "tier": "lottery",
+    "stats": {
+      "pts": 19.4,
+      "reb": 5.9,
+      "ast": 2.9,
+      "blk": 0.2,
+      "stl": 1.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 9,
+    "name": "Mikel Brown Jr.",
+    "current_team": "Louisville",
+    "position": "PG",
+    "height": "6-5",
+    "weight": 190,
+    "class_year": "Freshman",
+    "age": 20.2,
+    "tier": "lottery",
+    "stats": {
+      "pts": 22.4,
+      "reb": 4.1,
+      "ast": 5.8,
+      "blk": 0.2,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 10,
+    "name": "Nate Ament",
+    "current_team": "Tennessee",
+    "position": "SF",
+    "height": "6-10",
+    "weight": 207,
+    "class_year": "Freshman",
+    "age": 19.5,
+    "tier": "lottery",
+    "stats": {
+      "pts": 20.2,
+      "reb": 7.7,
+      "ast": 2.8,
+      "blk": 0.8,
+      "stl": 1.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 11,
+    "name": "Labaron Philon Jr.",
+    "current_team": "Alabama",
+    "position": "PG",
+    "height": "6-4",
+    "weight": 175,
+    "class_year": "Sophomore",
+    "age": 20.6,
+    "tier": "lottery",
+    "stats": {
+      "pts": 25.6,
+      "reb": 4.1,
+      "ast": 5.8,
+      "blk": 0.2,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 12,
+    "name": "Yaxel Lendeborg",
+    "current_team": "Michigan",
+    "position": "PF",
+    "height": "6-9.75",
+    "weight": 235,
+    "class_year": "Senior",
+    "age": 23.7,
+    "tier": "lottery",
+    "stats": {
+      "pts": 18.0,
+      "reb": 8.1,
+      "ast": 3.9,
+      "blk": 1.5,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 13,
+    "name": "Hannes Steinbach",
+    "current_team": "Washington",
+    "position": "PF",
+    "height": "6-11",
+    "weight": 220,
+    "class_year": "Freshman",
+    "age": 20.1,
+    "tier": "lottery",
+    "stats": {
+      "pts": 19.3,
+      "reb": 12.2,
+      "ast": 1.6,
+      "blk": 1.3,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 14,
+    "name": "Karim López",
+    "current_team": "New Zealand",
+    "position": "SF",
+    "height": "6-8",
+    "weight": 220,
+    "class_year": "International",
+    "age": 19.2,
+    "tier": "lottery",
+    "stats": {
+      "pts": 16.8,
+      "reb": 8.5,
+      "ast": 2.7,
+      "blk": 1.5,
+      "stl": 1.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 15,
+    "name": "Chris Cenac Jr.",
+    "current_team": "Houston",
+    "position": "PF/C",
+    "height": "6-11",
+    "weight": 240,
+    "class_year": "Freshman",
+    "age": 19.4,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 13.8,
+      "reb": 11.4,
+      "ast": 1.1,
+      "blk": 0.7,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 16,
+    "name": "Tounde Yessoufou",
+    "current_team": "Baylor",
+    "position": "SG/SF",
+    "height": "6-5",
+    "weight": 215,
+    "class_year": "Freshman",
+    "age": 20.1,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 19.7,
+      "reb": 6.5,
+      "ast": 1.8,
+      "blk": 0.7,
+      "stl": 2.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 17,
+    "name": "Koa Peat",
+    "current_team": "Arizona",
+    "position": "PF",
+    "height": "6-8",
+    "weight": 235,
+    "class_year": "Freshman",
+    "age": 19.4,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 18.3,
+      "reb": 7.3,
+      "ast": 3.3,
+      "blk": 0.9,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 18,
+    "name": "Jayden Quaintance",
+    "current_team": "Kentucky",
+    "position": "PF",
+    "height": "6-10.5",
+    "weight": 255,
+    "class_year": "Sophomore",
+    "age": 18.9,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 10.7,
+      "reb": 10.7,
+      "ast": 1.1,
+      "blk": 1.6,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 19,
+    "name": "Bennett Stirtz",
+    "current_team": "Iowa",
+    "position": "PG",
+    "height": "6-4",
+    "weight": 190,
+    "class_year": "Senior",
+    "age": 22.7,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 18.9,
+      "reb": 2.5,
+      "ast": 4.2,
+      "blk": 0.2,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 20,
+    "name": "Christian Anderson",
+    "current_team": "Texas Tech",
+    "position": "PG",
+    "height": "6-3",
+    "weight": 178,
+    "class_year": "Sophomore",
+    "age": 20.2,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 17.4,
+      "reb": 3.4,
+      "ast": 6.9,
+      "blk": 0.2,
+      "stl": 1.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 21,
+    "name": "Cameron Carr",
+    "current_team": "Baylor",
+    "position": "SG",
+    "height": "6-5",
+    "weight": 175,
+    "class_year": "Sophomore",
+    "age": 21.6,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 20.2,
+      "reb": 6.2,
+      "ast": 2.8,
+      "blk": 1.4,
+      "stl": 0.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 22,
+    "name": "Allen Graves",
+    "current_team": "Santa Clara",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 225,
+    "class_year": "Freshman",
+    "age": 19.9,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 18.8,
+      "reb": 10.4,
+      "ast": 2.9,
+      "blk": 1.5,
+      "stl": 3.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 23,
+    "name": "Isaiah Evans",
+    "current_team": "Duke",
+    "position": "SF",
+    "height": "6-6",
+    "weight": 180,
+    "class_year": "Sophomore",
+    "age": 20.5,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 19.2,
+      "reb": 4.1,
+      "ast": 1.6,
+      "blk": 0.8,
+      "stl": 0.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 24,
+    "name": "Aday Mara",
+    "current_team": "Michigan",
+    "position": "C",
+    "height": "7-3",
+    "weight": 255,
+    "class_year": "Junior",
+    "age": 21.2,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 18.6,
+      "reb": 10.4,
+      "ast": 3.7,
+      "blk": 4.0,
+      "stl": 0.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 25,
+    "name": "Tyler Tanner",
+    "current_team": "Vanderbilt",
+    "position": "PG",
+    "height": "6-0",
+    "weight": 175,
+    "class_year": "Sophomore",
+    "age": 20.4,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 21.0,
+      "reb": 3.9,
+      "ast": 5.5,
+      "blk": 0.4,
+      "stl": 2.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 26,
+    "name": "Joshua Jefferson",
+    "current_team": "Iowa State",
+    "position": "PF/SF",
+    "height": "6-9",
+    "weight": 240,
+    "class_year": "Senior",
+    "age": 22.6,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 19.1,
+      "reb": 8.6,
+      "ast": 5.6,
+      "blk": 1.0,
+      "stl": 1.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 27,
+    "name": "Amari Allen",
+    "current_team": "Alabama",
+    "position": "SF",
+    "height": "6-8",
+    "weight": 205,
+    "class_year": "Freshman",
+    "age": 20.4,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 14.6,
+      "reb": 8.9,
+      "ast": 4.0,
+      "blk": 0.9,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 28,
+    "name": "Morez Johnson Jr.",
+    "current_team": "Michigan",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 250,
+    "class_year": "Sophomore",
+    "age": 20.4,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 18.8,
+      "reb": 10.5,
+      "ast": 1.7,
+      "blk": 1.6,
+      "stl": 1.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 29,
+    "name": "Dailyn Swain",
+    "current_team": "Texas",
+    "position": "SG/SF",
+    "height": "6-8",
+    "weight": 225,
+    "class_year": "Junior",
+    "age": 20.9,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 19.0,
+      "reb": 8.3,
+      "ast": 3.9,
+      "blk": 0.3,
+      "stl": 1.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 30,
+    "name": "Ebuka Okorie",
+    "current_team": "Stanford",
+    "position": "PG",
+    "height": "6-2",
+    "weight": 185,
+    "class_year": "Freshman",
+    "age": 19.2,
+    "tier": "1st-round",
+    "stats": {
+      "pts": 23.8,
+      "reb": 3.7,
+      "ast": 3.7,
+      "blk": 0.3,
+      "stl": 1.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 31,
+    "name": "Meleek Thomas",
+    "current_team": "Arkansas",
+    "position": "SG/PG",
+    "height": "6-5",
+    "weight": 185,
+    "class_year": "Freshman",
+    "age": 19.9,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 18.5,
+      "reb": 4.5,
+      "ast": 2.9,
+      "blk": 0.2,
+      "stl": 1.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 32,
+    "name": "Alex Karaban",
+    "current_team": "UConn",
+    "position": "SF/PF",
+    "height": "6-7.75",
+    "weight": 219,
+    "class_year": "Senior",
+    "age": 23.6,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 13.8,
+      "reb": 5.5,
+      "ast": 2.5,
+      "blk": 0.9,
+      "stl": 0.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 33,
+    "name": "Henri Veesaar",
+    "current_team": "North Carolina",
+    "position": "C",
+    "height": "7-0",
+    "weight": 225,
+    "class_year": "Junior",
+    "age": 22.2,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 19.5,
+      "reb": 10.0,
+      "ast": 2.4,
+      "blk": 1.4,
+      "stl": 0.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 34,
+    "name": "Motiejus Krivas",
+    "current_team": "Arizona",
+    "position": "C",
+    "height": "7-2",
+    "weight": 260,
+    "class_year": "Junior",
+    "age": 21.6,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 14.8,
+      "reb": 11.6,
+      "ast": 1.6,
+      "blk": 2.7,
+      "stl": 1.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 35,
+    "name": "Alijah Arenas",
+    "current_team": "USC",
+    "position": "SG",
+    "height": "6-6",
+    "weight": 197,
+    "class_year": "Freshman",
+    "age": 19.3,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 18.4,
+      "reb": 3.7,
+      "ast": 2.7,
+      "blk": 0.7,
+      "stl": 1.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 36,
+    "name": "Flory Bidunga",
+    "current_team": "Kansas",
+    "position": "C",
+    "height": "6-10",
+    "weight": 235,
+    "class_year": "Sophomore",
+    "age": 21.1,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 15.1,
+      "reb": 10.2,
+      "ast": 1.7,
+      "blk": 3.0,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 37,
+    "name": "Tarris Reed Jr.",
+    "current_team": "UConn",
+    "position": "C",
+    "height": "6-11",
+    "weight": 265,
+    "class_year": "Senior",
+    "age": 22.9,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 19.4,
+      "reb": 11.8,
+      "ast": 3.0,
+      "blk": 2.6,
+      "stl": 1.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 38,
+    "name": "Sergio de Larrea",
+    "current_team": "Valencia",
+    "position": "PG/SG",
+    "height": "6-6",
+    "weight": 198,
+    "class_year": "International",
+    "age": 20.5,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 17.5,
+      "reb": 5.2,
+      "ast": 7.3,
+      "blk": 0.4,
+      "stl": 1.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 39,
+    "name": "Zuby Ejiofor",
+    "current_team": "St. John's",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 245,
+    "class_year": "Senior",
+    "age": 22.2,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 19.6,
+      "reb": 8.8,
+      "ast": 4.3,
+      "blk": 2.6,
+      "stl": 1.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 40,
+    "name": "Juke Harris",
+    "current_team": "Wake Forest",
+    "position": "SG",
+    "height": "6-7",
+    "weight": 200,
+    "class_year": "Sophomore",
+    "age": 20.9,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 22.0,
+      "reb": 6.7,
+      "ast": 2.0,
+      "blk": 0.2,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 41,
+    "name": "Richie Saunders",
+    "current_team": "BYU",
+    "position": "SG",
+    "height": "6-5",
+    "weight": 200,
+    "class_year": "Senior",
+    "age": 24.8,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 20.7,
+      "reb": 6.6,
+      "ast": 2.4,
+      "blk": 0.3,
+      "stl": 2.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 42,
+    "name": "Ryan Conwell",
+    "current_team": "Louisville",
+    "position": "SG",
+    "height": "6-4",
+    "weight": 215,
+    "class_year": "Senior",
+    "age": 22.0,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 21.9,
+      "reb": 5.6,
+      "ast": 3.1,
+      "blk": 0.2,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 43,
+    "name": "JT Toppin",
+    "current_team": "Texas Tech",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 230,
+    "class_year": "Junior",
+    "age": 21.0,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 22.6,
+      "reb": 11.2,
+      "ast": 2.2,
+      "blk": 1.8,
+      "stl": 1.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 44,
+    "name": "Jaden Bradley",
+    "current_team": "Arizona",
+    "position": "PG",
+    "height": "6-3",
+    "weight": 205,
+    "class_year": "Senior",
+    "age": 22.8,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 15.6,
+      "reb": 4.0,
+      "ast": 5.1,
+      "blk": 0.1,
+      "stl": 1.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 45,
+    "name": "Rueben Chinyelu",
+    "current_team": "Florida",
+    "position": "C",
+    "height": "6-10",
+    "weight": 265,
+    "class_year": "Junior",
+    "age": 22.7,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 16.0,
+      "reb": 16.5,
+      "ast": 1.0,
+      "blk": 1.5,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 46,
+    "name": "JoJo Tugler",
+    "current_team": "Houston",
+    "position": "PF",
+    "height": "6-8",
+    "weight": 230,
+    "class_year": "Junior",
+    "age": 21.1,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 12.9,
+      "reb": 8.1,
+      "ast": 2.0,
+      "blk": 2.3,
+      "stl": 1.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 47,
+    "name": "Milan Momcilovic",
+    "current_team": "Iowa State",
+    "position": "SF/PF",
+    "height": "6-8",
+    "weight": 225,
+    "class_year": "Junior",
+    "age": 21.7,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 19.9,
+      "reb": 3.7,
+      "ast": 1.2,
+      "blk": 0.3,
+      "stl": 1.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 48,
+    "name": "Bruce Thornton",
+    "current_team": "Ohio State",
+    "position": "PG",
+    "height": "6-2",
+    "weight": 215,
+    "class_year": "Senior",
+    "age": 22.8,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 19.6,
+      "reb": 5.0,
+      "ast": 3.9,
+      "blk": 0.2,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 49,
+    "name": "Emanuel Sharp",
+    "current_team": "Houston",
+    "position": "SG",
+    "height": "6-3",
+    "weight": 205,
+    "class_year": "Senior",
+    "age": 22.3,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 18.9,
+      "reb": 3.6,
+      "ast": 2.1,
+      "blk": 0.1,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 50,
+    "name": "Braden Smith",
+    "current_team": "Purdue",
+    "position": "PG",
+    "height": "6-0",
+    "weight": 170,
+    "class_year": "Senior",
+    "age": 22.9,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 14.9,
+      "reb": 3.7,
+      "ast": 9.2,
+      "blk": 0.2,
+      "stl": 1.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 51,
+    "name": "Trevon Brazile",
+    "current_team": "Arkansas",
+    "position": "PF",
+    "height": "6-10.5",
+    "weight": 215,
+    "class_year": "Senior",
+    "age": 23.4,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 14.9,
+      "reb": 8.4,
+      "ast": 1.8,
+      "blk": 1.8,
+      "stl": 1.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 52,
+    "name": "Paul McNeil Jr.",
+    "current_team": "NC State",
+    "position": "SG",
+    "height": "6-5",
+    "weight": 190,
+    "class_year": "Sophomore",
+    "age": 20.2,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 17.4,
+      "reb": 4.5,
+      "ast": 1.0,
+      "blk": 0.5,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 53,
+    "name": "Otega Oweh",
+    "current_team": "Kentucky",
+    "position": "SG",
+    "height": "6-5.5",
+    "weight": 213,
+    "class_year": "Senior",
+    "age": 22.9,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 20.5,
+      "reb": 5.3,
+      "ast": 2.9,
+      "blk": 0.3,
+      "stl": 2.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 54,
+    "name": "Tamin Lipsey",
+    "current_team": "Iowa State",
+    "position": "PG",
+    "height": "6-1",
+    "weight": 200,
+    "class_year": "Senior",
+    "age": 22.9,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 15.4,
+      "reb": 4.5,
+      "ast": 5.8,
+      "blk": 0.0,
+      "stl": 2.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 55,
+    "name": "Baba Miller",
+    "current_team": "Cincinnati",
+    "position": "SF",
+    "height": "6-11",
+    "weight": 225,
+    "class_year": "Senior",
+    "age": 22.4,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 14.7,
+      "reb": 11.7,
+      "ast": 4.2,
+      "blk": 1.3,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 56,
+    "name": "Keyshawn Hall",
+    "current_team": "Auburn",
+    "position": "SF",
+    "height": "6-7",
+    "weight": 225,
+    "class_year": "Senior",
+    "age": 23.2,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 20.6,
+      "reb": 7.6,
+      "ast": 2.8,
+      "blk": 0.7,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 57,
+    "name": "Nate Bittle",
+    "current_team": "Oregon",
+    "position": "C",
+    "height": "7-0",
+    "weight": 250,
+    "class_year": "Senior",
+    "age": 23.0,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 19.4,
+      "reb": 8.0,
+      "ast": 3.0,
+      "blk": 2.1,
+      "stl": 1.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 58,
+    "name": "Milos Uzan",
+    "current_team": "Houston",
+    "position": "PG",
+    "height": "6-4.5",
+    "weight": 186,
+    "class_year": "Senior",
+    "age": 23.5,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 12.1,
+      "reb": 2.9,
+      "ast": 4.4,
+      "blk": 0.1,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 59,
+    "name": "Jeremy Fears Jr.",
+    "current_team": "Michigan State",
+    "position": "PG",
+    "height": "6-2",
+    "weight": 190,
+    "class_year": "Sophomore",
+    "age": 21.2,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 16.9,
+      "reb": 2.7,
+      "ast": 10.4,
+      "blk": 0.0,
+      "stl": 1.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 60,
+    "name": "Dillon Mitchell",
+    "current_team": "St. John's",
+    "position": "SF",
+    "height": "6-7.75",
+    "weight": 210,
+    "class_year": "Senior",
+    "age": 22.7,
+    "tier": "2nd-round",
+    "stats": {
+      "pts": 10.7,
+      "reb": 9.0,
+      "ast": 3.8,
+      "blk": 0.9,
+      "stl": 1.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 61,
+    "name": "Kylan Boswell",
+    "current_team": "Illinois",
+    "position": "PG",
+    "height": "6-2",
+    "weight": 215,
+    "class_year": "Senior",
+    "age": 21.2,
+    "tier": "fringe",
+    "stats": {
+      "pts": 14.7,
+      "reb": 4.8,
+      "ast": 3.6,
+      "blk": 0.0,
+      "stl": 0.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 62,
+    "name": "Coen Carr",
+    "current_team": "Michigan State",
+    "position": "SF/PF",
+    "height": "6-6",
+    "weight": 230,
+    "class_year": "Junior",
+    "age": 21.6,
+    "tier": "fringe",
+    "stats": {
+      "pts": 14.8,
+      "reb": 6.6,
+      "ast": 1.5,
+      "blk": 1.0,
+      "stl": 0.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 63,
+    "name": "Darrion Williams",
+    "current_team": "NC State",
+    "position": "SF",
+    "height": "6-5.75",
+    "weight": 236,
+    "class_year": "Senior",
+    "age": 23.2,
+    "tier": "fringe",
+    "stats": {
+      "pts": 16.7,
+      "reb": 5.5,
+      "ast": 3.3,
+      "blk": 0.4,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 64,
+    "name": "Bryce Hopkins",
+    "current_team": "St. John's",
+    "position": "SF",
+    "height": "6-7",
+    "weight": 225,
+    "class_year": "Senior",
+    "age": 23.8,
+    "tier": "fringe",
+    "stats": {
+      "pts": 17.0,
+      "reb": 7.8,
+      "ast": 2.4,
+      "blk": 0.3,
+      "stl": 1.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 65,
+    "name": "Tucker DeVries",
+    "current_team": "Indiana",
+    "position": "SG/SF",
+    "height": "6-7",
+    "weight": 220,
+    "class_year": "Senior",
+    "age": 23.5,
+    "tier": "fringe",
+    "stats": {
+      "pts": 14.4,
+      "reb": 5.5,
+      "ast": 3.5,
+      "blk": 0.6,
+      "stl": 1.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 66,
+    "name": "Malik Reneau",
+    "current_team": "Miami",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 238,
+    "class_year": "Senior",
+    "age": 23.2,
+    "tier": "fringe",
+    "stats": {
+      "pts": 23.5,
+      "reb": 8.1,
+      "ast": 2.6,
+      "blk": 1.0,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": 67,
+    "name": "Mark Mitchell",
+    "current_team": "Missouri",
+    "position": "SF/PF",
+    "height": "6-9",
+    "weight": 230,
+    "class_year": "Senior",
+    "age": 22.8,
+    "tier": "fringe",
+    "stats": {
+      "pts": 19.6,
+      "reb": 5.5,
+      "ast": 3.8,
+      "blk": 0.5,
+      "stl": 0.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Michael Ajayi",
+    "current_team": "Butler",
+    "position": "PF",
+    "height": "6-7",
+    "weight": 228,
+    "class_year": "Senior",
+    "age": 22.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 17.6,
+      "reb": 11.9,
+      "ast": 3.4,
+      "blk": 1.0,
+      "stl": 1.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Terrance Arceneaux",
+    "current_team": "NC State",
+    "position": "SG",
+    "height": "6-6",
+    "weight": 205,
+    "class_year": "Senior",
+    "age": 22.6,
+    "tier": "unranked",
+    "stats": {
+      "pts": 8.7,
+      "reb": 6.0,
+      "ast": 1.1,
+      "blk": 0.8,
+      "stl": 2.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Neoklis Avdalas",
+    "current_team": "Virginia Tech",
+    "position": "SG/SF",
+    "height": "6-8.75",
+    "weight": 198,
+    "class_year": "Freshman",
+    "age": 20.4,
+    "tier": "unranked",
+    "stats": {
+      "pts": 13.7,
+      "reb": 3.5,
+      "ast": 5.2,
+      "blk": 0.6,
+      "stl": 0.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Solo Ball",
+    "current_team": "UConn",
+    "position": "SG",
+    "height": "6-4",
+    "weight": 200,
+    "class_year": "Junior",
+    "age": 22.5,
+    "tier": "unranked",
+    "stats": {
+      "pts": 16.3,
+      "reb": 3.8,
+      "ast": 1.9,
+      "blk": 0.3,
+      "stl": 0.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Jalil Bethea",
+    "current_team": "Alabama",
+    "position": "SG",
+    "height": "6-5",
+    "weight": 190,
+    "class_year": "Sophomore",
+    "age": 20.5,
+    "tier": "unranked",
+    "stats": {
+      "pts": 17.6,
+      "reb": 7.5,
+      "ast": 2.4,
+      "blk": 0.3,
+      "stl": 0.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Omaha Biliew",
+    "current_team": "Wake Forest",
+    "position": "PF",
+    "height": "6-8",
+    "weight": 230,
+    "class_year": "Junior",
+    "age": 21.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 11.2,
+      "reb": 4.3,
+      "ast": 0.9,
+      "blk": 0.7,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Xavier Booker",
+    "current_team": "UCLA",
+    "position": "PF",
+    "height": "6-11",
+    "weight": 245,
+    "class_year": "Junior",
+    "age": 21.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 13.1,
+      "reb": 6.3,
+      "ast": 1.3,
+      "blk": 2.1,
+      "stl": 0.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Cayden Boozer",
+    "current_team": "Duke",
+    "position": "PG",
+    "height": "6-4",
+    "weight": 205,
+    "class_year": "Freshman",
+    "age": 18.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 12.1,
+      "reb": 3.6,
+      "ast": 4.7,
+      "blk": 0.1,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Aaron Bradshaw",
+    "current_team": "Memphis",
+    "position": "C",
+    "height": "7-1",
+    "weight": 225,
+    "class_year": "Junior",
+    "age": 22.2,
+    "tier": "unranked",
+    "stats": {
+      "pts": 16.4,
+      "reb": 8.1,
+      "ast": 1.0,
+      "blk": 1.0,
+      "stl": 1.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Miles Byrd",
+    "current_team": "San Diego State",
+    "position": "SG",
+    "height": "6-6",
+    "weight": 182,
+    "class_year": "Junior",
+    "age": 21.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 13.4,
+      "reb": 6.0,
+      "ast": 3.3,
+      "blk": 1.6,
+      "stl": 2.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Elliot Cadeau",
+    "current_team": "Michigan",
+    "position": "PG",
+    "height": "6-1",
+    "weight": 180,
+    "class_year": "Junior",
+    "age": 21.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 13.8,
+      "reb": 3.6,
+      "ast": 7.7,
+      "blk": 0.3,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Kanaan Carlyle",
+    "current_team": "Florida Atlantic",
+    "position": "PG/SG",
+    "height": "6-3",
+    "weight": 182,
+    "class_year": "Junior",
+    "age": 21.7,
+    "tier": "unranked",
+    "stats": {
+      "pts": 16.5,
+      "reb": 4.4,
+      "ast": 3.4,
+      "blk": 0.2,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Daimion Collins",
+    "current_team": "South Florida",
+    "position": "PF/C",
+    "height": "6-9",
+    "weight": 200,
+    "class_year": "Senior",
+    "age": 23.6,
+    "tier": "unranked",
+    "stats": {
+      "pts": 10.3,
+      "reb": 8.0,
+      "ast": 1.0,
+      "blk": 3.6,
+      "stl": 0.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Alex Condon",
+    "current_team": "Florida",
+    "position": "PF/C",
+    "height": "7-0.5",
+    "weight": 222,
+    "class_year": "Junior",
+    "age": 21.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 17.8,
+      "reb": 8.8,
+      "ast": 4.3,
+      "blk": 1.7,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Dash Daniels",
+    "current_team": "Melbourne",
+    "position": "SG",
+    "height": "6-6",
+    "weight": 199,
+    "class_year": "International",
+    "age": 18.5,
+    "tier": "unranked",
+    "stats": {
+      "pts": 10.3,
+      "reb": 5.8,
+      "ast": 2.1,
+      "blk": 0.6,
+      "stl": 1.7
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Thierry Darlan",
+    "current_team": "G League",
+    "position": "SG/SF",
+    "height": "6-7.5",
+    "weight": 206,
+    "class_year": "G League",
+    "age": 22.4,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.3,
+      "reb": 8.8,
+      "ast": 2.5,
+      "blk": 1.8,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Kwame Evans",
+    "current_team": "Oregon",
+    "position": "PF",
+    "height": "6-10",
+    "weight": 220,
+    "class_year": "Junior",
+    "age": 21.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.6,
+      "reb": 8.7,
+      "ast": 2.3,
+      "blk": 1.5,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Mouhamed Faye",
+    "current_team": "Reggio Emilia",
+    "position": "C",
+    "height": "6-10",
+    "weight": 220,
+    "class_year": "International",
+    "age": 21.4,
+    "tier": "unranked",
+    "stats": {
+      "pts": 10.7,
+      "reb": 11.2,
+      "ast": 0.5,
+      "blk": 2.1,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Boogie Fland",
+    "current_team": "Florida",
+    "position": "PG",
+    "height": "6-3.25",
+    "weight": 172,
+    "class_year": "Sophomore",
+    "age": 19.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 13.9,
+      "reb": 2.9,
+      "ast": 4.1,
+      "blk": 0.2,
+      "stl": 2.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Donnie Freeman",
+    "current_team": "Syracuse",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 205,
+    "class_year": "Sophomore",
+    "age": 20.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 19.0,
+      "reb": 8.3,
+      "ast": 1.6,
+      "blk": 1.1,
+      "stl": 0.9
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Tyon Grant-Foster",
+    "current_team": "Gonzaga",
+    "position": "SG/SF",
+    "height": "6-7",
+    "weight": 215,
+    "class_year": "Senior",
+    "age": 26.3,
+    "tier": "unranked",
+    "stats": {
+      "pts": 18.5,
+      "reb": 8.3,
+      "ast": 2.0,
+      "blk": 1.8,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Johann Grünloh",
+    "current_team": "Virginia",
+    "position": "C",
+    "height": "7-0",
+    "weight": 238,
+    "class_year": "Freshman",
+    "age": 20.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 12.2,
+      "reb": 8.9,
+      "ast": 1.1,
+      "blk": 3.8,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Magoon Gwath",
+    "current_team": "San Diego State",
+    "position": "C",
+    "height": "7-0",
+    "weight": 212,
+    "class_year": "Sophomore",
+    "age": 20.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 16.8,
+      "reb": 8.2,
+      "ast": 0.6,
+      "blk": 2.8,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Isiah Harwell",
+    "current_team": "Houston",
+    "position": "SG",
+    "height": "6-6",
+    "weight": 220,
+    "class_year": "Freshman",
+    "age": 19.5,
+    "tier": "unranked",
+    "stats": {
+      "pts": 9.3,
+      "reb": 5.3,
+      "ast": 1.4,
+      "blk": 0.7,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Thomas Haugh",
+    "current_team": "Florida",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 215,
+    "class_year": "Junior",
+    "age": 22.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 18.4,
+      "reb": 6.6,
+      "ast": 2.3,
+      "blk": 1.0,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Ben Henshall",
+    "current_team": "Perth",
+    "position": "SG",
+    "height": "6-6.75",
+    "weight": 193,
+    "class_year": "International",
+    "age": 21.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.4,
+      "reb": 6.1,
+      "ast": 5.0,
+      "blk": 0.5,
+      "stl": 1.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Zvonimir Ivisic",
+    "current_team": "Illinois",
+    "position": "C",
+    "height": "7-2",
+    "weight": 250,
+    "class_year": "Junior",
+    "age": 22.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 13.5,
+      "reb": 9.4,
+      "ast": 0.6,
+      "blk": 4.1,
+      "stl": 0.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Tomislav Ivisic",
+    "current_team": "Illinois",
+    "position": "C",
+    "height": "7-1",
+    "weight": 255,
+    "class_year": "Junior",
+    "age": 22.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 14.8,
+      "reb": 8.0,
+      "ast": 2.2,
+      "blk": 0.8,
+      "stl": 0.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Elmarko Jackson",
+    "current_team": "Kansas",
+    "position": "PG",
+    "height": "6-3",
+    "weight": 195,
+    "class_year": "Sophomore",
+    "age": 22.2,
+    "tier": "unranked",
+    "stats": {
+      "pts": 9.8,
+      "reb": 3.6,
+      "ast": 2.9,
+      "blk": 0.4,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Ian Jackson",
+    "current_team": "St. John's",
+    "position": "SG",
+    "height": "6-5",
+    "weight": 195,
+    "class_year": "Sophomore",
+    "age": 21.3,
+    "tier": "unranked",
+    "stats": {
+      "pts": 18.6,
+      "reb": 4.5,
+      "ast": 2.5,
+      "blk": 0.4,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Daniel Jacobsen",
+    "current_team": "Purdue",
+    "position": "C",
+    "height": "7-4",
+    "weight": 250,
+    "class_year": "Sophomore",
+    "age": 20.2,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.3,
+      "reb": 8.4,
+      "ast": 0.9,
+      "blk": 3.4,
+      "stl": 0.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Nikolas Khamenia",
+    "current_team": "Duke",
+    "position": "SF/PF",
+    "height": "6-8",
+    "weight": 215,
+    "class_year": "Freshman",
+    "age": 19.5,
+    "tier": "unranked",
+    "stats": {
+      "pts": 10.4,
+      "reb": 5.9,
+      "ast": 1.9,
+      "blk": 0.1,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Karter Knox",
+    "current_team": "Arkansas",
+    "position": "SF",
+    "height": "6-6.25",
+    "weight": 214,
+    "class_year": "Sophomore",
+    "age": 21.1,
+    "tier": "unranked",
+    "stats": {
+      "pts": 13.1,
+      "reb": 7.4,
+      "ast": 1.9,
+      "blk": 0.9,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Riley Kugel",
+    "current_team": "UCF",
+    "position": "SG",
+    "height": "6-5",
+    "weight": 210,
+    "class_year": "Senior",
+    "age": 22.6,
+    "tier": "unranked",
+    "stats": {
+      "pts": 17.9,
+      "reb": 3.9,
+      "ast": 3.1,
+      "blk": 0.3,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Xaivian Lee",
+    "current_team": "Florida",
+    "position": "PG",
+    "height": "6-4",
+    "weight": 180,
+    "class_year": "Senior",
+    "age": 22.3,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.2,
+      "reb": 4.8,
+      "ast": 5.5,
+      "blk": 0.2,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "KJ Lewis",
+    "current_team": "Georgetown",
+    "position": "SG",
+    "height": "6-4",
+    "weight": 210,
+    "class_year": "Junior",
+    "age": 21.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 17.8,
+      "reb": 6.2,
+      "ast": 3.0,
+      "blk": 0.7,
+      "stl": 2.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Jaland Lowe",
+    "current_team": "Kentucky",
+    "position": "PG/SG",
+    "height": "6-3",
+    "weight": 173,
+    "class_year": "Junior",
+    "age": 21.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.6,
+      "reb": 4.1,
+      "ast": 4.8,
+      "blk": 0.4,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Mackenzie Mgbako",
+    "current_team": "Texas A&M",
+    "position": "SF",
+    "height": "6-8.75",
+    "weight": 216,
+    "class_year": "Junior",
+    "age": 21.6,
+    "tier": "unranked",
+    "stats": {
+      "pts": 19.9,
+      "reb": 9.3,
+      "ast": 2.5,
+      "blk": 0.3,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "David Mirkovic",
+    "current_team": "Illinois",
+    "position": "PF",
+    "height": "6-9",
+    "weight": 250,
+    "class_year": "Freshman",
+    "age": 20.5,
+    "tier": "unranked",
+    "stats": {
+      "pts": 16.3,
+      "reb": 9.8,
+      "ast": 3.1,
+      "blk": 0.5,
+      "stl": 0.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Malachi Moreno",
+    "current_team": "Kentucky",
+    "position": "C",
+    "height": "7-0",
+    "weight": 250,
+    "class_year": "Freshman",
+    "age": 19.7,
+    "tier": "unranked",
+    "stats": {
+      "pts": 12.4,
+      "reb": 10.1,
+      "ast": 2.8,
+      "blk": 2.3,
+      "stl": 0.8
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Braylon Mullins",
+    "current_team": "UConn",
+    "position": "SG",
+    "height": "6-6",
+    "weight": 196,
+    "class_year": "Freshman",
+    "age": 20.2,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.3,
+      "reb": 4.5,
+      "ast": 1.8,
+      "blk": 0.8,
+      "stl": 1.3
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Patrick Ngongba II",
+    "current_team": "Duke",
+    "position": "C",
+    "height": "6-11",
+    "weight": 250,
+    "class_year": "Sophomore",
+    "age": 20.3,
+    "tier": "unranked",
+    "stats": {
+      "pts": 16.6,
+      "reb": 9.6,
+      "ast": 3.3,
+      "blk": 1.7,
+      "stl": 1.0
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Tahaad Pettiford",
+    "current_team": "Auburn",
+    "position": "PG",
+    "height": "6-1.5",
+    "weight": 169,
+    "class_year": "Sophomore",
+    "age": 20.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 17.2,
+      "reb": 3.3,
+      "ast": 4.3,
+      "blk": 0.7,
+      "stl": 1.2
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Derrion Reid",
+    "current_team": "Oklahoma",
+    "position": "SF",
+    "height": "6-8",
+    "weight": 226,
+    "class_year": "Sophomore",
+    "age": 19.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 15.3,
+      "reb": 5.8,
+      "ast": 1.5,
+      "blk": 0.3,
+      "stl": 0.6
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Michael Ruzic",
+    "current_team": "Joventut",
+    "position": "PF",
+    "height": "7-0.25",
+    "weight": 221,
+    "class_year": "International",
+    "age": 19.7,
+    "tier": "unranked",
+    "stats": {
+      "pts": 12.8,
+      "reb": 7.9,
+      "ast": 1.2,
+      "blk": 1.2,
+      "stl": 0.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Pryce Sandfort",
+    "current_team": "Nebraska",
+    "position": "SF",
+    "height": "6-7",
+    "weight": 210,
+    "class_year": "Junior",
+    "age": 21.9,
+    "tier": "unranked",
+    "stats": {
+      "pts": 19.4,
+      "reb": 5.2,
+      "ast": 2.1,
+      "blk": 0.3,
+      "stl": 1.1
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Dame Sarr",
+    "current_team": "Duke",
+    "position": "SG/SF",
+    "height": "6-7",
+    "weight": 181,
+    "class_year": "Freshman",
+    "age": 20.0,
+    "tier": "unranked",
+    "stats": {
+      "pts": 9.8,
+      "reb": 5.8,
+      "ast": 1.7,
+      "blk": 0.6,
+      "stl": 1.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "Andrej Stojakovic",
+    "current_team": "Illinois",
+    "position": "SG",
+    "height": "6-7",
+    "weight": 215,
+    "class_year": "Junior",
+    "age": 21.8,
+    "tier": "unranked",
+    "stats": {
+      "pts": 18.5,
+      "reb": 6.2,
+      "ast": 1.4,
+      "blk": 0.6,
+      "stl": 0.5
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  },
+  {
+    "rank": null,
+    "name": "DJ Wagner",
+    "current_team": "Arkansas",
+    "position": "PG",
+    "height": "6-5",
+    "weight": 190,
+    "class_year": "Junior",
+    "age": 21.1,
+    "tier": "unranked",
+    "stats": {
+      "pts": 11.3,
+      "reb": 2.4,
+      "ast": 3.7,
+      "blk": 0.4,
+      "stl": 1.4
+    },
+    "source": "tankathon",
+    "as_of": "2026-05-10"
+  }
+]

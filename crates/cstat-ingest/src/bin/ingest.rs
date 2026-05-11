@@ -158,6 +158,29 @@ enum Commands {
         baseline: std::path::PathBuf,
     },
 
+    /// Ingest the 247Sports transfer portal for a class year (matches 247's `year=`
+    /// query param, i.e. the spring portal-cycle calendar year, NOT cstat-season).
+    /// Requires TFS_247_JWT env var (capture from DevTools; ~6 hour expiry).
+    Transfers {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Skip pages whose lastUpdated predates our DB cursor.
+        /// Default is a full refresh (every page touched).
+        #[arg(long)]
+        incremental: bool,
+
+        /// Load from a local snapshot file instead of hitting the live API.
+        /// Useful for the initial seed and for reproducible local dev.
+        #[arg(long)]
+        bootstrap_from: Option<std::path::PathBuf>,
+
+        /// Skip the cstat_player_id resolution pass after ingest. By default
+        /// we resolve `(full_name, source_institution)` → `players.id` joins.
+        #[arg(long)]
+        no_resolve_players: bool,
+    },
+
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
     Explore {
         /// Endpoint (e.g., "teams", "players", "playerperfs")
@@ -320,6 +343,33 @@ async fn main() -> Result<()> {
             report.print();
             if !report.passed() {
                 std::process::exit(1);
+            }
+        }
+
+        Commands::Transfers {
+            year,
+            incremental,
+            bootstrap_from,
+            no_resolve_players,
+        } => {
+            let report = if let Some(path) = bootstrap_from {
+                info!("bootstrapping transfers from {}", path.display());
+                cstat_ingest::ingest::transfers::bootstrap_from_snapshot(&db.pool, year, &path)
+                    .await?
+            } else {
+                let tfs = cstat_ingest::TfsClient::from_env()?;
+                cstat_ingest::ingest::transfers::ingest_live(&tfs, &db.pool, year, incremental)
+                    .await?
+            };
+            println!(
+                "transfers {}: {} upserted across {} page(s)",
+                report.year, report.upserts, report.total_pages
+            );
+
+            if !no_resolve_players {
+                let n =
+                    cstat_ingest::ingest::transfers::resolve_cstat_joins(&db.pool, year).await?;
+                println!("cstat_player_id resolved on {n} row(s)");
             }
         }
 
