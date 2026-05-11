@@ -469,7 +469,6 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
         name: String,
         team_short: Option<String>,
         team_full: Option<String>,
-        minutes_per_game: Option<f64>,
     }
 
     // Only consider rows that have a source school to disambiguate against —
@@ -488,16 +487,14 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
     // One candidate row per (player, team) stint in the season. Mid-season
     // transfers appear twice (once per team) via `player_season_stats`, which
     // is what lets us disambiguate when the 247 source names the *first*
-    // team. Pull `minutes_per_game` as the tiebreaker for collisions on a
-    // common name where source doesn't disambiguate.
+    // team.
     let candidates: Vec<CandRow> = sqlx::query_as(
         r#"
         SELECT
-            p.id                     AS player_id,
-            p.name                   AS name,
-            t.short_name             AS team_short,
-            t.name                   AS team_full,
-            pss.minutes_per_game     AS minutes_per_game
+            p.id          AS player_id,
+            p.name        AS name,
+            t.short_name  AS team_short,
+            t.name        AS team_full
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -519,6 +516,7 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
     let mut player_ids: Vec<Uuid> = Vec::new();
     let mut unmatched_name = 0u64;
     let mut unmatched_team = 0u64;
+    let mut single_bucket_fallback = 0u64;
 
     for row in &portal {
         let Some(cands) = by_name.get(&normalize_name(&row.full_name)) else {
@@ -526,28 +524,36 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
             continue;
         };
         let source = row.source_institution.as_deref().unwrap_or_default();
-        // Prefer the candidate whose team scores best against the 247 source
-        // string (lower score = better match; see `team_match_score`). If
-        // nothing scores, fall back to the most-played candidate so a common
-        // name with stats still lands somewhere — same fallback the route
-        // uses for the enrichment join.
-        let best = cands
+        // Score every candidate's team against the 247 source string and pick
+        // the lowest score (best match; see `team_match_score`).
+        let scored = cands
             .iter()
             .filter_map(|c| {
                 team_match_score(c.team_short.as_deref(), c.team_full.as_deref()?, source)
                     .map(|s| (s, *c))
             })
             .min_by_key(|(s, _)| *s)
-            .map(|(_, c)| c)
-            .or_else(|| {
+            .map(|(_, c)| c);
+        let best = match scored {
+            Some(c) => Some(c),
+            None => {
                 unmatched_team += 1;
-                cands.iter().copied().max_by(|a, b| {
-                    a.minutes_per_game
-                        .unwrap_or(0.0)
-                        .partial_cmp(&b.minutes_per_game.unwrap_or(0.0))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            });
+                // Fallback only when there's exactly one same-name candidate.
+                // Multi-candidate fallback was the previous behavior and the
+                // dangerous case — it would silently bind two different players
+                // who share a name. With a single candidate there's no other
+                // person it could be, so the worst case is "we attached a
+                // player who happens to share a name with the portal entry,"
+                // which a downstream 2027 projection aggregator can still
+                // sanity-check against `previous_team`.
+                if cands.len() == 1 {
+                    single_bucket_fallback += 1;
+                    Some(cands[0])
+                } else {
+                    None
+                }
+            }
+        };
         if let Some(c) = best {
             tfs_keys.push(row.tfs_key);
             player_ids.push(c.player_id);
@@ -580,7 +586,8 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
         matched = tfs_keys.len(),
         updated = n,
         unmatched_name,
-        unmatched_team_fallback = unmatched_team,
+        team_score_miss = unmatched_team,
+        single_bucket_fallback,
         "cstat_player_id resolution complete"
     );
     if tfs_keys.is_empty() {

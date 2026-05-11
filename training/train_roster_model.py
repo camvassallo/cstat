@@ -21,6 +21,7 @@ softer-calibrated than the actual computed AdjEM.
 """
 
 import json
+import os
 from pathlib import Path
 
 import lightgbm as lgb
@@ -85,7 +86,6 @@ WHERE season = ANY(%(seasons)s)
 #             MAE expected (this is just harder), but the swap signal is
 #             real (positional overlap, archetype mismatch, rate-stat
 #             interactions). This is the variant we ship for transfer Δ.
-import os
 INCLUDE_IMPACT_FEATURES = os.environ.get("ROSTER_INCLUDE_IMPACT", "0") == "1"
 
 W_COLS_BOX = [
@@ -279,11 +279,11 @@ def main() -> None:
     print("=" * 60)
     X, y = df[feature_cols], df["adj_efficiency_margin"]
     final_params = lgb_params()
-    # No early stopping on the final fit — there's no held-out set.
+    # No early stopping on the final fit — there's no held-out set. Empirically
+    # the LOSO folds stop near ~400 iters with our params and data shape; lock
+    # that as the final-fit budget to avoid overshooting into overfit territory.
     final_params.pop("early_stopping_rounds", None)
-    final_params["n_estimators"] = max(200, int(np.mean([
-        v.get("best_iter", 300) for v in loso["per_season"].values() if isinstance(v, dict)
-    ])) if False else 400)
+    final_params["n_estimators"] = 400
     final = lgb.LGBMRegressor(**final_params)
     final.fit(X, y)
 
@@ -306,6 +306,11 @@ def main() -> None:
         "n_rows": int(len(df)),
         "n_features": len(feature_cols),
         "features": feature_cols,
+        # Player qualification gate applied during dataset construction. The
+        # Rust inference + swap path MUST honor the same filter when building
+        # the feature vector at request time, or train/serve features drift.
+        "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
+        "include_impact_features": INCLUDE_IMPACT_FEATURES,
         "backtest_loso": loso,
         "cv_5fold": cv,
         "top_features": [{"name": n, "importance": int(i)} for n, i in importance[:25]],

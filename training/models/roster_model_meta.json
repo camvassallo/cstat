@@ -46,6 +46,8 @@
     "arch_rogue",
     "arch_fighter"
   ],
+  "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
+  "include_impact_features": false,
   "backtest_loso": {
     "per_season": {
       "2024": {
@@ -74,9 +76,9 @@
     }
   },
   "cv_5fold": {
-    "mae": 7.2177360061682325,
-    "rmse": 9.009604998182903,
-    "r2": 0.673847721725795
+    "mae": 7.216189900857586,
+    "rmse": 9.011126524721005,
+    "r2": 0.6737439871653502
   },
   "top_features": [
     {
