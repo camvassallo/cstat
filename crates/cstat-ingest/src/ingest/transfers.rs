@@ -21,6 +21,13 @@ use std::path::Path;
 use thiserror::Error;
 use tracing::{info, warn};
 
+/// Allowed values for `transfers.status`. Mirrors the CHECK constraint in
+/// `migrations/019_transfers.sql`. If 247 introduces a new value, widen the
+/// CHECK AND this array — keep them in sync.
+const ALLOWED_STATUS: &[&str] = &["Entered", "Committed", "Withdrawn"];
+const ALLOWED_INSTITUTION_STATUS: &[&str] = &["HS", "T"];
+const ALLOWED_ELIGIBILITY_TYPE: &[&str] = &["Immediate", "Withdrawn", "PendingAppeal", "TBD"];
+
 #[derive(Debug, Error)]
 pub enum TransferIngestError {
     #[error("TFS API error: {0}")]
@@ -213,7 +220,41 @@ pub async fn upsert_player(
 
     let first_name = string(p.get("firstName")).unwrap_or_default();
     let last_name = string(p.get("lastName")).unwrap_or_default();
-    let status = string(p.get("status")).unwrap_or_else(|| "Entered".to_string());
+
+    // `status` is NOT NULL with a CHECK constraint. If 247 sends an unknown
+    // value (e.g. a new enum we haven't whitelisted yet), the INSERT would
+    // fail and abort the whole ingest. Skip + warn instead so one stray value
+    // doesn't kill 2000+ rows. Same pattern as the missing-`key` case.
+    let status = match string(p.get("status")) {
+        Some(s) if ALLOWED_STATUS.contains(&s.as_str()) => s,
+        Some(other) => {
+            warn!(
+                year,
+                tfs_key,
+                status = %other,
+                "skipping player row: unknown `status` (widen ALLOWED_STATUS + CHECK to accept)"
+            );
+            return Ok(false);
+        }
+        None => "Entered".to_string(),
+    };
+    // Optional enums — same risk on the CHECK side. Drop unknowns to NULL so
+    // the row still lands; the raw value is preserved in `raw_player` for
+    // forensics if we want to widen later.
+    let institution_status = sanitize_enum(
+        p.get("institutionStatus"),
+        ALLOWED_INSTITUTION_STATUS,
+        "institutionStatus",
+        year,
+        tfs_key,
+    );
+    let eligibility_type = sanitize_enum(
+        p.get("eligibility").and_then(|e| e.get("type")),
+        ALLOWED_ELIGIBILITY_TYPE,
+        "eligibility.type",
+        year,
+        tfs_key,
+    );
 
     // `last_update_date` is NOT NULL in the schema. Fall back to "now" if 247
     // omits it (unlikely but defensive — the column drives incremental refresh).
@@ -323,9 +364,9 @@ pub async fn upsert_player(
     .bind(int(p.get("stateRank")))
     .bind(int(p.get("rankTrend")))
     .bind(&status)
-    .bind(string(p.get("institutionStatus")))
+    .bind(&institution_status)
     .bind(parse_dt(p.get("statusDate")))
-    .bind(p.get("eligibility").and_then(|e| string(e.get("type"))))
+    .bind(&eligibility_type)
     .bind(p.get("eligibility").and_then(|e| small_int(e.get("years"))))
     .bind(parse_dt(p.get("startDate")))
     .bind(parse_dt(p.get("endDate")))
@@ -466,6 +507,31 @@ fn parse_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// Return the input as `Some(String)` if it's in the allowed set, otherwise
+/// `None` (warning logged). Used for nullable enum columns so an unexpected
+/// upstream value doesn't trip the DB-side CHECK constraint and abort ingest.
+fn sanitize_enum(
+    v: Option<&Value>,
+    allowed: &[&str],
+    field_name: &str,
+    year: i32,
+    tfs_key: i64,
+) -> Option<String> {
+    let raw = v.and_then(|v| v.as_str())?;
+    if allowed.contains(&raw) {
+        Some(raw.to_string())
+    } else {
+        warn!(
+            year,
+            tfs_key,
+            field = field_name,
+            value = raw,
+            "unknown enum value — storing NULL (widen the allowed set + CHECK to accept)"
+        );
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,5 +565,28 @@ mod tests {
     fn primary_destination_none_when_empty() {
         let t = json!({ "destination": [] });
         assert!(primary_destination(Some(&t)).is_none());
+    }
+
+    #[test]
+    fn sanitize_enum_accepts_known_values() {
+        let v = json!("Committed");
+        assert_eq!(
+            sanitize_enum(Some(&v), ALLOWED_STATUS, "status", 2026, 1),
+            Some("Committed".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_enum_rejects_unknown_values() {
+        let v = json!("Pending");
+        assert_eq!(
+            sanitize_enum(Some(&v), ALLOWED_STATUS, "status", 2026, 1),
+            None
+        );
+    }
+
+    #[test]
+    fn sanitize_enum_passes_through_null_input() {
+        assert_eq!(sanitize_enum(None, ALLOWED_STATUS, "status", 2026, 1), None);
     }
 }
