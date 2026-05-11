@@ -1,3 +1,4 @@
+use crate::roster_features::{QUAL_FILTER_STRING, ROSTER_NUM_FEATURES};
 use crate::treeshap::{LgbModel, tree_shap};
 use ort::session::Session;
 use std::path::Path;
@@ -391,6 +392,11 @@ pub enum LoadError {
         expected: usize,
         actual: usize,
     },
+    /// `roster_model_meta.json` is missing, unparseable, or carries a
+    /// `player_filter` / `include_impact_features` value the Rust path
+    /// can't honor. Fail loudly at startup so the API never serves
+    /// silently-misaligned ΔAdjEM numbers.
+    RosterMetaMismatch(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -402,6 +408,9 @@ impl std::fmt::Display for LoadError {
                 f,
                 "margin .lgb feature count {actual} ≠ compiled NUM_FEATURES {expected}",
             ),
+            LoadError::RosterMetaMismatch(msg) => {
+                write!(f, "roster_model_meta.json contract mismatch: {msg}")
+            }
         }
     }
 }
@@ -427,24 +436,33 @@ impl From<crate::treeshap::LgbParseError> for LoadError {
     }
 }
 
-/// Holds loaded models for margin, win, and total prediction. ONNX
-/// powers the fast prediction path; the parsed LightGBM `.lgb` mirror of
-/// the margin model powers TreeSHAP attribution for the Predict page's
-/// keys panel. Totals don't get attribution — the keys panel narrative
-/// is margin-only.
+/// Holds loaded models for margin, win, total, and roster-AdjEM prediction.
+/// ONNX powers each fast prediction path; the parsed LightGBM `.lgb` mirror
+/// of the margin model powers TreeSHAP attribution for the Predict page's
+/// keys panel. Totals and roster don't get attribution — the roster model
+/// is consumed only as `Δ = swap_pred − baseline_pred` by the transfer-portal
+/// route, where per-feature attribution would just clutter the surface.
 pub struct Predictor {
     margin_session: Mutex<Session>,
     win_session: Mutex<Session>,
     total_session: Mutex<Session>,
+    roster_session: Mutex<Session>,
     margin_lgb: LgbModel,
 }
 
 impl Predictor {
     /// Load models from the given directory.
     ///
-    /// Expects `margin_model.onnx`, `win_model.onnx`,
-    /// `total_model.onnx`, and `margin_model.lgb` in `model_dir`. The
-    /// `.lgb` is the LightGBM text dump that backs TreeSHAP attribution.
+    /// Expects `margin_model.onnx`, `win_model.onnx`, `total_model.onnx`,
+    /// `roster_model.onnx`, `roster_model_meta.json`, and `margin_model.lgb`
+    /// in `model_dir`. The `.lgb` is the LightGBM text dump that backs
+    /// TreeSHAP attribution.
+    ///
+    /// `roster_model_meta.json` is read at load time and validated against
+    /// the Rust-side cohort gate (`roster_features::QUAL_FILTER_STRING`) and
+    /// the `include_impact_features=false` contract — drift returns
+    /// `LoadError::RosterMetaMismatch` so the API exits at boot rather than
+    /// serving Δ-rating numbers whose features the model wasn't trained on.
     pub fn load(model_dir: &Path) -> Result<Self, LoadError> {
         let margin_session = Session::builder()?
             .with_intra_threads(1)?
@@ -458,6 +476,12 @@ impl Predictor {
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("total_model.onnx"))?;
 
+        let roster_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("roster_model.onnx"))?;
+
+        validate_roster_meta(&model_dir.join("roster_model_meta.json"))?;
+
         let margin_lgb = LgbModel::load(&model_dir.join("margin_model.lgb"))?;
         if margin_lgb.num_features != NUM_FEATURES {
             return Err(LoadError::FeatureCountMismatch {
@@ -470,6 +494,7 @@ impl Predictor {
             margin_session: Mutex::new(margin_session),
             win_session: Mutex::new(win_session),
             total_session: Mutex::new(total_session),
+            roster_session: Mutex::new(roster_session),
             margin_lgb,
         })
     }
@@ -544,6 +569,25 @@ impl Predictor {
         Ok(data[0])
     }
 
+    /// Run the roster-only AdjEM model on a 36-feature vector built by
+    /// `roster_features::build_roster_features`.
+    ///
+    /// Returns the predicted `adj_efficiency_margin` for the roster. The
+    /// transfer-portal Δ engine calls this twice — once on the destination's
+    /// existing roster, once on the swap variant produced by
+    /// `roster_features::swap_player` — and reports the difference. Absolute
+    /// AdjEM is soft-calibrated (~7.4 MAE per the LOSO backtest in
+    /// `roster_model_meta.json`); only the Δ is meant to be load-bearing.
+    pub fn predict_adj_em(&self, features: &[f32; ROSTER_NUM_FEATURES]) -> Result<f32, ort::Error> {
+        use ort::value::TensorRef;
+        let shape = [1_usize, ROSTER_NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, features.as_slice()))?;
+        let mut session = self.roster_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+        Ok(data[0])
+    }
+
     /// Run the margin model and return TreeSHAP feature attributions.
     ///
     /// Margin comes from the ONNX session (fast, well-tested path); SHAP
@@ -590,6 +634,42 @@ impl Predictor {
             contributions,
         })
     }
+}
+
+/// Read `roster_model_meta.json` and verify the trained model's cohort
+/// filter + feature mode match what the Rust path can serve. Called from
+/// `Predictor::load` so the API never boots with a model whose features
+/// the runtime can't reproduce.
+fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::RosterMetaMismatch(format!("read {}: {e}", path.display())))?;
+    let meta: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| LoadError::RosterMetaMismatch(format!("parse: {e}")))?;
+
+    let filter = meta["player_filter"]
+        .as_str()
+        .ok_or_else(|| LoadError::RosterMetaMismatch("missing player_filter".into()))?;
+    if filter != QUAL_FILTER_STRING {
+        return Err(LoadError::RosterMetaMismatch(format!(
+            "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
+        )));
+    }
+
+    let include_impact = meta["include_impact_features"].as_bool().unwrap_or(true);
+    if include_impact {
+        return Err(LoadError::RosterMetaMismatch(
+            "include_impact_features=true; Rust path only serves box-score-only variant".into(),
+        ));
+    }
+
+    let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
+    if n_features != ROSTER_NUM_FEATURES {
+        return Err(LoadError::RosterMetaMismatch(format!(
+            "n_features {n_features} ≠ compiled ROSTER_NUM_FEATURES {ROSTER_NUM_FEATURES}",
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -697,6 +777,8 @@ mod tests {
         if !dir.join("margin_model.onnx").exists()
             || !dir.join("margin_model.lgb").exists()
             || !dir.join("total_model.onnx").exists()
+            || !dir.join("roster_model.onnx").exists()
+            || !dir.join("roster_model_meta.json").exists()
         {
             eprintln!("skipping: model files not found at {}", dir.display());
             return;
@@ -744,6 +826,8 @@ mod tests {
         if !dir.join("margin_model.onnx").exists()
             || !dir.join("margin_model.lgb").exists()
             || !dir.join("total_model.onnx").exists()
+            || !dir.join("roster_model.onnx").exists()
+            || !dir.join("roster_model_meta.json").exists()
         {
             return;
         }
@@ -833,6 +917,8 @@ mod tests {
         if !dir.join("margin_model.onnx").exists()
             || !dir.join("margin_model.lgb").exists()
             || !dir.join("total_model.onnx").exists()
+            || !dir.join("roster_model.onnx").exists()
+            || !dir.join("roster_model_meta.json").exists()
         {
             return;
         }
@@ -895,6 +981,44 @@ mod tests {
         assert!(
             max_abs > 0.1,
             "no feature contributed > 0.1 points; TreeSHAP likely broken (max |c| = {max_abs})",
+        );
+    }
+
+    /// The trained model was fit on real D-I roster aggregates (top-25
+    /// features include `w_stl_pct`, `total_minutes`, `w_ts`, archetype
+    /// shares — see `roster_model_meta.json::top_features`). A literal
+    /// zero-feature input lives well outside the training distribution,
+    /// but the model is bounded — verify the output is a finite number in
+    /// a sane AdjEM range, not NaN / infinity / 10⁹. Catches "session
+    /// loaded but doesn't actually run" failure modes.
+    #[test]
+    fn roster_predict_zeros_is_finite() {
+        let dir = model_dir();
+        if !dir.join("margin_model.onnx").exists()
+            || !dir.join("margin_model.lgb").exists()
+            || !dir.join("total_model.onnx").exists()
+            || !dir.join("roster_model.onnx").exists()
+            || !dir.join("roster_model_meta.json").exists()
+        {
+            return;
+        }
+
+        let predictor = Predictor::load(&dir).unwrap();
+        let features = [0.0_f32; ROSTER_NUM_FEATURES];
+        let pred = predictor
+            .predict_adj_em(&features)
+            .expect("roster prediction failed");
+
+        assert!(
+            pred.is_finite(),
+            "roster AdjEM prediction is NaN/inf for zero features",
+        );
+        // Real D-I AdjEM spans roughly [-25, +35]. A zero-feature input is
+        // out of distribution; tolerate ±60 as the "obviously broken vs
+        // sane" line.
+        assert!(
+            (-60.0..=60.0).contains(&pred),
+            "roster AdjEM {pred} outside plausible bound for zero input",
         );
     }
 }
