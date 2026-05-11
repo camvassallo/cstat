@@ -1,0 +1,183 @@
+{
+  "model": "roster_model",
+  "target": "adj_efficiency_margin",
+  "seasons": [
+    2024,
+    2025,
+    2026
+  ],
+  "n_rows": 1089,
+  "n_features": 36,
+  "features": [
+    "roster_size",
+    "total_minutes",
+    "top1_min_share",
+    "top5_min_share",
+    "minutes_stddev",
+    "w_ppg",
+    "w_rpg",
+    "w_apg",
+    "w_spg",
+    "w_bpg",
+    "w_topg",
+    "w_ts",
+    "w_efg",
+    "w_usg",
+    "w_ast_pct",
+    "w_tov_pct",
+    "w_orb_pct",
+    "w_drb_pct",
+    "w_stl_pct",
+    "w_blk_pct",
+    "w_ft_rate",
+    "star_ppg",
+    "star_ts",
+    "star_usg",
+    "arch_wizard",
+    "arch_sorcerer",
+    "arch_warlock",
+    "arch_bard",
+    "arch_ranger",
+    "arch_barbarian",
+    "arch_paladin",
+    "arch_monk",
+    "arch_cleric",
+    "arch_druid",
+    "arch_rogue",
+    "arch_fighter"
+  ],
+  "backtest_loso": {
+    "per_season": {
+      "2024": {
+        "mae": 7.08648859093979,
+        "rmse": 8.964332776279452,
+        "r2": 0.6451061629757465,
+        "n": 361
+      },
+      "2025": {
+        "mae": 7.107470298371138,
+        "rmse": 9.005898983876481,
+        "r2": 0.6879896707960258,
+        "n": 364
+      },
+      "2026": {
+        "mae": 8.097923544013907,
+        "rmse": 9.934451532126777,
+        "r2": 0.6462315471399074,
+        "n": 364
+      }
+    },
+    "pooled": {
+      "mae": 7.431575518785511,
+      "rmse": 9.31327673571202,
+      "r2": 0.6601378928373203
+    }
+  },
+  "cv_5fold": {
+    "mae": 7.2177360061682325,
+    "rmse": 9.009604998182903,
+    "r2": 0.673847721725795
+  },
+  "top_features": [
+    {
+      "name": "w_stl_pct",
+      "importance": 352
+    },
+    {
+      "name": "w_spg",
+      "importance": 258
+    },
+    {
+      "name": "total_minutes",
+      "importance": 252
+    },
+    {
+      "name": "w_bpg",
+      "importance": 232
+    },
+    {
+      "name": "w_tov_pct",
+      "importance": 231
+    },
+    {
+      "name": "w_topg",
+      "importance": 222
+    },
+    {
+      "name": "w_ts",
+      "importance": 209
+    },
+    {
+      "name": "w_blk_pct",
+      "importance": 198
+    },
+    {
+      "name": "w_orb_pct",
+      "importance": 185
+    },
+    {
+      "name": "arch_warlock",
+      "importance": 185
+    },
+    {
+      "name": "w_drb_pct",
+      "importance": 181
+    },
+    {
+      "name": "w_ft_rate",
+      "importance": 178
+    },
+    {
+      "name": "w_usg",
+      "importance": 175
+    },
+    {
+      "name": "w_ast_pct",
+      "importance": 174
+    },
+    {
+      "name": "w_ppg",
+      "importance": 172
+    },
+    {
+      "name": "top5_min_share",
+      "importance": 168
+    },
+    {
+      "name": "arch_fighter",
+      "importance": 165
+    },
+    {
+      "name": "arch_ranger",
+      "importance": 164
+    },
+    {
+      "name": "arch_rogue",
+      "importance": 162
+    },
+    {
+      "name": "w_rpg",
+      "importance": 161
+    },
+    {
+      "name": "arch_wizard",
+      "importance": 161
+    },
+    {
+      "name": "arch_monk",
+      "importance": 154
+    },
+    {
+      "name": "w_apg",
+      "importance": 149
+    },
+    {
+      "name": "minutes_stddev",
+      "importance": 148
+    },
+    {
+      "name": "star_usg",
+      "importance": 146
+    }
+  ]
+}
