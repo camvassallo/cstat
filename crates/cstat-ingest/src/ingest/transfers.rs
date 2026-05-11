@@ -589,4 +589,30 @@ mod tests {
     fn sanitize_enum_passes_through_null_input() {
         assert_eq!(sanitize_enum(None, ALLOWED_STATUS, "status", 2026, 1), None);
     }
+
+    #[test]
+    fn parse_dt_handles_z_suffix() {
+        let v = json!("2026-05-10T23:30:00Z");
+        let dt = parse_dt(Some(&v)).unwrap();
+        assert_eq!(dt.to_rfc3339(), "2026-05-10T23:30:00+00:00");
+    }
+
+    #[test]
+    fn parse_dt_normalizes_offset_to_utc() {
+        let v = json!("2026-05-10T19:30:00-04:00");
+        let dt = parse_dt(Some(&v)).unwrap();
+        assert_eq!(dt.to_rfc3339(), "2026-05-10T23:30:00+00:00");
+    }
+
+    #[test]
+    fn parse_dt_returns_none_for_garbage() {
+        let v = json!("not a date");
+        assert!(parse_dt(Some(&v)).is_none());
+    }
+
+    #[test]
+    fn parse_dt_returns_none_for_non_string() {
+        let v = json!(1234567890);
+        assert!(parse_dt(Some(&v)).is_none());
+    }
 }
