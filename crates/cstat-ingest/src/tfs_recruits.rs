@@ -62,10 +62,12 @@ pub enum RecruitError {
 
 /// Which 247 composite-ranking view to scrape.
 ///
-/// HS is the load-bearing case for the Phase 5c growth model. Juco/prep are
-/// ingested in v1 for completeness; juco in particular bridges the
-/// recruits-vs-transfers gap (a juco recruit looks like a recruit at signing
-/// but a transfer in performance).
+/// Empirically (verified against class-of-2026), the `compositerecruitrankings`
+/// endpoint returns **identical content** for all three `InstitutionGroup`
+/// values when called with only the subscriber `JWT` cookie — the filter
+/// likely depends on session state we don't carry. The CLI therefore defaults
+/// to `HighSchool` only; the `Juco` / `Prep` variants are kept so the schema
+/// vocab is ready for when we find the right endpoint(s) for those cohorts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstitutionGroup {
     HighSchool,
@@ -164,6 +166,8 @@ impl Recruit247Client {
         Ok(Self::new(jwt, rate))
     }
 
+    /// Build with an explicit JWT + rate (handy for tests). Prefer
+    /// [`Self::from_env`] in production code.
     pub fn new(jwt: String, max_per_hour: u32) -> Self {
         Self {
             http: Client::builder()

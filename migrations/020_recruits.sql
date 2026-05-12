@@ -8,10 +8,12 @@
 -- recruits first appear in cstat-season 2027 box scores — same offset-by-one
 -- as transfers (also keyed on the spring portal-cycle year).
 --
--- `institution_group` enumerates 247's three composite views: high-school,
--- juco (junior college), and prep. CHECK on TEXT (not native ENUM) so a new
--- group from 247 widens with a one-line migration. Same vocab-belongs-to-the-
--- upstream argument as transfers.
+-- `institution_group` is one of `highschool` / `juco` / `prep`. Empirically
+-- the composite-rankings endpoint returns identical content for all three
+-- values when called with our cookie set, so v1 ingest is HS-only; the enum
+-- vocab is kept so the schema is ready when we wire up separate juco/prep
+-- endpoints. CHECK on TEXT (not native ENUM) so widening a value is a
+-- one-line migration.
 --
 -- The load-bearing downstream consumer is the Phase 5c returning-player growth
 -- model: `composite_rank` / `composite_rating` / `star_rating` join to
@@ -31,9 +33,9 @@ CREATE TABLE IF NOT EXISTS recruits (
     -- with transfers; in practice keys don't recycle across class years.
     recruit_key BIGINT NOT NULL,
 
-    -- Which composite view this row was scraped from. HS recruits are the
-    -- load-bearing case; juco/prep are included for completeness (juco in
-    -- particular bridges the recruits-vs-transfers gap).
+    -- Which composite view this row was scraped from. v1 ingest is HS-only;
+    -- the `juco` / `prep` enum values are reserved for when we find the
+    -- separate endpoints for those cohorts (see comment in tfs_recruits.rs).
     institution_group TEXT NOT NULL
         CHECK (institution_group IN ('highschool', 'juco', 'prep')),
 

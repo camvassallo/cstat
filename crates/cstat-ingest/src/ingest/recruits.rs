@@ -120,12 +120,10 @@ pub async fn ingest_live(
         info!(path = %path.display(), rows = snapshot.players.len(), "snapshot written");
     }
 
-    let mut upserts = 0u64;
     for (group, row) in &all_rows {
-        if upsert_player(row, pool, year, *group).await? {
-            upserts += 1;
-        }
+        upsert_player(row, pool, year, *group).await?;
     }
+    let upserts = all_rows.len() as u64;
 
     info!(year, upserts, total_pages, "live recruits ingest complete");
     Ok(RecruitIngestReport {
@@ -191,35 +189,31 @@ pub async fn bootstrap_from_snapshot(
         "bootstrapping recruits from snapshot"
     );
 
-    let mut upserts = 0u64;
     for row in &snapshot.players {
-        if upsert_player(row, pool, year, group).await? {
-            upserts += 1;
-        }
+        upsert_player(row, pool, year, group).await?;
     }
+    let upserts = snapshot.players.len() as u64;
 
     let mut by_group = BTreeMap::new();
     by_group.insert(group.as_db_value().to_string(), upserts);
     Ok(RecruitIngestReport {
         year,
-        total_pages: 1,
+        // 0 = "didn't paginate" (bootstrap loads from a single file).
+        total_pages: 0,
         upserts,
         by_group,
     })
 }
 
-/// Insert or update one `recruits` row from a parsed `RecruitRow`.
-///
-/// Returns `Ok(true)` on a successful upsert, `Ok(false)` if the row was
-/// skipped (currently only possible if the row's `recruit_key` is 0, which
-/// the parser already filters out — kept as a defensive return shape that
-/// mirrors transfers).
+/// Insert or update one `recruits` row from a parsed `RecruitRow`. The parser
+/// filters out malformed rows (missing `recruit_key`) before they reach here,
+/// so this only fails on a DB error.
 pub async fn upsert_player(
     row: &RecruitRow,
     pool: &PgPool,
     year: i32,
     group: InstitutionGroup,
-) -> Result<bool, RecruitIngestError> {
+) -> Result<(), RecruitIngestError> {
     // Whole-row JSON envelope for `raw_player`. Preserves the parsed view +
     // the original `<li>` HTML for forensics. JSONB lets the route handler
     // probe fields the schema doesn't model without a re-scrape.
@@ -298,7 +292,7 @@ pub async fn upsert_player(
     .bind(&raw_player)
     .execute(pool)
     .await?;
-    Ok(true)
+    Ok(())
 }
 
 /// Pass 1: resolve `committed_school` text → `teams.id`.
