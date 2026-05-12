@@ -318,6 +318,7 @@ struct Selectors {
     sttrank: Selector,
     status_img_link: Selector,
     status_img: Selector,
+    status_bare_img: Selector,
     status_checkmark: Selector,
     status_crystal_ball: Selector,
     photo_img: Selector,
@@ -343,6 +344,11 @@ fn selectors() -> &'static Selectors {
         sttrank: Selector::parse(".rank .sttrank").unwrap(),
         status_img_link: Selector::parse(".status a.img-link").unwrap(),
         status_img: Selector::parse("img").unwrap(),
+        // Direct-child `<img>` of `.status` — fires for schools without a 247
+        // college landing page (e.g. small D-I programs like California
+        // Baptist) where 247 renders just `<img alt="..." title="...">` with
+        // no surrounding `<a class="img-link">`.
+        status_bare_img: Selector::parse(".status > img").unwrap(),
         status_checkmark: Selector::parse(".status b.checkmark").unwrap(),
         status_crystal_ball: Selector::parse(".status .rankings-page__crystal-ball").unwrap(),
         photo_img: Selector::parse(".circle-image-block img").unwrap(),
@@ -436,11 +442,14 @@ pub fn parse_recruits_html(body: &str) -> Vec<RecruitRow> {
 }
 
 /// Derive `(committed_school, slug, commit_status)` from a row's `.status`
-/// block. Three states, signalled by row markers:
+/// block. Four observed states, signalled by row markers:
 ///
 /// * `<a class="img-link" href="...">` + `<b class="checkmark">` → "Signed"
 /// * `<a class="img-link" href="...">` only → "Committed"
-/// * `.rankings-page__crystal-ball` (no img-link) → "Uncommitted"
+/// * direct-child `<img>` of `.status` (no `<a>` wrapper) → "Committed"
+///   without a slug — fires for schools that don't have a 247 college
+///   landing page (small D-I programs like California Baptist).
+/// * `.rankings-page__crystal-ball` (none of the above) → "Uncommitted"
 fn parse_commit(
     item: &ElementRef<'_>,
     sel: &Selectors,
@@ -460,6 +469,17 @@ fn parse_commit(
         let status = if signed { "Signed" } else { "Committed" };
         return (school, slug, Some(status.to_string()));
     }
+    if let Some(img) = item.select(&sel.status_bare_img).next() {
+        let school = img
+            .value()
+            .attr("alt")
+            .or_else(|| img.value().attr("title"))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let signed = item.select(&sel.status_checkmark).next().is_some();
+        let status = if signed { "Signed" } else { "Committed" };
+        return (school, None, Some(status.to_string()));
+    }
     if item.select(&sel.status_crystal_ball).next().is_some() {
         return (None, None, Some("Uncommitted".to_string()));
     }
@@ -467,21 +487,23 @@ fn parse_commit(
 }
 
 /// Extract the trailing numeric ID from a 247 player profile URL.
-/// `/player/alex-constanza-46134907/` → `Some(46134907)`.
+/// `/player/alex-constanza-46134907/` → `Some(46134907)`. The trailing slash
+/// is optional — the regex matches either form.
 pub fn recruit_key_from_url(url: &str) -> Option<i64> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"-(\d+)/?$").unwrap());
-    re.captures(url.trim_end_matches('/'))
+    re.captures(url)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<i64>().ok())
 }
 
-/// Extract the school slug from a 247 college URL.
+/// Extract the school slug from a 247 college URL. Tolerates URLs with or
+/// without a trailing path segment / slash.
 /// `https://247sports.com/college/north-carolina/season/2026-basketball/commits/`
 /// → `Some("north-carolina")`.
 pub fn school_slug_from_college_url(url: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"/college/([^/]+)/").unwrap());
+    let re = RE.get_or_init(|| Regex::new(r"/college/([^/]+)(?:/|$)").unwrap());
     re.captures(url)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
@@ -752,6 +774,33 @@ mod tests {
         assert_eq!(r.high_school.as_deref(), Some("Spain"));
         assert_eq!(r.committed_school.as_deref(), Some("North Carolina"));
         assert_eq!(r.committed_school_slug.as_deref(), Some("north-carolina"));
+        assert_eq!(r.commit_status.as_deref(), Some("Committed"));
+    }
+
+    #[test]
+    fn parse_bare_img_committed_without_url() {
+        // Schools without a 247 college landing page render the commit as a
+        // bare `<img>` inside `.status`, not wrapped in `<a class="img-link">`.
+        // Observed in the wild: California Baptist commits (Steven Reynolds,
+        // rank 175 in class of 2026).
+        let html = r##"
+        <li class="rankings-page__list-item">
+          <div class="recruit">
+            <a class="rankings-page__name-link" href="/player/steven-reynolds-46143041/">Steven Reynolds</a>
+          </div>
+          <div class="status">
+            <img alt="California Baptist" title="California Baptist" />
+            <a class="icon-caret-down expand-anchor" href="#"></a>
+          </div>
+        </li>
+        "##;
+        let rows = parse_recruits_html(html);
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.recruit_key, 46_143_041);
+        assert_eq!(r.committed_school.as_deref(), Some("California Baptist"));
+        // No URL → no slug to extract.
+        assert!(r.committed_school_slug.is_none());
         assert_eq!(r.commit_status.as_deref(), Some("Committed"));
     }
 

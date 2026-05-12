@@ -138,23 +138,21 @@ pub async fn ingest_live(
 
 /// Load a previously-captured snapshot and upsert every row.
 ///
-/// Snapshot shape:
+/// Snapshot shape (single-group; produced by `ingest_live --dump-snapshot`):
 /// ```json
 /// {
 ///   "year": 2026,
 ///   "fetched_at": "2026-05-11T20:00:00Z",
-///   "groups": ["highschool", "juco", "prep"],
+///   "groups": ["highschool"],
 ///   "players": [ { "recruit_key": ..., ... }, ... ]
 /// }
 /// ```
 ///
-/// The institution_group for each upsert is recovered from the per-row data
-/// (currently we don't persist it on `RecruitRow`, so the snapshot must
-/// either group rows by stored group prefix or default to highschool).
-/// In v1 we re-derive group by looking at `groups[0]` — when the snapshot
-/// covers a single group this is exact; for mixed snapshots prefer
-/// `ingest_live --dump-snapshot` against a single group and re-load per
-/// group.
+/// `institution_group` is recovered from `snapshot.groups[0]`. `RecruitRow`
+/// itself doesn't carry the group (it's a per-fetch concern, not a per-row
+/// concern), so multi-group snapshots are ambiguous — we warn and tag every
+/// row with `groups[0]`. The CLI defaults to a single group, so this is
+/// usually a non-issue.
 pub async fn bootstrap_from_snapshot(
     pool: &PgPool,
     year: i32,
@@ -171,6 +169,12 @@ pub async fn bootstrap_from_snapshot(
             cli_year = year,
             snapshot_year = snapshot.year,
             "snapshot's year metadata disagrees with --year; proceeding with --year"
+        );
+    }
+    if snapshot.groups.len() > 1 {
+        warn!(
+            groups = ?snapshot.groups,
+            "snapshot covers multiple institution_groups; all rows will be tagged as the first one"
         );
     }
 
@@ -306,10 +310,6 @@ pub async fn upsert_player(
 /// season the recruit will first play in); `teams.id` is season-scoped,
 /// but downstream consumers can re-resolve via `teams.natstat_id` if a
 /// later season's row exists.
-///
-/// Single-bucket fallback: when team scoring finds no match but there's
-/// exactly one cstat team with the same short-name prefix, take it. The
-/// dangerous multi-candidate silent-bind case is dropped.
 pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, RecruitIngestError> {
     #[derive(sqlx::FromRow)]
     struct RecruitNeed {
@@ -380,7 +380,6 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
     let mut recruit_ids: Vec<Uuid> = Vec::new();
     let mut team_ids: Vec<Uuid> = Vec::new();
     let mut team_score_miss = 0u64;
-    let mut single_candidate_fallback = 0u64;
 
     for need in &needs {
         let scored = candidates
@@ -395,33 +394,11 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
             })
             .min_by_key(|(s, _)| *s);
 
-        let chosen = match scored {
-            Some((_, c)) => Some(c),
-            None => {
-                team_score_miss += 1;
-                // Fallback: same-named candidate is unambiguous (only one team
-                // with that exact short_name). Multi-candidate fallback was the
-                // pre-fix transfers bug — silently binding to whichever row
-                // happened to come first. Keep it dropped.
-                let same_short: Vec<&CandidateTeam> = candidates
-                    .iter()
-                    .filter(|c| {
-                        c.short_name
-                            .as_deref()
-                            .is_some_and(|s| s.eq_ignore_ascii_case(&need.committed_school))
-                    })
-                    .collect();
-                if same_short.len() == 1 {
-                    single_candidate_fallback += 1;
-                    Some(same_short[0])
-                } else {
-                    None
-                }
-            }
-        };
-        if let Some(c) = chosen {
+        if let Some((_, c)) = scored {
             recruit_ids.push(need.id);
             team_ids.push(c.team_id);
+        } else {
+            team_score_miss += 1;
         }
     }
 
@@ -445,7 +422,6 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
         matched = recruit_ids.len(),
         updated = n,
         team_score_miss,
-        single_candidate_fallback,
         "committed_team_id resolution complete"
     );
     Ok(n)
