@@ -28,6 +28,11 @@ pub const TEAM_ALIASES: &[(&str, &str)] = &[
     ("miami", "miami (fla.)"),
     ("miami (fl)", "miami (fla.)"),
     ("miami (oh)", "miami (ohio)"),
+    // 247 recruits use bare "Kansas City" / "Pennsylvania" where cstat
+    // carries the full NatStat names. Exact-match (not prefix) to avoid
+    // sweeping in Penn State or other related programs.
+    ("kansas city", "missouri-kansas city kangaroos"),
+    ("pennsylvania", "penn quakers"),
 ];
 
 /// Score how well a cstat team matches a 247 short name. Lower is better;
@@ -114,6 +119,39 @@ mod tests {
     fn returns_none_for_unrelated() {
         assert_eq!(
             team_match_score(Some("Kansas"), "Kansas Jayhawks", "Gonzaga"),
+            None,
+        );
+    }
+
+    #[test]
+    fn umkc_alias_resolves_kansas_city() {
+        // 247 sends bare "Kansas City"; cstat carries the full NatStat name
+        // "Missouri-Kansas City Kangaroos" — short_name=UMKC doesn't match.
+        assert_eq!(
+            team_match_score(
+                Some("UMKC"),
+                "Missouri-Kansas City Kangaroos",
+                "Kansas City",
+            ),
+            Some(1),
+        );
+    }
+
+    #[test]
+    fn penn_alias_resolves_pennsylvania_and_excludes_penn_state() {
+        // 247 sends "Pennsylvania" for the Ivy League Quakers.
+        assert_eq!(
+            team_match_score(Some("Penn"), "Penn Quakers", "Pennsylvania"),
+            Some(1),
+        );
+        // Exact-match alias must NOT also resolve "Pennsylvania" → Penn State,
+        // which is a different program with a different short_name.
+        assert_eq!(
+            team_match_score(
+                Some("Penn State"),
+                "Penn State Nittany Lions",
+                "Pennsylvania",
+            ),
             None,
         );
     }

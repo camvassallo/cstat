@@ -191,8 +191,13 @@ enum Commands {
         year: i32,
 
         /// Institution groups to ingest. Comma-separated; values:
-        /// `highschool`, `juco`, `prep`. Defaults to all three.
-        #[arg(long, value_delimiter = ',', default_value = "highschool,juco,prep")]
+        /// `highschool`, `juco`, `prep`. Defaults to `highschool` — the
+        /// `compositerecruitrankings` endpoint returns identical content
+        /// for all three values (verified empirically against class-of-2026:
+        /// first player is "Tyran Stokes" regardless of `InstitutionGroup=`).
+        /// JUCO/prep rankings live elsewhere on 247; wire those up here once
+        /// we find the right endpoint.
+        #[arg(long, value_delimiter = ',', default_value = "highschool")]
         groups: Vec<String>,
 
         /// Load from a local snapshot file instead of hitting the live API.
