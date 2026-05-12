@@ -181,6 +181,43 @@ enum Commands {
         no_resolve_players: bool,
     },
 
+    /// Ingest 247Sports composite recruit rankings for a class year. `year` is
+    /// the recruiting class year (= spring of HS graduation, = 247's URL
+    /// `{year}-basketball` slug). Class-of-2026 recruits first appear in
+    /// cstat-season 2027 box scores.
+    /// Requires TFS_247_JWT env var (same JWT as Transfers; ~6h expiry).
+    Recruits {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Institution groups to ingest. Comma-separated; values:
+        /// `highschool`, `juco`, `prep`. Defaults to `highschool` — the
+        /// `compositerecruitrankings` endpoint returns identical content
+        /// for all three values (verified empirically against class-of-2026:
+        /// first player is "Tyran Stokes" regardless of `InstitutionGroup=`).
+        /// JUCO/prep rankings live elsewhere on 247; wire those up here once
+        /// we find the right endpoint.
+        #[arg(long, value_delimiter = ',', default_value = "highschool")]
+        groups: Vec<String>,
+
+        /// Load from a local snapshot file instead of hitting the live API.
+        #[arg(long)]
+        bootstrap_from: Option<std::path::PathBuf>,
+
+        /// Save the live fetch to this path before upserting (for snapshot capture).
+        #[arg(long)]
+        dump_snapshot: Option<std::path::PathBuf>,
+
+        /// Skip the committed_team_id resolution pass after ingest.
+        #[arg(long)]
+        no_resolve_teams: bool,
+
+        /// Skip the cstat_player_id resolution pass after ingest. Pass 2 is
+        /// mostly a no-op until cstat-season `year + 1` box scores are ingested.
+        #[arg(long)]
+        no_resolve_players: bool,
+    },
+
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
     Explore {
         /// Endpoint (e.g., "teams", "players", "playerperfs")
@@ -369,6 +406,68 @@ async fn main() -> Result<()> {
             if !no_resolve_players {
                 let n =
                     cstat_ingest::ingest::transfers::resolve_cstat_joins(&db.pool, year).await?;
+                println!("cstat_player_id resolved on {n} row(s)");
+            }
+        }
+
+        Commands::Recruits {
+            year,
+            groups,
+            bootstrap_from,
+            dump_snapshot,
+            no_resolve_teams,
+            no_resolve_players,
+        } => {
+            let report = if let Some(path) = bootstrap_from {
+                info!("bootstrapping recruits from {}", path.display());
+                cstat_ingest::ingest::recruits::bootstrap_from_snapshot(&db.pool, year, &path)
+                    .await?
+            } else {
+                let parsed: Vec<cstat_ingest::InstitutionGroup> = groups
+                    .iter()
+                    .filter_map(|g| {
+                        let parsed = cstat_ingest::InstitutionGroup::parse(g);
+                        if parsed.is_none() {
+                            tracing::warn!(group = g, "unknown institution_group — skipping");
+                        }
+                        parsed
+                    })
+                    .collect();
+                if parsed.is_empty() {
+                    anyhow::bail!(
+                        "no valid institution_groups parsed from `--groups`; pass any of: highschool, juco, prep"
+                    );
+                }
+                let client = cstat_ingest::Recruit247Client::from_env()?;
+                cstat_ingest::ingest::recruits::ingest_live(
+                    &client,
+                    &db.pool,
+                    year,
+                    &parsed,
+                    dump_snapshot.as_deref(),
+                )
+                .await?
+            };
+            let by_group: Vec<String> = report
+                .by_group
+                .iter()
+                .map(|(g, n)| format!("{g}={n}"))
+                .collect();
+            println!(
+                "recruits {}: {} upserted across {} page(s) ({})",
+                report.year,
+                report.upserts,
+                report.total_pages,
+                by_group.join(", ")
+            );
+
+            if !no_resolve_teams {
+                let n = cstat_ingest::ingest::recruits::resolve_team_joins(&db.pool, year).await?;
+                println!("committed_team_id resolved on {n} row(s)");
+            }
+            if !no_resolve_players {
+                let n =
+                    cstat_ingest::ingest::recruits::resolve_player_joins(&db.pool, year).await?;
                 println!("cstat_player_id resolved on {n} row(s)");
             }
         }
