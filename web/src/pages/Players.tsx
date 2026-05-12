@@ -14,6 +14,7 @@ import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
+import RecruitClass from '../components/RecruitClass';
 import { SeasonLink } from '../components/SeasonLink';
 import { useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
@@ -43,7 +44,7 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
 };
 
 type ColumnView = 'raw' | 'rate';
-type PageMode = 'all' | 'transfers';
+type PageMode = 'all' | 'transfers' | 'recruits';
 
 // Subtle vertical divider matching the roster table's `border-l border-gray-800`.
 // Applied via inline style so it survives AG Grid's themed cell borders.
@@ -225,15 +226,20 @@ export default function Players() {
   const [searchParams, setSearchParams] = useSearchParams();
   const archetype = searchParams.get('archetype');
   const includeSecondary = searchParams.get('include_secondary') === 'true';
+  const modeParam = searchParams.get('mode');
   const mode: PageMode =
-    searchParams.get('mode') === 'transfers' ? 'transfers' : 'all';
+    modeParam === 'transfers'
+      ? 'transfers'
+      : modeParam === 'recruits'
+        ? 'recruits'
+        : 'all';
 
   const setMode = useCallback(
     (next: PageMode) => {
       setSearchParams((prev) => {
         const p = new URLSearchParams(prev);
-        if (next === 'transfers') p.set('mode', 'transfers');
-        else p.delete('mode');
+        if (next === 'all') p.delete('mode');
+        else p.set('mode', next);
         return p;
       });
     },
@@ -330,6 +336,16 @@ export default function Players() {
       >
         Transfer Portal
       </button>
+      <button
+        onClick={() => setMode('recruits')}
+        className={`px-3 py-1 ${
+          mode === 'recruits'
+            ? 'bg-blue-600 text-white'
+            : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+        }`}
+      >
+        Recruits
+      </button>
     </div>
   );
 
@@ -341,6 +357,18 @@ export default function Players() {
       <div>
         {modeTabs}
         <TransferPortal year={season} />
+      </div>
+    );
+  }
+
+  if (mode === 'recruits') {
+    // Recruiting class year = spring of HS graduation. We anchor it to the
+    // current site-selected season so navigating "2026" in the dropdown
+    // shows the class-of-2026 entering cstat-season 2027.
+    return (
+      <div>
+        {modeTabs}
+        <RecruitClass year={season} />
       </div>
     );
   }

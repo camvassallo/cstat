@@ -403,6 +403,48 @@ export function fetchTransfers(year: number) {
   );
 }
 
+// HS recruit class — one row per 247Sports composite-ranked HS recruit for a
+// given recruiting class year. `year + 1` is the cstat-season they first play
+// in (class-of-2026 → cstat-season 2027). CamPom / archetype fields stay NULL
+// until that freshman cstat-season ingests box scores.
+export interface RecruitRow {
+  composite_rank: number | null;
+  name: string;
+  position: string | null;
+  height: string | null;
+  weight: number | null;
+  city: string | null;
+  state: string | null;
+  high_school: string | null;
+  composite_rating: number | null;
+  star_rating: number | null;
+  previous_rank: number | null;
+  position_rank: number | null;
+  state_rank: number | null;
+  committed_school: string | null;
+  committed_school_short: string | null;
+  committed_team_id: string | null;
+  commit_status: string | null;
+  profile_url: string | null;
+  photo_url: string | null;
+  player_id: string | null;
+  campom: number | null;
+  campom_pct: number | null;
+  primary_class: string | null;
+  secondary_class: string | null;
+  minutes_per_game: number | null;
+  games_played: number | null;
+}
+
+export function fetchRecruits(year: number) {
+  return fetchJson<{
+    year: number;
+    base_season: number;
+    recruits: RecruitRow[];
+    total: number;
+  }>(`/recruits/${year}`);
+}
+
 export interface ProjectedTeam {
   team_id: string;
   team_name: string;

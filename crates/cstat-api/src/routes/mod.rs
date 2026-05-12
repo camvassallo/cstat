@@ -3,6 +3,7 @@ pub mod games;
 pub mod players;
 pub mod predict;
 pub mod projections;
+pub mod recruits;
 pub mod seasons;
 pub mod teams;
 pub mod ticker;
@@ -23,4 +24,5 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(ticker::router())
         .merge(transfers::router())
         .merge(projections::router())
+        .merge(recruits::router())
 }
