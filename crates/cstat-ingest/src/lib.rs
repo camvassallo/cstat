@@ -4,10 +4,12 @@ pub mod client;
 pub mod ingest;
 pub mod rate_limiter;
 pub mod tfs;
+pub mod tfs_recruits;
 pub mod torvik;
 
 pub use client::NatStatClient;
 pub use tfs::TfsClient;
+pub use tfs_recruits::{InstitutionGroup, Recruit247Client, RecruitError};
 pub use torvik::TorkvikClient;
 
 use chrono::{Datelike, Utc};

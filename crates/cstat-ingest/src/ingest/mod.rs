@@ -1,6 +1,7 @@
 pub mod elo;
 pub mod games;
 pub mod players;
+pub mod recruits;
 pub mod season;
 pub mod team_aliases;
 pub mod teams;
