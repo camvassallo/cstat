@@ -199,13 +199,15 @@ export default function RecruitClass({ year }: Props) {
 
   useEffect(() => {
     let canceled = false;
-    // No setError/setRows reset here — `react-hooks/set-state-in-effect`
-    // forbids it. On year change, the previous data stays visible until the
-    // new fetch resolves; mild stale-flicker matches the Players page
-    // pattern (see comment in pages/Players.tsx::useEffect).
+    // No setError/setRows reset at the top — `react-hooks/set-state-in-effect`
+    // forbids synchronous state-sets in the effect body. Async resets in the
+    // `.then` / `.catch` callbacks are fine; clearing `error` there is what
+    // lets a successful year-change recover from a prior error.
     fetchRecruits(year)
       .then((r) => {
-        if (!canceled) setRows(r.recruits);
+        if (canceled) return;
+        setError(null);
+        setRows(r.recruits);
       })
       .catch((e) => {
         if (!canceled) setError(String(e));
@@ -245,7 +247,10 @@ export default function RecruitClass({ year }: Props) {
   }, [rows]);
 
   if (error) {
-    if (error.includes('404') || error.includes('no recruits')) {
+    // The route's 404 path returns `{ "error": "no recruits data for year N" }`,
+    // which `fetchJson` surfaces verbatim — no HTTP status in the message — so
+    // we anchor the empty-state check on the route's own wording.
+    if (error.includes('no recruits')) {
       return (
         <div className="p-4 text-gray-500 text-sm">
           No recruits ingested for class of {year}. Run{' '}
@@ -272,6 +277,7 @@ export default function RecruitClass({ year }: Props) {
       <button
         key={label}
         onClick={() => setStatusFilter(active ? null : label)}
+        aria-pressed={active}
         className={`px-2 py-0.5 rounded border text-xs transition-colors ${
           active
             ? statusChipClass(label) + ' ring-1 ring-current'
