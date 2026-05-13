@@ -13,7 +13,7 @@ use axum::{
 use cstat_core::inference::Predictor;
 use cstat_core::roster_features::build_roster_features;
 use cstat_core::roster_projection::{
-    DraftScenario, ProjectedRoster, compose_all_projections, load_draft_entrants,
+    DraftScenario, FreshmanTier, ProjectedRoster, compose_all_projections, load_draft_entrants,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -60,6 +60,18 @@ struct ProjectedTeam {
     returning_count: usize,
     /// Count of incoming portal arrivals committed to this team.
     arrivals_count: usize,
+    /// Count of incoming HS recruits committed to this team. Each
+    /// recruit is synthesized from a tier-mean freshman profile (see
+    /// `FreshmanTier` in `roster_projection.rs`).
+    recruits_count: usize,
+    /// Per-tier breakdown of the recruit class, e.g. `{"t1": 1, "t2": 2}`.
+    /// Surfaced separately so the UI can render "1× elite · 2× top-100"
+    /// without re-counting client-side.
+    recruits_by_tier: serde_json::Value,
+    /// Up to the top 5 recruits by composite_rank for UI display. Each
+    /// entry is `{name, composite_rank, star_rating, tier}` from
+    /// `RecruitMeta`.
+    top_recruits: Vec<serde_json::Value>,
     /// Count of players in the uncertain bucket — the spread
     /// (ceiling - floor) is roughly proportional to this.
     uncertain_count: usize,
@@ -200,7 +212,52 @@ fn predict_team(
     predictor: &Predictor,
     baseline: Option<f32>,
 ) -> Option<ProjectedTeam> {
-    let qualifying = p.returning.len() + p.arrivals.len();
+    // Recruits count toward the qualifying-size gate: a returners-thin
+    // team with a strong freshman class (e.g. Duke with 4 incoming
+    // 5-stars) is no longer "too thin to project". The roster model
+    // sees them via build_roster_features just like returners.
+    let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
+
+    // Per-tier counts for the UI breakdown chip.
+    let mut tier_counts: [u32; 4] = [0; 4];
+    for (_, meta) in &p.recruits {
+        let idx = match meta.tier {
+            FreshmanTier::T1 => 0,
+            FreshmanTier::T2 => 1,
+            FreshmanTier::T3 => 2,
+            FreshmanTier::T4 => 3,
+        };
+        tier_counts[idx] += 1;
+    }
+    let recruits_by_tier = json!({
+        "t1": tier_counts[0],
+        "t2": tier_counts[1],
+        "t3": tier_counts[2],
+        "t4": tier_counts[3],
+    });
+
+    // Top 5 recruits by composite_rank (NULL ranks last). Cloned so the
+    // closure capture is move-friendly.
+    let mut sorted_recruits: Vec<_> = p.recruits.iter().map(|(_, m)| m.clone()).collect();
+    sorted_recruits.sort_by(|a, b| match (a.composite_rank, b.composite_rank) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    let top_recruits: Vec<serde_json::Value> = sorted_recruits
+        .into_iter()
+        .take(5)
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "composite_rank": m.composite_rank,
+                "star_rating": m.star_rating,
+                "tier": m.tier,
+            })
+        })
+        .collect();
+
     // Every team produces a row — too-thin rosters get null predictions
     // and a `too_thin = true` flag instead of being silently dropped.
     // This keeps "what happened to X?" auditable from the response.
@@ -213,6 +270,9 @@ fn predict_team(
         midpoint_adj_em: floor.zip(ceiling).map(|(f, c)| (f + c) / 2.0),
         returning_count: p.returning.len(),
         arrivals_count: p.arrivals.len(),
+        recruits_count: p.recruits.len(),
+        recruits_by_tier: recruits_by_tier.clone(),
+        top_recruits: top_recruits.clone(),
         uncertain_count: p.uncertain.len(),
         departures_count: p.departures.len(),
         too_thin,

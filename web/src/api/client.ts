@@ -445,6 +445,17 @@ export function fetchRecruits(year: number) {
   }>(`/recruits/${year}`);
 }
 
+/// One synthesized HS recruit from the route's `top_recruits` payload.
+/// Source: `recruits` table joined to committed_team_id; the tier maps
+/// to a freshman impact profile (T1 elite / T2 top-100 / T3 / T4).
+export interface ProjectedRecruit {
+  name: string;
+  composite_rank: number | null;
+  star_rating: number | null;
+  /// Snake-case tier label from the route — `"t1"`, `"t2"`, `"t3"`, `"t4"`.
+  tier: 't1' | 't2' | 't3' | 't4';
+}
+
 export interface ProjectedTeam {
   team_id: string;
   team_name: string;
@@ -459,10 +470,18 @@ export interface ProjectedTeam {
   midpoint_adj_em: number | null;
   returning_count: number;
   arrivals_count: number;
+  /// Number of HS recruits committed to this team (class-of-`base_season`).
+  /// Each contributes a synthesized PlayerRow drawn from a tier-mean
+  /// freshman profile.
+  recruits_count: number;
+  /// Per-tier breakdown of the recruits, e.g. `{t1: 1, t2: 2, t3: 0, t4: 0}`.
+  recruits_by_tier: { t1: number; t2: number; t3: number; t4: number };
+  /// Up to 5 highest-ranked recruits for UI display.
+  top_recruits: ProjectedRecruit[];
   uncertain_count: number;
   departures_count: number;
-  /// True when (returning + arrivals) is below the projection threshold —
-  /// render '—' instead of the prediction columns.
+  /// True when (returning + arrivals + recruits) is below the projection
+  /// threshold — render '—' instead of the prediction columns.
   too_thin: boolean;
   /// Team's AdjEM at the end of the base season (= year-1, the
   /// just-completed season). Used as the shrinkage anchor and the

@@ -47,7 +47,7 @@ pub enum RecruitError {
     Http(#[from] reqwest::Error),
 
     #[error(
-        "missing TFS_247_JWT environment variable — capture a fresh JWT from DevTools and export it"
+        "missing TFS_247_COOKIE (or legacy TFS_247_JWT) env var — capture a fresh session via DevTools Copy-as-cURL and export the Cookie header value as TFS_247_COOKIE"
     )]
     MissingJwt,
 
@@ -147,28 +147,47 @@ pub struct RecruitRow {
 
 /// 247Sports recruit-rankings HTML client. Mirrors [`crate::tfs::TfsClient`]
 /// in shape but parses HTML rather than JSON.
+///
+/// Auth model: a full `Cookie:` header string is sent on every request. The
+/// constructor accepts either a multi-cookie session string (preferred,
+/// captured via DevTools Copy-as-cURL) or a legacy single `JWT=…` value
+/// (when wrapped as `JWT={value}`). 247 stopped honoring a bare `JWT`
+/// cookie at some point — current sessions auth via `REF_TKN` /
+/// `cbsiaa` / `minUnifiedSessionToken10` / etc., so we pass whatever the
+/// browser was using.
 pub struct Recruit247Client {
     http: Client,
-    jwt: String,
+    cookie_header: String,
     rate_limiter: RateLimiter,
 }
 
 impl Recruit247Client {
-    /// Build a client from `TFS_247_JWT` (required) and optional
-    /// `TFS_247_RATE_PER_HOUR` (default 3600). Same env vars as `TfsClient` —
-    /// both clients hit the same vendor and accept the same subscriber JWT.
+    /// Build a client from env. Prefers `TFS_247_COOKIE` (the full
+    /// `Cookie:` header string from DevTools Copy-as-cURL); falls back to
+    /// the legacy `TFS_247_JWT` (wrapped as `JWT={value}`) for backward
+    /// compat with pre-2026-05 captures. Rate is optional, default 3600/hr
+    /// shared with `TfsClient`.
     pub fn from_env() -> Result<Self, RecruitError> {
-        let jwt = std::env::var("TFS_247_JWT").map_err(|_| RecruitError::MissingJwt)?;
+        let cookie_header = std::env::var("TFS_247_COOKIE")
+            .ok()
+            .or_else(|| {
+                std::env::var("TFS_247_JWT")
+                    .ok()
+                    .map(|j| format!("JWT={j}"))
+            })
+            .ok_or(RecruitError::MissingJwt)?;
         let rate = std::env::var("TFS_247_RATE_PER_HOUR")
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(DEFAULT_RATE_PER_HOUR);
-        Ok(Self::new(jwt, rate))
+        Ok(Self::new(cookie_header, rate))
     }
 
-    /// Build with an explicit JWT + rate (handy for tests). Prefer
-    /// [`Self::from_env`] in production code.
-    pub fn new(jwt: String, max_per_hour: u32) -> Self {
+    /// Build with an explicit cookie header + rate (handy for tests).
+    /// Prefer [`Self::from_env`] in production code. The string is sent
+    /// verbatim as the `Cookie:` header value, so callers pass either a
+    /// multi-cookie session (`a=1; b=2; …`) or a single `JWT=xxx`.
+    pub fn new(cookie_header: String, max_per_hour: u32) -> Self {
         Self {
             http: Client::builder()
                 .user_agent(USER_AGENT)
@@ -176,7 +195,7 @@ impl Recruit247Client {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("failed to build HTTP client"),
-            jwt,
+            cookie_header,
             rate_limiter: RateLimiter::new(max_per_hour),
         }
     }
@@ -220,7 +239,7 @@ impl Recruit247Client {
             let response = match self
                 .http
                 .get(&url)
-                .header("Cookie", format!("JWT={}", self.jwt))
+                .header("Cookie", &self.cookie_header)
                 .header("Referer", &referer)
                 .header("X-Requested-With", "XMLHttpRequest")
                 .header("Accept", "*/*")
