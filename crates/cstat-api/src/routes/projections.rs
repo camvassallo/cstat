@@ -377,7 +377,17 @@ async fn projection_team_detail(
     // single-team code path that risks drifting from the list route.
     let entrants_path =
         PathBuf::from("data/draft").join(format!("{}_early_entrants.json", base_season));
-    let entrants = load_draft_entrants(&entrants_path).unwrap_or_default();
+    // Match the list route's behavior: missing-file failures are logged
+    // and the projection proceeds with an empty cohort (so a single
+    // team page doesn't 500 just because the draft list is unavailable).
+    let entrants = load_draft_entrants(&entrants_path).unwrap_or_else(|e| {
+        tracing::warn!(
+            path = %entrants_path.display(),
+            error = %e,
+            "draft entrants file unavailable; projecting without draft cohort",
+        );
+        vec![]
+    });
     let projections = compose_all_projections(pool, base_season, &entrants)
         .await
         .map_err(|e| {
