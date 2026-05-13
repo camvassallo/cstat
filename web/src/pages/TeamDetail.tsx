@@ -2,10 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   fetchTeamDetail,
+  fetchProjectedTeam,
   type TeamProfile,
   type ScheduleEntry,
   type RosterEntry,
   type ArchetypeShare,
+  type ProjectedReturning,
+  type ProjectedArrival,
+  type ProjectedRecruitDetail,
+  type ProjectedDeparture,
+  type ProjectedUncertain,
+  type ProjectedTeam,
 } from '../api/client';
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
@@ -15,7 +22,12 @@ import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
 import { SeasonLink } from '../components/SeasonLink';
-import { seasonHref, setPageSeasons, useSeason } from '../components/season';
+import {
+  AVAILABLE_SEASONS_FALLBACK,
+  seasonHref,
+  setPageSeasons,
+  useSeason,
+} from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
@@ -64,7 +76,24 @@ function FourFactors({ team, label }: { team: TeamProfile; label: string }) {
   );
 }
 
+/// Routing shim: the page handles two distinct modes (played-season
+/// historical detail vs upcoming-season projection) backed by
+/// different APIs. We branch by `season > AVAILABLE_SEASONS_FALLBACK[0]`
+/// at the wrapper layer so each mode's hooks live in their own
+/// component (Rules of Hooks). Triggered today by `?season=2027`
+/// links from the transfer-portal "next team" and recruit "committed
+/// to" cells, plus the Projected2027 page's team links.
 export default function TeamDetail() {
+  const { id } = useParams<{ id: string }>();
+  const { season } = useSeason();
+  const maxPlayed = AVAILABLE_SEASONS_FALLBACK[0];
+  if (id && season > maxPlayed) {
+    return <ProjectedTeamView id={id} year={season} />;
+  }
+  return <HistoricalTeamDetail />;
+}
+
+function HistoricalTeamDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { season } = useSeason();
@@ -736,3 +765,328 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
     </tr>
   );
 }
+
+// ─── Projection mode ──────────────────────────────────────────────────
+//
+// Stripped TeamDetail variant for upcoming-season projections. Shares
+// the same URL shape (`/teams/:id?season=2027`) — `TeamDetail`'s
+// wrapper picks this component when the requested season is past the
+// latest played one. No game log / schedule / season stats since the
+// season hasn't happened; we render the projected AdjEM band, a small
+// stat strip, and four roster cards (returning / arrivals / recruits /
+// departures + uncertain) so the user can see who composes the roster
+// the projection is built from. Future iteration: minutes-share radial
+// roster plot from §5b, projected schedule from the predict model.
+
+interface ProjectedTeamViewProps {
+  id: string;
+  year: number;
+}
+
+function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
+  const [data, setData] = useState<{
+    team: { id: string; name: string | null; short_name: string | null };
+    projection: ProjectedTeam;
+    returning: ProjectedReturning[];
+    arrivals: ProjectedArrival[];
+    recruits: ProjectedRecruitDetail[];
+    departures: ProjectedDeparture[];
+    uncertain: ProjectedUncertain[];
+    base_season: number;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  // YYYY-YY label, e.g. "2026-27" for year=2027. Mirrors the
+  // ProjectedRecruit chip on PlayerDetail / the Projected2027 page.
+  const seasonLabel = `${year - 1}-${(year % 100).toString().padStart(2, '0')}`;
+  usePageTitle(data?.team?.name ? `${data.team.name} ${seasonLabel} projection` : null);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    fetchProjectedTeam(year, id)
+      .then((r) => {
+        if (cancelled) return;
+        setData(r);
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(String(e));
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, year]);
+
+  if (loading) return <div className="p-4 text-gray-400">Loading projection...</div>;
+  if (error) return <div className="p-4 text-rose-300">Failed to load projection: {error}</div>;
+  if (!data) return <div className="p-4 text-gray-400">No projection data.</div>;
+
+  const { team, projection: p, returning, arrivals, recruits, departures, uncertain, base_season } =
+    data;
+  const displayName = team.name ?? team.short_name ?? '(unknown team)';
+
+  // Mid AdjEM chip color tier — mirrors `adjEmTone` on Projected2027 but
+  // duplicated here rather than promoted to a shared module so the
+  // Projected2027 page stays self-contained.
+  const tone = (v: number | null): string => {
+    if (v == null) return 'bg-slate-800/40 border-slate-700 text-slate-400';
+    if (v >= 25) return 'bg-emerald-900/50 border-emerald-700 text-emerald-200';
+    if (v >= 15) return 'bg-emerald-950/40 border-emerald-800 text-emerald-300';
+    if (v >= 5) return 'bg-teal-950/40 border-teal-800 text-teal-300';
+    if (v >= -5) return 'bg-slate-800/40 border-slate-700 text-slate-300';
+    if (v >= -15) return 'bg-amber-950/40 border-amber-800 text-amber-300';
+    return 'bg-rose-950/40 border-rose-800 text-rose-300';
+  };
+  const signed = (v: number | null) =>
+    v == null ? '—' : v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1);
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-3 flex-wrap">
+            {displayName}
+            <span className="text-xs uppercase tracking-wide px-2 py-0.5 rounded border border-amber-700/60 bg-amber-950/40 text-amber-300">
+              {seasonLabel} projection
+            </span>
+          </h1>
+          <div className="text-gray-400 mt-1 text-sm">
+            Composed from{' '}
+            <SeasonLink
+              to={`/teams/${team.id}?season=${base_season}`}
+              className="text-blue-400 hover:underline"
+            >
+              {base_season - 1}-{(base_season % 100).toString().padStart(2, '0')} roster
+            </SeasonLink>{' '}
+            minus departures + portal arrivals + HS commits.
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3 min-w-[400px]">
+          <div className="bg-gray-800 rounded-lg p-3 text-center">
+            <div className="text-[10px] text-gray-400 uppercase tracking-wide">Mid AdjEM</div>
+            <div className={`mt-1 inline-block px-2 py-0.5 rounded border ${tone(p.midpoint_adj_em)}`}>
+              <span className="text-xl font-bold">{signed(p.midpoint_adj_em)}</span>
+            </div>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-3 text-center">
+            <div className="text-[10px] text-gray-400 uppercase tracking-wide">Floor → Ceiling</div>
+            <div className="mt-1 text-sm font-mono text-gray-300">
+              {signed(p.floor_adj_em)} → {signed(p.ceiling_adj_em)}
+            </div>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-3 text-center">
+            <div className="text-[10px] text-gray-400 uppercase tracking-wide">
+              Δ vs {base_season - 1}-{(base_season % 100).toString().padStart(2, '0')}
+            </div>
+            <div className="mt-1 text-sm font-mono text-gray-300">
+              {p.midpoint_adj_em != null && p.baseline_adj_em != null
+                ? signed(p.midpoint_adj_em - p.baseline_adj_em)
+                : '—'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Honesty band — minimal version of the Projected2027 banner. */}
+      <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 leading-relaxed">
+        <strong className="text-amber-300">Projection mode:</strong>{' '}
+        This page is the {seasonLabel} forward-looking view, not a played season. Roster = returners
+        (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal commits +
+        HS-recruit class commits. Recruits use a tier-mean profile keyed on 247 composite rank — see
+        the Projected {seasonLabel} page for methodology.
+      </div>
+
+      {/* Roster cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <RosterCard title={`Returning (${returning.length})`}>
+          {returning.length === 0 ? (
+            <Empty label="No qualified returners" />
+          ) : (
+            returning.map((r) => (
+              <PlayerCard key={r.player_id} name={r.name} mpg={r.mpg} cam_v3={r.cam_v3} primary_class={r.primary_class}>
+                <SeasonLink
+                  to={`/players/${r.player_id}?season=${base_season}`}
+                  className="text-blue-400 hover:underline"
+                >
+                  {r.name}
+                </SeasonLink>
+              </PlayerCard>
+            ))
+          )}
+        </RosterCard>
+
+        <RosterCard title={`Incoming transfers (${arrivals.length})`}>
+          {arrivals.length === 0 ? (
+            <Empty label="No portal arrivals" />
+          ) : (
+            arrivals.map((a) => (
+              <PlayerCard key={a.player_id} name={a.name} mpg={a.mpg} cam_v3={a.cam_v3} primary_class={a.primary_class}>
+                <SeasonLink
+                  to={`/players/${a.player_id}?season=${base_season}`}
+                  className="text-blue-400 hover:underline"
+                >
+                  {a.name}
+                </SeasonLink>
+                {a.source_team_id && a.source_team_name && (
+                  <span className="text-xs text-gray-400 ml-2">
+                    from{' '}
+                    <SeasonLink
+                      to={`/teams/${a.source_team_id}?season=${base_season}`}
+                      className="text-blue-400 hover:underline"
+                    >
+                      {a.source_team_name}
+                    </SeasonLink>
+                  </span>
+                )}
+              </PlayerCard>
+            ))
+          )}
+        </RosterCard>
+
+        <RosterCard title={`Incoming recruits (${recruits.length})`}>
+          {recruits.length === 0 ? (
+            <Empty label="No HS commits" />
+          ) : (
+            recruits.map((r) => <RecruitCard key={r.recruit_id} r={r} />)
+          )}
+        </RosterCard>
+
+        <RosterCard title={`Departures (${departures.length})${uncertain.length > 0 ? ` · ? ${uncertain.length}` : ''}`}>
+          {departures.length === 0 && uncertain.length === 0 ? (
+            <Empty label="No departures" />
+          ) : (
+            <>
+              {departures.map((d) => (
+                <div key={d.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
+                  <span className="text-sm text-gray-300">{d.name}</span>
+                  <span
+                    className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                      d.kind === 'senior'
+                        ? 'text-slate-400'
+                        : d.kind === 'transferred'
+                          ? 'text-amber-400'
+                          : 'text-rose-400'
+                    }`}
+                    title={d.kind === 'transferred' && d.destination ? `to ${d.destination}` : undefined}
+                  >
+                    {d.kind === 'senior'
+                      ? 'Sr graduation'
+                      : d.kind === 'transferred'
+                        ? `→ ${d.destination ?? 'portal'}`
+                        : 'NBA draft'}
+                  </span>
+                </div>
+              ))}
+              {uncertain.map((u) => (
+                <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
+                  <span className="text-sm text-gray-300">{u.name}</span>
+                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
+                    ? draft (TBD)
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+        </RosterCard>
+      </div>
+    </div>
+  );
+}
+
+function RosterCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-gray-900 rounded-lg border border-gray-800">
+      <div className="px-4 py-2 border-b border-gray-800 text-sm font-semibold text-gray-300 uppercase tracking-wide">
+        {title}
+      </div>
+      <div className="p-2 space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function Empty({ label }: { label: string }) {
+  return <div className="text-sm text-gray-500 italic px-2 py-3">{label}</div>;
+}
+
+function PlayerCard({
+  mpg,
+  cam_v3,
+  primary_class,
+  children,
+}: {
+  name: string;
+  mpg: number;
+  cam_v3: number | null;
+  primary_class: string | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        <div className="truncate">{children}</div>
+        {primary_class && (
+          <span
+            className="text-[10px] font-bold uppercase tracking-wide"
+            style={{ color: classColor(primary_class) }}
+          >
+            {primary_class}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
+        <span title="Prior-season MPG">{mpg.toFixed(0)}'</span>
+        {cam_v3 != null && (
+          <span
+            className={`px-1.5 rounded border ${campomTierColor(campomTier(cam_v3))}`}
+            title="Prior-season CamPom v3"
+          >
+            {cam_v3.toFixed(1)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
+  const tierTone =
+    r.tier === 't1'
+      ? 'bg-amber-900/30 border-amber-700 text-amber-300'
+      : r.tier === 't2'
+        ? 'bg-cyan-900/30 border-cyan-700 text-cyan-300'
+        : 'bg-slate-800 border-slate-700 text-slate-400';
+  return (
+    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        <span className="text-sm text-gray-200 truncate">{r.name}</span>
+        {r.composite_rank != null && (
+          <span className="text-[10px] text-gray-500">#{r.composite_rank}</span>
+        )}
+        {r.star_rating != null && (
+          <span className="text-[10px] text-amber-300">{'★'.repeat(r.star_rating)}</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 text-xs">
+        <span
+          className={`px-1.5 py-0.5 rounded border text-[10px] uppercase ${tierTone}`}
+          title={`Tier ${r.tier.slice(1).toUpperCase()} freshman profile`}
+        >
+          {r.tier.toUpperCase()}
+        </span>
+        {r.projected_cam_v3 != null && (
+          <span
+            className={`px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`}
+            title="Tier-mean projected CamPom v3 (population average for the tier — not per-player)"
+          >
+            {r.projected_cam_v3.toFixed(1)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+

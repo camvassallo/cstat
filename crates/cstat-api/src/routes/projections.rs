@@ -24,7 +24,12 @@ use uuid::Uuid;
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/api/projections/{year}", get(projection_list))
+    Router::new()
+        .route("/api/projections/{year}", get(projection_list))
+        .route(
+            "/api/projections/{year}/teams/{team_id}",
+            get(projection_team_detail),
+        )
 }
 
 /// Minimum (returning + arrivals) count we'll score. Below this, the
@@ -316,6 +321,275 @@ fn predict_team(
         Some(shrink(ceiling_raw, baseline)),
         false,
     ))
+}
+
+/// Single-team projection detail. Mirrors the list route's composition
+/// pipeline but enriches each roster row with the player's `name` (and
+/// stats already on `PlayerRow`) so the frontend can render a per-team
+/// projected-roster view (Returning / Arrivals / Recruits / Departures)
+/// without a second round-trip.
+///
+/// `team_id` may belong to any season (UUIDs are season-scoped, but we
+/// resolve cross-season via `natstat_id` the same way `team_detail`
+/// does). The projection is composed off the `base_season = year - 1`
+/// teams row that matches the requested team_id's natstat_id.
+async fn projection_team_detail(
+    State(state): State<Arc<AppState>>,
+    Path((year, team_id)): Path<(i32, Uuid)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !(2025..=2030).contains(&year) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "year out of range — projections supported for 2025–2030",
+            })),
+        ));
+    }
+    let base_season = year - 1;
+    let pool = &state.db.pool;
+
+    // Resolve the cross-season UUID first: if the URL carries last-
+    // season's UUID for a team that exists in base_season, we'd 404
+    // without the natstat_id lookup. Same helper team_detail uses.
+    let resolved_id =
+        match cstat_core::queries::resolve_team_id_for_season(pool, team_id, base_season)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("team resolution failed: {e}") })),
+                )
+            })? {
+            Some(id) => id,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "error": format!("team not found in base_season {base_season}")
+                    })),
+                ));
+            }
+        };
+
+    // Compose all projections for the year, then pick the requested team.
+    // Composition is fast (one season's worth of fetches in 3 queries);
+    // single-team filtering after the fact is simpler than carving out a
+    // single-team code path that risks drifting from the list route.
+    let entrants_path =
+        PathBuf::from("data/draft").join(format!("{}_early_entrants.json", base_season));
+    let entrants = load_draft_entrants(&entrants_path).unwrap_or_default();
+    let projections = compose_all_projections(pool, base_season, &entrants)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
+            )
+        })?;
+    let Some(projection) = projections.into_iter().find(|p| p.team_id == resolved_id) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!(
+                    "no projection for team {resolved_id} (base season {base_season}); team may not have a qualified roster"
+                )
+            })),
+        ));
+    };
+
+    // Look up the team's natstat_id so the frontend can build canonical
+    // back-links into the played base season (e.g. clicking the team
+    // name on the projection page goes to the actual 2026 page).
+    let team_meta: Option<(String, Option<String>)> =
+        sqlx::query_as(r#"SELECT name, short_name FROM teams WHERE id = $1 LIMIT 1"#)
+            .bind(resolved_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("team meta fetch failed: {e}") })),
+                )
+            })?;
+
+    let baseline_map = fetch_baseline_adj_em(pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("baseline fetch failed: {e}") })),
+            )
+        })?;
+    let baseline = baseline_map.get(&resolved_id).copied();
+
+    let row = predict_team(&projection, &state.predictor, baseline);
+
+    // Name lookup for the returning + arrival player_ids. PlayerRow is
+    // stat-only (matches the roster model's input shape); names live on
+    // the `players` table and we batch-fetch them here so the UI can
+    // render a per-player roster without re-querying. Recruits already
+    // carry their name on `RecruitMeta`.
+    let mut player_ids: Vec<Uuid> = Vec::new();
+    for r in &projection.returning {
+        player_ids.push(r.player_id);
+    }
+    for a in &projection.arrivals {
+        player_ids.push(a.player_id);
+    }
+    let names: std::collections::HashMap<Uuid, String> = if player_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT ON (id) id, name
+            FROM players
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(&player_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("name fetch failed: {e}") })),
+            )
+        })?;
+        rows.into_iter().collect()
+    };
+
+    // Look up source-team display names + UUIDs for arrivals. We carry
+    // `player_id`, and `player_team` maps that → source team via the
+    // base-season player_season_stats row. Arrivals link out to their
+    // source-team page in the played base season (e.g. UCLA in 2025
+    // for a 2025-portal transfer), per the cross-season link rule.
+    let arrival_sources: std::collections::HashMap<Uuid, (Uuid, String)> =
+        if projection.arrivals.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            let arrival_pids: Vec<Uuid> = projection.arrivals.iter().map(|a| a.player_id).collect();
+            let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+                r#"
+            SELECT pss.player_id, t.id, COALESCE(t.short_name, t.name)
+            FROM player_season_stats pss
+            JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
+            WHERE pss.season = $1 AND pss.player_id = ANY($2)
+            "#,
+            )
+            .bind(base_season)
+            .bind(&arrival_pids)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": format!("arrival-source fetch failed: {e}")
+                    })),
+                )
+            })?;
+            rows.into_iter()
+                .map(|(pid, tid, tname)| (pid, (tid, tname)))
+                .collect()
+        };
+
+    // Serialize each cohort with names attached. We keep stats off the
+    // wire for v1 (the model's PlayerRow is hard to read for a user);
+    // the next iteration can add per-player CamPom + minutes + position.
+    let returning_json: Vec<Value> = projection
+        .returning
+        .iter()
+        .map(|r| {
+            json!({
+                "player_id": r.player_id,
+                "name": names.get(&r.player_id).cloned().unwrap_or_else(|| "(unknown)".to_string()),
+                "mpg": r.mpg,
+                "ppg": r.ppg,
+                "cam_v3": r.cam_v3,
+                "primary_class": r.primary_class,
+            })
+        })
+        .collect();
+    let arrivals_json: Vec<Value> = projection
+        .arrivals
+        .iter()
+        .map(|a| {
+            let source = arrival_sources.get(&a.player_id);
+            json!({
+                "player_id": a.player_id,
+                "name": names.get(&a.player_id).cloned().unwrap_or_else(|| "(unknown)".to_string()),
+                "source_team_id": source.map(|(tid, _)| *tid),
+                "source_team_name": source.map(|(_, n)| n.clone()),
+                "mpg": a.mpg,
+                "ppg": a.ppg,
+                "cam_v3": a.cam_v3,
+                "primary_class": a.primary_class,
+            })
+        })
+        .collect();
+    let recruits_json: Vec<Value> = projection
+        .recruits
+        .iter()
+        .map(|(row, meta)| {
+            json!({
+                "recruit_id": meta.recruit_id,
+                "name": meta.name,
+                "composite_rank": meta.composite_rank,
+                "star_rating": meta.star_rating,
+                "tier": meta.tier,
+                "projected_cam_v3": row.cam_v3,
+            })
+        })
+        .collect();
+    let departures_json: Vec<Value> = projection
+        .departures
+        .iter()
+        .map(|d| match d {
+            cstat_core::roster_projection::DepartureReason::GraduatedSenior { player_id, name } => {
+                json!({"kind": "senior", "player_id": player_id, "name": name})
+            }
+            cstat_core::roster_projection::DepartureReason::Transferred {
+                player_id,
+                name,
+                destination,
+            } => json!({
+                "kind": "transferred",
+                "player_id": player_id,
+                "name": name,
+                "destination": destination,
+            }),
+            cstat_core::roster_projection::DepartureReason::DraftGone { player_id, name } => {
+                json!({"kind": "draft_gone", "player_id": player_id, "name": name})
+            }
+        })
+        .collect();
+    let uncertain_json: Vec<Value> = projection
+        .uncertain
+        .iter()
+        .map(|(_, meta)| {
+            json!({
+                "player_id": meta.player_id,
+                "name": meta.name,
+                "reason": meta.reason,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "year": year,
+        "base_season": base_season,
+        "team": {
+            "id": resolved_id,
+            "name": team_meta.as_ref().map(|(n, _)| n.clone()),
+            "short_name": team_meta.as_ref().and_then(|(_, s)| s.clone()),
+        },
+        "projection": row,
+        "returning": returning_json,
+        "arrivals": arrivals_json,
+        "recruits": recruits_json,
+        "departures": departures_json,
+        "uncertain": uncertain_json,
+    })))
 }
 
 /// Pull `team_season_stats.adj_efficiency_margin` for every team in

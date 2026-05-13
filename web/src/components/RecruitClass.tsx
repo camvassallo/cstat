@@ -39,15 +39,16 @@ function statusChipClass(status: string | null): string {
 function teamCellRenderer(opts: {
   name: string | null;
   id: string | null;
+  season: number;
   fallback?: string;
   fallbackClass?: string;
 }) {
-  const { name, id, fallback = 'Uncommitted', fallbackClass = 'text-gray-500 italic' } = opts;
+  const { name, id, season, fallback = 'Uncommitted', fallbackClass = 'text-gray-500 italic' } = opts;
   if (!name) return <span className={fallbackClass}>{fallback}</span>;
   if (!id) return <span className="text-gray-200">{name}</span>;
   return (
     <SeasonLink
-      to={`/teams/${id}`}
+      to={`/teams/${id}?season=${season}`}
       onClick={(e) => e.stopPropagation()}
       className="text-blue-400 hover:underline"
     >
@@ -56,7 +57,7 @@ function teamCellRenderer(opts: {
   );
 }
 
-function buildColumns(isMobile: boolean): ColDef<RecruitRow>[] {
+function buildColumns(isMobile: boolean, year: number): ColDef<RecruitRow>[] {
   const flexCol = (flex: number, min: number) =>
     isMobile ? { width: min } : { flex, minWidth: min };
 
@@ -153,6 +154,10 @@ function buildColumns(isMobile: boolean): ColDef<RecruitRow>[] {
           // name verbatim if no match.
           name: p.data?.committed_school_short ?? p.data?.committed_school ?? null,
           id: p.data?.committed_team_id ?? null,
+          // Recruits join their committed school in the *next* cstat-
+          // season (class-of-2024 first plays in 2025, class-of-2026 in
+          // 2027). The 2027 case lands on the projected team page.
+          season: year + 1,
         }),
     },
     {
@@ -217,7 +222,7 @@ export default function RecruitClass({ year }: Props) {
     };
   }, [year]);
 
-  const columns = useMemo(() => buildColumns(isMobile), [isMobile]);
+  const columns = useMemo(() => buildColumns(isMobile, year), [isMobile, year]);
 
   const filtered = useMemo(() => {
     if (!rows) return null;
