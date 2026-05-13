@@ -1,7 +1,5 @@
 use crate::roster_features::{QUAL_FILTER_STRING, ROSTER_FEATURE_NAMES, ROSTER_NUM_FEATURES};
-use crate::trajectory::{
-    TRAJECTORY_FEATURE_NAMES, TRAJECTORY_NUM_FEATURES, TrajectoryPrediction,
-};
+use crate::trajectory::{TRAJECTORY_FEATURE_NAMES, TRAJECTORY_NUM_FEATURES, TrajectoryPrediction};
 use crate::treeshap::{LgbModel, tree_shap};
 use ort::session::Session;
 use std::path::Path;
@@ -769,15 +767,14 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
 /// never serves trajectory projections built off a stale or mismatched
 /// model.
 fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        LoadError::TrajectoryMetaMismatch(format!("read {}: {e}", path.display()))
-    })?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::TrajectoryMetaMismatch(format!("read {}: {e}", path.display())))?;
     let meta: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| LoadError::TrajectoryMetaMismatch(format!("parse: {e}")))?;
 
-    let filter = meta["player_filter"].as_str().ok_or_else(|| {
-        LoadError::TrajectoryMetaMismatch("missing player_filter".into())
-    })?;
+    let filter = meta["player_filter"]
+        .as_str()
+        .ok_or_else(|| LoadError::TrajectoryMetaMismatch("missing player_filter".into()))?;
     if filter != QUAL_FILTER_STRING {
         return Err(LoadError::TrajectoryMetaMismatch(format!(
             "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
@@ -791,9 +788,9 @@ fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
         )));
     }
 
-    let features = meta["features"].as_array().ok_or_else(|| {
-        LoadError::TrajectoryMetaMismatch("features array missing".into())
-    })?;
+    let features = meta["features"]
+        .as_array()
+        .ok_or_else(|| LoadError::TrajectoryMetaMismatch("features array missing".into()))?;
     if features.len() != TRAJECTORY_NUM_FEATURES {
         return Err(LoadError::TrajectoryMetaMismatch(format!(
             "features array length {} ≠ TRAJECTORY_NUM_FEATURES {TRAJECTORY_NUM_FEATURES}",
@@ -1245,9 +1242,7 @@ mod tests {
         let predictor = Predictor::load(&dir).expect("failed to load models");
         // Build a realistic prior-season vector: rotation player, USG 22%,
         // TS 58%, modest GBPM, primary class Wizard.
-        use crate::trajectory::{
-            TrajectoryPlayerRow, build_trajectory_features,
-        };
+        use crate::trajectory::{TrajectoryPlayerRow, build_trajectory_features};
         let row = TrajectoryPlayerRow {
             minutes_per_game: Some(28.0),
             games_played: Some(32),
@@ -1286,7 +1281,11 @@ mod tests {
         assert!(pred.upper.is_finite(), "upper is NaN/inf: {}", pred.upper);
         // CamPom values realistically span roughly [-5, 30]. Tolerate
         // ±40 as the "obviously broken vs sane" line for any one model.
-        for (name, v) in [("mean", pred.mean), ("lower", pred.lower), ("upper", pred.upper)] {
+        for (name, v) in [
+            ("mean", pred.mean),
+            ("lower", pred.lower),
+            ("upper", pred.upper),
+        ] {
             assert!(
                 (-40.0..=40.0).contains(&v),
                 "trajectory {name} {v} outside plausible CamPom range",

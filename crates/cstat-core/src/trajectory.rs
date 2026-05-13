@@ -263,8 +263,18 @@ pub fn build_trajectory_features(row: &TrajectoryPlayerRow) -> [f32; TRAJECTORY_
         row.gbpm.unwrap_or(0.0),
         row.campom.unwrap_or(0.0),
         // Archetype mixture (12)
-        arch[0], arch[1], arch[2], arch[3], arch[4], arch[5],
-        arch[6], arch[7], arch[8], arch[9], arch[10], arch[11],
+        arch[0],
+        arch[1],
+        arch[2],
+        arch[3],
+        arch[4],
+        arch[5],
+        arch[6],
+        arch[7],
+        arch[8],
+        arch[9],
+        arch[10],
+        arch[11],
     ];
 
     let mut out = [0.0_f32; TRAJECTORY_NUM_FEATURES];
@@ -395,7 +405,11 @@ mod tests {
             if i == 4 {
                 continue;
             }
-            assert_eq!(x, 0.0, "feature {} expected 0.0 got {}", TRAJECTORY_FEATURE_NAMES[i], x);
+            assert_eq!(
+                x, 0.0,
+                "feature {} expected 0.0 got {}",
+                TRAJECTORY_FEATURE_NAMES[i], x
+            );
         }
     }
 }

@@ -157,7 +157,11 @@ FEATURE_COLS = NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS  # 25 + 12 = 37
 
 
 def encode_class_year(s: Optional[str]) -> int:
-    if s is None:
+    # `pd.isna` covers both `None` (postgres TEXT NULL via SQLAlchemy) and
+    # `NaN` (hand-constructed DataFrames or alt drivers); plain `s is None`
+    # was a latent crash for the NaN case. Empirically real ingest only
+    # produces None, but we want the function to be safe to reuse.
+    if s is None or pd.isna(s):
         return -1
     return CLASS_YEAR_CODES.get(s.strip(), -1)
 
