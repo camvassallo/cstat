@@ -342,7 +342,7 @@ export default function Projected2027() {
 
   return (
     <div className="p-4">
-      <h1 className="text-2xl font-bold mb-2">Projected 2026-27 (v1)</h1>
+      <h1 className="text-2xl font-bold mb-2">Projected 2026-27 (v2)</h1>
       <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 mb-4 leading-relaxed">
         <strong className="text-amber-300">v2 honesty caveats:</strong>{' '}
         Holistic projection: returners (minus seniors, outbound portal,
