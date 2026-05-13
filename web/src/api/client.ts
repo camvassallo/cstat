@@ -564,6 +564,21 @@ export interface SimilarPlayer {
   similarity: number;
 }
 
+/// Phase 5c projection: next-season CamPom estimate with a quantile band.
+/// `null` when the player doesn't pass the qualification gate (≥5 GP /
+/// ≥5 MPG) for the requested season, or when they have no prior-season
+/// CamPom to project from. Honest framing: pooled LOPO MAE is ~2.3
+/// CamPom points; render as a directional projection, not a point
+/// estimate. Band width is what tells the user how much signal there is.
+export interface PlayerTrajectory {
+  base_season: number;
+  target_season: number;
+  projected_mean: number;
+  projected_lower: number;
+  projected_upper: number;
+  prior_campom: number | null;
+}
+
 export function fetchPlayerDetail(id: string, season?: number) {
   return fetchJson<{
     player: PlayerProfile;
@@ -576,6 +591,7 @@ export function fetchPlayerDetail(id: string, season?: number) {
     /// Seasons in which this player (joined cross-season via natstat_id) has
     /// any row. Drives the page-scoped season dropdown override.
     available_seasons: number[];
+    trajectory: PlayerTrajectory | null;
   }>(`/players/${id}`, { season: season?.toString() });
 }
 

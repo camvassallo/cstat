@@ -1,0 +1,223 @@
+{
+  "model": "trajectory_model",
+  "target": "cam_gbpm_v3_psos (season N+1)",
+  "join_key": "torvik_pid (cross-season stable)",
+  "seasons_trained_on": [
+    2024,
+    2025,
+    2026
+  ],
+  "n_rows": 4424,
+  "n_features": 37,
+  "features": [
+    "prior_mpg",
+    "prior_gp",
+    "prior_total_min",
+    "prior_height_in",
+    "prior_class_year_code",
+    "prior_ppg",
+    "prior_rpg",
+    "prior_apg",
+    "prior_spg",
+    "prior_bpg",
+    "prior_topg",
+    "prior_ts",
+    "prior_efg",
+    "prior_usg",
+    "prior_ast_pct",
+    "prior_tov_pct",
+    "prior_orb_pct",
+    "prior_drb_pct",
+    "prior_stl_pct",
+    "prior_blk_pct",
+    "prior_ft_rate",
+    "prior_ogbpm",
+    "prior_dgbpm",
+    "prior_gbpm",
+    "prior_campom",
+    "arch_wizard",
+    "arch_sorcerer",
+    "arch_warlock",
+    "arch_bard",
+    "arch_ranger",
+    "arch_barbarian",
+    "arch_paladin",
+    "arch_monk",
+    "arch_cleric",
+    "arch_druid",
+    "arch_rogue",
+    "arch_fighter"
+  ],
+  "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
+  "quantile_alphas": {
+    "q10": 0.1,
+    "q90": 0.9
+  },
+  "baseline_naive": {
+    "mae": 2.4442973087459587,
+    "rmse": 3.194825859005765,
+    "r2": 0.522446956082939
+  },
+  "backtest_lopo": {
+    "per_pair": {
+      "2025->2026": {
+        "mae": 2.353831506513482,
+        "rmse": 3.0728105263818373,
+        "r2": 0.5666071287084147,
+        "n": 2113
+      },
+      "2024->2025": {
+        "mae": 2.276731487002504,
+        "rmse": 2.984435529529037,
+        "r2": 0.575718184672763,
+        "n": 2311
+      }
+    },
+    "pooled": {
+      "mae": 2.313556157261703,
+      "rmse": 3.026967272093707,
+      "r2": 0.5713106579422518
+    }
+  },
+  "cv_5fold": {
+    "mae": 2.2774677471254825,
+    "rmse": 2.9873306747654826,
+    "r2": 0.5816517982154783,
+    "per_fold_mae": [
+      2.4098290763384664,
+      2.195255049538856,
+      2.2827717221565895,
+      2.259302667790911,
+      2.2401802198025917
+    ]
+  },
+  "mae_by_prior_class_year": {
+    "0": {
+      "n": 1021,
+      "model_mae": 1.5725846256124638,
+      "naive_mae": 2.356656055514792
+    },
+    "1": {
+      "n": 1211,
+      "model_mae": 1.642144915385039,
+      "naive_mae": 2.5075690785232303
+    },
+    "2": {
+      "n": 1506,
+      "model_mae": 1.5423309468566562,
+      "naive_mae": 2.428206250771651
+    },
+    "3": {
+      "n": 686,
+      "model_mae": 1.5845294717567235,
+      "naive_mae": 2.498368357810176
+    }
+  },
+  "top_features": [
+    {
+      "name": "prior_campom",
+      "importance": 703
+    },
+    {
+      "name": "prior_usg",
+      "importance": 500
+    },
+    {
+      "name": "prior_orb_pct",
+      "importance": 475
+    },
+    {
+      "name": "prior_dgbpm",
+      "importance": 458
+    },
+    {
+      "name": "prior_gbpm",
+      "importance": 453
+    },
+    {
+      "name": "prior_ts",
+      "importance": 435
+    },
+    {
+      "name": "prior_ogbpm",
+      "importance": 417
+    },
+    {
+      "name": "prior_ft_rate",
+      "importance": 411
+    },
+    {
+      "name": "prior_ast_pct",
+      "importance": 405
+    },
+    {
+      "name": "prior_drb_pct",
+      "importance": 397
+    },
+    {
+      "name": "prior_efg",
+      "importance": 392
+    },
+    {
+      "name": "prior_total_min",
+      "importance": 387
+    },
+    {
+      "name": "prior_tov_pct",
+      "importance": 387
+    },
+    {
+      "name": "prior_mpg",
+      "importance": 346
+    },
+    {
+      "name": "prior_rpg",
+      "importance": 327
+    },
+    {
+      "name": "prior_stl_pct",
+      "importance": 326
+    },
+    {
+      "name": "prior_ppg",
+      "importance": 320
+    },
+    {
+      "name": "prior_blk_pct",
+      "importance": 311
+    },
+    {
+      "name": "prior_apg",
+      "importance": 300
+    },
+    {
+      "name": "prior_topg",
+      "importance": 279
+    },
+    {
+      "name": "prior_gp",
+      "importance": 273
+    },
+    {
+      "name": "prior_height_in",
+      "importance": 253
+    },
+    {
+      "name": "prior_spg",
+      "importance": 174
+    },
+    {
+      "name": "prior_class_year_code",
+      "importance": 151
+    },
+    {
+      "name": "prior_bpg",
+      "importance": 122
+    }
+  ],
+  "known_limitations": [
+    "Destination-agnostic: cross-team transferring returners are projected against a destination-blind prior. Documented in \u00a75c.",
+    "Recruit-rank deferred: ablation experiment runs after historical recruit ingest (class-of-2021\u20132025 backfill).",
+    "Selection bias on returners: only includes players who returned for N+1; doesn't model the leave-for-draft cohort."
+  ]
+}

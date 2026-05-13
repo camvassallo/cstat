@@ -141,6 +141,7 @@ async fn player_detail(
         torvik_stats,
         archetype,
         available_seasons,
+        trajectory_row,
     ) = tokio::try_join!(
         queries::get_player_season_stats(pool, resolved_id, season),
         queries::get_player_percentiles(pool, resolved_id, season),
@@ -149,6 +150,7 @@ async fn player_detail(
         queries::get_torvik_stats(pool, resolved_id, season),
         queries::get_player_archetype(pool, resolved_id, season),
         queries::get_player_available_seasons(pool, resolved_id),
+        cstat_core::trajectory::fetch_player_trajectory_row(pool, resolved_id, season),
     )
     .map_err(|e| {
         (
@@ -156,6 +158,32 @@ async fn player_detail(
             Json(json!({ "error": format!("query failed: {e}") })),
         )
     })?;
+
+    // Phase 5c trajectory: project next-season CamPom from the qualified
+    // prior-season row. Gated on the player passing the QUAL filter AND
+    // having a non-null CamPom (the model's most-load-bearing feature) —
+    // if either is missing the badge stays null and the frontend hides the
+    // section. ONNX inference is ~3ms total (3 models); we run it inline
+    // on the request rather than precomputing because the player-detail
+    // route is per-player traffic, not batch.
+    let trajectory = trajectory_row.and_then(|row| {
+        row.campom?;
+        let features = cstat_core::trajectory::build_trajectory_features(&row);
+        match state.predictor.predict_trajectory(&features) {
+            Ok(pred) => Some(json!({
+                "base_season": season,
+                "target_season": season + 1,
+                "projected_mean": pred.mean,
+                "projected_lower": pred.lower,
+                "projected_upper": pred.upper,
+                "prior_campom": row.campom,
+            })),
+            Err(e) => {
+                tracing::warn!(error = ?e, player_id = %resolved_id, "trajectory predict failed");
+                None
+            }
+        }
+    });
 
     Ok(Json(json!({
         "player": player,
@@ -166,6 +194,7 @@ async fn player_detail(
         "torvik_stats": torvik_stats,
         "archetype": archetype,
         "available_seasons": available_seasons,
+        "trajectory": trajectory,
     })))
 }
 

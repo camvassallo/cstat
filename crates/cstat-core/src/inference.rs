@@ -1,4 +1,5 @@
 use crate::roster_features::{QUAL_FILTER_STRING, ROSTER_FEATURE_NAMES, ROSTER_NUM_FEATURES};
+use crate::trajectory::{TRAJECTORY_FEATURE_NAMES, TRAJECTORY_NUM_FEATURES, TrajectoryPrediction};
 use crate::treeshap::{LgbModel, tree_shap};
 use ort::session::Session;
 use std::path::Path;
@@ -397,6 +398,10 @@ pub enum LoadError {
     /// can't honor. Fail loudly at startup so the API never serves
     /// silently-misaligned ΔAdjEM numbers.
     RosterMetaMismatch(String),
+    /// `trajectory_model_meta.json` is missing, unparseable, or carries
+    /// a `player_filter` / feature-list / quantile-alpha value the Rust
+    /// path can't honor. Same load-fail-loudly contract as roster meta.
+    TrajectoryMetaMismatch(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -410,6 +415,9 @@ impl std::fmt::Display for LoadError {
             ),
             LoadError::RosterMetaMismatch(msg) => {
                 write!(f, "roster_model_meta.json contract mismatch: {msg}")
+            }
+            LoadError::TrajectoryMetaMismatch(msg) => {
+                write!(f, "trajectory_model_meta.json contract mismatch: {msg}")
             }
         }
     }
@@ -447,6 +455,9 @@ pub struct Predictor {
     win_session: Mutex<Session>,
     total_session: Mutex<Session>,
     roster_session: Mutex<Session>,
+    trajectory_mean_session: Mutex<Session>,
+    trajectory_q10_session: Mutex<Session>,
+    trajectory_q90_session: Mutex<Session>,
     margin_lgb: LgbModel,
 }
 
@@ -482,6 +493,22 @@ impl Predictor {
 
         validate_roster_meta(&model_dir.join("roster_model_meta.json"))?;
 
+        // Phase 5c trajectory: mean + q=0.1 + q=0.9 LightGBMs share one
+        // feature shape; the meta JSON pins the alphas in the order the
+        // loader expects them so we can't silently swap which model maps
+        // to which quantile.
+        let trajectory_mean_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("trajectory_mean_model.onnx"))?;
+        let trajectory_q10_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("trajectory_q10_model.onnx"))?;
+        let trajectory_q90_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("trajectory_q90_model.onnx"))?;
+
+        validate_trajectory_meta(&model_dir.join("trajectory_model_meta.json"))?;
+
         let margin_lgb = LgbModel::load(&model_dir.join("margin_model.lgb"))?;
         if margin_lgb.num_features != NUM_FEATURES {
             return Err(LoadError::FeatureCountMismatch {
@@ -495,6 +522,9 @@ impl Predictor {
             win_session: Mutex::new(win_session),
             total_session: Mutex::new(total_session),
             roster_session: Mutex::new(roster_session),
+            trajectory_mean_session: Mutex::new(trajectory_mean_session),
+            trajectory_q10_session: Mutex::new(trajectory_q10_session),
+            trajectory_q90_session: Mutex::new(trajectory_q90_session),
             margin_lgb,
         })
     }
@@ -586,6 +616,41 @@ impl Predictor {
         let outputs = session.run(ort::inputs![input])?;
         let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
         Ok(data[0])
+    }
+
+    /// Project a returning player's next-season CamPom v3 from their prior
+    /// season's 37-feature vector built by
+    /// `trajectory::build_trajectory_features`.
+    ///
+    /// Returns mean (q=0.5 equivalent — LightGBM regression objective) plus
+    /// q=0.1 / q=0.9 quantile predictions, so the UI can render a floor /
+    /// projection / ceiling band. Three ONNX sessions run sequentially; total
+    /// inference is ~1ms per player on the warm path.
+    ///
+    /// Honest framing: pooled LOPO MAE is ~2.3 CamPom points (vs naive
+    /// "same as last year" baseline of ~2.44), so per-player projections
+    /// are directional, not point estimates. The quantile band width is
+    /// what users should look at — wide = freshman with sparse signal,
+    /// tight = senior with a stable profile.
+    pub fn predict_trajectory(
+        &self,
+        features: &[f32; TRAJECTORY_NUM_FEATURES],
+    ) -> Result<TrajectoryPrediction, ort::Error> {
+        use ort::value::TensorRef;
+        let shape = [1_usize, TRAJECTORY_NUM_FEATURES];
+
+        let run = |session: &Mutex<Session>| -> Result<f32, ort::Error> {
+            let input = TensorRef::from_array_view((shape, features.as_slice()))?;
+            let mut s = session.lock().unwrap();
+            let outputs = s.run(ort::inputs![input])?;
+            let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+            Ok(data[0])
+        };
+
+        let mean = run(&self.trajectory_mean_session)?;
+        let lower = run(&self.trajectory_q10_session)?;
+        let upper = run(&self.trajectory_q90_session)?;
+        Ok(TrajectoryPrediction { mean, lower, upper })
     }
 
     /// Run the margin model and return TreeSHAP feature attributions.
@@ -691,6 +756,76 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
                 "features[{i}] = {s:?}, ROSTER_FEATURE_NAMES[{i}] = {expected:?}",
             )));
         }
+    }
+
+    Ok(())
+}
+
+/// Read `trajectory_model_meta.json` and verify feature order, qualification
+/// gate, count, and quantile-alpha labeling match what the Rust path expects.
+/// Same pattern as `validate_roster_meta` — boot-fail loudly so the API
+/// never serves trajectory projections built off a stale or mismatched
+/// model.
+fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::TrajectoryMetaMismatch(format!("read {}: {e}", path.display())))?;
+    let meta: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| LoadError::TrajectoryMetaMismatch(format!("parse: {e}")))?;
+
+    let filter = meta["player_filter"]
+        .as_str()
+        .ok_or_else(|| LoadError::TrajectoryMetaMismatch("missing player_filter".into()))?;
+    if filter != QUAL_FILTER_STRING {
+        return Err(LoadError::TrajectoryMetaMismatch(format!(
+            "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
+        )));
+    }
+
+    let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
+    if n_features != TRAJECTORY_NUM_FEATURES {
+        return Err(LoadError::TrajectoryMetaMismatch(format!(
+            "n_features {n_features} ≠ compiled TRAJECTORY_NUM_FEATURES {TRAJECTORY_NUM_FEATURES}",
+        )));
+    }
+
+    let features = meta["features"]
+        .as_array()
+        .ok_or_else(|| LoadError::TrajectoryMetaMismatch("features array missing".into()))?;
+    if features.len() != TRAJECTORY_NUM_FEATURES {
+        return Err(LoadError::TrajectoryMetaMismatch(format!(
+            "features array length {} ≠ TRAJECTORY_NUM_FEATURES {TRAJECTORY_NUM_FEATURES}",
+            features.len(),
+        )));
+    }
+    for (i, (meta_name, expected)) in features
+        .iter()
+        .zip(TRAJECTORY_FEATURE_NAMES.iter())
+        .enumerate()
+    {
+        let s = meta_name.as_str().ok_or_else(|| {
+            LoadError::TrajectoryMetaMismatch(format!("features[{i}] not a string"))
+        })?;
+        if s != *expected {
+            return Err(LoadError::TrajectoryMetaMismatch(format!(
+                "features[{i}] = {s:?}, TRAJECTORY_FEATURE_NAMES[{i}] = {expected:?}",
+            )));
+        }
+    }
+
+    // Quantile alphas are also load-bearing: the Rust loader assumes
+    // q10_model.onnx is the q=0.1 cut and q90_model.onnx is q=0.9. If the
+    // training script ever emits a different pair (e.g. q=0.05 / q=0.95
+    // for a wider band) the file naming would stay the same but the band
+    // semantics would silently change. Pin both.
+    let alphas = meta["quantile_alphas"].as_object().ok_or_else(|| {
+        LoadError::TrajectoryMetaMismatch("quantile_alphas object missing".into())
+    })?;
+    let q10 = alphas.get("q10").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let q90 = alphas.get("q90").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if (q10 - 0.1).abs() > 1e-9 || (q90 - 0.9).abs() > 1e-9 {
+        return Err(LoadError::TrajectoryMetaMismatch(format!(
+            "quantile_alphas {{q10: {q10}, q90: {q90}}} ≠ expected {{q10: 0.1, q90: 0.9}}",
+        )));
     }
 
     Ok(())
@@ -1044,5 +1179,133 @@ mod tests {
             (-60.0..=60.0).contains(&pred),
             "roster AdjEM {pred} outside plausible bound for zero input",
         );
+    }
+
+    #[test]
+    fn trajectory_feature_names_match_model_meta() {
+        let meta_path = model_dir().join("trajectory_model_meta.json");
+        let content = match std::fs::read_to_string(&meta_path) {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!(
+                    "skipping: trajectory_model_meta.json not found at {}",
+                    meta_path.display()
+                );
+                return;
+            }
+        };
+        let meta: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let meta_features: Vec<String> = meta["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(meta_features.len(), TRAJECTORY_NUM_FEATURES);
+        for (i, (expected, actual)) in meta_features
+            .iter()
+            .zip(TRAJECTORY_FEATURE_NAMES.iter())
+            .enumerate()
+        {
+            assert_eq!(expected, actual, "trajectory feature mismatch at index {i}");
+        }
+        // Player filter contract — same gate as roster, but checked here
+        // too so a meta-edit can't desync the two without one boot-time
+        // validator failing.
+        assert_eq!(
+            meta["player_filter"].as_str().unwrap(),
+            crate::roster_features::QUAL_FILTER_STRING,
+        );
+    }
+
+    #[test]
+    fn trajectory_predict_smoke() {
+        let dir = model_dir();
+        let required = [
+            "trajectory_mean_model.onnx",
+            "trajectory_q10_model.onnx",
+            "trajectory_q90_model.onnx",
+            "trajectory_model_meta.json",
+            "margin_model.onnx",
+            "margin_model.lgb",
+            "total_model.onnx",
+            "roster_model.onnx",
+            "roster_model_meta.json",
+        ];
+        for f in required {
+            if !dir.join(f).exists() {
+                eprintln!("skipping: {f} not found at {}", dir.display());
+                return;
+            }
+        }
+
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        // Build a realistic prior-season vector: rotation player, USG 22%,
+        // TS 58%, modest GBPM, primary class Wizard.
+        use crate::trajectory::{TrajectoryPlayerRow, build_trajectory_features};
+        let row = TrajectoryPlayerRow {
+            minutes_per_game: Some(28.0),
+            games_played: Some(32),
+            height_inches: Some(78),
+            class_year: Some("Sophomore".into()),
+            ppg: Some(14.0),
+            rpg: Some(5.0),
+            apg: Some(3.0),
+            spg: Some(1.0),
+            bpg: Some(0.4),
+            topg: Some(2.0),
+            true_shooting_pct: Some(0.58),
+            effective_fg_pct: Some(0.54),
+            usage_rate: Some(0.22),
+            ast_pct: Some(0.18),
+            tov_pct: Some(0.14),
+            orb_pct: Some(0.04),
+            drb_pct: Some(0.17),
+            stl_pct: Some(0.022),
+            blk_pct: Some(0.015),
+            ft_rate: Some(0.32),
+            ogbpm: Some(1.5),
+            dgbpm: Some(0.8),
+            gbpm: Some(2.3),
+            campom: Some(2.5),
+            primary_class: Some("Wizard".into()),
+            secondary_class: None,
+        };
+        let features = build_trajectory_features(&row);
+        let pred = predictor
+            .predict_trajectory(&features)
+            .expect("trajectory prediction failed");
+
+        assert!(pred.mean.is_finite(), "mean is NaN/inf: {}", pred.mean);
+        assert!(pred.lower.is_finite(), "lower is NaN/inf: {}", pred.lower);
+        assert!(pred.upper.is_finite(), "upper is NaN/inf: {}", pred.upper);
+        // CamPom values realistically span roughly [-5, 30]. Tolerate
+        // ±40 as the "obviously broken vs sane" line for any one model.
+        for (name, v) in [
+            ("mean", pred.mean),
+            ("lower", pred.lower),
+            ("upper", pred.upper),
+        ] {
+            assert!(
+                (-40.0..=40.0).contains(&v),
+                "trajectory {name} {v} outside plausible CamPom range",
+            );
+        }
+        // Band ordering: lower ≤ mean ≤ upper isn't strictly guaranteed
+        // by independently-trained quantile models (rare crossings on
+        // OOD inputs), but in-distribution they should respect the
+        // ordering. Log if not — fail only on absurd inversion.
+        if !(pred.lower <= pred.mean && pred.mean <= pred.upper) {
+            eprintln!(
+                "trajectory band ordering: lower={} mean={} upper={}",
+                pred.lower, pred.mean, pred.upper
+            );
+            assert!(
+                (pred.upper - pred.lower) > -5.0,
+                "trajectory band inverted by more than 5 CamPom points (upper={} lower={})",
+                pred.upper,
+                pred.lower
+            );
+        }
     }
 }

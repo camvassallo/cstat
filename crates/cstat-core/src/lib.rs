@@ -7,6 +7,7 @@ pub mod queries;
 pub mod roster_features;
 pub mod roster_projection;
 pub mod team_name_match;
+pub mod trajectory;
 pub mod treeshap;
 
 pub use db::Database;
