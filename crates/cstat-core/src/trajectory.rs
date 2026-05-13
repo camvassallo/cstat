@@ -22,7 +22,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::roster_features::{ARCHETYPES, QUAL_FILTER_STRING};
+use crate::roster_features::ARCHETYPES;
 
 /// Number of input features each of the three trajectory ONNX models expects.
 /// Wire-locked to `trajectory_model_meta.json::features` order.
@@ -283,12 +283,6 @@ pub struct TrajectoryPrediction {
     pub mean: f32,
     pub lower: f32,
     pub upper: f32,
-}
-
-/// Re-export so the route/test layer can reference the qualification gate
-/// without depending on the roster_features module directly.
-pub fn qual_filter_string() -> &'static str {
-    QUAL_FILTER_STRING
 }
 
 #[cfg(test)]
