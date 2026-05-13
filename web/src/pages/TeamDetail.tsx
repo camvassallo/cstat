@@ -897,7 +897,11 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         This page is the {seasonLabel} forward-looking view, not a played season. Roster = returners
         (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal commits +
         HS-recruit class commits. Recruits use a tier-mean profile keyed on 247 composite rank — see
-        the Projected {seasonLabel} page for methodology.
+        the{' '}
+        <SeasonLink to="/projected/2027" className="text-amber-200 underline hover:text-amber-100">
+          Projected {seasonLabel} grid
+        </SeasonLink>{' '}
+        for full methodology + cross-team rankings.
       </div>
 
       {/* Roster cards */}
@@ -907,7 +911,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No qualified returners" />
           ) : (
             returning.map((r) => (
-              <PlayerCard key={r.player_id} name={r.name} mpg={r.mpg} cam_v3={r.cam_v3} primary_class={r.primary_class}>
+              <PlayerCard key={r.player_id} mpg={r.mpg} cam_v3={r.cam_v3} primary_class={r.primary_class}>
                 <SeasonLink
                   to={`/players/${r.player_id}?season=${base_season}`}
                   className="text-blue-400 hover:underline"
@@ -924,7 +928,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No portal arrivals" />
           ) : (
             arrivals.map((a) => (
-              <PlayerCard key={a.player_id} name={a.name} mpg={a.mpg} cam_v3={a.cam_v3} primary_class={a.primary_class}>
+              <PlayerCard key={a.player_id} mpg={a.mpg} cam_v3={a.cam_v3} primary_class={a.primary_class}>
                 <SeasonLink
                   to={`/players/${a.player_id}?season=${base_season}`}
                   className="text-blue-400 hover:underline"
@@ -1018,7 +1022,10 @@ function PlayerCard({
   primary_class,
   children,
 }: {
-  name: string;
+  // Player name is intentionally passed via `children` (so callers can
+  // wrap the rendered name in `<SeasonLink>` for navigation) rather
+  // than as a separate prop. The shape of the row — name on the left,
+  // archetype chip, then MPG + CamPom on the right — is locked here.
   mpg: number;
   cam_v3: number | null;
   primary_class: string | null;
