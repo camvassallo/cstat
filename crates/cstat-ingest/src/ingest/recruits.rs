@@ -487,11 +487,19 @@ pub async fn resolve_player_joins(pool: &PgPool, year: i32) -> Result<u64, Recru
         return Ok(0);
     }
 
-    // Index by (lower(name), team_natstat_id) for O(1) per-need lookup.
+    // Index by (normalized_name, team_natstat_id) for O(1) per-need
+    // lookup. The normalization strips punctuation (so 247's "V.J.
+    // Edgecombe" matches cstat's "VJ Edgecombe") AND generational
+    // suffixes (so "Mikel Brown Jr." matches cstat's "Mikel Brown" /
+    // "Mikel Brown jr" / etc — cstat ingest is inconsistent about
+    // how it stores the suffix). Same function the transfers route +
+    // roster_projection use; consolidated as
+    // `cstat_core::roster_projection::normalize_player_name`.
+    use cstat_core::roster_projection::normalize_player_name;
     let mut by_key: HashMap<(String, String), Uuid> = HashMap::new();
     for c in &candidates {
         by_key.insert(
-            (c.name.to_lowercase(), c.team_natstat_id.clone()),
+            (normalize_player_name(&c.name), c.team_natstat_id.clone()),
             c.player_id,
         );
     }
@@ -500,7 +508,7 @@ pub async fn resolve_player_joins(pool: &PgPool, year: i32) -> Result<u64, Recru
     let mut player_ids: Vec<Uuid> = Vec::new();
     for need in &needs {
         let key = (
-            need.full_name.to_lowercase(),
+            normalize_player_name(&need.full_name),
             need.committed_team_natstat_id.clone(),
         );
         if let Some(&pid) = by_key.get(&key) {

@@ -5,6 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use cstat_core::roster_projection::normalize_player_name as normalize;
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -292,37 +293,4 @@ async fn transfer_list(
         "transfers": enriched,
         "total": enriched.len(),
     })))
-}
-
-/// Normalize a player name for matching: lowercase, drop accents/punctuation,
-/// strip generational suffixes. We match on first+last name only — the 247
-/// scrape and our DB sometimes differ on hyphenation and middle names.
-fn normalize(name: &str) -> String {
-    let folded: String = name
-        .chars()
-        .flat_map(|c| {
-            // Cheap accent fold for the diacritics we actually see.
-            match c {
-                'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' | 'Á' | 'À' | 'Â' | 'Ä' | 'Ã' | 'Å' => {
-                    Some('a')
-                }
-                'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => Some('e'),
-                'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => Some('i'),
-                'ó' | 'ò' | 'ô' | 'ö' | 'õ' | 'Ó' | 'Ò' | 'Ô' | 'Ö' | 'Õ' => Some('o'),
-                'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => Some('u'),
-                'ñ' | 'Ñ' => Some('n'),
-                'ç' | 'Ç' => Some('c'),
-                _ if c.is_alphabetic() || c.is_whitespace() => Some(c.to_ascii_lowercase()),
-                _ => None,
-            }
-        })
-        .collect();
-    folded
-        .split_whitespace()
-        // "lll" appears in our DB for "Ace Glass III" (typo, three lowercase
-        // L's instead of three capital I's); strip it like a generational
-        // suffix so the 247 entry still matches.
-        .filter(|w| !matches!(*w, "jr" | "sr" | "ii" | "iii" | "iv" | "v" | "lll"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
