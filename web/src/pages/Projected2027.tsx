@@ -37,7 +37,7 @@ function bandRenderer(p: { data?: ProjectedTeam }) {
   if (!t) return null;
   if (t.too_thin) {
     return (
-      <span className="text-slate-500 text-xs italic" title="Roster too thin to project — <7 qualifying players (returning + arrivals). v1 doesn't model freshmen/recruits, so small projected rosters over-weight rate stats. See honesty banner.">
+      <span className="text-slate-500 text-xs italic" title="Roster too thin to project — <7 qualifying players (returning + arrivals + recruits). The model over-weights rate stats when too few players carry them. See honesty banner.">
         thin roster
       </span>
     );
@@ -219,6 +219,56 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       ),
     },
     {
+      headerName: 'Rec',
+      field: 'recruits_count',
+      ...flexCol(2, 140),
+      headerTooltip:
+        "Incoming HS recruits committed to this team. Per-tier breakdown by 247 composite rank: T1=top-30 elite, T2=31-100, T3=101-250, T4=251+/unranked. Synthesized PlayerRow uses tier-mean profile — population average, not a per-player projection (Phase 6 freshman-impact prior model is the upgrade).",
+      // Sort by count of T1 + T2 commits (the impactful end of the
+      // class) rather than total count — Florida with 0 commits should
+      // sort below a team with 1 elite recruit and 4 walk-ons.
+      comparator: (_a, _b, na, nb) => {
+        const a = na.data as ProjectedTeam | undefined;
+        const b = nb.data as ProjectedTeam | undefined;
+        const wa = (a?.recruits_by_tier?.t1 ?? 0) * 3 + (a?.recruits_by_tier?.t2 ?? 0);
+        const wb = (b?.recruits_by_tier?.t1 ?? 0) * 3 + (b?.recruits_by_tier?.t2 ?? 0);
+        return wa - wb;
+      },
+      cellRenderer: (p: { data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t || t.recruits_count === 0) {
+          return <span className="text-slate-600 text-xs">—</span>;
+        }
+        const by = t.recruits_by_tier;
+        const top = t.top_recruits;
+        const tooltip = top.length
+          ? top
+              .map((r) => `${r.composite_rank ? `#${r.composite_rank} ` : ''}${r.name} (${r.star_rating ?? '?'}★)`)
+              .join('\n')
+          : 'recruits';
+        return (
+          <span className="inline-flex items-center gap-1 text-xs" title={tooltip}>
+            {by.t1 > 0 && (
+              <span className="px-1.5 py-0.5 rounded border border-amber-700/60 bg-amber-900/30 text-amber-300">
+                {by.t1}×T1
+              </span>
+            )}
+            {by.t2 > 0 && (
+              <span className="px-1.5 py-0.5 rounded border border-cyan-700/60 bg-cyan-900/30 text-cyan-300">
+                {by.t2}×T2
+              </span>
+            )}
+            {by.t3 > 0 && (
+              <span className="text-slate-400">{by.t3}×T3</span>
+            )}
+            {by.t4 > 0 && (
+              <span className="text-slate-500">{by.t4}×T4</span>
+            )}
+          </span>
+        );
+      },
+    },
+    {
       headerName: 'Unc',
       field: 'uncertain_count',
       ...flexCol(1, 60),
@@ -294,23 +344,27 @@ export default function Projected2027() {
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-2">Projected 2026-27 (v1)</h1>
       <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 mb-4 leading-relaxed">
-        <strong className="text-amber-300">v1 honesty caveats:</strong>{' '}
-        Projections are built from the 2025-26 roster (minus graduating
-        seniors, outbound portal, and firm NBA-draft departures, plus
-        committed portal arrivals), then <strong>shrunk 50% toward last
-        season's actual AdjEM</strong> as a Bayesian prior — the raw model
-        output swings too hard on heavy-portal and lost-stars teams because
-        it can't see what's coming. <strong>Freshmen and recruits are not
-        modeled</strong> — teams with thin returning cores look worse than
-        they actually will once a recruiting class arrives.{' '}
-        <strong>Returning players use their 2025-26 stats as-is</strong> —
-        no growth model yet, so a junior expected to break out as a senior
-        shows up at his junior line. Absolute AdjEM is calibrated at ~7.4
-        MAE per the model's leave-one-season-out backtest; treat the
-        ordering as <em>directional</em>, not point-estimates. Rosters with
-        &lt;7 qualifying players (returning + arrivals) are flagged "thin
-        roster" and not scored — the model over-weights rate stats when too
-        few players carry them.
+        <strong className="text-amber-300">v2 honesty caveats:</strong>{' '}
+        Holistic projection: returners (minus seniors, outbound portal,
+        firm draft departures, declared-draft `?` cohort) + incoming
+        portal commits + <strong>incoming HS recruits</strong>, then
+        shrunk 50% toward last season's actual AdjEM as a Bayesian prior.
+        Recruits are synthesized from a tier-mean freshman profile keyed
+        on 247 composite rank (T1=top-30, T2=31-100, T3=101-250,
+        T4=251+/unranked) calibrated against the class-of-2024 and
+        class-of-2025 freshmen we've already ingested — so the model
+        sees them as <em>average freshmen of their tier</em>, not as
+        specific players. A 5★ who busts and a 5★ All-American both
+        get the same projected row. The per-player upgrade is the
+        Phase 6 freshman-impact prior, gated on a few more paired
+        classes. <strong>Returning players use their 2025-26 stats
+        as-is</strong> — no growth model yet, so a junior expected to
+        break out as a senior shows up at his junior line. Absolute
+        AdjEM is calibrated at ~7.4 MAE per the model's
+        leave-one-season-out backtest; treat the ordering as
+        <em>directional</em>, not point-estimates. Rosters with &lt;7
+        qualifying players (returning + arrivals + recruits) are flagged
+        "thin roster" and not scored.
       </div>
       <div className="flex items-center gap-3 mb-3">
         <input

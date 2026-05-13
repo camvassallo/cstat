@@ -9,7 +9,7 @@
 //! [`roster_features::build_roster_features`] over the materialized
 //! roster and feeds them to [`Predictor::predict_adj_em`].
 //!
-//! Honest scope for v1 (frozen-stats, no growth model, no recruits):
+//! Honest scope for v1 (frozen-stats, no growth model):
 //! - **Returning players**: use their *N* (most recently completed
 //!   season) stats verbatim, with their N-season MPG. Real coaches
 //!   would reallocate minutes after departures; we don't try to model
@@ -19,13 +19,23 @@
 //! - **Incoming transfers**: use their N stats from their *source*
 //!   team. So the incoming row's `mpg` is the role they played at their
 //!   old school, not what they'll play at the destination.
-//! - **Recruits**: out of scope. Big-roster-loss teams that recruit a
-//!   strong freshman class will look pessimistic.
+//! - **Incoming freshman recruits**: synthesized from `recruits` table
+//!   commits via [`synthesize_freshman_row`]. Each commit gets a
+//!   PlayerRow built from a tier-average profile keyed on
+//!   `composite_rank` — T1 (top-30) / T2 (31-100) / T3 (101-250) /
+//!   T4 (251+ or unranked). Profiles are calibrated from class-of-2024
+//!   and class-of-2025 recruits joined to their actual freshman cstat
+//!   seasons. This is a population-mean heuristic, not a per-player
+//!   projection (that's the Phase 6 freshman-impact prior model). High
+//!   variance within tier is the expected honesty cost — a 4-star who
+//!   busts and a 4-star All-American both get the same projected row.
 //! - **Growth**: out of scope. A junior who's about to break out as a
 //!   senior is just their junior line in the model's view.
 //!
-//! These limitations are documented; the next iteration (Phase 5c growth
-//! model + Phase 5b recruiting cohort) is the path to better projections.
+//! Next iteration: Phase 5c trajectory model already projects per-player
+//! next-season CamPom for returners; plugging that in upgrades the
+//! "frozen-stats" framing for returning players. Phase 6 freshman-impact
+//! prior is the upgrade path for recruits.
 
 use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use crate::team_name_match::team_match_score;
@@ -78,6 +88,230 @@ pub struct UncertainPlayer {
     pub reason: String,
 }
 
+/// Audit-trail metadata for one incoming HS recruit. The synthesized
+/// PlayerRow lives alongside in [`ProjectedRoster::recruits`]; this
+/// struct is the UI-facing display payload (name, stars, rank tier) so
+/// users can see *who* the recruits are without dredging through the
+/// recruits table separately.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecruitMeta {
+    /// `recruits.id` — opaque per-recruit UUID. Used as the synthetic
+    /// PlayerRow's `player_id` so the row is identifiable across the
+    /// roster aggregation (no risk of collision with real player UUIDs;
+    /// they come from different namespaces).
+    pub recruit_id: Uuid,
+    pub name: String,
+    /// 247 composite national rank; `None` for unranked commits.
+    pub composite_rank: Option<i32>,
+    /// 1-5 star rating; `None` for unranked.
+    pub star_rating: Option<i16>,
+    /// Which tier the freshman profile came from — useful for the UI
+    /// tooltip ("synthesized from T1 top-30 profile, expect wide
+    /// variance").
+    pub tier: FreshmanTier,
+}
+
+/// Coarse freshman-impact buckets. We map `composite_rank` → tier and
+/// look up a tier-mean profile to synthesize the recruit's PlayerRow.
+/// 4-tier scheme calibrated from the empirical (class-of-2024,
+/// class-of-2025) × freshman-season-stats join — see
+/// `docs/projections_methodology.md` for the calibration query and the
+/// per-tier sample sizes (T1 n=52, T2 n=114, T3 n=201, T4 n=185).
+///
+/// The CamPom monotonicity is clean across tiers (T1 +8.97, T2 +2.41,
+/// T3 +0.70, T4 −0.57) so the tiering is real signal, not noise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreshmanTier {
+    /// `composite_rank` ∈ 1..=30. Elite recruits; "5-star tier".
+    T1,
+    /// `composite_rank` ∈ 31..=100. Top high-major recruits; mostly
+    /// 4-star and high 3-star.
+    T2,
+    /// `composite_rank` ∈ 101..=250. Lower 4-star and mid 3-star.
+    T3,
+    /// `composite_rank` ≥ 251 OR unranked. Includes walk-on equivalents,
+    /// late bloomers, internationals not in 247's database. Profile is
+    /// empirically very close to T3 (composite rank stops being a strong
+    /// signal past ~100) so don't claim more precision than warranted.
+    T4,
+}
+
+impl FreshmanTier {
+    /// Bucket a recruit by their composite_rank. `None` (unranked) → T4.
+    pub fn from_rank(rank: Option<i32>) -> Self {
+        match rank {
+            Some(r) if r <= 30 => Self::T1,
+            Some(r) if r <= 100 => Self::T2,
+            Some(r) if r <= 250 => Self::T3,
+            _ => Self::T4,
+        }
+    }
+}
+
+/// Per-tier averages. Each field is the mean across the empirical join
+/// described above. Persisting as `f64` constants (not a config file)
+/// because (a) the calibration is a one-time exercise to be redone
+/// when more paired classes ingest, (b) compile-time access keeps the
+/// hot path alloc-free, and (c) the next-level upgrade is a *prior
+/// model*, not a richer tier table — so investing in JSON config
+/// scaffolding would be churn.
+///
+/// Calibration query lives in `docs/projections_methodology.md` so the
+/// numbers can be re-derived against fresh data. Re-run when adding a
+/// new class year.
+struct FreshmanProfile {
+    mpg: f64,
+    gp: f64,
+    ppg: f64,
+    rpg: f64,
+    apg: f64,
+    spg: f64,
+    bpg: f64,
+    topg: f64,
+    ts: f64,
+    efg: f64,
+    usg: f64,
+    ast_pct: f64,
+    tov_pct: f64,
+    orb_pct: f64,
+    drb_pct: f64,
+    stl_pct: f64,
+    blk_pct: f64,
+    ft_rate: f64,
+    cam_v3: f64,
+}
+
+const T1_PROFILE: FreshmanProfile = FreshmanProfile {
+    mpg: 24.0,
+    gp: 31.1,
+    ppg: 11.80,
+    rpg: 4.39,
+    apg: 1.82,
+    spg: 0.80,
+    bpg: 0.53,
+    topg: 1.41,
+    ts: 0.573,
+    efg: 0.534,
+    usg: 0.232,
+    ast_pct: 0.133,
+    tov_pct: 0.124,
+    orb_pct: 6.308,
+    drb_pct: 15.392,
+    stl_pct: 1.792,
+    blk_pct: 2.400,
+    ft_rate: 0.361,
+    cam_v3: 8.97,
+};
+const T2_PROFILE: FreshmanProfile = FreshmanProfile {
+    mpg: 14.4,
+    gp: 23.3,
+    ppg: 5.48,
+    rpg: 2.37,
+    apg: 1.03,
+    spg: 0.52,
+    bpg: 0.32,
+    topg: 0.80,
+    ts: 0.537,
+    efg: 0.509,
+    usg: 0.194,
+    ast_pct: 0.107,
+    tov_pct: 0.158,
+    orb_pct: 6.630,
+    drb_pct: 14.246,
+    stl_pct: 1.947,
+    blk_pct: 2.512,
+    ft_rate: 0.363,
+    cam_v3: 2.41,
+};
+const T3_PROFILE: FreshmanProfile = FreshmanProfile {
+    mpg: 12.7,
+    gp: 21.9,
+    ppg: 4.24,
+    rpg: 2.15,
+    apg: 0.84,
+    spg: 0.44,
+    bpg: 0.24,
+    topg: 0.68,
+    ts: 0.524,
+    efg: 0.494,
+    usg: 0.175,
+    ast_pct: 0.108,
+    tov_pct: 0.154,
+    orb_pct: 8.095,
+    drb_pct: 13.988,
+    stl_pct: 2.005,
+    blk_pct: 2.396,
+    ft_rate: 0.416,
+    cam_v3: 0.70,
+};
+const T4_PROFILE: FreshmanProfile = FreshmanProfile {
+    mpg: 14.1,
+    gp: 22.4,
+    ppg: 4.91,
+    rpg: 2.21,
+    apg: 0.95,
+    spg: 0.48,
+    bpg: 0.21,
+    topg: 0.78,
+    ts: 0.514,
+    efg: 0.484,
+    usg: 0.184,
+    ast_pct: 0.110,
+    tov_pct: 0.151,
+    orb_pct: 6.459,
+    drb_pct: 13.465,
+    stl_pct: 2.108,
+    blk_pct: 2.111,
+    ft_rate: 0.381,
+    cam_v3: -0.57,
+};
+
+fn profile_for(tier: FreshmanTier) -> &'static FreshmanProfile {
+    match tier {
+        FreshmanTier::T1 => &T1_PROFILE,
+        FreshmanTier::T2 => &T2_PROFILE,
+        FreshmanTier::T3 => &T3_PROFILE,
+        FreshmanTier::T4 => &T4_PROFILE,
+    }
+}
+
+/// Build a synthetic PlayerRow from a recruit commit. The row plugs
+/// straight into `build_roster_features` so the projection model sees
+/// the freshman cohort just like it sees returning + arriving players.
+///
+/// `primary_class` is set to `None` — the empirical join showed no
+/// dominant archetype per tier (freshmen are stylistically diverse even
+/// within rank tier), and the roster model's archetype-share features
+/// degrade gracefully when None (the slot just stays at zero, same as
+/// for any player without an archetype assignment).
+pub fn synthesize_freshman_row(recruit_id: Uuid, tier: FreshmanTier) -> PlayerRow {
+    let p = profile_for(tier);
+    PlayerRow {
+        player_id: recruit_id,
+        total_min: p.mpg * p.gp,
+        mpg: p.mpg,
+        ppg: Some(p.ppg),
+        rpg: Some(p.rpg),
+        apg: Some(p.apg),
+        spg: Some(p.spg),
+        bpg: Some(p.bpg),
+        topg: Some(p.topg),
+        ts: Some(p.ts),
+        efg: Some(p.efg),
+        usg: Some(p.usg),
+        ast_pct: Some(p.ast_pct),
+        tov_pct: Some(p.tov_pct),
+        orb_pct: Some(p.orb_pct),
+        drb_pct: Some(p.drb_pct),
+        stl_pct: Some(p.stl_pct),
+        blk_pct: Some(p.blk_pct),
+        ft_rate: Some(p.ft_rate),
+        primary_class: None,
+        cam_v3: Some(p.cam_v3),
+    }
+}
+
 /// One team's projected N+1 roster. The caller picks `Floor` or
 /// `Ceiling` via [`Self::for_scenario`] to materialize the player rows
 /// fed into the model.
@@ -98,6 +332,11 @@ pub struct ProjectedRoster {
     /// Incoming portal transfers committed to this team. Carry their
     /// season-N PlayerRow from their *source* team.
     pub arrivals: Vec<PlayerRow>,
+    /// Incoming HS recruits committed to this team. Each pairs a
+    /// synthesized PlayerRow (from [`synthesize_freshman_row`]) with
+    /// audit metadata for the UI. Population-mean profile, not a
+    /// per-player projection — see the `FreshmanTier` doc.
+    pub recruits: Vec<(PlayerRow, RecruitMeta)>,
     /// Players who are returning in the ceiling scenario but gone in
     /// the floor scenario (declared draft entrants whose withdrawal
     /// status is still TBD). Their PlayerRow lives in `returning` only
@@ -110,13 +349,15 @@ pub struct ProjectedRoster {
 
 impl ProjectedRoster {
     /// Materialize the player list the model should see under a given
-    /// scenario. Returning + arrivals always; uncertain only under
-    /// ceiling.
+    /// scenario. Returning + arrivals + recruits always; uncertain only
+    /// under ceiling.
     pub fn for_scenario(&self, scenario: DraftScenario) -> Vec<PlayerRow> {
-        let mut out: Vec<PlayerRow> =
-            Vec::with_capacity(self.returning.len() + self.arrivals.len() + self.uncertain.len());
+        let mut out: Vec<PlayerRow> = Vec::with_capacity(
+            self.returning.len() + self.arrivals.len() + self.recruits.len() + self.uncertain.len(),
+        );
         out.extend(self.returning.iter().cloned());
         out.extend(self.arrivals.iter().cloned());
+        out.extend(self.recruits.iter().map(|(p, _)| p.clone()));
         if scenario == DraftScenario::Ceiling {
             out.extend(self.uncertain.iter().map(|(p, _)| p.clone()));
         }
@@ -220,6 +461,21 @@ struct TeamRow {
 struct TransferLink {
     cstat_player_id: Option<Uuid>,
     destination_institution: Option<String>,
+}
+
+/// One row from `recruits` for the base year's HS class. We only need
+/// the team destination + the rank/star fields driving the freshman
+/// profile lookup; everything else (position, height, hometown) is
+/// audit metadata served on the route response separately.
+#[derive(sqlx::FromRow)]
+struct RecruitRow {
+    recruit_id: Uuid,
+    full_name: String,
+    composite_rank: Option<i32>,
+    star_rating: Option<i16>,
+    committed_team_id: Option<Uuid>,
+    #[allow(dead_code)] // kept for forensics; row-filter is in SQL
+    commit_status: Option<String>,
 }
 
 /// Resolve a 247 short name to a team_id at the given season by best
@@ -348,6 +604,32 @@ pub async fn compose_all_projections(
     .fetch_all(pool)
     .await?;
 
+    // Recruits: HS class year = `base_season` (the spring of HS
+    // graduation; class-of-2026 first plays in cstat-season 2027 = N+1).
+    // We only consume rows with a resolved `committed_team_id`; uncommitted
+    // recruits don't have a destination so they can't be assigned. Status
+    // filter excludes "Uncommitted" to be defensive — the resolver may
+    // have backfilled `committed_team_id` for previously-committed-then-
+    // decommitted entries that 247 marked Uncommitted.
+    let recruit_rows: Vec<RecruitRow> = sqlx::query_as::<_, RecruitRow>(
+        r#"
+        SELECT
+            id            AS recruit_id,
+            full_name,
+            composite_rank,
+            star_rating,
+            committed_team_id,
+            commit_status
+        FROM recruits
+        WHERE year = $1
+          AND committed_team_id IS NOT NULL
+          AND COALESCE(commit_status, '') <> 'Uncommitted'
+        "#,
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?;
+
     // --- Bucket the inputs by team_id. ----------------------------------
     // Roster + audit metadata per team. The String alongside RosterRow
     // is a clone of the player's cstat name — used downstream for
@@ -367,6 +649,31 @@ pub async fn compose_all_projections(
             .push((pid, team_id));
         player_team.insert(pid, team_id);
         roster_by_team.entry(team_id).or_default().push((row, name));
+    }
+
+    // Recruits: bucket by destination team_id. Synthesize the PlayerRow
+    // up-front per recruit (it's just a tier lookup; cheap) and pair it
+    // with audit metadata. Recruits without committed_team_id are
+    // dropped by the SQL filter — they can't be assigned to a roster
+    // without a destination.
+    let mut recruits_by_team: HashMap<Uuid, Vec<(PlayerRow, RecruitMeta)>> = HashMap::new();
+    for r in recruit_rows {
+        let Some(team_id) = r.committed_team_id else {
+            continue; // SQL gate already filters; defensive guard.
+        };
+        let tier = FreshmanTier::from_rank(r.composite_rank);
+        let row = synthesize_freshman_row(r.recruit_id, tier);
+        let meta = RecruitMeta {
+            recruit_id: r.recruit_id,
+            name: r.full_name,
+            composite_rank: r.composite_rank,
+            star_rating: r.star_rating,
+            tier,
+        };
+        recruits_by_team
+            .entry(team_id)
+            .or_default()
+            .push((row, meta));
     }
 
     // Transfers: bucket outbound by source_team_id (= which team is
@@ -513,12 +820,16 @@ pub async fn compose_all_projections(
             })
             .unwrap_or_default();
 
+        let recruits: Vec<(PlayerRow, RecruitMeta)> =
+            recruits_by_team.remove(&team.id).unwrap_or_default();
+
         out.push(ProjectedRoster {
             team_id: team.id,
             team_name: team.short_name.clone().unwrap_or_else(|| team.name.clone()),
             team_full_name: team.name.clone(),
             returning,
             arrivals,
+            recruits,
             uncertain,
             departures,
         });
@@ -575,11 +886,93 @@ mod tests {
             team_full_name: "Foo Bar".into(),
             returning,
             arrivals,
+            recruits: vec![],
             uncertain,
             departures: vec![],
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
+    }
+
+    #[test]
+    fn for_scenario_includes_recruits_in_both_floor_and_ceiling() {
+        // Returning + arrivals + 2 recruits in both scenarios; the
+        // uncertain bucket lives in ceiling only.
+        let returning = vec![pr(28.0, Some(4.0))];
+        let arrivals = vec![pr(20.0, Some(2.0))];
+        let recruits = vec![
+            (
+                synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1),
+                RecruitMeta {
+                    recruit_id: Uuid::new_v4(),
+                    name: "5★".into(),
+                    composite_rank: Some(5),
+                    star_rating: Some(5),
+                    tier: FreshmanTier::T1,
+                },
+            ),
+            (
+                synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T3),
+                RecruitMeta {
+                    recruit_id: Uuid::new_v4(),
+                    name: "3★".into(),
+                    composite_rank: Some(180),
+                    star_rating: Some(3),
+                    tier: FreshmanTier::T3,
+                },
+            ),
+        ];
+        let uncertain = vec![(
+            pr(20.0, Some(3.0)),
+            UncertainPlayer {
+                player_id: Uuid::new_v4(),
+                name: "X".into(),
+                reason: "draft".into(),
+            },
+        )];
+        let r = ProjectedRoster {
+            team_id: Uuid::new_v4(),
+            team_name: "Foo".into(),
+            team_full_name: "Foo Bar".into(),
+            returning,
+            arrivals,
+            recruits,
+            uncertain,
+            departures: vec![],
+        };
+        // Floor: 1 returning + 1 arrival + 2 recruits = 4
+        assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);
+        // Ceiling: 4 + 1 uncertain = 5
+        assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 5);
+    }
+
+    #[test]
+    fn freshman_tier_buckets_match_rank() {
+        assert_eq!(FreshmanTier::from_rank(Some(1)), FreshmanTier::T1);
+        assert_eq!(FreshmanTier::from_rank(Some(30)), FreshmanTier::T1);
+        assert_eq!(FreshmanTier::from_rank(Some(31)), FreshmanTier::T2);
+        assert_eq!(FreshmanTier::from_rank(Some(100)), FreshmanTier::T2);
+        assert_eq!(FreshmanTier::from_rank(Some(101)), FreshmanTier::T3);
+        assert_eq!(FreshmanTier::from_rank(Some(250)), FreshmanTier::T3);
+        assert_eq!(FreshmanTier::from_rank(Some(251)), FreshmanTier::T4);
+        assert_eq!(FreshmanTier::from_rank(Some(9999)), FreshmanTier::T4);
+        assert_eq!(FreshmanTier::from_rank(None), FreshmanTier::T4);
+    }
+
+    #[test]
+    fn synthesize_freshman_row_uses_tier_profile() {
+        // T1 elite profile carries CamPom +8.97 by construction; check the
+        // PlayerRow surface reflects it.
+        let row = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1);
+        assert_eq!(row.cam_v3, Some(8.97));
+        assert_eq!(row.mpg, 24.0);
+        assert!((row.total_min - 24.0 * 31.1).abs() < 1e-6);
+        // T4 (unranked) is far below T1 on CamPom and minutes-share.
+        let unranked = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T4);
+        assert!(unranked.cam_v3.unwrap() < row.cam_v3.unwrap());
+        // No archetype — synthesized row leaves the slot empty (see
+        // synthesize_freshman_row's comment for rationale).
+        assert_eq!(row.primary_class, None);
     }
 
     #[test]
