@@ -11,6 +11,7 @@ import {
   type LeagueAverages,
   type TorkvikStats,
   type PlayerArchetype,
+  type PlayerTrajectory,
   type SimilarPlayer,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
@@ -72,6 +73,7 @@ export default function PlayerDetail() {
   const [leagueAvg, setLeagueAvg] = useState<LeagueAverages | null>(null);
   const [torvik, setTorvik] = useState<TorkvikStats | null>(null);
   const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
+  const [trajectory, setTrajectory] = useState<PlayerTrajectory | null>(null);
   const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedAxis, setSelectedAxis] = useState<string | null>(null);
@@ -109,6 +111,7 @@ export default function PlayerDetail() {
         setLeagueAvg(r.league_averages);
         setTorvik(r.torvik_stats);
         setArchetype(r.archetype);
+        setTrajectory(r.trajectory);
         if (r.archetype) {
           fetchPlayerSimilar(r.player.id, 8, season)
             .then((s) => {
@@ -135,6 +138,7 @@ export default function PlayerDetail() {
         setLeagueAvg(null);
         setTorvik(null);
         setArchetype(null);
+        setTrajectory(null);
         setSimilar([]);
         setLoading(false);
       });
@@ -191,6 +195,39 @@ export default function PlayerDetail() {
                   <span className="font-bold">{torvik.campom.toFixed(1)}</span>
                   {pctStr != null && <span className="text-xs opacity-80">{pctStr} pct</span>}
                   {tier && <span className="text-xs opacity-80">· {tier}</span>}
+                </span>
+              );
+            })()}
+            {trajectory && (() => {
+              // Phase 5c growth-model projection. Pooled LOPO MAE ~2.3
+              // CamPom points; the q=0.1 / q=0.9 band is what users
+              // should read for "how confident" — a wide band on a
+              // freshman with thin signal is correct, not a flaw. Tier
+              // colors track the projected mean so the chip visually
+              // reflects projected quality without needing a separate
+              // percentile lookup.
+              const tier = campomTier(trajectory.projected_mean);
+              const targetLabel = `${trajectory.target_season - 1}-${(trajectory.target_season % 100).toString().padStart(2, '0')}`;
+              const band = `${trajectory.projected_lower.toFixed(1)}–${trajectory.projected_upper.toFixed(1)}`;
+              const direction =
+                trajectory.prior_campom != null
+                  ? trajectory.projected_mean > trajectory.prior_campom + 0.5
+                    ? '↑'
+                    : trajectory.projected_mean < trajectory.prior_campom - 0.5
+                      ? '↓'
+                      : '→'
+                  : '';
+              return (
+                <span
+                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)}`}
+                  title={`Projected next-season CamPom. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).`}
+                >
+                  <span className="text-xs uppercase tracking-wide opacity-70">
+                    Proj {targetLabel}
+                  </span>
+                  <span className="font-bold">{trajectory.projected_mean.toFixed(1)}</span>
+                  <span className="text-xs opacity-70">{band}</span>
+                  {direction && <span className="text-xs opacity-90">{direction}</span>}
                 </span>
               );
             })()}

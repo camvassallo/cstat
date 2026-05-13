@@ -52,9 +52,13 @@ COPY training/models/margin_model.onnx \
      training/models/win_model.onnx \
      training/models/total_model.onnx \
      training/models/roster_model.onnx \
+     training/models/trajectory_mean_model.onnx \
+     training/models/trajectory_q10_model.onnx \
+     training/models/trajectory_q90_model.onnx \
      training/models/margin_model.lgb \
      training/models/model_meta.json \
      training/models/roster_model_meta.json \
+     training/models/trajectory_model_meta.json \
      /app/training/models/
 
 # Draft early-entrants + big-board JSONs. The projections route reads
