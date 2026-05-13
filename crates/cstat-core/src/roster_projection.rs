@@ -508,13 +508,21 @@ fn match_draft_entrant(
         .map(|(pid, _)| *pid)
 }
 
-/// Player-name normalization for cross-source joins. Same logic the
-/// transfers route uses for portal players: lowercase, strip accents,
-/// drop generational suffixes. Kept locally rather than promoted to a
-/// shared module — only the player-name use case wants the suffix
-/// stripping, and it's a small enough function that duplicating is
-/// cheaper than yet another shared module.
-fn normalize_player_name(name: &str) -> String {
+/// Player-name normalization for cross-source joins. Lowercases,
+/// accent-folds the diacritics we actually see, drops all
+/// non-alphabetic characters (so `V.J.` → `vj`), and strips
+/// generational suffixes (`Jr`, `Sr`, `II`–`V`, `lll` — the last one
+/// is the typo'd lowercase-L variant of `III` we've seen in our
+/// `players` table for a handful of rows). Same logic the transfers
+/// route inlines in `crates/cstat-api/src/routes/transfers.rs`; the
+/// recruit resolver uses this function too.
+///
+/// `pub` because the recruit-ingest resolver (a different crate)
+/// needs the exact same normalization to match `recruits.full_name`
+/// (247-side, e.g. `"V.J. Edgecombe"` or `"Mikel Brown Jr."`) against
+/// the cstat `players.name` (e.g. `"VJ Edgecombe"` / `"Mikel Brown"`).
+/// Three call sites is the right point to promote — two we tolerate.
+pub fn normalize_player_name(name: &str) -> String {
     let folded: String = name
         .chars()
         .flat_map(|c| match c {

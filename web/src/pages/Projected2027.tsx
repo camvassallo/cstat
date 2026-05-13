@@ -97,8 +97,12 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       ...flexCol(3, 200),
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: ProjectedTeam }) => (
+        // Link to the projected 2027 team page so users land on the
+        // forward-looking roster view (returners + transfers +
+        // recruits), not the played-2026 page. `season=2027` triggers
+        // TeamDetail's projection-mode branch.
         <SeasonLink
-          to={`/teams/${p.data?.team_id}`}
+          to={`/teams/${p.data?.team_id}?season=2027`}
           onClick={(e) => e.stopPropagation()}
           className="text-blue-400 hover:underline"
         >

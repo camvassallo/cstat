@@ -421,6 +421,27 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
     Ok(n)
 }
 
+/// Character-length of the common prefix of two strings, comparing
+/// char-by-char (UTF-8 safe). Used by the Tier 2 nickname match to gate
+/// last-name + same-initial pairs on a minimum first-name overlap:
+/// "Cam"/"Cameron" share 3 chars (accept), "Jacob"/"Jayden" share only
+/// 2 (reject). Threshold of 3 was chosen empirically against the
+/// class-of-2024/2025 unresolved residue — it catches every real
+/// nickname pair we observed (Ben/Benjamin, Cam/Cameron, Cash/Casmir,
+/// Chris/Christopher, Nate/Nathaniel, Nic/Nicolus, Timo/Timotej) and
+/// rejects the one observed false positive (Jacob/Jayden Ross).
+fn shared_prefix_len(a: &str, b: &str) -> usize {
+    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count()
+}
+
+fn first_token(name: &str) -> Option<&str> {
+    name.split_whitespace().next()
+}
+
+fn last_token(name: &str) -> Option<&str> {
+    name.split_whitespace().next_back()
+}
+
 /// Pass 2: resolve `cstat_player_id` for recruits whose freshman cstat-season
 /// (`year + 1`) has been ingested.
 ///
@@ -487,25 +508,104 @@ pub async fn resolve_player_joins(pool: &PgPool, year: i32) -> Result<u64, Recru
         return Ok(0);
     }
 
-    // Index by (lower(name), team_natstat_id) for O(1) per-need lookup.
+    // ── Tier 1: exact normalized match within team ─────────────────
+    //
+    // Normalization strips punctuation (so 247's "V.J. Edgecombe"
+    // matches cstat's "VJ Edgecombe") and generational suffixes (so
+    // "Mikel Brown Jr." matches cstat's "Mikel Brown" / "Mikel Brown
+    // jr" — cstat ingest is inconsistent about how it stores the
+    // suffix). Same function the transfers route + roster_projection
+    // use; consolidated as `cstat_core::roster_projection::normalize_player_name`.
+    use cstat_core::roster_projection::normalize_player_name;
     let mut by_key: HashMap<(String, String), Uuid> = HashMap::new();
     for c in &candidates {
         by_key.insert(
-            (c.name.to_lowercase(), c.team_natstat_id.clone()),
+            (normalize_player_name(&c.name), c.team_natstat_id.clone()),
             c.player_id,
         );
     }
 
     let mut recruit_ids: Vec<Uuid> = Vec::new();
     let mut player_ids: Vec<Uuid> = Vec::new();
+    let mut claimed_pids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut unresolved_needs: Vec<&RecruitNeed> = Vec::new();
     for need in &needs {
         let key = (
-            need.full_name.to_lowercase(),
+            normalize_player_name(&need.full_name),
             need.committed_team_natstat_id.clone(),
         );
         if let Some(&pid) = by_key.get(&key) {
             recruit_ids.push(need.id);
             player_ids.push(pid);
+            claimed_pids.insert(pid);
+        } else {
+            unresolved_needs.push(need);
+        }
+    }
+    let tier1_matched = recruit_ids.len();
+
+    // ── Tier 2: nickname match within team ──────────────────────────
+    //
+    // For each unmatched recruit, look at unclaimed cstat candidates on
+    // the same team. Match if their normalized last names match AND
+    // their normalized first names share a prefix of length ≥3. This
+    // catches the long tail (Cam ↔ Cameron, Chris ↔ Christopher, Nic ↔
+    // Nicolus, Nate ↔ Nathaniel, Cash ↔ Casmir, Ben ↔ Benjamin, …)
+    // without falsely binding Jacob ↔ Jayden (share only "Ja", length 2).
+    //
+    // Misses Jake ↔ Jacob and similar short-form ↔ long-form pairs that
+    // diverge before char 3 — fixing those would need a hardcoded
+    // nickname table, deferred. Maintenance cost > marginal coverage.
+    //
+    // Index unclaimed candidates by (team, last_name) for O(1) per-need.
+    // Last name = last whitespace-separated token of the normalized name.
+    let mut by_team_last: HashMap<(String, String), Vec<(Uuid, String)>> = HashMap::new();
+    for c in &candidates {
+        if claimed_pids.contains(&c.player_id) {
+            continue;
+        }
+        let norm = normalize_player_name(&c.name);
+        let (Some(ln), Some(fn_)) = (last_token(&norm), first_token(&norm)) else {
+            continue;
+        };
+        by_team_last
+            .entry((ln.to_string(), c.team_natstat_id.clone()))
+            .or_default()
+            .push((c.player_id, fn_.to_string()));
+    }
+
+    let mut tier2_matched = 0_usize;
+    let mut tier2_ambiguous = 0_usize;
+    for need in unresolved_needs {
+        let norm = normalize_player_name(&need.full_name);
+        let (Some(ln), Some(fn_recruit)) = (last_token(&norm), first_token(&norm)) else {
+            continue;
+        };
+        let bucket_key = (ln.to_string(), need.committed_team_natstat_id.clone());
+        let Some(bucket) = by_team_last.get(&bucket_key) else {
+            continue;
+        };
+        // Surviving candidates: same team, same last name, same
+        // first-initial, shared prefix ≥3 between first names. We
+        // accept a match only when *exactly one* survives — multiple
+        // matches mean we can't safely pick one, so we leave it
+        // unresolved and bump the ambiguous counter.
+        let first_initial_recruit = fn_recruit.chars().next();
+        let survivors: Vec<&(Uuid, String)> = bucket
+            .iter()
+            .filter(|(_, fn_cand)| {
+                fn_cand.chars().next() == first_initial_recruit
+                    && shared_prefix_len(fn_cand, fn_recruit) >= 3
+            })
+            .collect();
+        match survivors.as_slice() {
+            [(pid, _)] => {
+                recruit_ids.push(need.id);
+                player_ids.push(*pid);
+                tier2_matched += 1;
+            }
+            [] => {}
+            _ => tier2_ambiguous += 1,
         }
     }
 
@@ -528,6 +628,9 @@ pub async fn resolve_player_joins(pool: &PgPool, year: i32) -> Result<u64, Recru
         target_season,
         needs = needs.len(),
         candidates = candidates.len(),
+        tier1_exact = tier1_matched,
+        tier2_nickname = tier2_matched,
+        tier2_ambiguous,
         matched = recruit_ids.len(),
         updated = n,
         "cstat_player_id resolution complete"
@@ -538,6 +641,39 @@ pub async fn resolve_player_joins(pool: &PgPool, year: i32) -> Result<u64, Recru
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_prefix_len_basic() {
+        // Real nickname pairs that should clear the ≥3 gate.
+        assert!(shared_prefix_len("cam", "cameron") >= 3);
+        assert!(shared_prefix_len("ben", "benjamin") >= 3);
+        assert!(shared_prefix_len("nic", "nicolus") >= 3);
+        assert!(shared_prefix_len("chris", "christopher") >= 3);
+        assert!(shared_prefix_len("cash", "casmir") >= 3);
+        // Real false-positive that should NOT clear the gate (Jacob Ross
+        // vs Jayden Ross on the same team — different people).
+        assert!(shared_prefix_len("jacob", "jayden") < 3);
+        // No overlap at all.
+        assert_eq!(shared_prefix_len("zz", "zachiah"), 1);
+        // Exact match.
+        assert_eq!(shared_prefix_len("fawaz", "fawaz"), 5);
+        // Empty strings.
+        assert_eq!(shared_prefix_len("", "foo"), 0);
+    }
+
+    #[test]
+    fn first_and_last_token_split_on_whitespace() {
+        assert_eq!(first_token("ben winker"), Some("ben"));
+        assert_eq!(last_token("ben winker"), Some("winker"));
+        assert_eq!(first_token("vj edgecombe"), Some("vj"));
+        assert_eq!(last_token("vj edgecombe"), Some("edgecombe"));
+        // Single-token name (rare but possible).
+        assert_eq!(first_token("madonna"), Some("madonna"));
+        assert_eq!(last_token("madonna"), Some("madonna"));
+        // Empty / whitespace-only.
+        assert_eq!(first_token(""), None);
+        assert_eq!(last_token("   "), None);
+    }
 
     #[test]
     fn snapshot_roundtrip_preserves_rows() {

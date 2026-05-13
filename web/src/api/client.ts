@@ -489,6 +489,59 @@ export interface ProjectedTeam {
   baseline_adj_em: number | null;
 }
 
+/// One projected team detail row, returned by
+/// `GET /api/projections/{year}/teams/{team_id}`. Wraps the team's
+/// identity, the AdjEM band + baseline, and the four roster cohorts
+/// (returning / arrivals / recruits / departures + uncertain). Used by
+/// the projection-mode branch of `TeamDetail.tsx`.
+export interface ProjectedReturning {
+  player_id: string;
+  name: string;
+  mpg: number;
+  ppg: number | null;
+  cam_v3: number | null;
+  primary_class: string | null;
+}
+export interface ProjectedArrival extends ProjectedReturning {
+  /// Source team UUID + display name in the played base season. Powers
+  /// the "from $TEAM" link on the arrival card.
+  source_team_id: string | null;
+  source_team_name: string | null;
+}
+export interface ProjectedRecruitDetail {
+  recruit_id: string;
+  name: string;
+  composite_rank: number | null;
+  star_rating: number | null;
+  tier: 't1' | 't2' | 't3' | 't4';
+  projected_cam_v3: number | null;
+}
+export interface ProjectedDeparture {
+  kind: 'senior' | 'transferred' | 'draft_gone';
+  player_id: string;
+  name: string;
+  destination?: string | null;
+}
+export interface ProjectedUncertain {
+  player_id: string;
+  name: string;
+  reason: string;
+}
+
+export function fetchProjectedTeam(year: number, teamId: string) {
+  return fetchJson<{
+    year: number;
+    base_season: number;
+    team: { id: string; name: string | null; short_name: string | null };
+    projection: ProjectedTeam;
+    returning: ProjectedReturning[];
+    arrivals: ProjectedArrival[];
+    recruits: ProjectedRecruitDetail[];
+    departures: ProjectedDeparture[];
+    uncertain: ProjectedUncertain[];
+  }>(`/projections/${year}/teams/${teamId}`);
+}
+
 export function fetchProjections(year: number) {
   return fetchJson<{
     year: number;

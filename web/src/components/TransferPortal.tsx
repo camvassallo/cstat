@@ -42,18 +42,24 @@ const campomRenderer = (p: { value: number | null; data?: RankedTransfer }) => {
 // Renders a team cell as a link to /teams/:id when we resolved the 247 short
 // name to a cstat team_id, or as plain text when we didn't (rare; small
 // schools we don't carry, or "TBD" for an uncommitted next destination).
+//
+// `season` pins the destination season on the link: previous-team links
+// land on the played base season (year of the portal cycle), next-team
+// links land on the upcoming season (year + 1) — which may be a
+// projection page if that season hasn't been played yet.
 function teamCellRenderer(opts: {
   name: string | null;
   id: string | null;
+  season: number;
   fallback?: string;
   fallbackClass?: string;
 }) {
-  const { name, id, fallback = '—', fallbackClass = 'text-gray-500' } = opts;
+  const { name, id, season, fallback = '—', fallbackClass = 'text-gray-500' } = opts;
   if (!name) return <span className={fallbackClass}>{fallback}</span>;
   if (!id) return <span className="text-gray-200">{name}</span>;
   return (
     <SeasonLink
-      to={`/teams/${id}`}
+      to={`/teams/${id}?season=${season}`}
       onClick={(e) => e.stopPropagation()}
       className="text-blue-400 hover:underline"
     >
@@ -62,7 +68,7 @@ function teamCellRenderer(opts: {
   );
 }
 
-function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
+function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[] {
   // Mobile: fixed natural width (= the existing minWidth) so AG Grid
   // horizontal-scrolls instead of compressing content. Desktop: keep the
   // original flex distribution.
@@ -163,6 +169,9 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
           // fall back to the 247 short name verbatim if no match.
           name: p.data?.previous_team_full ?? p.data?.previous_team ?? null,
           id: p.data?.previous_team_id ?? null,
+          // Source team played the portal-cycle year (e.g. a 2025 portal
+          // entry was at their previous school during cstat-season 2025).
+          season: year,
         }),
     },
     {
@@ -173,6 +182,12 @@ function buildColumns(isMobile: boolean): ColDef<RankedTransfer>[] {
         teamCellRenderer({
           name: p.data?.next_team ?? null,
           id: p.data?.next_team_id ?? null,
+          // Destination team takes them into the *next* cstat-season
+          // (year + 1) — that's the page that reflects who they'll
+          // actually play for. For year=2026 this routes to the
+          // projected 2027 team page; for past portal cycles it goes
+          // to the played team page for that season.
+          season: year + 1,
           fallback: 'TBD',
           fallbackClass: 'text-gray-500 italic',
         }),
@@ -283,7 +298,7 @@ export default function TransferPortal({ year }: Props) {
     };
   }, [year]);
 
-  const columns = useMemo(() => buildColumns(isMobile), [isMobile]);
+  const columns = useMemo(() => buildColumns(isMobile, year), [isMobile, year]);
 
   const filtered = useMemo(() => {
     if (!rows) return null;
