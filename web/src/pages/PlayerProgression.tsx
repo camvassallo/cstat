@@ -119,15 +119,23 @@ export default function PlayerProgression() {
   // Reads naturally as career progression left → right.
   const seasonsAsc = [...data.seasons].sort((a, b) => a.season - b.season);
 
-  // Pick a CamPom Y-domain that comfortably contains both raw values
-  // and the trajectory band, with some headroom.
-  const allCam = campomSeries.flatMap((r) =>
-    [r.campom, r.projection, r.projection_lower, r.projection_upper].filter(
-      (v): v is number => v != null,
-    ),
+  // Pick a Y-domain that contains the rendered points (raw CamPom +
+  // projection mean) with light headroom. The projection band's
+  // lower/upper are intentionally excluded — they're not drawn on the
+  // chart, so including them would stretch the Y-axis for nothing.
+  const renderedCam = campomSeries.flatMap((r) =>
+    [r.campom, r.projection].filter((v): v is number => v != null),
   );
-  const camMin = allCam.length ? Math.min(...allCam) - 1 : -2;
-  const camMax = allCam.length ? Math.max(...allCam) + 1 : 6;
+  const camMin = renderedCam.length ? Math.min(...renderedCam) - 1 : -2;
+  const camMax = renderedCam.length ? Math.max(...renderedCam) + 1 : 6;
+  // Only render the chart if there's at least one real data point on
+  // it — a multi-season player with no Torvik CamPom in any season
+  // would otherwise render an empty plot with grid lines and nothing
+  // else. The trajectory projection alone (renderedCam.length === 1
+  // for a 0-data + 1-projection case) doesn't justify a "time series".
+  const hasCamSeries =
+    campomSeries.some((r) => r.campom != null) &&
+    campomSeries.length > 1;
 
   return (
     <div className="space-y-6">
@@ -195,7 +203,7 @@ export default function PlayerProgression() {
       </div>
 
       {/* Time-series chart */}
-      {campomSeries.length > 1 && (
+      {hasCamSeries && (
         <div className="bg-gray-800 rounded-lg p-5">
           <h2 className="text-lg font-bold mb-2">CamPom v3 over time</h2>
           <p className="text-xs text-gray-400 mb-3">

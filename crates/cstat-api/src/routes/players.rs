@@ -235,7 +235,10 @@ async fn player_progression(
     // inner is a good fit for ~3-6 seasons: ~50ms per season, never
     // hot-pathed enough to need futures::join_all.
     let mut entries: Vec<Value> = Vec::with_capacity(seasons.len());
-    for season in &seasons {
+    // Captured during iteration 0 so the trajectory step below doesn't
+    // re-resolve the same (id, latest_season) pair.
+    let mut latest_resolved_id: Option<Uuid> = None;
+    for (idx, season) in seasons.iter().enumerate() {
         let resolved = queries::resolve_player_id_for_season(pool, id, *season)
             .await
             .map_err(|e| {
@@ -247,6 +250,9 @@ async fn player_progression(
         let Some(rid) = resolved else {
             continue;
         };
+        if idx == 0 {
+            latest_resolved_id = Some(rid);
+        }
         let (profile, season_stats, percentiles, torvik_stats, archetype) = tokio::try_join!(
             queries::get_player_by_id(pool, rid, *season),
             queries::get_player_season_stats(pool, rid, *season),
@@ -287,17 +293,10 @@ async fn player_progression(
     // to the most-recent season. Surfaces in the page header so users
     // see the projected next-season CamPom alongside their actual
     // career arc on this page (and the link back from the chip on the
-    // single-season page).
+    // single-season page). Reuse the player_id resolved in iteration 0
+    // of the loop above rather than re-running `resolve_player_id_for_season`.
     let latest_season = seasons[0];
-    let latest_resolved = queries::resolve_player_id_for_season(pool, id, latest_season)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("trajectory resolve failed: {e}") })),
-            )
-        })?;
-    let trajectory = if let Some(rid) = latest_resolved {
+    let trajectory = if let Some(rid) = latest_resolved_id {
         let row = cstat_core::trajectory::fetch_player_trajectory_row(pool, rid, latest_season)
             .await
             .map_err(|e| {
