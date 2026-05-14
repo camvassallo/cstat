@@ -20,6 +20,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/players/{id}", get(player_detail))
         .route("/api/players/{id}/archetype", get(player_archetype))
         .route("/api/players/{id}/similar", get(player_similar))
+        .route("/api/players/{id}/progression", get(player_progression))
 }
 
 #[derive(Deserialize)]
@@ -194,6 +195,142 @@ async fn player_detail(
         "torvik_stats": torvik_stats,
         "archetype": archetype,
         "available_seasons": available_seasons,
+        "trajectory": trajectory,
+    })))
+}
+
+/// Cross-season "career progression" view. Returns one entry per
+/// (player_id, season) the human appears in — joined across transfers
+/// via `torvik_pid` the same way `get_player_available_seasons` does.
+/// Each entry carries the player profile (team name changes year over
+/// year for transfers), season_stats, percentiles, torvik_stats, and
+/// archetype, so the frontend can render time-series + per-season
+/// radars and shot-diet cards without N round-trips. The most-recent
+/// season's trajectory projection is included for the header chip.
+async fn player_progression(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let pool = &state.db.pool;
+
+    let seasons = queries::get_player_available_seasons(pool, id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("seasons query failed: {e}") })),
+            )
+        })?;
+    if seasons.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "player not found" })),
+        ));
+    }
+
+    // Fetch each season's payload. Seasons go in order from
+    // `get_player_available_seasons` (newest-first); we resolve the
+    // season-scoped player_id for each, then fan out the per-season
+    // queries via tokio::try_join. Sequential outer loop with parallel
+    // inner is a good fit for ~3-6 seasons: ~50ms per season, never
+    // hot-pathed enough to need futures::join_all.
+    let mut entries: Vec<Value> = Vec::with_capacity(seasons.len());
+    for season in &seasons {
+        let resolved = queries::resolve_player_id_for_season(pool, id, *season)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("resolve failed for season {season}: {e}") })),
+                )
+            })?;
+        let Some(rid) = resolved else {
+            continue;
+        };
+        let (profile, season_stats, percentiles, torvik_stats, archetype) = tokio::try_join!(
+            queries::get_player_by_id(pool, rid, *season),
+            queries::get_player_season_stats(pool, rid, *season),
+            queries::get_player_percentiles(pool, rid, *season),
+            queries::get_torvik_stats(pool, rid, *season),
+            queries::get_player_archetype(pool, rid, *season),
+        )
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(
+                    json!({ "error": format!("per-season fetch failed for season {season}: {e}") }),
+                ),
+            )
+        })?;
+        let Some(profile) = profile else {
+            continue;
+        };
+        entries.push(json!({
+            "season": season,
+            "player_id": rid,
+            "name": profile.name,
+            "team_id": profile.team_id,
+            "team_name": profile.team_name,
+            "position": profile.position,
+            "class_year": profile.class_year,
+            "jersey_number": profile.jersey_number,
+            "height_inches": profile.height_inches,
+            "weight_lbs": profile.weight_lbs,
+            "season_stats": season_stats,
+            "percentiles": percentiles,
+            "torvik_stats": torvik_stats,
+            "archetype": archetype,
+        }));
+    }
+
+    // Trajectory projection — same logic as `player_detail`, anchored
+    // to the most-recent season. Surfaces in the page header so users
+    // see the projected next-season CamPom alongside their actual
+    // career arc on this page (and the link back from the chip on the
+    // single-season page).
+    let latest_season = seasons[0];
+    let latest_resolved = queries::resolve_player_id_for_season(pool, id, latest_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("trajectory resolve failed: {e}") })),
+            )
+        })?;
+    let trajectory = if let Some(rid) = latest_resolved {
+        let row = cstat_core::trajectory::fetch_player_trajectory_row(pool, rid, latest_season)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("trajectory query failed: {e}") })),
+                )
+            })?;
+        row.and_then(|row| {
+            row.campom?;
+            let features = cstat_core::trajectory::build_trajectory_features(&row);
+            match state.predictor.predict_trajectory(&features) {
+                Ok(pred) => Some(json!({
+                    "base_season": latest_season,
+                    "target_season": latest_season + 1,
+                    "projected_mean": pred.mean,
+                    "projected_lower": pred.lower,
+                    "projected_upper": pred.upper,
+                    "prior_campom": row.campom,
+                })),
+                Err(e) => {
+                    tracing::warn!(error = ?e, player_id = %rid, "trajectory predict failed");
+                    None
+                }
+            }
+        })
+    } else {
+        None
+    };
+
+    Ok(Json(json!({
+        "available_seasons": seasons,
+        "seasons": entries,
         "trajectory": trajectory,
     })))
 }
