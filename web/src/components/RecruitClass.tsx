@@ -88,7 +88,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RecruitRow>[] {
         if (!id) return <span className="text-gray-300">{p.value}</span>;
         return (
           <SeasonLink
-            to={`/players/${id}`}
+            to={`/players/${id}?season=${year + 1}`}
             onClick={(e) => e.stopPropagation()}
             className="text-blue-400 hover:underline"
           >
