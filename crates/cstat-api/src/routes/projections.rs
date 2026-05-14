@@ -432,7 +432,19 @@ async fn projection_team_detail(
         })?;
     let baseline = baseline_map.get(&resolved_id).copied();
 
-    let row = predict_team(&projection, &state.predictor, baseline);
+    // `predict_team` returns None only when the ONNX session errors —
+    // the too-thin gate still returns Some with null bounds. The list
+    // route skips None rows (`continue`); a single-team detail page
+    // can't skip, so surface it as 500 rather than handing the
+    // frontend a `projection: null` it isn't typed for.
+    let Some(row) = predict_team(&projection, &state.predictor, baseline) else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("inference failed for team {resolved_id}")
+            })),
+        ));
+    };
 
     // Name lookup for the returning + arrival player_ids. PlayerRow is
     // stat-only (matches the roster model's input shape); names live on
