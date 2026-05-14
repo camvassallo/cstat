@@ -591,10 +591,17 @@ pub async fn resolve_player_joins(pool: &PgPool, year: i32) -> Result<u64, Recru
         // matches mean we can't safely pick one, so we leave it
         // unresolved and bump the ambiguous counter.
         let first_initial_recruit = fn_recruit.chars().next();
+        // Filter out pids already claimed in Tier 1 *or* earlier Tier 2
+        // iterations — without this, two unresolved recruits on the
+        // same team with same last name + prefix-matching first names
+        // would both bind to a single candidate (e.g. "Cam Davis" and
+        // "Cameron Davis" both → cstat's "Cameron Davis"), violating
+        // the one-recruit-per-cstat-player invariant.
         let survivors: Vec<&(Uuid, String)> = bucket
             .iter()
-            .filter(|(_, fn_cand)| {
-                fn_cand.chars().next() == first_initial_recruit
+            .filter(|(pid, fn_cand)| {
+                !claimed_pids.contains(pid)
+                    && fn_cand.chars().next() == first_initial_recruit
                     && shared_prefix_len(fn_cand, fn_recruit) >= 3
             })
             .collect();
@@ -602,6 +609,7 @@ pub async fn resolve_player_joins(pool: &PgPool, year: i32) -> Result<u64, Recru
             [(pid, _)] => {
                 recruit_ids.push(need.id);
                 player_ids.push(*pid);
+                claimed_pids.insert(*pid);
                 tier2_matched += 1;
             }
             [] => {}
