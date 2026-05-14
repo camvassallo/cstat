@@ -157,6 +157,30 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 .execute(pool)
                 .await?;
 
+            // Step 3.5: Reassign player_id on tables whose FK to players is
+            // RESTRICT (no CASCADE) and whose rows are valuable enough to
+            // keep through the merge. Torvik has UNIQUE(torvik_pid, season),
+            // not on player_id, so two surviving rows for the merged player
+            // is allowed; downstream consumers (compute_individual_ratings)
+            // are tolerant of the duplication. transfers/recruits use
+            // cstat_player_id (nullable) and are typically NULL during this
+            // step, but get covered too so re-resolves don't regress later.
+            sqlx::query("UPDATE torvik_player_stats SET player_id = $1 WHERE player_id = $2")
+                .bind(primary_id)
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
+            sqlx::query("UPDATE transfers SET cstat_player_id = $1 WHERE cstat_player_id = $2")
+                .bind(primary_id)
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
+            sqlx::query("UPDATE recruits SET cstat_player_id = $1 WHERE cstat_player_id = $2")
+                .bind(primary_id)
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
+
             // Step 4: Delete the duplicate player record
             sqlx::query("DELETE FROM players WHERE id = $1")
                 .bind(dup_id)
