@@ -224,7 +224,14 @@ export default function PlayerProgression() {
                   return [v.toFixed(2), name];
                 }}
               />
-              <ReferenceLine y={0} stroke="#475569" />
+              {/* Only render the league-average reference line when 0
+                  actually falls inside the Y-domain — otherwise it
+                  vanishes off-axis and looks like the chart broke. For
+                  a player whose entire career sits above (or below) 0
+                  the reference is implicit anyway. */}
+              {camMin <= 0 && camMax >= 0 && (
+                <ReferenceLine y={0} stroke="#475569" />
+              )}
               <Line
                 type="monotone"
                 dataKey="campom"
