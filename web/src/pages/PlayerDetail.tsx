@@ -217,10 +217,16 @@ export default function PlayerDetail() {
                       ? '↓'
                       : '→'
                   : '';
+              // The chip itself links to the cross-season progression
+              // page — the projection sits naturally as the right-most
+              // point in the time-series there. Hover affordance is the
+              // existing dashed border; we don't add an underline so the
+              // chip's typography stays clean.
               return (
-                <span
-                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)}`}
-                  title={`Projected next-season CamPom. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).`}
+                <SeasonLink
+                  to={`/players/${player.id}/progression`}
+                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)} hover:bg-gray-700/40 transition-colors`}
+                  title={`Projected next-season CamPom. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners). Click for full career progression.`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {targetLabel}
@@ -228,7 +234,7 @@ export default function PlayerDetail() {
                   <span className="font-bold">{trajectory.projected_mean.toFixed(1)}</span>
                   <span className="text-xs opacity-70">{band}</span>
                   {direction && <span className="text-xs opacity-90">{direction}</span>}
-                </span>
+                </SeasonLink>
               );
             })()}
           </div>

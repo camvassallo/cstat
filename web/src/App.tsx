@@ -4,6 +4,7 @@ import Rankings from './pages/Rankings';
 import TeamDetail from './pages/TeamDetail';
 import Players from './pages/Players';
 import PlayerDetail from './pages/PlayerDetail';
+import PlayerProgression from './pages/PlayerProgression';
 import PlayerCompare from './pages/PlayerCompare';
 import Predict from './pages/Predict';
 import Archetypes from './pages/Archetypes';
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="/players" element={<Players />} />
           <Route path="/players/compare" element={<PlayerCompare />} />
           <Route path="/players/:id" element={<PlayerDetail />} />
+          <Route path="/players/:id/progression" element={<PlayerProgression />} />
           <Route path="/predict" element={<Predict />} />
           <Route path="/archetypes" element={<Archetypes />} />
           <Route path="/projected/2027" element={<Projected2027 />} />

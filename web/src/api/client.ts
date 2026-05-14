@@ -667,6 +667,36 @@ export function fetchPlayerDetail(id: string, season?: number) {
   }>(`/players/${id}`, { season: season?.toString() });
 }
 
+/// One per-season entry in the career progression view. Mirrors the
+/// shape `/api/players/{id}` returns for a single season, minus the
+/// game_log and league_averages — the progression page renders
+/// season-over-season aggregates and side-by-side radars/shot diets,
+/// not per-game logs.
+export interface ProgressionSeason {
+  season: number;
+  player_id: string;
+  name: string;
+  team_id: string | null;
+  team_name: string | null;
+  position: string | null;
+  class_year: string | null;
+  jersey_number: string | null;
+  height_inches: number | null;
+  weight_lbs: number | null;
+  season_stats: PlayerSeasonStats | null;
+  percentiles: Percentiles | null;
+  torvik_stats: TorkvikStats | null;
+  archetype: PlayerArchetype | null;
+}
+
+export function fetchPlayerProgression(id: string) {
+  return fetchJson<{
+    available_seasons: number[];
+    seasons: ProgressionSeason[];
+    trajectory: PlayerTrajectory | null;
+  }>(`/players/${id}/progression`);
+}
+
 export function fetchPlayerSimilar(id: string, k = 8, season?: number) {
   return fetchJson<{ season: number; players: SimilarPlayer[] }>(
     `/players/${id}/similar`,
