@@ -146,11 +146,9 @@ After a retrain, the diagnostic + spot-check pass will surface one of three prob
 
 **Symptoms:** Population for one class swings dramatically; spot-checks land in unexpected classes; the class's mean centroid features look nothing like the description.
 
-**Fix:** Tweak the affected class's signature in `ARCHETYPE_SIGNATURES` (in `training/archetypes.py`). Add or strengthen weights on the dimensions that should distinguish it from neighboring clusters; add small *negative* weights on dimensions where the class shouldn't compete with another (e.g., Fighter's `min_share: 0.0, usage_rate: -0.3` keeps it out of the elite-wing cluster that should belong to Monk).
+**Fix:** Tweak the affected class's signature in `ARCHETYPE_SIGNATURES` (in `training/archetypes.py`). Add or strengthen weights on the dimensions that should distinguish it from neighboring clusters; add small *negative* weights on dimensions where the class shouldn't compete with another (e.g., Fighter's `min_share: -0.3, usage_rate: -0.3, ogbpm: -0.3` anchors it to the low-USG rotation-depth cluster instead of competing with mid-tier scoring clusters). The biggest recent example: forcing the Wizard label onto the elite-guard cluster required adding `ogbpm: 1.5, dgbpm: 0.5` to Wizard's signature so Hungarian wouldn't keep handing that cluster to Bard.
 
-This is what we did for Fighter — its original "near zero everywhere" signature made it a residual sink that absorbed whatever the more-distinctive clusters didn't claim.
-
-**After the fix:** Rerun the training, redo the full diagnostic pass. Beware of cascade effects: tweaking one signature can cause Hungarian to swap labels on *other* clusters too. We saw exactly this — when Fighter pulled away from the elite-wing cluster, Monk took its place and inherited that cluster's identity. Don't be surprised; just audit all 12 again.
+**After the fix:** Rerun the training; the signature-alignment guardrail (Step 1) will surface remaining sign/order mismatches. Beware of cascade effects: tweaking one signature can cause Hungarian to swap labels on *other* clusters too. Don't be surprised; just audit all 12 again and let the guardrail tell you when you're clean.
 
 ### B. A class's cluster identity genuinely shifted
 
@@ -162,7 +160,7 @@ This is what we did for Fighter — its original "near zero everywhere" signatur
 2. `web/src/pages/Archetypes.tsx::CLASS_DEFS` — the long description, signature badges, and "Comparable" line.
 3. `training/archetypes.py::ARCHETYPE_SIGNATURES` — the inline comment next to the signature dict (developer reference).
 
-Don't touch the signature itself unless the prose-only fix doesn't cover it. We did this for Bard, Ranger, Cleric, Barbarian, and Monk in the most recent retrain.
+Don't touch the signature itself unless the prose-only fix doesn't cover it. In the most recent retrain (2023–2026 expansion) we rewrote prose for Bard, Monk, Fighter, Cleric, Ranger, Rogue, Sorcerer, and Warlock — the cluster identities had shifted enough that the descriptions needed to catch up, but the signatures only needed small relaxations to pass the guardrail.
 
 ### C. A real new cluster emerged that no class fits
 
@@ -182,7 +180,7 @@ If you must add a class (because a true new cluster appeared and no existing cla
 
 ## Era horizon: when combined-cohort breaks down
 
-Combined-cohort training is fine at our current 2-3 season horizon. It will start to fail somewhere around **5+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. The candidate triggers:
+Combined-cohort training is fine at our current 4-season horizon. It will start to fail somewhere around **5–6+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. We've already seen mild cluster-identity drift between the 2-season fit and the 4-season fit (Bard and Monk both shifted); the same forces compound. The candidate triggers:
 
 - **3PT volume.** D-I three-point attempt rate has risen ~50% over the last decade. A 2026 Warlock and a 2010 Warlock have completely different `three_share` distributions. Combined-cohort z-scoring would compress the modern signal.
 - **Small-ball / positional fluidity.** Druid (positionless big) is a recent archetype; it didn't exist in the early 2010s in the same way. Forcing pre-small-ball seasons through the same clustering will dilute it.
@@ -214,7 +212,7 @@ Why it's bad:
 - Hides legitimate year-to-year evolution (a star going from Druid to Sorcerer because they took on more usage is real signal).
 - Tunable threshold X is arbitrary and hard to debug.
 - Brittle: a single feature outlier can flip a player's class either way regardless of the rest of the profile.
-- The 45.7% stability number we have is honest. Forcing it higher would just be lying.
+- The ~46% stability number we have is honest. Forcing it higher would just be lying.
 
 If you want higher stability, fix the inputs (combined-cohort, signature tweaks) — not the outputs.
 
