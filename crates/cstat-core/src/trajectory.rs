@@ -12,21 +12,35 @@
 //! don't pass a destination-team feature, so the model reads them the same
 //! way it reads same-team returners.
 //!
-//! Feature shape (37 cols, order is wire-locked):
+//! Feature shape (48 cols, order is wire-locked):
 //!   - 5 volume/context (mpg, gp, total_min, height_in, class_year_code)
 //!   - 6 box-score per-game (ppg, rpg, apg, spg, bpg, topg)
 //!   - 10 rate stats (ts, efg, usg, ast%, tov%, orb%, drb%, stl%, blk%, ft_rate)
 //!   - 4 impact metrics (ogbpm, dgbpm, gbpm, campom)
 //!   - 12 archetype mixture (primary 1.0× / secondary 0.5×)
+//!   - 11 recruit block (see `recruit_features.rs::RECRUIT_FEATURE_NAMES`)
+//!
+//! Recruit block is sourced via LEFT JOIN against `recruits`; majority of
+//! returners pre-2024 have no row and fall into the `recruit_is_ranked=0`
+//! sentinel branch. The freshman-impact prior model (next PR) will reuse
+//! the same `recruit_features` module so this contract is shared.
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::recruit_features::{
+    RECRUIT_NUM_FEATURES, RecruitFeatureRow, build_recruit_feature_block,
+};
 use crate::roster_features::ARCHETYPES;
+
+/// Size of the trajectory-specific feature head (volume/context + box +
+/// rate + impact + archetype). The recruit block is appended after, and
+/// `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
+const TRAJECTORY_HEAD_FEATURES: usize = 37;
 
 /// Number of input features each of the three trajectory ONNX models expects.
 /// Wire-locked to `trajectory_model_meta.json::features` order.
-pub const TRAJECTORY_NUM_FEATURES: usize = 37;
+pub const TRAJECTORY_NUM_FEATURES: usize = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES;
 
 /// Feature names in the exact order the three ONNX models consume. Boot-time
 /// validator (see `inference.rs::validate_trajectory_meta`) hard-fails if
@@ -74,6 +88,20 @@ pub const TRAJECTORY_FEATURE_NAMES: [&str; TRAJECTORY_NUM_FEATURES] = [
     "arch_druid",
     "arch_rogue",
     "arch_fighter",
+    // Recruit block (11) — must equal `RECRUIT_FEATURE_NAMES` in lockstep.
+    // The `recruit_names_match_subarray` test cross-validates the literal
+    // against the const so accidental edits to one diverge loudly.
+    "recruit_is_ranked",
+    "recruit_composite_rank",
+    "recruit_composite_rating",
+    "recruit_star_rating",
+    "recruit_position_rank",
+    "recruit_rank_movement",
+    "recruit_height_in",
+    "recruit_weight_lb",
+    "recruit_bmi_proxy",
+    "recruit_position_code",
+    "years_since_recruit",
 ];
 
 /// One player's prior-season row, joined across `player_season_stats`,
@@ -120,6 +148,22 @@ pub struct TrajectoryPlayerRow {
     // Archetype mixture
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
+    // Recruit block — LEFT JOIN on `recruits.cstat_player_id`. When the
+    // join misses (most pre-2024 returners) every field is None and the
+    // recruit feature block falls into its sentinel branch. Types mirror
+    // `migrations/020_recruits.sql`: composite_rank / position_rank /
+    // previous_rank / weight / year are INTEGER (i32); composite_rating
+    // is REAL (f32); star_rating is SMALLINT (i16); height / position
+    // are TEXT.
+    pub recruit_composite_rank: Option<i32>,
+    pub recruit_composite_rating: Option<f32>,
+    pub recruit_star_rating: Option<i16>,
+    pub recruit_position_rank: Option<i32>,
+    pub recruit_previous_rank: Option<i32>,
+    pub recruit_height: Option<String>,
+    pub recruit_weight: Option<i32>,
+    pub recruit_position: Option<String>,
+    pub recruit_year: Option<i32>,
 }
 
 /// `class_year` text → integer code. Mirrors the Python `CLASS_YEAR_CODES`
@@ -180,13 +224,24 @@ pub async fn fetch_player_trajectory_row(
             tps.gbpm,
             tps.cam_gbpm_v3_psos AS campom,
             pa.primary_class,
-            pa.secondary_class
+            pa.secondary_class,
+            rec.composite_rank   AS recruit_composite_rank,
+            rec.composite_rating AS recruit_composite_rating,
+            rec.star_rating      AS recruit_star_rating,
+            rec.position_rank    AS recruit_position_rank,
+            rec.previous_rank    AS recruit_previous_rank,
+            rec.height           AS recruit_height,
+            rec.weight           AS recruit_weight,
+            rec.position         AS recruit_position,
+            rec.year             AS recruit_year
         FROM player_season_stats pss
         JOIN players ply ON ply.id = pss.player_id
         LEFT JOIN torvik_player_stats tps
             ON tps.player_id = pss.player_id AND tps.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
+        LEFT JOIN recruits rec
+            ON rec.cstat_player_id = pss.player_id
         WHERE pss.player_id = $1
           AND pss.season = $2
           AND pss.games_played >= 5
@@ -200,15 +255,22 @@ pub async fn fetch_player_trajectory_row(
     Ok(row)
 }
 
-/// Convert one DB row into the 37-element feature vector the ONNX models
-/// expect. Feature order locked to `TRAJECTORY_FEATURE_NAMES`. Missing
-/// rate stats are filled with `0.0` (matches the roster_features.rs
-/// convention; gp/mpg gate keeps box stats populated). Missing CamPom or
-/// GBPM components fall back to `0.0`, but the training pipeline drops
-/// rows with these missing — at inference time, callers should check
-/// `row.campom.is_some()` before passing to the model to avoid serving a
-/// projection built from a sentinel zero.
-pub fn build_trajectory_features(row: &TrajectoryPlayerRow) -> [f32; TRAJECTORY_NUM_FEATURES] {
+/// Convert one DB row into the feature vector the ONNX models expect.
+/// Feature order locked to `TRAJECTORY_FEATURE_NAMES`. Missing rate stats
+/// are filled with `0.0` (matches the roster_features.rs convention; gp/mpg
+/// gate keeps box stats populated). Missing CamPom or GBPM components fall
+/// back to `0.0`, but the training pipeline drops rows with these missing —
+/// at inference time, callers should check `row.campom.is_some()` before
+/// passing to the model to avoid serving a projection built from a sentinel
+/// zero.
+///
+/// `prior_season` is the season the row represents (= `s_n` in the
+/// trajectory pairing). It's used by the recruit block to compute
+/// `years_since_recruit = prior_season - recruit.year`.
+pub fn build_trajectory_features(
+    row: &TrajectoryPlayerRow,
+    prior_season: i32,
+) -> [f32; TRAJECTORY_NUM_FEATURES] {
     let total_min = match (row.minutes_per_game, row.games_played) {
         (Some(m), Some(g)) => Some(m * g as f64),
         _ => None,
@@ -229,10 +291,28 @@ pub fn build_trajectory_features(row: &TrajectoryPlayerRow) -> [f32; TRAJECTORY_
         }
     }
 
+    // Recruit block — sentinel-encoded by `build_recruit_feature_block`
+    // when the LEFT JOIN missed. Appended at the end of the vector;
+    // RECRUIT_FEATURE_NAMES order is the trailing slice of
+    // TRAJECTORY_FEATURE_NAMES.
+    let recruit_row = RecruitFeatureRow {
+        composite_rank: row.recruit_composite_rank,
+        composite_rating: row.recruit_composite_rating.map(|x| x as f64),
+        star_rating: row.recruit_star_rating.map(|x| x as i32),
+        position_rank: row.recruit_position_rank,
+        previous_rank: row.recruit_previous_rank,
+        height: row.recruit_height.clone(),
+        weight: row.recruit_weight,
+        position: row.recruit_position.clone(),
+        year: row.recruit_year,
+    };
+    let recruit_block = build_recruit_feature_block(&recruit_row, prior_season);
+
     // Build the value list in feature-name order. NULL → 0.0 (rate stats,
     // box stats) or -1 (class_year_code, set above as a real f64).
-    // Order MUST match TRAJECTORY_FEATURE_NAMES.
-    let values: [f64; TRAJECTORY_NUM_FEATURES] = [
+    // Order MUST match TRAJECTORY_FEATURE_NAMES; the recruit block is
+    // appended after the archetype mixture.
+    let values_head: [f64; TRAJECTORY_HEAD_FEATURES] = [
         // Volume / context (5)
         row.minutes_per_game.unwrap_or(0.0),
         row.games_played.map(|x| x as f64).unwrap_or(0.0),
@@ -278,8 +358,11 @@ pub fn build_trajectory_features(row: &TrajectoryPlayerRow) -> [f32; TRAJECTORY_
     ];
 
     let mut out = [0.0_f32; TRAJECTORY_NUM_FEATURES];
-    for (i, v) in values.iter().enumerate() {
+    for (i, v) in values_head.iter().enumerate() {
         out[i] = *v as f32;
+    }
+    for (i, v) in recruit_block.iter().enumerate() {
+        out[TRAJECTORY_HEAD_FEATURES + i] = *v;
     }
     out
 }
@@ -298,6 +381,7 @@ pub struct TrajectoryPrediction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recruit_features::RECRUIT_FEATURE_NAMES;
 
     fn make_row() -> TrajectoryPlayerRow {
         TrajectoryPlayerRow {
@@ -327,13 +411,22 @@ mod tests {
             campom: Some(4.5),
             primary_class: Some("Wizard".into()),
             secondary_class: Some("Bard".into()),
+            recruit_composite_rank: None,
+            recruit_composite_rating: None,
+            recruit_star_rating: None,
+            recruit_position_rank: None,
+            recruit_previous_rank: None,
+            recruit_height: None,
+            recruit_weight: None,
+            recruit_position: None,
+            recruit_year: None,
         }
     }
 
     #[test]
     fn feature_vector_layout() {
         let row = make_row();
-        let v = build_trajectory_features(&row);
+        let v = build_trajectory_features(&row, 2026);
         // Spot-checks against the locked feature order.
         assert_eq!(v[0], 28.4); // prior_mpg
         assert_eq!(v[1], 32.0); // prior_gp
@@ -353,6 +446,63 @@ mod tests {
             .unwrap();
         assert!((v[wiz_idx] - 1.0).abs() < 1e-6);
         assert!((v[bard_idx] - 0.5).abs() < 1e-6);
+        // No recruit row in make_row() — every recruit slot is its sentinel.
+        let is_ranked_idx = TRAJECTORY_FEATURE_NAMES
+            .iter()
+            .position(|&n| n == "recruit_is_ranked")
+            .unwrap();
+        let years_since_idx = TRAJECTORY_FEATURE_NAMES
+            .iter()
+            .position(|&n| n == "years_since_recruit")
+            .unwrap();
+        assert_eq!(v[is_ranked_idx], 0.0);
+        assert_eq!(v[years_since_idx], -1.0);
+    }
+
+    #[test]
+    fn recruit_block_appended_when_present() {
+        let mut row = make_row();
+        row.recruit_composite_rank = Some(5);
+        row.recruit_composite_rating = Some(0.9852);
+        row.recruit_star_rating = Some(5);
+        row.recruit_position_rank = Some(2);
+        row.recruit_previous_rank = Some(8);
+        row.recruit_height = Some("6-8".into());
+        row.recruit_weight = Some(220);
+        row.recruit_position = Some("SF".into());
+        row.recruit_year = Some(2025);
+
+        let v = build_trajectory_features(&row, 2026);
+
+        let idx = |name: &str| {
+            TRAJECTORY_FEATURE_NAMES
+                .iter()
+                .position(|&n| n == name)
+                .unwrap()
+        };
+        assert_eq!(v[idx("recruit_is_ranked")], 1.0);
+        assert_eq!(v[idx("recruit_composite_rank")], 5.0);
+        assert!((v[idx("recruit_composite_rating")] - 0.9852).abs() < 1e-4);
+        assert_eq!(v[idx("recruit_star_rating")], 5.0);
+        assert_eq!(v[idx("recruit_rank_movement")], 3.0); // 8 - 5
+        assert_eq!(v[idx("recruit_height_in")], 80.0); // 6'8" = 80
+        assert_eq!(v[idx("recruit_weight_lb")], 220.0);
+        assert_eq!(v[idx("recruit_position_code")], 2.0); // SF
+        assert_eq!(v[idx("years_since_recruit")], 1.0); // 2026 - 2025
+    }
+
+    #[test]
+    fn recruit_names_match_subarray() {
+        // Hard-check the contract: the trailing slice of
+        // TRAJECTORY_FEATURE_NAMES must equal RECRUIT_FEATURE_NAMES in
+        // order. If someone reorders one without the other, this test
+        // (and the boot validator) catch it before a stale model serves
+        // garbage predictions.
+        let trailing = &TRAJECTORY_FEATURE_NAMES[TRAJECTORY_HEAD_FEATURES..];
+        assert_eq!(trailing.len(), RECRUIT_FEATURE_NAMES.len());
+        for (got, expected) in trailing.iter().zip(RECRUIT_FEATURE_NAMES.iter()) {
+            assert_eq!(got, expected);
+        }
     }
 
     #[test]
@@ -397,19 +547,55 @@ mod tests {
             campom: None,
             primary_class: None,
             secondary_class: None,
+            recruit_composite_rank: None,
+            recruit_composite_rating: None,
+            recruit_star_rating: None,
+            recruit_position_rank: None,
+            recruit_previous_rank: None,
+            recruit_height: None,
+            recruit_weight: None,
+            recruit_position: None,
+            recruit_year: None,
         };
-        let v = build_trajectory_features(&row);
-        // class_year_code slot becomes -1 sentinel; everything else 0.
-        assert_eq!(v[4], -1.0);
+        let v = build_trajectory_features(&row, 2026);
+        // Sentinel slots: class_year_code (-1), recruit_composite_rank (-1),
+        // recruit_position_rank (-1), recruit_position_code (-1),
+        // years_since_recruit (-1). Everything else 0.0.
+        let class_year_idx = TRAJECTORY_FEATURE_NAMES
+            .iter()
+            .position(|&n| n == "prior_class_year_code")
+            .unwrap();
+        let neg_one_features: &[&str] = &[
+            "prior_class_year_code",
+            "recruit_composite_rank",
+            "recruit_position_rank",
+            "recruit_position_code",
+            "years_since_recruit",
+        ];
+        let neg_one_indices: Vec<usize> = neg_one_features
+            .iter()
+            .map(|name| {
+                TRAJECTORY_FEATURE_NAMES
+                    .iter()
+                    .position(|n| n == name)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(v[class_year_idx], -1.0);
         for (i, &x) in v.iter().enumerate() {
-            if i == 4 {
-                continue;
+            if neg_one_indices.contains(&i) {
+                assert_eq!(
+                    x, -1.0,
+                    "feature {} expected -1.0 got {}",
+                    TRAJECTORY_FEATURE_NAMES[i], x
+                );
+            } else {
+                assert_eq!(
+                    x, 0.0,
+                    "feature {} expected 0.0 got {}",
+                    TRAJECTORY_FEATURE_NAMES[i], x
+                );
             }
-            assert_eq!(
-                x, 0.0,
-                "feature {} expected 0.0 got {}",
-                TRAJECTORY_FEATURE_NAMES[i], x
-            );
         }
     }
 }

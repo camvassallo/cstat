@@ -8,7 +8,7 @@
     2026
   ],
   "n_rows": 4424,
-  "n_features": 37,
+  "n_features": 48,
   "features": [
     "prior_mpg",
     "prior_gp",
@@ -46,7 +46,18 @@
     "arch_cleric",
     "arch_druid",
     "arch_rogue",
-    "arch_fighter"
+    "arch_fighter",
+    "recruit_is_ranked",
+    "recruit_composite_rank",
+    "recruit_composite_rating",
+    "recruit_star_rating",
+    "recruit_position_rank",
+    "recruit_rank_movement",
+    "recruit_height_in",
+    "recruit_weight_lb",
+    "recruit_bmi_proxy",
+    "recruit_position_code",
+    "years_since_recruit"
   ],
   "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
   "quantile_alphas": {
@@ -60,159 +71,159 @@
   },
   "backtest_lopo": {
     "per_pair": {
-      "2025->2026": {
-        "mae": 2.353831506513482,
-        "rmse": 3.0728105263818373,
-        "r2": 0.5666071287084147,
-        "n": 2113
-      },
       "2024->2025": {
-        "mae": 2.276731487002504,
-        "rmse": 2.984435529529037,
-        "r2": 0.575718184672763,
+        "mae": 2.2493141820994373,
+        "rmse": 2.954986470531479,
+        "r2": 0.5840501148250241,
         "n": 2311
+      },
+      "2025->2026": {
+        "mae": 2.3462670748509638,
+        "rmse": 3.0657334145310133,
+        "r2": 0.5686011584339137,
+        "n": 2113
       }
     },
     "pooled": {
-      "mae": 2.313556157261703,
-      "rmse": 3.026967272093707,
-      "r2": 0.5713106579422518
+      "mae": 2.2956210226021443,
+      "rmse": 3.008390288065448,
+      "r2": 0.5765563820781712
     }
   },
   "cv_5fold": {
-    "mae": 2.2774677471254825,
-    "rmse": 2.9873306747654826,
-    "r2": 0.5816517982154783,
+    "mae": 2.25232437499145,
+    "rmse": 2.9597138747082363,
+    "r2": 0.589346981486292,
     "per_fold_mae": [
-      2.4098290763384664,
-      2.195255049538856,
-      2.2827717221565895,
-      2.259302667790911,
-      2.2401802198025917
+      2.252479653648328,
+      2.3333986069052615,
+      2.1940689360951526,
+      2.214781772268049,
+      2.266892906040458
     ]
   },
   "mae_by_prior_class_year": {
     "0": {
       "n": 1021,
-      "model_mae": 1.5725846256124638,
-      "naive_mae": 2.356656055514792
+      "model_mae": 1.5022765764355004,
+      "naive_mae": 2.3566560555147915
     },
     "1": {
       "n": 1211,
-      "model_mae": 1.642144915385039,
+      "model_mae": 1.65210002123824,
       "naive_mae": 2.5075690785232303
     },
     "2": {
       "n": 1506,
-      "model_mae": 1.5423309468566562,
+      "model_mae": 1.5380303856157003,
       "naive_mae": 2.428206250771651
     },
     "3": {
       "n": 686,
-      "model_mae": 1.5845294717567235,
+      "model_mae": 1.563654636055522,
       "naive_mae": 2.498368357810176
     }
   },
   "top_features": [
     {
       "name": "prior_campom",
-      "importance": 703
+      "importance": 676
     },
     {
       "name": "prior_usg",
-      "importance": 500
-    },
-    {
-      "name": "prior_orb_pct",
-      "importance": 475
-    },
-    {
-      "name": "prior_dgbpm",
-      "importance": 458
-    },
-    {
-      "name": "prior_gbpm",
-      "importance": 453
-    },
-    {
-      "name": "prior_ts",
-      "importance": 435
-    },
-    {
-      "name": "prior_ogbpm",
-      "importance": 417
-    },
-    {
-      "name": "prior_ft_rate",
-      "importance": 411
-    },
-    {
-      "name": "prior_ast_pct",
-      "importance": 405
-    },
-    {
-      "name": "prior_drb_pct",
-      "importance": 397
-    },
-    {
-      "name": "prior_efg",
-      "importance": 392
-    },
-    {
-      "name": "prior_total_min",
-      "importance": 387
+      "importance": 529
     },
     {
       "name": "prior_tov_pct",
-      "importance": 387
+      "importance": 443
     },
     {
-      "name": "prior_mpg",
-      "importance": 346
+      "name": "prior_ft_rate",
+      "importance": 440
     },
     {
-      "name": "prior_rpg",
-      "importance": 327
+      "name": "prior_ts",
+      "importance": 434
     },
     {
-      "name": "prior_stl_pct",
-      "importance": 326
+      "name": "prior_ogbpm",
+      "importance": 430
     },
     {
-      "name": "prior_ppg",
-      "importance": 320
+      "name": "prior_dgbpm",
+      "importance": 428
     },
     {
-      "name": "prior_blk_pct",
-      "importance": 311
+      "name": "prior_drb_pct",
+      "importance": 417
+    },
+    {
+      "name": "prior_efg",
+      "importance": 409
+    },
+    {
+      "name": "prior_orb_pct",
+      "importance": 409
+    },
+    {
+      "name": "prior_gbpm",
+      "importance": 406
+    },
+    {
+      "name": "prior_ast_pct",
+      "importance": 401
+    },
+    {
+      "name": "prior_total_min",
+      "importance": 362
     },
     {
       "name": "prior_apg",
-      "importance": 300
+      "importance": 325
     },
     {
-      "name": "prior_topg",
-      "importance": 279
+      "name": "prior_stl_pct",
+      "importance": 325
+    },
+    {
+      "name": "prior_ppg",
+      "importance": 319
     },
     {
       "name": "prior_gp",
+      "importance": 298
+    },
+    {
+      "name": "prior_mpg",
+      "importance": 293
+    },
+    {
+      "name": "prior_blk_pct",
+      "importance": 287
+    },
+    {
+      "name": "prior_topg",
       "importance": 273
     },
     {
+      "name": "prior_rpg",
+      "importance": 271
+    },
+    {
       "name": "prior_height_in",
-      "importance": 253
+      "importance": 219
     },
     {
       "name": "prior_spg",
-      "importance": 174
+      "importance": 155
     },
     {
       "name": "prior_class_year_code",
-      "importance": 151
+      "importance": 105
     },
     {
-      "name": "prior_bpg",
-      "importance": 122
+      "name": "recruit_composite_rating",
+      "importance": 105
     }
   ],
   "known_limitations": [

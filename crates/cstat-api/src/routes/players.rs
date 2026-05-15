@@ -169,7 +169,7 @@ async fn player_detail(
     // route is per-player traffic, not batch.
     let trajectory = trajectory_row.and_then(|row| {
         row.campom?;
-        let features = cstat_core::trajectory::build_trajectory_features(&row);
+        let features = cstat_core::trajectory::build_trajectory_features(&row, season);
         match state.predictor.predict_trajectory(&features) {
             Ok(pred) => Some(json!({
                 "base_season": season,
@@ -307,7 +307,7 @@ async fn player_progression(
             })?;
         row.and_then(|row| {
             row.campom?;
-            let features = cstat_core::trajectory::build_trajectory_features(&row);
+            let features = cstat_core::trajectory::build_trajectory_features(&row, latest_season);
             match state.predictor.predict_trajectory(&features) {
                 Ok(pred) => Some(json!({
                     "base_season": latest_season,
