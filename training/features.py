@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from db import get_engine
 
-SEASONS = [2024, 2025, 2026]
+SEASONS = [2022, 2023, 2024, 2025, 2026]
 
 # GBPM source for roster aggregates / star features. Lets us A/B raw Torvik
 # GBPM against CamPom composites without changing feature names or count.

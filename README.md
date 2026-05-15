@@ -99,14 +99,14 @@ no source edits needed for the dropdown.
 
 ```bash
 # 1. Bootstrap the season end-to-end (NatStat + Torvik + compute).
-cargo run --bin cstat-ingest -- season --year 2024
+cargo run --bin cstat-ingest -- season --year 2022
 
 # 2. Retrain archetypes on the combined cohort. Required to keep cross-season
 #    class stability — see docs/archetypes_methodology.md before deviating.
-cd training && python -m archetypes --seasons 2024,2025,2026
+cd training && python -m archetypes --seasons 2022,2023,2024,2025,2026
 ```
 
-That's it. The next page load picks up `2024` in the season selector. If
+That's it. The next page load picks up `2022` in the season selector. If
 you want transfer-portal data for the new year, ingest it via the DB-backed
 pipeline: `cargo run --bin cstat-ingest -- transfers --year YYYY` (needs
 `TFS_247_JWT`; pass `--bootstrap-from path/to/snapshot.json` to load from a
@@ -156,11 +156,18 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 
 ### Player Archetypes
 
-12 D&D-class archetypes (Wizard, Sorcerer, Warlock, …) assigned via combined-cohort k-means in `training/archetypes.py`. Run with `cd training && python -m archetypes --seasons 2025,2026 [--diagnostics]` (the module is loaded from inside `training/`, not as `training.archetypes`). Methodology, retraining playbook, and health-metric tripwires are documented in `docs/archetypes_methodology.md` — read it before touching signatures or adding seasons.
+12 D&D-class archetypes (Wizard, Sorcerer, Warlock, …) assigned via combined-cohort k-means in `training/archetypes.py`. Run with `cd training && python -m archetypes --seasons 2022,2023,2024,2025,2026 [--diagnostics]` (the module is loaded from inside `training/`, not as `training.archetypes`). Methodology, retraining playbook, and health-metric tripwires are documented in `docs/archetypes_methodology.md` — read it before touching signatures or adding seasons.
 
 ### ML Predictions
 
-LightGBM models trained on 47 point-in-time diff-features (team stats, roster aggregates, rolling form). Exported to ONNX and loaded at API startup via the `ort` crate.
+Four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
+
+- **Game prediction** (margin / win / total) — 49 point-in-time diff-features for margin/win; 58 features for total (the 49 diffs plus 9 `sum_*` level-sensitive companions). Trained on 20,674 games from cstat-seasons 2022-2026 (after feature-completeness filter).
+- **Trajectory** — 48 features, 9,239 N→N+1 player-pairs across the 2022-2026 cohort. Projects returning-player CamPom v3 for next season.
+- **Freshman** — 13 features, 1,154 freshmen across recruit classes 2021-2025. Projects freshman-season CamPom v3 from 247 composite + school context.
+- **Roster** — 36 features, 1,799 team-seasons. Projects team AdjEM from roster aggregates.
+
+Per-model stats: `docs/model_performance.md`.
 
 ```
 GET /api/predict?home=Duke+Blue+Devils&away=North+Carolina+Tar+Heels&neutral=false

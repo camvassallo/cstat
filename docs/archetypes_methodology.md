@@ -10,7 +10,7 @@ This doc describes the system, the stability story behind the current design, an
 torvik_player_stats + player_season_stats (one row per player per season)
         │  (qualification: ≥10 GP, ≥10 MPG, complete shot-zone + GBPM data)
         ▼
-fetch_player_features  →  12,617 player-seasons (across 2023–2026 at the time of writing)
+fetch_player_features  →  15,658 player-seasons (across 2022–2026 at the time of writing)
         │
         ▼
 StandardScaler (z-score features)
@@ -34,7 +34,7 @@ archetype_models    (one row per season, all sharing centroids from this fit)
 
 The 14 features fed to k-means: `rim_share`, `mid_share`, `three_share`, `ast_pct`, `tov_pct`, `usage_rate`, `orb_pct`, `drb_pct`, `stl_pct`, `blk_pct`, `ft_rate`, `ogbpm`, `dgbpm`, `min_share` (= `minutes_per_game / 40`).
 
-**Run it:** `cd training && python -m archetypes --seasons 2023,2024,2025,2026 [--diagnostics]` — `training/` has no `__init__.py`, so the `training.archetypes` form fails; run from inside the dir. The signature-alignment guardrail blocks the DB write on any sign or ordering mismatch between cluster centroids and signatures; bypass with `--no-verify` only when intentionally rebalancing.
+**Run it:** `cd training && python -m archetypes --seasons 2022,2023,2024,2025,2026 [--diagnostics]` — `training/` has no `__init__.py`, so the `training.archetypes` form fails; run from inside the dir. The signature-alignment guardrail blocks the DB write on any sign or ordering mismatch between cluster centroids and signatures; bypass with `--no-verify` only when intentionally rebalancing.
 
 ## Why combined-cohort training
 
@@ -42,9 +42,9 @@ The script clusters the **union of all configured seasons** in a single k-means 
 
 The previous design clustered each season independently (`--season 2026`). Returning-player primary-class stability — measured by joining `player_archetypes` to itself via `torvik_player_stats.torvik_pid`, our stable cross-season ID — was **28%**. K-means redrew cluster boundaries each season, and Hungarian re-matched class names to whichever cluster scored best against each signature; small shifts in centroid position caused class labels to flip even when the underlying skill profile hadn't changed.
 
-Combined-cohort training lifts returning-player primary stability to ~46–48% per adjacent pair (and "primary OR secondary class match" to ~75–80%) on the current 4-season cohort. Same player → same cluster → same class assignment, regardless of which season we look at.
+Combined-cohort training lifts returning-player primary stability to ~46–48% per adjacent pair (and "primary OR secondary class match" to ~75–80%) on the 4-season cohort, and stays in that range on the current 5-season cohort (2022-2026, 15,658 player-seasons; measured pooled 47.1% primary / 78.2% primary-or-secondary across 7,054 returning pairs — see the stability table below). Same player → same cluster → same class assignment, regardless of which season we look at.
 
-**The trade-off:** combined-cohort doesn't capture genuine year-to-year evolution (rising 3PT volume, small-ball, rule changes). At a 2-3 season horizon that effect is tiny. At 4 seasons we've already seen it bite: expanding from 2025–2026 to 2023–2026 shifted the Bard cluster from "low-USG pass-first distributor" to "mid-major primary creator," and Monk from "disciplined wing star" to "stretch-four / versatile forward." Both prose rewrites followed the data. At 5+ seasons era effects stop being subtle — see "Era horizon" below.
+**The trade-off:** combined-cohort doesn't capture genuine year-to-year evolution (rising 3PT volume, small-ball, rule changes). At a 2-3 season horizon that effect is tiny. At 4 seasons we already saw it bite: expanding from 2025–2026 to 2023–2026 shifted the Bard cluster from "low-USG pass-first distributor" to "mid-major primary creator" (the old Bard prose migrated to Fighter's slot), and Monk from "disciplined wing star" to "stretch-four / versatile forward." Both prose rewrites followed the data. At 5 seasons (adding 2022) the Bard / Fighter pair drifted again *on the ast_pct axis* — Bard's cluster moved further from elite passing and Fighter's cluster picked up more of the high-AST mass, so the signature-alignment guardrail fired. The relaxation dropped `ast_pct` from both classes (no longer a clean separator) and Bard's prose was tweaked to drop the "high AST%" framing; Fighter's prose was already pass-first-distributor from the prior retrain, so it stayed. At 5+ seasons era effects stop being subtle — see "Era horizon" below.
 
 ## Health metrics & retraining playbook
 
@@ -53,7 +53,7 @@ Run this checklist every time `--seasons` changes. The whole pass takes ~10 minu
 ### Step 1 — Run the training
 
 ```bash
-cd training && python -m archetypes --seasons 2023,2024,2025,2026 --diagnostics 2>&1 | tee /tmp/archetypes-train.log
+cd training && python -m archetypes --seasons 2022,2023,2024,2025,2026 --diagnostics 2>&1 | tee /tmp/archetypes-train.log
 ```
 
 The `--diagnostics` flag prints per-cluster size, per-season size, and mean features per class in original (un-z-scored) units. Save the log; you'll diff against it next time.
@@ -96,6 +96,7 @@ If primary stability drops below 40%, **don't ship**. Investigate before retryin
 
 ```sql
 SELECT primary_class,
+  COUNT(*) FILTER (WHERE season = 2022) AS y2022,
   COUNT(*) FILTER (WHERE season = 2023) AS y2023,
   COUNT(*) FILTER (WHERE season = 2024) AS y2024,
   COUNT(*) FILTER (WHERE season = 2025) AS y2025,
@@ -158,7 +159,7 @@ After a retrain, the diagnostic + spot-check pass will surface one of three prob
 2. `web/src/pages/Archetypes.tsx::CLASS_DEFS` — the long description, signature badges, and "Comparable" line.
 3. `training/archetypes.py::ARCHETYPE_SIGNATURES` — the inline comment next to the signature dict (developer reference).
 
-Don't touch the signature itself unless the prose-only fix doesn't cover it. In the most recent retrain (2023–2026 expansion) we rewrote prose for Bard, Monk, Fighter, Cleric, Ranger, Rogue, Sorcerer, and Warlock — the cluster identities had shifted enough that the descriptions needed to catch up, but the signatures only needed small relaxations to pass the guardrail.
+Don't touch the signature itself unless the prose-only fix doesn't cover it. In the 2023–2026 expansion we rewrote prose for Bard, Monk, Fighter, Cleric, Ranger, Rogue, Sorcerer, and Warlock — the cluster identities had shifted enough that the descriptions needed to catch up, but the signatures only needed small relaxations to pass the guardrail. The 2022 addition was milder: only Bard needed a prose tweak (dropped "high AST%" — see "Where to look for drift first" below).
 
 ### C. A real new cluster emerged that no class fits
 
@@ -178,7 +179,7 @@ If you must add a class (because a true new cluster appeared and no existing cla
 
 ## Era horizon: when combined-cohort breaks down
 
-Combined-cohort training is fine at our current 4-season horizon. It will start to fail somewhere around **5–6+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. We've already seen real cluster-identity drift between the 2-season fit and the 4-season fit (Bard and Monk both required prose rewrites); the same forces compound. The candidate triggers:
+Combined-cohort training is fine at our current 5-season horizon (2022-2026 holds the same ~47% returning-player stability the 4-season fit had). It will start to fail somewhere around **6+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. We've already seen real cluster-identity drift between the 2-season fit and the 4-season fit (Bard and Monk both required prose rewrites), and the 5-season fit triggered another Bard/Fighter signature relaxation; the same forces compound as we extend backwards. The candidate triggers:
 
 - **3PT volume.** D-I three-point attempt rate has risen ~50% over the last decade. A 2026 Warlock and a 2010 Warlock have completely different `three_share` distributions. Combined-cohort z-scoring would compress the modern signal.
 - **Small-ball / positional fluidity.** Druid (positionless big) is a recent archetype; it didn't exist in the early 2010s in the same way. Forcing pre-small-ball seasons through the same clustering will dilute it.
@@ -216,39 +217,40 @@ If you want higher stability, fix the inputs (combined-cohort, signature tweaks)
 
 ## Reference: current state
 
-Snapshot from the most recent retrain (2023–2026 combined cohort, 12,617 player-seasons). Update when retraining; this section drifts fastest.
+Snapshot from the most recent retrain (2022–2026 combined cohort, **15,658 player-seasons**, 2026-05-15). Update when retraining; this section drifts fastest.
 
 ### Class populations
 
-| Class | n (2023) | n (2024) | n (2025) | n (2026) | Mean OGBPM | Mean DGBPM | Mean three_share |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Druid | 253 | 271 | 276 | 275 | +2.73 | +1.00 | 0.18 |
-| Sorcerer | 378 | 380 | 395 | 416 | +2.01 | −0.21 | 0.53 |
-| Wizard | 231 | 198 | 225 | 235 | +1.84 | +1.27 | 0.36 |
-| Bard | 280 | 289 | 221 | 238 | +0.03 | −1.32 | 0.34 |
-| Paladin | 139 | 160 | 183 | 189 | −0.23 | +2.32 | 0.06 |
-| Warlock | 264 | 282 | 358 | 382 | −0.29 | −0.57 | 0.73 |
-| Rogue | 206 | 217 | 255 | 238 | −0.57 | +2.04 | 0.42 |
-| Monk | 283 | 312 | 319 | 357 | −0.60 | −0.24 | 0.43 |
-| Barbarian | 208 | 226 | 240 | 267 | −2.00 | +0.07 | 0.07 |
-| Cleric | 279 | 244 | 167 | 162 | −2.37 | −0.60 | 0.12 |
-| Ranger | 333 | 328 | 303 | 295 | −3.05 | −1.19 | 0.52 |
-| Fighter | 244 | 198 | 223 | 195 | −4.03 | −0.23 | 0.34 |
+| Class | n (2022) | n (2023) | n (2024) | n (2025) | n (2026) | Mean OGBPM | Mean DGBPM | Mean three_share |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Druid | 242 | 249 | 260 | 263 | 261 | +2.83 | +0.92 | 0.18 |
+| Sorcerer | 307 | 311 | 310 | 333 | 367 | +2.12 | +0.72 | 0.55 |
+| Wizard | 242 | 262 | 234 | 245 | 251 | +1.98 | +0.53 | 0.35 |
+| Bard | 335 | 341 | 354 | 308 | 306 | +0.12 | −1.56 | 0.41 |
+| Paladin | 155 | 140 | 162 | 184 | 186 | −0.13 | +2.38 | 0.06 |
+| Warlock | 298 | 293 | 307 | 374 | 383 | −0.38 | −0.87 | 0.72 |
+| Monk | 298 | 290 | 323 | 321 | 362 | −0.42 | +0.14 | 0.44 |
+| Rogue | 172 | 167 | 180 | 225 | 215 | −0.79 | +2.17 | 0.34 |
+| Barbarian | 182 | 224 | 240 | 257 | 282 | −2.01 | +0.08 | 0.07 |
+| Cleric | 289 | 280 | 245 | 164 | 168 | −2.27 | −0.61 | 0.12 |
+| Ranger | 295 | 318 | 302 | 282 | 287 | −3.46 | −0.79 | 0.53 |
+| Fighter | 226 | 223 | 188 | 209 | 181 | −3.73 | −0.57 | 0.33 |
 
-Paladin (139) drops a touch below the rule-of-thumb 150 floor in 2023 — not a problem; the cluster is well-formed and Paladin populations grow steadily as ingest improves.
+Paladin (140 in 2023) dips just under the rule-of-thumb 150 floor — not a problem; the cluster is well-formed and Paladin populations grow steadily as ingest improves. Cleric drops markedly in 2025–2026 (164 / 168) vs the older seasons (~245+), reflecting genuine cluster drift toward Monk as the "versatile-rotation forward" framing absorbed more players.
 
 ### Stability
 
-Per adjacent-season pair, returning players matched by `torvik_pid`:
+Per adjacent-season pair, returning players matched by `torvik_pid` — measured on the current 5-season fit (2026-05-15):
 
 | Pair | n returning | Primary stable | In primary OR secondary |
 |---|---:|---:|---:|
-| 2023 → 2024 | 1,829 | 46.9% | 79.8% |
-| 2024 → 2025 | 1,778 | 48.5% | 78.3% |
-| 2025 → 2026 | 1,626 | 44.3% | 75.2% |
-| **Total** | **5,233** | **46.6%** | **77.9%** |
+| 2022 → 2023 | 1,821 | 48.9% | 80.1% |
+| 2023 → 2024 | 1,829 | 47.5% | 78.8% |
+| 2024 → 2025 | 1,778 | 48.7% | 79.0% |
+| 2025 → 2026 | 1,626 | 42.8% | 74.6% |
+| **Total** | **7,054** | **47.1%** | **78.2%** |
 
-Compare to the original per-season-clustering baseline (v1): 28.1% primary stability. Combined-cohort training is doing what it's supposed to.
+Compare to the original per-season-clustering baseline (v1): 28.1% primary stability. Combined-cohort training is doing what it's supposed to. With 2022 added the cluster geometry shifted (Bard / Fighter prose updated, signature `ast_pct` weights dropped) but stability held; the load-bearing design — one k-means fit across the union — is unchanged.
 
 ### Where to look for drift first
 

@@ -33,7 +33,7 @@ from sklearn.model_selection import KFold
 from db import get_engine
 
 OUT_DIR = Path(__file__).parent / "models"
-SEASONS = (2024, 2025, 2026)
+SEASONS = (2022, 2023, 2024, 2025, 2026)
 ARCHETYPES = (
     "Wizard", "Sorcerer", "Warlock", "Bard", "Ranger", "Barbarian",
     "Paladin", "Monk", "Cleric", "Druid", "Rogue", "Fighter",
