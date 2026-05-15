@@ -972,6 +972,37 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../training/models")
     }
 
+    /// Every file `Predictor::load` reads. Tests that call `load` should
+    /// skip via this helper when running on a dev box without the full
+    /// model set — beats stale per-test pre-flight lists that quietly
+    /// fall out of sync with `Predictor::load`. Single source of truth:
+    /// when a new model bundle joins the loader, append here.
+    fn all_model_files_present(dir: &Path) -> bool {
+        const REQUIRED: &[&str] = &[
+            "margin_model.onnx",
+            "win_model.onnx",
+            "margin_model.lgb",
+            "total_model.onnx",
+            "roster_model.onnx",
+            "roster_model_meta.json",
+            "trajectory_mean_model.onnx",
+            "trajectory_q10_model.onnx",
+            "trajectory_q90_model.onnx",
+            "trajectory_model_meta.json",
+            "freshman_mean_model.onnx",
+            "freshman_q10_model.onnx",
+            "freshman_q90_model.onnx",
+            "freshman_model_meta.json",
+        ];
+        for f in REQUIRED {
+            if !dir.join(f).exists() {
+                eprintln!("skipping: {f} not found at {}", dir.display());
+                return false;
+            }
+        }
+        true
+    }
+
     #[test]
     fn feature_names_match_model_meta() {
         let meta_path = model_dir().join("model_meta.json");
@@ -1065,13 +1096,7 @@ mod tests {
     #[test]
     fn load_models_and_predict_zeros() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
-            eprintln!("skipping: model files not found at {}", dir.display());
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -1114,12 +1139,7 @@ mod tests {
     #[test]
     fn predict_responds_to_feature_direction() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -1205,12 +1225,7 @@ mod tests {
     #[test]
     fn predict_with_contributions_matches_full_predict() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -1285,12 +1300,7 @@ mod tests {
     #[test]
     fn roster_predict_zeros_is_finite() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -1353,24 +1363,9 @@ mod tests {
     #[test]
     fn trajectory_predict_smoke() {
         let dir = model_dir();
-        let required = [
-            "trajectory_mean_model.onnx",
-            "trajectory_q10_model.onnx",
-            "trajectory_q90_model.onnx",
-            "trajectory_model_meta.json",
-            "margin_model.onnx",
-            "margin_model.lgb",
-            "total_model.onnx",
-            "roster_model.onnx",
-            "roster_model_meta.json",
-        ];
-        for f in required {
-            if !dir.join(f).exists() {
-                eprintln!("skipping: {f} not found at {}", dir.display());
-                return;
-            }
+        if !all_model_files_present(&dir) {
+            return;
         }
-
         let predictor = Predictor::load(&dir).expect("failed to load models");
         // Build a realistic prior-season vector: rotation player, USG 22%,
         // TS 58%, modest GBPM, primary class Wizard.
@@ -1453,30 +1448,9 @@ mod tests {
     #[test]
     fn freshman_predict_smoke() {
         let dir = model_dir();
-        let required = [
-            "freshman_mean_model.onnx",
-            "freshman_q10_model.onnx",
-            "freshman_q90_model.onnx",
-            "freshman_model_meta.json",
-            // Predictor::load requires the full model set; skip if any are
-            // missing so the test no-ops in environments without ONNX.
-            "margin_model.onnx",
-            "margin_model.lgb",
-            "total_model.onnx",
-            "roster_model.onnx",
-            "roster_model_meta.json",
-            "trajectory_mean_model.onnx",
-            "trajectory_q10_model.onnx",
-            "trajectory_q90_model.onnx",
-            "trajectory_model_meta.json",
-        ];
-        for f in required {
-            if !dir.join(f).exists() {
-                eprintln!("skipping: {f} not found at {}", dir.display());
-                return;
-            }
+        if !all_model_files_present(&dir) {
+            return;
         }
-
         let predictor = Predictor::load(&dir).expect("failed to load models");
         // Build a mid-tier ranked recruit profile (T2-ish): 4-star,
         // ranked #50, 6'5", 195 lb, SF, committed to a strong program.
