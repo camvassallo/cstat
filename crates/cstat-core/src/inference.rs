@@ -919,24 +919,101 @@ impl Predictor {
     }
 }
 
+/// Shared shape of every model-meta validator: read the JSON, check
+/// `player_filter` matches the Rust qualification gate, and verify the
+/// `features` array matches the compiled name list slot-for-slot.
+/// Returns the parsed meta so callers can layer per-model checks
+/// (`include_impact_features`, `quantile_alphas`, etc.) on top.
+///
+/// `err` is the per-model `LoadError` variant constructor (tuple-variant
+/// names are callable as `fn(String) -> LoadError`), so each meta family
+/// gets its own diagnostic without duplicating the validation flow.
+fn validate_model_meta(
+    path: &Path,
+    expected_n: usize,
+    expected_names: &[&str],
+    err: fn(String) -> LoadError,
+) -> Result<serde_json::Value, LoadError> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| err(format!("read {}: {e}", path.display())))?;
+    let meta: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| err(format!("parse: {e}")))?;
+
+    let filter = meta["player_filter"]
+        .as_str()
+        .ok_or_else(|| err("missing player_filter".into()))?;
+    if filter != QUAL_FILTER_STRING {
+        return Err(err(format!(
+            "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
+        )));
+    }
+
+    let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
+    if n_features != expected_n {
+        return Err(err(format!(
+            "n_features {n_features} ≠ compiled {expected_n}",
+        )));
+    }
+
+    // Feature-name order is wire-locked to the ONNX input layout. Tests
+    // pin this locally, but production boot has to fail fast too — a
+    // meta-only edit could silently mislabel every column the API serves.
+    let features = meta["features"]
+        .as_array()
+        .ok_or_else(|| err("features array missing".into()))?;
+    if features.len() != expected_n {
+        return Err(err(format!(
+            "features array length {} ≠ expected {expected_n}",
+            features.len(),
+        )));
+    }
+    for (i, (meta_name, expected)) in features.iter().zip(expected_names.iter()).enumerate() {
+        let s = meta_name
+            .as_str()
+            .ok_or_else(|| err(format!("features[{i}] not a string")))?;
+        if s != *expected {
+            return Err(err(format!(
+                "features[{i}] = {s:?}, expected[{i}] = {expected:?}",
+            )));
+        }
+    }
+
+    Ok(meta)
+}
+
+/// Quantile alphas are load-bearing: the Rust loader assumes
+/// `q10_model.onnx` is the q=0.1 cut and `q90_model.onnx` is q=0.9. If the
+/// training script ever emits a different pair (e.g. q=0.05 / q=0.95 for
+/// a wider band) the file naming would stay the same but the band
+/// semantics would silently change. Shared by trajectory + freshman.
+fn validate_quantile_alphas(
+    meta: &serde_json::Value,
+    err: fn(String) -> LoadError,
+) -> Result<(), LoadError> {
+    let alphas = meta["quantile_alphas"]
+        .as_object()
+        .ok_or_else(|| err("quantile_alphas object missing".into()))?;
+    let q10 = alphas.get("q10").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let q90 = alphas.get("q90").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if (q10 - 0.1).abs() > 1e-9 || (q90 - 0.9).abs() > 1e-9 {
+        return Err(err(format!(
+            "quantile_alphas {{q10: {q10}, q90: {q90}}} ≠ expected {{q10: 0.1, q90: 0.9}}",
+        )));
+    }
+    Ok(())
+}
+
 /// Read `roster_model_meta.json` and verify the trained model's cohort
 /// filter + feature mode match what the Rust path can serve. Called from
 /// `Predictor::load` so the API never boots with a model whose features
 /// the runtime can't reproduce.
 fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| LoadError::RosterMetaMismatch(format!("read {}: {e}", path.display())))?;
-    let meta: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| LoadError::RosterMetaMismatch(format!("parse: {e}")))?;
-
-    let filter = meta["player_filter"]
-        .as_str()
-        .ok_or_else(|| LoadError::RosterMetaMismatch("missing player_filter".into()))?;
-    if filter != QUAL_FILTER_STRING {
-        return Err(LoadError::RosterMetaMismatch(format!(
-            "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
-        )));
-    }
+    let meta = validate_model_meta(
+        path,
+        ROSTER_NUM_FEATURES,
+        &ROSTER_FEATURE_NAMES,
+        LoadError::RosterMetaMismatch,
+    )?;
 
     let include_impact = meta["include_impact_features"].as_bool().unwrap_or(true);
     if include_impact {
@@ -944,174 +1021,31 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
             "include_impact_features=true; Rust path only serves box-score-only variant".into(),
         ));
     }
-
-    let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
-    if n_features != ROSTER_NUM_FEATURES {
-        return Err(LoadError::RosterMetaMismatch(format!(
-            "n_features {n_features} ≠ compiled ROSTER_NUM_FEATURES {ROSTER_NUM_FEATURES}",
-        )));
-    }
-
-    // Feature-name order is wire-locked to the ONNX input layout. A test
-    // already pins this, but tests run locally — production boot has to
-    // fail fast too, or a meta-only edit silently mislabels every column
-    // the API serves.
-    let features = meta["features"]
-        .as_array()
-        .ok_or_else(|| LoadError::RosterMetaMismatch("features array missing".into()))?;
-    if features.len() != ROSTER_NUM_FEATURES {
-        return Err(LoadError::RosterMetaMismatch(format!(
-            "features array length {} ≠ ROSTER_NUM_FEATURES {ROSTER_NUM_FEATURES}",
-            features.len(),
-        )));
-    }
-    for (i, (meta_name, expected)) in features.iter().zip(ROSTER_FEATURE_NAMES.iter()).enumerate() {
-        let s = meta_name
-            .as_str()
-            .ok_or_else(|| LoadError::RosterMetaMismatch(format!("features[{i}] not a string")))?;
-        if s != *expected {
-            return Err(LoadError::RosterMetaMismatch(format!(
-                "features[{i}] = {s:?}, ROSTER_FEATURE_NAMES[{i}] = {expected:?}",
-            )));
-        }
-    }
-
     Ok(())
 }
 
 /// Read `trajectory_model_meta.json` and verify feature order, qualification
 /// gate, count, and quantile-alpha labeling match what the Rust path expects.
-/// Same pattern as `validate_roster_meta` — boot-fail loudly so the API
-/// never serves trajectory projections built off a stale or mismatched
-/// model.
 fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| LoadError::TrajectoryMetaMismatch(format!("read {}: {e}", path.display())))?;
-    let meta: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| LoadError::TrajectoryMetaMismatch(format!("parse: {e}")))?;
-
-    let filter = meta["player_filter"]
-        .as_str()
-        .ok_or_else(|| LoadError::TrajectoryMetaMismatch("missing player_filter".into()))?;
-    if filter != QUAL_FILTER_STRING {
-        return Err(LoadError::TrajectoryMetaMismatch(format!(
-            "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
-        )));
-    }
-
-    let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
-    if n_features != TRAJECTORY_NUM_FEATURES {
-        return Err(LoadError::TrajectoryMetaMismatch(format!(
-            "n_features {n_features} ≠ compiled TRAJECTORY_NUM_FEATURES {TRAJECTORY_NUM_FEATURES}",
-        )));
-    }
-
-    let features = meta["features"]
-        .as_array()
-        .ok_or_else(|| LoadError::TrajectoryMetaMismatch("features array missing".into()))?;
-    if features.len() != TRAJECTORY_NUM_FEATURES {
-        return Err(LoadError::TrajectoryMetaMismatch(format!(
-            "features array length {} ≠ TRAJECTORY_NUM_FEATURES {TRAJECTORY_NUM_FEATURES}",
-            features.len(),
-        )));
-    }
-    for (i, (meta_name, expected)) in features
-        .iter()
-        .zip(TRAJECTORY_FEATURE_NAMES.iter())
-        .enumerate()
-    {
-        let s = meta_name.as_str().ok_or_else(|| {
-            LoadError::TrajectoryMetaMismatch(format!("features[{i}] not a string"))
-        })?;
-        if s != *expected {
-            return Err(LoadError::TrajectoryMetaMismatch(format!(
-                "features[{i}] = {s:?}, TRAJECTORY_FEATURE_NAMES[{i}] = {expected:?}",
-            )));
-        }
-    }
-
-    // Quantile alphas are also load-bearing: the Rust loader assumes
-    // q10_model.onnx is the q=0.1 cut and q90_model.onnx is q=0.9. If the
-    // training script ever emits a different pair (e.g. q=0.05 / q=0.95
-    // for a wider band) the file naming would stay the same but the band
-    // semantics would silently change. Pin both.
-    let alphas = meta["quantile_alphas"].as_object().ok_or_else(|| {
-        LoadError::TrajectoryMetaMismatch("quantile_alphas object missing".into())
-    })?;
-    let q10 = alphas.get("q10").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let q90 = alphas.get("q90").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    if (q10 - 0.1).abs() > 1e-9 || (q90 - 0.9).abs() > 1e-9 {
-        return Err(LoadError::TrajectoryMetaMismatch(format!(
-            "quantile_alphas {{q10: {q10}, q90: {q90}}} ≠ expected {{q10: 0.1, q90: 0.9}}",
-        )));
-    }
-
-    Ok(())
+    let meta = validate_model_meta(
+        path,
+        TRAJECTORY_NUM_FEATURES,
+        &TRAJECTORY_FEATURE_NAMES,
+        LoadError::TrajectoryMetaMismatch,
+    )?;
+    validate_quantile_alphas(&meta, LoadError::TrajectoryMetaMismatch)
 }
 
 /// Read `freshman_model_meta.json` and verify feature order, qualification
-/// gate, count, and quantile-alpha labeling match what the Rust path
-/// expects. Same pattern as `validate_trajectory_meta` — boot-fail
-/// loudly so the API never serves freshman projections built off a stale
-/// or mismatched model.
+/// gate, count, and quantile-alpha labeling match what the Rust path expects.
 fn validate_freshman_meta(path: &Path) -> Result<(), LoadError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| LoadError::FreshmanMetaMismatch(format!("read {}: {e}", path.display())))?;
-    let meta: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| LoadError::FreshmanMetaMismatch(format!("parse: {e}")))?;
-
-    let filter = meta["player_filter"]
-        .as_str()
-        .ok_or_else(|| LoadError::FreshmanMetaMismatch("missing player_filter".into()))?;
-    if filter != QUAL_FILTER_STRING {
-        return Err(LoadError::FreshmanMetaMismatch(format!(
-            "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
-        )));
-    }
-
-    let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
-    if n_features != FRESHMAN_NUM_FEATURES {
-        return Err(LoadError::FreshmanMetaMismatch(format!(
-            "n_features {n_features} ≠ compiled FRESHMAN_NUM_FEATURES {FRESHMAN_NUM_FEATURES}",
-        )));
-    }
-
-    let features = meta["features"]
-        .as_array()
-        .ok_or_else(|| LoadError::FreshmanMetaMismatch("features array missing".into()))?;
-    if features.len() != FRESHMAN_NUM_FEATURES {
-        return Err(LoadError::FreshmanMetaMismatch(format!(
-            "features array length {} ≠ FRESHMAN_NUM_FEATURES {FRESHMAN_NUM_FEATURES}",
-            features.len(),
-        )));
-    }
-    for (i, (meta_name, expected)) in features
-        .iter()
-        .zip(FRESHMAN_FEATURE_NAMES.iter())
-        .enumerate()
-    {
-        let s = meta_name.as_str().ok_or_else(|| {
-            LoadError::FreshmanMetaMismatch(format!("features[{i}] not a string"))
-        })?;
-        if s != *expected {
-            return Err(LoadError::FreshmanMetaMismatch(format!(
-                "features[{i}] = {s:?}, FRESHMAN_FEATURE_NAMES[{i}] = {expected:?}",
-            )));
-        }
-    }
-
-    let alphas = meta["quantile_alphas"]
-        .as_object()
-        .ok_or_else(|| LoadError::FreshmanMetaMismatch("quantile_alphas object missing".into()))?;
-    let q10 = alphas.get("q10").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let q90 = alphas.get("q90").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    if (q10 - 0.1).abs() > 1e-9 || (q90 - 0.9).abs() > 1e-9 {
-        return Err(LoadError::FreshmanMetaMismatch(format!(
-            "quantile_alphas {{q10: {q10}, q90: {q90}}} ≠ expected {{q10: 0.1, q90: 0.9}}",
-        )));
-    }
-
-    Ok(())
+    let meta = validate_model_meta(
+        path,
+        FRESHMAN_NUM_FEATURES,
+        &FRESHMAN_FEATURE_NAMES,
+        LoadError::FreshmanMetaMismatch,
+    )?;
+    validate_quantile_alphas(&meta, LoadError::FreshmanMetaMismatch)
 }
 
 #[cfg(test)]
@@ -1128,7 +1062,13 @@ mod tests {
     /// model set — beats stale per-test pre-flight lists that quietly
     /// fall out of sync with `Predictor::load`. Single source of truth:
     /// when a new model bundle joins the loader, append here.
-    fn all_model_files_present(dir: &Path) -> bool {
+    ///
+    /// Panics with a clear message if any file is missing. The committed
+    /// bundle under `training/models/` is the source of truth — CI clones
+    /// include them, so a missing file means someone removed a model
+    /// without updating this list (or the local repo is mid-edit). Either
+    /// way we want the test to fail loudly, not silently skip.
+    fn require_model_files(dir: &Path) {
         const REQUIRED: &[&str] = &[
             "margin_model.onnx",
             "win_model.onnx",
@@ -1146,27 +1086,23 @@ mod tests {
             "freshman_model_meta.json",
         ];
         for f in REQUIRED {
-            if !dir.join(f).exists() {
-                eprintln!("skipping: {f} not found at {}", dir.display());
-                return false;
-            }
+            assert!(
+                dir.join(f).exists(),
+                "{f} not found at {} — run training/export_onnx.py first",
+                dir.display(),
+            );
         }
-        true
     }
 
     #[test]
     fn feature_names_match_model_meta() {
         let meta_path = model_dir().join("model_meta.json");
-        let content = match std::fs::read_to_string(&meta_path) {
-            Ok(c) => c,
-            Err(_) => {
-                eprintln!(
-                    "skipping: model_meta.json not found at {}",
-                    meta_path.display()
-                );
-                return;
-            }
-        };
+        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|_| {
+            panic!(
+                "model_meta.json not found at {} — run training/export_onnx.py first",
+                meta_path.display(),
+            )
+        });
         let meta: serde_json::Value = serde_json::from_str(&content).unwrap();
 
         let meta_features: Vec<String> = meta["features"]
@@ -1185,16 +1121,12 @@ mod tests {
     #[test]
     fn total_feature_names_match_model_meta() {
         let meta_path = model_dir().join("model_meta.json");
-        let content = match std::fs::read_to_string(&meta_path) {
-            Ok(c) => c,
-            Err(_) => {
-                eprintln!(
-                    "skipping: model_meta.json not found at {}",
-                    meta_path.display()
-                );
-                return;
-            }
-        };
+        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|_| {
+            panic!(
+                "model_meta.json not found at {} — run training/export_onnx.py first",
+                meta_path.display(),
+            )
+        });
         let meta: serde_json::Value = serde_json::from_str(&content).unwrap();
 
         let meta_features: Vec<String> = meta["total_features"]
@@ -1218,10 +1150,11 @@ mod tests {
     fn load_margin_model_and_predict_zeros() {
         let dir = model_dir();
         let path = dir.join("margin_model.onnx");
-        if !path.exists() {
-            eprintln!("skipping: ONNX model not found at {}", path.display());
-            return;
-        }
+        assert!(
+            path.exists(),
+            "ONNX model not found at {} — run training/export_onnx.py first",
+            path.display(),
+        );
 
         let mut session = Session::builder()
             .unwrap()
@@ -1247,9 +1180,7 @@ mod tests {
     #[test]
     fn load_models_and_predict_zeros() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
 
         let predictor = Predictor::load(&dir).expect("failed to load models");
         let features = [0.0_f32; NUM_FEATURES];
@@ -1290,9 +1221,7 @@ mod tests {
     #[test]
     fn predict_responds_to_feature_direction() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
 
         let predictor = Predictor::load(&dir).unwrap();
 
@@ -1376,9 +1305,7 @@ mod tests {
     #[test]
     fn predict_with_contributions_matches_full_predict() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
 
         let predictor = Predictor::load(&dir).unwrap();
 
@@ -1451,9 +1378,7 @@ mod tests {
     #[test]
     fn roster_predict_zeros_is_finite() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
 
         let predictor = Predictor::load(&dir).unwrap();
         let features = [0.0_f32; ROSTER_NUM_FEATURES];
@@ -1477,16 +1402,12 @@ mod tests {
     #[test]
     fn trajectory_feature_names_match_model_meta() {
         let meta_path = model_dir().join("trajectory_model_meta.json");
-        let content = match std::fs::read_to_string(&meta_path) {
-            Ok(c) => c,
-            Err(_) => {
-                eprintln!(
-                    "skipping: trajectory_model_meta.json not found at {}",
-                    meta_path.display()
-                );
-                return;
-            }
-        };
+        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|_| {
+            panic!(
+                "trajectory_model_meta.json not found at {} — run training/export_onnx.py first",
+                meta_path.display(),
+            )
+        });
         let meta: serde_json::Value = serde_json::from_str(&content).unwrap();
         let meta_features: Vec<String> = meta["features"]
             .as_array()
@@ -1514,9 +1435,7 @@ mod tests {
     #[test]
     fn trajectory_predict_smoke() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
         let predictor = Predictor::load(&dir).expect("failed to load models");
         // Build a realistic prior-season vector: rotation player, USG 22%,
         // TS 58%, modest GBPM, primary class Wizard.
@@ -1599,9 +1518,7 @@ mod tests {
     #[test]
     fn trajectory_batch_matches_single_row() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
         let predictor = Predictor::load(&dir).expect("failed to load models");
         use crate::trajectory::{TrajectoryPlayerRow, build_trajectory_features};
 
@@ -1733,9 +1650,7 @@ mod tests {
     #[test]
     fn trajectory_batch_empty_input() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
         let predictor = Predictor::load(&dir).expect("failed to load models");
         let result = predictor
             .predict_trajectory_batch(&[])
@@ -1746,9 +1661,7 @@ mod tests {
     #[test]
     fn freshman_batch_matches_single_row() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
         let predictor = Predictor::load(&dir).expect("failed to load models");
         use crate::freshman_model::{FreshmanFeatureRow, build_freshman_features};
 
@@ -1819,9 +1732,7 @@ mod tests {
     #[test]
     fn freshman_batch_empty_input() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
         let predictor = Predictor::load(&dir).expect("failed to load models");
         let result = predictor
             .predict_freshman_batch(&[])
@@ -1832,9 +1743,7 @@ mod tests {
     #[test]
     fn freshman_predict_smoke() {
         let dir = model_dir();
-        if !all_model_files_present(&dir) {
-            return;
-        }
+        require_model_files(&dir);
         let predictor = Predictor::load(&dir).expect("failed to load models");
         // Build a mid-tier ranked recruit profile (T2-ish): 4-star,
         // ranked #50, 6'5", 195 lb, SF, committed to a strong program.
