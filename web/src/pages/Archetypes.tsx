@@ -22,42 +22,42 @@ const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Wizard',
     description:
-      'Elite lead-guard creator. Heaviest minutes of any class, paired with strong assist rates and positive offensive impact — the team runs through them at the perimeter.',
-    signature: ['heavy minutes', 'high AST%', 'high OGBPM'],
+      'Elite lead-guard creator. Highest AST% in the dataset paired with heavy minutes and positive two-way impact — the offense runs through them and they don\'t cost you on the other end. POY-shortlist floor general.',
+    signature: ['highest AST%', 'heavy minutes', 'positive two-way'],
     comparable: 'All-American floor generals',
   },
   {
     name: 'Sorcerer',
     description:
-      'High-volume star scorer. Highest-USG class in the dataset paired with strong offensive impact and heavy minutes — they shoot, attack, and finish in roughly equal measure.',
-    signature: ['highest USG%', 'high OGBPM', 'heavy minutes'],
+      'High-volume star scorer. Strong offensive impact and heavy minutes with low assist rates — they hunt their own shots rather than create for teammates. The featured wing or guard who carries scoring load on a good team.',
+    signature: ['high OGBPM', 'heavy minutes', 'shot hunter'],
     comparable: 'Lottery-pick alphas',
   },
   {
     name: 'Warlock',
     description:
-      'Three-point specialist. Over 70% of their shots come from outside — the heaviest 3PA share of any class. Modest usage, lowest rim rate, boom-or-bust scoring.',
-    signature: ['heaviest 3PA share', 'lowest rim share', 'boom-or-bust'],
+      'Three-point specialist. Over 70% of their shots come from outside — the heaviest 3PA share of any class. Low usage and lowest rim rate; catch-and-shoot role player rather than primary creator.',
+    signature: ['heaviest 3PA share', 'lowest rim share', 'low USG%'],
     comparable: 'Microwave shooters / knockdown bombers',
   },
   {
     name: 'Bard',
     description:
-      'Pass-first distributor. High assist rate paired with the lowest usage in the dataset — they\'d rather set up a teammate than score. Modest impact rather than star-level.',
-    signature: ['high AST%', 'low USG%', 'modest impact'],
-    comparable: 'Backup point guards',
+      'Mid-major primary creator. Plays heavy minutes at high usage and runs the offense by necessity — the team has no one else who can. Solid assist rates paired with high scoring volume, but rarely on a tournament team.',
+    signature: ['heavy minutes', 'high USG%', 'high AST%'],
+    comparable: 'Mid-major leading scorers',
   },
   {
     name: 'Ranger',
     description:
-      'Perimeter spacer. Above-average 3PA share and steal rate at low usage — often a role-player shooter or rotation wing rather than a true two-way starter.',
-    signature: ['high 3PA share', 'high STL%', 'low USG%'],
+      'Perimeter spacer. Above-average 3PA share at low usage and rotation minutes — a role-player shooter rather than a two-way starter. Shoots from outside; doesn\'t generate much else.',
+    signature: ['high 3PA share', 'low USG%', 'rotation minutes'],
     comparable: 'Bench shooters / role wings',
   },
   {
     name: 'Barbarian',
     description:
-      'Interior finisher. Highest rim share of any class paired with the lowest 3PA — they live near the basket. Low usage, often a high-block-rate physical big.',
+      'Interior finisher. Highest rim share of any class paired with the lowest 3PA — they live near the basket. Low usage; a physical big who gets fed at the rim and blocks shots on the other end.',
     signature: ['highest rim share', 'lowest 3PA share', 'high BLK%'],
     comparable: 'Energy bigs / dunker-spot finishers',
   },
@@ -71,15 +71,15 @@ const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Monk',
     description:
-      'Disciplined wing star. High-floor scorer who shoots from outside, plays the heaviest minutes outside Wizard, posts strong OGBPM, and doesn\'t turn the ball over.',
-    signature: ['high OGBPM', 'heavy minutes', 'high 3PA share'],
-    comparable: 'All-Conference scoring wings',
+      'Versatile rotation forward. Balanced between rim and three at moderate usage and rotation minutes — a stretch four or hybrid forward who can step out to shoot or finish inside. Flexible role player, not a primary option.',
+    signature: ['balanced shot diet', 'rotation minutes', 'stretch-four flex'],
+    comparable: 'Stretch fours / versatile rotation forwards',
   },
   {
     name: 'Cleric',
     description:
-      'Low-volume interior connector. Plays inside the arc — rim and midrange — at low usage. Doesn\'t dominate any category; modest contributor without standing out on either end.',
-    signature: ['rim/mid finisher', 'low USG%', 'modest impact'],
+      'Low-volume backup big. Plays inside the arc — rim and midrange — at low usage with solid rebounding. Fills paint minutes without dominating any single column.',
+    signature: ['interior rebounder', 'low USG%', 'rotation minutes'],
     comparable: 'Backup bigs / glue forwards',
   },
   {
@@ -92,16 +92,16 @@ const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Rogue',
     description:
-      'Disruptive two-way wing. Strong DGBPM with above-average steal AND block rates simultaneously — opportunistic, off-ball, plays heavy minutes.',
-    signature: ['high STL%', 'high BLK%', 'high DGBPM'],
+      'Disruptive two-way wing. Highest steal rate of any class paired with strong defensive impact — an off-ball event creator on defense. Modest usage on offense but starter minutes on good teams.',
+    signature: ['highest STL%', 'high DGBPM', 'off-ball defender'],
     comparable: 'Defensive Swiss-army wings',
   },
   {
     name: 'Fighter',
     description:
-      'Balanced two-way rotation. Modest positives on creation, defense, and impact across multiple axes without elite production in any one — the plug-and-play rotation wing.',
-    signature: ['multi-axis positives', 'rotation minutes', 'no specialty'],
-    comparable: 'Rotation wings / utility players',
+      'Low-USG rotation depth. Above-average assist rate at very low usage and rotation minutes — a backup guard who can run an offense in short bursts without standing out anywhere. Steady, unspectacular, plug-and-play.',
+    signature: ['rotation minutes', 'low USG%', 'high AST%'],
+    comparable: 'Backup point guards / rotation depth',
   },
 ];
 

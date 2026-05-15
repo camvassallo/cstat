@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -82,96 +83,107 @@ FEATURE_NAMES = [
 # targets used only for relative scoring; they don't need to be calibrated.
 ARCHETYPE_SIGNATURES: dict[str, dict[str, float]] = {
     "Wizard": {
-        # Elite lead-guard creator — high AST, low TOV, heaviest minutes,
-        # positive impact via assists rather than rim attacks.
-        "ast_pct": 2.0, "tov_pct": -1.0, "usage_rate": 0.5, "min_share": 1.0,
-        "rim_share": -0.3,
+        # Elite lead-guard creator — highest AST% in the dataset, heavy
+        # minutes, POSITIVE two-way impact. The POY-shortlist floor general
+        # (Braden Smith, Walter Clayton, Kam Jones tier). OGBPM/DGBPM
+        # weights are load-bearing: without them Hungarian gave this
+        # cluster to Bard because Bard's signature was the only one that
+        # rewarded impact on top of AST. No tov_pct weight: elite ball-
+        # handlers turn it over slightly above average because they
+        # touch every possession.
+        "ast_pct": 2.5, "usage_rate": 0.5, "min_share": 1.0,
+        "ogbpm": 1.5, "dgbpm": 0.5, "rim_share": -0.3,
     },
     "Sorcerer": {
-        # High-volume star scorer — top-of-class USG, strong offensive impact,
-        # heavy minutes. The "team's leading scorer" archetype.
-        "usage_rate": 2.0, "ogbpm": 1.5, "min_share": 1.0,
-        "ast_pct": 0.5,
+        # High-volume star scorer — strong offensive impact at heavy
+        # minutes. The defining axes are OGBPM and minutes, not USG:
+        # elite guards (Wizard) and mid-major lead-creators (Bard) both
+        # outrank Sorcerer on raw usage in this cohort. Negative AST
+        # weight separates Sorcerer from Wizard — Wizards create for
+        # others, Sorcerers hunt their own shots.
+        "ogbpm": 1.5, "min_share": 1.0, "usage_rate": 0.5,
+        "ast_pct": -0.3,
     },
     "Warlock": {
-        # Three-point specialist — heaviest 3PA share, modest USG. Lives and
-        # dies from outside; lowest rim rate of any class.
-        "three_share": 2.0, "usage_rate": 1.0, "tov_pct": 0.5,
-        "rim_share": -1.0, "mid_share": -0.5,
+        # Three-point specialist — heaviest 3PA share, LOW USG, clean
+        # game from mostly spotting up. Catch-and-shoot role player,
+        # not a primary creator.
+        "three_share": 2.0, "rim_share": -1.0, "mid_share": -0.5,
+        "usage_rate": -0.5, "tov_pct": -0.5,
     },
     "Bard": {
-        # Pass-first distributor — high AST, low USG, modest impact. Sets up
-        # teammates rather than hunting shots; not a star-level contributor.
-        "ast_pct": 1.5, "usage_rate": -0.5, "ogbpm": 0.5,
-        "min_share": 0.5,
+        # High-USG primary creator on a non-elite roster — the team's only
+        # real offensive option, plays heavy minutes, takes a lot of shots
+        # and runs the offense by necessity. Antoine Davis / Jacksen Moni /
+        # Nick Martinelli tier. Cluster identity shifted with the 4-season
+        # cohort; the "pass-first low-usage distributor" cluster Bard
+        # historically described moved to Fighter's slot. No usage_rate
+        # weight: this cluster has high USG, anchoring the signature to
+        # the cluster identity.
+        "ast_pct": 1.0, "min_share": 0.5, "ogbpm": 0.3,
     },
     "Ranger": {
-        # Perimeter spacer — high 3PA share with steal rate, low USG. Often
-        # a role-player shooter rather than a true 3-and-D two-way starter
-        # (the cluster's defensive impact metrics are below average despite
-        # the steals).
-        "three_share": 1.5, "stl_pct": 1.5, "usage_rate": -0.5,
+        # Perimeter spacer — high 3PA share at low USG. Role-player
+        # shooter. (Removed the +stl_pct weight: the cluster does NOT
+        # generate elite steals — the D&D "bow" analogy is load-bearing
+        # via three_share, not stl.)
+        "three_share": 1.5, "usage_rate": -0.5,
         "ast_pct": -0.3, "blk_pct": -0.3,
     },
     "Barbarian": {
         # Interior finisher — highest rim share, lowest 3PA share. A
-        # low-USG physical big rather than a wing slasher; the cluster
-        # centers on high-BLK% paint players who get fed at the rim.
-        "ft_rate": 2.0, "rim_share": 1.0, "usage_rate": 0.5,
-        "three_share": -1.0,
+        # low-USG physical big who gets fed at the rim. Drop the
+        # usage_rate weight: the cluster is decidedly NOT high-usage.
+        "ft_rate": 2.0, "rim_share": 1.5, "three_share": -1.0,
+        "blk_pct": 0.3,
     },
     "Paladin": {
-        # Defensive anchor — elite BLK%, highest DGBPM in the dataset. The
-        # rim protector; low offensive usage but the wall in the paint.
+        # Defensive anchor — elite BLK%, highest DGBPM in the dataset.
         "blk_pct": 1.5, "dgbpm": 1.5, "drb_pct": 1.0,
         "three_share": -1.0,
     },
     "Monk": {
-        # Disciplined wing star — clean game (low TOV) at heavy minutes,
-        # strong OGBPM, leans 3-pt-heavy. The All-Conference scoring wing
-        # who shoots, plays defense, and doesn't waste possessions.
-        "tov_pct": -1.5, "usage_rate": -0.5, "ogbpm": 0.5,
-        "ft_rate": 0.3,
+        # Versatile mid-rotation forward — balanced inside/outside, modest
+        # minutes, not a star. Cluster identity drifted to "stretch four"
+        # as we added 2023/2024 to the cohort; the Monk label fits "agile,
+        # adaptable" but stretches the D&D metaphor. Prose should match
+        # the new cluster identity (stretch-4 forwards 79–82" who mix
+        # rim and three).
+        "three_share": 0.5, "rim_share": 0.3, "min_share": -0.3,
+        "ogbpm": -0.3, "usage_rate": -0.3,
     },
     "Cleric": {
-        # Low-volume interior connector — modest scoring volume from rim
-        # and midrange, low USG. The cluster doesn't post strong defensive
-        # impact; it's a "doesn't dominate any column" backup big rather
-        # than a glue defender.
-        "drb_pct": 1.0, "dgbpm": 0.5, "usage_rate": -0.5,
-        "stl_pct": 0.3, "blk_pct": 0.3, "ast_pct": 0.3,
+        # Low-volume backup big — rebounds, low USG, no column dominance.
+        # Removed dgbpm/stl_pct/ast_pct weights: cluster has below-average
+        # values on all three (guardrail flagged these as SIGN violations).
+        "drb_pct": 1.0, "orb_pct": 0.5, "usage_rate": -0.5,
+        "three_share": -0.5,
     },
     "Druid": {
         # Elite two-way big — highest combined OGBPM + DGBPM in the dataset.
-        # Owns the glass at both ends, finishes through contact at the rim,
-        # blocks shots. POY-shortlist / lottery-pick territory.
-        # Note the negative three_share weight: Druid does NOT shoot from
-        # outside in this dataset (the stretch-big cluster doesn't exist
-        # in college at the volume needed to form its own cluster).
+        # Owns the glass at both ends, finishes through contact, blocks
+        # shots. POY-shortlist / lottery-pick frontcourt.
         "rim_share": 1.0, "orb_pct": 1.0, "drb_pct": 1.0,
         "blk_pct": 0.5, "ogbpm": 1.5, "dgbpm": 0.5, "usage_rate": 1.0,
         "three_share": -0.3,
     },
     "Rogue": {
-        # Disruptive two-way wing — high STL+BLK simultaneously, strong
-        # DGBPM. Off-ball event creator who plays heavy minutes.
-        "stl_pct": 2.0, "blk_pct": 1.0, "usage_rate": -0.3,
+        # Disruptive two-way wing — high STL, strong DGBPM. Softened
+        # blk_pct from +1.0 to +0.3: the cluster doesn't have elite
+        # blocks (that's Paladin's lane).
+        "stl_pct": 2.0, "dgbpm": 1.0, "usage_rate": -0.3,
+        "blk_pct": 0.3,
     },
     "Fighter": {
-        # Balanced two-way rotation wing — modest positives across
-        # creation, defense, and impact, but not elite at any axis and
-        # not a heavy-minutes starter. The negative `usage_rate` and
-        # zero `min_share` are load-bearing: without them, Hungarian
-        # matching had Fighter scooping up an elite-perimeter-impact
-        # cluster (OGBPM +1.8, big minutes — basically a star scorer
-        # wing) which broke the D&D framing of Fighter as
-        # well-rounded-but-not-elite. Anchoring Fighter to a low-USG
-        # rotation profile keeps it distinct from Wizard (lead guards,
-        # heavy mins) and Sorcerer (high-USG volume scorers).
+        # Balanced two-way rotation wing — modest creation, modest defense,
+        # NOT elite at any axis, rotation minutes. Cluster has below-average
+        # OGBPM (~-1.2 z); signature must match the data, so ogbpm flipped
+        # to -0.3. Otherwise Hungarian re-routes Fighter onto a positive-
+        # impact cluster (the historical Fighter-onto-elite-wing failure
+        # mode predates this fix).
         "ast_pct": 0.3, "stl_pct": 0.3,
-        "ogbpm": 0.3, "dgbpm": 0.3,
-        "min_share": 0.0,
-        "usage_rate": -0.3,
+        "min_share": -0.3, "usage_rate": -0.3,
+        "ogbpm": -0.3,
     },
 }
 
@@ -333,6 +345,81 @@ def match_clusters_to_classes(centroids: np.ndarray) -> dict[int, str]:
 
     cluster_idx, class_idx = linear_sum_assignment(cost)
     return {int(c): CLASSES[k] for c, k in zip(cluster_idx, class_idx)}
+
+
+def verify_signature_alignment(
+    centroids: np.ndarray,
+    cluster_to_class: dict[int, str],
+    sign_tol: float = 0.2,
+    order_tol: float = 0.3,
+) -> list[str]:
+    """Sanity-check Hungarian's cluster→class assignment against the signatures.
+
+    Returns a list of human-readable violation strings; empty list = clean.
+
+    Two checks per non-zero signature weight:
+
+    1. SIGN — the assigned cluster's centroid z-score must agree in sign with
+       the signature weight (within ±sign_tol). Catches "this cluster doesn't
+       fit this description at all."
+    2. ORDERING — when two classes both put weight on the same feature, the
+       class with the larger weight must have the larger cluster z (within
+       ±order_tol). Catches Hungarian putting similar clusters in swapped
+       slots, e.g. the elite-guard cluster labeled as the low-impact
+       distributor class because both signatures want high AST%.
+
+    Tolerances are loose by design — signatures are rough relative targets,
+    not specifications, and we don't want false positives on borderline calls.
+    """
+    class_to_cluster = {v: k for k, v in cluster_to_class.items()}
+    violations: list[str] = []
+
+    for cls, sig in ARCHETYPE_SIGNATURES.items():
+        cid = class_to_cluster[cls]
+        for feat, weight in sig.items():
+            if weight == 0:
+                continue
+            z = centroids[cid, FEATURE_NAMES.index(feat)]
+            if weight > 0 and z < -sign_tol:
+                violations.append(
+                    f"SIGN: {cls} wants HIGH {feat} (w={weight:+.1f}), "
+                    f"cluster z={z:+.2f}"
+                )
+            elif weight < 0 and z > sign_tol:
+                violations.append(
+                    f"SIGN: {cls} wants LOW {feat} (w={weight:+.1f}), "
+                    f"cluster z={z:+.2f}"
+                )
+
+    # Per-feature: (class, weight, cluster_z) for every class that weights it.
+    by_feature: dict[str, list[tuple[str, float, float]]] = {}
+    for cls, sig in ARCHETYPE_SIGNATURES.items():
+        cid = class_to_cluster[cls]
+        for feat, weight in sig.items():
+            if weight == 0:
+                continue
+            z = float(centroids[cid, FEATURE_NAMES.index(feat)])
+            by_feature.setdefault(feat, []).append((cls, weight, z))
+
+    for feat, entries in by_feature.items():
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                cls_i, w_i, z_i = entries[i]
+                cls_j, w_j, z_j = entries[j]
+                if w_i - w_j > order_tol and z_i < z_j - order_tol:
+                    violations.append(
+                        f"ORDER: {cls_i} wants {feat} > {cls_j} "
+                        f"(w {w_i:+.1f} vs {w_j:+.1f}), but cluster z "
+                        f"{cls_i}={z_i:+.2f} < {cls_j}={z_j:+.2f}"
+                    )
+                elif w_j - w_i > order_tol and z_j < z_i - order_tol:
+                    violations.append(
+                        f"ORDER: {cls_j} wants {feat} > {cls_i} "
+                        f"(w {w_j:+.1f} vs {w_i:+.1f}), but cluster z "
+                        f"{cls_j}={z_j:+.2f} < {cls_i}={z_i:+.2f}"
+                    )
+
+    return violations
 
 
 def write_results(engine, seasons: list[int], df: pd.DataFrame, result: ClusterResult):
@@ -513,6 +600,12 @@ def main():
     )
     parser.add_argument("--diagnostics", action="store_true",
                         help="Print per-cluster summaries before writing")
+    parser.add_argument(
+        "--no-verify", action="store_true",
+        help="Skip the signature-alignment guardrail. Use only when "
+             "intentionally rebalancing signatures and you've reviewed "
+             "diagnostics manually.",
+    )
     args = parser.parse_args()
 
     engine = get_engine()
@@ -526,6 +619,21 @@ def main():
 
     if args.diagnostics:
         print_diagnostics(df, result)
+
+    if not args.no_verify:
+        violations = verify_signature_alignment(result.centroids, result.cluster_to_class)
+        if violations:
+            print("\n=== Signature alignment violations ===")
+            for v in violations:
+                print(f"  {v}")
+            print(
+                f"\n{len(violations)} violation(s) — Hungarian likely put labels on "
+                f"the wrong clusters, or signatures need tuning. See the "
+                f"decision tree in docs/archetypes_methodology.md. "
+                f"Rerun with --no-verify to write anyway."
+            )
+            sys.exit(1)
+        print("Signature alignment check passed.")
 
     write_results(engine, args.seasons, df, result)
     print("Done.")
