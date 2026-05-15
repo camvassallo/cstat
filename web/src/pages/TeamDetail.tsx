@@ -1107,11 +1107,13 @@ function PlayerCard({
         {projected_mean != null ? (
           <span className="flex items-center gap-1.5">
             {cam_v3 != null && (
-              <span className="text-[10px] text-gray-500" title="Prior-season CamPom v3">
-                {cam_v3.toFixed(1)}
-              </span>
+              <>
+                <span className="text-[10px] text-gray-500" title="Prior-season CamPom v3">
+                  {cam_v3.toFixed(1)}
+                </span>
+                <span className="text-gray-600 text-[10px]">→</span>
+              </>
             )}
-            <span className="text-gray-600 text-[10px]">→</span>
             <span
               className={`px-1.5 rounded border ${campomTierColor(campomTier(projected_mean))}`}
               title={projectedTitle}
