@@ -63,6 +63,13 @@ enum Commands {
 
         #[arg(short, long, default_value_t = default_season())]
         year: i32,
+
+        /// After ingest, run the season-wide compute pipeline so the new
+        /// rows get rate stats, percentiles, AdjEM, etc. Compute is
+        /// season-scoped, not team-scoped, so this re-derives every team
+        /// for `year` — handy after `team` but heavier than the bare ingest.
+        #[arg(long)]
+        also_compute: bool,
     },
 
     /// Ingest games (and optionally box scores) for a date range.
@@ -249,7 +256,11 @@ async fn main() -> Result<()> {
     db.migrate().await?;
     info!("connected to database");
 
-    let client = NatStatClient::new(db.pool.clone(), api_key, 1500);
+    let client = NatStatClient::new(
+        db.pool.clone(),
+        api_key,
+        cstat_ingest::rate_budget_from_env(),
+    );
 
     if cli.no_cache {
         let cleared = client.clear_all_cache().await?;
@@ -284,10 +295,19 @@ async fn main() -> Result<()> {
             println!("Ingested {count} players for {year}");
         }
 
-        Commands::Team { code, year } => {
+        Commands::Team {
+            code,
+            year,
+            also_compute,
+        } => {
             let ingester = SeasonIngester::new(&client, &db.pool, year);
             let report = ingester.ingest_team(&code).await?;
             print!("{report}");
+            if also_compute {
+                info!(year, "running compute_all after team ingest");
+                let report = cstat_core::compute::compute_all(&db.pool, year).await?;
+                println!("{report}");
+            }
         }
 
         Commands::Games { year, from, to } => {

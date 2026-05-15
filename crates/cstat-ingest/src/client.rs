@@ -58,6 +58,27 @@ const BASE_URL_V4: &str = "https://api4.natst.at";
 const BASE_URL_V3: &str = "https://api3.natst.at";
 const SERVICE: &str = "mbb";
 
+/// Default rate budget (calls/hour) — NatStat standard tier.
+pub const DEFAULT_MAX_PER_HOUR: u32 = 500;
+
+/// Read the per-hour rate budget from `NATSTAT_MAX_PER_HOUR`, falling back to
+/// the standard-tier default. Unparseable values log a warning and fall back.
+pub fn rate_budget_from_env() -> u32 {
+    match std::env::var("NATSTAT_MAX_PER_HOUR") {
+        Ok(s) => match s.parse::<u32>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                warn!(
+                    value = %s,
+                    "NATSTAT_MAX_PER_HOUR is not a positive integer; using default {DEFAULT_MAX_PER_HOUR}"
+                );
+                DEFAULT_MAX_PER_HOUR
+            }
+        },
+        Err(_) => DEFAULT_MAX_PER_HOUR,
+    }
+}
+
 impl NatStatClient {
     /// Create a new NatStat API v4 client.
     ///
