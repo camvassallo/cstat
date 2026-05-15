@@ -698,6 +698,78 @@ impl Predictor {
         Ok(TrajectoryPrediction { mean, lower, upper })
     }
 
+    /// Batch variant of `predict_trajectory`. Builds one `[N, 48]` input
+    /// tensor per model so each ONNX session runs once instead of N times.
+    /// Mirrors `predict_freshman_batch` in shape (single contiguous tensor,
+    /// empty-input short-circuit, output-length validation). For the
+    /// transfers route (~1k transfers across all years in v1, smaller
+    /// per-year cohorts) this is the difference between thousands of
+    /// sequential ONNX runs and 3 batched ones; the LightGBM trees the
+    /// models export support dynamic batch dim out of the box (Python
+    /// export uses `FloatTensorType([None, …])`).
+    ///
+    /// Errors propagate at the first failure; the route caller can fall
+    /// back to a slower per-row loop with `predict_trajectory` if needed
+    /// (today it just returns the error and the route serves NULL
+    /// projections — same behaviour as a per-row failure).
+    ///
+    /// Returns `Vec` in the same order as the input slice; empty input
+    /// short-circuits to an empty result.
+    ///
+    /// Regression-to-the-mean caveat applies per-row exactly as in
+    /// `predict_trajectory` — see that method's docstring. UI surfaces
+    /// reading these batched outputs should still gate the elite-tier
+    /// tooltip note on each row's `prior_campom`.
+    pub fn predict_trajectory_batch(
+        &self,
+        rows: &[[f32; TRAJECTORY_NUM_FEATURES]],
+    ) -> Result<Vec<TrajectoryPrediction>, ort::Error> {
+        use ort::value::TensorRef;
+
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = rows.len();
+        let shape = [n, TRAJECTORY_NUM_FEATURES];
+
+        // Single contiguous buffer for the [N, 48] tensor. Avoid Vec::extend
+        // in a hot loop by sizing the allocation up front.
+        let mut flat = Vec::with_capacity(n * TRAJECTORY_NUM_FEATURES);
+        for row in rows {
+            flat.extend_from_slice(row);
+        }
+
+        let run = |session: &Mutex<Session>| -> Result<Vec<f32>, ort::Error> {
+            let input = TensorRef::from_array_view((shape, flat.as_slice()))?;
+            let mut s = session.lock().unwrap();
+            let outputs = s.run(ort::inputs![input])?;
+            let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+            // LightGBM regression export returns shape [N, 1] flattened;
+            // we expect exactly N elements. Hard-fail on a mismatch
+            // rather than silently truncating — would only fire on an
+            // export shape change (e.g. multi-output regression).
+            if data.len() != n {
+                return Err(ort::Error::new(format!(
+                    "trajectory batch output length {} ≠ expected {n}",
+                    data.len()
+                )));
+            }
+            Ok(data.to_vec())
+        };
+
+        let mean = run(&self.trajectory_mean_session)?;
+        let lower = run(&self.trajectory_q10_session)?;
+        let upper = run(&self.trajectory_q90_session)?;
+
+        Ok((0..n)
+            .map(|i| TrajectoryPrediction {
+                mean: mean[i],
+                lower: lower[i],
+                upper: upper[i],
+            })
+            .collect())
+    }
+
     /// Project a recruit's freshman-season CamPom v3 from their 13-feature
     /// pre-college vector built by `freshman_model::build_freshman_features`.
     ///
@@ -1522,6 +1594,153 @@ mod tests {
                 pred.lower
             );
         }
+    }
+
+    #[test]
+    fn trajectory_batch_matches_single_row() {
+        let dir = model_dir();
+        if !all_model_files_present(&dir) {
+            return;
+        }
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        use crate::trajectory::{TrajectoryPlayerRow, build_trajectory_features};
+
+        // Two distinct profiles — solid mid-tier returner vs elite-tier
+        // returner — so the model produces meaningfully different outputs
+        // we can independently validate AND compare single-row vs batch.
+        // The elite profile (campom +18) lands in the regression-bias
+        // bucket per the mae_by_current_campom diagnostic; useful for
+        // PR 2's "negative ΔCP on elites is expected" narrative.
+        let solid = TrajectoryPlayerRow {
+            minutes_per_game: Some(28.0),
+            games_played: Some(32),
+            height_inches: Some(78),
+            class_year: Some("Junior".into()),
+            ppg: Some(14.0),
+            rpg: Some(5.0),
+            apg: Some(3.0),
+            spg: Some(1.0),
+            bpg: Some(0.4),
+            topg: Some(2.0),
+            true_shooting_pct: Some(0.58),
+            effective_fg_pct: Some(0.54),
+            usage_rate: Some(0.22),
+            ast_pct: Some(0.18),
+            tov_pct: Some(0.14),
+            orb_pct: Some(0.04),
+            drb_pct: Some(0.17),
+            stl_pct: Some(0.022),
+            blk_pct: Some(0.015),
+            ft_rate: Some(0.32),
+            ogbpm: Some(1.5),
+            dgbpm: Some(0.8),
+            gbpm: Some(2.3),
+            campom: Some(2.5),
+            primary_class: Some("Wizard".into()),
+            secondary_class: None,
+            recruit_composite_rank: None,
+            recruit_composite_rating: None,
+            recruit_star_rating: None,
+            recruit_position_rank: None,
+            recruit_previous_rank: None,
+            recruit_height: None,
+            recruit_weight: None,
+            recruit_position: None,
+            recruit_year: None,
+        };
+        let elite = TrajectoryPlayerRow {
+            minutes_per_game: Some(33.0),
+            games_played: Some(34),
+            height_inches: Some(81),
+            class_year: Some("Sophomore".into()),
+            ppg: Some(20.0),
+            rpg: Some(8.0),
+            apg: Some(4.0),
+            spg: Some(1.5),
+            bpg: Some(1.2),
+            topg: Some(2.3),
+            true_shooting_pct: Some(0.62),
+            effective_fg_pct: Some(0.58),
+            usage_rate: Some(0.28),
+            ast_pct: Some(0.22),
+            tov_pct: Some(0.12),
+            orb_pct: Some(0.08),
+            drb_pct: Some(0.22),
+            stl_pct: Some(0.028),
+            blk_pct: Some(0.035),
+            ft_rate: Some(0.4),
+            ogbpm: Some(8.0),
+            dgbpm: Some(3.5),
+            gbpm: Some(11.5),
+            campom: Some(18.0),
+            primary_class: Some("Druid".into()),
+            secondary_class: Some("Wizard".into()),
+            recruit_composite_rank: None,
+            recruit_composite_rating: None,
+            recruit_star_rating: None,
+            recruit_position_rank: None,
+            recruit_previous_rank: None,
+            recruit_height: None,
+            recruit_weight: None,
+            recruit_position: None,
+            recruit_year: None,
+        };
+        let feats_solid = build_trajectory_features(&solid, 2026);
+        let feats_elite = build_trajectory_features(&elite, 2026);
+
+        let single_solid = predictor.predict_trajectory(&feats_solid).unwrap();
+        let single_elite = predictor.predict_trajectory(&feats_elite).unwrap();
+
+        let batch = predictor
+            .predict_trajectory_batch(&[feats_solid, feats_elite])
+            .expect("batch prediction failed");
+        assert_eq!(batch.len(), 2);
+
+        // ONNX runtime is deterministic across batch size for tree
+        // ensembles — batched outputs should match single-row outputs
+        // to fp precision. Loose tolerance (1e-4) absorbs SIMD-width
+        // ordering jitter that could appear if the runtime chooses a
+        // different summation path for batch vs single.
+        let approx_eq = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert!(
+            approx_eq(batch[0].mean, single_solid.mean)
+                && approx_eq(batch[0].lower, single_solid.lower)
+                && approx_eq(batch[0].upper, single_solid.upper),
+            "solid mismatch: batch {:?} vs single {:?}",
+            batch[0],
+            single_solid,
+        );
+        assert!(
+            approx_eq(batch[1].mean, single_elite.mean)
+                && approx_eq(batch[1].lower, single_elite.lower)
+                && approx_eq(batch[1].upper, single_elite.upper),
+            "elite mismatch: batch {:?} vs single {:?}",
+            batch[1],
+            single_elite,
+        );
+
+        // Sanity: the elite (current campom +18) should project lower
+        // than its current value — regression-to-the-mean is the
+        // documented behaviour, not a bug. We don't pin a number
+        // because that's brittle to retrains, just the sign of the gap.
+        assert!(
+            batch[1].mean < 18.0,
+            "elite projection {} should regress below current +18.0",
+            batch[1].mean,
+        );
+    }
+
+    #[test]
+    fn trajectory_batch_empty_input() {
+        let dir = model_dir();
+        if !all_model_files_present(&dir) {
+            return;
+        }
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        let result = predictor
+            .predict_trajectory_batch(&[])
+            .expect("empty batch failed");
+        assert!(result.is_empty());
     }
 
     #[test]

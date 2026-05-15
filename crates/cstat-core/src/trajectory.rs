@@ -255,6 +255,97 @@ pub async fn fetch_player_trajectory_row(
     Ok(row)
 }
 
+/// Fetch trajectory feature rows for many players in a single query. Same
+/// join shape and qualification gate as `fetch_player_trajectory_row`,
+/// but takes a slice of player_ids and returns a HashMap keyed by
+/// player_id so the caller can pair predictions back to its own list
+/// (transfer route's matched players, projection route's roster, etc.).
+///
+/// Players who don't pass the gate (`≥5 GP, ≥5 MPG` in the requested
+/// season) are silently absent from the returned map — same semantics as
+/// the single-row helper returning `None`. The caller renders "no
+/// projection" for those.
+pub async fn fetch_player_trajectory_rows(
+    pool: &PgPool,
+    player_ids: &[Uuid],
+    season: i32,
+) -> Result<std::collections::HashMap<Uuid, TrajectoryPlayerRow>, sqlx::Error> {
+    if player_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct RowWithId {
+        player_id: Uuid,
+        #[sqlx(flatten)]
+        row: TrajectoryPlayerRow,
+    }
+
+    let rows = sqlx::query_as::<_, RowWithId>(
+        r#"
+        SELECT
+            pss.player_id,
+            pss.minutes_per_game,
+            pss.games_played,
+            ply.height_inches,
+            ply.class_year,
+            pss.ppg,
+            pss.rpg,
+            pss.apg,
+            pss.spg,
+            pss.bpg,
+            pss.topg,
+            pss.true_shooting_pct,
+            pss.effective_fg_pct,
+            pss.usage_rate,
+            pss.ast_pct,
+            pss.tov_pct,
+            pss.orb_pct,
+            pss.drb_pct,
+            pss.stl_pct,
+            pss.blk_pct,
+            pss.ft_rate,
+            tps.ogbpm,
+            tps.dgbpm,
+            tps.gbpm,
+            tps.cam_gbpm_v3_psos AS campom,
+            pa.primary_class,
+            pa.secondary_class,
+            rec.composite_rank   AS recruit_composite_rank,
+            rec.composite_rating AS recruit_composite_rating,
+            rec.star_rating      AS recruit_star_rating,
+            rec.position_rank    AS recruit_position_rank,
+            rec.previous_rank    AS recruit_previous_rank,
+            rec.height           AS recruit_height,
+            rec.weight           AS recruit_weight,
+            rec.position         AS recruit_position,
+            rec.year             AS recruit_year
+        FROM player_season_stats pss
+        JOIN players ply ON ply.id = pss.player_id
+        LEFT JOIN torvik_player_stats tps
+            ON tps.player_id = pss.player_id AND tps.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = pss.player_id AND pa.season = pss.season
+        LEFT JOIN recruits rec
+            ON rec.cstat_player_id = pss.player_id
+        WHERE pss.player_id = ANY($1)
+          AND pss.season = $2
+          AND pss.games_played >= 5
+          AND pss.minutes_per_game >= 5
+        "#,
+    )
+    .bind(player_ids)
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    let mut map = std::collections::HashMap::with_capacity(rows.len());
+    for r in rows {
+        map.insert(r.player_id, r.row);
+    }
+    Ok(map)
+}
+
 /// Convert one DB row into the feature vector the ONNX models expect.
 /// Feature order locked to `TRAJECTORY_FEATURE_NAMES`. Missing rate stats
 /// are filled with `0.0` (matches the roster_features.rs convention; gp/mpg

@@ -395,6 +395,13 @@ export interface TransferRow {
   minutes_per_game: number | null;
   games_played: number | null;
   url_247: string | null;
+  // Phase 5c trajectory projection — predicted CamPom for the transfer's
+  // first destination season (= source year + 1). NULL when the transfer
+  // didn't match a cstat row, didn't pass the trajectory qual gate, or
+  // batch inference failed. Trajectory model is destination-agnostic.
+  projected_campom_mean: number | null;
+  projected_campom_lower: number | null;
+  projected_campom_upper: number | null;
 }
 
 export function fetchTransfers(year: number) {
