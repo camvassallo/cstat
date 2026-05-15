@@ -761,6 +761,21 @@ last big offender. If we ever add a per-team enrichment step, fan it out
 behind the rate limiter (e.g. `futures::stream::buffered`) rather than
 inlining another `for` loop.
 
+### Serve held-out trajectory/freshman predictions for historical years
+The trajectory and freshman-impact models were trained on every pair of seasons currently in the DB (`trajectory_model_meta.json::seasons_trained_on = [2024, 2025, 2026]` → pairs `2024→2025` and `2025→2026`; freshman model trains on class-of-2022 through class-of-2025). The Transfer page (`/api/transfers/{year}`), 2027 projection page (`/api/projections/{year}/teams/{team_id}`), Recruits page (`/api/recruits/{year}`), and PlayerDetail/PlayerProgression "Proj YYYY-YY" chip all call the full model — for any historical year (2024 or 2025 transfers, class-of-2024/2025 recruits), that's in-sample inference on rows the model already learned from. Honest gap is ~35% on trajectory (in-sample 1.5 MAE vs LOPO 2.27 pooled) and widens at the elite tail where there are only ~13 training rows in `+15..+20`. Symptom: elite 2024 transfers like Richie Saunders, Joshua Jefferson, Oscar Cluff project far above their 247 rankings because the model saw their actual 2025 outcomes.
+
+Cleanest fix: precompute held-out predictions during training and serve those for any (player, target_season) pair the production model trained on; fall back to live inference for the forward year (2026→2027) where there's nothing to hold out.
+
+Shape:
+1. `training/train_trajectory_model.py::leave_one_pair_out` already produces held-out predictions per pair; persist them. Add a new table (`trajectory_oof_predictions(torvik_pid TEXT, target_season INT, mean REAL, lower REAL, upper REAL, PRIMARY KEY (torvik_pid, target_season))`) and write to it as part of the training pipeline (alongside ONNX export). Same shape for freshman model: `freshman_oof_predictions(recruit_id TEXT, target_season INT, mean REAL, lower REAL, upper REAL)` driven by the existing `leave_one_class_out_cv()`.
+2. In `crates/cstat-core/src/trajectory.rs` and `freshman_model.rs`, add an `oof_lookup(pool, &[id], target_season)` helper that returns the held-out prediction for any (id, season) the production model saw, else `None`.
+3. In each route that currently calls `predict_trajectory_batch` / `predict_freshman_batch`, try OOF lookup first; only run live inference for IDs without an OOF row (= the forward year cohort, or rows the qualification gate excluded from training). Same plumbing — just a precedence flip.
+4. Boot validator on `*_meta.json` should add a field flagging "OOF predictions persisted" so a stale meta + stale table can't silently regress to in-sample serving.
+
+Cost of leaving as-is: every historical Transfer/Projection/Recruits row served is dishonestly accurate; the 247-rank Δ surface is the single biggest victim because it's the page that explicitly invites users to compare projections against an external ranking. Cost of the fix: one migration, one schema-aware persistence step in two Python scripts, one lookup helper in two Rust modules, one route precedence change × 4 routes. No model retrain needed beyond the next regularly-scheduled one.
+
+Acceptance: pull `/api/transfers/2024`, confirm Saunders / Jefferson / Cluff projections drop into the LOPO-honest range (mid-tail rather than elite). Spot-check `/api/projections/2026/teams/{duke_id}` still shows the live-inference predictions for class-of-2026 returners projecting into 2027.
+
 ### Deprecate TreeSHAP infrastructure (no current consumer)
 The TreeSHAP plumbing shipped in PR #47 to drive the Keys to the Game
 panel's per-feature attribution. PR #49 reframed Keys around four-factor
