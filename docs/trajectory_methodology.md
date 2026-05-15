@@ -135,6 +135,6 @@ When adding a new pair-fold (new season ingested):
 
 ## Open questions
 
-- **Walk-forward CV** vs the current LOPO. With 2 pairs we only have 2 folds; once we have ≥3 pairs (2026→2027 ingested, 2025→2026 + 2024→2025 already present) we can do walk-forward where each season is predicted only from earlier-season pairs.
+- **Walk-forward CV** vs the current LOPO. With 4 pairs (2022→2023, 2023→2024, 2024→2025, 2025→2026) we now have enough folds to do walk-forward CV: train on `≤ N`, predict `N+1`, advance. Currently the LOPO holds 1 pair out anywhere in the timeline, including pairs that come *after* training rows — walk-forward would tighten the honesty story by predicting only with prior-season data. Implementation lift is small; the existing `leave_one_pair_out` loop just needs an order constraint.
 - **Destination-aware projection** for transferring players. Easy feature add: `dest_team_adj_em` (target team AdjEM at season N, since season N+1 doesn't exist yet at projection time). Requires the projection caller to also supply the destination team — fine for the 2027 projection page consumer, but `/api/players/:id` doesn't know the destination, so this would either need a separate endpoint or a "no projection available for transfers" gate.
 - **Calibration over time**: once we have OOF predictions from this model on a real future season, plot predicted vs actual binned by predicted-CamPom — the model should be well-calibrated near the mean and progressively over-/under-confident at the tails.

@@ -84,7 +84,7 @@ See `docs/trajectory_methodology.md` for the full methodology.
 
 ## 3. Freshman model (recruit class N → freshman season N+1)
 
-Three LightGBM regressors (mean + q10 + q90) on 13 features: 11 from the shared recruit-feature extractor (composite rank/rating, star rating, position rank, rank movement, height, weight, BMI proxy, position code, ranked flag) + 2 freshman-specific (`committed_team_prior_adjem`, `peer_class_strength`).
+Three LightGBM regressors (mean + q10 + q90) on 13 features: 11 from the shared recruit-feature extractor (`recruit_is_ranked`, `recruit_composite_rank`, `recruit_composite_rating`, `recruit_star_rating`, `recruit_position_rank`, `recruit_rank_movement`, `recruit_height_in`, `recruit_weight_lb`, `recruit_bmi_proxy`, `recruit_position_code`, `years_since_recruit` — degenerate at 0 for all freshmen but kept for shape parity with the trajectory model) + 2 freshman-specific (`committed_team_prior_adjem`, `peer_class_strength`).
 
 **Corpus:** 1,154 qualified freshmen (≥ 5 GP / ≥ 5 MPG) across recruit classes 2021-2025 (freshman cstat-seasons 2022-2026).
 

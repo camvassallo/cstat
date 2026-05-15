@@ -106,7 +106,7 @@ cargo run --bin cstat-ingest -- season --year 2022
 cd training && python -m archetypes --seasons 2022,2023,2024,2025,2026
 ```
 
-That's it. The next page load picks up `2024` in the season selector. If
+That's it. The next page load picks up `2022` in the season selector. If
 you want transfer-portal data for the new year, ingest it via the DB-backed
 pipeline: `cargo run --bin cstat-ingest -- transfers --year YYYY` (needs
 `TFS_247_JWT`; pass `--bootstrap-from path/to/snapshot.json` to load from a

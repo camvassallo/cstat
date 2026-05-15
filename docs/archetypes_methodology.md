@@ -10,7 +10,7 @@ This doc describes the system, the stability story behind the current design, an
 torvik_player_stats + player_season_stats (one row per player per season)
         │  (qualification: ≥10 GP, ≥10 MPG, complete shot-zone + GBPM data)
         ▼
-fetch_player_features  →  12,617 player-seasons (across 2023–2026 at the time of writing)
+fetch_player_features  →  15,658 player-seasons (across 2022–2026 at the time of writing)
         │
         ▼
 StandardScaler (z-score features)
@@ -96,6 +96,7 @@ If primary stability drops below 40%, **don't ship**. Investigate before retryin
 
 ```sql
 SELECT primary_class,
+  COUNT(*) FILTER (WHERE season = 2022) AS y2022,
   COUNT(*) FILTER (WHERE season = 2023) AS y2023,
   COUNT(*) FILTER (WHERE season = 2024) AS y2024,
   COUNT(*) FILTER (WHERE season = 2025) AS y2025,
@@ -158,7 +159,7 @@ After a retrain, the diagnostic + spot-check pass will surface one of three prob
 2. `web/src/pages/Archetypes.tsx::CLASS_DEFS` — the long description, signature badges, and "Comparable" line.
 3. `training/archetypes.py::ARCHETYPE_SIGNATURES` — the inline comment next to the signature dict (developer reference).
 
-Don't touch the signature itself unless the prose-only fix doesn't cover it. In the most recent retrain (2023–2026 expansion) we rewrote prose for Bard, Monk, Fighter, Cleric, Ranger, Rogue, Sorcerer, and Warlock — the cluster identities had shifted enough that the descriptions needed to catch up, but the signatures only needed small relaxations to pass the guardrail.
+Don't touch the signature itself unless the prose-only fix doesn't cover it. In the 2023–2026 expansion we rewrote prose for Bard, Monk, Fighter, Cleric, Ranger, Rogue, Sorcerer, and Warlock — the cluster identities had shifted enough that the descriptions needed to catch up, but the signatures only needed small relaxations to pass the guardrail. The 2022 addition was milder: only Bard needed a prose tweak (dropped "high AST%" — see "Where to look for drift first" below).
 
 ### C. A real new cluster emerged that no class fits
 
@@ -178,7 +179,7 @@ If you must add a class (because a true new cluster appeared and no existing cla
 
 ## Era horizon: when combined-cohort breaks down
 
-Combined-cohort training is fine at our current 4-season horizon. It will start to fail somewhere around **5–6+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. We've already seen real cluster-identity drift between the 2-season fit and the 4-season fit (Bard and Monk both required prose rewrites); the same forces compound. The candidate triggers:
+Combined-cohort training is fine at our current 5-season horizon (2022-2026 holds the same ~47% returning-player stability the 4-season fit had). It will start to fail somewhere around **6+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. We've already seen real cluster-identity drift between the 2-season fit and the 4-season fit (Bard and Monk both required prose rewrites), and the 5-season fit triggered another Bard/Fighter signature relaxation; the same forces compound as we extend backwards. The candidate triggers:
 
 - **3PT volume.** D-I three-point attempt rate has risen ~50% over the last decade. A 2026 Warlock and a 2010 Warlock have completely different `three_share` distributions. Combined-cohort z-scoring would compress the modern signal.
 - **Small-ball / positional fluidity.** Druid (positionless big) is a recent archetype; it didn't exist in the early 2010s in the same way. Forcing pre-small-ball seasons through the same clustering will dilute it.
