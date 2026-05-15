@@ -3,18 +3,18 @@
 // refresh plugin doesn't trip on mixed component / non-component exports.
 
 export const CLASS_COLORS: Record<string, string> = {
-  Wizard: '#7c3aed',     // violet — controllers
+  Wizard: '#7c3aed',     // violet — elite lead guards
   Sorcerer: '#dc2626',   // crimson — volume scorers
-  Warlock: '#c026d3',    // fuchsia — eldritch / high-variance gunners (lifted from violet-900 so it reads on dark mode and stays distinct from Wizard's violet)
-  Bard: '#ec4899',       // pink — pass-first
-  Ranger: '#16a34a',     // green — 3&D
-  Barbarian: '#ea580c',  // orange — slashers
-  Paladin: '#eab308',    // gold — two-way anchors
-  Monk: '#06b6d4',       // cyan — efficient
-  Cleric: '#854d0e',     // earth brown — grounded glue / connector
-  Druid: '#059669',      // emerald — frontcourt anchor (jewel-tone, distinct from Ranger's grass green)
-  Rogue: '#e5e7eb',      // bone-white / blade flash — event creators
-  Fighter: '#737373',    // neutral gray — balanced
+  Warlock: '#c026d3',    // fuchsia — catch-and-shoot specialists (lifted from violet-900 so it reads on dark mode and stays distinct from Wizard's violet)
+  Bard: '#ec4899',       // pink — mid-major primary creators
+  Ranger: '#16a34a',     // green — perimeter spacers
+  Barbarian: '#ea580c',  // orange — interior finishers
+  Paladin: '#eab308',    // gold — rim-protecting anchors
+  Monk: '#06b6d4',       // cyan — versatile rotation forwards
+  Cleric: '#854d0e',     // earth brown — backup bigs / interior connectors
+  Druid: '#059669',      // emerald — dominant two-way bigs (jewel-tone, distinct from Ranger's grass green)
+  Rogue: '#e5e7eb',      // bone-white / blade flash — disruptive defenders
+  Fighter: '#737373',    // neutral gray — low-USG rotation depth
 };
 
 export function classColor(cls: string | null | undefined): string {
@@ -30,15 +30,15 @@ export const CLASS_TAGLINES: Record<string, string> = {
   Wizard: 'Elite floor general.',
   Sorcerer: 'High-volume star scorer.',
   Warlock: 'Three-point specialist.',
-  Bard: 'Pass-first distributor.',
+  Bard: 'Mid-major primary creator.',
   Ranger: 'Perimeter spacer.',
   Barbarian: 'Interior finisher.',
   Paladin: 'Defensive anchor.',
-  Monk: 'Disciplined wing star.',
-  Cleric: 'Low-volume connector.',
+  Monk: 'Versatile rotation forward.',
+  Cleric: 'Backup big.',
   Druid: 'Elite two-way big.',
   Rogue: 'Disruptive two-way wing.',
-  Fighter: 'Balanced two-way rotation.',
+  Fighter: 'Low-USG rotation depth.',
 };
 
 export function classTagline(cls: string | null | undefined): string {
