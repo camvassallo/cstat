@@ -1270,8 +1270,17 @@ mod tests {
             campom: Some(2.5),
             primary_class: Some("Wizard".into()),
             secondary_class: None,
+            recruit_composite_rank: None,
+            recruit_composite_rating: None,
+            recruit_star_rating: None,
+            recruit_position_rank: None,
+            recruit_previous_rank: None,
+            recruit_height: None,
+            recruit_weight: None,
+            recruit_position: None,
+            recruit_year: None,
         };
-        let features = build_trajectory_features(&row);
+        let features = build_trajectory_features(&row, 2026);
         let pred = predictor
             .predict_trajectory(&features)
             .expect("trajectory prediction failed");

@@ -9,12 +9,15 @@ Target: next-season `torvik_player_stats.cam_gbpm_v3_psos`.
 
 Features come from the prior season only — rate stats + impact metrics
 (CamPom + GBPM components) + archetype mixture (primary 1.0× / secondary
-0.5×) + volume + class_year + height. Recruit-rank as a feature is
-**deferred to a follow-up ablation** — for every row in today's training
-set the player's recruiting class is 2021–2024, and cstat only has the
-class-of-2026 recruits ingested, so `composite_rank` would be NULL on
-100% of training rows. The ablation lands once historical recruit ingest
-covers 2021/2022/2023/2024/2025 classes.
+0.5×) + volume + class_year + height + recruit-rank block (composite rank,
+rating, star, position rank, rank movement, height/weight, BMI proxy,
+position code, years_since_recruit). Recruit features come via LEFT JOIN
+on `recruits.cstat_player_id`; only class-of-2024/2025 are ingested, so
+~7% of training rows have a recruit row and the rest fall into the
+`recruit_is_ranked=0` bucket. LightGBM fits a separate split on the
+majority-unranked cohort. Shared feature derivation lives in
+`training/recruit_features.py` so the freshman-impact prior model can
+reuse it without divergence.
 
 Cross-season pairing is via `torvik_pid` (per memory: stable cross-season
 key; `natstat_id` breaks on transfers — different code per team).
@@ -44,6 +47,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
 from db import get_engine
+from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
 SEASONS = (2024, 2025, 2026)
@@ -57,6 +61,11 @@ ARCHETYPES = (
 # Qualification gate: ≥5 GP / ≥5 MPG in BOTH seasons — matches the
 # roster_model gate so the Rust inference path can share the QUAL_FILTER
 # string and we don't need a second gate for trajectory inputs.
+#
+# Recruit features: LEFT JOIN on `recruits.cstat_player_id`. ~7% of rows
+# have a recruit row (class-of-2024/2025 only); the rest fall into the
+# `recruit_is_ranked=0` bucket via `derive_recruit_features()`. See
+# `training/recruit_features.py` for the column → feature derivation.
 PAIRED_QUERY = """
 WITH base AS (
     SELECT
@@ -111,7 +120,17 @@ SELECT
     tpsN.cam_gbpm_v3_psos AS prior_campom,
     -- Archetype mixture (primary + secondary)
     paN.primary_class AS prior_primary_class,
-    paN.secondary_class AS prior_secondary_class
+    paN.secondary_class AS prior_secondary_class,
+    -- Recruit fields (LEFT JOIN). Derived by recruit_features.py.
+    rec.composite_rank   AS recruit_composite_rank_raw,
+    rec.composite_rating AS recruit_composite_rating_raw,
+    rec.star_rating      AS recruit_star_rating_raw,
+    rec.position_rank    AS recruit_position_rank_raw,
+    rec.previous_rank    AS recruit_previous_rank_raw,
+    rec.height           AS recruit_height_raw,
+    rec.weight           AS recruit_weight_raw,
+    rec.position         AS recruit_position_raw,
+    rec.year             AS recruit_year_raw
 FROM base
 JOIN player_season_stats pssN
     ON pssN.player_id = base.pid_n AND pssN.season = base.s_n
@@ -123,6 +142,8 @@ JOIN torvik_player_stats tpsN
     ON tpsN.player_id = base.pid_n AND tpsN.season = base.s_n
 LEFT JOIN player_archetypes paN
     ON paN.player_id = base.pid_n AND paN.season = base.s_n
+LEFT JOIN recruits rec
+    ON rec.cstat_player_id = base.pid_n
 WHERE pssN.minutes_per_game >= 5
   AND pssN.games_played >= 5
   AND pssNP1.minutes_per_game >= 5
@@ -153,7 +174,10 @@ NUMERIC_FEATURE_COLS = [
     "prior_ogbpm", "prior_dgbpm", "prior_gbpm", "prior_campom",
 ]
 ARCH_FEATURE_COLS = [f"arch_{a.lower()}" for a in ARCHETYPES]
-FEATURE_COLS = NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS  # 25 + 12 = 37
+# Numeric (25) + archetype shares (12) + recruit block (11) = 48 features.
+# Recruit block order is locked in `training/recruit_features.py` and
+# mirrored by `cstat-core::recruit_features::RECRUIT_FEATURE_NAMES`.
+FEATURE_COLS = NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS + list(RECRUIT_FEATURE_NAMES)
 
 
 def encode_class_year(s: Optional[str]) -> int:
@@ -186,6 +210,7 @@ def build_dataset() -> pd.DataFrame:
 
     df["prior_class_year_code"] = df["prior_class_year"].map(encode_class_year)
     df = add_archetype_columns(df)
+    df = derive_recruit_features(df, prior_season_col="s_n")
 
     # Drop any row missing the headline impact feature — CamPom is in the
     # WHERE clause already, but ogbpm/dgbpm/gbpm can still be NULL for the
