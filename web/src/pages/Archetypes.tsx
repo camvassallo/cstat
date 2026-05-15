@@ -43,8 +43,8 @@ const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Bard',
     description:
-      'Mid-major primary creator. Plays heavy minutes at high usage and runs the offense by necessity — the team has no one else who can. Solid assist rates paired with high scoring volume, but rarely on a tournament team.',
-    signature: ['heavy minutes', 'high USG%', 'high AST%'],
+      'Mid-major primary scorer. Plays heavy minutes at high usage as the team\'s only real offensive option — modest passing, but the bulk of the shot diet runs through them. Positive offensive impact relative to their tier.',
+    signature: ['heavy minutes', 'high USG%', 'positive OGBPM'],
     comparable: 'Mid-major leading scorers',
   },
   {

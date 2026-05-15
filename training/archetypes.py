@@ -112,15 +112,17 @@ ARCHETYPE_SIGNATURES: dict[str, dict[str, float]] = {
         "usage_rate": -0.5, "tov_pct": -0.5,
     },
     "Bard": {
-        # High-USG primary creator on a non-elite roster — the team's only
-        # real offensive option, plays heavy minutes, takes a lot of shots
-        # and runs the offense by necessity. Antoine Davis / Jacksen Moni /
-        # Nick Martinelli tier. Cluster identity shifted with the 4-season
-        # cohort; the "pass-first low-usage distributor" cluster Bard
-        # historically described moved to Fighter's slot. No usage_rate
-        # weight: this cluster has high USG, anchoring the signature to
-        # the cluster identity.
-        "ast_pct": 1.0, "min_share": 0.5, "ogbpm": 0.3,
+        # High-USG primary scorer on a non-elite roster — the team's only
+        # real offensive option, plays heavy minutes, hunts shots. Eric
+        # Dixon / Antonio Reeves / Dimingus Stevens tier. Cluster identity
+        # shifted twice: from "pass-first distributor" (2-season) to
+        # "mid-major primary creator" (4-season) to "primary scorer with
+        # modest assist rate" (5-season w/ 2022). The high-AST cluster
+        # that the old prose described now lands on Fighter. ast_pct
+        # dropped from the signature because this cluster's ast_pct is
+        # only marginally above mean; usage_rate added to anchor the
+        # "high-USG scoring lead" identity.
+        "usage_rate": 0.5, "min_share": 0.5, "ogbpm": 0.3,
     },
     "Ranger": {
         # Perimeter spacer — high 3PA share at low USG. Role-player
@@ -175,13 +177,16 @@ ARCHETYPE_SIGNATURES: dict[str, dict[str, float]] = {
         "blk_pct": 0.3,
     },
     "Fighter": {
-        # Balanced two-way rotation wing — modest creation, modest defense,
-        # NOT elite at any axis, rotation minutes. Cluster has below-average
-        # OGBPM (~-1.2 z); signature must match the data, so ogbpm flipped
-        # to -0.3. Otherwise Hungarian re-routes Fighter onto a positive-
-        # impact cluster (the historical Fighter-onto-elite-wing failure
-        # mode predates this fix).
-        "ast_pct": 0.3, "stl_pct": 0.3,
+        # Low-USG pass-first guard / backup point — modest minutes, high
+        # AST% relative to shot volume, weak two-way impact. Christian
+        # Ings / Jaden Ray / Jayden Pierre tier. Cluster identity absorbed
+        # the "pass-first distributor" prose that Bard historically held —
+        # cluster z on ast_pct is high (~+1.2) but the ORDER constraint
+        # with Bard was dropped because Bard's cluster doesn't compete on
+        # AST anymore. Negative anchors (min_share, usage_rate, ogbpm)
+        # hold the rotation-depth identity. stl_pct kept for the steal
+        # tendency of low-usage guards.
+        "stl_pct": 0.3,
         "min_share": -0.3, "usage_rate": -0.3,
         "ogbpm": -0.3,
     },
