@@ -168,10 +168,23 @@ export default function PlayerProgression() {
               const t = data.trajectory;
               const tier = campomTier(t.projected_mean);
               const band = `${t.projected_lower.toFixed(1)}–${t.projected_upper.toFixed(1)}`;
+              // Same regression-to-the-mean note as PlayerDetail — the
+              // chart on this page already shows the predicted point
+              // dropping below an elite's current CamPom (e.g. Boozer
+              // +30 → +16), so users need the inline explanation to
+              // know that's a known model behaviour, not a UI bug.
+              // Per-bucket MAE / bias lives in
+              // `trajectory_model_meta.json::mae_by_current_campom`.
+              const regressionNote =
+                t.prior_campom != null && t.prior_campom >= 15
+                  ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15; +20+ inputs extrapolate beyond training). Read the q90 ceiling for the optimistic case.'
+                  : t.prior_campom != null && t.prior_campom >= 10
+                    ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
+                    : '';
               return (
                 <span
                   className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)}`}
-                  title={`Projected next-season CamPom. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — directional, not a point estimate.`}
+                  title={`Projected next-season CamPom. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — directional, not a point estimate.${regressionNote}`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {seasonLabel(t.target_season)}

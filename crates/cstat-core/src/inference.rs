@@ -650,7 +650,7 @@ impl Predictor {
     }
 
     /// Project a returning player's next-season CamPom v3 from their prior
-    /// season's 37-feature vector built by
+    /// season's 48-feature vector built by
     /// `trajectory::build_trajectory_features`.
     ///
     /// Returns mean (q=0.5 equivalent — LightGBM regression objective) plus
@@ -663,6 +663,20 @@ impl Predictor {
     /// are directional, not point estimates. The quantile band width is
     /// what users should look at — wide = freshman with sparse signal,
     /// tight = senior with a stable profile.
+    ///
+    /// **Regression-to-the-mean on the elite tail is real signal, not a
+    /// bug.** Per `trajectory_model_meta.json::mae_by_current_campom`,
+    /// the OOF bias is roughly zero for inputs in [−5, +15] but turns
+    /// sharply negative on the elite tail (≈−3.4 bias in the +15..+20
+    /// bucket; the +20+ bucket is empty — zero returners hit +20+ in
+    /// training because that cohort overwhelmingly leaves for the NBA).
+    /// Two forces compound: (a) the empirical pattern — the few +20+
+    /// returners we have did NOT sustain +20+ next year; (b) predictions
+    /// for elite inputs are extrapolation beyond the training
+    /// distribution. Surface the q10–q90 band rather than the mean
+    /// alone on UI; treat the elite mean prediction as a lower-bound
+    /// rather than a point estimate. The Q1 narrative in ROADMAP §6
+    /// has the full breakdown.
     pub fn predict_trajectory(
         &self,
         features: &[f32; TRAJECTORY_NUM_FEATURES],

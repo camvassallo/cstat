@@ -298,23 +298,32 @@ def leave_one_pair_out(df: pd.DataFrame) -> dict:
     return {"per_pair": results, "pooled": overall}
 
 
-def kfold_cv(df: pd.DataFrame, n_splits: int = 5) -> dict:
+def kfold_cv(df: pd.DataFrame, n_splits: int = 5) -> tuple[dict, np.ndarray]:
+    """Returns (summary_dict, oof_predictions). `oof_predictions` is an
+    array aligned to `df.index` order with each row's prediction from the
+    fold that held it out — the honest "what would the model say about
+    this row if it hadn't trained on it" signal, useful for downstream
+    diagnostics (per-bucket MAE, calibration plots, etc.).
+    """
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     X = df[FEATURE_COLS].values
     y = df["target_campom"].values
+    oof = np.full(len(df), np.nan)
     maes, rmses, r2s = [], [], []
     for fold, (tr, te) in enumerate(kf.split(X), 1):
         model = lgb.LGBMRegressor(**lgb_params())
         model.fit(X[tr], y[tr], eval_set=[(X[te], y[te])], eval_metric="mae")
         p = model.predict(X[te])
+        oof[te] = p
         maes.append(float(mean_absolute_error(y[te], p)))
         rmses.append(float(np.sqrt(mean_squared_error(y[te], p))))
         r2s.append(float(r2_score(y[te], p)))
         print(f"  fold {fold}: MAE {maes[-1]:.3f}  RMSE {rmses[-1]:.3f}  R² {r2s[-1]:.3f}")
-    return {
+    summary = {
         "mae": float(np.mean(maes)), "rmse": float(np.mean(rmses)), "r2": float(np.mean(r2s)),
         "per_fold_mae": maes,
     }
+    return summary, oof
 
 
 def mae_by_class_year(df: pd.DataFrame, model: lgb.LGBMRegressor) -> dict:
@@ -328,6 +337,65 @@ def mae_by_class_year(df: pd.DataFrame, model: lgb.LGBMRegressor) -> dict:
             "n": int(len(sub)),
             "model_mae": float(mean_absolute_error(sub["target_campom"], sub_preds)),
             "naive_mae": float(mean_absolute_error(sub["target_campom"], sub["prior_campom"])),
+        }
+    return out
+
+
+# Per-current-CamPom buckets for the regression-bias diagnostic. The model
+# fits a roughly symmetric distribution around the bulk of training data
+# (≈-3 to +10), so predictions for inputs in the elite tail (+15+) skew
+# toward the conditional median of similar-but-not-as-elite returners.
+# Buckets are chosen to land at least ~30 rows in each cell across the
+# current 4-class corpus; widen the highest bucket because +20+ inputs
+# are sparse (mostly returners-who-didn't-leave-for-NBA — selection bias
+# compounds the regression).
+CURRENT_CAMPOM_BUCKETS: list[tuple[str, float, float]] = [
+    ("<-5",     float("-inf"),  -5.0),
+    ("-5..0",   -5.0,            0.0),
+    ("0..+5",    0.0,            5.0),
+    ("+5..+10",  5.0,           10.0),
+    ("+10..+15", 10.0,          15.0),
+    ("+15..+20", 15.0,          20.0),
+    (">=+20",    20.0,  float("inf")),
+]
+
+
+def mae_by_current_campom(df: pd.DataFrame, oof: np.ndarray) -> dict:
+    """Diagnostic for the regression-to-the-mean behaviour at the elite
+    tail. Bucket OOF predictions by `prior_campom` (the player's
+    current-season CamPom — the model's input), report per-bucket MAE +
+    mean predicted vs mean actual + bias.
+
+    Bias = mean(pred) − mean(actual). Negative bias on the highest buckets
+    is the smoking gun for regression-to-the-mean: the model
+    systematically projects elite returners below their actual next-season
+    value. The Q1 narrative in the ROADMAP cites these numbers; the
+    tooltip on the trajectory chip should quote them so the bias is
+    legible to users staring at a "+30 → +16" projection.
+    """
+    actual = df["target_campom"].to_numpy()
+    prior = df["prior_campom"].to_numpy()
+    out: dict[str, dict] = {}
+    for label, lo, hi in CURRENT_CAMPOM_BUCKETS:
+        mask = (prior >= lo) & (prior < hi)
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        bucket_pred = oof[mask]
+        bucket_actual = actual[mask]
+        out[label] = {
+            "n": n,
+            "lo": lo if lo > float("-inf") else None,
+            "hi": hi if hi < float("inf") else None,
+            "mean_prior": float(prior[mask].mean()),
+            "mean_pred": float(bucket_pred.mean()),
+            "mean_actual": float(bucket_actual.mean()),
+            "model_mae": float(np.mean(np.abs(bucket_pred - bucket_actual))),
+            # Bias is the load-bearing number. Negative on +15+ buckets =
+            # confirms regression-to-the-mean. Naive baseline for context:
+            # `prior_campom` as the prediction (i.e. "next year = this year").
+            "model_bias": float((bucket_pred - bucket_actual).mean()),
+            "naive_mae": float(np.mean(np.abs(prior[mask] - bucket_actual))),
         }
     return out
 
@@ -375,7 +443,7 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("5-fold random CV")
     print("=" * 60)
-    cv = kfold_cv(df)
+    cv, oof_preds = kfold_cv(df)
 
     print("\n" + "=" * 60)
     print("Final fit on all data — mean + quantile (q=0.1, q=0.9)")
@@ -393,6 +461,24 @@ def main() -> None:
     print("\nMAE by prior class_year (model vs naive):")
     for code, m in sorted(by_class.items()):
         print(f"  class_year_code={code:<4} n={m['n']:<5} model_mae={m['model_mae']:.3f}  naive_mae={m['naive_mae']:.3f}  Δ={m['naive_mae']-m['model_mae']:+.3f}")
+
+    # Regression-to-the-mean diagnostic on OOF predictions. Documents the
+    # bias surfaced as Q1 in the ROADMAP — the trajectory model
+    # systematically projects elite returners lower than their
+    # current-season CamPom (Boozer +30 → +16 type). Negative `bias` on
+    # the highest buckets is the smoking gun.
+    by_campom = mae_by_current_campom(df, oof_preds)
+    print("\nMAE / bias by CURRENT (prior) CamPom bucket — OOF predictions:")
+    print(f"  {'bucket':<10} {'n':>5} {'meanCur':>8} {'meanPred':>9} {'meanAct':>8} {'MAE':>6} {'bias':>7} {'naiveMAE':>9}")
+    for label, _, _ in CURRENT_CAMPOM_BUCKETS:
+        m = by_campom.get(label)
+        if m is None:
+            continue
+        print(
+            f"  {label:<10} {m['n']:>5} {m['mean_prior']:>+8.2f} {m['mean_pred']:>+9.2f} "
+            f"{m['mean_actual']:>+8.2f} {m['model_mae']:>6.2f} {m['model_bias']:>+7.2f} "
+            f"{m['naive_mae']:>9.2f}"
+        )
 
     for name, model in (("trajectory_mean", mean_model), ("trajectory_q10", lo_model), ("trajectory_q90", hi_model)):
         path = OUT_DIR / f"{name}_model.onnx"
@@ -418,6 +504,13 @@ def main() -> None:
         "backtest_lopo": lopo,
         "cv_5fold": cv,
         "mae_by_prior_class_year": by_class,
+        # Per-current-CamPom bucket MAE + bias on OOF predictions —
+        # documents the regression-to-the-mean bias on the elite tail.
+        # Tooltips on PlayerDetail / PlayerProgression / future Transfer +
+        # Projection chips read this to quote MAE for the user's input
+        # CamPom range. Negative `model_bias` on the +15+ buckets is the
+        # regression signal.
+        "mae_by_current_campom": by_campom,
         "top_features": [{"name": n, "importance": int(i)} for n, i in importance[:25]],
         "known_limitations": [
             "Destination-agnostic: cross-team transferring returners are projected against a destination-blind prior. Documented in §5c.",
