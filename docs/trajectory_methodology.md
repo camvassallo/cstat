@@ -102,7 +102,7 @@ Prior CamPom is the dominant signal, which is intuitive — it's the most-aggreg
 Run when:
 
 1. A new cstat-season ingests (e.g. cstat-season 2027 lands → 2026→2027 becomes a new training pair).
-2. Pre-2021 recruit-class backfill completes (the current model already includes recruit features for classes 2021-2026; older classes would feed the Sr→Gr and beyond pairs that currently have NULL recruit blocks via the `is_ranked=0` sentinel).
+2. Pre-2021 recruit-class backfill completes (the current model already includes recruit features for classes 2021-2026; older classes would lift recruit coverage for the upperclassmen in our older training pairs — e.g. a senior in the 2022→2023 pair was recruited in ~2018, currently in the `is_ranked=0` sentinel branch).
 3. The CamPom v3 formula changes (e.g. CamPom v4) — target shifts, so retrain.
 
 ```bash
