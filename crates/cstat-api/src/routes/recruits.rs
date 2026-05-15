@@ -287,7 +287,7 @@ async fn recruit_list(
 
     // Assemble the final per-row projection list. OOF hits come from
     // `oof_map`; live hits come from `live_preds` indexed by `live_indices`.
-    let mut live_iter = live_indices.iter().zip(live_preds.into_iter());
+    let mut live_iter = live_indices.iter().zip(live_preds);
     let mut next_live = live_iter.next();
     let projections: Vec<Option<cstat_core::freshman_model::FreshmanPrediction>> = recruits
         .iter()
