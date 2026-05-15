@@ -421,9 +421,12 @@ export default function TransferPortal({ year }: Props) {
 
   const filtered = useMemo(() => {
     if (!rows) return null;
-    // `rank_cstat` is only assigned when both CamPom and 247 rank are
-    // present (see useEffect above), so this single check drops the
-    // unranked-by-247 long tail and the no-CamPom rows in one pass.
+    // `rank_cstat` is only assigned when both projected CamPom and 247
+    // rank are present (see useEffect above), so this single check drops
+    // the unranked-by-247 long tail and the no-projection rows in one
+    // pass. Sub-qual transfers (those without a trajectory projection)
+    // fall out of the ranked view; they still ride along on the page-
+    // level state for the 2027 roster aggregator.
     const ranked = rows.filter((t) => t.rank_cstat != null);
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
@@ -461,7 +464,7 @@ export default function TransferPortal({ year }: Props) {
         />
         <span className="text-xs text-gray-500">
           {ranked} ranked transfers
-          {hidden > 0 && ` · ${hidden} hidden (unranked by 247 or no CamPom)`} ·{' '}
+          {hidden > 0 && ` · ${hidden} hidden (unranked by 247 or no projection)`} ·{' '}
           <a
             href={`https://247sports.com/season/${year}-basketball/transferportaltop/`}
             target="_blank"
