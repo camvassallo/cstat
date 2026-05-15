@@ -591,7 +591,6 @@ Pointers below anchor on stable section headers / quoted phrases (not line numbe
 
 ### Infrastructure / Limits
 
-- **NatStat rate limit env-driven (Fixed).** Both the API and ingest binary now read `NATSTAT_MAX_PER_HOUR` (default 500) via `cstat_ingest::rate_budget_from_env()`. No recompile to match your tier.
 - **247Sports `compositerecruitrankings` returns identical content for all `InstitutionGroup` values.** v1 ingest is `highschool`-only; the `juco` / `prep` enum vocab is kept for when we find the separate endpoints. → see migration 020 comment and `tfs_recruits.rs::InstitutionGroup`.
 - **247Sports JWT is in cancelled-grace state** (`ss: "Monthly+Cancelled"`). Captured snapshot path documented as fallback; `srating.io` smoke-tested but needs full session-cookie replay to actually work. → see "Fallback source" under the Projected 2027 bullet in §5b.
 - **Native cstat impact metric — re-attempting failed work.** Prior native BPM (pre-PR #25) tried linear box-score formulas and got r=0.075 with Torvik OBPM. Don't repeat that approach. A LightGBM-on-team-game-outcomes attribution is a different methodology worth trying, but a multi-PR project that needs its own design doc. → see "Native cstat player impact metric" in §6.
