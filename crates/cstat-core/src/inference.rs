@@ -925,13 +925,15 @@ impl Predictor {
 /// Returns the parsed meta so callers can layer per-model checks
 /// (`include_impact_features`, `quantile_alphas`, etc.) on top.
 ///
-/// `err` is the per-model `LoadError` variant constructor (tuple-variant
-/// names are callable as `fn(String) -> LoadError`), so each meta family
-/// gets its own diagnostic without duplicating the validation flow.
+/// `family` is the constant-name prefix (`"ROSTER"`, `"TRAJECTORY"`,
+/// `"FRESHMAN"`) used in error messages so a boot-time failure tells the
+/// maintainer exactly which compiled constant to update — not just the
+/// `LoadError` variant. `err` is the matching variant constructor.
 fn validate_model_meta(
     path: &Path,
     expected_n: usize,
     expected_names: &[&str],
+    family: &str,
     err: fn(String) -> LoadError,
 ) -> Result<serde_json::Value, LoadError> {
     let content =
@@ -951,7 +953,7 @@ fn validate_model_meta(
     let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
     if n_features != expected_n {
         return Err(err(format!(
-            "n_features {n_features} ≠ compiled {expected_n}",
+            "n_features {n_features} ≠ compiled {family}_NUM_FEATURES {expected_n}",
         )));
     }
 
@@ -963,7 +965,7 @@ fn validate_model_meta(
         .ok_or_else(|| err("features array missing".into()))?;
     if features.len() != expected_n {
         return Err(err(format!(
-            "features array length {} ≠ expected {expected_n}",
+            "features array length {} ≠ {family}_NUM_FEATURES {expected_n}",
             features.len(),
         )));
     }
@@ -973,7 +975,7 @@ fn validate_model_meta(
             .ok_or_else(|| err(format!("features[{i}] not a string")))?;
         if s != *expected {
             return Err(err(format!(
-                "features[{i}] = {s:?}, expected[{i}] = {expected:?}",
+                "features[{i}] = {s:?}, {family}_FEATURE_NAMES[{i}] = {expected:?}",
             )));
         }
     }
@@ -1012,6 +1014,7 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
         path,
         ROSTER_NUM_FEATURES,
         &ROSTER_FEATURE_NAMES,
+        "ROSTER",
         LoadError::RosterMetaMismatch,
     )?;
 
@@ -1031,6 +1034,7 @@ fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
         path,
         TRAJECTORY_NUM_FEATURES,
         &TRAJECTORY_FEATURE_NAMES,
+        "TRAJECTORY",
         LoadError::TrajectoryMetaMismatch,
     )?;
     validate_quantile_alphas(&meta, LoadError::TrajectoryMetaMismatch)
@@ -1043,6 +1047,7 @@ fn validate_freshman_meta(path: &Path) -> Result<(), LoadError> {
         path,
         FRESHMAN_NUM_FEATURES,
         &FRESHMAN_FEATURE_NAMES,
+        "FRESHMAN",
         LoadError::FreshmanMetaMismatch,
     )?;
     validate_quantile_alphas(&meta, LoadError::FreshmanMetaMismatch)
