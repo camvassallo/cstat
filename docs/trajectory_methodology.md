@@ -2,7 +2,7 @@
 
 ## What it is
 
-The trajectory model projects a returning player's **next-season CamPom v3** from their prior-season stats. Three LightGBM regressors trained on the same 37-feature input share one feature shape:
+The trajectory model projects a returning player's **next-season CamPom v3** from their prior-season stats. Three LightGBM regressors trained on the same 48-feature input share one feature shape:
 
 - `trajectory_mean_model.onnx` — regression objective (`mean` prediction)
 - `trajectory_q10_model.onnx` — quantile objective at α=0.1 (`lower` band)
@@ -14,9 +14,11 @@ Surfaced today as the "Proj YYYY-YY" badge on PlayerDetail next to the current-s
 
 | Source pair | rows after gate |
 |---|---|
+| 2022 → 2023 | 2,377 |
+| 2023 → 2024 | 2,438 |
 | 2024 → 2025 | 2,311 |
 | 2025 → 2026 | 2,113 |
-| **total** | **4,424** |
+| **total** | **9,239** |
 
 Cross-season same-player join is via `torvik_player_stats.torvik_pid` — the stable cross-season key (96% coverage, zero collisions). `players.natstat_id` breaks on transfers (different code per team) so we don't use it for the join.
 
@@ -26,7 +28,7 @@ Cross-season same-player join is via `torvik_player_stats.torvik_pid` — the st
 
 Same string as `roster_model_meta.json::player_filter` so the Rust path can reuse `cstat_core::roster_features::QUAL_FILTER_STRING`. Boot-time validator (`inference.rs::validate_trajectory_meta`) hard-fails on drift.
 
-## Features (37, order locked)
+## Features (48, order locked)
 
 The order in `trajectory_model_meta.json::features` is wire-locked to `cstat_core::trajectory::TRAJECTORY_FEATURE_NAMES`. A boot-time test confirms the two match exactly.
 
@@ -44,34 +46,36 @@ Missing rate-stat values are filled with `0.0` at the Rust feature builder (matc
 
 ## What's NOT in the feature set (and why)
 
-- **Recruit rank** (`composite_rank`, `years_since_recruit`, `is_ranked`) — every row in the 2024–2026 training data has a recruiting class of 2021–2024, and we only have class-of-2026 in the `recruits` table today. So `composite_rank` would be NULL on 100% of training rows. Deferred to a follow-up ablation experiment, gated on the historical recruit ingest (2021–2025 backfill).
+- ~**Recruit rank** (`composite_rank`, `years_since_recruit`, `is_ranked`) — every row in the 2024–2026 training data has a recruiting class of 2021–2024, and we only have class-of-2026 in the `recruits` table today. So `composite_rank` would be NULL on 100% of training rows. Deferred to a follow-up ablation experiment, gated on the historical recruit ingest (2021–2025 backfill).~ *(shipped — 11 recruit features now in the trained model; recruit classes 2021-2026 ingested; coverage is partial but LightGBM handles NULL via `is_ranked=0` sentinel).*
 - **Destination team for transferring players** — v1 model is destination-agnostic. Cross-team transferring returners (joined via `torvik_pid`) are projected against the same prior as same-team returners; the model has no signal about how a Princeton→Duke transfer's role will change. Wider bands and a `direction` arrow that may surprise are the price; documented limitation.
 - **Last-season team identity / strength** — implicitly encoded through the player's own minute/usage/CamPom but no explicit team-strength column. Adding `prior_team_adj_em` is the natural v2 feature.
 
 ## Backtest
 
 **Naive baseline** (year N+1 ≈ year N CamPom):
-- pooled MAE 2.444, RMSE 3.195, R² 0.522
+- pooled MAE 2.392, RMSE 3.116, R² 0.518
 
-**Model (mean) — leave-one-pair-out:**
-- pair 2024→2025 (test): MAE 2.277, RMSE 2.984, R² 0.576, n=2,311
-- pair 2025→2026 (test): MAE 2.354, RMSE 3.073, R² 0.567, n=2,113
-- **pooled: MAE 2.314, RMSE 3.027, R² 0.571**
+**Model (mean) — leave-one-pair-out (5-season cohort, 2022-2026):**
+- pair 2022→2023: MAE 2.152, RMSE 2.810, R² 0.562, n=2,377
+- pair 2023→2024: MAE 2.157, RMSE 2.817, R² 0.604, n=2,438
+- pair 2024→2025: MAE 2.210, RMSE 2.897, R² 0.600, n=2,311
+- pair 2025→2026: MAE 2.312, RMSE 3.012, R² 0.583, n=2,113
+- **pooled: MAE 2.204, RMSE 2.881, R² 0.588**
 
-Beats naive by **−0.13 MAE pooled**.
+Beats naive by **−0.19 MAE pooled**.
 
-**5-fold random CV:** MAE 2.28, RMSE 2.99, R² 0.58.
+**5-fold random CV:** MAE 2.198, RMSE 2.876, R² 0.589.
 
 **Per–prior-class-year MAE** (model vs naive):
 
 | class_year_code | n | model MAE | naive MAE | Δ |
 |---|---|---|---|---|
-| 0 (Fr→So) | 1,021 | 1.573 | 2.357 | +0.784 |
-| 1 (So→Jr) | 1,211 | 1.642 | 2.508 | +0.865 |
-| 2 (Jr→Sr) | 1,506 | 1.542 | 2.428 | +0.886 |
-| 3 (Sr→Gr) | 686 | 1.585 | 2.498 | +0.914 |
+| 0 (Fr→So) | 2,057 | 1.690 | 2.318 | +0.627 |
+| 1 (So→Jr) | 2,710 | 1.833 | 2.382 | +0.548 |
+| 2 (Jr→Sr) | 2,980 | 1.832 | 2.413 | +0.581 |
+| 3 (Sr→Gr) | 1,490 | 1.819 | 2.470 | +0.651 |
 
-Model beats naive in every bucket by **0.78–0.91 MAE**. Per-bucket MAE on training data (~1.6) is materially better than the LOPO MAE (~2.3) — the gap is the honest generalization cost across the two pair-folds.
+Model beats naive in every bucket by **0.55–0.65 MAE**. Per-bucket MAE on training data (~1.8) is materially better than the LOPO MAE (~2.2) — the gap is the honest generalization cost across the four pair-folds.
 
 Top features (mean model, by split count):
 1. `prior_campom` (703)

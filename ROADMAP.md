@@ -141,7 +141,7 @@ Barttorvik   ↗                                    ↓
 - ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
 - ~**Use NatStat ELO as feature**: Replace computed incremental ELO with NatStat's pre-game ELO from `/forecasts` endpoint. Uses only `elo_before` (pre-game) to avoid leakage.~ *(done — `features.py` now uses NatStat pre-game ELO from `game_forecasts`, falling back to computed ELO for games without forecast data)*
 - ~**Benchmark against NatStat win probability**: `/forecasts` provides ELO-based `winexp` per game. Compare our model's predictions against theirs to identify where we add value.~ *(done — cstat wins every metric: +2.1pp accuracy, +0.014 AUC, 3x better calibration)*
-- **Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.
+- ~**Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.~ *(partially done — 2022-2026 ingested as of 2026-05-15. Margin/win/total models now train on 26,779 games (was 12,821); win AUC 0.795→0.811, margin R² 0.396→0.459. Trajectory model now trains on 9,239 N→N+1 pairs (was 4,424); LOPO pooled MAE 2.29→2.20. Roster model on 1,799 team-seasons (was 1,089); LOSO pooled MAE 7.43→6.45. See `docs/model_performance.md`. Pre-2022 backfill still unblocks all-time leaderboards & career trajectories — see §6.)*
 - **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
 - **Add `games_played` feature**: lets model know how much data it has on a team (early-season uncertainty)
 - **Conference strength feature**: average adj_efficiency_margin of conference, captures tier gaps beyond SOS
@@ -152,7 +152,7 @@ NatStat's `/forecasts` provides both `elo_before` (pre-game) and `elo_after` (po
 
 ### Known Model Limitations
 - **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
-- **Limited data**: Training on 2025+2026 seasons (9,147 games). More historical seasons would further improve generalization. NatStat has data back to 2007.
+- **Limited data**: Training on 2022-2026 seasons (26,779 games as of 2026-05-15). More historical seasons would further improve generalization. NatStat has data back to 2007.
 - **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach
@@ -489,7 +489,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 ## Phase 6: Expansion & Refinement
 > Historical depth, brackets, continuous improvement
 
-- [ ] **Full historical data support across the site** (NatStat perfs back to 2007, ~20 seasons). Today only 2025 and 2026 are ingested; expanding to the full archive unlocks career-spanning player profiles, multi-season team trends, "all-time" leaderboards, and dramatically more training data for ML. Per Phase 3 notes, this is the single highest-leverage improvement available to the predict model — current training early-stops at 49-66 iterations, data-starved on two seasons.
+- [~] **Full historical data support across the site** (NatStat perfs back to 2007, ~20 seasons). **2022-2026 ingested (5 seasons) as of 2026-05-15**; remaining 2007-2021 backfill unlocks career-spanning player profiles, multi-season team trends, and "all-time" leaderboards. Per Phase 3 notes, expanding the cstat training window remains a high-leverage lever for the predict model, though the diminishing-returns inflection point above 5 seasons is unproven empirically. Pre-2022 also brings era-effect risk for combined-cohort archetypes (see `docs/archetypes_methodology.md` "Era horizon").
   - **Data availability**: `/seasons` confirms perfs for 2007-2026 (20 seasons), play-by-play from 2012+. Each season ≈ 6,200 games, ≈ 6,000 players, ≈ 110k box scores. Rate-limited at 500 API calls/hr → full backfill is a multi-day job leaning on the existing `api_cache` table.
   - **Ingest**: extend `cstat-ingest season` to accept a year range and run the full pipeline (teams → games → perfs → teamperfs → forecasts → elo) per season. Handle historical conference realignment, team renames, and defunct programs without breaking FK constraints. Layer Torvik backfill on the same range (CSV is per-year).
   - **Compute**: run the 13-step compute pipeline per historical season. CamPom, percentiles, adj efficiency, and archetypes are all already season-scoped, but worth sanity-checking early seasons where some advanced fields (e.g., shot zones from Torvik) may be missing.

@@ -1,195 +1,174 @@
 # Model Performance Report
 
-Last updated: 2026-04-15
-Training data: 2025 + 2026 seasons (4,107 games with complete features after NaN filtering)
+Last updated: 2026-05-15
+Training data: 2022-2026 seasons (5 seasons across all models, 26,779 games for game prediction)
 
-## Overview
+cstat ships four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
-cstat uses two LightGBM models for game prediction:
+| Model | Task | Training rows | Where it's used |
+|-------|------|---------------|------------------|
+| **Game (margin / win / total)** | Per-game margin, win prob, total points | 26,779 games | `POST /api/predict`, score ticker, schedule projected scores |
+| **Trajectory** | Project next-season CamPom v3 for returners | 9,239 N→N+1 player-pairs | Transfer page (ΔCP), 2027 projection page, PlayerDetail "Proj YYYY-YY" chip |
+| **Freshman** | Project freshman-season CamPom v3 for new recruits | 1,154 freshmen (5 recruit classes 2021-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
+| **Roster** | Project team AdjEM from roster aggregates | 1,799 team-seasons | 2027 projection page team rows, transfer-portal "what-if" |
 
-- **Margin model** (regression): predicts the home team's scoring margin
-- **Win model** (classification): predicts home team win probability
+All four models share the same training rhythm: 5-fold random CV for headline metrics, leave-one-season-out (or leave-one-pair-out / leave-one-class-out) for honest out-of-sample numbers, and a final fit on all data for the shipped artifacts.
 
-Both models use 49 point-in-time diff-features (home minus away) covering team efficiency, roster composition, Barttorvik GBPM, rolling form, and game context. All features are computed using only data available before each game — no data leakage.
+Authoritative per-run details (top features, per-fold breakdowns, known limitations) live in each model's `model_meta.json` alongside the ONNX artifacts.
 
 ---
 
-## Backtest Results
+## 1. Game model (margin / win / total)
 
-Chronological 80/20 split: train on first 3,285 games (2025-11-18 to 2026-02-21), test on last 822 games (2026-02-21 to 2026-04-06).
+Three regressors share the same 49-feature point-in-time diff matrix (home minus away). The total model also reads 9 `sum_*` companion features (58 total features) because diffs throw away absolute level.
 
-### Margin Model
+**Backtest:** chronological 80/20 split — train on 16,539 games (2021-11-21 to 2025-12-03), test on 4,135 games (2025-12-03 to 2026-04-06).
 
-| Metric | Value |
-|--------|-------|
-| MAE | 8.68 pts |
-| RMSE | 11.16 pts |
-| R² | 0.300 |
-| Median AE | 7.07 pts |
-| P75 AE | 12.49 pts |
-| P90 AE | 18.65 pts |
-| P95 AE | 21.85 pts |
-| Win accuracy (from sign) | 70.0% |
+| Target | Test MAE / Acc | Test R² / AUC | 5-fold CV |
+|--------|----------------|---------------|-----------|
+| Margin (regression) | MAE **8.27 pts** | R² **0.459** · win-acc **74.2%** | Margin MAE 8.27 ± 0.10 |
+| Win prob (classification) | Acc **73.7%** · log-loss **0.507** | AUC **0.811** | Win AUC 0.811 ± 0.008 |
+| Total (regression) | MAE **13.70 pts** | R² **0.185** | Total MAE 13.36 ± 0.18 |
 
-### Win Probability Model
+**Top features (margin):** `diff_w_gbpm` dominates (~3× the next feature), then `diff_w_dgbpm`, `diff_w_ogbpm`, `diff_adj_efficiency_margin`, `venue`, `diff_pythag_win_pct`. Roster-aggregate Barttorvik GBPM is doing more work than any single team-stat.
 
-| Metric | Value |
-|--------|-------|
-| Accuracy | 70.0% |
-| AUC | 0.764 |
-| Log loss | 0.558 |
-| ECE (calibration error) | 0.049 |
+**Top features (total):** `sum_adj_tempo`, `sum_adj_offense`, `sum_adj_defense` occupy the top 3 — confirming the design intuition that totals are about absolute levels, not differences.
 
-### 5-Fold Cross-Validation
+**Known limitations:**
+- Total model is materially worse than KenPom (~9 MAE) / Vegas (~7-8). Framed as KenPom-style approximation, not betting-grade.
+- No game-specific roster (missing-star teams look identical to full-strength).
+- No lineup data.
 
-| Metric | Value |
-|--------|-------|
-| Margin MAE | 8.81 +/- 0.34 |
-| Margin Acc | 73.2% +/- 1.2% |
-| Win Acc | 71.6% +/- 1.3% |
-| Win AUC | 0.785 +/- 0.013 |
+---
 
-### Training Details
+## 2. Trajectory model (returner N → N+1)
 
-| Parameter | Margin | Win |
-|-----------|--------|-----|
-| Best iteration | 52 | 127 |
-| Num leaves | 24 | 24 |
-| Learning rate | 0.03 | 0.03 |
-| Feature fraction | 0.7 | 0.7 |
-| Early stopping | 80 rounds | 80 rounds |
+Three LightGBM regressors (mean + q10 + q90) trained on a shared 48-feature input. Projects a returning player's next-season CamPom v3 from prior-season stats, archetype, and recruit-rank features.
+
+**Backtest:** leave-one-pair-out across the 4 transition pairs (2022→2023, 2023→2024, 2024→2025, 2025→2026) — for each held-out pair, retrain on the other 3 and score the held-out cohort.
+
+| Backtest | MAE | RMSE | R² | n |
+|----------|-----|------|-----|----|
+| LOPO 2022→2023 | 2.152 | 2.810 | 0.562 | 2,377 |
+| LOPO 2023→2024 | 2.157 | 2.817 | 0.604 | 2,438 |
+| LOPO 2024→2025 | 2.210 | 2.897 | 0.600 | 2,311 |
+| LOPO 2025→2026 | 2.312 | 3.012 | 0.583 | 2,113 |
+| **Pooled** | **2.204** | **2.881** | **0.588** | 9,239 |
+| Naive baseline (year N+1 ≈ year N CamPom) | 2.392 | 3.116 | 0.518 | 9,239 |
+
+5-fold random CV: MAE 2.198 ± 0.024.
+
+**Top features:** `prior_campom`, `prior_usg`, `prior_dgbpm`, `prior_ogbpm`, `prior_gbpm`, `prior_efg`, `prior_mpg`, `prior_ft_rate`. Prior-season CamPom alone carries the most signal; the model's value-add is the regression-to-the-mean correction and class-year × archetype interactions.
+
+**Calibration by current CamPom bucket** (OOF):
+
+| Bucket | n | Mean predicted | Mean actual | Bias |
+|--------|---|----------------|-------------|------|
+| < −5 | 551 | −3.35 | −3.56 | +0.21 |
+| −5..0 | 4,811 | −1.31 | −1.35 | +0.03 |
+| 0..+5 | 2,942 | +2.34 | +2.38 | −0.04 |
+| +5..+10 | 775 | +7.18 | +7.38 | −0.20 |
+| +10..+15 | 139 | +11.58 | +11.67 | −0.10 |
+| +15..+20 | 20 | +13.67 | +15.79 | **−2.12** |
+
+The model is well-calibrated in `[−5, +15]` and under-projects elite returners (`≥ +15`) by ~2 CamPom — empirical regression-to-the-mean + thin tail support (n=20 in the highest non-empty bucket; +20+ is **zero** in training, so Boozer-tier predictions are extrapolation). The trajectory tooltip on PlayerDetail / Transfer / Projection pages surfaces this caveat conditionally.
+
+**Known limitations:**
+- Destination-agnostic for transferring returners (no destination-team archetype mix in v1 features).
+- Selection bias on returners — Cooper Flagg / Boozer tier leaves for the draft, so the trained corpus skews toward returners who didn't break out.
+- Extrapolation only for `current_campom ≥ +20`.
+
+See `docs/trajectory_methodology.md` for the full methodology.
+
+---
+
+## 3. Freshman model (recruit class N → freshman season N+1)
+
+Three LightGBM regressors (mean + q10 + q90) on 13 features: 11 from the shared recruit-feature extractor (composite rank/rating, star rating, position rank, rank movement, height, weight, BMI proxy, position code, ranked flag) + 2 freshman-specific (`committed_team_prior_adjem`, `peer_class_strength`).
+
+**Corpus:** 1,154 qualified freshmen (≥ 5 GP / ≥ 5 MPG) across recruit classes 2021-2025 (freshman cstat-seasons 2022-2026).
+
+**Leave-one-class-out CV** (every class held out, retrain on rest, score held-out vs tier-mean baseline):
+
+| Held-out class | n | Model MAE | Baseline MAE | Δ vs baseline |
+|----------------|---|-----------|--------------|---------------|
+| 2021 → 2022 | 191 | **2.273** | 2.474 | +0.201 |
+| 2022 → 2023 | 219 | 2.360 | 2.414 | +0.054 |
+| 2023 → 2024 | 250 | 2.576 | 2.590 | +0.013 |
+| 2024 → 2025 | 186 | 2.475 | 2.588 | +0.113 |
+| 2025 → 2026 | 308 | 2.607 | 2.743 | +0.136 |
+| **Pooled** | 1,154 | **2.477** | 2.535 | **+0.058 (2.3%)** |
+
+5-fold random CV: MAE 2.439, R² 0.364. Gap vs LOCO: +0.038 — no severe overfit, mild fold-overlap leakage.
+
+**Top features:** `peer_class_strength` (#1, importance 449), `committed_team_prior_adjem` (#2, 441), `recruit_bmi_proxy` (#3, 397), then recruit composite rating/rank/position-rank. School-context features dominate the recruit-direct block.
+
+**Notes on the 2021 class:**
+- Added 2026-05-15 to lift the corpus from 963 → 1,154 rows.
+- The 2021 class has the lowest LOCO MAE — fits cleanly into the learned distribution.
+- `committed_team_prior_adjem` is NULL for all 191 rows (we don't have cstat-season 2021 ingested), so those rows are trained on the remaining 12 features. LightGBM handles the NaN natively via a dedicated split direction. Full feature parity for that fold will land if/when 2021 cstat-season is ingested.
+
+**Known limitations:**
+- Selection bias is *sharper* than for the trajectory model — elite freshmen leave for the draft, so the calibrated cohort skews toward returners.
+- Sample size below ~30th rank drops fast; bands widen accordingly. Surface with the q10–q90 band, not just the mean.
+- Bootstrap-from snapshots: see `docs/projections_methodology.md` for the tier-mean baseline and the per-tier centroid reassignment logic in `synthesize_freshman_row`.
+
+---
+
+## 4. Roster model (team AdjEM from roster)
+
+Single LightGBM regressor on 36 features: roster shape (size, total minutes, top-1/top-5 min share, minutes stddev), minutes-weighted player rate stats, star indicators, and one-hot archetype counts.
+
+**Backtest:** leave-one-season-out across 2022-2026.
+
+| Held-out season | n | MAE | RMSE | R² |
+|-----------------|---|-----|------|-----|
+| 2022 | 350 | 6.30 | 8.09 | 0.688 |
+| 2023 | 360 | 5.81 | 7.39 | 0.726 |
+| 2024 | 361 | 5.92 | 7.51 | 0.751 |
+| 2025 | 364 | 6.38 | 8.00 | 0.754 |
+| 2026 | 364 | 7.84 | 9.60 | 0.670 |
+| **Pooled** | 1,799 | **6.45** | 8.16 | **0.717** |
+
+5-fold random CV: MAE 6.38, R² 0.731.
+
+**Top features:** `w_stl_pct`, `w_drb_pct`, `w_topg`, `total_minutes`, `w_bpg`, `arch_warlock`, `w_spg`, `w_ts`, `arch_druid`, `arch_ranger`. Defensive event-rate features and archetype dummies do most of the work.
+
+**Notes:**
+- 2026 has the largest LOSO MAE (7.84) — partial-season noise (in-flight season vs full-season target).
+- Used inside `Predictor::predict_adj_em` for the 2027 projection page; transfer "what-if" infrastructure stays warm but isn't currently surfaced.
 
 ---
 
 ## Benchmark vs NatStat ELO
 
-Compared on the same 1,590 test games where both cstat and NatStat forecasts are available.
-
-> **Note:** This benchmark was run with the prior 47-feature model. The current 49-feature model (with Barttorvik GBPM) should perform at least as well — a re-benchmark is pending.
-
-### Head-to-Head
-
-| Metric | cstat (47-feat) | NatStat | Delta | Winner |
-|--------|-----------------|---------|-------|--------|
-| Win Accuracy | 69.4% | 67.3% | +2.1pp | cstat |
-| AUC | 0.738 | 0.724 | +0.014 | cstat |
-| Log Loss | 0.578 | 0.595 | -0.017 | cstat |
-| Calibration ECE | 0.022 | 0.061 | 3x better | cstat |
-
-cstat wins every metric. NatStat uses a pure ELO model; cstat combines adjusted efficiency, roster composition, four factors, rolling form, and ELO.
-
-### Calibration
-
-| Predicted Prob | N | Predicted | Actual Win% | Error |
-|---------------|---|-----------|-------------|-------|
-| 0-10% | 26 | 0.122 | 0.077 | 0.045 |
-| 10-20% | 37 | 0.215 | 0.243 | 0.028 |
-| 20-30% | 47 | 0.300 | 0.383 | 0.083 |
-| 30-40% | 47 | 0.397 | 0.362 | 0.035 |
-| 40-50% | 48 | 0.483 | 0.521 | 0.038 |
-| 50-60% | 86 | 0.579 | 0.419 | 0.160 |
-| 60-70% | 138 | 0.668 | 0.616 | 0.052 |
-| 70-80% | 168 | 0.760 | 0.738 | 0.022 |
-| 80-90% | 133 | 0.843 | 0.812 | 0.030 |
-| 90-100% | 92 | 0.954 | 0.935 | 0.020 |
-
-Well-calibrated in the 70-100% range. The 50-60% bin shows the largest miscalibration (0.160 error), suggesting the model slightly overestimates slight favorites.
+Previous benchmark (47-feature model, 2-season training): cstat +2.1pp accuracy, +0.014 AUC, 3× better calibration. A re-benchmark on the current 5-season model is pending; expect cstat's lead to widen given the AUC jump (0.795 → 0.811).
 
 ---
 
-## Segment Performance
+## Historical context
 
-### By Venue
+For reference, public CBB game-prediction models typically achieve:
 
-| Segment | N | MAE | Win Acc | AUC |
-|---------|---|-----|---------|-----|
-| Home games | 517 | 8.78 | 72.0% | 0.776 |
-| Neutral site | 305 | 8.52 | 66.6% | 0.745 |
-
-### By Matchup Type
-
-| Segment | N | MAE | Win Acc | AUC |
-|---------|---|-----|---------|-----|
-| Conference | 711 | 8.55 | 69.6% | 0.757 |
-| Non-conference | 111 | 9.51 | 72.1% | 0.822 |
-
-Non-conference games have higher AUC despite higher MAE, likely because talent gaps between conferences are easier to capture.
-
-### By Predicted Spread
-
-| Segment | N | MAE | Win Acc | AUC |
-|---------|---|-----|---------|-----|
-| Big favorite (10+ pts) | 129 | 8.62 | 92.2% | 0.859 |
-| Moderate (5-10 pts) | 312 | 8.43 | 75.0% | 0.693 |
-| Lean (<5 pts) | 381 | 8.91 | 58.3% | 0.648 |
-
-### By Actual Closeness
-
-| Segment | N | MAE | Win Acc | AUC |
-|---------|---|-----|---------|-----|
-| Blowout (15+ pts) | 222 | 15.34 | 84.7% | 0.921 |
-| Close (<=5 pts) | 257 | 4.95 | 56.8% | 0.604 |
-
-Close games approach coin-flip accuracy — expected, as outcomes in tight games are driven by in-game variance (free throws, turnovers, last-second shots) that no pre-game model can predict.
-
-### By Season Timing
-
-| Segment | N | MAE | Win Acc | AUC |
-|---------|---|-----|---------|-----|
-| First half of test set | 428 | 8.88 | 71.0% | 0.765 |
-| Second half of test set | 394 | 8.47 | 68.8% | 0.769 |
-
-Performance is stable across the test window with a slight MAE improvement late-season.
-
----
-
-## Feature Importance
-
-Top 15 features by LightGBM split importance (combined margin + win models):
-
-| Rank | Feature | Splits | Description |
-|------|---------|--------|-------------|
-| 1 | diff_w_gbpm | 227 | Minutes-weighted Barttorvik GBPM |
-| 2 | diff_adj_efficiency_margin | 60 | KenPom-style adjusted net efficiency |
-| 3 | diff_elo | 40 | NatStat pre-game ELO rating |
-| 4 | diff_win_pct | 39 | Overall win percentage |
-| 5 | diff_star_gbpm | 38 | Star player's Barttorvik GBPM |
-| 6 | diff_ft_rate | 36 | Free throw rate |
-| 7 | diff_def_rebound_pct | 36 | Defensive rebounding rate |
-| 8 | diff_w_tov_pct | 35 | Minutes-weighted turnover rate |
-| 9 | diff_w_dbpm | 34 | Minutes-weighted defensive BPM |
-| 10 | diff_minutes_stddev | 34 | Minutes distribution (depth proxy) |
-| 11 | diff_star_ppg | 33 | Star player's PPG |
-| 12 | diff_opp_effective_fg_pct | 32 | Opponent effective FG% allowed |
-| 13 | diff_w_rpg | 28 | Minutes-weighted rebounds per game |
-| 14 | diff_adj_defense | 27 | Adjusted defensive efficiency |
-| 15 | diff_w_usage | 24 | Minutes-weighted usage rate |
-
-Barttorvik GBPM dominates (nearly 4x the next feature). GBPM is a possession-adjusted plus/minus metric that captures player impact beyond what box-score BPM can measure. The model also draws signal from adjusted efficiency, ELO, four factors, and roster composition.
-
----
-
-## Known Limitations
-
-- **Two seasons of training data**: Early stopping at 52/127 iterations suggests the model is still data-starved. NatStat has data back to 2007; ingesting even 3-4 more seasons should meaningfully improve generalization.
-- **No roster availability**: The model doesn't know who actually played in each game. A team missing its best player looks identical to a full-strength team.
-- **No lineup data**: Can't model specific 5-man combinations or substitution patterns.
-- **Close game ceiling**: ~55% accuracy on games decided by 5 or fewer points. This is near the theoretical ceiling for pre-game models — in-game variance dominates.
-- **Player rate stats are approximations**: AST%, ORB%, etc. use per-40-minute proxies rather than true possession-based formulas.
-
----
-
-## Context: How Does This Compare?
-
-For reference, public college basketball models typically achieve:
-
-| Model | Win Accuracy | Notes |
-|-------|-------------|-------|
+| Model | Win accuracy | Notes |
+|-------|--------------|-------|
 | Home team always wins | ~58% | Naive baseline |
-| AP/Coaches poll ranking | ~65% | Higher-ranked team wins |
+| AP / Coaches poll | ~65% | Higher-ranked team wins |
 | Basic ELO | ~67% | Where NatStat sits |
-| KenPom/Barttorvik | ~70-72% | Full-season adjusted efficiency |
-| **cstat** | **70.0%** | 2 seasons, 49 features (incl. Torvik GBPM), PIT |
-| Vegas closing lines | ~73-74% | Incorporates injury reports, betting market info |
+| KenPom / Barttorvik | ~70-72% | Full-season adjusted efficiency |
+| **cstat (current)** | **73.7%** | 5 seasons, 49 features (incl. Barttorvik GBPM), point-in-time |
+| Vegas closing lines | ~73-74% | Incorporates injury reports + betting market |
 
-cstat is competitive with established systems despite training on only 2 seasons and lacking injury/lineup data. Adding Barttorvik GBPM brought cstat from 68.6% to 70.0% — closing the gap with KenPom/Barttorvik-tier models. The main paths to further improvement are more training data and recruiting rank as an early-season prior.
+cstat is now level with public-tier baselines. Remaining gaps to Vegas are dominated by lineup / injury signal, not feature engineering — see ROADMAP §6 Phase 6 "Full historical data" and §4b "Predict follow-up — point-in-time historical predictions" for the next levers.
+
+---
+
+## How to refresh this doc
+
+After any model retrain, copy the headline numbers from:
+- `training/models/model_meta.json` — game models (margin / win / total)
+- `training/models/trajectory_model_meta.json` — trajectory
+- `training/models/freshman_model_meta.json` — freshman
+- `training/models/roster_model_meta.json` — roster
+
+Each `*_meta.json` is the authoritative source; this doc is a curated summary. If you only retrain a subset of models, update only the affected section and bump the "Last updated" stamp.
