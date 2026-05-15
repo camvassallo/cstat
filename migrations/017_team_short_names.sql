@@ -6,12 +6,6 @@
 -- The mapping was derived from torvik_player_stats.team_name (the most-common
 -- name per natstat_id), with manual overrides for two NatStat-only programs
 -- (Hartford and Saint Francis NY) that no longer appear in Torvik data.
---
--- DO NOT add a follow-up migration to patch this list. The runtime ingest
--- (team_aliases::short_name) reads data/team_short_names.json on every
--- `cstat-ingest teams` run, so future corrections only need a JSON edit
--- and a re-ingest — no new SQL. Migration 018 violated this by patching
--- one typo here; don't repeat the pattern.
 
 UPDATE teams t
 SET short_name = m.short_name,
