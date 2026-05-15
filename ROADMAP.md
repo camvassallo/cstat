@@ -141,7 +141,7 @@ Barttorvik   ↗                                    ↓
 - ~**Ingest historical seasons**: even 1-2 more seasons roughly doubles training data and reduces early stopping; highest-impact improvement available~ *(done — training pipeline now supports multi-season; 2025+2026 ingested)*
 - ~**Use NatStat ELO as feature**: Replace computed incremental ELO with NatStat's pre-game ELO from `/forecasts` endpoint. Uses only `elo_before` (pre-game) to avoid leakage.~ *(done — `features.py` now uses NatStat pre-game ELO from `game_forecasts`, falling back to computed ELO for games without forecast data)*
 - ~**Benchmark against NatStat win probability**: `/forecasts` provides ELO-based `winexp` per game. Compare our model's predictions against theirs to identify where we add value.~ *(done — cstat wins every metric: +2.1pp accuracy, +0.014 AUC, 3x better calibration)*
-- ~**Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.~ *(partially done — 2022-2026 ingested as of 2026-05-15. Margin/win/total models now train on 26,779 games (was 12,821); win AUC 0.795→0.811, margin R² 0.396→0.459. Trajectory model now trains on 9,239 N→N+1 pairs (was 4,424); LOPO pooled MAE 2.29→2.20. Roster model on 1,799 team-seasons (was 1,089); LOSO pooled MAE 7.43→6.45. See `docs/model_performance.md`. Pre-2022 backfill still unblocks all-time leaderboards & career trajectories — see §6.)*
+- ~**Expand historical training data**: `/seasons` confirms perfs available 2007-2026 (20 seasons), play-by-play from 2012+. Even 5-6 seasons would dramatically reduce early-stopping. ~57 `/forecasts` API calls per season for per-game ELO.~ *(partially done — 2022-2026 ingested as of 2026-05-15. Margin/win/total models now train on 20,674 games (was 12,821, +61%); win AUC 0.795→0.811, margin R² 0.396→0.459. Trajectory model now trains on 9,239 N→N+1 pairs (was 4,424); LOPO pooled MAE 2.29→2.20. Roster model on 1,799 team-seasons (was 1,089); LOSO pooled MAE 7.43→6.45. Freshman model on 1,154 rows (was 963; class-of-2021 ingested); LOCO pooled MAE 2.53→2.48. See `docs/model_performance.md`. Pre-2022 backfill still unblocks all-time leaderboards & career trajectories — see §6.)*
 - **Lower roster qualification**: reduce from 5 to 3 prior games to recover ~200-300 training rows
 - **Add `games_played` feature**: lets model know how much data it has on a team (early-season uncertainty)
 - **Conference strength feature**: average adj_efficiency_margin of conference, captures tier gaps beyond SOS
@@ -152,7 +152,7 @@ NatStat's `/forecasts` provides both `elo_before` (pre-game) and `elo_after` (po
 
 ### Known Model Limitations
 - **No game-specific roster**: Model doesn't know who actually played — a team missing their star looks the same as full-strength.
-- **Limited data**: Training on 2022-2026 seasons (26,779 games as of 2026-05-15). More historical seasons would further improve generalization. NatStat has data back to 2007.
+- **Limited data**: Training on 2022-2026 seasons (20,674 games after feature-completeness filter as of 2026-05-15; 26,779 raw before NaN drop). More historical seasons would further improve generalization. NatStat has data back to 2007.
 - **No lineup data**: Can't model specific 5-man combinations on court.
 
 ### Player-Centric Composition Approach

@@ -39,6 +39,7 @@ The order in `trajectory_model_meta.json::features` is wire-locked to `cstat_cor
 | Rate stats | `prior_ts`, `prior_efg`, `prior_usg`, `prior_ast_pct`, `prior_tov_pct`, `prior_orb_pct`, `prior_drb_pct`, `prior_stl_pct`, `prior_blk_pct`, `prior_ft_rate` | 10 |
 | Impact metrics | `prior_ogbpm`, `prior_dgbpm`, `prior_gbpm`, `prior_campom` | 4 |
 | Archetype mixture | `arch_{wizard,sorcerer,warlock,bard,ranger,barbarian,paladin,monk,cleric,druid,rogue,fighter}` — primary 1.0× / secondary 0.5× | 12 |
+| Recruit block (shared with freshman model) | `recruit_is_ranked`, `recruit_composite_rank`, `recruit_composite_rating`, `recruit_star_rating`, `recruit_position_rank`, `recruit_rank_movement`, `recruit_height_in`, `recruit_weight_lb`, `recruit_bmi_proxy`, `recruit_position_code`, `years_since_recruit` | 11 |
 
 `prior_class_year_code` encoding: `Fr=0, So=1, Jr=2, Sr=3, Gr=4, NULL/unknown=-1`. NULL gets a separate bucket rather than imputation — LightGBM splits can isolate the unknown cohort, and many real rows have NULL class year (Torvik bio coverage is partial).
 

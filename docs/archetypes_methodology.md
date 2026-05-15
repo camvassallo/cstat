@@ -42,7 +42,7 @@ The script clusters the **union of all configured seasons** in a single k-means 
 
 The previous design clustered each season independently (`--season 2026`). Returning-player primary-class stability — measured by joining `player_archetypes` to itself via `torvik_player_stats.torvik_pid`, our stable cross-season ID — was **28%**. K-means redrew cluster boundaries each season, and Hungarian re-matched class names to whichever cluster scored best against each signature; small shifts in centroid position caused class labels to flip even when the underlying skill profile hadn't changed.
 
-Combined-cohort training lifts returning-player primary stability to ~46–48% per adjacent pair (and "primary OR secondary class match" to ~75–80%) on the 4-season cohort, and holds at similar stability on the current 5-season cohort (2022-2026, 15,658 player-seasons). Same player → same cluster → same class assignment, regardless of which season we look at.
+Combined-cohort training lifts returning-player primary stability to ~46–48% per adjacent pair (and "primary OR secondary class match" to ~75–80%) on the 4-season cohort, and stays in that range on the current 5-season cohort (2022-2026, 15,658 player-seasons; measured pooled 47.1% primary / 78.2% primary-or-secondary across 7,054 returning pairs — see the stability table below). Same player → same cluster → same class assignment, regardless of which season we look at.
 
 **The trade-off:** combined-cohort doesn't capture genuine year-to-year evolution (rising 3PT volume, small-ball, rule changes). At a 2-3 season horizon that effect is tiny. At 4 seasons we already saw it bite: expanding from 2025–2026 to 2023–2026 shifted the Bard cluster from "low-USG pass-first distributor" to "mid-major primary creator," and Monk from "disciplined wing star" to "stretch-four / versatile forward." Both prose rewrites followed the data. At 5 seasons (adding 2022) the Bard / Fighter pair drifted again — Bard re-anchored on "high-USG mid-major lead, moderate AST" and Fighter absorbed the historical "pass-first distributor" prose; the signature relaxation dropped `ast_pct` from both classes (no longer a clean separator) and the Bard prose was tweaked accordingly. At 5+ seasons era effects stop being subtle — see "Era horizon" below.
 
@@ -239,16 +239,17 @@ Paladin (140 in 2023) dips just under the rule-of-thumb 150 floor — not a prob
 
 ### Stability
 
-Per adjacent-season pair, returning players matched by `torvik_pid` (numbers from the prior 4-season cohort fit; recompute against the current 5-season fit when convenient — query is `player_archetypes` self-joined via `torvik_player_stats.torvik_pid`):
+Per adjacent-season pair, returning players matched by `torvik_pid` — measured on the current 5-season fit (2026-05-15):
 
 | Pair | n returning | Primary stable | In primary OR secondary |
 |---|---:|---:|---:|
-| 2023 → 2024 | 1,829 | 46.9% | 79.8% |
-| 2024 → 2025 | 1,778 | 48.5% | 78.3% |
-| 2025 → 2026 | 1,626 | 44.3% | 75.2% |
-| **Total** | **5,233** | **46.6%** | **77.9%** |
+| 2022 → 2023 | 1,821 | 48.9% | 80.1% |
+| 2023 → 2024 | 1,829 | 47.5% | 78.8% |
+| 2024 → 2025 | 1,778 | 48.7% | 79.0% |
+| 2025 → 2026 | 1,626 | 42.8% | 74.6% |
+| **Total** | **7,054** | **47.1%** | **78.2%** |
 
-Compare to the original per-season-clustering baseline (v1): 28.1% primary stability. Combined-cohort training is doing what it's supposed to. With 2022 added the cluster geometry shifted (Bard / Fighter prose updated, signature `ast_pct` weights dropped) but the load-bearing design — one k-means fit across the union — is unchanged.
+Compare to the original per-season-clustering baseline (v1): 28.1% primary stability. Combined-cohort training is doing what it's supposed to. With 2022 added the cluster geometry shifted (Bard / Fighter prose updated, signature `ast_pct` weights dropped) but stability held — the load-bearing design — one k-means fit across the union — is unchanged.
 
 ### Where to look for drift first
 

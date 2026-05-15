@@ -1,13 +1,13 @@
 # Model Performance Report
 
 Last updated: 2026-05-15
-Training data: 2022-2026 seasons (5 seasons across all models, 26,779 games for game prediction)
+Training data: 2022-2026 seasons (5 seasons across all models). Game-prediction training set is 20,674 games after dropping early-season rows with incomplete features (26,779 raw before filter).
 
 cstat ships four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
 | Model | Task | Training rows | Where it's used |
 |-------|------|---------------|------------------|
-| **Game (margin / win / total)** | Per-game margin, win prob, total points | 26,779 games | `POST /api/predict`, score ticker, schedule projected scores |
+| **Game (margin / win / total)** | Per-game margin, win prob, total points | 20,674 games | `POST /api/predict`, score ticker, schedule projected scores |
 | **Trajectory** | Project next-season CamPom v3 for returners | 9,239 N→N+1 player-pairs | Transfer page (ΔCP), 2027 projection page, PlayerDetail "Proj YYYY-YY" chip |
 | **Freshman** | Project freshman-season CamPom v3 for new recruits | 1,154 freshmen (5 recruit classes 2021-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
 | **Roster** | Project team AdjEM from roster aggregates | 1,799 team-seasons | 2027 projection page team rows, transfer-portal "what-if" |
@@ -71,7 +71,7 @@ Three LightGBM regressors (mean + q10 + q90) trained on a shared 48-feature inpu
 | +10..+15 | 139 | +11.58 | +11.67 | −0.10 |
 | +15..+20 | 20 | +13.67 | +15.79 | **−2.12** |
 
-The model is well-calibrated in `[−5, +15]` and under-projects elite returners (`≥ +15`) by ~2 CamPom — empirical regression-to-the-mean + thin tail support (n=20 in the highest non-empty bucket; +20+ is **zero** in training, so Boozer-tier predictions are extrapolation). The trajectory tooltip on PlayerDetail / Transfer / Projection pages surfaces this caveat conditionally.
+The model is well-calibrated in `[−5, +15]` and under-projects elite returners (`≥ +15`) by ~2 CamPom — empirical regression-to-the-mean + thin tail support (n=20 in the +15..+20 bucket; n=**1** in +20+, single returner whose +30 actual produced a −13 bias on a +17 prediction). Boozer-tier predictions are essentially extrapolation. The trajectory tooltip on PlayerDetail / Transfer / Projection pages surfaces this caveat conditionally.
 
 **Known limitations:**
 - Destination-agnostic for transferring returners (no destination-team archetype mix in v1 features).
@@ -97,7 +97,9 @@ Three LightGBM regressors (mean + q10 + q90) on 13 features: 11 from the shared 
 | 2023 → 2024 | 250 | 2.576 | 2.590 | +0.013 |
 | 2024 → 2025 | 186 | 2.475 | 2.588 | +0.113 |
 | 2025 → 2026 | 308 | 2.607 | 2.743 | +0.136 |
-| **Pooled** | 1,154 | **2.477** | 2.535 | **+0.058 (2.3%)** |
+| **Pooled (weighted)** | 1,154 | **2.477** | **2.578** | **+0.101 (3.9%)** |
+
+Pooled baseline above is the n-weighted average of each fold's held-out tier-mean baseline (apples-to-apples with the model's LOCO MAE). For reference, the in-sample tier-mean heuristic (whole-dataset tier means applied to every row) scores MAE 2.535 — the training script reports `2.477 vs 2.535` (~2.3% delta) which is the in-sample-baseline framing; the table above uses the stricter LOCO-aligned baseline.
 
 5-fold random CV: MAE 2.439, R² 0.364. Gap vs LOCO: +0.038 — no severe overfit, mild fold-overlap leakage.
 

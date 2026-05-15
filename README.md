@@ -160,7 +160,14 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 
 ### ML Predictions
 
-LightGBM models trained on 49 point-in-time diff-features (team stats, roster aggregates, rolling form) — game prediction (margin/win/total), plus trajectory (N→N+1 player projection), freshman (recruit→freshman projection), and roster (team AdjEM from roster aggregates). All trained on the 2022-2026 combined cohort (26,779 games for game models; 9,239 N→N+1 pairs for trajectory; 1,154 freshmen across recruit classes 2021-2025). Exported to ONNX and loaded at API startup via the `ort` crate. Per-model stats: `docs/model_performance.md`.
+Four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
+
+- **Game prediction** (margin / win / total) — 49 point-in-time diff-features for margin/win; 58 features for total (the 49 diffs plus 9 `sum_*` level-sensitive companions). Trained on 20,674 games from cstat-seasons 2022-2026 (after feature-completeness filter).
+- **Trajectory** — 48 features, 9,239 N→N+1 player-pairs across the 2022-2026 cohort. Projects returning-player CamPom v3 for next season.
+- **Freshman** — 13 features, 1,154 freshmen across recruit classes 2021-2025. Projects freshman-season CamPom v3 from 247 composite + school context.
+- **Roster** — 36 features, 1,799 team-seasons. Projects team AdjEM from roster aggregates.
+
+Per-model stats: `docs/model_performance.md`.
 
 ```
 GET /api/predict?home=Duke+Blue+Devils&away=North+Carolina+Tar+Heels&neutral=false
