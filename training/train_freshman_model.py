@@ -281,7 +281,13 @@ def leave_one_class_out_cv(df: pd.DataFrame) -> dict:
         truth = test_df["target_campom"].values
         mae = float(mean_absolute_error(truth, preds))
         rmse = float(np.sqrt(mean_squared_error(truth, preds)))
-        r2 = float(r2_score(truth, preds)) if len(test_df) > 1 else float("nan")
+        # `None` rather than `float('nan')` for single-row folds: NaN
+        # serialises as the non-standard JSON token `NaN`, which strict
+        # parsers (incl. browser `JSON.parse`) reject. None → `null`,
+        # universally safe. Mirrors the pooled-r2 branch below.
+        r2: Optional[float] = (
+            float(r2_score(truth, preds)) if len(test_df) > 1 else None
+        )
         # Tier-mean baseline using TRAIN-only tier means. Keeps the
         # comparison honest — the held-out class doesn't feed its own
         # baseline.
