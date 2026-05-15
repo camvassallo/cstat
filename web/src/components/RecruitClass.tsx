@@ -409,7 +409,7 @@ export default function RecruitClass({ year }: Props) {
         </span>
       </div>
       <div style={{ height: 'calc(100dvh - 220px)', minHeight: '400px', width: '100%' }}>
-        <AgGridReact<RecruitRow>
+        <AgGridReact<RankedRecruit>
           theme={gridTheme}
           columnDefs={columns}
           rowData={filtered ?? []}
