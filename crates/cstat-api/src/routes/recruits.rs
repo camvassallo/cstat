@@ -5,6 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use cstat_core::freshman_model::{FreshmanFeatureRow, build_freshman_features};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -58,6 +59,18 @@ struct RecruitRow {
     secondary_class: Option<String>,
     minutes_per_game: Option<f64>,
     games_played: Option<i32>,
+    // Freshman-impact prior model inputs (Phase 6). Same join chain as
+    // `freshman_model::fetch_freshman_features` — committed-team AdjEM
+    // from the season BEFORE the recruit arrived (`r.year`), peer-class
+    // mean rating across the same (year, committed_team) bucket. NULL
+    // for solo signings / defunct programs; sentinel-encoded inside
+    // `build_freshman_features`.
+    committed_team_prior_adjem: Option<f64>,
+    peer_class_strength: Option<f64>,
+    // Raw recruit fields the freshman model needs but the existing route
+    // didn't surface — `year` for `years_since_recruit`, the others to
+    // mirror the FreshmanFeatureRow struct.
+    recruit_year: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +102,14 @@ struct EnrichedRecruit {
     secondary_class: Option<String>,
     minutes_per_game: Option<f64>,
     games_played: Option<i32>,
+    // Phase 6 freshman-impact projection — mean + q10/q90 band. Available
+    // for every recruit (uses pre-college features only; doesn't depend on
+    // cstat_player_id being resolved). For unranked recruits with missing
+    // school context, the model returns a sensible unranked-cohort baseline
+    // via the sentinel branch.
+    projected_campom_mean: Option<f32>,
+    projected_campom_lower: Option<f32>,
+    projected_campom_upper: Option<f32>,
 }
 
 async fn recruit_list(
@@ -132,6 +153,7 @@ async fn recruit_list(
             r.profile_url,
             r.photo_url,
             r.cstat_player_id,
+            r.year                       AS recruit_year,
             t.name                       AS committed_team_name,
             t.short_name                 AS committed_team_short_name,
             tps.cam_gbpm_v3_psos         AS campom,
@@ -139,7 +161,9 @@ async fn recruit_list(
             pa.primary_class             AS primary_class,
             pa.secondary_class           AS secondary_class,
             pss.minutes_per_game         AS minutes_per_game,
-            pss.games_played             AS games_played
+            pss.games_played             AS games_played,
+            adjem.adj_efficiency_margin  AS committed_team_prior_adjem,
+            peer.mean_rating             AS peer_class_strength
         FROM recruits r
         LEFT JOIN teams t
             ON t.id = r.committed_team_id
@@ -149,6 +173,17 @@ async fn recruit_list(
             ON pa.player_id = r.cstat_player_id AND pa.season = $2
         LEFT JOIN player_season_stats pss
             ON pss.player_id = r.cstat_player_id AND pss.season = $2
+        LEFT JOIN teams tm_prior
+            ON tm_prior.natstat_id = t.natstat_id AND tm_prior.season = r.year
+        LEFT JOIN team_season_stats adjem
+            ON adjem.team_id = tm_prior.id AND adjem.season = r.year
+        LEFT JOIN (
+            SELECT year, committed_team_id, AVG(composite_rating) AS mean_rating
+            FROM recruits
+            WHERE composite_rating IS NOT NULL AND committed_team_id IS NOT NULL
+            GROUP BY year, committed_team_id
+        ) peer
+            ON peer.year = r.year AND peer.committed_team_id = r.committed_team_id
         WHERE r.year = $1
         ORDER BY r.composite_rank NULLS LAST, r.full_name
         "#,
@@ -173,35 +208,75 @@ async fn recruit_list(
         ));
     }
 
+    // Phase 6 freshman-impact projections — per-recruit mean + q10/q90 band.
+    // Inference is single-row per recruit; with ~3 ONNX runs per call (mean
+    // + q10 + q90) and ~370 recruits in a typical class, this is ~1100 ONNX
+    // runs serialized through the Predictor's mutex sessions. Acceptable for
+    // a non-hot-path route; batch inference is a follow-up if needed.
+    //
+    // On inference error, log and emit NULL projection fields rather than
+    // failing the whole route — one borked feature vector shouldn't deny
+    // the whole class-of-N response.
     let enriched: Vec<EnrichedRecruit> = recruits
         .into_iter()
-        .map(|r| EnrichedRecruit {
-            composite_rank: r.composite_rank,
-            name: r.full_name,
-            position: r.position,
-            height: r.height,
-            weight: r.weight,
-            city: r.city,
-            state: r.state,
-            high_school: r.high_school,
-            composite_rating: r.composite_rating,
-            star_rating: r.star_rating,
-            previous_rank: r.previous_rank,
-            position_rank: r.position_rank,
-            state_rank: r.state_rank,
-            committed_school: r.committed_school,
-            committed_school_short: r.committed_team_short_name.or(r.committed_team_name),
-            committed_team_id: r.committed_team_id,
-            commit_status: r.commit_status,
-            profile_url: r.profile_url,
-            photo_url: r.photo_url,
-            player_id: r.cstat_player_id,
-            campom: r.campom,
-            campom_pct: r.campom_pct,
-            primary_class: r.primary_class,
-            secondary_class: r.secondary_class,
-            minutes_per_game: r.minutes_per_game,
-            games_played: r.games_played,
+        .map(|r| {
+            let feature_row = FreshmanFeatureRow {
+                composite_rank: r.composite_rank,
+                composite_rating: r.composite_rating,
+                star_rating: r.star_rating,
+                position_rank: r.position_rank,
+                previous_rank: r.previous_rank,
+                height: r.height.clone(),
+                weight: r.weight,
+                position: r.position.clone(),
+                year: r.recruit_year,
+                committed_team_prior_adjem: r.committed_team_prior_adjem,
+                peer_class_strength: r.peer_class_strength,
+            };
+            let features = build_freshman_features(&feature_row);
+            let (proj_mean, proj_lo, proj_hi) = match state.predictor.predict_freshman(&features) {
+                Ok(p) => (Some(p.mean), Some(p.lower), Some(p.upper)),
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        name = %r.full_name,
+                        "freshman predict failed",
+                    );
+                    (None, None, None)
+                }
+            };
+
+            EnrichedRecruit {
+                composite_rank: r.composite_rank,
+                name: r.full_name,
+                position: r.position,
+                height: r.height,
+                weight: r.weight,
+                city: r.city,
+                state: r.state,
+                high_school: r.high_school,
+                composite_rating: r.composite_rating,
+                star_rating: r.star_rating,
+                previous_rank: r.previous_rank,
+                position_rank: r.position_rank,
+                state_rank: r.state_rank,
+                committed_school: r.committed_school,
+                committed_school_short: r.committed_team_short_name.or(r.committed_team_name),
+                committed_team_id: r.committed_team_id,
+                commit_status: r.commit_status,
+                profile_url: r.profile_url,
+                photo_url: r.photo_url,
+                player_id: r.cstat_player_id,
+                campom: r.campom,
+                campom_pct: r.campom_pct,
+                primary_class: r.primary_class,
+                secondary_class: r.secondary_class,
+                minutes_per_game: r.minutes_per_game,
+                games_played: r.games_played,
+                projected_campom_mean: proj_mean,
+                projected_campom_lower: proj_lo,
+                projected_campom_upper: proj_hi,
+            }
         })
         .collect();
 

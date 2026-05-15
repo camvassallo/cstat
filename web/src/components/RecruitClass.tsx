@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchRecruits, type RecruitRow } from '../api/client';
+import { campomTier, campomTierColor } from './campom';
 import { gridTheme } from '../theme';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
@@ -187,6 +188,32 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RecruitRow>[] {
         ) : (
           <span className="text-gray-600 text-xs">—</span>
         ),
+    },
+    {
+      headerName: 'Projection',
+      field: 'projected_campom_mean',
+      ...flexCol(1, 100),
+      headerTooltip:
+        "cstat's freshman-impact projection (CamPom v3 for the recruit's first college season). Hover a cell to see the q10–q90 band. Wider band = thinner training-set support; tighter band = denser cohort. Selection-bias caveat: elite top-30 projections are calibrated on returners since the highest-rated freshmen leave for the draft.",
+      sort: 'desc',
+      cellRenderer: (p: { value: number | null; data?: RecruitRow }) => {
+        if (p.value == null) return <span className="text-gray-600 text-xs">—</span>;
+        const tier = campomTier(p.value);
+        const lo = p.data?.projected_campom_lower;
+        const hi = p.data?.projected_campom_upper;
+        const bandStr =
+          lo != null && hi != null
+            ? `Projected freshman CamPom: ${p.value.toFixed(1)} (${lo.toFixed(1)}–${hi.toFixed(1)})${tier ? ` · ${tier}` : ''}`
+            : `Projected freshman CamPom: ${p.value.toFixed(1)}${tier ? ` · ${tier}` : ''}`;
+        return (
+          <span
+            className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
+            title={bandStr}
+          >
+            {p.value.toFixed(1)}
+          </span>
+        );
+      },
     },
   ];
 }
