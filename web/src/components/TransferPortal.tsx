@@ -296,7 +296,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
       field: 'campom_delta',
       ...flexCol(1, 80),
       headerTooltip:
-        "Projection vs. current: projected next-season CamPom − current CamPom. Negative (red) means the model expects regression — common for elite transfers (≥+15 current) due to regression-to-the-mean in the trajectory model. Positive (green) means the model expects growth — typical for younger players still on the rising curve. Read alongside the q10–q90 band on the Proj column for the honest framing. Distinct from Δ247 (which is a RANK comparison).",
+        "Projection vs. current: projected next-season CamPom − current CamPom, rounded to one decimal. Negative (red) means the model expects regression — common for elite transfers (≥+15 current) due to regression-to-the-mean in the trajectory model. Positive (green) means the model expects growth — typical for younger players still on the rising curve. Read alongside the q10–q90 band on the Proj column for the honest framing. Distinct from Δ247 (which is a RANK comparison).",
       comparator: (a: number | null, b: number | null) => {
         if (a == null && b == null) return 0;
         if (a == null) return 1;
@@ -305,14 +305,22 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
       },
       cellRenderer: (p: { value: number | null }) => {
         if (p.value == null) return <span className="text-gray-600">—</span>;
-        const v = p.value;
+        // Round once and derive both color and sign from the rounded
+        // value so we never show "+0.0" in green or "-0.1" in gray
+        // because the raw float sat just under the color threshold.
+        const rounded = parseFloat(p.value.toFixed(1));
         const color =
-          v > 0.1
+          rounded > 0
             ? 'text-emerald-400'
-            : v < -0.1
+            : rounded < 0
               ? 'text-rose-400'
               : 'text-gray-500';
-        const text = v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1);
+        const text =
+          rounded > 0
+            ? `+${rounded.toFixed(1)}`
+            : rounded === 0
+              ? '0.0'
+              : rounded.toFixed(1);
         return (
           <span className={`text-xs font-semibold ${color}`}>{text}</span>
         );
