@@ -1,0 +1,144 @@
+{
+  "model": "freshman_model",
+  "target": "cam_gbpm_v3_psos (freshman season = recruit.year + 1)",
+  "join_key": "recruits.cstat_player_id \u2192 torvik_player_stats.player_id",
+  "training_classes": [
+    2022,
+    2023,
+    2024,
+    2025
+  ],
+  "n_rows": 963,
+  "n_features": 13,
+  "features": [
+    "recruit_is_ranked",
+    "recruit_composite_rank",
+    "recruit_composite_rating",
+    "recruit_star_rating",
+    "recruit_position_rank",
+    "recruit_rank_movement",
+    "recruit_height_in",
+    "recruit_weight_lb",
+    "recruit_bmi_proxy",
+    "recruit_position_code",
+    "years_since_recruit",
+    "committed_team_prior_adjem",
+    "peer_class_strength"
+  ],
+  "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
+  "quantile_alphas": {
+    "q10": 0.1,
+    "q90": 0.9
+  },
+  "tier_thresholds": [
+    30,
+    100,
+    250
+  ],
+  "tier_mean_baseline": {
+    "tier_means": {
+      "1": 6.9253028904194345,
+      "2": 2.5016073481336436,
+      "3": 0.8088591967577654,
+      "4": -1.0230117002807615
+    },
+    "mae": 2.561313085599537,
+    "rmse": 3.5724587833518453,
+    "r2": 0.3063912752285479,
+    "per_tier_mae": {
+      "1": 4.318047777053221,
+      "2": 2.7614938076935442,
+      "3": 2.1843230947337817,
+      "4": 2.2168557819023094
+    },
+    "per_tier_n": {
+      "1": 110,
+      "2": 206,
+      "3": 357,
+      "4": 290
+    }
+  },
+  "cv_5fold": {
+    "mae": 2.488203175762751,
+    "rmse": 3.398283830514069,
+    "r2": 0.3666267359535848,
+    "per_fold_mae": [
+      2.6151750599926262,
+      2.3284292887450615,
+      2.4574119479436507,
+      2.606152269082474,
+      2.433847313049941
+    ],
+    "per_tier_mae": {
+      "1": 3.8404049035031487,
+      "2": 2.8501766909030737,
+      "3": 2.2298135777705754,
+      "4": 2.0360402760463683
+    },
+    "per_tier_n": {
+      "1": 110,
+      "2": 206,
+      "3": 357,
+      "4": 290
+    }
+  },
+  "top_features": [
+    {
+      "name": "committed_team_prior_adjem",
+      "importance": 437
+    },
+    {
+      "name": "peer_class_strength",
+      "importance": 420
+    },
+    {
+      "name": "recruit_bmi_proxy",
+      "importance": 374
+    },
+    {
+      "name": "recruit_composite_rating",
+      "importance": 274
+    },
+    {
+      "name": "recruit_composite_rank",
+      "importance": 266
+    },
+    {
+      "name": "recruit_position_rank",
+      "importance": 261
+    },
+    {
+      "name": "recruit_rank_movement",
+      "importance": 249
+    },
+    {
+      "name": "recruit_weight_lb",
+      "importance": 166
+    },
+    {
+      "name": "recruit_height_in",
+      "importance": 129
+    },
+    {
+      "name": "recruit_position_code",
+      "importance": 85
+    },
+    {
+      "name": "recruit_star_rating",
+      "importance": 6
+    },
+    {
+      "name": "recruit_is_ranked",
+      "importance": 0
+    },
+    {
+      "name": "years_since_recruit",
+      "importance": 0
+    }
+  ],
+  "known_limitations": [
+    "Selection bias on top-30 recruits: elite freshmen leave for the draft, so the calibrated cohort skews toward returners.",
+    "School-context features (committed_team_prior_adjem, peer_class_strength) skip the dog-fooding trap by using the season BEFORE the recruit arrived.",
+    "Sample size below ~30th ranked drops fast; bands widen accordingly. Surface the projection with the q10\u2013q90 band, not just the mean."
+  ]
+}
