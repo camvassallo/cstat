@@ -1062,17 +1062,17 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../training/models")
     }
 
-    /// Every file `Predictor::load` reads. Tests that call `load` should
-    /// skip via this helper when running on a dev box without the full
-    /// model set — beats stale per-test pre-flight lists that quietly
-    /// fall out of sync with `Predictor::load`. Single source of truth:
-    /// when a new model bundle joins the loader, append here.
+    /// Every file `Predictor::load` reads. Tests that call `load` go
+    /// through this helper so the gate stays in lockstep with the loader
+    /// (a stale per-test pre-flight list silently falls out of sync).
+    /// Single source of truth: when a new model bundle joins the loader,
+    /// append here.
     ///
     /// Panics with a clear message if any file is missing. The committed
-    /// bundle under `training/models/` is the source of truth — CI clones
-    /// include them, so a missing file means someone removed a model
-    /// without updating this list (or the local repo is mid-edit). Either
-    /// way we want the test to fail loudly, not silently skip.
+    /// bundle under `training/models/` is the source of truth — CI
+    /// clones include them, so a missing file means someone removed a
+    /// model without updating this list (or the local repo is mid-edit).
+    /// Either way we want the test to fail loudly, not silently skip.
     fn require_model_files(dir: &Path) {
         const REQUIRED: &[&str] = &[
             "margin_model.onnx",
@@ -1102,9 +1102,9 @@ mod tests {
     #[test]
     fn feature_names_match_model_meta() {
         let meta_path = model_dir().join("model_meta.json");
-        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|_| {
+        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|e| {
             panic!(
-                "model_meta.json not found at {} — run training/export_onnx.py first",
+                "read model_meta.json at {}: {e} — run training/export_onnx.py first",
                 meta_path.display(),
             )
         });
@@ -1126,9 +1126,9 @@ mod tests {
     #[test]
     fn total_feature_names_match_model_meta() {
         let meta_path = model_dir().join("model_meta.json");
-        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|_| {
+        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|e| {
             panic!(
-                "model_meta.json not found at {} — run training/export_onnx.py first",
+                "read model_meta.json at {}: {e} — run training/export_onnx.py first",
                 meta_path.display(),
             )
         });
@@ -1407,9 +1407,9 @@ mod tests {
     #[test]
     fn trajectory_feature_names_match_model_meta() {
         let meta_path = model_dir().join("trajectory_model_meta.json");
-        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|_| {
+        let content = std::fs::read_to_string(&meta_path).unwrap_or_else(|e| {
             panic!(
-                "trajectory_model_meta.json not found at {} — run training/export_onnx.py first",
+                "read trajectory_model_meta.json at {}: {e} — run training/export_onnx.py first",
                 meta_path.display(),
             )
         });
