@@ -248,6 +248,89 @@ def kfold_cv(df: pd.DataFrame, n_splits: int = 5) -> dict:
     }
 
 
+def leave_one_class_out_cv(df: pd.DataFrame) -> dict:
+    """Leave-one-class-out CV — the rigorous out-of-sample test.
+
+    The 5-fold random CV above lets adjacent-class signal leak between
+    train and test rows; LOCO simulates the production task ("we have
+    classes A/B/C; project class D") by holding out every row from one
+    recruit_year, training on the rest, scoring on the held-out cohort.
+
+    For each held-out class we also compute the tier-mean baseline using
+    train-only tier means so the comparison is apples-to-apples (the
+    global baseline above uses the full corpus including the held-out
+    rows, which would understate baseline error here).
+
+    Acceptance gate: pooled LOCO MAE should beat tier-mean baseline on
+    the same held-out cohorts. Blowing past ~3.0 signals serious overfit;
+    landing within ±0.3 of the 5-fold CV number (2.49) means the model
+    generalizes across classes.
+    """
+    classes = sorted(df["recruit_year"].unique())
+    fold_results: dict[int, dict] = {}
+    pooled_pred: list[float] = []
+    pooled_truth: list[float] = []
+    for held_year in classes:
+        train_df = df[df["recruit_year"] != held_year]
+        test_df = df[df["recruit_year"] == held_year]
+        if len(test_df) == 0:
+            continue
+        model = lgb.LGBMRegressor(**lgb_params("regression"))
+        model.fit(train_df[FEATURE_COLS], train_df["target_campom"])
+        preds = model.predict(test_df[FEATURE_COLS])
+        truth = test_df["target_campom"].values
+        mae = float(mean_absolute_error(truth, preds))
+        rmse = float(np.sqrt(mean_squared_error(truth, preds)))
+        r2 = float(r2_score(truth, preds)) if len(test_df) > 1 else float("nan")
+        # Tier-mean baseline using TRAIN-only tier means. Keeps the
+        # comparison honest — the held-out class doesn't feed its own
+        # baseline.
+        train_tier_means = train_df.groupby("tier")["target_campom"].mean().to_dict()
+        baseline_preds = test_df["tier"].map(train_tier_means).values
+        baseline_mae = float(mean_absolute_error(truth, baseline_preds))
+        per_tier: dict[int, dict] = {}
+        for t in (1, 2, 3, 4):
+            tier_mask = (test_df["tier"] == t).values
+            n_t = int(tier_mask.sum())
+            if n_t == 0:
+                continue
+            per_tier[t] = {
+                "n": n_t,
+                "model_mae": float(np.mean(np.abs(preds[tier_mask] - truth[tier_mask]))),
+                "baseline_mae": float(
+                    np.mean(np.abs(baseline_preds[tier_mask] - truth[tier_mask]))
+                ),
+            }
+        fold_results[int(held_year)] = {
+            "n": int(len(test_df)),
+            "model_mae": mae,
+            "model_rmse": rmse,
+            "model_r2": r2,
+            "baseline_mae": baseline_mae,
+            "per_tier": per_tier,
+        }
+        pooled_pred.extend(preds.tolist())
+        pooled_truth.extend(truth.tolist())
+        print(
+            f"  hold-out {held_year}: n={len(test_df):3d}  "
+            f"model MAE {mae:.3f}  baseline MAE {baseline_mae:.3f}  "
+            f"Δ={baseline_mae - mae:+.3f}"
+        )
+    pooled_pred_arr = np.array(pooled_pred)
+    pooled_truth_arr = np.array(pooled_truth)
+    return {
+        "per_fold": fold_results,
+        "pooled": {
+            "n": int(len(pooled_truth_arr)),
+            "mae": float(mean_absolute_error(pooled_truth_arr, pooled_pred_arr)),
+            "rmse": float(np.sqrt(mean_squared_error(pooled_truth_arr, pooled_pred_arr))),
+            "r2": float(r2_score(pooled_truth_arr, pooled_pred_arr))
+            if len(pooled_truth_arr) > 1
+            else None,
+        },
+    }
+
+
 def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -> None:
     from onnxmltools.convert import convert_lightgbm
     from onnxconverter_common.data_types import FloatTensorType
@@ -302,6 +385,34 @@ def main() -> None:
 
     print()
     print("=" * 60)
+    print("Leave-one-class-out CV (rigorous out-of-sample test)")
+    print("=" * 60)
+    loco = leave_one_class_out_cv(df)
+    pooled = loco["pooled"]
+    print(
+        f"  pooled (n={pooled['n']}): MAE {pooled['mae']:.3f}  RMSE {pooled['rmse']:.3f}  "
+        f"R² {pooled['r2']:.3f}"
+    )
+    # Honesty gate: pooled LOCO MAE should beat tier-mean baseline on the
+    # same held-out cohorts AND stay within ~±0.3 of the 5-fold CV number.
+    # Print the comparison so the takeaway is visible at the bottom of every
+    # training run.
+    cv_gap = pooled["mae"] - cv["mae"]
+    baseline_gap = baseline["mae"] - pooled["mae"]
+    if baseline_gap > 0:
+        print(
+            f"  Beats tier-mean baseline ({baseline['mae']:.3f}) by {baseline_gap:.3f} "
+            f"({100 * baseline_gap / baseline['mae']:.1f}%) on held-out cohorts."
+        )
+    else:
+        print(
+            f"  LOSES to tier-mean baseline ({baseline['mae']:.3f}) by {-baseline_gap:.3f} "
+            f"on held-out cohorts — investigate before shipping."
+        )
+    print(f"  Gap vs 5-fold random CV ({cv['mae']:.3f}): {cv_gap:+.3f}")
+
+    print()
+    print("=" * 60)
     print("Final fit on all data — mean + quantile (q=0.1, q=0.9)")
     print("=" * 60)
     mean_model = fit_final(df, "regression")
@@ -332,6 +443,7 @@ def main() -> None:
         "tier_thresholds": TIER_THRESHOLDS,
         "tier_mean_baseline": baseline,
         "cv_5fold": cv,
+        "loco_cv": loco,
         "top_features": [{"name": n, "importance": int(i)} for n, i in importance],
         "known_limitations": [
             "Selection bias on top-30 recruits: elite freshmen leave for the draft, so the calibrated cohort skews toward returners.",
