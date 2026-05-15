@@ -17,6 +17,7 @@ use cstat_core::roster_projection::{
 };
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
+    fetch_trajectory_oof,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -542,45 +543,73 @@ async fn projection_team_detail(
     for (row, _) in &projection.uncertain {
         traj_ids.push(row.player_id);
     }
+    // Precedence: OOF (LOPO held-out) predictions first for any player
+    // whose torvik_pid has a row in `trajectory_oof_predictions` at
+    // target_season = year. For historical years (target_season the
+    // model trained on) this serves honest held-out projections; for
+    // the forward year (current year + 1) the OOF table is empty and
+    // everything falls through to live inference. See ROADMAP §"Serve
+    // held-out trajectory/freshman predictions for historical years".
     let traj_predictions: std::collections::HashMap<
         Uuid,
         cstat_core::trajectory::TrajectoryPrediction,
     > = if traj_ids.is_empty() {
         std::collections::HashMap::new()
     } else {
-        match fetch_player_trajectory_rows(pool, &traj_ids, base_season).await {
-            Ok(row_map) => {
-                let mut ids: Vec<Uuid> = Vec::new();
-                let mut feature_vectors: Vec<[f32; TRAJECTORY_NUM_FEATURES]> = Vec::new();
-                for (pid, row) in row_map {
-                    ids.push(pid);
-                    feature_vectors.push(build_trajectory_features(&row, base_season));
-                }
-                match state.predictor.predict_trajectory_batch(&feature_vectors) {
-                    Ok(preds) => ids.into_iter().zip(preds).collect(),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = ?e,
-                            year,
-                            n = feature_vectors.len(),
-                            "trajectory batch predict failed for projection team detail; \
-                             serving NULL projections",
-                        );
-                        std::collections::HashMap::new()
-                    }
-                }
-            }
-            Err(e) => {
+        let mut acc = fetch_trajectory_oof(pool, &traj_ids, year)
+            .await
+            .unwrap_or_else(|e| {
                 tracing::warn!(
                     error = ?e,
-                    year,
+                    target_season = year,
                     n = traj_ids.len(),
-                    "trajectory features fetch failed for projection team detail; \
-                     serving NULL projections",
+                    "trajectory OOF lookup failed for projection team detail; falling through to live inference",
                 );
                 std::collections::HashMap::new()
+            });
+        let need_live: Vec<Uuid> = traj_ids
+            .iter()
+            .filter(|pid| !acc.contains_key(*pid))
+            .copied()
+            .collect();
+        if !need_live.is_empty() {
+            match fetch_player_trajectory_rows(pool, &need_live, base_season).await {
+                Ok(row_map) => {
+                    let mut ids: Vec<Uuid> = Vec::new();
+                    let mut feature_vectors: Vec<[f32; TRAJECTORY_NUM_FEATURES]> = Vec::new();
+                    for (pid, row) in row_map {
+                        ids.push(pid);
+                        feature_vectors.push(build_trajectory_features(&row, base_season));
+                    }
+                    match state.predictor.predict_trajectory_batch(&feature_vectors) {
+                        Ok(preds) => {
+                            for (pid, pred) in ids.into_iter().zip(preds) {
+                                acc.insert(pid, pred);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = ?e,
+                                year,
+                                n = feature_vectors.len(),
+                                "trajectory batch predict failed for projection team detail; \
+                                 serving NULL projections for live-inference cohort",
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        year,
+                        n = need_live.len(),
+                        "trajectory features fetch failed for projection team detail; \
+                         serving NULL projections for live-inference cohort",
+                    );
+                }
             }
         }
+        acc
     };
 
     // Serialize each cohort with names + per-player projections. `cam_v3`
