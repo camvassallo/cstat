@@ -44,7 +44,7 @@ The previous design clustered each season independently (`--season 2026`). Retur
 
 Combined-cohort training lifts returning-player primary stability to ~46–48% per adjacent pair (and "primary OR secondary class match" to ~75–80%) on the current 4-season cohort. Same player → same cluster → same class assignment, regardless of which season we look at.
 
-**The trade-off:** combined-cohort doesn't capture genuine year-to-year evolution (rising 3PT volume, small-ball, rule changes). At a 2-3 season horizon that effect is tiny. At 4 seasons we've already seen one real example: when we expanded from 2025–2026 to 2023–2026, the Bard cluster shifted from "low-USG pass-first distributor" to "mid-major primary creator" and Monk shifted from "disciplined wing star" to "stretch-four / versatile forward." Both prose rewrites followed the data. At 5+ seasons era effects stop being tiny — see "Era horizon" below.
+**The trade-off:** combined-cohort doesn't capture genuine year-to-year evolution (rising 3PT volume, small-ball, rule changes). At a 2-3 season horizon that effect is tiny. At 4 seasons we've already seen it bite: expanding from 2025–2026 to 2023–2026 shifted the Bard cluster from "low-USG pass-first distributor" to "mid-major primary creator," and Monk from "disciplined wing star" to "stretch-four / versatile forward." Both prose rewrites followed the data. At 5+ seasons era effects stop being subtle — see "Era horizon" below.
 
 ## Health metrics & retraining playbook
 
@@ -70,26 +70,24 @@ When the guardrail fires, the violation messages tell you which `(class, feature
 This is the canonical health metric. Tripwire: **< 40% means something destabilized.** (45-50% is the realistic ceiling for now; getting to 70%+ would require post-hoc rules we explicitly chose not to add — see "Anti-patterns" below.)
 
 ```sql
--- Run for each adjacent pair of seasons in the new training set.
+-- All adjacent pairs in one shot; one row per (prev_season → prev_season+1).
 WITH archetype_with_pid AS (
-  SELECT pa.season, pa.player_id, pa.primary_class, pa.secondary_class,
-         t.torvik_pid
+  SELECT pa.season, pa.player_id, pa.primary_class, pa.secondary_class, t.torvik_pid
   FROM player_archetypes pa
-  JOIN torvik_player_stats t
-    ON t.player_id = pa.player_id AND t.season = pa.season
-),
-paired AS (
-  SELECT a.torvik_pid,
-         a.primary_class AS prev, b.primary_class AS curr,
-         a.secondary_class AS prev_sec, b.secondary_class AS curr_sec
-  FROM archetype_with_pid a
-  JOIN archetype_with_pid b ON a.torvik_pid = b.torvik_pid
-  WHERE a.season = 2025 AND b.season = 2026   -- adjust per pair
+  JOIN torvik_player_stats t ON t.player_id = pa.player_id AND t.season = pa.season
+  WHERE t.torvik_pid IS NOT NULL
 )
-SELECT COUNT(*) AS n_returning,
-  ROUND(100.0 * COUNT(*) FILTER (WHERE prev = curr) / COUNT(*), 1) AS pct_primary_stable,
-  ROUND(100.0 * COUNT(*) FILTER (WHERE prev = curr OR prev = curr_sec OR prev_sec = curr) / COUNT(*), 1) AS pct_in_either
-FROM paired;
+SELECT
+  a.season AS prev_season,
+  COUNT(*) AS n_returning,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE a.primary_class = b.primary_class) / COUNT(*), 1) AS pct_primary_stable,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE a.primary_class = b.primary_class
+                                  OR a.primary_class = b.secondary_class
+                                  OR a.secondary_class = b.primary_class) / COUNT(*), 1) AS pct_in_either
+FROM archetype_with_pid a
+JOIN archetype_with_pid b ON a.torvik_pid = b.torvik_pid AND b.season = a.season + 1
+GROUP BY a.season
+ORDER BY a.season;
 ```
 
 If primary stability drops below 40%, **don't ship**. Investigate before retrying.
@@ -180,7 +178,7 @@ If you must add a class (because a true new cluster appeared and no existing cla
 
 ## Era horizon: when combined-cohort breaks down
 
-Combined-cohort training is fine at our current 4-season horizon. It will start to fail somewhere around **5–6+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. We've already seen mild cluster-identity drift between the 2-season fit and the 4-season fit (Bard and Monk both shifted); the same forces compound. The candidate triggers:
+Combined-cohort training is fine at our current 4-season horizon. It will start to fail somewhere around **5–6+ seasons**, when era effects make players from different eras non-comparable on the same feature scale. We've already seen real cluster-identity drift between the 2-season fit and the 4-season fit (Bard and Monk both required prose rewrites); the same forces compound. The candidate triggers:
 
 - **3PT volume.** D-I three-point attempt rate has risen ~50% over the last decade. A 2026 Warlock and a 2010 Warlock have completely different `three_share` distributions. Combined-cohort z-scoring would compress the modern signal.
 - **Small-ball / positional fluidity.** Druid (positionless big) is a recent archetype; it didn't exist in the early 2010s in the same way. Forcing pre-small-ball seasons through the same clustering will dilute it.

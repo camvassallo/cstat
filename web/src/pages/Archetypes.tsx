@@ -22,7 +22,7 @@ const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Wizard',
     description:
-      'Elite lead-guard creator. Highest AST% in the dataset paired with heavy minutes and positive two-way impact — the floor general at a roster-good program. The offense runs through them and they don\'t cost you on the other end.',
+      'Elite lead-guard creator. Highest AST% in the dataset paired with heavy minutes and positive two-way impact — the offense runs through them and they don\'t cost you on the other end. POY-shortlist floor general.',
     signature: ['highest AST%', 'heavy minutes', 'positive two-way'],
     comparable: 'All-American floor generals',
   },
@@ -43,7 +43,7 @@ const CLASS_DEFS: ClassDef[] = [
   {
     name: 'Bard',
     description:
-      'Mid-major primary creator. Plays heavy minutes at above-average usage and runs the offense by necessity — the team has no one else who can. Solid assist rates paired with high scoring volume, but rarely on a tournament team.',
+      'Mid-major primary creator. Plays heavy minutes at high usage and runs the offense by necessity — the team has no one else who can. Solid assist rates paired with high scoring volume, but rarely on a tournament team.',
     signature: ['heavy minutes', 'high USG%', 'high AST%'],
     comparable: 'Mid-major leading scorers',
   },
