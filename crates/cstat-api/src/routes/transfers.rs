@@ -7,6 +7,9 @@ use axum::{
 };
 use cstat_core::roster_projection::normalize_player_name as normalize;
 use cstat_core::team_name_match::{team_match_score, team_matches};
+use cstat_core::trajectory::{
+    TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -68,6 +71,20 @@ struct EnrichedTransfer {
     minutes_per_game: Option<f64>,
     games_played: Option<i32>,
     url_247: Option<String>,
+    /// Phase 5c trajectory projection — predicted CamPom for the
+    /// transfer's first season at the destination (= year+1). Computed
+    /// from the player's source-season stats; the trajectory model is
+    /// destination-agnostic (no team feature), so the projection
+    /// assumes a role similar to what they played at their source.
+    /// NULL when the player didn't match a cstat row, or didn't pass
+    /// the trajectory qualification gate (≥5 GP, ≥5 MPG), or batch
+    /// inference failed. The Phase 6 honesty note applies here too:
+    /// elite transfers (current CamPom ≥+15) get systematically
+    /// under-projected by ≈−3 due to regression-to-the-mean — see
+    /// `trajectory_model_meta.json::mae_by_current_campom`.
+    projected_campom_mean: Option<f32>,
+    projected_campom_lower: Option<f32>,
+    projected_campom_upper: Option<f32>,
 }
 
 /// One DB candidate row pulled by name match. We may have several per name
@@ -227,7 +244,7 @@ async fn transfer_list(
         by_name.entry(normalize(&c.name)).or_default().push(c);
     }
 
-    let enriched: Vec<EnrichedTransfer> = transfers
+    let mut enriched: Vec<EnrichedTransfer> = transfers
         .into_iter()
         .map(|t| {
             let key = normalize(&t.full_name);
@@ -284,9 +301,70 @@ async fn transfer_list(
                 minutes_per_game: best.and_then(|c| c.minutes_per_game),
                 games_played: best.and_then(|c| c.games_played),
                 url_247: t.player_profile_url,
+                projected_campom_mean: None,
+                projected_campom_lower: None,
+                projected_campom_upper: None,
             }
         })
         .collect();
+
+    // Phase 5c trajectory projections — predicted CamPom for the
+    // transfer's first destination season (= source-season `year` + 1).
+    // Source-season `year` is also the portal-class year by definition
+    // (transfers.year tracks the spring the player entered the portal,
+    // which is the cstat-season they just finished). One batch SQL
+    // fetch for all matched players' trajectory feature rows, one
+    // batched `predict_trajectory_batch` call across all of them. On
+    // any error (fetch failure or inference failure), log once and
+    // serve NULL projections route-wide — the frontend's null branch
+    // renders an em-dash.
+    let matched_ids: Vec<Uuid> = enriched.iter().filter_map(|e| e.player_id).collect();
+    if !matched_ids.is_empty() {
+        match fetch_player_trajectory_rows(&state.db.pool, &matched_ids, year).await {
+            Ok(row_map) => {
+                // Re-enumerate to preserve original ordering; build feature
+                // vectors only for rows that came back from the fetch
+                // (qualification gate may have dropped some). Track which
+                // `enriched` indices correspond to which feature row so we
+                // can splice predictions back in.
+                let mut indices: Vec<usize> = Vec::new();
+                let mut feature_vectors: Vec<[f32; TRAJECTORY_NUM_FEATURES]> = Vec::new();
+                for (i, e) in enriched.iter().enumerate() {
+                    if let Some(pid) = e.player_id
+                        && let Some(row) = row_map.get(&pid)
+                    {
+                        indices.push(i);
+                        feature_vectors.push(build_trajectory_features(row, year));
+                    }
+                }
+                match state.predictor.predict_trajectory_batch(&feature_vectors) {
+                    Ok(preds) => {
+                        for (idx, pred) in indices.iter().zip(preds.iter()) {
+                            enriched[*idx].projected_campom_mean = Some(pred.mean);
+                            enriched[*idx].projected_campom_lower = Some(pred.lower);
+                            enriched[*idx].projected_campom_upper = Some(pred.upper);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = ?e,
+                            year,
+                            n = feature_vectors.len(),
+                            "trajectory batch predict failed for transfers; serving NULL projections",
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    year,
+                    n = matched_ids.len(),
+                    "trajectory features fetch failed for transfers; serving NULL projections",
+                );
+            }
+        }
+    }
 
     Ok(Json(json!({
         "year": year,

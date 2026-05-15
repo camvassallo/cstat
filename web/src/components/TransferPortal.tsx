@@ -11,10 +11,14 @@ import { useIsMobile } from './useIsMobile';
 // Players ranked by 247Sports who carry one of our derived ranks (we have a
 // matching cstat player with a CamPom value). `rank_delta` is `rank_247 −
 // rank_cstat`: positive means CamPom values the player higher than 247 does
-// (best value), negative the opposite. Null when we couldn't rank the player.
+// (best value), negative the opposite. `campom_delta` is the trajectory
+// projection delta (projected − current); negative is the regression-to-
+// the-mean case for elite transfers, positive is "model expects growth".
+// All three derived fields are null when we couldn't compute them.
 type RankedTransfer = TransferRow & {
   rank_cstat: number | null;
   rank_delta: number | null;
+  campom_delta: number | null;
 };
 
 const fmtCampom = (v: number | null) => (v != null ? v.toFixed(1) : '—');
@@ -220,11 +224,11 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
         ),
     },
     {
-      headerName: 'Δ',
+      headerName: 'Δ247',
       field: 'rank_delta',
       ...flexCol(1, 80),
       headerTooltip:
-        'Value vs. 247: 247 rank − our rank. Positive (green) means CamPom rates the player higher than 247 does — sort desc to find best values. Negative (red) means CamPom is lower on the player.',
+        'Rank value vs. 247: 247 portal rank − our CamPom rank. Positive (green) means CamPom rates the player higher than 247 does — sort desc to find best values. Negative (red) means CamPom is lower on the player. This is a RANK comparison; for the projection-vs-current comparison, see ΔCP.',
       comparator: (a: number | null, b: number | null) => {
         // Push unranked rows to the bottom regardless of sort direction.
         if (a == null && b == null) return 0;
@@ -242,6 +246,73 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
               ? 'text-rose-400'
               : 'text-gray-500';
         const text = v > 0 ? `+${v}` : `${v}`;
+        return (
+          <span className={`text-xs font-semibold ${color}`}>{text}</span>
+        );
+      },
+    },
+    {
+      headerName: 'Proj',
+      field: 'projected_campom_mean',
+      ...flexCol(1, 100),
+      headerTooltip:
+        "Phase 5c trajectory projection — predicted next-season CamPom for the transfer's first season at the destination. Computed from source-season stats; the model is destination-agnostic (no team feature), so the projection assumes a role similar to what they played at their source. Hover a cell for the q10–q90 band. NULL when the transfer didn't match a cstat row, didn't pass the qual gate (≥5 GP, ≥5 MPG), or batch inference failed.",
+      cellRenderer: (p: { value: number | null; data?: RankedTransfer }) => {
+        if (p.value == null) return <span className="text-gray-600 text-xs">—</span>;
+        const tier = campomTier(p.value);
+        const lo = p.data?.projected_campom_lower;
+        const hi = p.data?.projected_campom_upper;
+        const cur = p.data?.campom;
+        // Regression-to-the-mean honesty note — same conditional as
+        // PlayerDetail / PlayerProgression. `cur` is the model's input
+        // (their source-season CamPom); ≥+15 enters the documented
+        // bias zone where the model under-projects by ≈−3.
+        const regressionNote =
+          cur != null && cur >= 15
+            ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15). Read the q90 ceiling for the optimistic case.'
+            : cur != null && cur >= 10
+              ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
+              : '';
+        const bandStr =
+          lo != null && hi != null
+            ? `Projected next-season CamPom: ${p.value.toFixed(1)} (${lo.toFixed(1)}–${hi.toFixed(1)})${tier ? ` · ${tier}` : ''}.${regressionNote} Trajectory model is destination-agnostic — projection assumes a role similar to source team.`
+            : `Projected next-season CamPom: ${p.value.toFixed(1)}${tier ? ` · ${tier}` : ''}.${regressionNote}`;
+        return (
+          <span
+            className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
+            title={bandStr}
+          >
+            {p.value.toFixed(1)}
+          </span>
+        );
+      },
+    },
+    {
+      headerName: 'ΔCP',
+      // Derived field — projected − current — so AG Grid sorts by the
+      // signed delta directly. Computed by the parent component (see
+      // RankedTransfer.campom_delta) so AG Grid can sort/compare. NULL
+      // when either input is NULL.
+      field: 'campom_delta',
+      ...flexCol(1, 80),
+      headerTooltip:
+        "Projection vs. current: projected next-season CamPom − current CamPom. Negative (red) means the model expects regression — common for elite transfers (≥+15 current) due to regression-to-the-mean in the trajectory model. Positive (green) means the model expects growth — typical for younger players still on the rising curve. Read alongside the q10–q90 band on the Proj column for the honest framing. Distinct from Δ247 (which is a RANK comparison).",
+      comparator: (a: number | null, b: number | null) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null }) => {
+        if (p.value == null) return <span className="text-gray-600">—</span>;
+        const v = p.value;
+        const color =
+          v > 0.1
+            ? 'text-emerald-400'
+            : v < -0.1
+              ? 'text-rose-400'
+              : 'text-gray-500';
+        const text = v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1);
         return (
           <span className={`text-xs font-semibold ${color}`}>{text}</span>
         );
@@ -281,11 +352,20 @@ export default function TransferPortal({ year }: Props) {
         const withRank: RankedTransfer[] = sorted.map((t) => {
           const rank_cstat =
             t.campom != null && t.rank_247 != null ? ++i : null;
+          // campom_delta needs BOTH current and projected CamPom. The
+          // route serves projection NULLs for unmatched / sub-qual rows;
+          // we don't fabricate one here just because current CamPom is
+          // available, since the model couldn't actually run.
+          const campom_delta =
+            t.campom != null && t.projected_campom_mean != null
+              ? t.projected_campom_mean - t.campom
+              : null;
           return {
             ...t,
             rank_cstat,
             rank_delta:
               rank_cstat != null ? t.rank_247! - rank_cstat : null,
+            campom_delta,
           };
         });
         setRows(withRank);
