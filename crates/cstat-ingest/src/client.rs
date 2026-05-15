@@ -62,7 +62,9 @@ const SERVICE: &str = "mbb";
 pub const DEFAULT_MAX_PER_HOUR: u32 = 500;
 
 /// Read the per-hour rate budget from `NATSTAT_MAX_PER_HOUR`, falling back to
-/// the standard-tier default. Unparseable values log a warning and fall back.
+/// the standard-tier default. Values that fail to parse OR parse to a
+/// non-positive integer log a warning and fall back; an unset variable falls
+/// back silently.
 pub fn rate_budget_from_env() -> u32 {
     match std::env::var("NATSTAT_MAX_PER_HOUR") {
         Ok(s) => match s.parse::<u32>() {
