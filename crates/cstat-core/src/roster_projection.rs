@@ -37,6 +37,8 @@
 //! "frozen-stats" framing for returning players. Phase 6 freshman-impact
 //! prior is the upgrade path for recruits.
 
+use crate::freshman_model::{FreshmanFeatureRow, build_freshman_features};
+use crate::inference::Predictor;
 use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use crate::team_name_match::team_match_score;
 use serde::{Deserialize, Serialize};
@@ -276,18 +278,79 @@ fn profile_for(tier: FreshmanTier) -> &'static FreshmanProfile {
     }
 }
 
+/// Pick the tier whose mean CamPom is closest to the model's per-recruit
+/// projection. The freshman model predicts CamPom directly; we use it to
+/// reassign the recruit to a *predicted-impact* tier (rather than the
+/// rank-derived one), then synthesise the PlayerRow from that tier's
+/// profile. Cheap path per ROADMAP §6 — keeps the tier-mean per-stat
+/// *shape* (e.g. T1's higher mpg/usg, T4's lower) while letting the
+/// model's prediction drive which shape we pull.
+///
+/// Closest-tier (min absolute distance) instead of linear scaling because
+/// the four tier centroids span both signs (T1 +8.97 down to T4 −0.57)
+/// and naive ratio scaling sign-flips when predicted and tier mean
+/// disagree. The 4-bucket discretisation loses some resolution at the
+/// extremes — predicted +12 and +6 both land in T1 — but the
+/// per-recruit CamPom is also surfaced as `cam_v3` on the row, so
+/// downstream consumers that look at impact directly (e.g.
+/// `roster_features::normalize_rotation`) still see the continuous
+/// signal. Multi-output per-stat regression would replace this
+/// heuristic; tracked as the principled-path follow-up in ROADMAP.
+pub fn tier_from_predicted_campom(predicted: f64) -> FreshmanTier {
+    let candidates = [
+        (FreshmanTier::T1, T1_PROFILE.cam_v3),
+        (FreshmanTier::T2, T2_PROFILE.cam_v3),
+        (FreshmanTier::T3, T3_PROFILE.cam_v3),
+        (FreshmanTier::T4, T4_PROFILE.cam_v3),
+    ];
+    candidates
+        .iter()
+        .min_by(|(_, a), (_, b)| {
+            (predicted - a)
+                .abs()
+                .partial_cmp(&(predicted - b).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(t, _)| *t)
+        .unwrap_or(FreshmanTier::T4)
+}
+
 /// Build a synthetic PlayerRow from a recruit commit. The row plugs
 /// straight into `build_roster_features` so the projection model sees
 /// the freshman cohort just like it sees returning + arriving players.
+///
+/// `rank_tier` is the recruit's 247-derived tier — used as the fallback
+/// when no model prediction is available. `predicted_campom` is the
+/// freshman-impact model's central projection; when present, the row is
+/// synthesised from the *predicted-impact* tier (closest-centroid match)
+/// and `cam_v3` is set to the prediction rather than the tier mean. The
+/// returned `FreshmanTier` is the one actually used for the profile (=
+/// predicted-impact tier when available, else `rank_tier`); caller stores
+/// it in `RecruitMeta` so the UI can label the team's class breakdown by
+/// projected impact rather than 247 rank.
 ///
 /// `primary_class` is set to `None` — the empirical join showed no
 /// dominant archetype per tier (freshmen are stylistically diverse even
 /// within rank tier), and the roster model's archetype-share features
 /// degrade gracefully when None (the slot just stays at zero, same as
 /// for any player without an archetype assignment).
-pub fn synthesize_freshman_row(recruit_id: Uuid, tier: FreshmanTier) -> PlayerRow {
-    let p = profile_for(tier);
-    PlayerRow {
+pub fn synthesize_freshman_row(
+    recruit_id: Uuid,
+    rank_tier: FreshmanTier,
+    predicted_campom: Option<f64>,
+) -> (PlayerRow, FreshmanTier) {
+    let chosen_tier = predicted_campom
+        .map(tier_from_predicted_campom)
+        .unwrap_or(rank_tier);
+    let p = profile_for(chosen_tier);
+    // `cam_v3` carries the per-recruit prediction when available — the
+    // tier profile's `cam_v3` is the cohort mean, which is correct as a
+    // last-resort fallback but loses the model's resolution. Downstream
+    // rotation-normalisation (if/when the projection page starts using
+    // it) reads `cam_v3` directly, so surfacing the continuous prediction
+    // here is the load-bearing piece.
+    let cam_v3 = Some(predicted_campom.unwrap_or(p.cam_v3));
+    let row = PlayerRow {
         player_id: recruit_id,
         total_min: p.mpg * p.gp,
         mpg: p.mpg,
@@ -308,8 +371,9 @@ pub fn synthesize_freshman_row(recruit_id: Uuid, tier: FreshmanTier) -> PlayerRo
         blk_pct: Some(p.blk_pct),
         ft_rate: Some(p.ft_rate),
         primary_class: None,
-        cam_v3: Some(p.cam_v3),
-    }
+        cam_v3,
+    };
+    (row, chosen_tier)
 }
 
 /// One team's projected N+1 roster. The caller picks `Floor` or
@@ -476,6 +540,20 @@ struct RecruitRow {
     committed_team_id: Option<Uuid>,
     #[allow(dead_code)] // kept for forensics; row-filter is in SQL
     commit_status: Option<String>,
+    // Freshman-impact prior model inputs (Phase 6). Same join chain as
+    // `freshman_model::fetch_freshman_features` and the recruits route —
+    // pulled here so a single SQL fetch covers both the audit metadata
+    // and the model features. NULL for solo signings / defunct programs;
+    // sentinel-encoded inside `build_freshman_features`.
+    composite_rating: Option<f32>,
+    position_rank: Option<i32>,
+    previous_rank: Option<i32>,
+    height: Option<String>,
+    weight: Option<i32>,
+    position: Option<String>,
+    recruit_year: Option<i32>,
+    committed_team_prior_adjem: Option<f64>,
+    peer_class_strength: Option<f64>,
 }
 
 /// Resolve a 247 short name to a team_id at the given season by best
@@ -560,6 +638,7 @@ pub async fn compose_all_projections(
     pool: &PgPool,
     base_season: i32,
     draft_entrants: &[DraftEntrant],
+    predictor: &Predictor,
 ) -> Result<Vec<ProjectedRoster>, sqlx::Error> {
     // --- Pull every input table in one shot. ----------------------------
     let teams: Vec<TeamRow> =
@@ -619,19 +698,48 @@ pub async fn compose_all_projections(
     // filter excludes "Uncommitted" to be defensive — the resolver may
     // have backfilled `committed_team_id` for previously-committed-then-
     // decommitted entries that 247 marked Uncommitted.
+    // Pulls freshman-model features alongside audit metadata in one
+    // query — mirrors the recruits-route SQL. The two LEFT JOINs (teams
+    // → tm_prior via natstat_id, then team_season_stats for the season
+    // BEFORE the recruit arrived) carry the school-context inputs the
+    // model needs; the peer subquery aggregates per-(year, committed_team)
+    // mean composite_rating for the peer-class-strength feature. Each
+    // freshman gets a per-recruit prediction below.
     let recruit_rows: Vec<RecruitRow> = sqlx::query_as::<_, RecruitRow>(
         r#"
         SELECT
-            id            AS recruit_id,
-            full_name,
-            composite_rank,
-            star_rating,
-            committed_team_id,
-            commit_status
-        FROM recruits
-        WHERE year = $1
-          AND committed_team_id IS NOT NULL
-          AND COALESCE(commit_status, '') <> 'Uncommitted'
+            r.id            AS recruit_id,
+            r.full_name,
+            r.composite_rank,
+            r.star_rating,
+            r.committed_team_id,
+            r.commit_status,
+            r.composite_rating,
+            r.position_rank,
+            r.previous_rank,
+            r.height,
+            r.weight,
+            r.position,
+            r.year                            AS recruit_year,
+            adjem.adj_efficiency_margin       AS committed_team_prior_adjem,
+            peer.mean_rating                  AS peer_class_strength
+        FROM recruits r
+        LEFT JOIN teams t
+            ON t.id = r.committed_team_id
+        LEFT JOIN teams tm_prior
+            ON tm_prior.natstat_id = t.natstat_id AND tm_prior.season = r.year
+        LEFT JOIN team_season_stats adjem
+            ON adjem.team_id = tm_prior.id AND adjem.season = r.year
+        LEFT JOIN (
+            SELECT year, committed_team_id, AVG(composite_rating) AS mean_rating
+            FROM recruits
+            WHERE composite_rating IS NOT NULL AND committed_team_id IS NOT NULL
+            GROUP BY year, committed_team_id
+        ) peer
+            ON peer.year = r.year AND peer.committed_team_id = r.committed_team_id
+        WHERE r.year = $1
+          AND r.committed_team_id IS NOT NULL
+          AND COALESCE(r.commit_status, '') <> 'Uncommitted'
         "#,
     )
     .bind(base_season)
@@ -659,24 +767,59 @@ pub async fn compose_all_projections(
         roster_by_team.entry(team_id).or_default().push((row, name));
     }
 
-    // Recruits: bucket by destination team_id. Synthesize the PlayerRow
-    // up-front per recruit (it's just a tier lookup; cheap) and pair it
-    // with audit metadata. Recruits without committed_team_id are
-    // dropped by the SQL filter — they can't be assigned to a roster
-    // without a destination.
+    // Recruits: bucket by destination team_id. Each recruit synthesises
+    // a PlayerRow from the closest-impact tier profile per the freshman
+    // model's CamPom projection (was tier-mean by 247 rank before
+    // Phase 6). Predictions are batched: one [N, 13] tensor per model
+    // for the whole class (3 ONNX runs total). On batch error, fall
+    // back to rank-tier synthesis with no predicted CamPom — same
+    // behaviour as before this PR.
+    let feature_vectors: Vec<[f32; crate::freshman_model::FRESHMAN_NUM_FEATURES]> = recruit_rows
+        .iter()
+        .map(|r| {
+            let feature_row = FreshmanFeatureRow {
+                composite_rank: r.composite_rank,
+                composite_rating: r.composite_rating,
+                star_rating: r.star_rating,
+                position_rank: r.position_rank,
+                previous_rank: r.previous_rank,
+                height: r.height.clone(),
+                weight: r.weight,
+                position: r.position.clone(),
+                year: r.recruit_year,
+                committed_team_prior_adjem: r.committed_team_prior_adjem,
+                peer_class_strength: r.peer_class_strength,
+            };
+            build_freshman_features(&feature_row)
+        })
+        .collect();
+    let predictions: Vec<Option<f64>> = match predictor.predict_freshman_batch(&feature_vectors) {
+        Ok(preds) => preds.into_iter().map(|p| Some(p.mean as f64)).collect(),
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                year = base_season,
+                n = recruit_rows.len(),
+                "freshman batch predict failed in compose_all_projections; \
+                 falling back to rank-tier synthesis",
+            );
+            vec![None; recruit_rows.len()]
+        }
+    };
+
     let mut recruits_by_team: HashMap<Uuid, Vec<(PlayerRow, RecruitMeta)>> = HashMap::new();
-    for r in recruit_rows {
+    for (r, pred) in recruit_rows.into_iter().zip(predictions) {
         let Some(team_id) = r.committed_team_id else {
             continue; // SQL gate already filters; defensive guard.
         };
-        let tier = FreshmanTier::from_rank(r.composite_rank);
-        let row = synthesize_freshman_row(r.recruit_id, tier);
+        let rank_tier = FreshmanTier::from_rank(r.composite_rank);
+        let (row, chosen_tier) = synthesize_freshman_row(r.recruit_id, rank_tier, pred);
         let meta = RecruitMeta {
             recruit_id: r.recruit_id,
             name: r.full_name,
             composite_rank: r.composite_rank,
             star_rating: r.star_rating,
-            tier,
+            tier: chosen_tier,
         };
         recruits_by_team
             .entry(team_id)
@@ -910,7 +1053,7 @@ mod tests {
         let arrivals = vec![pr(20.0, Some(2.0))];
         let recruits = vec![
             (
-                synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1),
+                synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1, None).0,
                 RecruitMeta {
                     recruit_id: Uuid::new_v4(),
                     name: "5★".into(),
@@ -920,7 +1063,7 @@ mod tests {
                 },
             ),
             (
-                synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T3),
+                synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T3, None).0,
                 RecruitMeta {
                     recruit_id: Uuid::new_v4(),
                     name: "3★".into(),
@@ -969,18 +1112,57 @@ mod tests {
 
     #[test]
     fn synthesize_freshman_row_uses_tier_profile() {
-        // T1 elite profile carries CamPom +8.97 by construction; check the
-        // PlayerRow surface reflects it.
-        let row = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1);
+        // Pre-Phase-6 fallback path: no predicted CamPom → use the
+        // rank-tier profile. T1 elite carries cam_v3 +8.97 by construction.
+        let (row, chosen) = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1, None);
+        assert_eq!(chosen, FreshmanTier::T1);
         assert_eq!(row.cam_v3, Some(8.97));
         assert_eq!(row.mpg, 24.0);
         assert!((row.total_min - 24.0 * 31.1).abs() < 1e-6);
-        // T4 (unranked) is far below T1 on CamPom and minutes-share.
-        let unranked = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T4);
+        // T4 (unranked) is far below T1 on cam_v3.
+        let (unranked, _) = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T4, None);
         assert!(unranked.cam_v3.unwrap() < row.cam_v3.unwrap());
-        // No archetype — synthesized row leaves the slot empty (see
-        // synthesize_freshman_row's comment for rationale).
+        // No archetype — synthesised row leaves the slot empty.
         assert_eq!(row.primary_class, None);
+    }
+
+    #[test]
+    fn synthesize_freshman_row_reassigns_tier_from_prediction() {
+        // Low rank (T4) but high model prediction → closest-impact tier
+        // is T1; synthesised PlayerRow takes T1's profile (mpg, usg, etc.)
+        // and `cam_v3` carries the per-recruit prediction, not the
+        // tier mean. Mirrors the Wagler-style "model overrules rank" case.
+        let (row, chosen) = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T4, Some(8.0));
+        assert_eq!(chosen, FreshmanTier::T1);
+        assert_eq!(row.mpg, T1_PROFILE.mpg);
+        assert_eq!(row.usg, Some(T1_PROFILE.usg));
+        assert_eq!(row.cam_v3, Some(8.0));
+
+        // Conversely: high rank (T1) but bearish model prediction → tier
+        // reassigned downward. cam_v3 carries the prediction.
+        let (bearish, bearish_tier) =
+            synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1, Some(-0.5));
+        assert_eq!(bearish_tier, FreshmanTier::T4);
+        assert_eq!(bearish.mpg, T4_PROFILE.mpg);
+        assert_eq!(bearish.cam_v3, Some(-0.5));
+    }
+
+    #[test]
+    fn tier_from_predicted_campom_picks_closest_centroid() {
+        // Tier means: T1 +8.97, T2 +2.41, T3 +0.70, T4 -0.57. Midpoint
+        // boundaries are (8.97+2.41)/2 = 5.69, (2.41+0.70)/2 = 1.555,
+        // (0.70-0.57)/2 = 0.065. Pick test values clearly inside each
+        // bucket so the boundary semantics aren't load-bearing.
+        assert_eq!(tier_from_predicted_campom(20.0), FreshmanTier::T1);
+        assert_eq!(tier_from_predicted_campom(8.97), FreshmanTier::T1);
+        assert_eq!(tier_from_predicted_campom(7.0), FreshmanTier::T1);
+        assert_eq!(tier_from_predicted_campom(2.41), FreshmanTier::T2);
+        assert_eq!(tier_from_predicted_campom(3.0), FreshmanTier::T2);
+        assert_eq!(tier_from_predicted_campom(0.70), FreshmanTier::T3);
+        assert_eq!(tier_from_predicted_campom(1.0), FreshmanTier::T3);
+        assert_eq!(tier_from_predicted_campom(-0.57), FreshmanTier::T4);
+        assert_eq!(tier_from_predicted_campom(-2.0), FreshmanTier::T4);
+        assert_eq!(tier_from_predicted_campom(-50.0), FreshmanTier::T4);
     }
 
     #[test]

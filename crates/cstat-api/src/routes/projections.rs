@@ -156,14 +156,15 @@ async fn projection_list(
         }
     };
 
-    let projections = compose_all_projections(&state.db.pool, base_season, &entrants)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
-            )
-        })?;
+    let projections =
+        compose_all_projections(&state.db.pool, base_season, &entrants, &state.predictor)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
+                )
+            })?;
 
     // Fetch the base-season AdjEM per team in one batch. Keyed by
     // team_id; missing entries (new D-I, no AdjEM) fall through to
@@ -388,7 +389,7 @@ async fn projection_team_detail(
         );
         vec![]
     });
-    let projections = compose_all_projections(pool, base_season, &entrants)
+    let projections = compose_all_projections(pool, base_season, &entrants, &state.predictor)
         .await
         .map_err(|e| {
             (
