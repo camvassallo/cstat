@@ -33,9 +33,14 @@ use crate::recruit_features::{
 };
 use crate::roster_features::ARCHETYPES;
 
+/// Size of the trajectory-specific feature head (volume/context + box +
+/// rate + impact + archetype). The recruit block is appended after, and
+/// `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
+const TRAJECTORY_HEAD_FEATURES: usize = 37;
+
 /// Number of input features each of the three trajectory ONNX models expects.
 /// Wire-locked to `trajectory_model_meta.json::features` order.
-pub const TRAJECTORY_NUM_FEATURES: usize = 37 + RECRUIT_NUM_FEATURES;
+pub const TRAJECTORY_NUM_FEATURES: usize = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES;
 
 /// Feature names in the exact order the three ONNX models consume. Boot-time
 /// validator (see `inference.rs::validate_trajectory_meta`) hard-fails if
@@ -307,7 +312,7 @@ pub fn build_trajectory_features(
     // box stats) or -1 (class_year_code, set above as a real f64).
     // Order MUST match TRAJECTORY_FEATURE_NAMES; the recruit block is
     // appended after the archetype mixture.
-    let values_head: [f64; 37] = [
+    let values_head: [f64; TRAJECTORY_HEAD_FEATURES] = [
         // Volume / context (5)
         row.minutes_per_game.unwrap_or(0.0),
         row.games_played.map(|x| x as f64).unwrap_or(0.0),
@@ -357,7 +362,7 @@ pub fn build_trajectory_features(
         out[i] = *v as f32;
     }
     for (i, v) in recruit_block.iter().enumerate() {
-        out[37 + i] = *v;
+        out[TRAJECTORY_HEAD_FEATURES + i] = *v;
     }
     out
 }
@@ -493,7 +498,7 @@ mod tests {
         // order. If someone reorders one without the other, this test
         // (and the boot validator) catch it before a stale model serves
         // garbage predictions.
-        let trailing = &TRAJECTORY_FEATURE_NAMES[37..];
+        let trailing = &TRAJECTORY_FEATURE_NAMES[TRAJECTORY_HEAD_FEATURES..];
         assert_eq!(trailing.len(), RECRUIT_FEATURE_NAMES.len());
         for (got, expected) in trailing.iter().zip(RECRUIT_FEATURE_NAMES.iter()) {
             assert_eq!(got, expected);

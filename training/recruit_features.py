@@ -49,35 +49,6 @@ POSITION_CODES = {
 }
 
 
-def recruit_join_sql() -> str:
-    """SQL fragment that joins `recruits` against the prior season's player.
-
-    Caller must alias `recruits` as `rec` and provide `base.pid_n` (the
-    prior-season player_id) as the join key. Returns LEFT JOIN — most
-    returners pre-2024 won't have a recruit row, and that's intentional.
-    """
-    return """
-    LEFT JOIN recruits rec
-        ON rec.cstat_player_id = base.pid_n
-    """
-
-
-def recruit_select_columns() -> str:
-    """Comma-separated SELECT columns. Caller is responsible for placing
-    this fragment inside their SELECT list (no trailing comma added)."""
-    return """
-    rec.composite_rank   AS recruit_composite_rank_raw,
-    rec.composite_rating AS recruit_composite_rating_raw,
-    rec.star_rating      AS recruit_star_rating_raw,
-    rec.position_rank    AS recruit_position_rank_raw,
-    rec.previous_rank    AS recruit_previous_rank_raw,
-    rec.height           AS recruit_height_raw,
-    rec.weight           AS recruit_weight_raw,
-    rec.position         AS recruit_position_raw,
-    rec.year             AS recruit_year_raw
-    """
-
-
 def parse_height_text(s: Optional[str]) -> Optional[int]:
     """247's height field is `feet-inches` text (e.g., `6-7`). Returns
     total inches or None if unparseable. Empirically all 1,147 resolved
@@ -111,7 +82,10 @@ def derive_recruit_features(df: pd.DataFrame, prior_season_col: str = "s_n") -> 
     """Derive the locked RECRUIT_FEATURE_NAMES columns from raw recruit
     fields. Mutates the DataFrame in place and returns it for chaining.
 
-    Input columns (all `_raw` suffixed by `recruit_select_columns()`):
+    Input columns (callers SELECT these explicitly — the column shapes
+    diverge between the trajectory query, which aliases `rec.year` as
+    `recruit_year_raw`, and the freshman query, which aliases `r.year`
+    three different ways — so a single SQL helper wouldn't fit both):
         recruit_composite_rank_raw, recruit_composite_rating_raw,
         recruit_star_rating_raw, recruit_position_rank_raw,
         recruit_previous_rank_raw, recruit_height_raw, recruit_weight_raw,
