@@ -5,7 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
-use cstat_core::freshman_model::{FreshmanFeatureRow, build_freshman_features};
+use cstat_core::freshman_model::{FreshmanFeatureRow, build_freshman_features, fetch_freshman_oof};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -208,46 +208,108 @@ async fn recruit_list(
         ));
     }
 
-    // Phase 6 freshman-impact projections — single batch tensor for the
-    // whole class-of-N. 3 ONNX runs total (mean / q10 / q90), each on an
-    // [N, 13] tensor, regardless of how many recruits we're serving.
+    // Phase 6 freshman-impact projections.
+    //
+    // Precedence: OOF (LOCO held-out) predictions first for any recruit
+    // whose cstat_player_id has a row in `freshman_oof_predictions` at
+    // target_season = year + 1. For historical class years the model
+    // trained on, this serves honest held-out projections; for the
+    // forward year (current class the model hasn't seen yet) the OOF
+    // table is empty and everything falls through to live inference.
+    // Recruits without a resolved cstat_player_id also fall through —
+    // they weren't in training, so live is the only honest option.
+    //
     // On batch-inference error, log once and degrade to NULL projection
-    // fields for the whole response — the route still returns recruits
-    // and the frontend's existing null-check renders an em-dash. Inputs
-    // are validated at feature-build time, not in ONNX, so this branch
-    // only fires on session-level errors (unloaded model, GPU OOM, etc.).
-    let feature_vectors: Vec<[f32; cstat_core::freshman_model::FRESHMAN_NUM_FEATURES]> = recruits
-        .iter()
-        .map(|r| {
-            let feature_row = FreshmanFeatureRow {
-                composite_rank: r.composite_rank,
-                composite_rating: r.composite_rating,
-                star_rating: r.star_rating,
-                position_rank: r.position_rank,
-                previous_rank: r.previous_rank,
-                height: r.height.clone(),
-                weight: r.weight,
-                position: r.position.clone(),
-                year: r.recruit_year,
-                committed_team_prior_adjem: r.committed_team_prior_adjem,
-                peer_class_strength: r.peer_class_strength,
-            };
-            build_freshman_features(&feature_row)
-        })
-        .collect();
-
-    let projections = match state.predictor.predict_freshman_batch(&feature_vectors) {
-        Ok(preds) => preds.into_iter().map(Some).collect::<Vec<_>>(),
-        Err(e) => {
+    // fields for the live-inference cohort — the route still returns
+    // recruits and the frontend's existing null-check renders an em-dash.
+    let target_season = year + 1;
+    let cstat_ids: Vec<Uuid> = recruits.iter().filter_map(|r| r.cstat_player_id).collect();
+    let oof_map = fetch_freshman_oof(&state.db.pool, &cstat_ids, target_season)
+        .await
+        .unwrap_or_else(|e| {
             tracing::warn!(
                 error = ?e,
-                year,
-                n = recruits.len(),
-                "freshman batch predict failed; serving NULL projections",
+                target_season,
+                n = cstat_ids.len(),
+                "freshman OOF lookup failed; falling through to live inference",
             );
-            vec![None; recruits.len()]
+            std::collections::HashMap::new()
+        });
+
+    // Build feature vectors only for recruits without an OOF hit. Track
+    // the original index so we can splice predictions back in order.
+    let mut live_indices: Vec<usize> = Vec::new();
+    let mut live_feature_vectors: Vec<[f32; cstat_core::freshman_model::FRESHMAN_NUM_FEATURES]> =
+        Vec::new();
+    for (i, r) in recruits.iter().enumerate() {
+        if let Some(pid) = r.cstat_player_id
+            && oof_map.contains_key(&pid)
+        {
+            continue;
         }
-    };
+        let feature_row = FreshmanFeatureRow {
+            composite_rank: r.composite_rank,
+            composite_rating: r.composite_rating,
+            star_rating: r.star_rating,
+            position_rank: r.position_rank,
+            previous_rank: r.previous_rank,
+            height: r.height.clone(),
+            weight: r.weight,
+            position: r.position.clone(),
+            year: r.recruit_year,
+            committed_team_prior_adjem: r.committed_team_prior_adjem,
+            peer_class_strength: r.peer_class_strength,
+        };
+        live_indices.push(i);
+        live_feature_vectors.push(build_freshman_features(&feature_row));
+    }
+
+    let live_preds: Vec<Option<cstat_core::freshman_model::FreshmanPrediction>> =
+        if live_feature_vectors.is_empty() {
+            Vec::new()
+        } else {
+            match state
+                .predictor
+                .predict_freshman_batch(&live_feature_vectors)
+            {
+                Ok(preds) => preds.into_iter().map(Some).collect(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        year,
+                        n = live_feature_vectors.len(),
+                        "freshman batch predict failed; serving NULL projections for live-inference cohort",
+                    );
+                    vec![None; live_feature_vectors.len()]
+                }
+            }
+        };
+
+    // Assemble the final per-row projection list. OOF hits come from
+    // `oof_map`; live hits come from `live_preds` indexed by `live_indices`.
+    let mut live_iter = live_indices.iter().zip(live_preds);
+    let mut next_live = live_iter.next();
+    let projections: Vec<Option<cstat_core::freshman_model::FreshmanPrediction>> = recruits
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            if let Some(pid) = r.cstat_player_id
+                && let Some(pred) = oof_map.get(&pid)
+            {
+                return Some(pred.clone());
+            }
+            // Otherwise, this row was in the live cohort.
+            if let Some((idx, _)) = next_live.as_ref()
+                && **idx == i
+            {
+                let (_, pred) = next_live.take().unwrap();
+                next_live = live_iter.next();
+                pred
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let enriched: Vec<EnrichedRecruit> = recruits
         .into_iter()

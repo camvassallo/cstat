@@ -77,6 +77,8 @@ All season-scoped tables carry a `season` column; the API and frontend support a
 
 **Roster ingest caveat**: NatStat's `/players/mbb/{TEAMCODE}` endpoint has no historical-season filter — it always returns the *current* roster. The box-score path (`games.rs`) is the sole authority for `players.team_id` per season; `players.rs::upsert_player` deliberately never overwrites `team_id` on conflict. Running `cstat-ingest players --year YYYY` against a non-current season warns once and only enriches metadata fields (height, weight, position, etc.). Box-score ingest auto-creates player rows with the correct team, so historical seasons are safe to add via `cstat-ingest season --year YYYY` alone.
 
+**Never edit an applied migration** — not even comments. SQLx checksums every file in `/migrations/` and refuses to boot if the on-disk hash differs from `_sqlx_migrations.checksum` in prod. To correct an applied migration, add a new one. For data-driven migrations (e.g. `017_team_short_names.sql` is sourced from `data/team_short_names.json`), edit the JSON and re-run the relevant `cstat-ingest` command — no SQL needed.
+
 ## ML Inference
 
 ONNX models are loaded at API startup via the `ort` crate (ONNX Runtime):

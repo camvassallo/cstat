@@ -162,28 +162,42 @@ async fn player_detail(
 
     // Phase 5c trajectory: project next-season CamPom from the qualified
     // prior-season row. Gated on the player passing the QUAL filter AND
-    // having a non-null CamPom (the model's most-load-bearing feature) —
-    // if either is missing the badge stays null and the frontend hides the
-    // section. ONNX inference is ~3ms total (3 models); we run it inline
-    // on the request rather than precomputing because the player-detail
-    // route is per-player traffic, not batch.
+    // having a non-null CamPom (the model's most-load-bearing feature).
+    //
+    // Precedence: OOF (LOPO held-out) prediction first if persisted for
+    // (torvik_pid, target_season = season + 1); live inference only when
+    // no OOF row exists (= forward year + the ~4% missing torvik_pid
+    // mapping). For historical seasons this serves the honest held-out
+    // projection instead of in-sample inference.
+    let target_season = season + 1;
+    let oof_pred =
+        cstat_core::trajectory::fetch_trajectory_oof(pool, &[resolved_id], target_season)
+            .await
+            .ok()
+            .and_then(|map| map.get(&resolved_id).cloned());
     let trajectory = trajectory_row.and_then(|row| {
         row.campom?;
-        let features = cstat_core::trajectory::build_trajectory_features(&row, season);
-        match state.predictor.predict_trajectory(&features) {
-            Ok(pred) => Some(json!({
-                "base_season": season,
-                "target_season": season + 1,
-                "projected_mean": pred.mean,
-                "projected_lower": pred.lower,
-                "projected_upper": pred.upper,
-                "prior_campom": row.campom,
-            })),
-            Err(e) => {
-                tracing::warn!(error = ?e, player_id = %resolved_id, "trajectory predict failed");
-                None
+        let pred = match oof_pred {
+            Some(p) => p,
+            None => {
+                let features = cstat_core::trajectory::build_trajectory_features(&row, season);
+                match state.predictor.predict_trajectory(&features) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, player_id = %resolved_id, "trajectory predict failed");
+                        return None;
+                    }
+                }
             }
-        }
+        };
+        Some(json!({
+            "base_season": season,
+            "target_season": target_season,
+            "projected_mean": pred.mean,
+            "projected_lower": pred.lower,
+            "projected_upper": pred.upper,
+            "prior_campom": row.campom,
+        }))
     });
 
     Ok(Json(json!({
@@ -305,23 +319,38 @@ async fn player_progression(
                     Json(json!({ "error": format!("trajectory query failed: {e}") })),
                 )
             })?;
+        // Same OOF-first precedence as `player_detail`. Historical
+        // seasons that match a persisted (torvik_pid, target_season)
+        // pair get the held-out prediction; everything else falls
+        // through to live inference.
+        let target_season = latest_season + 1;
+        let oof_pred = cstat_core::trajectory::fetch_trajectory_oof(pool, &[rid], target_season)
+            .await
+            .ok()
+            .and_then(|map| map.get(&rid).cloned());
         row.and_then(|row| {
             row.campom?;
-            let features = cstat_core::trajectory::build_trajectory_features(&row, latest_season);
-            match state.predictor.predict_trajectory(&features) {
-                Ok(pred) => Some(json!({
-                    "base_season": latest_season,
-                    "target_season": latest_season + 1,
-                    "projected_mean": pred.mean,
-                    "projected_lower": pred.lower,
-                    "projected_upper": pred.upper,
-                    "prior_campom": row.campom,
-                })),
-                Err(e) => {
-                    tracing::warn!(error = ?e, player_id = %rid, "trajectory predict failed");
-                    None
+            let pred = match oof_pred {
+                Some(p) => p,
+                None => {
+                    let features = cstat_core::trajectory::build_trajectory_features(&row, latest_season);
+                    match state.predictor.predict_trajectory(&features) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            tracing::warn!(error = ?e, player_id = %rid, "trajectory predict failed");
+                            return None;
+                        }
+                    }
                 }
-            }
+            };
+            Some(json!({
+                "base_season": latest_season,
+                "target_season": target_season,
+                "projected_mean": pred.mean,
+                "projected_lower": pred.lower,
+                "projected_upper": pred.upper,
+                "prior_campom": row.campom,
+            }))
         })
     } else {
         None
