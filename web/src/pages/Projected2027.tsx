@@ -227,7 +227,7 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       field: 'recruits_count',
       ...flexCol(2, 140),
       headerTooltip:
-        "Incoming HS recruits committed to this team. Per-tier breakdown by 247 composite rank: T1=top-30 elite, T2=31-100, T3=101-250, T4=251+/unranked. Synthesized PlayerRow uses tier-mean profile — population average, not a per-player projection (Phase 6 freshman-impact prior model is the upgrade).",
+        "Incoming HS recruits committed to this team. Per-tier breakdown by cstat's freshman-impact model: each recruit is reassigned to T1 (≈+9 projected CamPom) / T2 (≈+2.4) / T3 (≈+0.7) / T4 (≈-0.6) based on which tier centroid is closest to their model-predicted freshman CamPom — so a 247-T3 recruit at a top-tier program with a strong peer class can move up to T2, and a 247-T1 at a thin program can move down. The synthesised PlayerRow uses the chosen tier's per-game profile; the recruit's continuous prediction surfaces on the Recruits tab.",
       // Sort by count of T1 + T2 commits (the impactful end of the
       // class) rather than total count — Florida with 0 commits should
       // sort below a team with 1 elite recruit and 4 walk-ons.

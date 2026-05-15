@@ -217,6 +217,21 @@ export default function PlayerDetail() {
                       ? '↓'
                       : '→'
                   : '';
+              // Regression-to-the-mean honesty note (ROADMAP §6 Q1):
+              // the model systematically under-projects elite-tier
+              // returners because (a) historically very few +20+
+              // returners sustained +20+, and (b) the +20+ training tail
+              // is empty (cohort leaves for the NBA). Append the caveat
+              // when current CamPom enters the bias zone — ≥10 gets a
+              // mild note, ≥15 gets the full "read the ceiling" prompt.
+              // Per-bucket MAE / bias lives in
+              // `trajectory_model_meta.json::mae_by_current_campom`.
+              const regressionNote =
+                trajectory.prior_campom != null && trajectory.prior_campom >= 15
+                  ? ' Regression-to-the-mean: the model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15; +20+ inputs are extrapolation beyond training). Read the q90 ceiling for the optimistic case.'
+                  : trajectory.prior_campom != null && trajectory.prior_campom >= 10
+                    ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
+                    : '';
               // The chip itself links to the cross-season progression
               // page — the projection sits naturally as the right-most
               // point in the time-series there. Hover affordance is the
@@ -226,7 +241,7 @@ export default function PlayerDetail() {
                 <SeasonLink
                   to={`/players/${player.id}/progression`}
                   className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)} hover:bg-gray-700/40 transition-colors`}
-                  title={`Projected next-season CamPom. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners). Click for full career progression.`}
+                  title={`Projected next-season CamPom. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).${regressionNote} Click for full career progression.`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {targetLabel}
