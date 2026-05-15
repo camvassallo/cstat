@@ -262,10 +262,18 @@ def naive_baseline(df: pd.DataFrame) -> dict:
     }
 
 
-def leave_one_pair_out(df: pd.DataFrame) -> dict:
-    """Honest-backtest analog of the roster model's LOSO. With 2 pairs
-    (2024→2025, 2025→2026), train on one pair and predict the other."""
+def leave_one_pair_out(df: pd.DataFrame) -> tuple[dict, pd.Series]:
+    """Honest-backtest analog of the roster model's LOSO. With 4 pairs
+    (2022→23 .. 2025→26), train on three pairs and predict the held-out
+    fourth — repeat.
+
+    Returns (metrics_dict, lopo_predictions). `lopo_predictions` is a Series
+    aligned to `df.index` with each row's held-out mean prediction, used
+    for OOF persistence so historical-year API routes serve honest numbers
+    instead of in-sample inference.
+    """
     results = {}
+    lopo_preds = pd.Series(index=df.index, dtype=float)
     pairs = df[["s_n", "s_np1"]].drop_duplicates().to_dict("records")
     overall_y, overall_p = [], []
     for held in pairs:
@@ -279,6 +287,7 @@ def leave_one_pair_out(df: pd.DataFrame) -> dict:
         model = lgb.LGBMRegressor(**lgb_params())
         model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], eval_metric="mae")
         preds = model.predict(X_te)
+        lopo_preds.loc[mask] = preds
         key = f"{held['s_n']}->{held['s_np1']}"
         results[key] = {
             "mae": float(mean_absolute_error(y_te, preds)),
@@ -295,7 +304,28 @@ def leave_one_pair_out(df: pd.DataFrame) -> dict:
         "r2": float(r2_score(overall_y, overall_p)),
     }
     print(f"  pooled:      MAE {overall['mae']:.3f}  RMSE {overall['rmse']:.3f}  R² {overall['r2']:.3f}")
-    return {"per_pair": results, "pooled": overall}
+    return {"per_pair": results, "pooled": overall}, lopo_preds
+
+
+def lopo_quantile_predictions(df: pd.DataFrame, alpha: float) -> pd.Series:
+    """Held-out quantile predictions across the same pair splits as
+    `leave_one_pair_out`. Used to assemble lower/upper bands for the OOF
+    table — without this, persisted historical projections would have an
+    honest mean but in-sample bands."""
+    preds = pd.Series(index=df.index, dtype=float)
+    pairs = df[["s_n", "s_np1"]].drop_duplicates().to_dict("records")
+    for held in pairs:
+        mask = (df["s_n"] == held["s_n"]) & (df["s_np1"] == held["s_np1"])
+        train = df[~mask]
+        test = df[mask]
+        if len(train) == 0 or len(test) == 0:
+            continue
+        X_tr, y_tr = train[FEATURE_COLS], train["target_campom"]
+        X_te, y_te = test[FEATURE_COLS], test["target_campom"]
+        model = lgb.LGBMRegressor(**lgb_params(objective="quantile", alpha=alpha))
+        model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)])
+        preds.loc[mask] = model.predict(X_te)
+    return preds
 
 
 def kfold_cv(df: pd.DataFrame, n_splits: int = 5) -> tuple[dict, np.ndarray]:
@@ -400,6 +430,48 @@ def mae_by_current_campom(df: pd.DataFrame, oof: np.ndarray) -> dict:
     return out
 
 
+def persist_trajectory_oof(
+    df: pd.DataFrame,
+    mean_preds: pd.Series,
+    q10_preds: pd.Series,
+    q90_preds: pd.Series,
+) -> None:
+    """Persist LOPO held-out predictions to `trajectory_oof_predictions`,
+    keyed by (torvik_pid, target_season=s_np1). Replaces all rows so the
+    table tracks the freshest training cohort. Wrapped in a transaction so
+    concurrent readers see either the prior set or the new set, never an
+    empty window."""
+    from sqlalchemy import text
+    oof = pd.DataFrame({
+        "torvik_pid": df["torvik_pid"].astype(int).values,
+        "target_season": df["s_np1"].astype(int).values,
+        "mean": mean_preds.astype(float).values,
+        "lower": q10_preds.astype(float).values,
+        "upper": q90_preds.astype(float).values,
+    })
+    # Defensive: drop any row missing one of the three predictions (shouldn't
+    # happen if every pair had both train + test rows, but tolerate small
+    # cohorts where a pair is degenerate).
+    pre = len(oof)
+    oof = oof.dropna(subset=["mean", "lower", "upper"])
+    if len(oof) < pre:
+        print(f"  dropped {pre - len(oof)} rows with missing predictions")
+    # Also drop dupes — defensive: the LOPO loop produces exactly one row
+    # per (torvik_pid, s_np1) by construction, but if `build_dataset` ever
+    # returns dupes the upstream invariant is what'll save us.
+    oof = oof.drop_duplicates(subset=["torvik_pid", "target_season"], keep="last")
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE trajectory_oof_predictions"))
+        oof.to_sql(
+            "trajectory_oof_predictions",
+            conn,
+            if_exists="append",
+            index=False,
+        )
+    print(f"  persisted {len(oof):,} OOF predictions → trajectory_oof_predictions")
+
+
 def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -> None:
     import onnxmltools
     from onnxmltools.convert.common.data_types import FloatTensorType
@@ -438,12 +510,19 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("Leave-one-pair-out backtest")
     print("=" * 60)
-    lopo = leave_one_pair_out(df)
+    lopo, lopo_mean = leave_one_pair_out(df)
 
     print("\n" + "=" * 60)
     print("5-fold random CV")
     print("=" * 60)
     cv, oof_preds = kfold_cv(df)
+
+    print("\n" + "=" * 60)
+    print("LOPO quantile predictions (q=0.1, q=0.9) for OOF persistence")
+    print("=" * 60)
+    lopo_q10 = lopo_quantile_predictions(df, alpha=0.1)
+    lopo_q90 = lopo_quantile_predictions(df, alpha=0.9)
+    persist_trajectory_oof(df, lopo_mean, lopo_q10, lopo_q90)
 
     print("\n" + "=" * 60)
     print("Final fit on all data — mean + quantile (q=0.1, q=0.9)")
@@ -500,6 +579,11 @@ def main() -> None:
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
         # Quantile model alphas, in the order the Rust loader expects them.
         "quantile_alphas": {"q10": 0.1, "q90": 0.9},
+        # Set true once the LOPO held-out predictions land in
+        # `trajectory_oof_predictions`. The Rust boot validator gates on
+        # this so a stale meta + empty table can't silently regress the
+        # historical-year API routes to in-sample serving.
+        "oof_persisted": True,
         "baseline_naive": naive,
         "backtest_lopo": lopo,
         "cv_5fold": cv,

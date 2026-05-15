@@ -248,7 +248,7 @@ def kfold_cv(df: pd.DataFrame, n_splits: int = 5) -> dict:
     }
 
 
-def leave_one_class_out_cv(df: pd.DataFrame) -> dict:
+def leave_one_class_out_cv(df: pd.DataFrame) -> tuple[dict, pd.Series]:
     """Leave-one-class-out CV — the rigorous out-of-sample test.
 
     The 5-fold random CV above lets adjacent-class signal leak between
@@ -270,6 +270,7 @@ def leave_one_class_out_cv(df: pd.DataFrame) -> dict:
     fold_results: dict[int, dict] = {}
     pooled_pred: list[float] = []
     pooled_truth: list[float] = []
+    loco_preds = pd.Series(index=df.index, dtype=float)
     for held_year in classes:
         train_df = df[df["recruit_year"] != held_year]
         test_df = df[df["recruit_year"] == held_year]
@@ -278,6 +279,7 @@ def leave_one_class_out_cv(df: pd.DataFrame) -> dict:
         model = lgb.LGBMRegressor(**lgb_params("regression"))
         model.fit(train_df[FEATURE_COLS], train_df["target_campom"])
         preds = model.predict(test_df[FEATURE_COLS])
+        loco_preds.loc[test_df.index] = preds
         truth = test_df["target_campom"].values
         mae = float(mean_absolute_error(truth, preds))
         rmse = float(np.sqrt(mean_squared_error(truth, preds)))
@@ -324,7 +326,7 @@ def leave_one_class_out_cv(df: pd.DataFrame) -> dict:
         )
     pooled_pred_arr = np.array(pooled_pred)
     pooled_truth_arr = np.array(pooled_truth)
-    return {
+    metrics = {
         "per_fold": fold_results,
         "pooled": {
             "n": int(len(pooled_truth_arr)),
@@ -335,6 +337,59 @@ def leave_one_class_out_cv(df: pd.DataFrame) -> dict:
             else None,
         },
     }
+    return metrics, loco_preds
+
+
+def loco_quantile_predictions(df: pd.DataFrame, alpha: float) -> pd.Series:
+    """Held-out quantile predictions across the same class-year splits as
+    `leave_one_class_out_cv`. Used to assemble lower/upper bands for the
+    OOF table — without this, persisted historical projections would have
+    an honest mean but in-sample bands."""
+    preds = pd.Series(index=df.index, dtype=float)
+    for held_year in sorted(df["recruit_year"].unique()):
+        train_df = df[df["recruit_year"] != held_year]
+        test_df = df[df["recruit_year"] == held_year]
+        if len(test_df) == 0:
+            continue
+        model = lgb.LGBMRegressor(**lgb_params("quantile", alpha=alpha))
+        model.fit(train_df[FEATURE_COLS], train_df["target_campom"])
+        preds.loc[test_df.index] = model.predict(test_df[FEATURE_COLS])
+    return preds
+
+
+def persist_freshman_oof(
+    df: pd.DataFrame,
+    mean_preds: pd.Series,
+    q10_preds: pd.Series,
+    q90_preds: pd.Series,
+) -> None:
+    """Persist LOCO held-out predictions to `freshman_oof_predictions`,
+    keyed by (cstat_player_id, target_season = recruit_year + 1). Atomic
+    swap inside a transaction so concurrent readers never see an empty
+    window."""
+    from sqlalchemy import text
+    oof = pd.DataFrame({
+        "cstat_player_id": df["cstat_player_id"].values,
+        "target_season": (df["recruit_year"].astype(int) + 1).values,
+        "mean": mean_preds.astype(float).values,
+        "lower": q10_preds.astype(float).values,
+        "upper": q90_preds.astype(float).values,
+    })
+    pre = len(oof)
+    oof = oof.dropna(subset=["mean", "lower", "upper"])
+    if len(oof) < pre:
+        print(f"  dropped {pre - len(oof)} rows with missing predictions")
+    oof = oof.drop_duplicates(subset=["cstat_player_id", "target_season"], keep="last")
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE freshman_oof_predictions"))
+        oof.to_sql(
+            "freshman_oof_predictions",
+            conn,
+            if_exists="append",
+            index=False,
+        )
+    print(f"  persisted {len(oof):,} OOF predictions → freshman_oof_predictions")
 
 
 def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -> None:
@@ -393,7 +448,7 @@ def main() -> None:
     print("=" * 60)
     print("Leave-one-class-out CV (rigorous out-of-sample test)")
     print("=" * 60)
-    loco = leave_one_class_out_cv(df)
+    loco, loco_mean = leave_one_class_out_cv(df)
     pooled = loco["pooled"]
     print(
         f"  pooled (n={pooled['n']}): MAE {pooled['mae']:.3f}  RMSE {pooled['rmse']:.3f}  "
@@ -416,6 +471,14 @@ def main() -> None:
             f"on held-out cohorts — investigate before shipping."
         )
     print(f"  Gap vs 5-fold random CV ({cv['mae']:.3f}): {cv_gap:+.3f}")
+
+    print()
+    print("=" * 60)
+    print("LOCO quantile predictions (q=0.1, q=0.9) for OOF persistence")
+    print("=" * 60)
+    loco_q10 = loco_quantile_predictions(df, alpha=0.1)
+    loco_q90 = loco_quantile_predictions(df, alpha=0.9)
+    persist_freshman_oof(df, loco_mean, loco_q10, loco_q90)
 
     print()
     print("=" * 60)
@@ -446,6 +509,11 @@ def main() -> None:
         "features": FEATURE_COLS,
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
         "quantile_alphas": {"q10": 0.1, "q90": 0.9},
+        # Set true once the LOCO held-out predictions land in
+        # `freshman_oof_predictions`. The Rust boot validator gates on
+        # this so a stale meta + empty table can't silently regress the
+        # Recruits page to in-sample serving.
+        "oof_persisted": True,
         "tier_thresholds": TIER_THRESHOLDS,
         "tier_mean_baseline": baseline,
         "cv_5fold": cv,

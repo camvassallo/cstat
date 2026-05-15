@@ -202,6 +202,43 @@ pub struct FreshmanPrediction {
     pub upper: f32,
 }
 
+/// Fetch held-out (LOCO) freshman impact predictions for the given
+/// `cstat_player_id`s, targeting `target_season` (= recruit class year + 1).
+/// Returns a map only for recruits with a persisted OOF row for that target
+/// season; absent keys mean "no OOF row, fall back to live inference" —
+/// expected for forward-year recruits (the class the model has never seen
+/// yet) and for recruits whose `cstat_player_id` wasn't resolved at
+/// training time.
+///
+/// Routes call this BEFORE `predict_freshman_batch` and splice in OOF hits
+/// where available — the precedence flip that keeps the Recruits page
+/// honest for historical class years.
+pub async fn fetch_freshman_oof(
+    pool: &sqlx::PgPool,
+    cstat_player_ids: &[uuid::Uuid],
+    target_season: i32,
+) -> Result<std::collections::HashMap<uuid::Uuid, FreshmanPrediction>, sqlx::Error> {
+    if cstat_player_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(uuid::Uuid, f32, f32, f32)> = sqlx::query_as(
+        r#"
+        SELECT cstat_player_id, mean, lower, upper
+        FROM freshman_oof_predictions
+        WHERE cstat_player_id = ANY($1)
+          AND target_season = $2
+        "#,
+    )
+    .bind(cstat_player_ids)
+    .bind(target_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(pid, mean, lower, upper)| (pid, FreshmanPrediction { mean, lower, upper }))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

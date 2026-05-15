@@ -469,6 +469,55 @@ pub struct TrajectoryPrediction {
     pub upper: f32,
 }
 
+/// Fetch held-out (LOPO) trajectory predictions for the given source-season
+/// `players.id`s, targeting `target_season` (typically source_season + 1).
+/// Returns a map only for players whose `torvik_pid` has a persisted OOF row
+/// for that target season; absent keys mean "no OOF row, fall back to live
+/// inference" (forward-year cohort or the ~4% of rows missing a torvik_pid
+/// mapping).
+///
+/// Routes call this BEFORE `predict_trajectory_batch` and splice in OOF
+/// hits where available — the precedence flip that keeps historical API
+/// pages honest (see ROADMAP §"Serve held-out trajectory/freshman
+/// predictions for historical years"). For target_seasons the model never
+/// trained on (e.g. the forward year), this returns an empty map by
+/// construction.
+pub async fn fetch_trajectory_oof(
+    pool: &PgPool,
+    player_ids: &[Uuid],
+    target_season: i32,
+) -> Result<std::collections::HashMap<Uuid, TrajectoryPrediction>, sqlx::Error> {
+    if player_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    // Resolve player_id → torvik_pid via torvik_player_stats. `tps.player_id`
+    // is season-scoped, so one passed UUID matches at most one tps row;
+    // duplicates aren't possible. Players without a Torvik mapping just
+    // don't appear in the result and fall through to live inference.
+    let rows: Vec<(Uuid, f32, f32, f32)> = sqlx::query_as(
+        r#"
+        SELECT
+            tps.player_id,
+            oof.mean,
+            oof.lower,
+            oof.upper
+        FROM torvik_player_stats tps
+        JOIN trajectory_oof_predictions oof ON oof.torvik_pid = tps.torvik_pid
+        WHERE tps.player_id = ANY($1)
+          AND oof.target_season = $2
+        "#,
+    )
+    .bind(player_ids)
+    .bind(target_season)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(pid, mean, lower, upper)| (pid, TrajectoryPrediction { mean, lower, upper }))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
