@@ -79,20 +79,20 @@ Beats naive by **−0.19 MAE pooled**.
 Model beats naive in every bucket by **0.55–0.65 MAE**. Per-bucket MAE on training data (~1.8) is materially better than the LOPO MAE (~2.2) — the gap is the honest generalization cost across the four pair-folds.
 
 Top features (mean model, by split count):
-1. `prior_campom` (703)
-2. `prior_usg` (500)
-3. `prior_orb_pct` (475)
-4. `prior_dgbpm` (458)
-5. `prior_gbpm` (453)
-6. `prior_ts` (435)
-7. `prior_ogbpm` (417)
-8. `prior_ft_rate` (411)
+1. `prior_campom` (739)
+2. `prior_usg` (572)
+3. `prior_dgbpm` (458)
+4. `prior_ogbpm` (427)
+5. `prior_gbpm` (426)
+6. `prior_efg` (408)
+7. `prior_mpg` (402)
+8. `prior_ft_rate` (389)
 
 Prior CamPom is the dominant signal, which is intuitive — it's the most-aggregated impact metric. The interesting non-obvious result: `prior_usg` is #2, suggesting role-on-team is a meaningful growth differentiator beyond raw impact.
 
 ## Honesty framing for UI consumers
 
-- **Pooled LOPO MAE is ~2.3 CamPom points.** Render projections as directional, not point estimates. The 80% band width (q90 − q10) is what users should read for confidence.
+- **Pooled LOPO MAE is ~2.2 CamPom points.** Render projections as directional, not point estimates. The 80% band width (q90 − q10) is what users should read for confidence.
 - **Bands wider on freshmen and low-minute returners** — the model correctly flags thin-signal cases. Don't try to tighten them.
 - **Selection bias on returners** (per ROADMAP §5c caveat): top-ranked freshmen who *return* are negatively selected (the Cooper Flagg / Boozer cohort leaves for the draft; the 5-stars who stay are disproportionately those whose freshman year disappointed). The model doesn't see the leave-for-draft cohort, so projections for "5-star high-impact freshman" → year 2 will systematically underestimate the elite ceiling.
 - **Transferring returners get destination-agnostic projections.** The arrow direction may be misleading if the player is joining a roster with a very different usage / role profile.
@@ -102,7 +102,7 @@ Prior CamPom is the dominant signal, which is intuitive — it's the most-aggreg
 Run when:
 
 1. A new cstat-season ingests (e.g. cstat-season 2027 lands → 2026→2027 becomes a new training pair).
-2. Recruit rank backfill completes (then turn on `composite_rank` / `years_since_recruit` / `is_ranked` as features and re-train; documented as the §5c ablation follow-up).
+2. Pre-2021 recruit-class backfill completes (the current model already includes recruit features for classes 2021-2026; older classes would feed the Sr→Gr and beyond pairs that currently have NULL recruit blocks via the `is_ranked=0` sentinel).
 3. The CamPom v3 formula changes (e.g. CamPom v4) — target shifts, so retrain.
 
 ```bash

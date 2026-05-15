@@ -12,7 +12,7 @@ cstat ships four LightGBM model families, all exported to ONNX and loaded at API
 | **Freshman** | Project freshman-season CamPom v3 for new recruits | 1,154 freshmen (5 recruit classes 2021-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
 | **Roster** | Project team AdjEM from roster aggregates | 1,799 team-seasons | 2027 projection page team rows, transfer-portal "what-if" |
 
-All four models share the same training rhythm: 5-fold random CV for headline metrics, leave-one-season-out (or leave-one-pair-out / leave-one-class-out) for honest out-of-sample numbers, and a final fit on all data for the shipped artifacts.
+All four models follow the same rhythm: 5-fold random CV for headline metrics, an out-of-sample backtest (chronological 80/20 for the game model; leave-one-pair-out / leave-one-class-out / leave-one-season-out for trajectory / freshman / roster), and a final fit on all data for the shipped artifacts.
 
 Authoritative per-run details (top features, per-fold breakdowns, known limitations) live in each model's `model_meta.json` alongside the ONNX artifacts.
 
@@ -56,7 +56,7 @@ Three LightGBM regressors (mean + q10 + q90) trained on a shared 48-feature inpu
 | **Pooled** | **2.204** | **2.881** | **0.588** | 9,239 |
 | Naive baseline (year N+1 ≈ year N CamPom) | 2.392 | 3.116 | 0.518 | 9,239 |
 
-5-fold random CV: MAE 2.198 ± 0.024.
+5-fold random CV: MAE 2.198 ± 0.031 (sample stdev across folds).
 
 **Top features:** `prior_campom`, `prior_usg`, `prior_dgbpm`, `prior_ogbpm`, `prior_gbpm`, `prior_efg`, `prior_mpg`, `prior_ft_rate`. Prior-season CamPom alone carries the most signal; the model's value-add is the regression-to-the-mean correction and class-year × archetype interactions.
 
@@ -76,7 +76,7 @@ The model is well-calibrated in `[−5, +15]` and under-projects elite returners
 **Known limitations:**
 - Destination-agnostic for transferring returners (no destination-team archetype mix in v1 features).
 - Selection bias on returners — Cooper Flagg / Boozer tier leaves for the draft, so the trained corpus skews toward returners who didn't break out.
-- Extrapolation only for `current_campom ≥ +20`.
+- Predictions for `current_campom ≥ +20` are effectively extrapolation — only n=1 training row in that bucket.
 
 See `docs/trajectory_methodology.md` for the full methodology.
 
@@ -113,7 +113,7 @@ Pooled baseline above is the n-weighted average of each fold's held-out tier-mea
 **Known limitations:**
 - Selection bias is *sharper* than for the trajectory model — elite freshmen leave for the draft, so the calibrated cohort skews toward returners.
 - Sample size below ~30th rank drops fast; bands widen accordingly. Surface with the q10–q90 band, not just the mean.
-- Bootstrap-from snapshots: see `docs/projections_methodology.md` for the tier-mean baseline and the per-tier centroid reassignment logic in `synthesize_freshman_row`.
+- The legacy tier-mean heuristic (4-bucket discretisation on composite rank) lives in parallel and is used as the per-tier centroid for `synthesize_freshman_row` reassignment — see `docs/projections_methodology.md` for that path.
 
 ---
 

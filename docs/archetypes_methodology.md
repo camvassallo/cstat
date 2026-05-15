@@ -249,7 +249,7 @@ Per adjacent-season pair, returning players matched by `torvik_pid` — measured
 | 2025 → 2026 | 1,626 | 42.8% | 74.6% |
 | **Total** | **7,054** | **47.1%** | **78.2%** |
 
-Compare to the original per-season-clustering baseline (v1): 28.1% primary stability. Combined-cohort training is doing what it's supposed to. With 2022 added the cluster geometry shifted (Bard / Fighter prose updated, signature `ast_pct` weights dropped) but stability held — the load-bearing design — one k-means fit across the union — is unchanged.
+Compare to the original per-season-clustering baseline (v1): 28.1% primary stability. Combined-cohort training is doing what it's supposed to. With 2022 added the cluster geometry shifted (Bard / Fighter prose updated, signature `ast_pct` weights dropped) but stability held; the load-bearing design — one k-means fit across the union — is unchanged.
 
 ### Where to look for drift first
 
