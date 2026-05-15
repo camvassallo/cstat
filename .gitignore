@@ -76,6 +76,11 @@ __pycache__/
 # for review locally, never meant to ship.
 pr.diff
 
+# Local scratch / investigation notes — text dumps, copy-pasted API
+# responses, anything ending in _temp.txt. Never meant to ship.
+*_temp.txt
+*.scratch
+
 # Railway / deploy runtime logs downloaded for debugging. Refreshed each
 # time the container restarts, so committing them creates noisy diffs.
 build.log
