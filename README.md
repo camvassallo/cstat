@@ -217,6 +217,7 @@ them installed.
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes | — | Postgres connection string |
 | `NATSTAT_API_KEY` | Yes | — | NatStat API v4 key |
+| `NATSTAT_MAX_PER_HOUR` | No | `500` | NatStat per-hour rate budget. Standard tier is 500; raise to match your tier rather than recompiling. |
 | `BIND_ADDR` | No | `0.0.0.0:8080` | API server bind address |
 | `RUST_LOG` | No | — | Tracing filter (e.g. `cstat_api=info`) |
 | `MODEL_DIR` | No | `training/models/` | Path to ONNX model directory |

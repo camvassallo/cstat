@@ -31,5 +31,3 @@ regex = "1"
 name = "cstat-ingest"
 path = "src/bin/ingest.rs"
 
-[dev-dependencies]
-tokio-test = { workspace = true }

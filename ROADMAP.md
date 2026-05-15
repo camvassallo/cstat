@@ -591,7 +591,6 @@ Pointers below anchor on stable section headers / quoted phrases (not line numbe
 
 ### Infrastructure / Limits
 
-- **NatStat rate limit hardcoded at 1500.** `NatStatClient::new(..., 1500)` doesn't match the 500/hr standard tier. Should read `NATSTAT_MAX_PER_HOUR` env var with 500 as the default. Testers on different tiers shouldn't have to recompile. → see "Rate limiter unification" in Refactor Backlog.
 - **247Sports `compositerecruitrankings` returns identical content for all `InstitutionGroup` values.** v1 ingest is `highschool`-only; the `juco` / `prep` enum vocab is kept for when we find the separate endpoints. → see migration 020 comment and `tfs_recruits.rs::InstitutionGroup`.
 - **247Sports JWT is in cancelled-grace state** (`ss: "Monthly+Cancelled"`). Captured snapshot path documented as fallback; `srating.io` smoke-tested but needs full session-cookie replay to actually work. → see "Fallback source" under the Projected 2027 bullet in §5b.
 - **Native cstat impact metric — re-attempting failed work.** Prior native BPM (pre-PR #25) tried linear box-score formulas and got r=0.075 with Torvik OBPM. Don't repeat that approach. A LightGBM-on-team-game-outcomes attribution is a different methodology worth trying, but a multi-PR project that needs its own design doc. → see "Native cstat player impact metric" in §6.
@@ -739,19 +738,15 @@ load-bearing and shouldn't be silently re-fit. Reasonable shape: an
 `--archetypes` flag that runs a subprocess and surfaces the diagnostics, or
 a small Python entrypoint the bootstrap script calls.
 
-### Per-team `Team` ingest doesn't run compute
-`SeasonIngester::ingest_team(code)` does NatStat ingest only — the resulting
-roster row won't have rate stats / percentiles until a season-wide compute
-pass runs. Fine for power users, surprising for first-time use. Consider
-adding an `--also-compute` flag; skipped for now because per-team compute
-isn't supported (compute_all is season-scoped).
+### Per-team `Team` ingest doesn't run compute (Fixed)
+Added `--also-compute` to `cstat-ingest team`. Default still ingest-only
+(power-user shape); the flag runs a season-wide `compute_all` after, since
+compute is season-scoped, not team-scoped.
 
-### Rate limiter unification
-`NatStatClient::new(..., 1500)` hardcodes the rate budget at the bin
-construction site. The budget is account-tier-dependent. Read it from
-`NATSTAT_MAX_PER_HOUR` (with 500 as the default standard-tier budget) so
-testers on different tiers don't have to recompile. Same change makes the
-README's "500 calls/hour" line accurate by default.
+### Rate limiter unification (Fixed)
+Both call sites — `cstat-api::main` and `cstat-ingest::bin::ingest` — now
+read `NATSTAT_MAX_PER_HOUR` via `cstat_ingest::rate_budget_from_env()`
+(default 500, standard-tier). README/CLAUDE/`.env.example` updated.
 
 ### Sequenced ingest concurrency
 Every `for team_code in teams` loop in the ingest crate is strictly

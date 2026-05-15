@@ -7,7 +7,7 @@ pub mod tfs;
 pub mod tfs_recruits;
 pub mod torvik;
 
-pub use client::NatStatClient;
+pub use client::{NatStatClient, rate_budget_from_env};
 pub use tfs::TfsClient;
 pub use tfs_recruits::{InstitutionGroup, Recruit247Client, RecruitError};
 pub use torvik::TorkvikClient;

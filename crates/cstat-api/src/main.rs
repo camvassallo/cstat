@@ -2,7 +2,6 @@ mod routes;
 
 use anyhow::Result;
 use axum::{Router, extract::State, response::Json, routing::get};
-use chrono::Datelike;
 use cstat_core::{Database, Predictor};
 use cstat_ingest::NatStatClient;
 use serde_json::{Value, json};
@@ -20,15 +19,10 @@ pub struct AppState {
     pub predictor: Predictor,
 }
 
-/// Default season: Nov+ = next year, otherwise current year.
-pub fn default_season() -> i32 {
-    let now = chrono::Utc::now().naive_utc().date();
-    if now.month() >= 11 {
-        now.year() + 1
-    } else {
-        now.year()
-    }
-}
+/// Default season used by route handlers when `?season=` is omitted.
+/// Delegates to `cstat_ingest::current_natstat_season` so the CLI and API
+/// agree on what "now" means.
+pub use cstat_ingest::current_natstat_season as default_season;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -51,7 +45,11 @@ async fn main() -> Result<()> {
 
     // NatStat client
     let natstat_api_key = std::env::var("NATSTAT_API_KEY").expect("NATSTAT_API_KEY must be set");
-    let natstat = NatStatClient::new(db.pool.clone(), natstat_api_key, 500);
+    let natstat = NatStatClient::new(
+        db.pool.clone(),
+        natstat_api_key,
+        cstat_ingest::rate_budget_from_env(),
+    );
 
     // ONNX models
     let model_dir = std::env::var("MODEL_DIR")
