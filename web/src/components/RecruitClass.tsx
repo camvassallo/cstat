@@ -58,7 +58,18 @@ function teamCellRenderer(opts: {
   );
 }
 
-function buildColumns(isMobile: boolean, year: number): ColDef<RecruitRow>[] {
+// Row enriched with the model-vs-247 disagreement signal. `campom_rank` is
+// the recruit's position when the class is sorted by projected freshman
+// CamPom desc; `rank_delta = composite_rank − campom_rank` is the value
+// index. Mirrors TransferPortal's sign convention — positive = CamPom
+// rates the recruit higher than 247 does. Both fields are NULL when either
+// rank input is missing (unranked recruit OR predict failure).
+interface RankedRecruit extends RecruitRow {
+  campom_rank: number | null;
+  rank_delta: number | null;
+}
+
+function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] {
   const flexCol = (flex: number, min: number) =>
     isMobile ? { width: min } : { flex, minWidth: min };
 
@@ -196,7 +207,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RecruitRow>[] {
       headerTooltip:
         "cstat's freshman-impact projection (CamPom v3 for the recruit's first college season). Hover a cell to see the q10–q90 band. Wider band = thinner training-set support; tighter band = denser cohort. Selection-bias caveat: elite top-30 projections are calibrated on returners since the highest-rated freshmen leave for the draft.",
       sort: 'desc',
-      cellRenderer: (p: { value: number | null; data?: RecruitRow }) => {
+      cellRenderer: (p: { value: number | null; data?: RankedRecruit }) => {
         if (p.value == null) return <span className="text-gray-600 text-xs">—</span>;
         const tier = campomTier(p.value);
         const lo = p.data?.projected_campom_lower;
@@ -215,6 +226,27 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RecruitRow>[] {
         );
       },
     },
+    {
+      headerName: 'Δ',
+      field: 'rank_delta',
+      ...flexCol(1, 70),
+      headerTooltip:
+        'Value vs. 247: composite_rank − cstat projected rank. Positive (green) = CamPom rates the recruit higher than 247 does; negative (red) = CamPom is lower. Useful for spotting model-vs-scouts disagreement; also a sanity-check surface — sort desc to find sleepers, asc to find scout-favorites the model is bearish on. NULL when either rank is missing (unranked-by-247 recruit, or projection unavailable).',
+      comparator: (a: number | null, b: number | null) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null }) => {
+        if (p.value == null) return <span className="text-gray-600 text-xs">—</span>;
+        const v = p.value;
+        const color =
+          v > 0 ? 'text-emerald-400' : v < 0 ? 'text-rose-400' : 'text-gray-500';
+        const text = v > 0 ? `+${v}` : `${v}`;
+        return <span className={`text-xs font-semibold ${color}`}>{text}</span>;
+      },
+    },
   ];
 }
 
@@ -223,7 +255,7 @@ interface Props {
 }
 
 export default function RecruitClass({ year }: Props) {
-  const [rows, setRows] = useState<RecruitRow[] | null>(null);
+  const [rows, setRows] = useState<RankedRecruit[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
@@ -239,7 +271,33 @@ export default function RecruitClass({ year }: Props) {
       .then((r) => {
         if (canceled) return;
         setError(null);
-        setRows(r.recruits);
+        // Rank by projected freshman CamPom desc. Mirrors the TransferPortal
+        // pattern: `campom_rank` is only assigned when BOTH inputs are
+        // present (projected CamPom + 247 composite_rank), so the Δ column
+        // is NULL for unranked-by-247 recruits and for the rare predict
+        // failure — frontend column already renders that as an em-dash.
+        // Predict-rank counter `i` is incremented only on eligible rows
+        // so on-screen position matches the displayed rank.
+        const sorted = [...r.recruits].sort((a, b) => {
+          if (a.projected_campom_mean == null && b.projected_campom_mean == null) return 0;
+          if (a.projected_campom_mean == null) return 1;
+          if (b.projected_campom_mean == null) return -1;
+          return b.projected_campom_mean - a.projected_campom_mean;
+        });
+        let i = 0;
+        const ranked: RankedRecruit[] = sorted.map((rec) => {
+          const campom_rank =
+            rec.projected_campom_mean != null && rec.composite_rank != null
+              ? ++i
+              : null;
+          return {
+            ...rec,
+            campom_rank,
+            rank_delta:
+              campom_rank != null ? rec.composite_rank! - campom_rank : null,
+          };
+        });
+        setRows(ranked);
       })
       .catch((e) => {
         if (!canceled) setError(String(e));
