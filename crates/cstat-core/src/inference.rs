@@ -1,3 +1,4 @@
+use crate::freshman_model::{FRESHMAN_FEATURE_NAMES, FRESHMAN_NUM_FEATURES, FreshmanPrediction};
 use crate::roster_features::{QUAL_FILTER_STRING, ROSTER_FEATURE_NAMES, ROSTER_NUM_FEATURES};
 use crate::trajectory::{TRAJECTORY_FEATURE_NAMES, TRAJECTORY_NUM_FEATURES, TrajectoryPrediction};
 use crate::treeshap::{LgbModel, tree_shap};
@@ -402,6 +403,10 @@ pub enum LoadError {
     /// a `player_filter` / feature-list / quantile-alpha value the Rust
     /// path can't honor. Same load-fail-loudly contract as roster meta.
     TrajectoryMetaMismatch(String),
+    /// `freshman_model_meta.json` is missing, unparseable, or carries
+    /// a feature-list / quantile-alpha value the Rust path can't honor.
+    /// Same load-fail-loudly contract as trajectory meta.
+    FreshmanMetaMismatch(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -418,6 +423,9 @@ impl std::fmt::Display for LoadError {
             }
             LoadError::TrajectoryMetaMismatch(msg) => {
                 write!(f, "trajectory_model_meta.json contract mismatch: {msg}")
+            }
+            LoadError::FreshmanMetaMismatch(msg) => {
+                write!(f, "freshman_model_meta.json contract mismatch: {msg}")
             }
         }
     }
@@ -458,6 +466,9 @@ pub struct Predictor {
     trajectory_mean_session: Mutex<Session>,
     trajectory_q10_session: Mutex<Session>,
     trajectory_q90_session: Mutex<Session>,
+    freshman_mean_session: Mutex<Session>,
+    freshman_q10_session: Mutex<Session>,
+    freshman_q90_session: Mutex<Session>,
     margin_lgb: LgbModel,
 }
 
@@ -509,6 +520,23 @@ impl Predictor {
 
         validate_trajectory_meta(&model_dir.join("trajectory_model_meta.json"))?;
 
+        // Phase 6 freshman-impact prior: same mean + q=0.1 + q=0.9 shape
+        // as the trajectory model, different feature head (13 inputs:
+        // 11 shared recruit block + 2 school-context). Loaded with the
+        // same validator pattern; mismatched meta vs compiled features
+        // hard-fails boot.
+        let freshman_mean_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("freshman_mean_model.onnx"))?;
+        let freshman_q10_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("freshman_q10_model.onnx"))?;
+        let freshman_q90_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("freshman_q90_model.onnx"))?;
+
+        validate_freshman_meta(&model_dir.join("freshman_model_meta.json"))?;
+
         let margin_lgb = LgbModel::load(&model_dir.join("margin_model.lgb"))?;
         if margin_lgb.num_features != NUM_FEATURES {
             return Err(LoadError::FeatureCountMismatch {
@@ -525,6 +553,9 @@ impl Predictor {
             trajectory_mean_session: Mutex::new(trajectory_mean_session),
             trajectory_q10_session: Mutex::new(trajectory_q10_session),
             trajectory_q90_session: Mutex::new(trajectory_q90_session),
+            freshman_mean_session: Mutex::new(freshman_mean_session),
+            freshman_q10_session: Mutex::new(freshman_q10_session),
+            freshman_q90_session: Mutex::new(freshman_q90_session),
             margin_lgb,
         })
     }
@@ -651,6 +682,42 @@ impl Predictor {
         let lower = run(&self.trajectory_q10_session)?;
         let upper = run(&self.trajectory_q90_session)?;
         Ok(TrajectoryPrediction { mean, lower, upper })
+    }
+
+    /// Project a recruit's freshman-season CamPom v3 from their 13-feature
+    /// pre-college vector built by `freshman_model::build_freshman_features`.
+    ///
+    /// Returns mean plus q=0.1 / q=0.9 quantile predictions so the UI can
+    /// render a floor / projection / ceiling band. Same shape as
+    /// `predict_trajectory`; the load-bearing difference is the feature
+    /// head — 11 shared recruit features + 2 school-context features
+    /// (committed-team prior AdjEM, peer-class strength).
+    ///
+    /// Honest framing: 5-fold CV MAE is 2.49 CamPom points (vs tier-mean
+    /// baseline 2.56). T1 (top-30 ranked) wins the biggest — MAE 3.84 vs
+    /// baseline 4.32 — but the cohort itself is selection-biased (elite
+    /// freshmen leave for the draft), so headline accuracy on draft-bound
+    /// prospects is looser than the corpus MAE implies. The q10/q90 band
+    /// is the honest framing.
+    pub fn predict_freshman(
+        &self,
+        features: &[f32; FRESHMAN_NUM_FEATURES],
+    ) -> Result<FreshmanPrediction, ort::Error> {
+        use ort::value::TensorRef;
+        let shape = [1_usize, FRESHMAN_NUM_FEATURES];
+
+        let run = |session: &Mutex<Session>| -> Result<f32, ort::Error> {
+            let input = TensorRef::from_array_view((shape, features.as_slice()))?;
+            let mut s = session.lock().unwrap();
+            let outputs = s.run(ort::inputs![input])?;
+            let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+            Ok(data[0])
+        };
+
+        let mean = run(&self.freshman_mean_session)?;
+        let lower = run(&self.freshman_q10_session)?;
+        let upper = run(&self.freshman_q90_session)?;
+        Ok(FreshmanPrediction { mean, lower, upper })
     }
 
     /// Run the margin model and return TreeSHAP feature attributions.
@@ -831,6 +898,71 @@ fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
     Ok(())
 }
 
+/// Read `freshman_model_meta.json` and verify feature order, qualification
+/// gate, count, and quantile-alpha labeling match what the Rust path
+/// expects. Same pattern as `validate_trajectory_meta` — boot-fail
+/// loudly so the API never serves freshman projections built off a stale
+/// or mismatched model.
+fn validate_freshman_meta(path: &Path) -> Result<(), LoadError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::FreshmanMetaMismatch(format!("read {}: {e}", path.display())))?;
+    let meta: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| LoadError::FreshmanMetaMismatch(format!("parse: {e}")))?;
+
+    let filter = meta["player_filter"]
+        .as_str()
+        .ok_or_else(|| LoadError::FreshmanMetaMismatch("missing player_filter".into()))?;
+    if filter != QUAL_FILTER_STRING {
+        return Err(LoadError::FreshmanMetaMismatch(format!(
+            "player_filter {filter:?} ≠ Rust QUAL_FILTER_STRING {QUAL_FILTER_STRING:?}",
+        )));
+    }
+
+    let n_features = meta["n_features"].as_u64().unwrap_or(0) as usize;
+    if n_features != FRESHMAN_NUM_FEATURES {
+        return Err(LoadError::FreshmanMetaMismatch(format!(
+            "n_features {n_features} ≠ compiled FRESHMAN_NUM_FEATURES {FRESHMAN_NUM_FEATURES}",
+        )));
+    }
+
+    let features = meta["features"]
+        .as_array()
+        .ok_or_else(|| LoadError::FreshmanMetaMismatch("features array missing".into()))?;
+    if features.len() != FRESHMAN_NUM_FEATURES {
+        return Err(LoadError::FreshmanMetaMismatch(format!(
+            "features array length {} ≠ FRESHMAN_NUM_FEATURES {FRESHMAN_NUM_FEATURES}",
+            features.len(),
+        )));
+    }
+    for (i, (meta_name, expected)) in features
+        .iter()
+        .zip(FRESHMAN_FEATURE_NAMES.iter())
+        .enumerate()
+    {
+        let s = meta_name.as_str().ok_or_else(|| {
+            LoadError::FreshmanMetaMismatch(format!("features[{i}] not a string"))
+        })?;
+        if s != *expected {
+            return Err(LoadError::FreshmanMetaMismatch(format!(
+                "features[{i}] = {s:?}, FRESHMAN_FEATURE_NAMES[{i}] = {expected:?}",
+            )));
+        }
+    }
+
+    let alphas = meta["quantile_alphas"]
+        .as_object()
+        .ok_or_else(|| LoadError::FreshmanMetaMismatch("quantile_alphas object missing".into()))?;
+    let q10 = alphas.get("q10").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let q90 = alphas.get("q90").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if (q10 - 0.1).abs() > 1e-9 || (q90 - 0.9).abs() > 1e-9 {
+        return Err(LoadError::FreshmanMetaMismatch(format!(
+            "quantile_alphas {{q10: {q10}, q90: {q90}}} ≠ expected {{q10: 0.1, q90: 0.9}}",
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,6 +970,37 @@ mod tests {
 
     fn model_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../training/models")
+    }
+
+    /// Every file `Predictor::load` reads. Tests that call `load` should
+    /// skip via this helper when running on a dev box without the full
+    /// model set — beats stale per-test pre-flight lists that quietly
+    /// fall out of sync with `Predictor::load`. Single source of truth:
+    /// when a new model bundle joins the loader, append here.
+    fn all_model_files_present(dir: &Path) -> bool {
+        const REQUIRED: &[&str] = &[
+            "margin_model.onnx",
+            "win_model.onnx",
+            "margin_model.lgb",
+            "total_model.onnx",
+            "roster_model.onnx",
+            "roster_model_meta.json",
+            "trajectory_mean_model.onnx",
+            "trajectory_q10_model.onnx",
+            "trajectory_q90_model.onnx",
+            "trajectory_model_meta.json",
+            "freshman_mean_model.onnx",
+            "freshman_q10_model.onnx",
+            "freshman_q90_model.onnx",
+            "freshman_model_meta.json",
+        ];
+        for f in REQUIRED {
+            if !dir.join(f).exists() {
+                eprintln!("skipping: {f} not found at {}", dir.display());
+                return false;
+            }
+        }
+        true
     }
 
     #[test]
@@ -933,13 +1096,7 @@ mod tests {
     #[test]
     fn load_models_and_predict_zeros() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
-            eprintln!("skipping: model files not found at {}", dir.display());
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -982,12 +1139,7 @@ mod tests {
     #[test]
     fn predict_responds_to_feature_direction() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -1073,12 +1225,7 @@ mod tests {
     #[test]
     fn predict_with_contributions_matches_full_predict() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -1153,12 +1300,7 @@ mod tests {
     #[test]
     fn roster_predict_zeros_is_finite() {
         let dir = model_dir();
-        if !dir.join("margin_model.onnx").exists()
-            || !dir.join("margin_model.lgb").exists()
-            || !dir.join("total_model.onnx").exists()
-            || !dir.join("roster_model.onnx").exists()
-            || !dir.join("roster_model_meta.json").exists()
-        {
+        if !all_model_files_present(&dir) {
             return;
         }
 
@@ -1221,24 +1363,9 @@ mod tests {
     #[test]
     fn trajectory_predict_smoke() {
         let dir = model_dir();
-        let required = [
-            "trajectory_mean_model.onnx",
-            "trajectory_q10_model.onnx",
-            "trajectory_q90_model.onnx",
-            "trajectory_model_meta.json",
-            "margin_model.onnx",
-            "margin_model.lgb",
-            "total_model.onnx",
-            "roster_model.onnx",
-            "roster_model_meta.json",
-        ];
-        for f in required {
-            if !dir.join(f).exists() {
-                eprintln!("skipping: {f} not found at {}", dir.display());
-                return;
-            }
+        if !all_model_files_present(&dir) {
+            return;
         }
-
         let predictor = Predictor::load(&dir).expect("failed to load models");
         // Build a realistic prior-season vector: rotation player, USG 22%,
         // TS 58%, modest GBPM, primary class Wizard.
@@ -1314,6 +1441,64 @@ mod tests {
                 "trajectory band inverted by more than 5 CamPom points (upper={} lower={})",
                 pred.upper,
                 pred.lower
+            );
+        }
+    }
+
+    #[test]
+    fn freshman_predict_smoke() {
+        let dir = model_dir();
+        if !all_model_files_present(&dir) {
+            return;
+        }
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        // Build a mid-tier ranked recruit profile (T2-ish): 4-star,
+        // ranked #50, 6'5", 195 lb, SF, committed to a strong program.
+        use crate::freshman_model::{FreshmanFeatureRow, build_freshman_features};
+        let row = FreshmanFeatureRow {
+            composite_rank: Some(50),
+            composite_rating: Some(0.95),
+            star_rating: Some(4),
+            position_rank: Some(8),
+            previous_rank: Some(45),
+            height: Some("6-5".into()),
+            weight: Some(195),
+            position: Some("SF".into()),
+            year: Some(2025),
+            committed_team_prior_adjem: Some(18.0),
+            peer_class_strength: Some(0.94),
+        };
+        let features = build_freshman_features(&row);
+        let pred = predictor
+            .predict_freshman(&features)
+            .expect("freshman prediction failed");
+
+        assert!(pred.mean.is_finite(), "mean is NaN/inf: {}", pred.mean);
+        assert!(pred.lower.is_finite(), "lower is NaN/inf: {}", pred.lower);
+        assert!(pred.upper.is_finite(), "upper is NaN/inf: {}", pred.upper);
+        // Freshman CamPom realistically spans roughly [-3, 15]. Use the
+        // same ±40 sanity range as trajectory; tighter ranges would be
+        // brittle to retraining.
+        for (name, v) in [
+            ("mean", pred.mean),
+            ("lower", pred.lower),
+            ("upper", pred.upper),
+        ] {
+            assert!(
+                (-40.0..=40.0).contains(&v),
+                "freshman {name} {v} outside plausible CamPom range",
+            );
+        }
+        if !(pred.lower <= pred.mean && pred.mean <= pred.upper) {
+            eprintln!(
+                "freshman band ordering: lower={} mean={} upper={}",
+                pred.lower, pred.mean, pred.upper
+            );
+            assert!(
+                (pred.upper - pred.lower) > -5.0,
+                "freshman band inverted by more than 5 CamPom points (upper={} lower={})",
+                pred.upper,
+                pred.lower,
             );
         }
     }
