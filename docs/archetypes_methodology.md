@@ -63,7 +63,7 @@ The script's `verify_signature_alignment` guardrail fires automatically before a
 - **SIGN:** a positive-weight feature lands on a cluster with a notably negative z (or vice versa) — "this cluster doesn't fit this description at all."
 - **ORDER:** two classes both weight the same feature, but the cluster with the higher weight has the lower mean — Hungarian put similar clusters in swapped slots.
 
-When the guardrail fires, the violation messages tell you which `(class, feature)` pairs disagree. Treat them as Case A symptoms (see decision tree below) unless you've intentionally rebalanced signatures. Bypass with `--no-verify` only when you've reviewed the diagnostics by hand and accept the assignment.
+When the guardrail fires, the violation messages tell you which `(class, feature)` pairs disagree. Treat them as Case A symptoms (see decision tree below) unless you've intentionally rebalanced signatures. Bypass with `--no-verify` only when you've reviewed the diagnostics by hand and you accept the assignment.
 
 ### Step 2 — Returning-player stability
 
@@ -126,7 +126,7 @@ A few examples of what "drift" looks like in practice (taken from the 2023→202
 
 The clusters should classify obvious cases obviously. If a known elite big doesn't land in Druid, or a primary scorer isn't in Sorcerer/Wizard, the signature for that class probably needs a tweak. We use a small canonical list (extend as new seasons land):
 
-- Cooper Flagg (2025), Cameron Boozer (2026), Zach Edey (2023/2024), Trayce Jackson-Davis (2023), Johni Broome (all seasons) → expect **Druid**
+- Cooper Flagg (2025), Cameron Boozer (2026), Zach Edey (2023/2024), Trayce Jackson-Davis (2023), Johni Broome (2023–2025) → expect **Druid**
 - Walter Clayton (2023/2025), Braden Smith (all seasons), Kam Jones (2025), AJ Dybantsa (2026), V.J. Edgecombe (2025), Mark Sears (2024) → expect **Wizard**
 - Khaman Maluach (2025), Donovan Clingan (2023/2024), Liam Robbins (2023) → expect **Paladin**
 - John Tonje (2025), Eric Dixon (2025), Terrence Shannon (2024), Darryn Peterson (2026), Richie Saunders (2025) → expect **Sorcerer**
@@ -254,7 +254,7 @@ Compare to the original per-season-clustering baseline (v1): 28.1% primary stabi
 
 When updating this section after a retrain, the classes that have historically been most fragile (in order of how often we've had to touch them):
 
-1. **Bard / Fighter** — the two "low-impact guard" clusters. Cluster identities shifted dramatically when we expanded from 2 seasons to 4 (Bard moved from "pass-first distributor" to "mid-major primary creator"; the original Bard prose moved to Fighter's slot). They sit close in feature space; small signature changes flip which gets which label.
+1. **Bard / Fighter** — the two non-elite guard clusters (Bard is mid-USG mid-major leads; Fighter is low-USG rotation depth). Cluster identities shifted dramatically when we expanded from 2 seasons to 4 — Bard moved from "pass-first distributor" to "mid-major primary creator," and the original Bard prose effectively migrated to Fighter's slot. They sit close in feature space; small signature changes flip which gets which label.
 2. **Monk** — drifted from "disciplined wing star" to "stretch-four / versatile forward" between 2-season and 4-season cohorts. Watch the height distribution and the rim/three split.
 3. **Cleric / Ranger** — low-impact role clusters that Hungarian sometimes shuffles. Less volatile than the guard-tier pair above, but always check their signature alignments.
 
