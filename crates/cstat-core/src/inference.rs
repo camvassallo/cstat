@@ -720,6 +720,71 @@ impl Predictor {
         Ok(FreshmanPrediction { mean, lower, upper })
     }
 
+    /// Batch variant of `predict_freshman`. Builds one `[N, 13]` input
+    /// tensor per model so each ONNX session runs once instead of N times.
+    /// For the recruits route (~370 recruits per class-of-N response) this
+    /// is the difference between ~1100 sequential ONNX runs and 3 batched
+    /// ones; the LightGBM trees the models export support dynamic batch
+    /// dim out of the box (Python export uses `FloatTensorType([None, …])`).
+    ///
+    /// Errors propagate at the first failure; on the recruits route the
+    /// caller can fall back to a slower per-row loop with `predict_freshman`
+    /// if needed (today it just returns the error and the route serves
+    /// NULL projections — same behavior as a per-row failure).
+    ///
+    /// Returns `Vec` in the same order as the input slice; empty input
+    /// short-circuits to an empty result (ort would otherwise build a
+    /// zero-row tensor which some kernels reject).
+    pub fn predict_freshman_batch(
+        &self,
+        rows: &[[f32; FRESHMAN_NUM_FEATURES]],
+    ) -> Result<Vec<FreshmanPrediction>, ort::Error> {
+        use ort::value::TensorRef;
+
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = rows.len();
+        let shape = [n, FRESHMAN_NUM_FEATURES];
+
+        // Single contiguous buffer for the [N, 13] tensor. Avoid Vec::extend
+        // in a hot loop by sizing the allocation up front.
+        let mut flat = Vec::with_capacity(n * FRESHMAN_NUM_FEATURES);
+        for row in rows {
+            flat.extend_from_slice(row);
+        }
+
+        let run = |session: &Mutex<Session>| -> Result<Vec<f32>, ort::Error> {
+            let input = TensorRef::from_array_view((shape, flat.as_slice()))?;
+            let mut s = session.lock().unwrap();
+            let outputs = s.run(ort::inputs![input])?;
+            let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+            // LightGBM regression export returns shape [N, 1] flattened; we
+            // expect exactly N elements. Hard-fail loudly on a mismatch
+            // rather than silently truncating — would only happen if the
+            // export shape changed (e.g. multi-output regression).
+            if data.len() != n {
+                return Err(ort::Error::new(format!(
+                    "freshman batch output length {} ≠ expected {n}",
+                    data.len()
+                )));
+            }
+            Ok(data.to_vec())
+        };
+
+        let mean = run(&self.freshman_mean_session)?;
+        let lower = run(&self.freshman_q10_session)?;
+        let upper = run(&self.freshman_q90_session)?;
+
+        Ok((0..n)
+            .map(|i| FreshmanPrediction {
+                mean: mean[i],
+                lower: lower[i],
+                upper: upper[i],
+            })
+            .collect())
+    }
+
     /// Run the margin model and return TreeSHAP feature attributions.
     ///
     /// Margin comes from the ONNX session (fast, well-tested path); SHAP
@@ -1443,6 +1508,92 @@ mod tests {
                 pred.lower
             );
         }
+    }
+
+    #[test]
+    fn freshman_batch_matches_single_row() {
+        let dir = model_dir();
+        if !all_model_files_present(&dir) {
+            return;
+        }
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        use crate::freshman_model::{FreshmanFeatureRow, build_freshman_features};
+
+        // Two distinct recruit profiles — top-30 elite vs unranked filler —
+        // so the model produces meaningfully different outputs we can both
+        // independently validate and compare across single-row vs batch.
+        let elite = FreshmanFeatureRow {
+            composite_rank: Some(3),
+            composite_rating: Some(0.99),
+            star_rating: Some(5),
+            position_rank: Some(1),
+            previous_rank: Some(2),
+            height: Some("6-7".into()),
+            weight: Some(215),
+            position: Some("SF".into()),
+            year: Some(2025),
+            committed_team_prior_adjem: Some(28.5),
+            peer_class_strength: Some(0.97),
+        };
+        let unranked = FreshmanFeatureRow {
+            composite_rank: None,
+            composite_rating: None,
+            star_rating: None,
+            position_rank: None,
+            previous_rank: None,
+            height: Some("6-3".into()),
+            weight: Some(180),
+            position: Some("PG".into()),
+            year: Some(2025),
+            committed_team_prior_adjem: None,
+            peer_class_strength: None,
+        };
+        let feats_elite = build_freshman_features(&elite);
+        let feats_unranked = build_freshman_features(&unranked);
+
+        let single_elite = predictor.predict_freshman(&feats_elite).unwrap();
+        let single_unranked = predictor.predict_freshman(&feats_unranked).unwrap();
+
+        let batch = predictor
+            .predict_freshman_batch(&[feats_elite, feats_unranked])
+            .expect("batch prediction failed");
+        assert_eq!(batch.len(), 2);
+
+        // ONNX runtime is deterministic across batch size for tree ensembles —
+        // batched outputs should match single-row outputs to fp precision.
+        // Loose tolerance (1e-4) absorbs any float-summation ordering jitter
+        // that could appear if the runtime chooses different SIMD widths
+        // for batch vs single.
+        let approx_eq = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert!(
+            approx_eq(batch[0].mean, single_elite.mean)
+                && approx_eq(batch[0].lower, single_elite.lower)
+                && approx_eq(batch[0].upper, single_elite.upper),
+            "elite mismatch: batch {:?} vs single {:?}",
+            batch[0],
+            single_elite,
+        );
+        assert!(
+            approx_eq(batch[1].mean, single_unranked.mean)
+                && approx_eq(batch[1].lower, single_unranked.lower)
+                && approx_eq(batch[1].upper, single_unranked.upper),
+            "unranked mismatch: batch {:?} vs single {:?}",
+            batch[1],
+            single_unranked,
+        );
+    }
+
+    #[test]
+    fn freshman_batch_empty_input() {
+        let dir = model_dir();
+        if !all_model_files_present(&dir) {
+            return;
+        }
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        let result = predictor
+            .predict_freshman_batch(&[])
+            .expect("empty batch failed");
+        assert!(result.is_empty());
     }
 
     #[test]

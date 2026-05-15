@@ -434,6 +434,12 @@ export interface RecruitRow {
   secondary_class: string | null;
   minutes_per_game: number | null;
   games_played: number | null;
+  // Phase 6 freshman-impact projection — populated for every recruit row
+  // regardless of cstat_player_id. Mean + q10/q90 band; the chip surfaces
+  // the mean, tooltip shows the band.
+  projected_campom_mean: number | null;
+  projected_campom_lower: number | null;
+  projected_campom_upper: number | null;
 }
 
 export function fetchRecruits(year: number) {
