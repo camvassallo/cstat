@@ -911,7 +911,15 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No qualified returners" />
           ) : (
             returning.map((r) => (
-              <PlayerCard key={r.player_id} mpg={r.mpg} cam_v3={r.cam_v3} primary_class={r.primary_class}>
+              <PlayerCard
+                key={r.player_id}
+                mpg={r.mpg}
+                cam_v3={r.cam_v3}
+                primary_class={r.primary_class}
+                projected_mean={r.projected_campom_mean}
+                projected_lower={r.projected_campom_lower}
+                projected_upper={r.projected_campom_upper}
+              >
                 <SeasonLink
                   to={`/players/${r.player_id}?season=${base_season}`}
                   className="text-blue-400 hover:underline"
@@ -928,7 +936,15 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No portal arrivals" />
           ) : (
             arrivals.map((a) => (
-              <PlayerCard key={a.player_id} mpg={a.mpg} cam_v3={a.cam_v3} primary_class={a.primary_class}>
+              <PlayerCard
+                key={a.player_id}
+                mpg={a.mpg}
+                cam_v3={a.cam_v3}
+                primary_class={a.primary_class}
+                projected_mean={a.projected_campom_mean}
+                projected_lower={a.projected_campom_lower}
+                projected_upper={a.projected_campom_upper}
+              >
                 <SeasonLink
                   to={`/players/${a.player_id}?season=${base_season}`}
                   className="text-blue-400 hover:underline"
@@ -986,11 +1002,25 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                 </div>
               ))}
               {uncertain.map((u) => (
-                <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
-                  <span className="text-sm text-gray-300">{u.name}</span>
-                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
-                    ? draft (TBD)
-                  </span>
+                <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
+                  <span className="text-sm text-gray-300 flex-1 min-w-0 truncate">{u.name}</span>
+                  <div className="flex items-center gap-2 text-xs tabular-nums">
+                    {u.projected_campom_mean != null && (
+                      <span
+                        className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
+                        title={
+                          u.projected_campom_lower != null && u.projected_campom_upper != null
+                            ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
+                            : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
+                        }
+                      >
+                        {u.projected_campom_mean.toFixed(1)}
+                      </span>
+                    )}
+                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
+                      ? draft (TBD)
+                    </span>
+                  </div>
                 </div>
               ))}
             </>
@@ -1020,17 +1050,45 @@ function PlayerCard({
   mpg,
   cam_v3,
   primary_class,
+  projected_mean,
+  projected_lower,
+  projected_upper,
   children,
 }: {
   // Player name is intentionally passed via `children` (so callers can
   // wrap the rendered name in `<SeasonLink>` for navigation) rather
   // than as a separate prop. The shape of the row — name on the left,
-  // archetype chip, then MPG + CamPom on the right — is locked here.
+  // archetype chip, then MPG + (projected → current) chips on the
+  // right — is locked here. The projection page is forward-looking,
+  // so the projected chip is the visual headline; the small grey
+  // current number sits to its left for comparison.
   mpg: number;
   cam_v3: number | null;
   primary_class: string | null;
+  projected_mean: number | null;
+  projected_lower: number | null;
+  projected_upper: number | null;
   children: React.ReactNode;
 }) {
+  // Regression-to-the-mean honesty note — same conditional as the
+  // Transfer/PlayerDetail surfaces. Anchors on the model's *input*
+  // (current/source-season CamPom), not the projection.
+  const regressionNote =
+    cam_v3 != null && cam_v3 >= 15
+      ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15). Read the q90 ceiling for the optimistic case.'
+      : cam_v3 != null && cam_v3 >= 10
+        ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
+        : '';
+  const projectedTitle =
+    projected_mean != null
+      ? `Projected next-season CamPom: ${projected_mean.toFixed(1)}${
+          projected_lower != null && projected_upper != null
+            ? ` (${projected_lower.toFixed(1)}–${projected_upper.toFixed(1)})`
+            : ''
+        }${cam_v3 != null ? `. Current ${cam_v3.toFixed(1)}, Δ ${projected_mean - cam_v3 >= 0 ? '+' : ''}${(projected_mean - cam_v3).toFixed(1)}.` : '.'}${regressionNote}`
+      : cam_v3 != null
+        ? 'No next-season projection (player did not pass the trajectory model qual gate or batch inference failed). Current CamPom shown.'
+        : '';
   return (
     <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
       <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -1046,13 +1104,30 @@ function PlayerCard({
       </div>
       <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
         <span title="Prior-season MPG">{mpg.toFixed(0)}'</span>
-        {cam_v3 != null && (
-          <span
-            className={`px-1.5 rounded border ${campomTierColor(campomTier(cam_v3))}`}
-            title="Prior-season CamPom v3"
-          >
-            {cam_v3.toFixed(1)}
+        {projected_mean != null ? (
+          <span className="flex items-center gap-1.5">
+            {cam_v3 != null && (
+              <span className="text-[10px] text-gray-500" title="Prior-season CamPom v3">
+                {cam_v3.toFixed(1)}
+              </span>
+            )}
+            <span className="text-gray-600 text-[10px]">→</span>
+            <span
+              className={`px-1.5 rounded border ${campomTierColor(campomTier(projected_mean))}`}
+              title={projectedTitle}
+            >
+              {projected_mean.toFixed(1)}
+            </span>
           </span>
+        ) : (
+          cam_v3 != null && (
+            <span
+              className={`px-1.5 rounded border ${campomTierColor(campomTier(cam_v3))}`}
+              title={projectedTitle}
+            >
+              {cam_v3.toFixed(1)}
+            </span>
+          )
         )}
       </div>
     </div>
@@ -1087,7 +1162,11 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
         {r.projected_cam_v3 != null && (
           <span
             className={`px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`}
-            title="Tier-mean projected CamPom v3 (population average for the tier — not per-player)"
+            title={
+              r.projected_campom_lower != null && r.projected_campom_upper != null
+                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Per-player prediction from the freshman model — wide band on T1/T2 reflects elite-tail uncertainty.`
+                : 'Tier-mean projected CamPom v3 (batch inference fell back to tier-mean synthesis — no per-player band available).'
+            }
           >
             {r.projected_cam_v3.toFixed(1)}
           </span>

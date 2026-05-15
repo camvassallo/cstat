@@ -15,6 +15,9 @@ use cstat_core::roster_features::build_roster_features;
 use cstat_core::roster_projection::{
     DraftScenario, FreshmanTier, ProjectedRoster, compose_all_projections, load_draft_entrants,
 };
+use cstat_core::trajectory::{
+    TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -516,13 +519,87 @@ async fn projection_team_detail(
                 .collect()
         };
 
-    // Serialize each cohort with names attached. We keep stats off the
-    // wire for v1 (the model's PlayerRow is hard to read for a user);
-    // the next iteration can add per-player CamPom + minutes + position.
+    // Phase 5c trajectory projections — predicted next-season CamPom
+    // for every returner / arrival / uncertain on this team. One batch
+    // SQL fetch (across all matched player_ids), one batched
+    // `predict_trajectory_batch` call. Failure (fetch or inference)
+    // logs once at warn and serves NULL projections route-wide; the
+    // frontend's null branch renders only the current-season chip. The
+    // single page lifts the per-row latency the transfer-portal
+    // experience proved out in PR 2.
+    //
+    // Uncertain players are batched alongside returning because they
+    // *are* returners under the ceiling scenario — projecting them
+    // gives the UI a "if they withdraw and stay, here's what they'd
+    // contribute" number that pairs naturally with the band.
+    let mut traj_ids: Vec<Uuid> = Vec::new();
+    for r in &projection.returning {
+        traj_ids.push(r.player_id);
+    }
+    for a in &projection.arrivals {
+        traj_ids.push(a.player_id);
+    }
+    for (row, _) in &projection.uncertain {
+        traj_ids.push(row.player_id);
+    }
+    let traj_predictions: std::collections::HashMap<
+        Uuid,
+        cstat_core::trajectory::TrajectoryPrediction,
+    > = if traj_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        match fetch_player_trajectory_rows(pool, &traj_ids, base_season).await {
+            Ok(row_map) => {
+                let mut ids: Vec<Uuid> = Vec::new();
+                let mut feature_vectors: Vec<[f32; TRAJECTORY_NUM_FEATURES]> = Vec::new();
+                for (pid, row) in row_map {
+                    ids.push(pid);
+                    feature_vectors.push(build_trajectory_features(&row, base_season));
+                }
+                match state.predictor.predict_trajectory_batch(&feature_vectors) {
+                    Ok(preds) => ids.into_iter().zip(preds).collect(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = ?e,
+                            year,
+                            n = feature_vectors.len(),
+                            "trajectory batch predict failed for projection team detail; \
+                             serving NULL projections",
+                        );
+                        std::collections::HashMap::new()
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    year,
+                    n = traj_ids.len(),
+                    "trajectory features fetch failed for projection team detail; \
+                     serving NULL projections",
+                );
+                std::collections::HashMap::new()
+            }
+        }
+    };
+
+    // Serialize each cohort with names + per-player projections. `cam_v3`
+    // is the source-season (current) CamPom; `projected_campom_*` is
+    // the next-season forecast. Recruits don't have a "current" so
+    // their `projected_cam_v3` (= synthesized PlayerRow's cam_v3 =
+    // freshman model mean) is the headline; `projected_campom_lower/upper`
+    // carry the band.
+    let serialize_proj = |pid: &Uuid| -> (Option<f32>, Option<f32>, Option<f32>) {
+        match traj_predictions.get(pid) {
+            Some(p) => (Some(p.mean), Some(p.lower), Some(p.upper)),
+            None => (None, None, None),
+        }
+    };
     let returning_json: Vec<Value> = projection
         .returning
         .iter()
         .map(|r| {
+            let (mean, lower, upper) = serialize_proj(&r.player_id);
             json!({
                 "player_id": r.player_id,
                 "name": names.get(&r.player_id).cloned().unwrap_or_else(|| "(unknown)".to_string()),
@@ -530,6 +607,9 @@ async fn projection_team_detail(
                 "ppg": r.ppg,
                 "cam_v3": r.cam_v3,
                 "primary_class": r.primary_class,
+                "projected_campom_mean": mean,
+                "projected_campom_lower": lower,
+                "projected_campom_upper": upper,
             })
         })
         .collect();
@@ -538,6 +618,7 @@ async fn projection_team_detail(
         .iter()
         .map(|a| {
             let source = arrival_sources.get(&a.player_id);
+            let (mean, lower, upper) = serialize_proj(&a.player_id);
             json!({
                 "player_id": a.player_id,
                 "name": names.get(&a.player_id).cloned().unwrap_or_else(|| "(unknown)".to_string()),
@@ -547,6 +628,9 @@ async fn projection_team_detail(
                 "ppg": a.ppg,
                 "cam_v3": a.cam_v3,
                 "primary_class": a.primary_class,
+                "projected_campom_mean": mean,
+                "projected_campom_lower": lower,
+                "projected_campom_upper": upper,
             })
         })
         .collect();
@@ -561,6 +645,8 @@ async fn projection_team_detail(
                 "star_rating": meta.star_rating,
                 "tier": meta.tier,
                 "projected_cam_v3": row.cam_v3,
+                "projected_campom_lower": meta.projected_campom_lower,
+                "projected_campom_upper": meta.projected_campom_upper,
             })
         })
         .collect();
@@ -589,11 +675,18 @@ async fn projection_team_detail(
     let uncertain_json: Vec<Value> = projection
         .uncertain
         .iter()
-        .map(|(_, meta)| {
+        .map(|(row, meta)| {
+            let (mean, lower, upper) = serialize_proj(&meta.player_id);
             json!({
                 "player_id": meta.player_id,
                 "name": meta.name,
                 "reason": meta.reason,
+                "mpg": row.mpg,
+                "cam_v3": row.cam_v3,
+                "primary_class": row.primary_class,
+                "projected_campom_mean": mean,
+                "projected_campom_lower": lower,
+                "projected_campom_upper": upper,
             })
         })
         .collect();

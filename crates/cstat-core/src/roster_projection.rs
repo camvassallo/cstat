@@ -37,7 +37,7 @@
 //! "frozen-stats" framing for returning players. Phase 6 freshman-impact
 //! prior is the upgrade path for recruits.
 
-use crate::freshman_model::{FreshmanFeatureRow, build_freshman_features};
+use crate::freshman_model::{FreshmanFeatureRow, FreshmanPrediction, build_freshman_features};
 use crate::inference::Predictor;
 use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use crate::team_name_match::team_match_score;
@@ -111,6 +111,14 @@ pub struct RecruitMeta {
     /// tooltip ("synthesized from T1 top-30 profile, expect wide
     /// variance").
     pub tier: FreshmanTier,
+    /// Lower bound (q10) of the freshman-model projection. `None` when
+    /// batch inference failed and we fell back to tier-mean synthesis;
+    /// the synthesized PlayerRow's `cam_v3` field still carries the
+    /// tier-mean point estimate in that case.
+    pub projected_campom_lower: Option<f32>,
+    /// Upper bound (q90) of the freshman-model projection. Pairs with
+    /// `projected_campom_lower`; both `None` together on fallback.
+    pub projected_campom_upper: Option<f32>,
 }
 
 /// Coarse freshman-impact buckets. We map `composite_rank` → tier and
@@ -793,19 +801,20 @@ pub async fn compose_all_projections(
             build_freshman_features(&feature_row)
         })
         .collect();
-    let predictions: Vec<Option<f64>> = match predictor.predict_freshman_batch(&feature_vectors) {
-        Ok(preds) => preds.into_iter().map(|p| Some(p.mean as f64)).collect(),
-        Err(e) => {
-            tracing::warn!(
-                error = ?e,
-                year = base_season,
-                n = recruit_rows.len(),
-                "freshman batch predict failed in compose_all_projections; \
-                 falling back to rank-tier synthesis",
-            );
-            vec![None; recruit_rows.len()]
-        }
-    };
+    let predictions: Vec<Option<FreshmanPrediction>> =
+        match predictor.predict_freshman_batch(&feature_vectors) {
+            Ok(preds) => preds.into_iter().map(Some).collect(),
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    year = base_season,
+                    n = recruit_rows.len(),
+                    "freshman batch predict failed in compose_all_projections; \
+                     falling back to rank-tier synthesis",
+                );
+                vec![None; recruit_rows.len()]
+            }
+        };
 
     let mut recruits_by_team: HashMap<Uuid, Vec<(PlayerRow, RecruitMeta)>> = HashMap::new();
     for (r, pred) in recruit_rows.into_iter().zip(predictions) {
@@ -813,13 +822,21 @@ pub async fn compose_all_projections(
             continue; // SQL gate already filters; defensive guard.
         };
         let rank_tier = FreshmanTier::from_rank(r.composite_rank);
-        let (row, chosen_tier) = synthesize_freshman_row(r.recruit_id, rank_tier, pred);
+        // `synthesize_freshman_row` only needs the mean for tier
+        // reassignment; the full band rides alongside on RecruitMeta so
+        // the team-detail route can surface q10/q90 without re-running
+        // the model. Fallback path keeps both None — the synthesized
+        // PlayerRow's `cam_v3` is the tier-mean and surfaces alone.
+        let pred_mean = pred.as_ref().map(|p| p.mean as f64);
+        let (row, chosen_tier) = synthesize_freshman_row(r.recruit_id, rank_tier, pred_mean);
         let meta = RecruitMeta {
             recruit_id: r.recruit_id,
             name: r.full_name,
             composite_rank: r.composite_rank,
             star_rating: r.star_rating,
             tier: chosen_tier,
+            projected_campom_lower: pred.as_ref().map(|p| p.lower),
+            projected_campom_upper: pred.as_ref().map(|p| p.upper),
         };
         recruits_by_team
             .entry(team_id)
@@ -1060,6 +1077,8 @@ mod tests {
                     composite_rank: Some(5),
                     star_rating: Some(5),
                     tier: FreshmanTier::T1,
+                    projected_campom_lower: None,
+                    projected_campom_upper: None,
                 },
             ),
             (
@@ -1070,6 +1089,8 @@ mod tests {
                     composite_rank: Some(180),
                     star_rating: Some(3),
                     tier: FreshmanTier::T3,
+                    projected_campom_lower: None,
+                    projected_campom_upper: None,
                 },
             ),
         ];

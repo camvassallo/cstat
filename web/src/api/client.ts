@@ -514,6 +514,15 @@ export interface ProjectedReturning {
   ppg: number | null;
   cam_v3: number | null;
   primary_class: string | null;
+  // Phase 5c trajectory projection — predicted next-season CamPom for
+  // this player on the projected roster. Null when the player didn't
+  // pass the trajectory qual gate (≥5 GP, ≥5 MPG) or batch inference
+  // failed. `cam_v3` (above) is the *current/source-season* CamPom;
+  // the chip on the projection page shows the projected number with
+  // the current as a delta on hover.
+  projected_campom_mean: number | null;
+  projected_campom_lower: number | null;
+  projected_campom_upper: number | null;
 }
 export interface ProjectedArrival extends ProjectedReturning {
   /// Source team UUID + display name in the played base season. Powers
@@ -527,7 +536,14 @@ export interface ProjectedRecruitDetail {
   composite_rank: number | null;
   star_rating: number | null;
   tier: 't1' | 't2' | 't3' | 't4';
+  // Mean predicted freshman-season CamPom from the freshman-impact
+  // model. Same number as the chip on the Recruits tab; null when the
+  // freshman batch fell back to tier-mean synthesis.
   projected_cam_v3: number | null;
+  // q10/q90 band from the freshman model. Both null on the same
+  // fallback path that nulls `projected_cam_v3`.
+  projected_campom_lower: number | null;
+  projected_campom_upper: number | null;
 }
 export interface ProjectedDeparture {
   kind: 'senior' | 'transferred' | 'draft_gone';
@@ -539,6 +555,20 @@ export interface ProjectedUncertain {
   player_id: string;
   name: string;
   reason: string;
+  // Source-season MPG / CamPom from the player's PlayerRow on the
+  // base-season roster (always populated for uncertain since the
+  // bucket only contains qualified returners — same gate as
+  // ProjectedReturning).
+  mpg: number;
+  cam_v3: number | null;
+  primary_class: string | null;
+  // Per-player projection (route projects uncertain players alongside
+  // returners since they *are* returners under the ceiling scenario).
+  // null when the player wasn't found in the trajectory feature fetch
+  // (gate failure) or batch inference failed.
+  projected_campom_mean: number | null;
+  projected_campom_lower: number | null;
+  projected_campom_upper: number | null;
 }
 
 export function fetchProjectedTeam(year: number, teamId: string) {
