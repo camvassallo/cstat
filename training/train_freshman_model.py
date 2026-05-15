@@ -29,10 +29,10 @@ Features (13 total):
       Captures whether they're the only signing or part of a wave.
 
 Baseline to beat: 4-tier mean heuristic. Pooled MAE ~2.56 on qualified
-freshmen across class-of-2024 + class-of-2025 (n ≈ 963 — exact figure
-recomputed every run and recorded in the meta JSON). T1 (top-30 ranked,
-~110 players) is the loose bucket with MAE 4.32 in the baseline — the
-biggest room to improve.
+freshmen across **class-of-2022 through class-of-2025** (4 paired
+classes, n ≈ 963 — exact figure recomputed every run and recorded in
+the meta JSON). T1 (top-30 ranked, ~110 players) is the loose bucket
+with MAE 4.32 in the baseline — the biggest room to improve.
 
 Honest framing constants (mirror trajectory model):
   - Selection bias on top recruits is even sharper here: the elite

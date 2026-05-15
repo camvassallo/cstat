@@ -4,11 +4,13 @@ Wire-locked feature names. The freshman-impact prior model (Phase 6) will
 consume this same module so a single recruit-feature change benefits both.
 
 Coverage caveat: only ~7% of trajectory training rows currently have recruit
-data because we've ingested class-of-2024/2025/2026 only. Class-of-2022 and
-earlier (most non-freshman returners) have no `recruits` row, so the model
-sees `recruit_is_ranked=0` and sentinel values for those rows. LightGBM
-fits a separate split on the unranked-majority cohort. Historical recruit
-backfill (class-of-2021/2022/2023) will expand coverage on a separate PR.
+data. Ingested classes: 2022, 2023, 2024, 2025, 2026 (2026 not yet played).
+Class-of-2021 and earlier (most upperclassmen returners in 2024-25 and
+2025-26 trajectory pairs) have no `recruits` row, so the model sees
+`recruit_is_ranked=0` and sentinel values for those rows. LightGBM fits
+a separate split on the unranked-majority cohort. Historical recruit
+backfill (class-of-2021 and earlier) is the obvious lever to expand
+coverage on a separate PR.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ RECRUIT_FEATURE_NAMES = [
 ]
 N_RECRUIT_FEATURES = len(RECRUIT_FEATURE_NAMES)
 
-# Position taxonomy from 247 (verified against ingested 2024/2025/2026 classes).
+# Position taxonomy from 247 (verified against ingested 2022–2026 classes).
 # CG = Combo Guard (PG/SG hybrid). Anything outside this set maps to -1.
 POSITION_CODES = {
     "PG": 0,

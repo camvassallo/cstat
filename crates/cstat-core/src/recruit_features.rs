@@ -4,11 +4,12 @@
 //! and the position-code taxonomy must match exactly. The
 //! `trajectory_model_meta.json` validator at boot enforces the contract.
 //!
-//! Coverage caveat: only class-of-2024/2025/2026 are ingested today, so
-//! the majority of trajectory-model rows have NO recruit row and fall
-//! into the `recruit_is_ranked=0` bucket via sentinel encoding. LightGBM
-//! fits a separate branch on the unranked-majority cohort. Historical
-//! backfill (class-of-2021/2022/2023) is a follow-up PR.
+//! Coverage caveat: class-of-2022 through 2026 are ingested today, but
+//! the majority of trajectory-model rows are upperclassmen from earlier
+//! classes that have no recruit row and fall into the
+//! `recruit_is_ranked=0` bucket via sentinel encoding. LightGBM fits a
+//! separate branch on the unranked-majority cohort. Historical backfill
+//! (class-of-2021 and earlier) is a follow-up PR.
 //!
 //! Feature shape (11 cols, locked order — must equal Python
 //! `RECRUIT_FEATURE_NAMES` in `training/recruit_features.py`):
