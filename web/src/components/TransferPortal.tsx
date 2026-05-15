@@ -9,39 +9,21 @@ import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
 
 // Players ranked by 247Sports who carry one of our derived ranks (we have a
-// matching cstat player with a CamPom value). `rank_delta` is `rank_247 −
-// rank_cstat`: positive means CamPom values the player higher than 247 does
-// (best value), negative the opposite. `campom_delta` is the trajectory
-// projection delta (projected − current); negative is the regression-to-
-// the-mean case for elite transfers, positive is "model expects growth".
-// All three derived fields are null when we couldn't compute them.
+// matching cstat player with a projected CamPom value). `rank_cstat` is the
+// row's rank among ranked-by-247 transfers when the cohort is sorted by
+// projected next-season CamPom desc — the forward-looking "who should I be
+// excited about" view. `rank_delta` is `rank_247 − rank_cstat`: positive
+// means cstat rates the player higher than 247 does (best value), negative
+// the opposite. `campom_delta` is the trajectory projection delta
+// (projected − current); negative is the regression-to-the-mean case for
+// elite transfers, positive is "model expects growth". All three derived
+// fields are null when we couldn't compute them.
 type RankedTransfer = TransferRow & {
   rank_cstat: number | null;
   rank_delta: number | null;
   campom_delta: number | null;
 };
 
-const fmtCampom = (v: number | null) => (v != null ? v.toFixed(1) : '—');
-
-const campomRenderer = (p: { value: number | null; data?: RankedTransfer }) => {
-  if (p.value == null) return <span className="text-slate-500">—</span>;
-  const tier = campomTier(p.value);
-  const pct = p.data?.campom_pct;
-  const pctStr = pct != null ? Math.round(pct * 100) : null;
-  return (
-    <span className="inline-flex items-baseline gap-2">
-      <span
-        className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
-        title={tier ?? ''}
-      >
-        {p.value.toFixed(1)}
-      </span>
-      {pctStr != null && (
-        <span className="text-slate-400 text-xs">{pctStr}</span>
-      )}
-    </span>
-  );
-};
 
 // Renders a team cell as a link to /teams/:id when we resolved the 247 short
 // name to a cstat team_id, or as plain text when we didn't (rare; small
@@ -86,7 +68,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
       width: 70,
       pinned: 'left',
       headerTooltip:
-        'Our rank by CamPom among 247-ranked transfers with a CamPom value',
+        "Our rank among 247-ranked transfers, sorted by projected next-season CamPom. Forward-looking — favors players the trajectory model expects to be more impactful next year, not just who's good right now.",
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="font-bold">{p.value}</span>
@@ -197,13 +179,85 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
         }),
     },
     {
-      headerName: 'CamPom',
-      field: 'campom',
-      ...flexCol(1, 100),
+      headerName: 'Projection',
+      field: 'projected_campom_mean',
+      ...flexCol(1, 130),
       sort: 'desc',
-      headerTooltip: 'Our composite player valuation from prior season',
-      cellRenderer: campomRenderer,
-      valueFormatter: (p) => fmtCampom(p.value),
+      headerTooltip:
+        "Projected next-season CamPom (Phase 5c trajectory model) — the headline number for this page. Source-season CamPom shows as a small grey lead-in on the left when available, so you can read the delta directly (12.5 → 11.2). Trajectory model is destination-agnostic (no team feature), so the projection assumes a role similar to source team. Sort default is by projection desc. Tied/null projections fall back to source-season CamPom for tiebreak.",
+      comparator: (a, b, nodeA, nodeB) => {
+        // Primary: projected_campom_mean desc (nulls last regardless of
+        // direction — keeps sub-qual / unmatched rows at the bottom).
+        // Secondary: source-season campom desc, used as a tiebreak
+        // inside the null cohort so those rows don't clump randomly.
+        if (a == null && b == null) {
+          const ca = nodeA.data?.campom ?? null;
+          const cb = nodeB.data?.campom ?? null;
+          if (ca == null && cb == null) return 0;
+          if (ca == null) return 1;
+          if (cb == null) return -1;
+          return ca - cb;
+        }
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null; data?: RankedTransfer }) => {
+        const cur = p.data?.campom ?? null;
+        const lo = p.data?.projected_campom_lower;
+        const hi = p.data?.projected_campom_upper;
+        if (p.value == null) {
+          // No projection — show source-season CamPom as the fallback
+          // chip (subdued styling) so users still see something. Common
+          // for transfers that didn't pass the trajectory qual gate.
+          if (cur == null) return <span className="text-gray-600 text-xs">—</span>;
+          return (
+            <span
+              className={`px-1.5 rounded border text-xs ${campomTierColor(campomTier(cur))}`}
+              title="No next-season projection (transfer didn't pass the trajectory qual gate or batch inference failed). Source-season CamPom shown for reference."
+            >
+              {cur.toFixed(1)}
+            </span>
+          );
+        }
+        const tier = campomTier(p.value);
+        // Regression-to-the-mean honesty note — same conditional as
+        // PlayerDetail / PlayerProgression / TeamDetail PlayerCard.
+        // Anchors on the model's *input* (source-season CamPom), not
+        // the projection.
+        const regressionNote =
+          cur != null && cur >= 15
+            ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15). Read the q90 ceiling for the optimistic case.'
+            : cur != null && cur >= 10
+              ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
+              : '';
+        const deltaStr =
+          cur != null
+            ? `. Source-season ${cur.toFixed(1)}, Δ ${p.value - cur >= 0 ? '+' : ''}${(p.value - cur).toFixed(1)}.`
+            : '.';
+        const bandStr =
+          lo != null && hi != null
+            ? `Projected next-season CamPom: ${p.value.toFixed(1)} (${lo.toFixed(1)}–${hi.toFixed(1)})${tier ? ` · ${tier}` : ''}${deltaStr}${regressionNote} Trajectory model is destination-agnostic — projection assumes a role similar to source team.`
+            : `Projected next-season CamPom: ${p.value.toFixed(1)}${tier ? ` · ${tier}` : ''}${deltaStr}${regressionNote}`;
+        return (
+          <span className="inline-flex items-center gap-1.5">
+            {cur != null && (
+              <>
+                <span className="text-[10px] text-gray-500" title="Source-season CamPom v3">
+                  {cur.toFixed(1)}
+                </span>
+                <span className="text-gray-600 text-[10px]">→</span>
+              </>
+            )}
+            <span
+              className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
+              title={bandStr}
+            >
+              {p.value.toFixed(1)}
+            </span>
+          </span>
+        );
+      },
     },
     {
       headerName: '247',
@@ -228,7 +282,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
       field: 'rank_delta',
       ...flexCol(1, 80),
       headerTooltip:
-        'Rank value vs. 247: 247 portal rank − our CamPom rank. Positive (green) means CamPom rates the player higher than 247 does — sort desc to find best values. Negative (red) means CamPom is lower on the player. This is a RANK comparison; for the projection-vs-current comparison, see ΔCP.',
+        'Rank value vs. 247: 247 portal rank − our projected-CamPom rank. Positive (green) means cstat rates the player higher than 247 does after factoring in next-season projection — sort desc to find best values. Negative (red) means cstat is lower on the player. This is a RANK comparison; for the projection-vs-current point delta on a single player, see ΔCP.',
       comparator: (a: number | null, b: number | null) => {
         // Push unranked rows to the bottom regardless of sort direction.
         if (a == null && b == null) return 0;
@@ -248,42 +302,6 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
         const text = v > 0 ? `+${v}` : `${v}`;
         return (
           <span className={`text-xs font-semibold ${color}`}>{text}</span>
-        );
-      },
-    },
-    {
-      headerName: 'Proj',
-      field: 'projected_campom_mean',
-      ...flexCol(1, 100),
-      headerTooltip:
-        "Phase 5c trajectory projection — predicted next-season CamPom for the transfer's first season at the destination. Computed from source-season stats; the model is destination-agnostic (no team feature), so the projection assumes a role similar to what they played at their source. Hover a cell for the q10–q90 band. NULL when the transfer didn't match a cstat row, didn't pass the qual gate (≥5 GP, ≥5 MPG), or batch inference failed.",
-      cellRenderer: (p: { value: number | null; data?: RankedTransfer }) => {
-        if (p.value == null) return <span className="text-gray-600 text-xs">—</span>;
-        const tier = campomTier(p.value);
-        const lo = p.data?.projected_campom_lower;
-        const hi = p.data?.projected_campom_upper;
-        const cur = p.data?.campom;
-        // Regression-to-the-mean honesty note — same conditional as
-        // PlayerDetail / PlayerProgression. `cur` is the model's input
-        // (their source-season CamPom); ≥+15 enters the documented
-        // bias zone where the model under-projects by ≈−3.
-        const regressionNote =
-          cur != null && cur >= 15
-            ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15). Read the q90 ceiling for the optimistic case.'
-            : cur != null && cur >= 10
-              ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
-              : '';
-        const bandStr =
-          lo != null && hi != null
-            ? `Projected next-season CamPom: ${p.value.toFixed(1)} (${lo.toFixed(1)}–${hi.toFixed(1)})${tier ? ` · ${tier}` : ''}.${regressionNote} Trajectory model is destination-agnostic — projection assumes a role similar to source team.`
-            : `Projected next-season CamPom: ${p.value.toFixed(1)}${tier ? ` · ${tier}` : ''}.${regressionNote}`;
-        return (
-          <span
-            className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
-            title={bandStr}
-          >
-            {p.value.toFixed(1)}
-          </span>
         );
       },
     },
@@ -344,13 +362,23 @@ export default function TransferPortal({ year }: Props) {
     fetchTransfers(year)
       .then((r) => {
         if (canceled) return;
-        // Sort everything by CamPom desc first; rows lacking either CamPom
-        // or a 247 rank stay in the array but skip the rank counter so the
-        // displayed `rank_cstat` matches on-screen position. The endpoint
-        // returns the full portal (including unranked-by-247 entries) for
-        // the 2027-projection roster aggregator; those don't compete for
-        // a rank here.
+        // Sort by PROJECTED CamPom desc — the forward-looking ranking. Rows
+        // lacking either projection or 247 rank stay in the array but skip
+        // the rank counter so the displayed `rank_cstat` matches on-screen
+        // position. Tiebreak in the no-projection cohort uses source-season
+        // CamPom desc so those rows are at least internally sorted. The
+        // endpoint returns the full portal (including unranked-by-247
+        // entries) for the 2027-projection roster aggregator; those don't
+        // compete for a rank here. Δ247 reads directly off `rank_cstat`,
+        // so this switch propagates the projection-based interpretation
+        // into the value-vs-247 column too.
         const sorted = [...r.transfers].sort((a, b) => {
+          const ap = a.projected_campom_mean;
+          const bp = b.projected_campom_mean;
+          if (ap != null && bp != null) return bp - ap;
+          if (ap != null) return -1;
+          if (bp != null) return 1;
+          // Both projections null — tiebreak on source-season campom.
           if (a.campom == null && b.campom == null) return 0;
           if (a.campom == null) return 1;
           if (b.campom == null) return -1;
@@ -358,8 +386,11 @@ export default function TransferPortal({ year }: Props) {
         });
         let i = 0;
         const withRank: RankedTransfer[] = sorted.map((t) => {
+          // Rank only when BOTH projection and 247 rank present — keeps
+          // the rank a single-meaning number (= position when sorted by
+          // projected CamPom among 247-ranked transfers).
           const rank_cstat =
-            t.campom != null && t.rank_247 != null ? ++i : null;
+            t.projected_campom_mean != null && t.rank_247 != null ? ++i : null;
           // campom_delta needs BOTH current and projected CamPom. The
           // route serves projection NULLs for unmatched / sub-qual rows;
           // we don't fabricate one here just because current CamPom is
@@ -390,9 +421,12 @@ export default function TransferPortal({ year }: Props) {
 
   const filtered = useMemo(() => {
     if (!rows) return null;
-    // `rank_cstat` is only assigned when both CamPom and 247 rank are
-    // present (see useEffect above), so this single check drops the
-    // unranked-by-247 long tail and the no-CamPom rows in one pass.
+    // `rank_cstat` is only assigned when both projected CamPom and 247
+    // rank are present (see useEffect above), so this single check drops
+    // the unranked-by-247 long tail and the no-projection rows in one
+    // pass. Sub-qual transfers (those without a trajectory projection)
+    // fall out of the ranked view; they still ride along on the page-
+    // level state for the 2027 roster aggregator.
     const ranked = rows.filter((t) => t.rank_cstat != null);
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
@@ -430,7 +464,7 @@ export default function TransferPortal({ year }: Props) {
         />
         <span className="text-xs text-gray-500">
           {ranked} ranked transfers
-          {hidden > 0 && ` · ${hidden} hidden (unranked by 247 or no CamPom)`} ·{' '}
+          {hidden > 0 && ` · ${hidden} hidden (unranked by 247 or no projection)`} ·{' '}
           <a
             href={`https://247sports.com/season/${year}-basketball/transferportaltop/`}
             target="_blank"
