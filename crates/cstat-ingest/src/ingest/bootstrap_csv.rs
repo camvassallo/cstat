@@ -142,7 +142,7 @@ fn find_csv(dir: &Path, year: i32, kind: &str) -> Result<PathBuf> {
 // Cell parsers — CSV strings are all quoted; missing values are empty strings.
 // ---------------------------------------------------------------------------
 
-fn cell<'a>(row: &'a csv::StringRecord, idx: usize) -> &'a str {
+fn cell(row: &csv::StringRecord, idx: usize) -> &str {
     row.get(idx).unwrap_or("").trim()
 }
 
@@ -488,7 +488,7 @@ async fn load_team_statlines(
         count += 1;
 
         // Commit every 1000 rows so a partial failure isn't catastrophic.
-        if count % 1000 == 0 {
+        if count.is_multiple_of(1000) {
             tx.commit().await?;
             tx = pool.begin().await?;
         }
@@ -690,7 +690,7 @@ async fn load_player_statlines(
         .await?;
         count += 1;
 
-        if count % 2000 == 0 {
+        if count.is_multiple_of(2000) {
             tx.commit().await?;
             tx = pool.begin().await?;
             info!(progress = count, "player_game_stats inserted");
@@ -737,7 +737,7 @@ async fn game_uuid_map(pool: &PgPool, year: i32) -> Result<HashMap<String, (Uuid
             .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|(id, nat, date)| Some((nat, (id, date))))
+        .map(|(id, nat, date)| (nat, (id, date)))
         .collect())
 }
 
@@ -787,7 +787,7 @@ async fn upsert_players_batch(
         .execute(&mut *tx)
         .await?;
         count += 1;
-        if count % 2000 == 0 {
+        if count.is_multiple_of(2000) {
             tx.commit().await?;
             tx = pool.begin().await?;
         }

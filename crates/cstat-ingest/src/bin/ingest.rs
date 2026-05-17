@@ -382,10 +382,9 @@ async fn main() -> Result<()> {
             dir,
             also_compute,
         } => {
-            let report = cstat_ingest::ingest::bootstrap_csv::bootstrap_from_csv_dir(
-                &db.pool, year, &dir,
-            )
-            .await?;
+            let report =
+                cstat_ingest::ingest::bootstrap_csv::bootstrap_from_csv_dir(&db.pool, year, &dir)
+                    .await?;
             println!("{report}");
             if also_compute {
                 info!(year, "running compute_all after CSV bootstrap");
