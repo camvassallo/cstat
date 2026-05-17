@@ -1037,7 +1037,8 @@ fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
         "TRAJECTORY",
         LoadError::TrajectoryMetaMismatch,
     )?;
-    validate_quantile_alphas(&meta, LoadError::TrajectoryMetaMismatch)
+    validate_quantile_alphas(&meta, LoadError::TrajectoryMetaMismatch)?;
+    validate_oof_persisted(&meta, LoadError::TrajectoryMetaMismatch)
 }
 
 /// Read `freshman_model_meta.json` and verify feature order, qualification
@@ -1050,7 +1051,28 @@ fn validate_freshman_meta(path: &Path) -> Result<(), LoadError> {
         "FRESHMAN",
         LoadError::FreshmanMetaMismatch,
     )?;
-    validate_quantile_alphas(&meta, LoadError::FreshmanMetaMismatch)
+    validate_quantile_alphas(&meta, LoadError::FreshmanMetaMismatch)?;
+    validate_oof_persisted(&meta, LoadError::FreshmanMetaMismatch)
+}
+
+/// Held-out OOF predictions are load-bearing for historical-year route
+/// honesty: `routes::transfers` / `routes::projections` / `routes::recruits`
+/// and the two `routes::players` chips all try `*_oof_predictions` first
+/// and only fall through to live inference for IDs without a stored row.
+/// A retrain that skipped `persist_*_oof()` silently serves in-sample
+/// predictions for every historical row — the symptom is elite 2024
+/// transfers projecting +15-20 instead of the LOPO-honest +8-12. Fail
+/// boot rather than ship that quietly. Shared by trajectory + freshman.
+fn validate_oof_persisted(
+    meta: &serde_json::Value,
+    err: fn(String) -> LoadError,
+) -> Result<(), LoadError> {
+    if !meta["oof_persisted"].as_bool().unwrap_or(false) {
+        return Err(err(
+            "oof_persisted ≠ true — rerun training script so persist_*_oof() populates the table".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
