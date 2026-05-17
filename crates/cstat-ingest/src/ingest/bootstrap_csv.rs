@@ -536,8 +536,24 @@ async fn load_player_statlines(
         if player_id.is_empty() {
             continue;
         }
-        let name = cell_owned(&row, 2);
+        // Fall back to player_id when Name is empty so the players row
+        // has *something* in name (NOT NULL constraint upstream). The API
+        // path similarly stubs to "Unknown" when name is missing.
+        let name = {
+            let n = cell(&row, 2);
+            if n.is_empty() {
+                player_id.clone()
+            } else {
+                n.to_string()
+            }
+        };
         let team_csv = cell_owned(&row, 5);
+        // or_insert (not insert) keeps the FIRST team seen for a player —
+        // chronological CSV order means this is the pre-transfer team for
+        // mid-season movers. Matches the API path's `upsert_player`,
+        // which also never overwrites team_id on conflict. The DB's
+        // UNIQUE (natstat_id, season) constraint only allows one team per
+        // player-season anyway.
         players_seen.entry(player_id).or_insert((name, team_csv));
     }
     info!(
@@ -622,6 +638,7 @@ async fn load_player_statlines(
         let is_home = match location {
             "H" => Some(true),
             "V" | "A" => Some(false),
+            "N" => None, // neutral — games.is_neutral_site carries the flag
             _ => None,
         };
         let starter = match starter_raw {
@@ -803,4 +820,60 @@ async fn upsert_players_batch(
     }
     tx.commit().await?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pct_returns_percent_scale_not_fraction() {
+        // Match the API ingester convention so downstream rate-stat
+        // aggregations don't end up bimodal across CSV-loaded vs
+        // API-loaded seasons. See ROADMAP "CSV bulk-bootstrap" Shipped
+        // notes for why this is load-bearing.
+        assert_eq!(pct(Some(50), Some(100)), Some(50.0));
+        assert_eq!(pct(Some(0), Some(10)), Some(0.0));
+        assert_eq!(pct(Some(10), Some(10)), Some(100.0));
+    }
+
+    #[test]
+    fn pct_returns_none_for_missing_or_zero_attempts() {
+        assert_eq!(pct(None, Some(10)), None);
+        assert_eq!(pct(Some(5), None), None);
+        assert_eq!(pct(Some(5), Some(0)), None);
+        assert_eq!(pct(None, None), None);
+    }
+
+    #[test]
+    fn parse_i32_handles_blanks_and_whitespace() {
+        assert_eq!(parse_i32(""), None);
+        assert_eq!(parse_i32("   "), None);
+        assert_eq!(parse_i32("42"), Some(42));
+        assert_eq!(parse_i32(" 42 "), Some(42));
+        assert_eq!(parse_i32("not a number"), None);
+    }
+
+    #[test]
+    fn parse_date_accepts_iso_format_only() {
+        assert_eq!(
+            parse_date("2026-03-15"),
+            Some(NaiveDate::from_ymd_opt(2026, 3, 15).unwrap())
+        );
+        assert_eq!(parse_date(""), None);
+        assert_eq!(parse_date("3/15/2026"), None);
+    }
+
+    #[test]
+    fn find_csv_errors_when_no_match() {
+        // Empty temp dir — no CSVs of any kind. Both search paths
+        // (dir/ and dir/{year}/) miss; expect a single useful error.
+        let tmp = std::env::temp_dir().join(format!("cstat-bootstrap-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let err = find_csv(&tmp, 2026, "Teams").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no CSV found"), "got: {msg}");
+        assert!(msg.contains("Teams"), "got: {msg}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }
