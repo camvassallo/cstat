@@ -1069,7 +1069,8 @@ fn validate_oof_persisted(
 ) -> Result<(), LoadError> {
     if !meta["oof_persisted"].as_bool().unwrap_or(false) {
         return Err(err(
-            "oof_persisted ≠ true — rerun training script so persist_*_oof() populates the table".into(),
+            "oof_persisted ≠ true — rerun training script so persist_*_oof() populates the table"
+                .into(),
         ));
     }
     Ok(())

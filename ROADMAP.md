@@ -489,7 +489,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 ## Phase 6: Expansion & Refinement
 > Historical depth, brackets, continuous improvement
 
-- [~] **Full historical data support across the site** (NatStat perfs back to 2007, ~20 seasons). **2022-2026 ingested (5 seasons) as of 2026-05-15**; remaining 2007-2021 backfill unlocks career-spanning player profiles, multi-season team trends, and "all-time" leaderboards. Per Phase 3 notes, expanding the cstat training window remains a high-leverage lever for the predict model, though the diminishing-returns inflection point above 5 seasons is unproven empirically. Pre-2022 also brings era-effect risk for combined-cohort archetypes (see `docs/archetypes_methodology.md` "Era horizon").
+- [~] **Full historical data support across the site** (NatStat perfs back to 2007, ~20 seasons). **2015-2026 ingested (12 seasons) as of 2026-05-17** — 2022-2026 via the API path; 2015-2021 via the new `bootstrap-csv` subcommand (see Refactor Backlog). 2007-2014 remain — same CSV path works, just needs the dashboard exports. Per Phase 3 notes, expanding the cstat training window remains a high-leverage lever for the predict model, though the diminishing-returns inflection point above 5 seasons is unproven empirically. Pre-2015 brings sharper era-effect risk for combined-cohort archetypes (see `docs/archetypes_methodology.md` "Era horizon") — three-point line moved in 2008, small-ball/3PT-volume era began ~2014.
   - **Data availability**: `/seasons` confirms perfs for 2007-2026 (20 seasons), play-by-play from 2012+. Each season ≈ 6,200 games, ≈ 6,000 players, ≈ 110k box scores. Rate-limited at 500 API calls/hr → full backfill is a multi-day job leaning on the existing `api_cache` table.
   - **Ingest**: extend `cstat-ingest season` to accept a year range and run the full pipeline (teams → games → perfs → teamperfs → forecasts → elo) per season. Handle historical conference realignment, team renames, and defunct programs without breaking FK constraints. Layer Torvik backfill on the same range (CSV is per-year).
   - **Compute**: run the 13-step compute pipeline per historical season. CamPom, percentiles, adj efficiency, and archetypes are all already season-scoped, but worth sanity-checking early seasons where some advanced fields (e.g., shot zones from Torvik) may be missing.
@@ -550,9 +550,80 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 - [ ] Tournament bracket simulator (Monte Carlo, inspired by gravity project)
 - [ ] Season simulation engine
 - [ ] Model accuracy dashboard with calibration tracking
-- [ ] Automated daily data refresh during season
+- [ ] **Live in-season ingest hardening + out-of-season test harness** — `cstat-ingest update --from X --to Y` already exists and runs compute at the end. What's missing is the production wrapping: a scheduler, idempotency guarantees, failure detection, and a test plan that exercises the live path *now* (we're 5+ months from tipoff and can't afford to discover a regression on opening night).
+  - **Scheduling**: nightly cron at ~04:30 ET (after NatStat's ~3 AM ET nightly re-tabulation completes — `/stats` re-runs then, per `docs/natstat-api-v4.md`). Run `cstat-ingest update --from <yesterday> --to <today>` so late stat corrections from the prior day's window get picked up. Host options: Railway scheduled job, GitHub Actions scheduled workflow, or systemd timer on the deploy host. Pick whichever matches the prod-runtime story.
+  - **Idempotency**: `update --from X --to Y` must be safe to re-run on the same window without duplicating rows or corrupting derived stats. Most upsert paths in `games.rs` already use `ON CONFLICT … DO UPDATE`; audit the path end-to-end and add a regression test (run twice, assert row counts and key column values are identical).
+  - **Rate-limit headroom**: the 500/hr cap is the hard ceiling. Peak Saturdays in March can hit 200+ games → 200 game-detail calls + perfs/teamperfs pagination. Worst-case daily budget consumption is ~40–60% — fine, but we should log per-run "tokens consumed" + emit an alert if a run uses >80% of the daily budget.
+  - **Failure detection**: today, a failed run silently leaves stale data. Need (a) per-step success markers persisted to a `ingest_runs` table (start_at, end_at, status, rows_touched, api_calls), (b) a `/api/health/ingest` route that returns the timestamp of the last successful run per data source, (c) an alerting hook (Slack webhook, email, or just an exit-code-based job-failure email from the scheduler) when last-success is >36h old during season.
+  - **Late stat corrections**: NatStat retabulates at 3 AM ET nightly. A game played on day N often has its final box score corrected on the day-N+1 retabulation. The default `update --from <yesterday> --to <today>` window catches this. Document the policy: derived stats (CamPom, percentiles, AdjEM) recompute on every nightly run, so a Tuesday correction silently propagates into Wednesday morning's rankings without manual intervention.
+  - **Edge cases to exercise**:
+    - Postponed game → ingested with `GameStatus != Final`, then corrected later. Verify the upsert overwrites scores when status flips.
+    - Game cancelled outright → does anything write a phantom 0-0 row? (Probably not, but worth a smoke test.)
+    - Player adds (mid-season transfer eligibility) → box-score path auto-creates the player row; verify no FK violations.
+    - Conference re-classification (rare mid-season) → `is_conference` recompute should pick up the change on next compute pass.
+    - ELO endpoint may be empty if NatStat hasn't run their nightly ELO update yet — `update` should not fail the whole run on a missing `/elo` payload.
+    - Forecasts endpoint goes empty after a season ends — current code probably handles it (forecasts only exist for future games), but worth a check on March 14 vs March 16.
+  - **Out-of-season test plan** (the load-bearing part — needs to be exercised before October 2026):
+    - **Approach A (replay)**: Pick a recent fully-ingested window (e.g. 2026-02-01 to 2026-02-07). Snapshot the affected rows. Delete them. Run `cstat-ingest update --from 2026-02-01 --to 2026-02-07`. Diff the result against the snapshot. Repeat for several different-shaped windows (single-game day, 100-game Saturday, postponement day, conference-tournament day).
+    - **Approach B (staging)**: Stand up a staging DB on Railway, point a separate `cstat-ingest` instance at it via the scheduler, run the nightly job out-of-season against the empty payload window. Confirm the job completes with zero-game-day handling. Won't test correctness, but catches scheduler/auth/connectivity regressions.
+    - **Approach C (synthetic)**: Mock NatStat's API at the HTTP layer for integration tests — fixed payload fixtures for each endpoint, verified by replaying through the existing ingest path. Lives in `crates/cstat-ingest/tests/` and runs in CI on every push. Highest engineering cost but the only one that catches API-shape regressions without burning rate budget.
+    - **Recommended**: Approach A for the immediate confidence check (run once a week between now and October), Approach C for ongoing CI protection, Approach B as a stretch goal if staging infra is cheap.
+  - **First-day-of-season checklist** (run manually the morning of 2026-11-03 or whenever tipoff lands): (a) confirm scheduled job ran overnight, (b) check `/api/health/ingest` shows recent timestamps, (c) inspect a freshly-ingested box score on the frontend, (d) verify ML predict route returns plausible margins for opening-night games (might need a `season=2027` fallback during the first ~2 weeks when game volume is too thin for adj efficiency to converge — already partially handled but worth a spot check).
 - [ ] Conference/team/player trend analysis over time
-- [ ] **Native cstat player impact metric** (alternative to Torvik GBPM passthrough). Frame as a *descriptive* grade — "what's this player's value, derived purely from cstat's own machinery" — not a predictor (the §4f experiment already showed CamPom-style adjustments don't beat raw GBPM as ML features; this is a different goal). Approach: non-linear regression of team-game outcomes on roster-composition features (player IDs × minutes) to attribute per-player coefficients. Acceptance: matches or beats CamPom on (a) year-over-year rank stability for returning players and (b) external benchmarks (KenPom POY, AP All-American). **Caveat — re-attempting failed work**: cstat's prior native BPM (`compute.rs` pre-PR #25) tried this with linear box-score formulas and got r=0.075 with Torvik OBPM. Don't repeat that approach; the limit at our data resolution is team-game level (no play-by-play) and box-score-derived linear coefficients are exactly what blew up. A LightGBM-on-team-game-outcomes attribution is a different methodology and worth trying — but it's a multi-PR project and would need its own design doc.
+- [ ] **PBP-derived features in models and UI** — depends on the `play_by_play` table landing (see Refactor Backlog "Play-by-play ingestion"). Once PBP is loaded, several model and UI surfaces unlock that we currently have *no path to* from box-score data alone. Order of work: ingest first (CSV path), then derive per-player aggregates, then plumb into models and UI in parallel.
+  - **New compute step: `compute_pbp_aggregates`** (runs after `backfill_game_stats`, before `compute_player_season_stats`). Derives per `(player_id, game_id)`:
+    - `plus_minus_pbp` — sum of `thediff` deltas across plays where the player appears in `onfloorhome` or `onfloorvis` (overwrites the sparse box-score `plus_minus` field)
+    - `seconds_on_court` — precise minutes-on-floor (replaces or sanity-checks NatStat's `MIN`)
+    - `paint_fga`, `paint_fgm`, `perimeter_fga`, `perimeter_fgm` — from `tags LIKE '%paint%'`
+    - `transition_points`, `second_chance_points`, `points_off_turnovers` — from `brk|`, `2ch|`, `offto|` tags
+    - `fouls_drawn` — distinct `FOULED|` event count for player_id
+    - `assists_with_recipients` JSONB — per-game `{recipient_player_id: count}` map for assist-network analysis
+  - **New tables**:
+    - `lineup_stints (game_id, period, start_clock, end_clock, home_lineup INT[5], vis_lineup INT[5], home_score_delta, vis_score_delta, possessions)` — one row per unique 5-man on-floor combination's contiguous time window. Derived by `GROUP BY (game_id, onfloorhome, onfloorvis)` with clock boundaries.
+    - `lineup_aggregates (season, team_id, lineup INT[5], minutes, plus_minus, ortg, drtg, possessions)` — season-level rollup of `lineup_stints` for the team-detail "top 5-man lineups" surface.
+    - Optional: `assist_edges (season, passer_id, scorer_id, count)` for the assist-network graph.
+  - **ML model features** (margin / win prediction, `training/features.py`):
+    - Team-level: `lineup_quality` (minutes-weighted +/- per 100 poss of top 5 lineups), `transition_rate` (transition pts / total pts), `second_chance_rate`, `paint_rate` (paint FGA / FGA)
+    - Star-player: top-3 GBPM players' lineup-quality average (catches "is this team's best lineup the one that plays the most?")
+    - Risk: PBP features only available from 2013 onward (NatStat's PBP coverage start). Either train two model variants (PBP-era vs pre-PBP) or impute missing features with season averages. Document the decision in `docs/features_methodology.md`.
+  - **Trajectory + freshman models**:
+    - Add `prior_lineup_plus_minus` as a quality-of-fit signal (does this player play in good lineups? predicts whether their counting stats are inflated or suppressed)
+    - Add `prior_paint_rate` as a position-proxy refinement (paint% > 60% with low height = inside-out big who'll grow into 4)
+  - **API endpoints** (new):
+    - `GET /api/players/:id/on-off` — season on/off splits (team ortg/drtg with vs without this player)
+    - `GET /api/players/:id/lineups` — top lineup partners (most-shared minutes, joint +/-)
+    - `GET /api/players/:id/shot-mix` — paint vs perimeter FG splits per game / season
+    - `GET /api/teams/:id/lineups` — top 5-man lineups for the season (minutes, +/-, ortg/drtg)
+    - `GET /api/games/:id/playbyplay` — full PBP timeline for game detail page
+    - `GET /api/games/:id/lineup-stints` — stint-by-stint +/- breakdown
+  - **UI surfaces** (Phase 4-style frontend work):
+    - **Player detail page** (`web/src/pages/PlayerDetail.tsx`) — new sub-panels:
+      - On/off split chart (line graph: team ortg/drtg by 5-game window, with vs without player highlighted)
+      - Top lineup partners table (top 5 teammates by joint minutes, with joint +/- and possessions)
+      - Shot mix chart (paint vs perimeter pie + game-by-game trend)
+      - Fouls drawn vs committed line
+      - Clutch splits stat box (last 5 min, within 5 pts: PPG, FG%, +/-)
+    - **Team detail page** (`TeamDetail.tsx`) — new tab "Lineups":
+      - Top 5-man lineups table (lineup, MIN, +/-, ortg, drtg, possessions) — default sort by minutes
+      - Top 10 by +/- per 100 poss (with min-possessions filter)
+      - Substitution heatmap (rows = players, cols = game time, fill = on-court)
+    - **Game detail page** — *new page entirely* (no existing surface for individual games). Routes: `/games/:id`. Components:
+      - Header: matchup, final score, venue, attendance, conference
+      - Score timeline chart (lead-change momentum)
+      - Box score with new lineup column ("avg lineup +/- when this player was in")
+      - PBP filterable list (by team, player, event type)
+      - Stint-by-stint +/- table (lineup-on, points-for/against, possessions)
+      - Linked from: schedule cells on TeamDetail, recent-results on Home, NatStat ID lookup
+  - **Acceptance**: PBP-features ML model retrain beats the current 47-feature LightGBM baseline by ≥0.5 MAE; on-off splits ship and at least one player detail page shows a non-trivial gap (e.g. a star player's team ortg drops ≥5 points without them). Game detail page exists and at least one frontend nav surface links to it.
+  - **Sequencing**: bulk-CSV bootstrap (Refactor Backlog) lands first → PBP CSV loader (also Refactor Backlog) lands second → this item kicks off third. The ingest pieces are prerequisites; model + UI work splits cleanly across multiple PRs once the table is populated.
+- [~] **Post-12-season backfill follow-ups (next session)** — the 2026-05-17 backfill brought us from 5 → 12 ingested seasons (2015–2026) in one sitting. Several downstream pieces became unlockable but weren't done in-session; queueing them here so they don't drift.
+  - [ ] **Archetype combined-cohort retrain on 12 seasons** — `cd training && python -m archetypes --seasons 2015,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026 --diagnostics`. Centroids will shift (combined cohort jumped from ~25k to ~57k player-seasons). Read `docs/archetypes_methodology.md` "Era horizon" before committing — 2015–2017 is the borderline era-effect zone (small-ball/3PT-volume era began ~2014). Diagnostics flag is non-negotiable here; compare to current 5-season baseline before merging.
+  - [ ] **Trajectory + freshman model retrain** — both models now have ≥7 more paired classes than the current shipped versions (2015 → 2016, 2016 → 2017, … all the way through 2025 → 2026). Expect the bulk of MAE improvement on the older-class buckets (training was previously thin pre-2022). Watch the `mae_by_current_campom` diagnostic for whether the +15/+20 prior-CamPom heavy-regression bucket finally gets some real training mass (it was n=20/n=1 before).
+  - [ ] **Margin/win ML model retrain** — Phase 3 notes flagged training-window expansion as high-leverage. We now have 12 seasons × ~6k games ≈ 72k games of training data (was 27k). Need a backtest comparing 5-season vs 12-season fits on hold-out 2026 windows to confirm the lift before swapping prod models. Watch for distribution shift from the 2015–2017 era — may want to weight older seasons down or cap the training window if backtest shows the older data hurts.
+  - [ ] **Re-resolve transfer + recruit player IDs for 2021–2024** — first-pass resolution returns 0 matches because the destination-season players don't exist yet at ingest time. Now that all of 2022–2026 are loaded, re-running `cstat-ingest transfers --year 20XX --incremental` for 2021 (= cstat-season 2022 destination) through 2025 (= cstat-season 2026 destination) should fill in the joins. Same for `recruits --year 20XX`.
+  - [ ] **Historical-season UI verification** — the team and player detail page season dropdowns should now show 2015–2026 for stable D1 programs (and a subset for reclassifying teams thanks to the `EXISTS (team_game_stats)` gate shipped 2026-05-17). Spot-check a handful: Duke (expect 12), Hartford (expect 2022–2023 only), Le Moyne (expect 2024+), a 2015 star player who's no longer in the league. Frontend never had visibility into historical seasons before, so this is its first real test.
+  - [ ] **2007–2014 backfill** — same `bootstrap-csv` path works. Three caveats: pre-2013 has no PBP CSV (NatStat coverage start = 2012); pre-2008 is pre-three-point-line-move (era effects on rate stats); Torvik coverage may have fewer columns pre-2014 (shot zones, recruiting rank). Worth doing in two waves: 2012–2014 first (full feature set), then 2007–2011 (no PBP, reduced Torvik).
+- [ ] **Native cstat player impact metric** (alternative to Torvik GBPM passthrough). Frame as a *descriptive* grade — "what's this player's value, derived purely from cstat's own machinery" — not a predictor (the §4f experiment already showed CamPom-style adjustments don't beat raw GBPM as ML features; this is a different goal). Approach: non-linear regression of team-game outcomes on roster-composition features (player IDs × minutes) to attribute per-player coefficients. Acceptance: matches or beats CamPom on (a) year-over-year rank stability for returning players and (b) external benchmarks (KenPom POY, AP All-American). **Caveat — re-attempting failed work**: cstat's prior native BPM (`compute.rs` pre-PR #25) tried this with linear box-score formulas and got r=0.075 with Torvik OBPM. Don't repeat that approach; the limit at our data resolution *as of today* is team-game level (no play-by-play) and box-score-derived linear coefficients are exactly what blew up. A LightGBM-on-team-game-outcomes attribution is a different methodology and worth trying — but it's a multi-PR project and would need its own design doc. **PBP changes the picture**: once `play_by_play` lands (Refactor Backlog) and lineup stints exist, the attribution problem becomes per-stint (5-on-5 with known on-floor players over a known time window), which is what most impact metrics in the literature actually use. The native impact metric is far more tractable post-PBP — consider this item soft-blocked on the PBP ingest, then revisit with stint-level RAPM or a Bayesian adjusted +/- as the starting methodology.
 
 ---
 
@@ -755,6 +826,159 @@ the per-team `teamperfs` path (now season-wide as of 2026-05-03) was the
 last big offender. If we ever add a per-team enrichment step, fan it out
 behind the rate limiter (e.g. `futures::stream::buffered`) rather than
 inlining another `for` loop.
+
+### CSV bulk-bootstrap for historical seasons (Shipped 2026-05-17)
+Adding a past season via the API used to take ~2 hrs end-to-end, gated by the 500-call/hr NatStat budget. The new `cstat-ingest bootstrap-csv --year YYYY` subcommand cuts a season's bootstrap to **~20 seconds load + ~5 seconds compute**. Measured on the live ingest of 2015–2020 (6 seasons): all six loaded + computed + Torvik-attached in under 25 minutes wall clock, vs. ~12 hours via the API path. Speedup ~30× per season.
+
+**Shipped:**
+- `crates/cstat-ingest/src/ingest/bootstrap_csv.rs` (~600 lines) — orchestrator + 4 per-CSV loaders + 3 in-memory ID-map helpers + the `BootstrapCsvReport` struct. Loads `Teams.csv` → `Games.csv` → `Team_Statlines.csv` → `Player_Statlines.csv` in dependency order. Auto-creates player rows from box-score appearances (mirrors API path's `upsert_player_game_stats` behavior).
+- New CLI subcommand: `cstat-ingest bootstrap-csv --year YYYY [--dir data/natstat_csv] [--also-compute]`. Default `--dir` accepts either the parent collection root (`data/natstat_csv/`, autodiscovers the `{year}/` subdir) or the per-season dir directly. `--also-compute` runs the 13-step `compute_all` pipeline after load.
+- New `data/natstat_csv/{year}/` directory convention, gitignored. Filename pattern matches NatStat's dashboard export: `NatStat-MBB{year}-{Kind}-{date}-h{hour}.csv` for kinds `Teams`/`Games`/`Players`/`Player_Statlines`/`Team_Statlines`/`Play-by-Play`.
+- Auto-seeds empty `team_season_stats` rows after team load. Required because `compute_team_four_factors`, `compute_adjusted_efficiency`, and the W-L derivation are all `UPDATE` statements that silently no-op on missing rows. The API path normally creates these via TCR enrichment; the CSV path has no equivalent step so the loader seeds them.
+- Mapping wrinkle handled: most CSVs use NatStat's numeric `TeamID` (e.g. `2031759`) but our DB stores `teams.natstat_id` as the short code (`WGEO`). `Teams.csv` Abbrev column is the bridge — loader builds a numeric→abbrev map first and translates `HomeID`/`VisitorID`/`TeamID`/`OpponentID` through it. `PlayerID` in `Player_Statlines.csv` already matches our DB's `players.natstat_id` (verified) so no player-side translation needed.
+- Intentionally **skips** `Players.csv` and `Play-by-Play.csv`. Players uses a different ID space (registration IDs ≠ box-score IDs — confirmed against Žužić); box-score path is the authoritative source as in the API. PBP is its own future loader.
+
+**Coverage after 2015–2026 backfill** (12 seasons):
+- Games: 4,052 (COVID 2021) to 6,108 (2026) — all reasonable
+- Player game stats: 77k (2021) to 116k (2026) — proportional to games
+- Team season stats with AdjEM: 345–364 per season (matches D1 expansion)
+- Torvik passthrough (ORTG/DRTG): 4,537–4,898 players per season
+- CamPom v3: 4,694–5,046 players per season
+
+**Known limitations / what was deferred:**
+- PBP CSV loader is separate (see "Play-by-play ingestion" below).
+- No `--just-elo --just-forecasts` API-fill pass yet — historical seasons skip these (they're only meaningful during the live season).
+- `bootstrap-csv` doesn't run Torvik or transfers/recruits — those are separate commands (`torvik --year YYYY`, etc.) by design so each can run independently.
+
+**Original analysis preserved below for reference:**
+
+Adding a past season today takes ~2 hrs end-to-end, gated entirely by the 500-call/hr NatStat API budget — `/playerperfs` alone is ~865 pages × 100 rows per season. NatStat exposes the same data as per-season CSV exports from its dashboard ("Players", "Player Statlines", "Team Statlines", "Games", "Teams", "Play-by-Play"). Bulk-loading those would cut the run from ~2 hrs to under a minute. Live-incremental keeps using the API; bulk only kicks in for backfill.
+
+**CSV ↔ API endpoint coverage map:**
+| CSV file | Equivalent API step | Notes |
+|---|---|---|
+| `Teams.csv` | `/teams` | 1:1 — TeamID, names, abbrev |
+| `Players.csv` | `/players` | Includes height/weight/position/jersey# (the metadata enrichment) |
+| `Games.csv` | `/games` | 1:1 + Neutral/Venue/Conference |
+| `Player_Statlines.csv` | `/playerperfs` (the slow leg) | 30 core stats — see gap list below |
+| `Team_Statlines.csv` | `/teamperfs` | 27 core stats |
+| `Play-by-Play.csv` | `/playbyplay` | Currently unused — see "Play-by-play ingestion" below |
+
+**Fields in the API perf payload but missing from `Player_Statlines.csv`:**
+- `usgpct`, `eff`, `twofgpct` — NatStat pre-computed percentages; trivially re-derivable in `compute.rs`
+- `presencerate`, `adjpresencerate`, `perfscoreseasonavg` — NatStat-derived metrics; niche
+- `teamposs`, `teamfga`, `teamfta`, `teamto`, `teamfgm` — team-game context embedded in each perf row, **load-bearing** for the AST%/ORB%/DRB%/TOV% formulas in `compute_player_season_stats`. Solution: re-derive from `team_game_stats` after CSV load (we'll have all the inputs).
+- `plus_minus` — sometimes present in API, never in CSV; generally sparse anyway. PBP-derived +/- (below) would be more reliable.
+- `dreb` — CSV only has REB + OREB, and we already derive DREB = REB − OREB in compute.
+
+**Still needs API (CSV exports don't cover):**
+- `/elo` — ~4 calls/season for current ELO ratings
+- `/forecasts` — ~57 calls/season for per-game ELO/win-exp/spread/moneyline (only meaningful during the live season; optional for historical backfill)
+- Torvik — separate API, ~5 min, unaffected
+- Team detail (TCR) enrichment — but W-L is unconditionally recomputed from `team_game_stats` by `compute_derived_game_fields`, so this is moot
+
+**Proposed shape:**
+1. New directory: `data/natstat_csv/YYYY/` with the six CSVs per season (filenames retain the `NatStat-MBB{YYYY}-{Kind}-{date}-h{hour}.csv` pattern from the dashboard download).
+2. New subcommand `cstat-ingest bootstrap-csv --year YYYY --dir data/natstat_csv/YYYY/`:
+   - `COPY` each CSV into a staging table (e.g. `_csv_player_statlines`)
+   - Upsert into normalized tables in dependency order: teams → players → games → team_game_stats → player_game_stats
+   - PBP skipped by default; opt in with `--with-pbp`
+3. `season --year YYYY` gains a `--csv-dir <path>` flag that swaps CSV bulk-load for the NatStat API steps, then runs Torvik + compute as today.
+4. Optional follow-up: `--just-elo --just-forecasts` post-bootstrap to fill the API-only gaps (~60 calls total — well inside the hourly budget).
+
+**Estimated work:** ~1 day. Hardest part is the column-name mapping (CSV uses `MIN`/`PTS`/`3FM`, DB uses `minutes`/`points`/`tpm`) — straightforward but tedious. Compute pipeline runs unchanged on the result.
+
+**Complete checklist for backfilling one historical season** (e.g. 2021), once `bootstrap-csv` exists:
+1. Drop the six dashboard CSVs into `data/natstat_csv/2021/` (`Teams`, `Players`, `Games`, `Player_Statlines`, `Team_Statlines`, `Play-by-Play`).
+2. `cstat-ingest bootstrap-csv --year 2021 --dir data/natstat_csv/2021/` — loads teams → players → games → team_game_stats → player_game_stats via `COPY`.
+3. `cstat-ingest torvik --year 2021 --rebounds` — Torvik covers advanced metrics (OGBPM/DGBPM, shot zones, recruiting rank, bio). The `--rebounds` flag is the safety net for seasons where NatStat lacks DREB; for 2021 specifically NatStat already has 100% rebound coverage in the in-progress test, but `--rebounds` is idempotent so always pass it.
+4. `cstat-ingest compute --year 2021` — runs the 13-step pipeline (`backfill_game_stats` → `compute_player_season_stats` → four factors → AdjO/AdjD → individual ratings → CamPom → rolling → derived → schedules → percentiles). Already wired into `bootstrap-csv` if we put it there; can also run standalone if compute logic changes later.
+5. *(Optional)* `cstat-ingest transfers --year 2021` for the spring-2021 portal class (going INTO the 2022 cstat-season). Year semantics here are the spring-cycle calendar year, NOT cstat-season.
+6. *(Optional)* `cstat-ingest recruits --year 2021` for the HS class of 2021 (whose freshmen play in cstat-season 2022).
+7. After steps 5–6, **re-run the player-ID resolution pass** for both transfers and recruits — at first ingest, the destination season's players don't exist yet, so 0 matches happen. Currently this means a second `cstat-ingest transfers --year YYYY --incremental` and `recruits --year YYYY` run; longer-term, factor a standalone `--resolve-only` flag.
+8. `cd training && python -m archetypes --seasons 2021,2022,2023,2024,2025,2026` — combined-cohort retrain. The shared centroids shift slightly on every new season added (load-bearing for cross-season class stability — see `docs/archetypes_methodology.md` before changing).
+9. *(Optional, big lift)* Retrain ML models — `train_margin_model.py`, `train_win_model.py`, `train_trajectory_model.py`, `train_freshman_model.py` — if you want the new season's data in the training corpus. Trajectory + freshman models need ≥3 paired classes already, so adding 2021 pulls 2022 into eligibility too. Watch boot-time `validate_*_meta` gates after retrain.
+10. **Validation queries** (run after step 4):
+    - `SELECT season, COUNT(*) FROM games GROUP BY season` — expect ~6,200 for a non-COVID year, ~4,200 for 2021
+    - `SELECT COUNT(*) FROM player_game_stats WHERE season=YYYY AND def_rebounds IS NULL` — should be small (in-season missing data only)
+    - `SELECT COUNT(*) FROM team_season_stats WHERE season=YYYY AND adj_em IS NOT NULL` — non-zero confirms `compute_adjusted_efficiency` ran
+    - `SELECT COUNT(*) FROM player_season_stats WHERE season=YYYY AND cam_gbpm_v3 IS NOT NULL` — non-zero confirms CamPom ran on top of Torvik
+    - `SELECT COUNT(*) FROM player_archetypes WHERE season=YYYY` — non-zero confirms archetypes retrained
+
+**Known data gotchas per era** (for the eventual 2007–2020 backfill):
+- **2021**: COVID-shortened (~4,200 games vs ~6,200 normal), no Ivy League, lots of conference-only stretches, Big Ten cancellations. Compute will work but `adj_em` rankings have weird tails because of uneven SOS.
+- **Pre-2013**: NatStat docs say `/playbyplay` data starts in 2012 — earlier seasons can be bootstrapped but PBP is unavailable.
+- **Pre-2018**: Transfer portal data is sparse before the one-time transfer rule changed; 247's portal endpoint may return empty pages.
+- **2007 (the floor)**: Three-point line was 19'9" (moved to 20'9" in 2008); rule changes may shift player rate-stat distributions. Combined-cohort archetype training across this boundary risks era effects — see `docs/archetypes_methodology.md` "Era horizon".
+- **Torvik coverage**: Torvik's player stat CSVs go back to ~2008 but earlier seasons have fewer columns (shot zones, recruiting rank may be missing). `compute_individual_ratings` (Torvik ORTG/DRTG passthrough) skips rows where source data is absent, so the column will just be NULL.
+- **Conference realignment**: Teams change conferences. `is_conference` derivation in `compute_derived_game_fields` reads the current team's conference field, not a point-in-time mapping — flag if the 2014 Maryland game vs Wisconsin should be Big Ten vs ACC (it's stored as the team's current conference). Low priority; flag in the historical-trends UI.
+
+### Play-by-play ingestion
+NatStat exposes PBP via the `/playbyplay` API endpoint (alias `/pbp`, **500 results/page** despite docs claiming 100 — verified via live call 2026-05-17 against gamecode 1511104) and as a per-season CSV dashboard dump. We don't currently ingest it. Worth picking up because it unlocks several derived stats we have **no other source for**:
+
+**What PBP gives us that we can't compute today:**
+1. **Lineup data** — **NatStat gives us the 5-man lineup pre-computed in every PBP row** (`onfloorhome` / `onfloorvis` as comma-separated player IDs), so no `SUB|` replay is needed. No other endpoint has this. Unlocks:
+   - Real plus-minus (the box-score `plus_minus` field is sparse and unreliable) — group by `(onfloorhome, onfloorvis)` and sum `thediff` deltas
+   - 5-man lineup performance / lineup synergies
+   - On/off splits per player
+   - Actual minutes-on-court (vs. NatStat's coarse `MIN`)
+2. **Shot location tags** — `paint|` vs. perimeter is tagged on every FGA. Even without coordinates, paint% is a strong player profile signal. We currently get this from Torvik for ~95% of players; PBP would push it to 100% and give us the per-game splits.
+3. **Shot context tags**:
+   - `2ch|` — second-chance (off ORB)
+   - `brk|` — fast break / transition
+   - `offto|` — points off turnover
+   - `block|` — shot was blocked
+   These feed team-level "advanced four factors" (transition pts/poss, second-chance pts/poss) and player-level finishing-context profiles.
+4. **Assist networks** — link each `AST|` to the `FGM|` that followed. Who-assists-whom graphs, primary-creator detection.
+5. **Foul-drawn rates** — `FOULED|` tags the *drawer*, distinct from who shot the FTs. Currently invisible.
+6. **Clutch splits** — PBP carries clock + score `Diff`, so we can filter to "last 5 min, within 5 pts" performance.
+
+**API feasibility — revised after live-call check (2026-05-17):** Standard tier handles daily incremental fine; full-season backfill is slow but feasible. CSV is still strictly faster and the recommended path for backfill.
+- 2026 PBP volume: 3.3M rows ⇒ at **500/page** that's **~6,700 API calls per season** ⇒ **13.4 hours** at the 500/hr cap. Slow but possible.
+- Daily incremental during peak season: 50–200 games/day × ~600 PBP rows/game = 30k–120k rows = **60–240 API calls/day**. Comfortably inside the daily budget (~10–50% of one hour's allocation).
+- Recommended cadence: **CSV dump for backfill** (725 MB → `COPY` in ~30 sec, no API budget consumed), **API for daily incremental** once we have a few seasons loaded. PBP-derived features can lag a day; none of our current use cases are real-time.
+
+**Subscription-tier breakeven** (recorded for the next time we re-evaluate):
+- Standard 500/hr is enough for daily incremental indefinitely. No upgrade needed.
+- Backfill of 5 historical seasons via API would take ~67 hrs at standard, ~13 hrs at Skybox's 2,500/hr, or under a day with API+ (100k/day, ~$/yr add-on). All of these lose to **CSV bulk-load (<1 min/season)** if the dashboard CSV is available.
+- The only API+ use case is removing the 6-IP block — relevant only if Railway rotates outbound IPs and trips the abuse policy. Test before paying.
+
+**If we do it, the build:**
+1. New migration: `play_by_play` table — (game_id, sort_order, period, clock, team_id, player_id, description, scoring_play, points, distance, tags `TEXT[]`, score_home, score_vis, score_diff). 3.3M rows/season is fine for Postgres with an index on (game_id, sort_order).
+2. CSV bulk-loader from `data/natstat_csv/YYYY/NatStat-MBB{YYYY}-Play-by-Play-*.csv` (725 MB → `COPY` in ~30 sec).
+3. New compute step that derives:
+   - `player_game_stats.plus_minus` (overwrite the sparse API value)
+   - New columns on `player_game_stats`: `paint_pts`, `transition_pts`, `second_chance_pts`, `fouls_drawn`
+   - New tables: `lineup_stints` (per-stint 5-man combo + duration + +/-) and `lineup_aggregates` (season rollup)
+4. Optional later: assist network graph (separate `assist_edges` table linking AST → FGM with timestamps).
+
+**Order of work**: do the bulk-CSV bootstrap (above) first — it's the immediate unblock for historical backfill. PBP is a strict extension; load it after we've got several seasons bulk-imported.
+
+**Storage architecture: local-only raw PBP, derived aggregates ship to prod.**
+Per-season PBP is ~3.3M rows ≈ 500 MB in Postgres; 15 seasons (2012–2026, the PBP-available range) is ~7.5 GB raw plus index overhead. Railway's hobby-tier Postgres has a low GB cap and even paid tiers get expensive at that scale, while the frontend has **no use case for raw play rows** — every UI surface consumes derived aggregates (lineup +/-, paint%, on/off splits, transition rate, etc.). The right split is:
+
+- **Local Postgres** holds the raw `play_by_play` table — full historical depth, used for: ML model training (lineup-quality features etc.), offline analysis, ad-hoc queries, recomputing aggregates if the methodology changes.
+- **Railway Postgres** holds only what the running site reads:
+  - The new derived columns on `player_game_stats` (`plus_minus_pbp`, `paint_fga`/`paint_fgm`, `perimeter_fga`/`perimeter_fgm`, `transition_points`, `second_chance_points`, `points_off_turnovers`, `fouls_drawn`) — additive, small
+  - `lineup_aggregates` (season-rollup, ~50–100k rows/season — fine)
+  - `assist_edges` if added (small)
+  - **Not** `play_by_play` (the 7.5 GB raw table)
+  - **Not** `lineup_stints` (per-stint detail, only needed for ML training and the game-detail PBP timeline view — if that UI surface ships, revisit and reconsider whether to send `lineup_stints` for that game's foreign-key range only)
+- **ML models** trained on PBP-derived features ship as ONNX in the Docker image, same as today. The model carries the learned weights; the live-inference path on prod reads from `player_game_stats` and `lineup_aggregates` and doesn't need raw PBP at request time.
+- **UI implication**: any feature whose data isn't in the Railway-resident tables **cannot be displayed on the live site**. The proposed game-detail PBP timeline view (see Phase 6 "PBP-derived features in models and UI") would either need a scoped PBP subset on prod (e.g. last 30 days of games) or be deferred until that's wired up. Player on/off and team lineup tables run off `lineup_aggregates` and are safe.
+
+**`scripts/sync_to_prod.sh` changes required.**
+Today the script auto-discovers every public-schema table and TRUNCATEs+restores each on prod (only `api_cache` and `_sqlx_migrations` are excluded). With PBP added, the discovery loop would pick up `play_by_play` (and `lineup_stints` if local-only) and try to push them — disastrous on Railway (multi-GB transfer, would hit the DB cap, possibly fail mid-restore leaving prod in a bad state).
+
+Required changes:
+- **Extend `EXCLUDED` array** in `scripts/sync_to_prod.sh` to include any local-only tables. Initial list: `api_cache`, `_sqlx_migrations`, `play_by_play`, `lineup_stints`. Comment each entry with the *why* (api_cache: ingest-only; _sqlx_migrations: managed by sqlx; play_by_play / lineup_stints: local-only, raw PBP doesn't ship to prod).
+- **Update the `--dry-run` output** to print the excluded set explicitly so it's obvious during preview which tables stay local.
+- **Schema awareness**: prod still needs migrations for the *empty* `play_by_play` / `lineup_stints` tables, OR migrations need a `WHERE current_database() != 'railway'`-style gate, OR (cleaner) split migrations into a `local/` subdir that's only applied locally. Pick the simplest — likely a comment-only `play_by_play` table on prod with an empty body, since it's never queried.
+  - Even simpler: ship the migration to both, prod's table sits empty forever, costs ~0 storage. Drawback: any frontend or API code path that queries `play_by_play` directly would silently return empty results on prod and break gracefully if it's a feature-flag check — explicit error preferred. Add a runtime assertion in `cstat-api`: on startup, log a warn if `play_by_play` row count is 0 AND any route claims to use it.
+- **Sanity check on size**: pre-sync, print local dump size + total local DB size + estimated prod size delta. Hard-fail if dump > 2 GB (configurable threshold) to prevent accidents.
+- **Tests**: add a smoke test that runs the dump against a fresh local DB with a populated `play_by_play` table and asserts that the dump file does not contain PBP `COPY` statements. Cheap regression-prevention; the exclusion logic is the load-bearing piece.
+
+**Order**: bulk-CSV bootstrap → schema migrations for `play_by_play` / `lineup_stints` / `lineup_aggregates` → CSV PBP loader → sync_to_prod.sh exclusion update + safety threshold → derived compute step → ML feature additions → UI surfaces (per Phase 6 entry). The sync_to_prod change is a **must-land-before-PBP-ingestion-merges-to-main** gate — otherwise the next person who runs the sync ships a multi-GB raw PBP dump to Railway.
 
 ### Serve held-out trajectory/freshman predictions for historical years (Shipped)
 Foundation work landed in commits `b36341d` + `ad85e0e` on `dev3`; activated 2026-05-17. Historical-year routes (transfers, projections, recruits, the two player-detail trajectory chips) now serve LOPO/LOCO predictions from the OOF tables. Forward-year routes (e.g. 2026 portal → cstat-season 2027) fall through to live inference as designed — the OOF table is empty for forward targets by construction.

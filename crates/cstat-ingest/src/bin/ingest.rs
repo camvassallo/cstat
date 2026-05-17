@@ -225,6 +225,27 @@ enum Commands {
         no_resolve_players: bool,
     },
 
+    /// Bulk-load a season from NatStat dashboard CSV exports — alternative
+    /// to the rate-limited `season` API path for backfilling historical
+    /// years. Expects `data/natstat_csv/{year}/NatStat-MBB{year}-{Kind}-*.csv`
+    /// for kinds Teams, Games, Team_Statlines, Player_Statlines.
+    /// Skips Players.csv (different ID space — see module docs) and PBP
+    /// (separate future loader). Runs in seconds; pair with `compute --year`
+    /// to derive season stats afterward, or pass `--also-compute`.
+    BootstrapCsv {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Directory containing the season's CSV files.
+        #[arg(long, default_value = "data/natstat_csv")]
+        dir: std::path::PathBuf,
+
+        /// Run `compute_all` after loading. Off by default so multi-season
+        /// bulk loads can batch one compute pass at the end.
+        #[arg(long)]
+        also_compute: bool,
+    },
+
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
     Explore {
         /// Endpoint (e.g., "teams", "players", "playerperfs")
@@ -354,6 +375,22 @@ async fn main() -> Result<()> {
         Commands::Compute { year } => {
             let report = cstat_core::compute::compute_all(&db.pool, year).await?;
             println!("{report}");
+        }
+
+        Commands::BootstrapCsv {
+            year,
+            dir,
+            also_compute,
+        } => {
+            let report =
+                cstat_ingest::ingest::bootstrap_csv::bootstrap_from_csv_dir(&db.pool, year, &dir)
+                    .await?;
+            println!("{report}");
+            if also_compute {
+                info!(year, "running compute_all after CSV bootstrap");
+                let compute = cstat_core::compute::compute_all(&db.pool, year).await?;
+                println!("{compute}");
+            }
         }
 
         Commands::Update {
