@@ -757,7 +757,7 @@ behind the rate limiter (e.g. `futures::stream::buffered`) rather than
 inlining another `for` loop.
 
 ### Serve held-out trajectory/freshman predictions for historical years (Foundation shipped; activation pending retrain)
-Foundation work landed in PR `b36341d` + `26ff413` on `dev3`. Schema, persistence, lookup helpers, and route precedence flips are all in. Behavior unchanged on production until the next retrain runs — tables are empty, so every route falls through to live inference exactly as before. Activation is mechanical:
+Foundation work landed in commits `b36341d` + `ad85e0e` on `dev3`. Schema, persistence, lookup helpers, and route precedence flips are all in. Behavior unchanged on production until the next retrain runs — tables are empty, so every route falls through to live inference exactly as before. Activation is mechanical:
 
 **Shipped:**
 - `migrations/021_oof_predictions.sql` — `trajectory_oof_predictions(torvik_pid INTEGER, target_season, mean, lower, upper)` keyed by cross-season-stable torvik_pid (matches the training-pipeline join key); `freshman_oof_predictions(cstat_player_id UUID, target_season, mean, lower, upper)` keyed by the resolved player UUID (freshman training query filters `WHERE r.cstat_player_id IS NOT NULL`).
