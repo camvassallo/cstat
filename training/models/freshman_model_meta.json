@@ -31,6 +31,7 @@
     "q10": 0.1,
     "q90": 0.9
   },
+  "oof_persisted": true,
   "tier_thresholds": [
     30,
     100,
