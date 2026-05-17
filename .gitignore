@@ -91,3 +91,11 @@ deploy.log
 
 # Logs
 /logs/
+
+# NatStat dashboard CSV exports for bulk season backfill. Per-season PBP
+# files are ~725 MB each (over GitHub's 100 MB hard limit); even box-score
+# CSVs total ~540 MB across 20 seasons and shouldn't ship in-repo. CSVs
+# are intermediate — bulk-load into local Postgres, then they're optional
+# to keep on disk. See ROADMAP "CSV bulk-bootstrap for historical seasons"
+# and "Play-by-play ingestion".
+/data/natstat_csv/

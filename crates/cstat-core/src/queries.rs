@@ -645,6 +645,7 @@ pub async fn get_player_available_seasons(
             SELECT p.season
             FROM players p, this
             WHERE p.natstat_id = this.nat_id
+              AND EXISTS (SELECT 1 FROM player_game_stats pgs WHERE pgs.player_id = p.id)
             UNION
             SELECT t.season
             FROM torvik_player_stats t, this
@@ -661,6 +662,11 @@ pub async fn get_player_available_seasons(
 }
 
 /// Team analogue of `get_player_available_seasons`.
+///
+/// Gates on `EXISTS (team_game_stats)` so reclassifying programs (D2↔D1 like
+/// Le Moyne, D1↔D3 like Hartford) only surface seasons where actual games
+/// were played. Ghost `teams` rows created by enrichment paths in non-D1
+/// seasons are filtered out — they have zero `team_game_stats` rows.
 pub async fn get_team_available_seasons(
     pool: &PgPool,
     team_id: Uuid,
@@ -670,6 +676,7 @@ pub async fn get_team_available_seasons(
         SELECT DISTINCT t.season
         FROM teams t
         WHERE t.natstat_id = (SELECT natstat_id FROM teams WHERE id = $1)
+          AND EXISTS (SELECT 1 FROM team_game_stats tgs WHERE tgs.team_id = t.id)
         ORDER BY t.season DESC
         "#,
     )
