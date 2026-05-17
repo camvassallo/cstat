@@ -269,6 +269,7 @@ async fn load_games(
     let mut tx = pool.begin().await?;
     let mut count = 0u64;
     let mut unresolved = 0u64;
+    let mut bad_dates = 0u64;
 
     for result in rdr.records() {
         let row = result?;
@@ -278,7 +279,10 @@ async fn load_games(
         }
         let game_date = match parse_date(cell(&row, 1)) {
             Some(d) => d,
-            None => continue,
+            None => {
+                bad_dates += 1;
+                continue;
+            }
         };
         let home_team_csv_id = cell(&row, 4);
         let away_team_csv_id = cell(&row, 6);
@@ -287,7 +291,9 @@ async fn load_games(
         let status = maybe(cell(&row, 9));
         let venue = maybe(cell(&row, 10));
         let is_neutral = cell(&row, 12) == "Y";
-        let is_postseason = !cell(&row, 15).is_empty();
+        // Playoffs column uses "Y" for postseason games; tighter than
+        // !is_empty() (which would treat any rogue value as postseason).
+        let is_postseason = cell(&row, 15) == "Y";
 
         let home_team_id = team_id_map
             .get(home_team_csv_id)
@@ -341,6 +347,9 @@ async fn load_games(
     if unresolved > 0 {
         warn!(unresolved, "games skipped: non-D1 opponent (no team in DB)");
     }
+    if bad_dates > 0 {
+        warn!(bad_dates, "games skipped: unparseable GameDay");
+    }
     Ok(count)
 }
 
@@ -370,13 +379,13 @@ async fn load_team_statlines(
 
     for result in rdr.records() {
         let row = result?;
-        let game_natstat = cell_owned(&row, 1);
+        let game_natstat = cell(&row, 1);
         let team_csv_id = cell(&row, 2);
         let opponent_csv_id = cell(&row, 4);
         let location = cell(&row, 6);
         let win_loss = cell(&row, 10);
 
-        let game_info = game_uuids.get(&game_natstat);
+        let game_info = game_uuids.get(game_natstat);
         let team_id = team_id_map
             .get(team_csv_id)
             .and_then(|a| team_uuids.get(a))
@@ -555,15 +564,15 @@ async fn load_player_statlines(
 
     for result in rdr.records() {
         let row = result?;
-        let game_natstat = cell_owned(&row, 1);
-        let player_natstat = cell_owned(&row, 3);
+        let game_natstat = cell(&row, 1);
+        let player_natstat = cell(&row, 3);
         let team_csv = cell(&row, 5);
         let opponent_csv = cell(&row, 7);
         let location = cell(&row, 9);
         let starter_raw = cell(&row, 14);
 
-        let game_info = game_uuids.get(&game_natstat);
-        let player_id = player_uuids.get(&player_natstat).copied();
+        let game_info = game_uuids.get(game_natstat);
+        let player_id = player_uuids.get(player_natstat).copied();
         let team_id = team_id_map
             .get(team_csv)
             .and_then(|a| team_uuids.get(a))
