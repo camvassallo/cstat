@@ -1,7 +1,7 @@
 # Model Performance Report
 
 Last updated: 2026-05-18
-Training data: cstat NatStat seasons 2015-2026 ingested as of 2026-05-17 (12 seasons total; 2015-2020 added via the `bootstrap-csv` path). All four model families now train on the full 12-season cohort. Game-prediction model retrained 2026-05-18 (20,674 → 47,502 games); freshman model corpus expanded from 1,154 → 3,252 rows after pre-2021 recruit-class ingest (2014-2020).
+Training data: cstat NatStat seasons 2015-2026 ingested as of 2026-05-17 (12 seasons total; 2015-2020 added via the `bootstrap-csv` path). Game / trajectory / freshman models all retrained on the full 12-season cohort over 2026-05-17 / 2026-05-18; **roster model is still on the 5-season cohort (2022-2026) pending its own retrain pass.** Game-prediction model retrained 2026-05-18 (20,674 → 47,502 games); freshman model corpus expanded from 1,154 → 3,252 rows after pre-2021 recruit-class ingest (2014-2020).
 
 cstat ships four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
@@ -10,7 +10,7 @@ cstat ships four LightGBM model families, all exported to ONNX and loaded at API
 | **Game (margin / win / total)** | Per-game margin, win prob, total points | 47,502 games (12 seasons 2015-2026) | `POST /api/predict`, score ticker, schedule projected scores |
 | **Trajectory** | Project next-season CamPom v3 for returners | 24,168 N→N+1 player-pairs (11 paired classes 2015→2016 through 2025→2026) | Transfer page (ΔCP), 2027 projection page, PlayerDetail "Proj YYYY-YY" chip |
 | **Freshman** | Project freshman-season CamPom v3 for new recruits | 3,252 freshmen (12 recruit classes 2014-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
-| **Roster** | Project team AdjEM from roster aggregates | 1,799 team-seasons | 2027 projection page team rows, transfer-portal "what-if" |
+| **Roster** | Project team AdjEM from roster aggregates | 1,799 team-seasons (5 seasons 2022-2026; 12-season retrain pending) | 2027 projection page team rows, transfer-portal "what-if" |
 
 All four models follow the same rhythm: 5-fold random CV for headline metrics, an out-of-sample backtest (chronological 80/20 for the game model; leave-one-pair-out / leave-one-class-out / leave-one-season-out for trajectory / freshman / roster), and a final fit on all data for the shipped artifacts.
 
@@ -80,7 +80,7 @@ Elite-tier bias improved meaningfully with the 12-season corpus: `+15..+20` went
 **Known limitations:**
 - Destination-agnostic for transferring returners (no destination-team archetype mix in v1 features).
 - Selection bias on returners — Cooper Flagg / Boozer tier leaves for the draft, so the trained corpus skews toward returners who didn't break out.
-- Predictions for `current_campom ≥ +20` are effectively extrapolation — only n=1 training row in that bucket.
+- Predictions for `current_campom ≥ +20` are effectively extrapolation — only n=2 training rows in that bucket (up from n=1 pre-retrain).
 
 See `docs/trajectory_methodology.md` for the full methodology.
 
@@ -173,6 +173,7 @@ Single LightGBM regressor on 36 features: roster shape (size, total minutes, top
 **Notes:**
 - 2026 has the largest LOSO MAE (7.84) — partial-season noise (in-flight season vs full-season target).
 - Used inside `Predictor::predict_adj_em` for the 2027 projection page; transfer "what-if" infrastructure stays warm but isn't currently surfaced.
+- **Still on 5 seasons (2022-2026).** Game / trajectory / freshman models all sit on the full 12-season cohort as of 2026-05-18; the roster model's 12-season retrain is queued but not yet shipped. The 7 extra seasons (2015-2021) would push the corpus from ~1.8k to ~4.3k team-seasons and give LOSO 12 seasons to average over instead of 5 — likely smoothing out the 2026 in-flight-season spike (7.84 MAE).
 
 ---
 
