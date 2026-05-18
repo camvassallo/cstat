@@ -486,9 +486,8 @@ async fn main() -> Result<()> {
                 );
 
                 if !no_resolve_players {
-                    let n =
-                        cstat_ingest::ingest::transfers::resolve_cstat_joins(&db.pool, year)
-                            .await?;
+                    let n = cstat_ingest::ingest::transfers::resolve_cstat_joins(&db.pool, year)
+                        .await?;
                     println!("cstat_player_id resolved on {n} row(s)");
                 }
             }
