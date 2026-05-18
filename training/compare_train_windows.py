@@ -8,13 +8,22 @@ hurts more than the extra data helps.
 
 Setup:
   - Build the full 12-season feature matrix once.
-  - Held-out test set: chronological last 20% of 2026 (~1.2k games).
+  - Held-out test set: chronological last 20% of 2026 (~920 games after
+    the per-row feature-completeness filter drops ~25% of raw 2026 games).
   - Train A: 2022-2026 minus holdout (matches current prod cohort).
   - Train B: 2015-2026 minus holdout (12-season cohort).
   - Evaluate both on the same test set with identical hyperparameters.
 
-This is a comparison script, not a swap. Production models are NOT touched.
-ROADMAP §6 "Margin/win ML model retrain" item drives this work.
+Honesty caveat: `early_stopping_rounds=80` uses the holdout itself as the
+LightGBM eval set (matches `train.py`'s production backtest convention),
+so reported numbers peek at the test set when choosing best_iteration_.
+Both cohorts use the same holdout, so the bias is identical and the
+comparison is fair — but absolute numbers are slightly optimistic vs a
+true held-out fit.
+
+This is a comparison script, not a swap. Production models are NOT touched
+by this file; `train.py` is the prod path. Drove the 2026-05-18 retrain
+documented in ROADMAP §6 "Margin/win/total ML model retrain on 12 seasons".
 """
 
 import numpy as np

@@ -1,13 +1,13 @@
 # Model Performance Report
 
 Last updated: 2026-05-18
-Training data: cstat NatStat seasons 2015-2026 ingested as of 2026-05-17 (12 seasons total; 2015-2020 added via the `bootstrap-csv` path). Game-prediction model still on the 5-season window (2022-2026) pending the high-leverage retrain backtest in ROADMAP §6. Trajectory + archetypes already retrained on the full 12-season cohort; freshman model corpus expanded from 1,154 → 3,252 rows after pre-2021 recruit-class ingest (2014-2020).
+Training data: cstat NatStat seasons 2015-2026 ingested as of 2026-05-17 (12 seasons total; 2015-2020 added via the `bootstrap-csv` path). All four model families now train on the full 12-season cohort. Game-prediction model retrained 2026-05-18 (20,674 → 47,502 games); freshman model corpus expanded from 1,154 → 3,252 rows after pre-2021 recruit-class ingest (2014-2020).
 
 cstat ships four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
 | Model | Task | Training rows | Where it's used |
 |-------|------|---------------|------------------|
-| **Game (margin / win / total)** | Per-game margin, win prob, total points | 20,674 games | `POST /api/predict`, score ticker, schedule projected scores |
+| **Game (margin / win / total)** | Per-game margin, win prob, total points | 47,502 games (12 seasons 2015-2026) | `POST /api/predict`, score ticker, schedule projected scores |
 | **Trajectory** | Project next-season CamPom v3 for returners | 24,168 N→N+1 player-pairs (11 paired classes 2015→2016 through 2025→2026) | Transfer page (ΔCP), 2027 projection page, PlayerDetail "Proj YYYY-YY" chip |
 | **Freshman** | Project freshman-season CamPom v3 for new recruits | 3,252 freshmen (12 recruit classes 2014-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
 | **Roster** | Project team AdjEM from roster aggregates | 1,799 team-seasons | 2027 projection page team rows, transfer-portal "what-if" |
@@ -22,17 +22,19 @@ Authoritative per-run details (top features, per-fold breakdowns, known limitati
 
 Three regressors share the same 49-feature point-in-time diff matrix (home minus away). The total model also reads 9 `sum_*` companion features (58 total features) because diffs throw away absolute level.
 
-**Backtest:** chronological 80/20 split — train on 16,539 games (2021-11-21 to 2025-12-03), test on 4,135 games (2025-12-03 to 2026-04-06).
+**Backtest:** chronological 80/20 split — train on 38,001 games (2014-11-25 to 2024-02-26), test on 9,501 games (2024-02-26 to 2026-04-06).
 
 | Target | Test MAE / Acc | Test R² / AUC | 5-fold CV |
 |--------|----------------|---------------|-----------|
-| Margin (regression) | MAE **8.27 pts** | R² **0.459** · win-acc **74.2%** | Margin MAE 8.27 ± 0.10 |
-| Win prob (classification) | Acc **73.7%** · log-loss **0.507** | AUC **0.811** | Win AUC 0.811 ± 0.008 |
-| Total (regression) | MAE **13.70 pts** | R² **0.185** | Total MAE 13.36 ± 0.18 |
+| Margin (regression) | MAE **8.25 pts** | R² **0.459** · win-acc **74.8%** | Margin MAE 8.13 ± 0.04 |
+| Win prob (classification) | Acc **74.6%** · log-loss **0.498** | AUC **0.818** | Win AUC 0.815 ± 0.004 |
+| Total (regression) | MAE **13.56 pts** | R² **0.179** | Total MAE 13.48 ± 0.11 |
 
-**Top features (margin):** `diff_w_gbpm` dominates (~3× the next feature), then `diff_w_dgbpm`, `diff_w_ogbpm`, `diff_adj_efficiency_margin`, `venue`, `diff_pythag_win_pct`. Roster-aggregate Barttorvik GBPM is doing more work than any single team-stat.
+**Head-to-head 12 vs 5 seasons** (`training/compare_train_windows.py`, shared chronological-last-20%-of-2026 holdout, n_test=920): 12-season wins every metric — margin MAE 8.237 → **8.161** (−0.9%), win accuracy 71.3% → **72.9%** (+1.6pp), win AUC 0.793 → **0.797**, total MAE 13.41 → **13.33**. No distribution-shift damage from the 2015–2017 era; best_iter roughly doubled across all heads (model uses the extra data, not memorizing).
 
-**Top features (total):** `sum_adj_tempo`, `sum_adj_offense`, `sum_adj_defense` occupy the top 3 — confirming the design intuition that totals are about absolute levels, not differences.
+**Top features (margin):** `diff_w_gbpm` dominates (~2.2× the next feature, importance 767), then `diff_w_dgbpm` (341), `diff_w_ogbpm` (264), `diff_opp_effective_fg_pct` (222), `diff_adj_efficiency_margin` (206), `diff_roster_size` (177), `diff_w_player_sos` (171). Roster-aggregate Barttorvik GBPM is doing more work than any single team-stat.
+
+**Top features (total):** `sum_adj_tempo` (568), `sum_adj_offense` (536), `sum_adj_defense` (477) occupy the top 3 — confirming the design intuition that totals are about absolute levels, not differences.
 
 **Known limitations:**
 - Total model is materially worse than KenPom (~9 MAE) / Vegas (~7-8). Framed as KenPom-style approximation, not betting-grade.
@@ -176,7 +178,7 @@ Single LightGBM regressor on 36 features: roster shape (size, total minutes, top
 
 ## Benchmark vs NatStat ELO
 
-Previous benchmark (47-feature model, 2-season training): cstat +2.1pp accuracy, +0.014 AUC, 3× better calibration. A re-benchmark on the current 5-season model is pending; expect cstat's lead to widen given the AUC jump (0.795 → 0.811).
+Previous benchmark (47-feature model, 2-season training): cstat +2.1pp accuracy, +0.014 AUC, 3× better calibration. A re-benchmark on the current 12-season model is pending; expect cstat's lead to widen given the cumulative AUC jump (0.795 → 0.811 → 0.818).
 
 ---
 
@@ -190,7 +192,7 @@ For reference, public CBB game-prediction models typically achieve:
 | AP / Coaches poll | ~65% | Higher-ranked team wins |
 | Basic ELO | ~67% | Where NatStat sits |
 | KenPom / Barttorvik | ~70-72% | Full-season adjusted efficiency |
-| **cstat (current)** | **73.7%** | 5 seasons, 49 features (incl. Barttorvik GBPM), point-in-time |
+| **cstat (current)** | **74.6%** | 12 seasons, 49 features (incl. Barttorvik GBPM), point-in-time |
 | Vegas closing lines | ~73-74% | Incorporates injury reports + betting market |
 
 cstat is now level with public-tier baselines. Remaining gaps to Vegas are dominated by lineup / injury signal, not feature engineering — see ROADMAP §6 Phase 6 "Full historical data" and §4b "Predict follow-up — point-in-time historical predictions" for the next levers.
