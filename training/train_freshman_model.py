@@ -202,6 +202,13 @@ def lgb_params(objective: str = "regression", alpha: Optional[float] = None) -> 
         lambda_l2=1.5,
         verbose=-1,
         n_estimators=400,
+        # Pinned for reproducibility — without this, bagging/feature subsampling
+        # re-rolls every fit and model_meta.json diffs are dominated by noise
+        # (~0.05 MAE drift on identical data). `seed=42` overrides all sub-seeds
+        # per LightGBM docs; `deterministic=True` is needed for full multi-thread
+        # reproducibility but adds noticeable training time on larger corpora.
+        seed=42,
+        deterministic=True,
     )
     if alpha is not None:
         p["alpha"] = alpha

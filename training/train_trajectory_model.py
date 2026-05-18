@@ -244,6 +244,11 @@ def lgb_params(objective: str = "regression", alpha: Optional[float] = None) -> 
         "verbose": -1,
         "n_estimators": 1500,
         "early_stopping_rounds": 80,
+        # Pinned for reproducibility — without this, bagging/feature subsampling
+        # re-rolls every fit. `seed=42` overrides all sub-seeds per LightGBM docs;
+        # `deterministic=True` is needed for full multi-thread reproducibility.
+        "seed": 42,
+        "deterministic": True,
     }
     if alpha is not None:
         p["alpha"] = alpha
