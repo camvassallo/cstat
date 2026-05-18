@@ -333,15 +333,18 @@ pub async fn compute_player_season_stats(pool: &PgPool, season: i32) -> Result<u
                 ELSE NULL END,
             -- USG% (Basketball Reference): 100 × ((Plays × Tm_MP/5) / (MP × Tm_Plays))
             -- where Plays = FGA + 0.44×FTA + TOV. Stored as a fraction (multiply by 100 for percent).
+            -- Reads team totals from team_game_stats (populated for every ingested season)
+            -- instead of pgs.team_fga / team_fta / team_turnovers (denormalized columns the
+            -- bootstrap-csv path doesn't populate for pre-2021 seasons).
             CASE WHEN SUM(pgs.minutes) > 0
-                  AND SUM(COALESCE(pgs.team_fga, 0) + 0.44 * COALESCE(pgs.team_fta, 0)
-                          + COALESCE(pgs.team_turnovers, 0)) > 0
+                  AND SUM(COALESCE(tgs.fga, 0) + 0.44 * COALESCE(tgs.fta, 0)
+                          + COALESCE(tgs.turnovers, 0)) > 0
                 THEN ROUND((
                     (SUM(pgs.fga + 0.44 * COALESCE(pgs.fta, 0) + COALESCE(pgs.turnovers, 0))::float
                         * (SUM(COALESCE(tgs.minutes, 200))::float / 5.0))
                     / (SUM(pgs.minutes)::float
-                        * SUM(COALESCE(pgs.team_fga, 0) + 0.44 * COALESCE(pgs.team_fta, 0)
-                              + COALESCE(pgs.team_turnovers, 0))::float)
+                        * SUM(COALESCE(tgs.fga, 0) + 0.44 * COALESCE(tgs.fta, 0)
+                              + COALESCE(tgs.turnovers, 0))::float)
                 )::numeric, 3)
                 ELSE NULL END,
             -- AST% (Basketball Reference): AST / ((MP / (Team_MP / 5)) × Team_FGM − Player_FGM)

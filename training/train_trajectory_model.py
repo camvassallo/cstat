@@ -50,7 +50,7 @@ from db import get_engine
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
-SEASONS = (2022, 2023, 2024, 2025, 2026)
+SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
 ARCHETYPES = (
     "Wizard", "Sorcerer", "Warlock", "Bard", "Ranger", "Barbarian",
     "Paladin", "Monk", "Cleric", "Druid", "Rogue", "Fighter",
@@ -244,6 +244,11 @@ def lgb_params(objective: str = "regression", alpha: Optional[float] = None) -> 
         "verbose": -1,
         "n_estimators": 1500,
         "early_stopping_rounds": 80,
+        # Pinned for reproducibility — without this, bagging/feature subsampling
+        # re-rolls every fit. `seed=42` overrides all sub-seeds per LightGBM docs;
+        # `deterministic=True` is needed for full multi-thread reproducibility.
+        "seed": 42,
+        "deterministic": True,
     }
     if alpha is not None:
         p["alpha"] = alpha

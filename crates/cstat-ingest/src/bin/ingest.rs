@@ -182,6 +182,14 @@ enum Commands {
         #[arg(long)]
         bootstrap_from: Option<std::path::PathBuf>,
 
+        /// Skip ingest entirely and only run the cstat_player_id resolution
+        /// pass against the rows already in the `transfers` table. Useful for
+        /// back-resolving historical years once the destination season's
+        /// players are ingested. Mutually exclusive with `--bootstrap-from`
+        /// and ignores `--incremental`.
+        #[arg(long, conflicts_with = "bootstrap_from")]
+        resolve_only: bool,
+
         /// Skip the cstat_player_id resolution pass after ingest. By default
         /// we resolve `(full_name, source_institution)` → `players.id` joins.
         #[arg(long)]
@@ -214,6 +222,14 @@ enum Commands {
         /// Save the live fetch to this path before upserting (for snapshot capture).
         #[arg(long)]
         dump_snapshot: Option<std::path::PathBuf>,
+
+        /// Skip ingest entirely and only run the resolution passes against the
+        /// rows already in the `recruits` table. Useful for back-resolving
+        /// historical class years once the freshman season's players are
+        /// ingested. Mutually exclusive with `--bootstrap-from` and
+        /// `--dump-snapshot`.
+        #[arg(long, conflicts_with_all = ["bootstrap_from", "dump_snapshot"])]
+        resolve_only: bool,
 
         /// Skip the committed_team_id resolution pass after ingest.
         #[arg(long)]
@@ -444,26 +460,36 @@ async fn main() -> Result<()> {
             year,
             incremental,
             bootstrap_from,
+            resolve_only,
             no_resolve_players,
         } => {
-            let report = if let Some(path) = bootstrap_from {
-                info!("bootstrapping transfers from {}", path.display());
-                cstat_ingest::ingest::transfers::bootstrap_from_snapshot(&db.pool, year, &path)
-                    .await?
-            } else {
-                let tfs = cstat_ingest::TfsClient::from_env()?;
-                cstat_ingest::ingest::transfers::ingest_live(&tfs, &db.pool, year, incremental)
-                    .await?
-            };
-            println!(
-                "transfers {}: {} upserted across {} page(s)",
-                report.year, report.upserts, report.total_pages
-            );
-
-            if !no_resolve_players {
+            if resolve_only {
+                if no_resolve_players {
+                    anyhow::bail!("--resolve-only with --no-resolve-players is a no-op");
+                }
                 let n =
                     cstat_ingest::ingest::transfers::resolve_cstat_joins(&db.pool, year).await?;
-                println!("cstat_player_id resolved on {n} row(s)");
+                println!("transfers {year}: cstat_player_id resolved on {n} row(s)");
+            } else {
+                let report = if let Some(path) = bootstrap_from {
+                    info!("bootstrapping transfers from {}", path.display());
+                    cstat_ingest::ingest::transfers::bootstrap_from_snapshot(&db.pool, year, &path)
+                        .await?
+                } else {
+                    let tfs = cstat_ingest::TfsClient::from_env()?;
+                    cstat_ingest::ingest::transfers::ingest_live(&tfs, &db.pool, year, incremental)
+                        .await?
+                };
+                println!(
+                    "transfers {}: {} upserted across {} page(s)",
+                    report.year, report.upserts, report.total_pages
+                );
+
+                if !no_resolve_players {
+                    let n = cstat_ingest::ingest::transfers::resolve_cstat_joins(&db.pool, year)
+                        .await?;
+                    println!("transfers {year}: cstat_player_id resolved on {n} row(s)");
+                }
             }
         }
 
@@ -472,60 +498,80 @@ async fn main() -> Result<()> {
             groups,
             bootstrap_from,
             dump_snapshot,
+            resolve_only,
             no_resolve_teams,
             no_resolve_players,
         } => {
-            let report = if let Some(path) = bootstrap_from {
-                info!("bootstrapping recruits from {}", path.display());
-                cstat_ingest::ingest::recruits::bootstrap_from_snapshot(&db.pool, year, &path)
-                    .await?
-            } else {
-                let parsed: Vec<cstat_ingest::InstitutionGroup> = groups
-                    .iter()
-                    .filter_map(|g| {
-                        let parsed = cstat_ingest::InstitutionGroup::parse(g);
-                        if parsed.is_none() {
-                            tracing::warn!(group = g, "unknown institution_group — skipping");
-                        }
-                        parsed
-                    })
-                    .collect();
-                if parsed.is_empty() {
+            if resolve_only {
+                if no_resolve_teams && no_resolve_players {
                     anyhow::bail!(
-                        "no valid institution_groups parsed from `--groups`; pass any of: highschool, juco, prep"
+                        "--resolve-only with both --no-resolve-teams and --no-resolve-players is a no-op"
                     );
                 }
-                let client = cstat_ingest::Recruit247Client::from_env()?;
-                cstat_ingest::ingest::recruits::ingest_live(
-                    &client,
-                    &db.pool,
-                    year,
-                    &parsed,
-                    dump_snapshot.as_deref(),
-                )
-                .await?
-            };
-            let by_group: Vec<String> = report
-                .by_group
-                .iter()
-                .map(|(g, n)| format!("{g}={n}"))
-                .collect();
-            println!(
-                "recruits {}: {} upserted across {} page(s) ({})",
-                report.year,
-                report.upserts,
-                report.total_pages,
-                by_group.join(", ")
-            );
+                if !no_resolve_teams {
+                    let n =
+                        cstat_ingest::ingest::recruits::resolve_team_joins(&db.pool, year).await?;
+                    println!("recruits {year}: committed_team_id resolved on {n} row(s)");
+                }
+                if !no_resolve_players {
+                    let n = cstat_ingest::ingest::recruits::resolve_player_joins(&db.pool, year)
+                        .await?;
+                    println!("recruits {year}: cstat_player_id resolved on {n} row(s)");
+                }
+            } else {
+                let report = if let Some(path) = bootstrap_from {
+                    info!("bootstrapping recruits from {}", path.display());
+                    cstat_ingest::ingest::recruits::bootstrap_from_snapshot(&db.pool, year, &path)
+                        .await?
+                } else {
+                    let parsed: Vec<cstat_ingest::InstitutionGroup> = groups
+                        .iter()
+                        .filter_map(|g| {
+                            let parsed = cstat_ingest::InstitutionGroup::parse(g);
+                            if parsed.is_none() {
+                                tracing::warn!(group = g, "unknown institution_group — skipping");
+                            }
+                            parsed
+                        })
+                        .collect();
+                    if parsed.is_empty() {
+                        anyhow::bail!(
+                            "no valid institution_groups parsed from `--groups`; pass any of: highschool, juco, prep"
+                        );
+                    }
+                    let client = cstat_ingest::Recruit247Client::from_env()?;
+                    cstat_ingest::ingest::recruits::ingest_live(
+                        &client,
+                        &db.pool,
+                        year,
+                        &parsed,
+                        dump_snapshot.as_deref(),
+                    )
+                    .await?
+                };
+                let by_group: Vec<String> = report
+                    .by_group
+                    .iter()
+                    .map(|(g, n)| format!("{g}={n}"))
+                    .collect();
+                println!(
+                    "recruits {}: {} upserted across {} page(s) ({})",
+                    report.year,
+                    report.upserts,
+                    report.total_pages,
+                    by_group.join(", ")
+                );
 
-            if !no_resolve_teams {
-                let n = cstat_ingest::ingest::recruits::resolve_team_joins(&db.pool, year).await?;
-                println!("committed_team_id resolved on {n} row(s)");
-            }
-            if !no_resolve_players {
-                let n =
-                    cstat_ingest::ingest::recruits::resolve_player_joins(&db.pool, year).await?;
-                println!("cstat_player_id resolved on {n} row(s)");
+                if !no_resolve_teams {
+                    let n =
+                        cstat_ingest::ingest::recruits::resolve_team_joins(&db.pool, year).await?;
+                    println!("recruits {year}: committed_team_id resolved on {n} row(s)");
+                }
+                if !no_resolve_players {
+                    let n = cstat_ingest::ingest::recruits::resolve_player_joins(&db.pool, year)
+                        .await?;
+                    println!("recruits {year}: cstat_player_id resolved on {n} row(s)");
+                }
             }
         }
 
