@@ -30,6 +30,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::team_aliases;
+
 /// Per-table row counts from a bootstrap run. Surfaced to the CLI so the
 /// user can sanity-check against expected season volume.
 #[derive(Debug, Default)]
@@ -211,15 +213,27 @@ async fn load_teams(
         // Map for downstream translation. Insert even if upsert fails.
         id_map.insert(team_id_csv.clone(), abbrev.to_string());
 
+        // Mirror the live-API path (`teams.rs::upsert_team`): populate
+        // short_name from the bundled Torvik-style alias map so the
+        // historical-season dropdown / detail-page labels match the
+        // 2021+ rows. Without this, `bootstrap-csv` rows arrive with
+        // NULL short_name and the frontend falls back to `name`
+        // ("Hartford Hawks") for older seasons while the API rows
+        // render as "Hartford" — an inconsistency the user flagged on
+        // the team-detail page.
+        let short_name = team_aliases::short_name(abbrev);
         sqlx::query(
-            "INSERT INTO teams (id, natstat_id, name, season)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO teams (id, natstat_id, name, short_name, season)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (natstat_id, season) DO UPDATE
-             SET name = EXCLUDED.name, updated_at = now()",
+             SET name = EXCLUDED.name,
+                 short_name = COALESCE(teams.short_name, EXCLUDED.short_name),
+                 updated_at = now()",
         )
         .bind(Uuid::new_v4())
         .bind(abbrev)
         .bind(full_name)
+        .bind(short_name)
         .bind(year)
         .execute(&mut *tx)
         .await?;

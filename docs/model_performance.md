@@ -1,7 +1,7 @@
 # Model Performance Report
 
 Last updated: 2026-05-18
-Training data: cstat NatStat seasons 2015-2026 ingested as of 2026-05-17 (12 seasons total; 2015-2020 added via the `bootstrap-csv` path). Game / trajectory / freshman models all retrained on the full 12-season cohort over 2026-05-17 / 2026-05-18; **roster model is still on the 5-season cohort (2022-2026) pending its own retrain pass.** Game-prediction model retrained 2026-05-18 (20,674 → 47,502 games); freshman model corpus expanded from 1,154 → 3,252 rows after pre-2021 recruit-class ingest (2014-2020).
+Training data: cstat NatStat seasons 2015-2026 ingested as of 2026-05-17 (12 seasons total; 2015-2020 added via the `bootstrap-csv` path). All four model families now train on the full 12-season cohort. Game model retrained 2026-05-18 (20,674 → 47,502 games); freshman corpus 1,154 → 3,252 rows after pre-2021 recruit-class ingest (2014-2020); roster corpus 1,799 → 4,248 team-seasons retrained 2026-05-18.
 
 cstat ships four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
@@ -10,7 +10,7 @@ cstat ships four LightGBM model families, all exported to ONNX and loaded at API
 | **Game (margin / win / total)** | Per-game margin, win prob, total points | 47,502 games (12 seasons 2015-2026) | `POST /api/predict`, score ticker, schedule projected scores |
 | **Trajectory** | Project next-season CamPom v3 for returners | 24,168 N→N+1 player-pairs (11 paired classes 2015→2016 through 2025→2026) | Transfer page (ΔCP), 2027 projection page, PlayerDetail "Proj YYYY-YY" chip |
 | **Freshman** | Project freshman-season CamPom v3 for new recruits | 3,252 freshmen (12 recruit classes 2014-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
-| **Roster** | Project team AdjEM from roster aggregates | 1,799 team-seasons (5 seasons 2022-2026; 12-season retrain pending) | 2027 projection page team rows, transfer-portal "what-if" |
+| **Roster** | Project team AdjEM from roster aggregates | 4,248 team-seasons (12 seasons 2015-2026) | 2027 projection page team rows, transfer-portal "what-if" |
 
 All four models follow the same rhythm: 5-fold random CV for headline metrics, an out-of-sample backtest (chronological 80/20 for the game model; leave-one-pair-out / leave-one-class-out / leave-one-season-out for trajectory / freshman / roster), and a final fit on all data for the shipped artifacts.
 
@@ -155,25 +155,41 @@ A LOCO-aligned ablation (`training/spike_247_baseline.py`) trains the same Light
 
 Single LightGBM regressor on 36 features: roster shape (size, total minutes, top-1/top-5 min share, minutes stddev), minutes-weighted player rate stats, star indicators, and one-hot archetype counts.
 
-**Backtest:** leave-one-season-out across 2022-2026.
+**Backtest:** leave-one-season-out across 2015-2026 (12 folds).
 
 | Held-out season | n | MAE | RMSE | R² |
 |-----------------|---|-----|------|-----|
-| 2022 | 350 | 6.30 | 8.09 | 0.688 |
-| 2023 | 360 | 5.81 | 7.39 | 0.726 |
-| 2024 | 361 | 5.92 | 7.51 | 0.751 |
-| 2025 | 364 | 6.38 | 8.00 | 0.754 |
-| 2026 | 364 | 7.84 | 9.60 | 0.670 |
-| **Pooled** | 1,799 | **6.45** | 8.16 | **0.717** |
+| 2015 | 351 | 5.47 | 7.16 | 0.777 |
+| 2016 | 351 | 4.73 | 6.10 | 0.835 |
+| 2017 | 351 | 4.82 | 6.23 | 0.834 |
+| 2018 | 351 | 4.91 | 6.23 | 0.823 |
+| 2019 | 353 | 5.16 | 6.38 | 0.813 |
+| 2020 | 353 | 6.33 | 8.04 | 0.691 |
+| 2021 | 339 | 6.90 | 8.81 | 0.663 |
+| 2022 | 350 | 5.85 | 7.37 | 0.741 |
+| 2023 | 360 | 5.94 | 7.55 | 0.713 |
+| 2024 | 361 | 6.07 | 7.62 | 0.744 |
+| 2025 | 364 | 6.67 | 8.24 | 0.739 |
+| 2026 | 364 | 7.71 | 9.39 | 0.684 |
+| **Pooled** | 4,248 | **5.89** | 7.50 | **0.754** |
 
-5-fold random CV: MAE 6.38, R² 0.731.
+5-fold random CV: MAE 5.80, R² 0.763. Gap to LOSO: +0.09 — clean, no fold-overlap leakage.
 
-**Top features:** `w_stl_pct`, `w_drb_pct`, `w_topg`, `total_minutes`, `w_bpg`, `arch_warlock`, `w_spg`, `w_ts`, `arch_druid`, `arch_ranger`. Defensive event-rate features and archetype dummies do most of the work.
+| Pooled metric | This model (12 seasons) | Prior 5-season model |
+|---------------|------------------------:|---------------------:|
+| LOSO MAE | **5.89** | 6.45 |
+| LOSO R² | **0.754** | 0.717 |
+| 5-fold CV MAE | **5.80** | 6.38 |
+| n | 4,248 | 1,799 |
+
+**Top features:** `w_stl_pct` (importance 330), `w_topg` (287), `total_minutes` (282), `w_ts` (256), `w_drb_pct` (243), `arch_rogue` (240), `arch_wizard` (233), `arch_druid` (220), `w_bpg` (215), `arch_warlock` (200), `w_orb_pct` (193), `w_spg` (175), `arch_sorcerer` (175), `arch_ranger` (175), `w_usg` (171). Defensive event rates and archetype dummies still dominate; archetypes got slightly more prominent with more seasons of stable labels.
 
 **Notes:**
-- 2026 has the largest LOSO MAE (7.84) — partial-season noise (in-flight season vs full-season target).
+- 2026 has the largest LOSO MAE (7.71, down from 7.84 in the prior 5-season fit) — partial-season noise (in-flight season vs full-season target). The dropping number is the most honest signal that the wider corpus is doing real work.
+- Pre-portal seasons (2015-2019) fit notably easier than recent ones (MAE 4.73-5.47 vs 5.85-7.71 for 2022-2026). Less roster volatility before the 2018-19 transfer-portal rule change is the most plausible driver; not investigated further.
+- COVID seasons (2020 / 2021) are the hardest folds in the historical window (MAE 6.33 / 6.90) — schedule disruption, eligibility waivers, partial seasons.
+- The pooled MAE drop (6.45 → 5.89, −8.7%) is a mix of real model lift on the recent window and easier pre-portal seasons pulling the average down. Apples-to-apples on 2022-2026 only: 2022/2026 better, 2023/2024/2025 slightly worse — roughly neutral on the recent overlap, with the new historical seasons providing the headline gain.
 - Used inside `Predictor::predict_adj_em` for the 2027 projection page; transfer "what-if" infrastructure stays warm but isn't currently surfaced.
-- **Still on 5 seasons (2022-2026).** Game / trajectory / freshman models all sit on the full 12-season cohort as of 2026-05-18; the roster model's 12-season retrain is queued but not yet shipped. The 7 extra seasons (2015-2021) would push the corpus from ~1.8k to ~4.3k team-seasons and give LOSO 12 seasons to average over instead of 5 — likely smoothing out the 2026 in-flight-season spike (7.84 MAE).
 
 ---
 
