@@ -213,14 +213,22 @@ async fn load_teams(
         // Map for downstream translation. Insert even if upsert fails.
         id_map.insert(team_id_csv.clone(), abbrev.to_string());
 
-        // Mirror the live-API path (`teams.rs::upsert_team`): populate
-        // short_name from the bundled Torvik-style alias map so the
-        // historical-season dropdown / detail-page labels match the
-        // 2021+ rows. Without this, `bootstrap-csv` rows arrive with
-        // NULL short_name and the frontend falls back to `name`
-        // ("Hartford Hawks") for older seasons while the API rows
-        // render as "Hartford" — an inconsistency the user flagged on
-        // the team-detail page.
+        // Populate `short_name` from the bundled Torvik-style alias map,
+        // matching `teams.rs::upsert_team`. Without this, `bootstrap-csv`
+        // rows arrived with NULL short_name and the frontend fell back to
+        // `name` ("Hartford Hawks") for older seasons while 2021+ rows
+        // rendered as "Hartford" — the inconsistency flagged on the
+        // team-detail page.
+        //
+        // Conflict behavior intentionally diverges from the live-API
+        // path: API uses `EXCLUDED.short_name` (always overwrite), this
+        // path uses `COALESCE(teams.short_name, EXCLUDED.short_name)`
+        // (preserve existing). Reason: bootstrap-csv is a backfill loop
+        // and any non-null existing value was set by the API or by
+        // migration 017, both of which are higher-trust sources. Trade-
+        // off: a typo fix in `data/team_short_names.json` won't
+        // propagate to already-stamped rows via bootstrap alone — run
+        // migration 017 again (it's idempotent) for that case.
         let short_name = team_aliases::short_name(abbrev);
         sqlx::query(
             "INSERT INTO teams (id, natstat_id, name, short_name, season)

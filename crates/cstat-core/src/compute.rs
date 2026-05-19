@@ -26,7 +26,10 @@ async fn seed_missing_team_season_stats(
         SELECT gen_random_uuid(), t.id, t.season
         FROM teams t
         WHERE t.season = $1
-          AND EXISTS (SELECT 1 FROM team_game_stats tgs WHERE tgs.team_id = t.id)
+          AND EXISTS (
+              SELECT 1 FROM team_game_stats tgs
+              WHERE tgs.team_id = t.id AND tgs.season = t.season
+          )
           AND NOT EXISTS (
               SELECT 1 FROM team_season_stats tss
               WHERE tss.team_id = t.id AND tss.season = t.season
