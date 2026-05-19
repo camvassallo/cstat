@@ -30,6 +30,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::team_aliases;
+
 /// Per-table row counts from a bootstrap run. Surfaced to the CLI so the
 /// user can sanity-check against expected season volume.
 #[derive(Debug, Default)]
@@ -211,15 +213,38 @@ async fn load_teams(
         // Map for downstream translation. Insert even if upsert fails.
         id_map.insert(team_id_csv.clone(), abbrev.to_string());
 
+        // Populate `short_name` from the bundled Torvik-style alias map,
+        // matching `teams.rs::upsert_team`. Without this, `bootstrap-csv`
+        // rows arrived with NULL short_name and the frontend fell back to
+        // `name` ("Hartford Hawks") for older seasons while 2021+ rows
+        // rendered as "Hartford" — the inconsistency flagged on the
+        // team-detail page.
+        //
+        // Conflict behavior intentionally diverges from the live-API
+        // path: API uses `EXCLUDED.short_name` (always overwrite), this
+        // path uses `COALESCE(teams.short_name, EXCLUDED.short_name)`
+        // (preserve existing). Reason: bootstrap-csv is a backfill loop
+        // and any non-null existing value was set by the API or by
+        // migration 017, both of which are higher-trust sources. Trade-
+        // off: a typo fix in `data/team_short_names.json` won't
+        // propagate to already-stamped rows via bootstrap alone — for
+        // that case, re-execute migration 017's UPDATE block via psql
+        // (`psql ... -f migrations/017_team_short_names.sql`); SQLx's
+        // checksum gate prevents the migration framework from re-running
+        // it automatically, but the SQL itself is an idempotent UPDATE.
+        let short_name = team_aliases::short_name(abbrev);
         sqlx::query(
-            "INSERT INTO teams (id, natstat_id, name, season)
-             VALUES ($1, $2, $3, $4)
+            "INSERT INTO teams (id, natstat_id, name, short_name, season)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (natstat_id, season) DO UPDATE
-             SET name = EXCLUDED.name, updated_at = now()",
+             SET name = EXCLUDED.name,
+                 short_name = COALESCE(teams.short_name, EXCLUDED.short_name),
+                 updated_at = now()",
         )
         .bind(Uuid::new_v4())
         .bind(abbrev)
         .bind(full_name)
+        .bind(short_name)
         .bind(year)
         .execute(&mut *tx)
         .await?;

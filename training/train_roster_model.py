@@ -33,7 +33,7 @@ from sklearn.model_selection import KFold
 from db import get_engine
 
 OUT_DIR = Path(__file__).parent / "models"
-SEASONS = (2022, 2023, 2024, 2025, 2026)
+SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
 ARCHETYPES = (
     "Wizard", "Sorcerer", "Warlock", "Bard", "Ranger", "Barbarian",
     "Paladin", "Monk", "Cleric", "Druid", "Rogue", "Fighter",
@@ -196,8 +196,8 @@ def lgb_params() -> dict:
 
 
 def leave_one_season_out(df: pd.DataFrame, feature_cols: list[str]) -> dict:
-    """Honest backtest: predict each season using a model trained on the other two.
-    With only 3 seasons, leave-one-season-out is the right cross-val."""
+    """Honest backtest: predict each season using a model trained on the other N-1.
+    LOSO is the right cross-val for a target with potential season-level drift."""
     results = {}
     overall_y, overall_p = [], []
     for season in SEASONS:

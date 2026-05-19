@@ -1,7 +1,44 @@
 use sqlx::PgPool;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
+
+/// Defensive self-heal: ensure every (team, season) with `team_game_stats`
+/// rows also has a `team_season_stats` row. Without this, the compute
+/// pipeline silently no-ops on the missing-row teams (four-factors / adj
+/// eff / wins-losses are all UPDATEs, and UPDATE-without-row is a no-op),
+/// leaving them with blank stats on the team-detail page.
+///
+/// The gap arises when a `teams` row gets created by the box-score path
+/// (auto-create on first perf encounter) rather than the `/teams` API
+/// step that normally seeds `team_season_stats`. Empirically this hits
+/// D-I-transitioning programs: NatStat's `/teams` endpoint may not
+/// return a team in its final D1 season (Hartford 2023, St. Francis NY
+/// 2023) or its first D1 season (Le Moyne 2024). Idempotent: no-op when
+/// every relevant row already exists.
+async fn seed_missing_team_season_stats(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO team_season_stats (id, team_id, season)
+        SELECT gen_random_uuid(), t.id, t.season
+        FROM teams t
+        WHERE t.season = $1
+          AND EXISTS (
+              SELECT 1 FROM team_game_stats tgs
+              WHERE tgs.team_id = t.id AND tgs.season = t.season
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM team_season_stats tss
+              WHERE tss.team_id = t.id AND tss.season = t.season
+          )
+        ON CONFLICT (team_id, season) DO NOTHING
+        "#,
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
 
 /// Deduplicate player records that share the same (name, team_id, season).
 /// NatStat assigns different player codes across seasons, creating duplicate entries.
@@ -1458,6 +1495,18 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
     let mut report = ComputeReport::default();
 
     info!(season, "starting compute pipeline");
+
+    // Step 0 (defensive prerequisite): seed team_season_stats for any team
+    // with games but no row. Silent when there's nothing to heal.
+    let seeded = seed_missing_team_season_stats(pool, season).await?;
+    if seeded > 0 {
+        warn!(
+            season,
+            seeded,
+            "seeded {} missing team_season_stats row(s) — D-I transition or upstream gap",
+            seeded
+        );
+    }
 
     info!("step 1/13: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;

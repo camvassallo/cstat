@@ -2,13 +2,20 @@
   "model": "roster_model",
   "target": "adj_efficiency_margin",
   "seasons": [
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
     2022,
     2023,
     2024,
     2025,
     2026
   ],
-  "n_rows": 1799,
+  "n_rows": 4248,
   "n_features": 36,
   "features": [
     "roster_size",
@@ -52,148 +59,190 @@
   "include_impact_features": false,
   "backtest_loso": {
     "per_season": {
+      "2015": {
+        "mae": 5.466378913246178,
+        "rmse": 7.155342867913836,
+        "r2": 0.7772143132744074,
+        "n": 351
+      },
+      "2016": {
+        "mae": 4.731045304388837,
+        "rmse": 6.101844054144307,
+        "r2": 0.8346099933572115,
+        "n": 351
+      },
+      "2017": {
+        "mae": 4.817261804692157,
+        "rmse": 6.227571626189549,
+        "r2": 0.8338969764551951,
+        "n": 351
+      },
+      "2018": {
+        "mae": 4.913174407447098,
+        "rmse": 6.234595034759122,
+        "r2": 0.8225104476930976,
+        "n": 351
+      },
+      "2019": {
+        "mae": 5.163687065596225,
+        "rmse": 6.383051125029959,
+        "r2": 0.812823468001423,
+        "n": 353
+      },
+      "2020": {
+        "mae": 6.32606415610545,
+        "rmse": 8.038425874821737,
+        "r2": 0.6908007910246053,
+        "n": 353
+      },
+      "2021": {
+        "mae": 6.90294447743784,
+        "rmse": 8.807017090150518,
+        "r2": 0.6632951953462887,
+        "n": 339
+      },
       "2022": {
-        "mae": 6.2982881048562165,
-        "rmse": 8.09128592230575,
-        "r2": 0.6879079343702419,
+        "mae": 5.854190011525383,
+        "rmse": 7.370813390807736,
+        "r2": 0.7410127025702276,
         "n": 350
       },
       "2023": {
-        "mae": 5.80589768794168,
-        "rmse": 7.38938394477097,
-        "r2": 0.7255219241776671,
+        "mae": 5.943279466207222,
+        "rmse": 7.549493569571217,
+        "r2": 0.7134985433956342,
         "n": 360
       },
       "2024": {
-        "mae": 5.915881476274391,
-        "rmse": 7.506040442392646,
-        "r2": 0.7511805548008467,
+        "mae": 6.0740281373703215,
+        "rmse": 7.616602157486042,
+        "r2": 0.7437964989521437,
         "n": 361
       },
       "2025": {
-        "mae": 6.381145184858039,
-        "rmse": 8.00205160395701,
-        "r2": 0.7536698765078199,
+        "mae": 6.670186383255628,
+        "rmse": 8.237516289918254,
+        "r2": 0.7389597949385174,
         "n": 364
       },
       "2026": {
-        "mae": 7.844325491251026,
-        "rmse": 9.599688730567216,
-        "r2": 0.6696718277930238,
+        "mae": 7.709073435722174,
+        "rmse": 9.392187612960576,
+        "r2": 0.6837978415808512,
         "n": 364
       }
     },
     "pooled": {
-      "mae": 6.452600635573894,
-      "rmse": 8.159137835488831,
-      "r2": 0.7169237572814443
+      "mae": 5.886530417497641,
+      "rmse": 7.501833031804731,
+      "r2": 0.753679969187854
     }
   },
   "cv_5fold": {
-    "mae": 6.382723807481832,
-    "rmse": 7.930211946998066,
-    "r2": 0.7306765048978395
+    "mae": 5.802920080087754,
+    "rmse": 7.351627336881604,
+    "r2": 0.7626753307401399
   },
   "top_features": [
     {
       "name": "w_stl_pct",
-      "importance": 344
-    },
-    {
-      "name": "w_drb_pct",
-      "importance": 274
+      "importance": 330
     },
     {
       "name": "w_topg",
-      "importance": 241
+      "importance": 287
     },
     {
       "name": "total_minutes",
-      "importance": 222
-    },
-    {
-      "name": "w_bpg",
-      "importance": 220
-    },
-    {
-      "name": "arch_warlock",
-      "importance": 213
-    },
-    {
-      "name": "w_spg",
-      "importance": 209
+      "importance": 282
     },
     {
       "name": "w_ts",
-      "importance": 197
+      "importance": 256
     },
     {
-      "name": "arch_druid",
-      "importance": 197
-    },
-    {
-      "name": "arch_ranger",
-      "importance": 186
-    },
-    {
-      "name": "arch_bard",
-      "importance": 182
-    },
-    {
-      "name": "arch_wizard",
-      "importance": 178
-    },
-    {
-      "name": "w_tov_pct",
-      "importance": 177
-    },
-    {
-      "name": "w_ast_pct",
-      "importance": 175
-    },
-    {
-      "name": "w_orb_pct",
-      "importance": 175
-    },
-    {
-      "name": "arch_paladin",
-      "importance": 172
-    },
-    {
-      "name": "w_rpg",
-      "importance": 170
-    },
-    {
-      "name": "w_ft_rate",
-      "importance": 163
+      "name": "w_drb_pct",
+      "importance": 243
     },
     {
       "name": "arch_rogue",
-      "importance": 161
+      "importance": 240
     },
     {
-      "name": "top1_min_share",
-      "importance": 157
+      "name": "arch_wizard",
+      "importance": 233
     },
     {
-      "name": "w_blk_pct",
-      "importance": 145
+      "name": "arch_druid",
+      "importance": 220
+    },
+    {
+      "name": "w_bpg",
+      "importance": 215
+    },
+    {
+      "name": "arch_warlock",
+      "importance": 200
+    },
+    {
+      "name": "w_orb_pct",
+      "importance": 193
+    },
+    {
+      "name": "w_spg",
+      "importance": 175
     },
     {
       "name": "arch_sorcerer",
-      "importance": 143
+      "importance": 175
+    },
+    {
+      "name": "arch_ranger",
+      "importance": 175
+    },
+    {
+      "name": "w_usg",
+      "importance": 171
+    },
+    {
+      "name": "arch_paladin",
+      "importance": 168
+    },
+    {
+      "name": "w_ast_pct",
+      "importance": 163
+    },
+    {
+      "name": "arch_bard",
+      "importance": 157
+    },
+    {
+      "name": "w_rpg",
+      "importance": 153
+    },
+    {
+      "name": "w_tov_pct",
+      "importance": 152
+    },
+    {
+      "name": "w_blk_pct",
+      "importance": 150
+    },
+    {
+      "name": "top5_min_share",
+      "importance": 149
+    },
+    {
+      "name": "w_ft_rate",
+      "importance": 144
     },
     {
       "name": "w_apg",
-      "importance": 142
+      "importance": 141
     },
     {
       "name": "minutes_stddev",
-      "importance": 140
-    },
-    {
-      "name": "w_ppg",
-      "importance": 136
+      "importance": 137
     }
   ]
 }
