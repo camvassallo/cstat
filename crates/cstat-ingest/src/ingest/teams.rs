@@ -38,10 +38,16 @@ async fn upsert_team(team: &Value, pool: &PgPool, season: i32) -> Result<bool, N
         None => return Ok(false),
     };
 
+    // NatStat's /teamcodes endpoint returns `"name": {}` (an empty object) for
+    // some teams with `&` in the name (ALAM, CWM, FAMU, NCAT, TAMC, TAMU, TMCM).
+    // `Value::as_str()` returns None for non-string values, so the chain below
+    // falls through to `full_name`, then the bundled alias map, then finally
+    // the raw code as a last resort.
     let name = team
         .get("name")
-        .or_else(|| team.get("full_name"))
         .and_then(|n| n.as_str())
+        .or_else(|| team.get("full_name").and_then(|n| n.as_str()))
+        .or_else(|| team_aliases::short_name(natstat_id))
         .unwrap_or(natstat_id);
 
     // Prefer the bundled Torvik-style short name; fall back to whatever NatStat
