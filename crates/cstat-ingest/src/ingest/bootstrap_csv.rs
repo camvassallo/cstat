@@ -227,8 +227,11 @@ async fn load_teams(
         // and any non-null existing value was set by the API or by
         // migration 017, both of which are higher-trust sources. Trade-
         // off: a typo fix in `data/team_short_names.json` won't
-        // propagate to already-stamped rows via bootstrap alone — run
-        // migration 017 again (it's idempotent) for that case.
+        // propagate to already-stamped rows via bootstrap alone — for
+        // that case, re-execute migration 017's UPDATE block via psql
+        // (`psql ... -f migrations/017_team_short_names.sql`); SQLx's
+        // checksum gate prevents the migration framework from re-running
+        // it automatically, but the SQL itself is an idempotent UPDATE.
         let short_name = team_aliases::short_name(abbrev);
         sqlx::query(
             "INSERT INTO teams (id, natstat_id, name, short_name, season)

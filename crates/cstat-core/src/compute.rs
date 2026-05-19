@@ -16,10 +16,7 @@ use uuid::Uuid;
 /// return a team in its final D1 season (Hartford 2023, St. Francis NY
 /// 2023) or its first D1 season (Le Moyne 2024). Idempotent: no-op when
 /// every relevant row already exists.
-async fn seed_missing_team_season_stats(
-    pool: &PgPool,
-    season: i32,
-) -> Result<u64, sqlx::Error> {
+async fn seed_missing_team_season_stats(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
         INSERT INTO team_season_stats (id, team_id, season)
