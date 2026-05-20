@@ -686,13 +686,8 @@ impl Predictor {
         &self,
         features: &[f32; ROSTER_IMPACT_NUM_FEATURES],
     ) -> Result<f32, ort::Error> {
-        use ort::value::TensorRef;
-        let shape = [1_usize, ROSTER_IMPACT_NUM_FEATURES];
-        let input = TensorRef::from_array_view((shape, features.as_slice()))?;
         let mut session = self.roster_impact_session.lock().unwrap();
-        let outputs = session.run(ort::inputs![input])?;
-        let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
-        Ok(data[0])
+        roster_impact_infer(&mut session, features)
     }
 
     /// Batch variant of `predict_roster_impact` — one `[N, 25]` tensor,
@@ -994,6 +989,63 @@ impl Predictor {
             predicted_margin,
             contributions,
         })
+    }
+}
+
+/// Run the roster-impact ONNX session on one 25-feature vector. Shared by
+/// `Predictor::predict_roster_impact` and the standalone `RosterImpactModel`
+/// below so the tensor-shape / extract logic lives in one place.
+fn roster_impact_infer(
+    session: &mut Session,
+    features: &[f32; ROSTER_IMPACT_NUM_FEATURES],
+) -> Result<f32, ort::Error> {
+    use ort::value::TensorRef;
+    let shape = [1_usize, ROSTER_IMPACT_NUM_FEATURES];
+    let input = TensorRef::from_array_view((shape, features.as_slice()))?;
+    let outputs = session.run(ort::inputs![input])?;
+    let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+    Ok(data[0])
+}
+
+/// A single Phase B impact-aggregation model loaded on its own, outside the
+/// main `Predictor` bundle.
+///
+/// The projection backtest (`cstat-ingest::projections_backtest`) loads one
+/// per target season — the leave-one-season-out model that never trained on
+/// that season's team-seasons — so the end-to-end MAE is free of the small
+/// in-sample leak the all-seasons `roster_impact_model.onnx` carries. Not
+/// part of API boot: the live `/api/projections` route scores with
+/// `Predictor::predict_roster_impact` (the all-seasons model, correct there
+/// because the live target year is genuinely unseen).
+pub struct RosterImpactModel {
+    session: Mutex<Session>,
+}
+
+impl RosterImpactModel {
+    /// Load the LOSO model that excludes `season` from
+    /// `{model_dir}/roster_impact_loso/roster_impact_model_{season}.onnx`.
+    ///
+    /// These files are gitignored diagnostic artifacts — rerun
+    /// `training/train_roster_impact_model.py` to (re)generate them. Callers
+    /// should check existence first for a friendlier message than the raw
+    /// ONNX loader error (see `projections_backtest::run`).
+    pub fn load_loso(model_dir: &Path, season: i32) -> Result<Self, LoadError> {
+        let path = model_dir
+            .join("roster_impact_loso")
+            .join(format!("roster_impact_model_{season}.onnx"));
+        let session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(&path)?;
+        Ok(Self {
+            session: Mutex::new(session),
+        })
+    }
+
+    /// Score one 25-feature `roster_impact::build_roster_impact_features`
+    /// vector. Same model family as `Predictor::predict_roster_impact`.
+    pub fn predict(&self, features: &[f32; ROSTER_IMPACT_NUM_FEATURES]) -> Result<f32, ort::Error> {
+        let mut session = self.session.lock().unwrap();
+        roster_impact_infer(&mut session, features)
     }
 }
 

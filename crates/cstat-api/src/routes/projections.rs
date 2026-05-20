@@ -115,22 +115,29 @@ struct ProjectedTeam {
 /// (496 pooled team-years; see `docs/projections_methodology.md`).
 ///
 /// Phase B's raw output is a far stronger projector than the old
-/// box-score model — raw MAE 6.58 vs the box-score model's 9.97 — so
+/// box-score model — raw MAE 6.39 vs the box-score model's 9.97 — so
 /// the blend leans much less on baseline persistence than Phase A did
-/// (`0.55` vs the old `0.80`). The MAE curve is flat across 0.50–0.60;
-/// `0.55` is the backtest optimum (blended MAE 5.88, beating both
+/// (`0.50` vs the old `0.80`). The MAE curve is flat across 0.40–0.60;
+/// `0.50` is the backtest optimum (blended MAE 5.86, beating both
 /// baseline-persistence 6.53 and the old Phase A pipeline 6.23).
-const SHRINK_WEIGHT: f32 = 0.55;
+///
+/// v2 retune (ROADMAP §5b): the impact model now trains on held-out OOF
+/// cam_v3 ("train on what you serve"), and the backtest scores it with
+/// leave-one-season-out models — so 5.86 is leak-free, where the v1
+/// `0.55`/5.88 figure carried a small in-sample leak. The better-
+/// calibrated raw projector earns marginally more trust (0.55 → 0.50).
+const SHRINK_WEIGHT: f32 = 0.50;
 
 /// Additive calibration offset applied to the blended projection.
 ///
 /// **Zero under Phase B.** Phase A needed `+2.0` because the box-score
 /// roster model ran a structural −4.8 low (it never saw freshman upside
-/// or returner growth). The Phase B model consumes *projected* cam_v3
-/// directly, so its raw output is near-unbiased (+0.44) and the blended
-/// pipeline's residual bias is ≈−0.25 — within backtest noise. The
-/// offset is kept as a named `0.0` knob so the methodology doc's
-/// re-tuning playbook (grid-search weight *and* offset) stays valid.
+/// or returner growth). The Phase B v2 model consumes *projected* cam_v3
+/// directly, so its raw output is near-unbiased (+0.62) and the blended
+/// pipeline's residual bias at `SHRINK_WEIGHT` is ≈−0.10 — within
+/// backtest noise. The offset is kept as a named `0.0` knob so the
+/// methodology doc's re-tuning playbook (grid-search weight *and*
+/// offset) stays valid.
 const PROJECTION_OFFSET: f32 = 0.0;
 
 /// Blend the raw model output with the baseline AdjEM and apply the

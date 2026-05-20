@@ -1,5 +1,5 @@
 """
-Train the Phase B impact-aggregation projection model.
+Train the Phase B impact-aggregation projection model (v2 — OOF-trained).
 
 Phase B vs. the box-score roster model (`train_roster_model.py`):
 the box-score model deliberately EXCLUDES cam_v3 / GBPM because
@@ -16,9 +16,21 @@ arrivals, the freshman model for recruits); all projection error then
 lives in those upstream models — honest and decomposable. The
 box-score `roster_model.onnx` is untouched and still serves swap-Δ.
 
-v1 (this script) trains on *actual* same-season `cam_gbpm_v3_psos`. The
-v2 follow-up named in ROADMAP §5b retrains on held-out OOF cam_v3 so
-the model absorbs the trajectory / freshman projection bias directly.
+"Train on what you serve" (v2, this script). At serve time the
+projections route never sees a player's actual cam_v3 — it sees a
+*projected* one (the trajectory model for returners / arrivals, the
+freshman model for recruits), and those projections are regression-
+biased: the trajectory model under-projects elite returners by ≈3.4
+CamPom. v1 trained on actual same-season `cam_gbpm_v3_psos`, so it
+learned a calibration slope for *unbiased* inputs and then inherited
+the upstream bias raw at serve. v2 trains on the held-out OOF cam_v3
+the upstream models actually emit — `trajectory_oof_predictions` for
+returners, `freshman_oof_predictions` for recruits — so this calibrator
+absorbs that bias directly. The cohort neither OOF table covers (true
+walk-on freshmen, JUCO arrivals, pre-2015 priors, 2015 itself) falls
+back to actual `cam_gbpm_v3_psos`; that cohort skews to low-minute
+bench slots, so its weight in the load-bearing minutes-weighted
+aggregates is small. `build_dataset` prints the per-source coverage.
 
 Rotation normalization — train/serve parity. Both this script and the
 Rust `roster_impact::build_roster_impact_features` rank each roster by
@@ -54,6 +66,14 @@ from db import get_engine
 
 OUT_DIR = Path(__file__).parent / "models"
 SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
+
+# Target seasons that get an exported leave-one-season-out model for the
+# end-to-end `cstat-ingest projections-backtest` (ROADMAP §5b v2 Part 2).
+# Only these are backtestable: the backtest's `compose_all_projections`
+# needs portal-`transfers` data (ingested 2024+) AND a finished actual
+# AdjEM to score against, so 2025 / 2026 are the sole meaningful targets.
+# Extend when a new season finishes with transfers data ingested.
+LOSO_EXPORT_SEASONS = (2025, 2026)
 ARCHETYPES = (
     "Wizard", "Sorcerer", "Warlock", "Bard", "Ranger", "Barbarian",
     "Paladin", "Monk", "Cleric", "Druid", "Rogue", "Fighter",
@@ -72,16 +92,43 @@ CANONICAL_ROTATION_MPG = (
 # → NEG_INFINITY sort in `project_rotation`).
 _NEG = -1.0e9
 
+# cam_v3 is the *projected* value, "train on what you serve": held-out
+# OOF predictions where the trajectory / freshman models cover the player,
+# falling back to actual same-season `cam_gbpm_v3_psos` otherwise.
+#   - trajectory_oof_predictions: keyed (torvik_pid, target_season). A row
+#     exists when the player qualified in BOTH season N-1 and N — i.e. a
+#     returner the trajectory model trained on.
+#   - freshman_oof_predictions: keyed (cstat_player_id, target_season). A
+#     row exists for a resolved, ranked recruit in their first cstat season.
+# A player is almost always a returner XOR a freshman in season N, so the
+# two tables rarely both match one (player, season) — 4 rows in the
+# 2015-2026 corpus do: non-freshmen (So-Sr) that also carry a freshman OOF
+# row through a recruit-resolution edge case (a recruit linked to a
+# same-named player, or a recruit-year mismatch). COALESCE puts trajectory
+# first deliberately — for a genuine returner the prior-season projection
+# is the right signal, so the precedence resolves these 4 correctly
+# whatever the cause.
+# `campom_source` tags provenance for the coverage report in build_dataset.
 PLAYER_QUERY = """
 SELECT
     pss.team_id, pss.season, pss.player_id,
-    tps.cam_gbpm_v3_psos AS campom,
+    COALESCE(traj.mean, fresh.mean, tps.cam_gbpm_v3_psos) AS campom,
+    CASE
+        WHEN traj.mean IS NOT NULL THEN 'trajectory_oof'
+        WHEN fresh.mean IS NOT NULL THEN 'freshman_oof'
+        WHEN tps.cam_gbpm_v3_psos IS NOT NULL THEN 'actual_fallback'
+        ELSE 'none'
+    END AS campom_source,
     pa.primary_class,
     p.class_year
 FROM player_season_stats pss
 JOIN players p ON p.id = pss.player_id
 LEFT JOIN torvik_player_stats tps
     ON tps.player_id = pss.player_id AND tps.season = pss.season
+LEFT JOIN trajectory_oof_predictions traj
+    ON traj.torvik_pid = tps.torvik_pid AND traj.target_season = pss.season
+LEFT JOIN freshman_oof_predictions fresh
+    ON fresh.cstat_player_id = pss.player_id AND fresh.target_season = pss.season
 LEFT JOIN player_archetypes pa
     ON pa.player_id = pss.player_id AND pa.season = pss.season
 WHERE pss.season = ANY(%(seasons)s)
@@ -170,12 +217,37 @@ def aggregate_team_season(group: pd.DataFrame) -> pd.Series:
     return pd.Series(row)
 
 
-def build_dataset() -> tuple[pd.DataFrame, list[str]]:
+def cam_v3_coverage(players: pd.DataFrame) -> dict:
+    """Per-source breakdown of where each player's projected cam_v3 came
+    from. The OOF share is the "train on what you serve" coverage — the
+    fraction of inputs that carry the same regression bias as serve."""
+    counts = players["campom_source"].value_counts().to_dict()
+    n = len(players)
+    traj = int(counts.get("trajectory_oof", 0))
+    fresh = int(counts.get("freshman_oof", 0))
+    cov = {
+        "n_player_rows": int(n),
+        "trajectory_oof": traj,
+        "freshman_oof": fresh,
+        "actual_fallback": int(counts.get("actual_fallback", 0)),
+        "no_cam_v3": int(counts.get("none", 0)),
+        "oof_pct": round(100.0 * (traj + fresh) / n, 1) if n else 0.0,
+    }
+    print(
+        f"  cam_v3 source: {traj:,} trajectory OOF + {fresh:,} freshman OOF "
+        f"= {cov['oof_pct']}% held-out projections | "
+        f"{cov['actual_fallback']:,} actual fallback | {cov['no_cam_v3']:,} no cam_v3"
+    )
+    return cov
+
+
+def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
     engine = get_engine()
     players = pd.read_sql(PLAYER_QUERY, engine, params={"seasons": list(SEASONS)})
     teams = pd.read_sql(TEAM_QUERY, engine, params={"seasons": list(SEASONS)})
 
     print(f"Loaded {len(players):,} player-season rows, {len(teams):,} team-seasons.")
+    coverage = cam_v3_coverage(players)
 
     agg = (
         players.groupby(["team_id", "season"], as_index=False)
@@ -195,7 +267,7 @@ def build_dataset() -> tuple[pd.DataFrame, list[str]]:
         c for c in df.columns
         if c not in ("team_id", "season", "adj_efficiency_margin")
     ]
-    return df, feature_cols
+    return df, feature_cols, coverage
 
 
 def lgb_params() -> dict:
@@ -224,7 +296,13 @@ def lgb_params() -> dict:
 
 def leave_one_season_out(df: pd.DataFrame, feature_cols: list[str]) -> dict:
     """Honest backtest: predict each season from a model trained on the
-    other N-1. Same harness as `train_roster_model.py`."""
+    other N-1. Same harness as `train_roster_model.py`.
+
+    Note — v2 vs v1 MAE: this same-season diagnostic reads ≈3.7 on the
+    projected-cam_v3 inputs, well above v1's ≈2.2 on actual cam_v3. That
+    is expected, not a regression: v1's inputs were the near-identity
+    truth (`Σ cam_v3 ≈ AdjEM`), so the task was trivially easy. The honest
+    cross-version metric is the end-to-end `projections-backtest` MAE."""
     results = {}
     overall_y, overall_p = [], []
     best_iters: list[int] = []
@@ -290,12 +368,46 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     onnxmltools.utils.save_model(onnx_model, str(onnx_path))
 
 
+def export_loso_models(
+    df: pd.DataFrame, feature_cols: list[str], final_n: int
+) -> list[int]:
+    """Export per-target-season leave-one-season-out models for the
+    end-to-end `cstat-ingest projections-backtest` (ROADMAP §5b v2 Part 2).
+
+    The backtest scores target season S against actual AdjEM. The shipped
+    `roster_impact_model.onnx` trained on *every* season including S, so
+    its backtest MAE carries a small in-sample leak. The LOSO model for S
+    trains on every season EXCEPT S, so the backtest reads an honest
+    held-out prediction. Fixed `n_estimators` — early stopping would have
+    to watch the held-out season and re-introduce the leak it removes.
+
+    Files land in `models/roster_impact_loso/`; they are gitignored
+    diagnostic artifacts (the `*.onnx` rule with no allowlist entry),
+    regenerable by rerunning this script. Returns the per-season train
+    row counts for the meta JSON."""
+    loso_dir = OUT_DIR / "roster_impact_loso"
+    loso_dir.mkdir(parents=True, exist_ok=True)
+    params = lgb_params()
+    params.pop("early_stopping_rounds", None)
+    params["n_estimators"] = final_n
+    train_ns: list[int] = []
+    for season in LOSO_EXPORT_SEASONS:
+        train = df[df["season"] != season]
+        train_ns.append(int(len(train)))
+        model = lgb.LGBMRegressor(**params)
+        model.fit(train[feature_cols], train["adj_efficiency_margin"])
+        path = loso_dir / f"roster_impact_model_{season}.onnx"
+        export_to_onnx(model, len(feature_cols), path)
+        print(f"  LOSO model (excl. {season}, train n={len(train):,}) → {path}")
+    return train_ns
+
+
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
     print("Building dataset...")
-    df, feature_cols = build_dataset()
+    df, feature_cols, coverage = build_dataset()
     print(f"Features: {len(feature_cols)}  | rows: {len(df)}")
     print(f"Feature order: {feature_cols}")
 
@@ -335,6 +447,11 @@ def main() -> None:
     export_to_onnx(final, len(feature_cols), onnx_path)
     print(f"\nExported ONNX → {onnx_path}")
 
+    print("\n" + "=" * 60)
+    print("Leave-one-season-out models for projections-backtest (v2 Part 2)")
+    print("=" * 60)
+    loso_train_ns = export_loso_models(df, feature_cols, final_n)
+
     meta = {
         "model": "roster_impact_model",
         "target": "adj_efficiency_margin",
@@ -345,9 +462,16 @@ def main() -> None:
         # Honored verbatim by the Rust boot validator (`validate_model_meta`
         # checks this equals `QUAL_FILTER_STRING`).
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
-        # v1 = actual same-season cam_v3. v2 follow-up retrains on OOF.
-        "cam_v3_source": "actual",
+        # v2: trained on projected (held-out OOF) cam_v3, "train on what
+        # you serve". v1 was "actual" same-season cam_v3. See module docstring.
+        "cam_v3_source": "oof",
+        # Per-source provenance of the training cam_v3 inputs.
+        "cam_v3_coverage": coverage,
         "final_n_estimators": final_n,
+        # Per-target-season LOSO models exported to models/roster_impact_loso/
+        # for the honest end-to-end backtest (gitignored; regenerable here).
+        "loso_export_seasons": list(LOSO_EXPORT_SEASONS),
+        "loso_train_rows": dict(zip(LOSO_EXPORT_SEASONS, loso_train_ns)),
         "canonical_rotation_mpg": list(CANONICAL_ROTATION_MPG),
         "backtest_loso": loso,
         "cv_5fold": cv,
