@@ -344,8 +344,14 @@ mod tests {
     fn classify_status_covers_every_branch() {
         // International / G League win regardless of declaration state —
         // they're not college players, so the early-entrant list is moot.
-        assert_eq!(classify_status(Some("International"), false), "international");
-        assert_eq!(classify_status(Some("International"), true), "international");
+        assert_eq!(
+            classify_status(Some("International"), false),
+            "international"
+        );
+        assert_eq!(
+            classify_status(Some("International"), true),
+            "international"
+        );
         assert_eq!(classify_status(Some("G League"), false), "g-league");
         // An underclassman on the early-entrant list is a pending declaration.
         assert_eq!(classify_status(Some("Freshman"), true), "declared");
