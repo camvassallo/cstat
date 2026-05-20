@@ -100,8 +100,13 @@ _NEG = -1.0e9
 #     returner the trajectory model trained on.
 #   - freshman_oof_predictions: keyed (cstat_player_id, target_season). A
 #     row exists for a resolved, ranked recruit in their first cstat season.
-# A player is a returner XOR a freshman in season N, so the two OOF tables
-# never both match the same (player, season) — COALESCE order is cosmetic.
+# A player is almost always a returner XOR a freshman in season N, so the
+# two tables rarely both match one (player, season) — 4 rows in the
+# 2015-2026 corpus do, all upperclassmen wrongly carrying a freshman row
+# from a name-collision recruit misresolution. COALESCE puts trajectory
+# first deliberately: for a genuine returner the prior-season-based
+# projection is the right signal, and the precedence dodges that
+# misresolution artifact for free.
 # `campom_source` tags provenance for the coverage report in build_dataset.
 PLAYER_QUERY = """
 SELECT
@@ -290,7 +295,13 @@ def lgb_params() -> dict:
 
 def leave_one_season_out(df: pd.DataFrame, feature_cols: list[str]) -> dict:
     """Honest backtest: predict each season from a model trained on the
-    other N-1. Same harness as `train_roster_model.py`."""
+    other N-1. Same harness as `train_roster_model.py`.
+
+    Note — v2 vs v1 MAE: this same-season diagnostic reads ≈3.7 on the
+    projected-cam_v3 inputs, well above v1's ≈2.2 on actual cam_v3. That
+    is expected, not a regression: v1's inputs were the near-identity
+    truth (`Σ cam_v3 ≈ AdjEM`), so the task was trivially easy. The honest
+    cross-version metric is the end-to-end `projections-backtest` MAE."""
     results = {}
     overall_y, overall_p = [], []
     best_iters: list[int] = []

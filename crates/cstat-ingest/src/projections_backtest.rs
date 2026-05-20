@@ -20,9 +20,9 @@
 //!  - **baseline-persistence** — target AdjEM ≈ base-season AdjEM.
 //!
 //! Acceptance (ROADMAP §5b): Phase B should beat or match Phase A while
-//! being more principled. The PR 2 recalibration the blend sweep informs
-//! shipped — the live route now blends `0.55·baseline + 0.45·raw` with
-//! no offset.
+//! being more principled. The blend sweep informs the live route's
+//! recalibration — after the v2 OOF retrain it blends
+//! `0.50·baseline + 0.50·raw` with no offset.
 //!
 //! Honesty caveats (printed with the report):
 //!  - The roster-impact model is the **leave-one-season-out** model for
@@ -60,9 +60,10 @@ const MIN_QUALIFYING: usize = 7;
 
 /// Phase A blend constants — the *frozen* old box-score pipeline
 /// (0.80 baseline weight + 2.0 offset), held as a fixed comparison
-/// baseline. The live route moved to the Phase B blend (0.55 / 0.0) in
-/// PR 2; these deliberately do NOT track `routes/projections.rs` — they
-/// pin what "Phase A" meant so the backtest keeps a stable reference.
+/// baseline. The live route moved to the Phase B blend (0.50 / 0.0 after
+/// the v2 OOF retrain); these deliberately do NOT track
+/// `routes/projections.rs` — they pin what "Phase A" meant so the
+/// backtest keeps a stable reference.
 const PHASE_A_SHRINK_WEIGHT: f32 = 0.80;
 const PHASE_A_OFFSET: f32 = 2.0;
 
