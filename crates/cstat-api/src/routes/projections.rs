@@ -11,10 +11,10 @@ use axum::{
     routing::get,
 };
 use cstat_core::inference::Predictor;
-use cstat_core::roster_features::{build_roster_features, project_rotation};
+use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
     DraftScenario, FreshmanTier, ProjectedRoster, compose_all_projections, load_draft_entrants,
-    load_mock_draft, normalize_player_name,
+    load_mock_draft, normalize_player_name, project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -37,12 +37,11 @@ pub fn router() -> Router<Arc<AppState>> {
         )
 }
 
-/// Minimum (returning + arrivals) count we'll score. Below this, the
-/// projection is dominated by the few qualifying players' rate stats
-/// and the model produces wildly optimistic AdjEM (the v1 spot-check
-/// surfaced this — see ROADMAP §5b's "thin roster" caveat). Smaller
-/// rosters return null predictions and a `too_thin = true` flag so the
-/// UI can render them honestly without hiding the row.
+/// Minimum (returning + arrivals + recruits) count we'll score. Below
+/// this the roster is too sparse to be a real rotation — a 1–6 player
+/// roster can't be honestly projected — so smaller rosters return null
+/// predictions and a `too_thin = true` flag, letting the UI render them
+/// honestly (an explanation chip) instead of hiding the row.
 const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 
 /// Shape returned to the frontend. One row per team; ranked by midpoint
@@ -104,35 +103,33 @@ struct ProjectedTeam {
     baseline_adj_em: Option<f32>,
 }
 
-/// Weight on the base-season AdjEM when blending it with the roster
-/// model's raw projection. Tuned on a backtest of the projection
-/// pipeline against actual 2025 + 2026 AdjEM (496 pooled team-years;
-/// see `docs/projections_methodology.md`): last season's AdjEM is, on
-/// its own, a far stronger next-season predictor than the roster model
-/// (6.53 vs 9.97 MAE), so the blend leans heavily toward the baseline
-/// while still letting roster turnover nudge a team off its prior. The
-/// MAE curve is flat from 0.75–0.82; `0.80` sits at the optimum
-/// (blended MAE 6.23, beating baseline-only 6.53). An earlier
-/// continuity-weighted scheme (weight scaled by returning-minutes
-/// share) was tried and reverted: the backtest showed it moved weight
-/// *away* from the better predictor and widened the top-team error.
-const SHRINK_WEIGHT: f32 = 0.80;
+/// Weight on the base-season AdjEM when blending it with the Phase B
+/// impact-aggregation model's raw projection. Tuned on the end-to-end
+/// `cstat-ingest projections-backtest` against actual 2025 + 2026 AdjEM
+/// (496 pooled team-years; see `docs/projections_methodology.md`).
+///
+/// Phase B's raw output is a far stronger projector than the old
+/// box-score model — raw MAE 6.58 vs the box-score model's 9.97 — so
+/// the blend leans much less on baseline persistence than Phase A did
+/// (`0.55` vs the old `0.80`). The MAE curve is flat across 0.50–0.60;
+/// `0.55` is the backtest optimum (blended MAE 5.88, beating both
+/// baseline-persistence 6.53 and the old Phase A pipeline 6.23).
+const SHRINK_WEIGHT: f32 = 0.55;
 
-/// Additive calibration offset applied to the blended projection. The
-/// roster model is a *same-season descriptive* model; used as a
-/// *projection* it runs systematically low (raw bias −4.8 on the
-/// 2025 + 2026 backtest) — it sees tier-mean freshmen and growth-
-/// frozen returners, never the upside tail that produces elite
-/// seasons. `+2.0` is the constant that zeroes the blended pipeline's
-/// mean signed error at `SHRINK_WEIGHT = 0.80`. The principled fix is
-/// the Phase B impact-aggregation model.
-const PROJECTION_OFFSET: f32 = 2.0;
+/// Additive calibration offset applied to the blended projection.
+///
+/// **Zero under Phase B.** Phase A needed `+2.0` because the box-score
+/// roster model ran a structural −4.8 low (it never saw freshman upside
+/// or returner growth). The Phase B model consumes *projected* cam_v3
+/// directly, so its raw output is near-unbiased (+0.44) and the blended
+/// pipeline's residual bias is ≈−0.25 — within backtest noise. The
+/// offset is kept as a named `0.0` knob so the methodology doc's
+/// re-tuning playbook (grid-search weight *and* offset) stays valid.
+const PROJECTION_OFFSET: f32 = 0.0;
 
 /// Blend the raw model output with the baseline AdjEM and apply the
 /// calibration offset. With no baseline (e.g. a brand-new D-I program)
-/// the blend collapses to the offset-corrected raw value — the offset
-/// was tuned for the blended case, so no-baseline teams stay mildly
-/// under-projected, which is acceptable for that rare cohort.
+/// the blend collapses to the offset-corrected raw value.
 fn shrink(raw: f32, baseline: Option<f32>) -> f32 {
     match baseline {
         Some(b) => SHRINK_WEIGHT * b + (1.0 - SHRINK_WEIGHT) * raw + PROJECTION_OFFSET,
@@ -258,11 +255,39 @@ async fn projection_list(
     // team's floor/ceiling midpoint (see `mean_return_probability`).
     let mock_by_name = load_mock_by_name(base_season);
 
+    // Forward-project each returner / arrival's cam_v3 in one batched
+    // pass across every team — the Phase B model scores rosters of
+    // *projected* cam_v3 (recruits already carry the freshman model's
+    // value). One trajectory fetch + inference for the whole slate; a
+    // failure logs and degrades to current-season cam_v3.
+    let mut traj_ids: Vec<Uuid> = Vec::new();
+    for p in &projections {
+        traj_ids.extend(p.returning.iter().map(|r| r.player_id));
+        traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
+        traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
+    }
+    let projected_cam = project_returner_cam_v3(
+        &state.db.pool,
+        &state.predictor,
+        &traj_ids,
+        base_season,
+        year,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %e,
+            "trajectory cam_v3 projection failed; projecting on current-season cam_v3",
+        );
+        std::collections::HashMap::new()
+    });
+
     let mut rows: Vec<ProjectedTeam> = Vec::with_capacity(projections.len());
     for p in &projections {
         let baseline = baseline_map.get(&p.team_id).copied();
         let p_return = mean_return_probability(p, &mock_by_name);
-        let Some(row) = predict_team(p, &state.predictor, baseline, p_return) else {
+        let Some(row) = predict_team(p, &state.predictor, baseline, p_return, &projected_cam)
+        else {
             continue;
         };
         rows.push(row);
@@ -299,11 +324,12 @@ fn predict_team(
     predictor: &Predictor,
     baseline: Option<f32>,
     p_return: f32,
+    projected_cam: &std::collections::HashMap<Uuid, f64>,
 ) -> Option<ProjectedTeam> {
     // Recruits count toward the qualifying-size gate: a returners-thin
     // team with a strong freshman class (e.g. Duke with 4 incoming
-    // 5-stars) is no longer "too thin to project". The roster model
-    // sees them via build_roster_features just like returners.
+    // 5-stars) is no longer "too thin to project". The Phase B model
+    // sees them via build_roster_impact_features just like returners.
     let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
 
     // Per-tier counts for the UI breakdown chip.
@@ -377,23 +403,25 @@ fn predict_team(
         return Some(base(None, None, true));
     }
 
-    // Re-cast each scenario's materialized roster as a realistic
-    // cam_v3-ranked rotation before feature extraction. Without this
-    // the model sees frozen prior-season minutes that don't sum to a
-    // real team (see `project_rotation`).
-    let floor_roster = project_rotation(p.for_scenario(DraftScenario::Floor));
-    let ceiling_roster = project_rotation(p.for_scenario(DraftScenario::Ceiling));
-    let floor_feats = build_roster_features(&floor_roster);
-    let ceiling_feats = build_roster_features(&ceiling_roster);
-
-    let floor_raw = match predictor.predict_adj_em(&floor_feats) {
+    // Score each scenario with the Phase B impact-aggregation model.
+    // Overwrite each returner / arrival's `cam_v3` with the trajectory
+    // model's projection (recruits already carry the freshman model's
+    // value from `synthesize_freshman_row`); `build_roster_impact_features`
+    // then does its own cam_v3-ranked canonical-MPG rotation
+    // normalization — no separate `project_rotation` pass needed.
+    let score = |scenario| {
+        let mut roster = p.for_scenario(scenario);
+        apply_projected_cam_v3(&mut roster, projected_cam);
+        predictor.predict_roster_impact(&build_roster_impact_features(&roster))
+    };
+    let floor_raw = match score(DraftScenario::Floor) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(team = %p.team_name, error = ?e, "floor predict failed");
             return None;
         }
     };
-    let ceiling_raw = match predictor.predict_adj_em(&ceiling_feats) {
+    let ceiling_raw = match score(DraftScenario::Ceiling) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(team = %p.team_name, error = ?e, "ceiling predict failed");
@@ -401,10 +429,10 @@ fn predict_team(
         }
     };
 
-    // Bias-correct and baseline-shrink both bounds. The band shrinks
-    // in width by `(1 - SHRINK_WEIGHT)` but stays internally
-    // consistent (ceiling ≥ floor preserved for non-anomaly teams;
-    // negative-spread anomalies stay negative-spread).
+    // Baseline-shrink both bounds. The band shrinks in width by
+    // `(1 - SHRINK_WEIGHT)` but stays internally consistent (ceiling ≥
+    // floor preserved for non-anomaly teams; negative-spread anomalies
+    // stay negative-spread).
     Some(base(
         Some(shrink(floor_raw, baseline)),
         Some(shrink(ceiling_raw, baseline)),
@@ -526,20 +554,6 @@ async fn projection_team_detail(
     // informational `?`-row chips further down.
     let mock_by_name = load_mock_by_name(base_season);
     let p_return = mean_return_probability(&projection, &mock_by_name);
-
-    // `predict_team` returns None only when the ONNX session errors —
-    // the too-thin gate still returns Some with null bounds. The list
-    // route skips None rows (`continue`); a single-team detail page
-    // can't skip, so surface it as 500 rather than handing the
-    // frontend a `projection: null` it isn't typed for.
-    let Some(row) = predict_team(&projection, &state.predictor, baseline, p_return) else {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": format!("inference failed for team {resolved_id}")
-            })),
-        ));
-    };
 
     // Name lookup for the returning + arrival player_ids. PlayerRow is
     // stat-only (matches the roster model's input shape); names live on
@@ -717,6 +731,37 @@ async fn projection_team_detail(
             }
         }
         acc
+    };
+
+    // Phase B scoring input: trajectory means for returners / arrivals
+    // (recruits already carry the freshman model's value on their
+    // synthesized PlayerRow). Reuses the OOF-first `traj_predictions`
+    // computed just above rather than re-fetching — the detail route
+    // needs the full band for display anyway, and `predict_team` only
+    // needs the mean.
+    let projected_cam: std::collections::HashMap<Uuid, f64> = traj_predictions
+        .iter()
+        .map(|(pid, pred)| (*pid, pred.mean as f64))
+        .collect();
+
+    // `predict_team` returns None only when the ONNX session errors —
+    // the too-thin gate still returns Some with null bounds. The list
+    // route skips None rows (`continue`); a single-team detail page
+    // can't skip, so surface it as 500 rather than handing the
+    // frontend a `projection: null` it isn't typed for.
+    let Some(row) = predict_team(
+        &projection,
+        &state.predictor,
+        baseline,
+        p_return,
+        &projected_cam,
+    ) else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("inference failed for team {resolved_id}")
+            })),
+        ));
     };
 
     // Serialize each cohort with names + per-player projections. `cam_v3`

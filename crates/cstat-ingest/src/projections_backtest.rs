@@ -11,15 +11,17 @@
 //!
 //! Three predictions per team, all measured against the same actual:
 //!  - **Phase B** — `predict_roster_impact` on the projected-cam_v3 roster.
-//!  - **Phase A** — the shipped box-score pipeline: `project_rotation` →
-//!    `build_roster_features` → `predict_adj_em`, blended
-//!    `0.80·baseline + 0.20·raw + 2.0` (the constants in
-//!    `routes/projections.rs`).
+//!  - **Phase A** — the *former* box-score pipeline (what the route
+//!    shipped before Phase B): `project_rotation` → `build_roster_features`
+//!    → `predict_adj_em`, blended `0.80·baseline + 0.20·raw + 2.0`. Kept
+//!    here as a frozen comparison baseline; the live route has since
+//!    moved to Phase B.
 //!  - **baseline-persistence** — target AdjEM ≈ base-season AdjEM.
 //!
 //! Acceptance (ROADMAP §5b): Phase B should beat or match Phase A while
-//! being more principled — ideally with a near-zero raw bias, which is
-//! what would let PR 2 retire the `PROJECTION_OFFSET` hack.
+//! being more principled. The PR 2 recalibration the blend sweep informs
+//! shipped — the live route now blends `0.55·baseline + 0.45·raw` with
+//! no offset.
 //!
 //! Honesty caveats (printed with the report):
 //!  - `roster_impact_model.onnx` is trained on every season including
@@ -50,9 +52,11 @@ use cstat_core::roster_projection::{
 /// `MIN_QUALIFYING_FOR_PROJECTION` in `routes/projections.rs`.
 const MIN_QUALIFYING: usize = 7;
 
-/// Phase A blend constants — mirror `routes/projections.rs::{SHRINK_WEIGHT,
-/// PROJECTION_OFFSET}`. Duplicated (not imported) because they're private
-/// to the API crate; kept in sync by this comment.
+/// Phase A blend constants — the *frozen* old box-score pipeline
+/// (0.80 baseline weight + 2.0 offset), held as a fixed comparison
+/// baseline. The live route moved to the Phase B blend (0.55 / 0.0) in
+/// PR 2; these deliberately do NOT track `routes/projections.rs` — they
+/// pin what "Phase A" meant so the backtest keeps a stable reference.
 const PHASE_A_SHRINK_WEIGHT: f32 = 0.80;
 const PHASE_A_OFFSET: f32 = 2.0;
 
