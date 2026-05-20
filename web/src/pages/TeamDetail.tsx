@@ -1361,7 +1361,11 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
             className={`px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`}
             title={
               r.projected_campom_lower != null && r.projected_campom_upper != null
-                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Tier ${r.tier.slice(1).toUpperCase()} cohort — wide bands on T1/T2 reflect elite-tail uncertainty.`
+                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Tier ${r.tier.slice(1).toUpperCase()} cohort.${
+                    r.tier === 't1' || r.tier === 't2'
+                      ? ' Wide bands on T1/T2 reflect elite-tail uncertainty.'
+                      : ''
+                  }`
                 : `Tier ${r.tier.slice(1).toUpperCase()} mean projected CamPom v3 (batch inference fell back to tier-mean synthesis — no per-player band available).`
             }
           >

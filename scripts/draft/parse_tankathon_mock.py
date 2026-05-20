@@ -30,7 +30,7 @@ from typing import List, Optional
 POS_SCHOOL_RE = re.compile(r"^[A-Z/]+\s*\|\s*.+$")
 TEAM_ON_PICK_LINE_RE = re.compile(r"^(\d+)\t([A-Z]{2,4})\t?$")
 INT_LINE_RE = re.compile(r"^\d+$")
-TEAM_CODE_RE = re.compile(r"^[A-Z]{2,4}\t?$")
+TEAM_CODE_RE = re.compile(r"^[A-Z]{2,4}$")
 
 
 def parse(raw: str) -> List[dict]:
@@ -84,7 +84,7 @@ def parse_block(block: List[str]) -> Optional[dict]:
             team = m.group(2)
             break
         if TEAM_CODE_RE.match(ln) and team is None:
-            team = ln.rstrip("\t").strip()
+            team = ln
             continue
         if INT_LINE_RE.match(ln) and team is not None:
             # Always overwrite — last integer wins, so the topmost

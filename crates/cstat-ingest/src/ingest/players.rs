@@ -101,10 +101,17 @@ async fn upsert_player(
         None => return Ok(false),
     };
 
+    // Same defensive chain as `upsert_team::pick_team_name` — NatStat
+    // returns `"name": {}` (an empty object) on some records, which
+    // makes `Value::as_str()` return None. Without the per-field
+    // `as_str()` guard the chain short-circuits on the first key
+    // present (even when its value isn't a string) and lands at the
+    // "Unknown" fallback. Players with `&` in the name on the teams
+    // side were the canary; preempt the same shape on players.
     let name = player
         .get("name")
-        .or_else(|| player.get("full_name"))
         .and_then(|n| n.as_str())
+        .or_else(|| player.get("full_name").and_then(|n| n.as_str()))
         .unwrap_or("Unknown");
 
     let position = player

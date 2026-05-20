@@ -74,10 +74,10 @@ pub enum DepartureReason {
     /// `teams` vec the rest of compose_all_projections uses, which is
     /// loaded for `base_season` (N), not the projection target (N+1).
     /// The frontend links `/teams/{destination_team_id}?season={year}`;
-    /// when N+1 ≠ base_season, the route's `resolve_team_id_for_season`
-    /// re-maps via `natstat_id`, so the link still lands on the right
-    /// team — just with one extra resolution hop. None when the
-    /// destination string didn't match any base-season D-I team (non-D1
+    /// the route's `resolve_team_id_for_season` re-maps via `natstat_id`
+    /// to the N+1 team, so the link still lands on the right team —
+    /// just with one extra resolution hop. None when the destination
+    /// string didn't match any base-season D-I team (non-D1
     /// destination, name miss).
     Transferred {
         player_id: Uuid,
