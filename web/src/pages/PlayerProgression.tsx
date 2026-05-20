@@ -264,9 +264,11 @@ export default function PlayerProgression() {
                   return [v.toFixed(2), name];
                 }}
               />
-              {/* D-I average reference. CamPom v3 is centered such that 0 =
-                  league-average by construction; matches PlayerDetail's
-                  dashed-line treatment of avg-PPG / avg-GameScore. */}
+              {/* D-I average reference at y=0. CamPom v3 is centered such
+                  that 0 = league-average by construction; the Y-domain
+                  clamps already include 0 so the line is always
+                  visible. Dashed slate styling matches PlayerDetail's
+                  avg-PPG / avg-GameScore reference treatment. */}
               <ReferenceLine
                 y={0}
                 stroke="#94a3b8"

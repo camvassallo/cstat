@@ -69,11 +69,16 @@ pub enum DepartureReason {
     /// `class_year = 'Sr'` at season N → graduating.
     GraduatedSenior { player_id: Uuid, name: String },
     /// In the `transfers` table for portal class N, source = this team.
-    /// `destination_team_id` carries the projected-season UUID of the
-    /// destination team (resolved via the same name-matching helper as the
-    /// arrivals/incoming path) so the UI can link "→ Duke" straight to
-    /// `/projections/{year}/teams/{destination_team_id}`. None when the
-    /// destination string didn't resolve (non-D1 destination, name miss).
+    /// `destination_team_id` carries the **base-season** UUID of the
+    /// destination team — `resolve_team_id` runs against the same
+    /// `teams` vec the rest of compose_all_projections uses, which is
+    /// loaded for `base_season` (N), not the projection target (N+1).
+    /// The frontend links `/teams/{destination_team_id}?season={year}`;
+    /// when N+1 ≠ base_season, the route's `resolve_team_id_for_season`
+    /// re-maps via `natstat_id`, so the link still lands on the right
+    /// team — just with one extra resolution hop. None when the
+    /// destination string didn't match any base-season D-I team (non-D1
+    /// destination, name miss).
     Transferred {
         player_id: Uuid,
         name: String,
@@ -486,11 +491,12 @@ pub struct MockDraft {
     pub picks: Vec<MockPick>,
 }
 
-/// Load + parse `data/draft/{year}_mock_draft.json`. Returns an empty
-/// MockDraft on missing file so the projection route can degrade
-/// gracefully when the snapshot isn't available — same pattern as
-/// `load_draft_entrants`, where missing data is logged and the
-/// projection proceeds without it. Phase 1 use is purely additive UI.
+/// Load + parse `data/draft/{year}_mock_draft.json`. Returns Err on
+/// missing or malformed file — callers should `.map(...).unwrap_or_default()`
+/// the lookup hashmap derived from the result, not the MockDraft itself,
+/// to degrade gracefully when the snapshot isn't available. Same pattern
+/// as `load_draft_entrants`. Phase 1 use is purely additive UI; the
+/// projection still composes correctly without a mock-draft file.
 pub fn load_mock_draft(path: &Path) -> Result<MockDraft, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
     let parsed: MockDraft = serde_json::from_str(&content)

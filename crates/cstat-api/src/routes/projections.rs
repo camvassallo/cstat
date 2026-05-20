@@ -703,6 +703,18 @@ async fn projection_team_detail(
     // base_season slices of player_archetypes / player_season_stats /
     // torvik_player_stats in one shot, then weave the result back into
     // each departure's JSON.
+    //
+    // Contract: the player_ids in `projection.departures` are *base_season*
+    // pids — for graduating seniors and draft entrants this is obvious
+    // (they only exist in base_season), and for outbound transfers the
+    // resolver in `roster_projection.rs` keys on
+    // `transfers.cstat_player_id` which is resolved against the *source*
+    // (base_season) roster, not the destination. The base_season-bound
+    // join below depends on that. If the transfer ingest ever starts
+    // resolving cstat_player_id against the destination season, this
+    // query silently returns all-NULL meta and the UI degrades to plain
+    // text — pinned via the comment so the breakage surfaces here, not
+    // in a mysterious "where did the archetype chip go" bug report.
     let departure_pids: Vec<Uuid> = projection
         .departures
         .iter()

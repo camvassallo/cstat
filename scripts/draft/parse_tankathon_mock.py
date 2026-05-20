@@ -39,10 +39,11 @@ def parse(raw: str) -> List[dict]:
     block: List[str] = []
     for line in lines:
         block.append(line)
-        if "\tpts" in line.replace(" pts", "\tpts"):  # belt-and-braces match
-            picks.append(parse_block(block))
-            block = []
-        elif " pts\t" in line:
+        # Stats line shape: "26.4 pts\t7.1 reb\t3.8 ast\t…" — the only line
+        # in a block containing " pts\t". Use it as the block terminator
+        # since pick blocks vary in length (some carry a change-indicator
+        # line, some don't, and pick #10+ packs pick+team onto one line).
+        if " pts\t" in line:
             picks.append(parse_block(block))
             block = []
     return [p for p in picks if p is not None]

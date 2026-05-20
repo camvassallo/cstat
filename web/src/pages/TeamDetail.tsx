@@ -1065,9 +1065,12 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 text-xs tabular-nums">
+                    <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
+                      {u.mpg != null && (
+                        <span title="Prior-season MPG">{u.mpg.toFixed(0)}'</span>
+                      )}
                       {u.projected_campom_mean != null ? (
-                        <span className="flex items-center gap-1.5 text-gray-400">
+                        <span className="flex items-center gap-1.5">
                           {u.cam_v3 != null && (
                             <>
                               <span

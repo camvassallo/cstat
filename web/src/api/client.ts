@@ -573,8 +573,11 @@ export interface ProjectedDeparture {
   projected_campom_upper?: number | null;
   /// Transfer destination institution name (text label from 247).
   destination?: string | null;
-  /// Projected-season UUID of the destination team. Set when destination
-  /// resolves to a D-I program in the target year — null for non-D1 dests.
+  /// Base-season UUID of the destination team — set when destination
+  /// resolved to a D-I program in base_season, null for non-D1 dests.
+  /// The frontend uses this for `/teams/{id}?season={year}`; the route
+  /// transparently re-resolves to the projected-season team via
+  /// `natstat_id` so the cross-season hop is a single round-trip.
   destination_team_id?: string | null;
 }
 export interface ProjectedUncertain {

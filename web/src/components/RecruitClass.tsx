@@ -77,7 +77,10 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
     {
       headerName: 'Rank',
       field: 'campom_rank',
-      width: 70,
+      // minWidth (not width) so the grid's `fitCellContents` autoSize
+      // strategy can grow this column when the header demands more —
+      // a hard `width: 70` would clip "Rank" on narrow viewports.
+      minWidth: 70,
       pinned: 'left',
       headerTooltip:
         "Our rank among 247-ranked recruits, sorted by projected freshman CamPom. Forward-looking — favors recruits the freshman-impact model expects to be more productive in year one, not just who 247 has ranked highest. '—' for unranked-by-247 recruits or rare projection failures.",
