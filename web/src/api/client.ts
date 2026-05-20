@@ -500,6 +500,10 @@ export interface ProjectedTeam {
   /// just-completed season). Used as the shrinkage anchor and the
   /// reference for the 'Δ vs last' column.
   baseline_adj_em: number | null;
+  /// Team's *actual* AdjEM for the projected season itself. Null for the
+  /// live/upcoming forecast year (not played yet). Drives the historical
+  /// view's "Projected vs Actual" accuracy column.
+  actual_adj_em: number | null;
 }
 
 /// One projected team detail row, returned by

@@ -1,13 +1,31 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams, Navigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchProjections, type ProjectedTeam } from '../api/client';
 import { gridTheme } from '../theme';
 import { SeasonLink } from '../components/SeasonLink';
+import { AVAILABLE_SEASONS_FALLBACK } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 
+// The upcoming (not-yet-played) season — the default projection target.
+// Projections compose from `year - 1`, so the upcoming year is
+// newest-played + 1; the backend route floors at 2025.
+const UPCOMING_YEAR = AVAILABLE_SEASONS_FALLBACK[0] + 1;
+
+// Every projectable year, newest first: the upcoming forecast plus the
+// played seasons we can show a projected-vs-actual backtest for.
+const PROJECTABLE_YEARS: number[] = (() => {
+  const ys: number[] = [];
+  for (let y = UPCOMING_YEAR; y >= 2025; y--) ys.push(y);
+  return ys;
+})();
+
+// cstat-season year → "2026-27"-style college-season label.
+const seasonLabel = (year: number) => `${year - 1}-${String(year).slice(2)}`;
+
 // AdjEM tier coloring (tuned for D-I 2025 distribution where teams
-// range ~-30 to +45). Reused for floor/ceiling/midpoint chips.
+// range ~-30 to +45). Reused for floor/ceiling/midpoint/actual chips.
 function adjEmTone(v: number): string {
   if (v >= 25) return 'bg-emerald-900/50 border-emerald-700 text-emerald-200';
   if (v >= 15) return 'bg-emerald-950/40 border-emerald-800 text-emerald-300';
@@ -18,14 +36,29 @@ function adjEmTone(v: number): string {
 }
 
 const adjEmChip = (v: number | null) => {
-  if (v == null)
-    return <span className="text-slate-600 text-xs">—</span>;
+  if (v == null) return <span className="text-slate-600 text-xs">—</span>;
   return (
     <span className={`px-1.5 rounded border text-xs font-semibold ${adjEmTone(v)}`}>
       {v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1)}
     </span>
   );
 };
+
+// AG Grid sorts ascending then reverses for descending; to pin nulls
+// (thin rosters / missing actuals) to the visual bottom regardless of
+// direction, flip the null result by `isDescending`.
+function nullsLast(
+  a: number | null,
+  b: number | null,
+  _na: unknown,
+  _nb: unknown,
+  isDescending: boolean,
+): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return isDescending ? -1 : 1;
+  if (b == null) return isDescending ? 1 : -1;
+  return a - b;
+}
 
 // Render the floor → ceiling band as a small horizontal bar. Width
 // proportional to (ceiling - floor); flagged with a tooltip when the
@@ -37,7 +70,7 @@ function bandRenderer(p: { data?: ProjectedTeam }) {
   if (!t) return null;
   if (t.too_thin) {
     return (
-      <span className="text-slate-500 text-xs italic" title="Roster too thin to project — <7 qualifying players (returning + arrivals + recruits). The model over-weights rate stats when too few players carry them. See honesty banner.">
+      <span className="text-slate-500 text-xs italic" title="Roster too thin to project — <7 qualifying players (returning + arrivals + recruits). See honesty banner.">
         thin roster
       </span>
     );
@@ -47,7 +80,6 @@ function bandRenderer(p: { data?: ProjectedTeam }) {
   if (f == null || c == null) return <span className="text-slate-600">—</span>;
   const spread = c - f;
   const isNegative = spread < -0.1;
-  // Render a thin range bar. Spread <= 0.1 collapses to a single dot.
   const collapsed = Math.abs(spread) < 0.1;
   return (
     <div
@@ -71,9 +103,59 @@ function bandRenderer(p: { data?: ProjectedTeam }) {
   );
 }
 
-function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
+// `showActual` adds the Actual + projection-error columns — populated
+// only for past seasons (the live forecast year has no actual yet).
+function buildColumns(
+  isMobile: boolean,
+  year: number,
+  showActual: boolean,
+): ColDef<ProjectedTeam>[] {
   const flexCol = (flex: number, min: number) =>
     isMobile ? { width: min } : { flex, minWidth: min };
+
+  const actualColumns: ColDef<ProjectedTeam>[] = showActual
+    ? [
+        {
+          headerName: 'Actual',
+          field: 'actual_adj_em',
+          ...flexCol(1, 90),
+          headerTooltip: `The team's actual AdjEM for ${seasonLabel(year)} — what really happened. Shown for completed seasons so the projection can be graded.`,
+          comparator: nullsLast,
+          cellRenderer: (p: { value: number | null }) => adjEmChip(p.value),
+        },
+        {
+          headerName: 'Proj − Act',
+          colId: 'proj_error',
+          ...flexCol(1, 100),
+          headerTooltip:
+            'Projected midpoint minus actual AdjEM — the forecast error. Positive = we over-projected, negative = under-projected. Near zero is a good call.',
+          valueGetter: (p) => {
+            const t = p.data;
+            if (!t || t.midpoint_adj_em == null || t.actual_adj_em == null) return null;
+            return t.midpoint_adj_em - t.actual_adj_em;
+          },
+          comparator: nullsLast,
+          cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
+            if (p.value == null) return <span className="text-slate-600 text-xs">—</span>;
+            const v = p.value;
+            const mag = Math.abs(v);
+            const tone =
+              mag <= 3 ? 'text-emerald-300' : mag <= 7 ? 'text-amber-300' : 'text-rose-300';
+            const t = p.data;
+            const title =
+              t && t.midpoint_adj_em != null && t.actual_adj_em != null
+                ? `Projected ${t.midpoint_adj_em.toFixed(1)} vs actual ${t.actual_adj_em.toFixed(1)}`
+                : undefined;
+            return (
+              <span className={`text-xs font-mono font-semibold ${tone}`} title={title}>
+                {v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1)}
+              </span>
+            );
+          },
+        },
+      ]
+    : [];
+
   return [
     {
       headerName: 'Rank',
@@ -82,9 +164,7 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       pinned: 'left',
       sortable: false,
       valueGetter: (p) =>
-        p.node && typeof p.node.rowIndex === 'number'
-          ? p.node.rowIndex + 1
-          : null,
+        p.node && typeof p.node.rowIndex === 'number' ? p.node.rowIndex + 1 : null,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         if (p.value == null || p.data?.too_thin)
           return <span className="text-slate-600">—</span>;
@@ -97,12 +177,12 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       ...flexCol(3, 200),
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: ProjectedTeam }) => (
-        // Link to the projected 2027 team page so users land on the
-        // forward-looking roster view (returners + transfers +
-        // recruits), not the played-2026 page. `season=2027` triggers
-        // TeamDetail's projection-mode branch.
+        // For the upcoming forecast year, `?season={year}` lands on
+        // TeamDetail's projection-mode branch (the season hasn't been
+        // played). For a past season it lands on the actual played
+        // team page — "here's how that roster really did".
         <SeasonLink
-          to={`/teams/${p.data?.team_id}?season=2027`}
+          to={`/teams/${p.data?.team_id}?season=${year}`}
           onClick={(e) => e.stopPropagation()}
           className="text-blue-400 hover:underline"
         >
@@ -116,23 +196,8 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       ...flexCol(1, 100),
       sort: 'desc',
       headerTooltip:
-        'Probability-weighted blend of the floor and ceiling bounds (by the declared-draft cohort\'s mock-draft-implied odds of returning), then blended 55/45 with last year\'s actual AdjEM (45% the Phase B impact model\'s projected-roster output, 55% last year).',
-      // AG Grid's sort engine applies the comparator in ascending order
-      // and then reverses for descending. So to anchor nulls (thin
-      // rosters) to the visual bottom regardless of direction, we flip
-      // the null-vs-non-null result based on `isDescending`.
-      comparator: (
-        a: number | null,
-        b: number | null,
-        _na: unknown,
-        _nb: unknown,
-        isDescending: boolean,
-      ) => {
-        if (a == null && b == null) return 0;
-        if (a == null) return isDescending ? -1 : 1;
-        if (b == null) return isDescending ? 1 : -1;
-        return a - b;
-      },
+        "Probability-weighted blend of the floor and ceiling bounds (by the declared-draft cohort's mock-draft-implied odds of returning), then blended 55/45 with last year's actual AdjEM (45% the Phase B impact model's projected-roster output, 55% last year).",
+      comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         const chip = adjEmChip(p.value);
         const baseline = p.data?.baseline_adj_em;
@@ -146,29 +211,19 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
         );
       },
     },
+    ...actualColumns,
     {
       headerName: 'Δ vs last',
       colId: 'delta_baseline',
       ...flexCol(1, 90),
       headerTooltip:
-        'Projected midpoint minus last season\'s actual AdjEM. Positive (green) = the model thinks this roster improves on last year. Negative (red) = regression. Null when we lack a baseline (new D-I) or the projection is gated.',
+        "Projected midpoint minus last season's actual AdjEM. Positive (green) = the model thinks this roster improves on last year. Negative (red) = regression. Null when we lack a baseline (new D-I) or the projection is gated.",
       valueGetter: (p) => {
         const t = p.data;
         if (!t || t.midpoint_adj_em == null || t.baseline_adj_em == null) return null;
         return t.midpoint_adj_em - t.baseline_adj_em;
       },
-      comparator: (
-        a: number | null,
-        b: number | null,
-        _na: unknown,
-        _nb: unknown,
-        isDescending: boolean,
-      ) => {
-        if (a == null && b == null) return 0;
-        if (a == null) return isDescending ? -1 : 1;
-        if (b == null) return isDescending ? 1 : -1;
-        return a - b;
-      },
+      comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         if (p.value == null) return <span className="text-slate-600 text-xs">—</span>;
         const v = p.value;
@@ -227,10 +282,7 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       field: 'recruits_count',
       ...flexCol(2, 140),
       headerTooltip:
-        "Incoming HS recruits committed to this team. Per-tier breakdown by cstat's freshman-impact model: each recruit is reassigned to T1 (≈+9 projected CamPom) / T2 (≈+2.4) / T3 (≈+0.7) / T4 (≈-0.6) based on which tier centroid is closest to their model-predicted freshman CamPom — so a 247-T3 recruit at a top-tier program with a strong peer class can move up to T2, and a 247-T1 at a thin program can move down. The synthesised PlayerRow uses the chosen tier's per-game profile; the recruit's continuous prediction surfaces on the Recruits tab.",
-      // Sort by count of T1 + T2 commits (the impactful end of the
-      // class) rather than total count — Florida with 0 commits should
-      // sort below a team with 1 elite recruit and 4 walk-ons.
+        "Incoming HS recruits committed to this team. Per-tier breakdown by cstat's freshman-impact model: each recruit is reassigned to T1 (≈+9 projected CamPom) / T2 (≈+2.4) / T3 (≈+0.7) / T4 (≈-0.6) based on which tier centroid is closest to their model-predicted freshman CamPom. The recruit's continuous prediction surfaces on the Recruits tab.",
       comparator: (_a, _b, na, nb) => {
         const a = na.data as ProjectedTeam | undefined;
         const b = nb.data as ProjectedTeam | undefined;
@@ -262,12 +314,8 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
                 {by.t2}×T2
               </span>
             )}
-            {by.t3 > 0 && (
-              <span className="text-slate-400">{by.t3}×T3</span>
-            )}
-            {by.t4 > 0 && (
-              <span className="text-slate-500">{by.t4}×T4</span>
-            )}
+            {by.t3 > 0 && <span className="text-slate-400">{by.t3}×T3</span>}
+            {by.t4 > 0 && <span className="text-slate-500">{by.t4}×T4</span>}
           </span>
         );
       },
@@ -297,16 +345,32 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
   ];
 }
 
-export default function Projected2027() {
+/// Routing shim — validate the `:year` param before mounting the data
+/// view, so an out-of-range URL redirects instead of 400-ing the API.
+/// Keeps the hook-bearing `ProjectionView` mounted at a stable position.
+export default function Projected() {
+  const { year: yearParam } = useParams<{ year: string }>();
+  const year = Number(yearParam);
+  if (!PROJECTABLE_YEARS.includes(year)) {
+    return <Navigate to={`/projected/${UPCOMING_YEAR}`} replace />;
+  }
+  // `key={year}` remounts the view on a year switch, so its state
+  // (teams / error) resets to the loading state without an in-effect
+  // setState reset.
+  return <ProjectionView key={year} year={year} />;
+}
+
+function ProjectionView({ year }: { year: number }) {
   const [teams, setTeams] = useState<ProjectedTeam[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [baseSeason, setBaseSeason] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
 
   useEffect(() => {
     let canceled = false;
-    fetchProjections(2027)
+    fetchProjections(year)
       .then((r) => {
         if (canceled) return;
         setTeams(r.teams);
@@ -318,9 +382,18 @@ export default function Projected2027() {
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [year]);
 
-  const columns = useMemo(() => buildColumns(isMobile), [isMobile]);
+  // Past seasons carry actuals; the live forecast year doesn't.
+  const hasActuals = useMemo(
+    () => teams?.some((t) => t.actual_adj_em != null) ?? false,
+    [teams],
+  );
+
+  const columns = useMemo(
+    () => buildColumns(isMobile, year, hasActuals),
+    [isMobile, year, hasActuals],
+  );
 
   const filtered = useMemo(() => {
     if (!teams) return null;
@@ -333,11 +406,22 @@ export default function Projected2027() {
     );
   }, [teams, search]);
 
+  // Forecast accuracy: midpoint vs actual over teams that have both.
+  // `null` for the live year (no actuals) — the banner is then hidden.
+  const accuracy = useMemo(() => {
+    if (!teams) return null;
+    const errs = teams
+      .filter((t) => t.midpoint_adj_em != null && t.actual_adj_em != null)
+      .map((t) => (t.midpoint_adj_em as number) - (t.actual_adj_em as number));
+    if (errs.length === 0) return null;
+    const mae = errs.reduce((s, e) => s + Math.abs(e), 0) / errs.length;
+    const bias = errs.reduce((s, e) => s + e, 0) / errs.length;
+    return { n: errs.length, mae, bias };
+  }, [teams]);
+
   if (error) {
     return (
-      <div className="p-4 text-rose-300">
-        Failed to load projections: {error}
-      </div>
+      <div className="p-4 text-rose-300">Failed to load projections: {error}</div>
     );
   }
 
@@ -346,8 +430,33 @@ export default function Projected2027() {
 
   return (
     <div className="p-4">
-      <h1 className="text-2xl font-bold mb-2">Projected 2026-27 (v3)</h1>
-      <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 mb-4 leading-relaxed">
+      <div className="flex flex-wrap items-center gap-3 mb-2">
+        <h1 className="text-2xl font-bold">Projected {seasonLabel(year)}</h1>
+        {/* Year selector — switch between the upcoming forecast and the
+            played seasons we can grade it against. */}
+        <div className="inline-flex rounded border border-gray-700 overflow-hidden">
+          {PROJECTABLE_YEARS.map((y) => (
+            <button
+              key={y}
+              type="button"
+              onClick={() => navigate(`/projected/${y}`)}
+              className={`px-2.5 py-1 text-xs font-semibold ${
+                y === year
+                  ? 'bg-blue-900/60 text-blue-200'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+              }`}
+              title={
+                y === UPCOMING_YEAR
+                  ? `${seasonLabel(y)} — upcoming forecast`
+                  : `${seasonLabel(y)} — projected vs actual`
+              }
+            >
+              {seasonLabel(y)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 mb-3 leading-relaxed">
         <strong className="text-amber-300">v3 honesty caveats:</strong>{' '}
         Holistic projection: returners (minus seniors, outbound portal,
         firm draft departures, declared-draft `?` cohort) + incoming
@@ -370,6 +479,19 @@ export default function Projected2027() {
         &lt;7 qualifying players (returning + arrivals + recruits) are
         flagged "thin roster" and not scored.
       </div>
+      {accuracy && (
+        <div className="rounded border border-emerald-800/40 bg-emerald-950/20 text-emerald-200 text-xs p-3 mb-4 leading-relaxed">
+          <strong className="text-emerald-300">Backtest receipt:</strong>{' '}
+          this is the forecast we'd have made going into {seasonLabel(year)},
+          graded against what actually happened. Across {accuracy.n} teams,
+          mean absolute error <strong>{accuracy.mae.toFixed(1)} AdjEM</strong>,
+          mean bias {accuracy.bias >= 0 ? '+' : ''}
+          {accuracy.bias.toFixed(1)} (
+          {accuracy.bias >= 0 ? 'slightly over-projected' : 'slightly under-projected'}
+          ). See the <strong>Actual</strong> and <strong>Proj − Act</strong>{' '}
+          columns per team.
+        </div>
+      )}
       <div className="flex items-center gap-3 mb-3">
         <input
           type="text"
@@ -379,9 +501,9 @@ export default function Projected2027() {
           className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-64"
         />
         <span className="text-xs text-gray-500">
-          {scoredCount} teams scored · {thinCount} flagged thin roster ·{' '}
-          based on 2025-26 → projecting 2026-27
-          {baseSeason && baseSeason !== 2026 && ` (base season ${baseSeason})`}
+          {scoredCount} teams scored · {thinCount} flagged thin roster
+          {baseSeason != null &&
+            ` · based on ${seasonLabel(baseSeason)} → projecting ${seasonLabel(year)}`}
         </span>
       </div>
       <div

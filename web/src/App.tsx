@@ -8,7 +8,7 @@ import PlayerProgression from './pages/PlayerProgression';
 import PlayerCompare from './pages/PlayerCompare';
 import Predict from './pages/Predict';
 import Archetypes from './pages/Archetypes';
-import Projected2027 from './pages/Projected2027';
+import Projected from './pages/Projected';
 
 export default function App() {
   return (
@@ -23,7 +23,7 @@ export default function App() {
           <Route path="/players/:id/progression" element={<PlayerProgression />} />
           <Route path="/predict" element={<Predict />} />
           <Route path="/archetypes" element={<Archetypes />} />
-          <Route path="/projected/2027" element={<Projected2027 />} />
+          <Route path="/projected/:year" element={<Projected />} />
         </Route>
       </Routes>
     </BrowserRouter>
