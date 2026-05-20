@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Version Control
+
+**Leave all git operations to the user.** Do not run `git commit`, `git branch`, `git checkout`/`switch`, `git merge`, `git rebase`, `git push`, `git pull`, `git stash`, or `git reset` — the user manages version control themselves. Read-only inspection (`git status`, `git log`, `git diff`, `git show`) is fine. Perform a git mutation **only** when the user explicitly asks for it in that same message; a general "work on this PR" is not such a request. When work is ready to commit, finish the code changes and let the user handle staging, committing, and pushing.
+
 ## Build & Development Commands
 
 ```bash
