@@ -178,6 +178,23 @@ fn mean_return_probability(
     sum / p.uncertain.len() as f32
 }
 
+/// Load the Tankathon mock-draft snapshot for `base_season` into a
+/// `normalized-name → (pick, team)` map. Best-effort: a missing or
+/// malformed file yields an empty map and callers degrade gracefully
+/// (no `?`-row chips; the floor/ceiling midpoint falls back to a flat
+/// 50/50 average).
+fn load_mock_by_name(base_season: i32) -> std::collections::HashMap<String, (i32, String)> {
+    let mock_path = PathBuf::from("data/draft").join(format!("{base_season}_mock_draft.json"));
+    load_mock_draft(&mock_path)
+        .map(|md| {
+            md.picks
+                .into_iter()
+                .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn projection_list(
     State(state): State<Arc<AppState>>,
     Path(year): Path<i32>,
@@ -239,18 +256,7 @@ async fn projection_list(
 
     // Tankathon mock-draft snapshot — used to probability-weight each
     // team's floor/ceiling midpoint (see `mean_return_probability`).
-    // Best-effort: a missing file yields an empty map and the midpoint
-    // falls back to a flat 50/50 floor/ceiling average.
-    let mock_path = PathBuf::from("data/draft").join(format!("{}_mock_draft.json", base_season));
-    let mock_by_name: std::collections::HashMap<String, (i32, String)> =
-        load_mock_draft(&mock_path)
-            .map(|md| {
-                md.picks
-                    .into_iter()
-                    .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
-                    .collect()
-            })
-            .unwrap_or_default();
+    let mock_by_name = load_mock_by_name(base_season);
 
     let mut rows: Vec<ProjectedTeam> = Vec::with_capacity(projections.len());
     for p in &projections {
@@ -372,9 +378,9 @@ fn predict_team(
     }
 
     // Re-cast each scenario's materialized roster as a realistic
-    // ~200-minute, cam_v3-ranked rotation before feature extraction.
-    // Without this the model sees frozen prior-season minutes that
-    // don't sum to a real team (see `project_rotation`).
+    // cam_v3-ranked rotation before feature extraction. Without this
+    // the model sees frozen prior-season minutes that don't sum to a
+    // real team (see `project_rotation`).
     let floor_roster = project_rotation(p.for_scenario(DraftScenario::Floor));
     let ceiling_roster = project_rotation(p.for_scenario(DraftScenario::Ceiling));
     let floor_feats = build_roster_features(&floor_roster);
@@ -517,19 +523,8 @@ async fn projection_team_detail(
 
     // Tankathon mock-draft snapshot — drives both the floor/ceiling
     // midpoint weighting (via `mean_return_probability`) and the
-    // informational `?`-row chips further down. Best-effort: a missing
-    // file yields an empty map (no chips; midpoint falls back to a
-    // flat 50/50 floor/ceiling average).
-    let mock_path = PathBuf::from("data/draft").join(format!("{}_mock_draft.json", base_season));
-    let mock_by_name: std::collections::HashMap<String, (i32, String)> =
-        load_mock_draft(&mock_path)
-            .map(|md| {
-                md.picks
-                    .into_iter()
-                    .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
-                    .collect()
-            })
-            .unwrap_or_default();
+    // informational `?`-row chips further down.
+    let mock_by_name = load_mock_by_name(base_season);
     let p_return = mean_return_probability(&projection, &mock_by_name);
 
     // `predict_team` returns None only when the ONNX session errors —

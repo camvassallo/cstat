@@ -420,7 +420,7 @@ fn scale_opt(v: &mut Option<f64>, factor: f64) {
 }
 
 /// Re-cast a projected roster (returning + arrivals + recruits, in any
-/// order) as a realistic ~200-minute rotation before feature extraction.
+/// order) as a realistic ~220-minute rotation before feature extraction.
 ///
 /// Why this exists: `compose_all_projections` carries every player's
 /// *prior* minutes — returners at last year's role, recruits at a

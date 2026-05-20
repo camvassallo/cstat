@@ -431,16 +431,6 @@ pub struct ProjectedRoster {
     /// Audit trail: who left and why. Sized for UI display, not used by
     /// inference.
     pub departures: Vec<DepartureReason>,
-    /// Fraction of the base-season team's qualified minutes still on the
-    /// roster — `Σ total_min(returning ∪ uncertain) ÷ Σ total_min(every
-    /// base-season qualified player)`. `1.0` = the whole team is back,
-    /// `0.0` = a fully turned-over roster. The API's baseline-shrinkage
-    /// step scales its weight by this: last season's AdjEM is a strong
-    /// prior for a team that returns its core and a weak one for a team
-    /// that doesn't. `0.0` when the team had no qualified base-season
-    /// minutes (shouldn't happen for a team with a `roster_by_team`
-    /// entry, but the ratio is guarded).
-    pub returning_min_share: f32,
 }
 
 impl ProjectedRoster {
@@ -1053,19 +1043,6 @@ pub async fn compose_all_projections(
         let recruits: Vec<(PlayerRow, RecruitMeta)> =
             recruits_by_team.remove(&team.id).unwrap_or_default();
 
-        // Continuity: share of the base-season team's qualified minutes
-        // still on the projected roster. `returning` + `uncertain` are
-        // last year's players who are (or may be) back; `rows` is the
-        // full base-season qualified roster. Drives baseline shrinkage.
-        let base_total_min: f64 = rows.iter().map(|(r, _)| r.total_min).sum();
-        let kept_min: f64 = returning.iter().map(|p| p.total_min).sum::<f64>()
-            + uncertain.iter().map(|(p, _)| p.total_min).sum::<f64>();
-        let returning_min_share = if base_total_min > 0.0 {
-            (kept_min / base_total_min) as f32
-        } else {
-            0.0
-        };
-
         out.push(ProjectedRoster {
             team_id: team.id,
             team_name: team.short_name.clone().unwrap_or_else(|| team.name.clone()),
@@ -1075,7 +1052,6 @@ pub async fn compose_all_projections(
             recruits,
             uncertain,
             departures,
-            returning_min_share,
         });
     }
 
@@ -1133,7 +1109,6 @@ mod tests {
             recruits: vec![],
             uncertain,
             departures: vec![],
-            returning_min_share: 0.0,
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
@@ -1190,7 +1165,6 @@ mod tests {
             recruits,
             uncertain,
             departures: vec![],
-            returning_min_share: 0.0,
         };
         // Floor: 1 returning + 1 arrival + 2 recruits = 4
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);
