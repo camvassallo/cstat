@@ -551,7 +551,9 @@ async fn projection_team_detail(
     // source row for context), and NBA-draft departures.
     for d in &projection.departures {
         let pid = match d {
-            cstat_core::roster_projection::DepartureReason::GraduatedSenior { player_id, .. }
+            cstat_core::roster_projection::DepartureReason::GraduatedSenior {
+                player_id, ..
+            }
             | cstat_core::roster_projection::DepartureReason::Transferred { player_id, .. }
             | cstat_core::roster_projection::DepartureReason::DraftGone { player_id, .. } => {
                 *player_id
@@ -719,7 +721,9 @@ async fn projection_team_detail(
         .departures
         .iter()
         .map(|d| match d {
-            cstat_core::roster_projection::DepartureReason::GraduatedSenior { player_id, .. }
+            cstat_core::roster_projection::DepartureReason::GraduatedSenior {
+                player_id, ..
+            }
             | cstat_core::roster_projection::DepartureReason::Transferred { player_id, .. }
             | cstat_core::roster_projection::DepartureReason::DraftGone { player_id, .. } => {
                 *player_id
@@ -793,10 +797,9 @@ async fn projection_team_detail(
                     destination.clone(),
                     *destination_team_id,
                 ),
-                cstat_core::roster_projection::DepartureReason::DraftGone {
-                    player_id,
-                    name,
-                } => (*player_id, "draft_gone", name.clone(), None, None),
+                cstat_core::roster_projection::DepartureReason::DraftGone { player_id, name } => {
+                    (*player_id, "draft_gone", name.clone(), None, None)
+                }
             };
             let meta = departure_meta.get(&pid);
             let (mean, lower, upper) = serialize_proj(&pid);
@@ -820,16 +823,16 @@ async fn projection_team_detail(
     // chip on each ? row). Best-effort — when the file is missing we
     // skip the chip rather than failing the route. Built once and
     // shared across every uncertain row in the response.
-    let mock_path =
-        PathBuf::from("data/draft").join(format!("{}_mock_draft.json", base_season));
-    let mock_by_name: std::collections::HashMap<String, (i32, String)> = load_mock_draft(&mock_path)
-        .map(|md| {
-            md.picks
-                .into_iter()
-                .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mock_path = PathBuf::from("data/draft").join(format!("{}_mock_draft.json", base_season));
+    let mock_by_name: std::collections::HashMap<String, (i32, String)> =
+        load_mock_draft(&mock_path)
+            .map(|md| {
+                md.picks
+                    .into_iter()
+                    .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
+                    .collect()
+            })
+            .unwrap_or_default();
 
     let uncertain_json: Vec<Value> = projection
         .uncertain

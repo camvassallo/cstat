@@ -995,9 +995,7 @@ pub async fn compose_all_projections(
                         .find(|(p, _)| *p == pid)
                         .and_then(|(_, d)| d.clone())
                 });
-                let dest_team_id = dest
-                    .as_deref()
-                    .and_then(|d| resolve_team_id(&teams, d));
+                let dest_team_id = dest.as_deref().and_then(|d| resolve_team_id(&teams, d));
                 departures.push(DepartureReason::Transferred {
                     player_id: pid,
                     name: name.clone(),
