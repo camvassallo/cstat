@@ -22,8 +22,10 @@ pub fn router() -> Router<Arc<AppState>> {
 
 /// One curated prospect from `data/draft/{year}_big_board.json`. Schema is
 /// documented in ROADMAP.md (Phase 5b "NBA Draft Big Board") and produced by
-/// `scripts/parse_tankathon.py` from a Tankathon paste. Unknown fields
-/// (`source`, `as_of`) are ignored — we don't surface them.
+/// `scripts/parse_tankathon.py` from a Tankathon paste. We model only the
+/// fields the `/draft` page renders; the rest of the board JSON (`height`,
+/// `weight`, `age`, `stats`, `source`, `as_of`) is left as unknown keys for
+/// serde to ignore.
 #[derive(Debug, Deserialize)]
 struct BoardEntry {
     /// Tankathon draft rank. `None` for the alphabetical "unranked" tail
@@ -35,40 +37,15 @@ struct BoardEntry {
     #[serde(default)]
     position: Option<String>,
     #[serde(default)]
-    height: Option<String>,
-    #[serde(default)]
-    weight: Option<i32>,
-    #[serde(default)]
     class_year: Option<String>,
-    #[serde(default)]
-    age: Option<f64>,
     /// `lottery` | `1st-round` | `2nd-round` | `fringe` | `unranked`.
     tier: String,
-    #[serde(default)]
-    stats: BoardStats,
-}
-
-/// Per-game counting stats carried on the board JSON. Passed straight through
-/// to the response so the frontend can show a box-score line if it wants;
-/// not part of the headline table.
-#[derive(Debug, Default, Deserialize)]
-struct BoardStats {
-    #[serde(default)]
-    pts: Option<f64>,
-    #[serde(default)]
-    reb: Option<f64>,
-    #[serde(default)]
-    ast: Option<f64>,
-    #[serde(default)]
-    blk: Option<f64>,
-    #[serde(default)]
-    stl: Option<f64>,
 }
 
 /// A cstat player row pulled by season for name-matching against the board.
-/// Mirrors `transfers.rs::DbCandidate` — we carry both the Torvik short name
-/// (for display) and the full NatStat name (for alias matching against the
-/// board's school strings).
+/// We carry both the Torvik short name (for display) and the full NatStat
+/// name (for alias matching against the board's school strings).
+/// `minutes_per_game` is the name-collision tiebreaker, not a response field.
 #[derive(sqlx::FromRow)]
 struct DbCandidate {
     player_id: Uuid,
@@ -77,11 +54,7 @@ struct DbCandidate {
     team_name: Option<String>,
     team_full_name: Option<String>,
     minutes_per_game: Option<f64>,
-    games_played: Option<i32>,
     campom: Option<f64>,
-    campom_pct: Option<f64>,
-    primary_class: Option<String>,
-    secondary_class: Option<String>,
 }
 
 /// Subset of a `teams` row — enough to resolve a board school name to a
@@ -93,8 +66,9 @@ struct DbTeam {
     short_name: Option<String>,
 }
 
-/// One prospect returned to the frontend — board fields plus the cstat
-/// player match (if any) and a derived draft `status`.
+/// One prospect returned to the frontend — exactly the fields the `/draft`
+/// page renders: the board basics plus the cstat player match (if any) and a
+/// derived draft `status`.
 #[derive(Serialize)]
 struct Prospect {
     /// Tankathon draft rank (`None` for the unranked tail).
@@ -102,17 +76,9 @@ struct Prospect {
     name: String,
     tier: String,
     position: Option<String>,
-    height: Option<String>,
-    weight: Option<i32>,
     /// Academic class as Tankathon writes it (Freshman / … / Senior /
     /// International / G League).
     class_year: Option<String>,
-    age: Option<f64>,
-    pts: Option<f64>,
-    reb: Option<f64>,
-    ast: Option<f64>,
-    blk: Option<f64>,
-    stl: Option<f64>,
     /// Derived eligibility status — see `classify_status`. One of
     /// `declared` / `senior` / `international` / `g-league` / `prospect`.
     status: &'static str,
@@ -125,14 +91,9 @@ struct Prospect {
     /// cstat player match. `None` for prospects with no college row this
     /// season — internationals, G-Leaguers, the odd name we couldn't match.
     player_id: Option<Uuid>,
-    /// CamPom v3 (`cam_gbpm_v3_psos`) and its percentile, from the matched
-    /// player. `None` when unmatched.
+    /// CamPom v3 (`cam_gbpm_v3_psos`) for the matched player. `None` when
+    /// unmatched.
     campom: Option<f64>,
-    campom_pct: Option<f64>,
-    primary_class: Option<String>,
-    secondary_class: Option<String>,
-    minutes_per_game: Option<f64>,
-    games_played: Option<i32>,
 }
 
 /// Derive the draft-eligibility status of a board prospect.
@@ -209,18 +170,12 @@ async fn draft_board(
             COALESCE(t.short_name, t.name) AS team_name,
             t.name                   AS team_full_name,
             pss.minutes_per_game     AS minutes_per_game,
-            pss.games_played         AS games_played,
-            tps.cam_gbpm_v3_psos     AS campom,
-            tps.cam_gbpm_v3_psos_pct AS campom_pct,
-            pa.primary_class         AS primary_class,
-            pa.secondary_class       AS secondary_class
+            tps.cam_gbpm_v3_psos     AS campom
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
         LEFT JOIN torvik_player_stats tps
             ON tps.player_id = p.id AND tps.season = pss.season
-        LEFT JOIN player_archetypes pa
-            ON pa.player_id = p.id AND pa.season = pss.season
         WHERE pss.season = $1
         "#,
     )
@@ -305,26 +260,13 @@ async fn draft_board(
                 name: b.name,
                 tier: b.tier,
                 position: b.position,
-                height: b.height,
-                weight: b.weight,
                 class_year: b.class_year,
-                age: b.age,
-                pts: b.stats.pts,
-                reb: b.stats.reb,
-                ast: b.stats.ast,
-                blk: b.stats.blk,
-                stl: b.stats.stl,
                 status,
                 team_id,
                 team_name: best.and_then(|c| c.team_name.clone()),
                 current_team: b.current_team,
                 player_id: best.map(|c| c.player_id),
                 campom: best.and_then(|c| c.campom),
-                campom_pct: best.and_then(|c| c.campom_pct),
-                primary_class: best.and_then(|c| c.primary_class.clone()),
-                secondary_class: best.and_then(|c| c.secondary_class.clone()),
-                minutes_per_game: best.and_then(|c| c.minutes_per_game),
-                games_played: best.and_then(|c| c.games_played),
             }
         })
         .collect();
@@ -366,9 +308,10 @@ mod tests {
 
     #[test]
     fn board_entry_deserializes_real_schema() {
-        // Mirrors `data/draft/2026_big_board.json` exactly, including the
-        // `source` / `as_of` fields we deliberately don't model (serde
-        // ignores unknown keys) and a ranked + an unranked entry.
+        // Mirrors `data/draft/2026_big_board.json`, including the keys we
+        // deliberately don't model (`height` / `weight` / `age` / `stats` /
+        // `source` / `as_of`) — serde must ignore them — and both a ranked
+        // and an unranked entry.
         let raw = r#"[
             { "rank": 1, "name": "Cameron Boozer", "current_team": "Duke",
               "position": "PF", "height": "6-9", "weight": 250,
@@ -382,12 +325,13 @@ mod tests {
         assert_eq!(board.len(), 2);
         assert_eq!(board[0].rank, Some(1));
         assert_eq!(board[0].name, "Cameron Boozer");
-        assert_eq!(board[0].stats.pts, Some(24.2));
-        // The unranked tail: rank absent, optional blocks absent — every
-        // missing field must fall back to None via `#[serde(default)]`.
+        assert_eq!(board[0].position.as_deref(), Some("PF"));
+        assert_eq!(board[0].class_year.as_deref(), Some("Freshman"));
+        assert_eq!(board[0].tier, "lottery");
+        // The unranked tail: rank and the optional fields absent.
         assert_eq!(board[1].rank, None);
         assert_eq!(board[1].tier, "unranked");
         assert_eq!(board[1].position, None);
-        assert_eq!(board[1].stats.pts, None);
+        assert_eq!(board[1].class_year, None);
     }
 }

@@ -421,26 +421,13 @@ export interface DraftProspect {
   name: string;
   tier: string;
   position: string | null;
-  height: string | null;
-  weight: number | null;
   class_year: string | null;
-  age: number | null;
-  pts: number | null;
-  reb: number | null;
-  ast: number | null;
-  blk: number | null;
-  stl: number | null;
   status: string;
   current_team: string;
   team_id: string | null;
   team_name: string | null;
   player_id: string | null;
   campom: number | null;
-  campom_pct: number | null;
-  primary_class: string | null;
-  secondary_class: string | null;
-  minutes_per_game: number | null;
-  games_played: number | null;
 }
 
 export function fetchDraft(year: number) {
