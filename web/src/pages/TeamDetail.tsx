@@ -392,7 +392,7 @@ function ValueWithPctile({ value, pctile }: { value: string; pctile: number | nu
 function RosterTable({ roster }: { roster: RosterEntry[] }) {
   const [view, setView] = useState<RosterView>('raw');
   const [sort, setSort] = useState<{ key: RosterSortKey; dir: SortDir }>({
-    key: 'minutes_per_game',
+    key: 'campom',
     dir: 'desc',
   });
   const onSort = (key: RosterSortKey) => {
@@ -408,8 +408,8 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
     setView(next);
     const rawOnly: RosterSortKey[] = ['ppg', 'rpg', 'apg', 'spg', 'bpg', 'topg'];
     const rateOnly: RosterSortKey[] = ['ast_pct', 'tov_pct', 'orb_pct', 'drb_pct', 'stl_pct', 'blk_pct'];
-    if (next === 'rate' && rawOnly.includes(sort.key)) setSort({ key: 'minutes_per_game', dir: 'desc' });
-    if (next === 'raw' && rateOnly.includes(sort.key)) setSort({ key: 'minutes_per_game', dir: 'desc' });
+    if (next === 'rate' && rawOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
+    if (next === 'raw' && rateOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
   };
 
   const sorted = useMemo(() => {
@@ -828,6 +828,33 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
     data;
   const displayName = team.name ?? team.short_name ?? '(unknown team)';
 
+  // Sort each roster section by CamPom desc so the visual headline of
+  // each card is the most impactful player. Nulls sink to the bottom in
+  // every section.
+  //   - Returning / Arrivals: sort by projected next-season CamPom (the
+  //     forward-looking chip is the page's main number), fall back to
+  //     current CamPom when projection missing.
+  //   - Recruits: sort by projected freshman CamPom from the freshman
+  //     model (matches the only CamPom number shown on the row).
+  //   - Departures: no projection available; sort by base-season CamPom
+  //     so the team's biggest losses are listed first.
+  const cmpDesc = (a: number | null | undefined, b: number | null | undefined) => {
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    return b - a;
+  };
+  const returningSorted = [...returning].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
+  const arrivalsSorted = [...arrivals].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
+  const recruitsSorted = [...recruits].sort((x, y) =>
+    cmpDesc(x.projected_cam_v3, y.projected_cam_v3),
+  );
+  const departuresSorted = [...departures].sort((x, y) => cmpDesc(x.cam_v3, y.cam_v3));
+
   // Mid AdjEM chip color tier — mirrors `adjEmTone` on Projected2027 but
   // duplicated here rather than promoted to a shared module so the
   // Projected2027 page stays self-contained.
@@ -910,7 +937,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           {returning.length === 0 ? (
             <Empty label="No qualified returners" />
           ) : (
-            returning.map((r) => (
+            returningSorted.map((r) => (
               <PlayerCard
                 key={r.player_id}
                 mpg={r.mpg}
@@ -935,7 +962,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           {arrivals.length === 0 ? (
             <Empty label="No portal arrivals" />
           ) : (
-            arrivals.map((a) => (
+            arrivalsSorted.map((a) => (
               <PlayerCard
                 key={a.player_id}
                 mpg={a.mpg}
@@ -971,7 +998,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           {recruits.length === 0 ? (
             <Empty label="No HS commits" />
           ) : (
-            recruits.map((r) => <RecruitCard key={r.recruit_id} r={r} />)
+            recruitsSorted.map((r) => <RecruitCard key={r.recruit_id} r={r} />)
           )}
         </RosterCard>
 
@@ -980,27 +1007,83 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No departures" />
           ) : (
             <>
-              {departures.map((d) => (
-                <div key={d.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
-                  <span className="text-sm text-gray-300">{d.name}</span>
-                  <span
-                    className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${
-                      d.kind === 'senior'
-                        ? 'text-slate-400'
-                        : d.kind === 'transferred'
-                          ? 'text-amber-400'
-                          : 'text-rose-400'
-                    }`}
-                    title={d.kind === 'transferred' && d.destination ? `to ${d.destination}` : undefined}
+              {departuresSorted.map((d) => {
+                // Mirror PlayerCard's row shape: name · archetype on the
+                // left, stats + status chip on the right. The right-most
+                // pill replaces the "current → projected" chip pair
+                // (departures have no next-season projection) with a
+                // status indicator coloured by departure kind.
+                const statusClass =
+                  d.kind === 'senior'
+                    ? 'text-slate-300 border-slate-500/40'
+                    : d.kind === 'transferred'
+                      ? 'text-amber-300 border-amber-500/40'
+                      : 'text-rose-300 border-rose-500/40';
+                const statusLabel =
+                  d.kind === 'senior'
+                    ? 'Sr graduation'
+                    : d.kind === 'draft_gone'
+                      ? 'NBA draft'
+                      : `→ ${d.destination ?? 'portal'}`;
+                return (
+                  <div
+                    key={d.player_id}
+                    className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2"
                   >
-                    {d.kind === 'senior'
-                      ? 'Sr graduation'
-                      : d.kind === 'transferred'
-                        ? `→ ${d.destination ?? 'portal'}`
-                        : 'NBA draft'}
-                  </span>
-                </div>
-              ))}
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <div className="truncate">
+                        <SeasonLink
+                          to={`/players/${d.player_id}?season=${d.prior_season}`}
+                          className="text-blue-400 hover:underline"
+                        >
+                          {d.name}
+                        </SeasonLink>
+                      </div>
+                      {d.primary_class && (
+                        <span
+                          className="text-[10px] font-bold uppercase tracking-wide"
+                          style={{ color: classColor(d.primary_class) }}
+                        >
+                          {d.primary_class}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
+                      {d.mpg != null && (
+                        <span title="Prior-season MPG">{d.mpg.toFixed(0)}'</span>
+                      )}
+                      {d.cam_v3 != null && (
+                        <span
+                          className={`px-1.5 rounded border ${campomTierColor(campomTier(d.cam_v3))}`}
+                          title={`Prior-season CamPom v3: ${d.cam_v3.toFixed(1)}`}
+                        >
+                          {d.cam_v3.toFixed(1)}
+                        </span>
+                      )}
+                      {d.kind === 'transferred' && d.destination_team_id ? (
+                        <SeasonLink
+                          to={`/teams/${d.destination_team_id}?season=${year}`}
+                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border hover:underline ${statusClass}`}
+                          title={`to ${d.destination}`}
+                        >
+                          {statusLabel}
+                        </SeasonLink>
+                      ) : (
+                        <span
+                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${statusClass}`}
+                          title={
+                            d.kind === 'transferred' && d.destination
+                              ? `to ${d.destination}`
+                              : undefined
+                          }
+                        >
+                          {statusLabel}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
               {uncertain.map((u) => (
                 <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
                   <span className="text-sm text-gray-300 flex-1 min-w-0 truncate">{u.name}</span>
@@ -1137,16 +1220,13 @@ function PlayerCard({
 }
 
 function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
-  const tierTone =
-    r.tier === 't1'
-      ? 'bg-amber-900/30 border-amber-700 text-amber-300'
-      : r.tier === 't2'
-        ? 'bg-cyan-900/30 border-cyan-700 text-cyan-300'
-        : 'bg-slate-800 border-slate-700 text-slate-400';
   return (
-    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
+    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-sm text-gray-200 truncate">{r.name}</span>
+        {r.position && (
+          <span className="text-[10px] text-gray-400">{r.position}</span>
+        )}
         {r.composite_rank != null && (
           <span className="text-[10px] text-gray-500">#{r.composite_rank}</span>
         )}
@@ -1155,19 +1235,13 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
         )}
       </div>
       <div className="flex items-center gap-2 text-xs">
-        <span
-          className={`px-1.5 py-0.5 rounded border text-[10px] uppercase ${tierTone}`}
-          title={`Tier ${r.tier.slice(1).toUpperCase()} freshman profile`}
-        >
-          {r.tier.toUpperCase()}
-        </span>
         {r.projected_cam_v3 != null && (
           <span
             className={`px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`}
             title={
               r.projected_campom_lower != null && r.projected_campom_upper != null
-                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Per-player prediction from the freshman model — wide band on T1/T2 reflects elite-tail uncertainty.`
-                : 'Tier-mean projected CamPom v3 (batch inference fell back to tier-mean synthesis — no per-player band available).'
+                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Tier ${r.tier.slice(1).toUpperCase()} cohort — wide bands on T1/T2 reflect elite-tail uncertainty.`
+                : `Tier ${r.tier.slice(1).toUpperCase()} mean projected CamPom v3 (batch inference fell back to tier-mean synthesis — no per-player band available).`
             }
           >
             {r.projected_cam_v3.toFixed(1)}

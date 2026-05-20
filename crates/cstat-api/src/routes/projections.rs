@@ -673,32 +673,115 @@ async fn projection_team_detail(
                 "composite_rank": meta.composite_rank,
                 "star_rating": meta.star_rating,
                 "tier": meta.tier,
+                "position": meta.position,
                 "projected_cam_v3": row.cam_v3,
                 "projected_campom_lower": meta.projected_campom_lower,
                 "projected_campom_upper": meta.projected_campom_upper,
             })
         })
         .collect();
-    let departures_json: Vec<Value> = projection
+    // Enrich departures with the player's base_season archetype + MPG +
+    // CamPom v3 so the row visually matches Returning / Arrivals
+    // (name · archetype · MPG · CamPom on the right). One batched query
+    // rather than N+1: gather every departure's player_id, join the
+    // base_season slices of player_archetypes / player_season_stats /
+    // torvik_player_stats in one shot, then weave the result back into
+    // each departure's JSON.
+    let departure_pids: Vec<Uuid> = projection
         .departures
         .iter()
         .map(|d| match d {
-            cstat_core::roster_projection::DepartureReason::GraduatedSenior { player_id, name } => {
-                json!({"kind": "senior", "player_id": player_id, "name": name})
+            cstat_core::roster_projection::DepartureReason::GraduatedSenior { player_id, .. }
+            | cstat_core::roster_projection::DepartureReason::Transferred { player_id, .. }
+            | cstat_core::roster_projection::DepartureReason::DraftGone { player_id, .. } => {
+                *player_id
             }
-            cstat_core::roster_projection::DepartureReason::Transferred {
-                player_id,
-                name,
-                destination,
-            } => json!({
-                "kind": "transferred",
-                "player_id": player_id,
+        })
+        .collect();
+    struct DepartureMeta {
+        primary_class: Option<String>,
+        mpg: Option<f64>,
+        cam_v3: Option<f64>,
+    }
+    let departure_meta: std::collections::HashMap<Uuid, DepartureMeta> =
+        if departure_pids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            sqlx::query_as::<_, (Uuid, Option<String>, Option<f64>, Option<f64>)>(
+                "SELECT p.id,
+                        pa.primary_class,
+                        pss.minutes_per_game,
+                        tps.cam_gbpm_v3_psos
+                 FROM players p
+                 LEFT JOIN player_archetypes pa
+                     ON pa.player_id = p.id AND pa.season = $1
+                 LEFT JOIN player_season_stats pss
+                     ON pss.player_id = p.id AND pss.season = $1
+                 LEFT JOIN torvik_player_stats tps
+                     ON tps.player_id = p.id AND tps.season = $1
+                 WHERE p.id = ANY($2)",
+            )
+            .bind(base_season)
+            .bind(&departure_pids)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("departure enrichment failed: {e}") })),
+                )
+            })?
+            .into_iter()
+            .map(|(pid, primary_class, mpg, cam_v3)| {
+                (
+                    pid,
+                    DepartureMeta {
+                        primary_class,
+                        mpg,
+                        cam_v3,
+                    },
+                )
+            })
+            .collect()
+        };
+    let departures_json: Vec<Value> = projection
+        .departures
+        .iter()
+        .map(|d| {
+            let (pid, kind, name, destination, destination_team_id) = match d {
+                cstat_core::roster_projection::DepartureReason::GraduatedSenior {
+                    player_id,
+                    name,
+                } => (*player_id, "senior", name.clone(), None, None),
+                cstat_core::roster_projection::DepartureReason::Transferred {
+                    player_id,
+                    name,
+                    destination,
+                    destination_team_id,
+                } => (
+                    *player_id,
+                    "transferred",
+                    name.clone(),
+                    destination.clone(),
+                    *destination_team_id,
+                ),
+                cstat_core::roster_projection::DepartureReason::DraftGone {
+                    player_id,
+                    name,
+                } => (*player_id, "draft_gone", name.clone(), None, None),
+            };
+            let meta = departure_meta.get(&pid);
+            json!({
+                "kind": kind,
+                "player_id": pid,
                 "name": name,
+                "prior_season": base_season,
+                "primary_class": meta.and_then(|m| m.primary_class.clone()),
+                "mpg": meta.and_then(|m| m.mpg),
+                "cam_v3": meta.and_then(|m| m.cam_v3),
                 "destination": destination,
-            }),
-            cstat_core::roster_projection::DepartureReason::DraftGone { player_id, name } => {
-                json!({"kind": "draft_gone", "player_id": player_id, "name": name})
-            }
+                "destination_team_id": destination_team_id,
+            })
         })
         .collect();
     let uncertain_json: Vec<Value> = projection
