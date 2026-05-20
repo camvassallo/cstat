@@ -56,6 +56,20 @@ function tierLabel(tier: string): string {
   }
 }
 
+// Tier quality order for sorting. The tier is a categorical string, so a plain
+// sort would land alphabetically (1st-round, 2nd-round, fringe, lottery, …)
+// instead of best-to-worst — this maps each tier to its rank so the Tier
+// column sorts lottery → unranked. Unknown values sort last.
+const TIER_ORDER: Record<string, number> = {
+  lottery: 0,
+  '1st-round': 1,
+  '2nd-round': 2,
+  fringe: 3,
+  unranked: 4,
+};
+const tierComparator = (a: string, b: string) =>
+  (TIER_ORDER[a] ?? 99) - (TIER_ORDER[b] ?? 99);
+
 // Status chip — derived eligibility state from the API (early-entrant
 // cross-reference + class year).
 function statusChip(status: string): { label: string; cls: string; title: string } {
@@ -203,7 +217,8 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
       field: 'tier',
       ...flexCol(1, 100),
       headerTooltip:
-        'Tankathon tier mapped to NBA draft-round structure: Lottery (1–14), 1st Rd (15–30), 2nd Rd (31–60), Fringe (61+), Unranked.',
+        'Tankathon tier mapped to NBA draft-round structure: Lottery (1–14), 1st Rd (15–30), 2nd Rd (31–60), Fringe (61+), Unranked. Sorts best-to-worst.',
+      comparator: tierComparator,
       cellRenderer: (p: { value: string }) => (
         <span
           className={`px-1.5 py-0.5 rounded border text-[11px] font-semibold ${tierChipClass(p.value)}`}
@@ -305,7 +320,7 @@ export default function Draft() {
   // Decorate each prospect with its CamPom rank and the headline Δ. The
   // CamPom rank only ranks prospects that have BOTH a draft rank and a CamPom
   // value — the same cohort the draft rank covers — so Δ stays a like-for-like
-  // comparison. Display order is left to AG Grid (default sort = draft rank).
+  // comparison. Display order is left to AG Grid (default sort = CamPom desc).
   const ranked = useMemo<RankedProspect[]>(() => {
     if (!rows) return [];
     const rankable = rows
