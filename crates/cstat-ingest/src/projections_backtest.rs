@@ -10,7 +10,8 @@
 //! `team_season_stats.adj_efficiency_margin` the season finished with.
 //!
 //! Three predictions per team, all measured against the same actual:
-//!  - **Phase B** — `predict_roster_impact` on the projected-cam_v3 roster.
+//!  - **Phase B** — the leave-one-season-out roster-impact model scored on
+//!    the projected-cam_v3 roster.
 //!  - **Phase A** — the *former* box-score pipeline (what the route
 //!    shipped before Phase B): `project_rotation` → `build_roster_features`
 //!    → `predict_adj_em`, blended `0.80·baseline + 0.20·raw + 2.0`. Kept
@@ -24,11 +25,16 @@
 //! no offset.
 //!
 //! Honesty caveats (printed with the report):
-//!  - `roster_impact_model.onnx` is trained on every season including
-//!    the backtest targets. Because it is *served* projected (OOF)
-//!    cam_v3 — not the actual cam_v3 it trained on — the in-sample
-//!    leakage is small but not zero. A LOSO-per-target roster model is
-//!    the v2 tightening.
+//!  - The roster-impact model is the **leave-one-season-out** model for
+//!    each target season (`roster_impact_loso/roster_impact_model_{year}
+//!    .onnx`), trained on every season *except* the one being scored — so
+//!    there is no in-sample leak from the roster model itself. This is the
+//!    ROADMAP §5b v2 tightening; the live `/api/projections` route still
+//!    uses the all-seasons model, correct there because the live target
+//!    year is genuinely unseen.
+//!  - The Phase A box-score model (`roster_model.onnx`) stays the frozen
+//!    all-seasons model — Phase A is only a fixed comparison reference, so
+//!    its slight in-sample edge can only understate Phase B's win.
 //!  - Recruit cam_v3 comes from `compose_all_projections`, which runs
 //!    live freshman inference — mildly in-sample for the freshman model
 //!    on historical targets.
@@ -38,10 +44,10 @@
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use cstat_core::inference::Predictor;
+use cstat_core::inference::{Predictor, RosterImpactModel};
 use cstat_core::roster_features::{build_roster_features, project_rotation};
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
@@ -165,7 +171,12 @@ async fn fetch_actual_adj_em(
 
 /// Run the backtest for one target season. Returns the per-team results
 /// (teams with no actual AdjEM, or below the qualifying gate, are omitted).
-async fn backtest_year(pool: &PgPool, predictor: &Predictor, year: i32) -> Result<Vec<TeamResult>> {
+async fn backtest_year(
+    pool: &PgPool,
+    predictor: &Predictor,
+    loso_model: &RosterImpactModel,
+    year: i32,
+) -> Result<Vec<TeamResult>> {
     let base_season = year - 1;
 
     // Declared-draft cohort — absent for historical base seasons, so the
@@ -211,7 +222,7 @@ async fn backtest_year(pool: &PgPool, predictor: &Predictor, year: i32) -> Resul
             continue;
         };
 
-        // --- Phase B: projected cam_v3 → impact-aggregation model. ------
+        // --- Phase B: projected cam_v3 → LOSO impact-aggregation model. -
         let mut traj_ids: Vec<Uuid> = Vec::new();
         traj_ids.extend(p.returning.iter().map(|r| r.player_id));
         traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
@@ -221,9 +232,9 @@ async fn backtest_year(pool: &PgPool, predictor: &Predictor, year: i32) -> Resul
 
         let mut roster_b = p.for_scenario(DraftScenario::Ceiling);
         apply_projected_cam_v3(&mut roster_b, &projected_cam);
-        let phase_b = predictor
-            .predict_roster_impact(&build_roster_impact_features(&roster_b))
-            .map_err(|e| anyhow::anyhow!("predict_roster_impact ({}): {e}", p.team_name))?;
+        let phase_b = loso_model
+            .predict(&build_roster_impact_features(&roster_b))
+            .map_err(|e| anyhow::anyhow!("LOSO roster-impact predict ({}): {e}", p.team_name))?;
 
         // --- Phase A: box-score pipeline with the shipped blend. --------
         let roster_a = project_rotation(p.for_scenario(DraftScenario::Ceiling));
@@ -310,14 +321,41 @@ fn blend_sweep(results: &[TeamResult]) -> (f64, f64) {
 /// Run the backtest across `years` and print the report. Returns Ok even
 /// when Phase B underperforms — this is a diagnostic, not a CI gate; the
 /// printed verdict carries the conclusion.
-pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<()> {
+pub async fn run(
+    pool: &PgPool,
+    predictor: &Predictor,
+    model_dir: &Path,
+    years: &[i32],
+) -> Result<()> {
     println!("{}", "=".repeat(72));
     println!("Phase B projection backtest — target seasons: {years:?}");
     println!("{}", "=".repeat(72));
 
+    // Per-target-season leave-one-season-out roster-impact models — each
+    // trained on every season except the one it scores, so the backtest
+    // carries no in-sample leak from the roster model (ROADMAP §5b v2).
+    let loso_dir = model_dir.join("roster_impact_loso");
+    let mut loso: HashMap<i32, RosterImpactModel> = HashMap::new();
+    for &year in years {
+        let path = loso_dir.join(format!("roster_impact_model_{year}.onnx"));
+        if !path.exists() {
+            anyhow::bail!(
+                "LOSO backtest model {} not found. Run \
+                 `cd training && python3 train_roster_impact_model.py` to \
+                 generate the per-season models — only backtestable seasons \
+                 (those with portal data + a finished actual AdjEM; 2025 and \
+                 2026 today) are exported.",
+                path.display(),
+            );
+        }
+        let model = RosterImpactModel::load_loso(model_dir, year)
+            .map_err(|e| anyhow::anyhow!("load LOSO roster-impact model for {year}: {e}"))?;
+        loso.insert(year, model);
+    }
+
     let mut pooled: Vec<TeamResult> = Vec::new();
     for &year in years {
-        let yr = backtest_year(pool, predictor, year).await?;
+        let yr = backtest_year(pool, predictor, &loso[&year], year).await?;
         report(&format!("season {year}"), &yr);
         pooled.extend(yr);
     }
@@ -368,9 +406,9 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
     );
     println!("{}", "-".repeat(72));
     println!(
-        "  Caveats: roster_impact model is in-sample for the target seasons \
-         (served projected, not actual, cam_v3 — small leakage); recruit cam_v3 \
-         uses live freshman inference. See module docs.",
+        "  Caveats: roster-impact model is now leave-one-season-out (no \
+         in-sample leak from the roster model); recruit cam_v3 still uses \
+         live freshman inference (mildly in-sample). See module docs.",
     );
     Ok(())
 }

@@ -486,7 +486,13 @@ async fn main() -> Result<()> {
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
-            cstat_ingest::projections_backtest::run(&db.pool, &predictor, &years).await?;
+            cstat_ingest::projections_backtest::run(
+                &db.pool,
+                &predictor,
+                std::path::Path::new(&model_dir),
+                &years,
+            )
+            .await?;
         }
 
         Commands::Transfers {
