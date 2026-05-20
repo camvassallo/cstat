@@ -79,6 +79,9 @@ export default function Layout() {
       <NavLink to="/projected/2027" className={({ isActive }) => navLinkClass(isActive)}>
         Future
       </NavLink>
+      <NavLink to="/draft" className={({ isActive }) => navLinkClass(isActive)}>
+        Draft
+      </NavLink>
     </>
   );
 
@@ -147,6 +150,9 @@ export default function Layout() {
           </NavLink>
           <NavLink to="/projected/2027" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Future
+          </NavLink>
+          <NavLink to="/draft" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
+            Draft
           </NavLink>
         </div>
       )}
