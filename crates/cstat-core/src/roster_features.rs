@@ -135,6 +135,15 @@ pub struct PlayerRow {
     pub blk_pct: Option<f64>,
     pub ft_rate: Option<f64>,
     pub primary_class: Option<String>,
+    /// Player class year (`Fr` / `So` / `Jr` / `Sr`). On a *projected*
+    /// roster this is the class for the season being projected — returners
+    /// and arrivals are aged up one year from their base season by
+    /// `roster_projection::age_up_class_year`; synthesized recruits are
+    /// `Fr`. Consumed by `roster_impact::build_roster_impact_features`
+    /// (the Phase B experience-mix features); the box-score
+    /// `build_roster_features` ignores it. Nullable — Torvik bio coverage
+    /// is incomplete; missing values contribute to no experience bucket.
+    pub class_year: Option<String>,
     /// `torvik_player_stats.cam_gbpm_v3_psos` — the production CamPom composite,
     /// used by `swap_player` to rank the incoming player against the destination
     /// roster and pick their post-swap MPG slot. Not consumed by
@@ -394,7 +403,7 @@ pub fn normalize_rotation(roster: Vec<PlayerRow>) -> Vec<PlayerRow> {
 /// played — injury fill-ins inflate the sum). `project_rotation`
 /// assigns these verbatim; ranks past index 12 fall out of the
 /// rotation (0 MPG).
-const CANONICAL_ROTATION_MPG: [f64; 13] = [
+pub(crate) const CANONICAL_ROTATION_MPG: [f64; 13] = [
     32.0, 29.8, 27.8, 25.5, 23.0, 20.1, 17.2, 14.4, 11.9, 9.6, 8.2, 7.3, 6.9,
 ];
 
@@ -685,6 +694,7 @@ mod tests {
             blk_pct: Some(1.5),
             ft_rate: Some(0.35),
             primary_class: class.map(str::to_string),
+            class_year: None,
             cam_v3: None,
         }
     }

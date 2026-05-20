@@ -1,5 +1,6 @@
 use crate::freshman_model::{FRESHMAN_FEATURE_NAMES, FRESHMAN_NUM_FEATURES, FreshmanPrediction};
 use crate::roster_features::{QUAL_FILTER_STRING, ROSTER_FEATURE_NAMES, ROSTER_NUM_FEATURES};
+use crate::roster_impact::{ROSTER_IMPACT_FEATURE_NAMES, ROSTER_IMPACT_NUM_FEATURES};
 use crate::trajectory::{TRAJECTORY_FEATURE_NAMES, TRAJECTORY_NUM_FEATURES, TrajectoryPrediction};
 use crate::treeshap::{LgbModel, tree_shap};
 use ort::session::Session;
@@ -407,6 +408,10 @@ pub enum LoadError {
     /// a feature-list / quantile-alpha value the Rust path can't honor.
     /// Same load-fail-loudly contract as trajectory meta.
     FreshmanMetaMismatch(String),
+    /// `roster_impact_model_meta.json` (Phase B) is missing, unparseable,
+    /// or carries a `player_filter` / feature-list value the Rust path
+    /// can't honor. Same load-fail-loudly contract as the roster meta.
+    RosterImpactMetaMismatch(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -426,6 +431,9 @@ impl std::fmt::Display for LoadError {
             }
             LoadError::FreshmanMetaMismatch(msg) => {
                 write!(f, "freshman_model_meta.json contract mismatch: {msg}")
+            }
+            LoadError::RosterImpactMetaMismatch(msg) => {
+                write!(f, "roster_impact_model_meta.json contract mismatch: {msg}")
             }
         }
     }
@@ -463,6 +471,7 @@ pub struct Predictor {
     win_session: Mutex<Session>,
     total_session: Mutex<Session>,
     roster_session: Mutex<Session>,
+    roster_impact_session: Mutex<Session>,
     trajectory_mean_session: Mutex<Session>,
     trajectory_q10_session: Mutex<Session>,
     trajectory_q90_session: Mutex<Session>,
@@ -503,6 +512,17 @@ impl Predictor {
             .commit_from_file(model_dir.join("roster_model.onnx"))?;
 
         validate_roster_meta(&model_dir.join("roster_model_meta.json"))?;
+
+        // Phase B impact-aggregation model: a separate ONNX from the
+        // box-score `roster_model` above. Consumes the 25-feature
+        // cam_v3-aggregation vector and powers the 2027 projection route;
+        // the box-score model stays for swap-Δ. Validated with the same
+        // fail-loudly contract.
+        let roster_impact_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("roster_impact_model.onnx"))?;
+
+        validate_roster_impact_meta(&model_dir.join("roster_impact_model_meta.json"))?;
 
         // Phase 5c trajectory: mean + q=0.1 + q=0.9 LightGBMs share one
         // feature shape; the meta JSON pins the alphas in the order the
@@ -550,6 +570,7 @@ impl Predictor {
             win_session: Mutex::new(win_session),
             total_session: Mutex::new(total_session),
             roster_session: Mutex::new(roster_session),
+            roster_impact_session: Mutex::new(roster_impact_session),
             trajectory_mean_session: Mutex::new(trajectory_mean_session),
             trajectory_q10_session: Mutex::new(trajectory_q10_session),
             trajectory_q90_session: Mutex::new(trajectory_q90_session),
@@ -647,6 +668,63 @@ impl Predictor {
         let outputs = session.run(ort::inputs![input])?;
         let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
         Ok(data[0])
+    }
+
+    /// Score a projected roster's AdjEM with the Phase B impact-aggregation
+    /// model (`roster_impact_model.onnx`). Input is the 25-feature vector
+    /// from `roster_impact::build_roster_impact_features`, built over a
+    /// roster whose `cam_v3` fields carry *projected* next-season values
+    /// (trajectory model for returners / arrivals, freshman model for
+    /// recruits).
+    ///
+    /// Distinct from `predict_adj_em`, which scores the box-score
+    /// `roster_model.onnx` for the swap-Δ tool. This is the consumer for
+    /// the trajectory / freshman per-player cam_v3 projections; all
+    /// projection error lives in those upstream models, making the
+    /// composed pipeline honest and decomposable.
+    pub fn predict_roster_impact(
+        &self,
+        features: &[f32; ROSTER_IMPACT_NUM_FEATURES],
+    ) -> Result<f32, ort::Error> {
+        use ort::value::TensorRef;
+        let shape = [1_usize, ROSTER_IMPACT_NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, features.as_slice()))?;
+        let mut session = self.roster_impact_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+        Ok(data[0])
+    }
+
+    /// Batch variant of `predict_roster_impact` — one `[N, 25]` tensor,
+    /// one ONNX run for N teams. The projection-list route scores ~360
+    /// teams per request; batching collapses that to a single inference
+    /// call. Empty input short-circuits; output length is validated
+    /// against N (a mismatch only fires on an export shape change).
+    pub fn predict_roster_impact_batch(
+        &self,
+        rows: &[[f32; ROSTER_IMPACT_NUM_FEATURES]],
+    ) -> Result<Vec<f32>, ort::Error> {
+        use ort::value::TensorRef;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = rows.len();
+        let shape = [n, ROSTER_IMPACT_NUM_FEATURES];
+        let mut flat = Vec::with_capacity(n * ROSTER_IMPACT_NUM_FEATURES);
+        for row in rows {
+            flat.extend_from_slice(row);
+        }
+        let input = TensorRef::from_array_view((shape, flat.as_slice()))?;
+        let mut session = self.roster_impact_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+        if data.len() != n {
+            return Err(ort::Error::new(format!(
+                "roster impact batch output length {} ≠ expected {n}",
+                data.len()
+            )));
+        }
+        Ok(data.to_vec())
     }
 
     /// Project a returning player's next-season CamPom v3 from their prior
@@ -1027,6 +1105,22 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
     Ok(())
 }
 
+/// Read `roster_impact_model_meta.json` (Phase B) and verify feature
+/// order, count, and the player qualification gate match the compiled
+/// Rust contract. Same fail-loudly-at-boot policy as the box-score
+/// roster validator; this model carries no `include_impact_features`
+/// flag (cam_v3 aggregation IS the model, by design).
+fn validate_roster_impact_meta(path: &Path) -> Result<(), LoadError> {
+    validate_model_meta(
+        path,
+        ROSTER_IMPACT_NUM_FEATURES,
+        &ROSTER_IMPACT_FEATURE_NAMES,
+        "ROSTER_IMPACT",
+        LoadError::RosterImpactMetaMismatch,
+    )?;
+    Ok(())
+}
+
 /// Read `trajectory_model_meta.json` and verify feature order, qualification
 /// gate, count, and quantile-alpha labeling match what the Rust path expects.
 fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
@@ -1104,6 +1198,8 @@ mod tests {
             "total_model.onnx",
             "roster_model.onnx",
             "roster_model_meta.json",
+            "roster_impact_model.onnx",
+            "roster_impact_model_meta.json",
             "trajectory_mean_model.onnx",
             "trajectory_q10_model.onnx",
             "trajectory_q90_model.onnx",
@@ -1424,6 +1520,65 @@ mod tests {
         assert!(
             (-60.0..=60.0).contains(&pred),
             "roster AdjEM {pred} outside plausible bound for zero input",
+        );
+    }
+
+    #[test]
+    fn roster_impact_predict_zeros_is_finite() {
+        let dir = model_dir();
+        require_model_files(&dir);
+
+        let predictor = Predictor::load(&dir).unwrap();
+        let features = [0.0_f32; ROSTER_IMPACT_NUM_FEATURES];
+        let pred = predictor
+            .predict_roster_impact(&features)
+            .expect("roster impact prediction failed");
+
+        assert!(
+            pred.is_finite(),
+            "roster impact AdjEM is NaN/inf for zero features",
+        );
+        assert!(
+            (-60.0..=60.0).contains(&pred),
+            "roster impact AdjEM {pred} outside plausible bound for zero input",
+        );
+    }
+
+    #[test]
+    fn roster_impact_batch_matches_single_row() {
+        let dir = model_dir();
+        require_model_files(&dir);
+
+        let predictor = Predictor::load(&dir).unwrap();
+
+        // A strong roster (deep, high cam_v3) and a weak one.
+        let mut strong = [0.0_f32; ROSTER_IMPACT_NUM_FEATURES];
+        strong[0] = 11.0; // roster_size
+        strong[1] = 8.0; // cam_wmean
+        strong[2] = 60.0; // cam_sum
+        strong[3] = 18.0; // cam_top1
+        let mut weak = [0.0_f32; ROSTER_IMPACT_NUM_FEATURES];
+        weak[0] = 8.0;
+        weak[1] = 1.0;
+        weak[2] = 8.0;
+        weak[3] = 4.0;
+
+        let batch = predictor
+            .predict_roster_impact_batch(&[strong, weak])
+            .expect("batch predict failed");
+        assert_eq!(batch.len(), 2);
+
+        let s = predictor.predict_roster_impact(&strong).unwrap();
+        let w = predictor.predict_roster_impact(&weak).unwrap();
+        assert!((batch[0] - s).abs() < 1e-5, "batch[0] ≠ single-row strong");
+        assert!((batch[1] - w).abs() < 1e-5, "batch[1] ≠ single-row weak");
+
+        // Empty input short-circuits to an empty Vec.
+        assert!(
+            predictor
+                .predict_roster_impact_batch(&[])
+                .unwrap()
+                .is_empty(),
         );
     }
 
