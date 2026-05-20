@@ -252,10 +252,15 @@ export default function PlayerProgression() {
                 formatter={(value, name) => {
                   // Range areas hand Recharts a [lower, upper] tuple; render
                   // both bounds in the tooltip rather than the default "[a, b]".
+                  // At the cone's vertex (latest actual point) lo == hi by
+                  // construction — collapse to a single value to avoid the
+                  // visual noise of "12.50–12.50".
                   if (Array.isArray(value)) {
                     const [lo, hi] = value;
                     if (typeof lo === 'number' && typeof hi === 'number') {
-                      return [`${lo.toFixed(2)}–${hi.toFixed(2)}`, name];
+                      return lo === hi
+                        ? [lo.toFixed(2), name]
+                        : [`${lo.toFixed(2)}–${hi.toFixed(2)}`, name];
                     }
                     return ['—', name];
                   }
@@ -291,7 +296,7 @@ export default function PlayerProgression() {
                   dataKey={(d: { projection_lower: number | null; projection_upper: number | null }) =>
                     d.projection_lower != null && d.projection_upper != null
                       ? [d.projection_lower, d.projection_upper]
-                      : [null, null]
+                      : undefined
                   }
                   name="Projection range (q10–q90)"
                   fill="#a78bfa"
