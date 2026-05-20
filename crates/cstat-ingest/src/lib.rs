@@ -2,6 +2,7 @@ pub mod cache;
 pub mod campom_parity;
 pub mod client;
 pub mod ingest;
+pub mod projections_backtest;
 pub mod rate_limiter;
 pub mod tfs;
 pub mod tfs_recruits;

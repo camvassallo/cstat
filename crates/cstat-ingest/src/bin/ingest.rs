@@ -154,6 +154,15 @@ enum Commands {
         rebounds: bool,
     },
 
+    /// End-to-end backtest for the Phase B impact-aggregation projection
+    /// pipeline. Composes projected rosters for each target season, scores
+    /// them with roster_impact_model.onnx, and compares to actual AdjEM.
+    ProjectionsBacktest {
+        /// Target seasons to backtest (comma-separated). Defaults to 2025,2026.
+        #[arg(long, value_delimiter = ',', default_values_t = [2025, 2026])]
+        years: Vec<i32>,
+    },
+
     /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
     /// Pass condition: max abs diff < 0.01 across every CamPom intermediate and final.
     CampomParity {
@@ -469,6 +478,15 @@ async fn main() -> Result<()> {
             if !report.passed() {
                 std::process::exit(1);
             }
+        }
+
+        Commands::ProjectionsBacktest { years } => {
+            let model_dir =
+                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let predictor =
+                cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
+                    .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
+            cstat_ingest::projections_backtest::run(&db.pool, &predictor, &years).await?;
         }
 
         Commands::Transfers {

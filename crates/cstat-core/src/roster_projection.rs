@@ -41,6 +41,9 @@ use crate::freshman_model::{FreshmanFeatureRow, FreshmanPrediction, build_freshm
 use crate::inference::Predictor;
 use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use crate::team_name_match::team_match_score;
+use crate::trajectory::{
+    build_trajectory_features, fetch_player_trajectory_rows, fetch_trajectory_oof,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
@@ -393,6 +396,8 @@ pub fn synthesize_freshman_row(
         blk_pct: Some(p.blk_pct),
         ft_rate: Some(p.ft_rate),
         primary_class: None,
+        // Recruits are freshmen in the projected season by definition.
+        class_year: Some("Fr".to_string()),
         cam_v3,
     };
     (row, chosen_tier)
@@ -536,6 +541,33 @@ struct RosterRow {
     cam_v3: Option<f64>,
 }
 
+/// Advance a class year by one season for forward projection. A returner
+/// who was a `Jr` in the base season is a `Sr` in the projected season;
+/// arrivals (transfers, who played last season) age up the same way.
+/// Tolerates the inconsistently-stored vocab (`Sr` / `Senior` / `SR`).
+/// A returning `Sr` (a 5th-year / grad returner — base-season graduating
+/// seniors are filtered to `departures` before this is reached, but
+/// grad-transfer *arrivals* can carry `Sr`) stays `Sr`. Unrecognized or
+/// missing values pass through unchanged.
+fn age_up_class_year(cy: Option<String>) -> Option<String> {
+    let lc = cy.as_deref()?.to_ascii_lowercase();
+    let next = if lc.starts_with("fr") {
+        "So"
+    } else if lc.starts_with("so") {
+        "Jr"
+    } else if lc.starts_with("jr")
+        || lc.starts_with("ju")
+        || lc.starts_with("sr")
+        || lc.starts_with("se")
+    {
+        // Jr → Sr; a returning Sr (5th-year / grad transfer) stays Sr.
+        "Sr"
+    } else {
+        return cy; // unknown vocab — pass through untouched
+    };
+    Some(next.to_string())
+}
+
 impl RosterRow {
     fn into_player_row(self) -> PlayerRow {
         PlayerRow {
@@ -559,6 +591,9 @@ impl RosterRow {
             blk_pct: self.blk_pct,
             ft_rate: self.ft_rate,
             primary_class: self.primary_class,
+            // Aged up one season — this PlayerRow is materialized into a
+            // *projected* (next-season) roster.
+            class_year: age_up_class_year(self.class_year),
             cam_v3: self.cam_v3,
         }
     }
@@ -1058,6 +1093,74 @@ pub async fn compose_all_projections(
     Ok(out)
 }
 
+/// Forward-project next-season cam_v3 for a set of returning / arriving
+/// players (the Phase B impact-aggregation pipeline's per-player input).
+///
+/// OOF-first: for a historical `target_season` the trajectory model
+/// trained on, `trajectory_oof_predictions` holds leave-one-pair-out
+/// predictions — honest, not in-sample. Players without an OOF row
+/// (the live forward year, or transitions the model didn't train on)
+/// fall through to live trajectory inference off their `base_season`
+/// line.
+///
+/// Returns a `player_id → projected cam_v3` map. Players the trajectory
+/// model can't score (no qualifying prior season) are simply absent;
+/// `roster_impact::apply_projected_cam_v3` then leaves their existing
+/// cam_v3 in place (a "no growth projected" fallback). Recruits are not
+/// passed here — their cam_v3 already carries the freshman model's
+/// prediction from `synthesize_freshman_row`.
+pub async fn project_returner_cam_v3(
+    pool: &PgPool,
+    predictor: &Predictor,
+    player_ids: &[Uuid],
+    base_season: i32,
+    target_season: i32,
+) -> Result<HashMap<Uuid, f64>, sqlx::Error> {
+    if player_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // OOF held-out predictions for the historical target seasons.
+    let mut out: HashMap<Uuid, f64> = fetch_trajectory_oof(pool, player_ids, target_season)
+        .await?
+        .into_iter()
+        .map(|(pid, p)| (pid, p.mean as f64))
+        .collect();
+
+    // Live inference for everyone without an OOF row.
+    let need_live: Vec<Uuid> = player_ids
+        .iter()
+        .filter(|pid| !out.contains_key(*pid))
+        .copied()
+        .collect();
+    if !need_live.is_empty() {
+        let row_map = fetch_player_trajectory_rows(pool, &need_live, base_season).await?;
+        let mut ids: Vec<Uuid> = Vec::with_capacity(row_map.len());
+        let mut feats = Vec::with_capacity(row_map.len());
+        for (pid, row) in row_map {
+            ids.push(pid);
+            feats.push(build_trajectory_features(&row, base_season));
+        }
+        if !feats.is_empty() {
+            match predictor.predict_trajectory_batch(&feats) {
+                Ok(preds) => {
+                    for (pid, pred) in ids.into_iter().zip(preds) {
+                        out.insert(pid, pred.mean as f64);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        n = feats.len(),
+                        "trajectory batch predict failed in project_returner_cam_v3; \
+                         affected players keep their current cam_v3",
+                    );
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1084,6 +1187,7 @@ mod tests {
             blk_pct: None,
             ft_rate: None,
             primary_class: Some("Wizard".into()),
+            class_year: None,
             cam_v3,
         }
     }
