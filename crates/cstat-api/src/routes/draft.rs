@@ -1,0 +1,387 @@
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::Json,
+    routing::get,
+};
+use cstat_core::roster_projection::{load_draft_entrants, normalize_player_name as normalize};
+use cstat_core::team_name_match::{team_match_score, team_matches};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::AppState;
+
+pub fn router() -> Router<Arc<AppState>> {
+    Router::new().route("/api/draft/{year}", get(draft_board))
+}
+
+/// One curated prospect from `data/draft/{year}_big_board.json`. Schema is
+/// documented in ROADMAP.md (Phase 5b "NBA Draft Big Board") and produced by
+/// `scripts/parse_tankathon.py` from a Tankathon paste. Unknown fields
+/// (`source`, `as_of`) are ignored — we don't surface them.
+#[derive(Debug, Deserialize)]
+struct BoardEntry {
+    /// Tankathon draft rank. `None` for the alphabetical "unranked" tail
+    /// (players Tankathon lists without a number).
+    rank: Option<i32>,
+    name: String,
+    /// School / team name as Tankathon writes it ("Duke", "Kansas", "BYU").
+    current_team: String,
+    #[serde(default)]
+    position: Option<String>,
+    #[serde(default)]
+    height: Option<String>,
+    #[serde(default)]
+    weight: Option<i32>,
+    #[serde(default)]
+    class_year: Option<String>,
+    #[serde(default)]
+    age: Option<f64>,
+    /// `lottery` | `1st-round` | `2nd-round` | `fringe` | `unranked`.
+    tier: String,
+    #[serde(default)]
+    stats: BoardStats,
+}
+
+/// Per-game counting stats carried on the board JSON. Passed straight through
+/// to the response so the frontend can show a box-score line if it wants;
+/// not part of the headline table.
+#[derive(Debug, Default, Deserialize)]
+struct BoardStats {
+    #[serde(default)]
+    pts: Option<f64>,
+    #[serde(default)]
+    reb: Option<f64>,
+    #[serde(default)]
+    ast: Option<f64>,
+    #[serde(default)]
+    blk: Option<f64>,
+    #[serde(default)]
+    stl: Option<f64>,
+}
+
+/// A cstat player row pulled by season for name-matching against the board.
+/// Mirrors `transfers.rs::DbCandidate` — we carry both the Torvik short name
+/// (for display) and the full NatStat name (for alias matching against the
+/// board's school strings).
+#[derive(sqlx::FromRow)]
+struct DbCandidate {
+    player_id: Uuid,
+    name: String,
+    team_id: Option<Uuid>,
+    team_name: Option<String>,
+    team_full_name: Option<String>,
+    minutes_per_game: Option<f64>,
+    games_played: Option<i32>,
+    campom: Option<f64>,
+    campom_pct: Option<f64>,
+    primary_class: Option<String>,
+    secondary_class: Option<String>,
+}
+
+/// Subset of a `teams` row — enough to resolve a board school name to a
+/// cstat team_id for the team link.
+#[derive(sqlx::FromRow)]
+struct DbTeam {
+    id: Uuid,
+    name: String,
+    short_name: Option<String>,
+}
+
+/// One prospect returned to the frontend — board fields plus the cstat
+/// player match (if any) and a derived draft `status`.
+#[derive(Serialize)]
+struct Prospect {
+    /// Tankathon draft rank (`None` for the unranked tail).
+    draft_rank: Option<i32>,
+    name: String,
+    tier: String,
+    position: Option<String>,
+    height: Option<String>,
+    weight: Option<i32>,
+    /// Academic class as Tankathon writes it (Freshman / … / Senior /
+    /// International / G League).
+    class_year: Option<String>,
+    age: Option<f64>,
+    pts: Option<f64>,
+    reb: Option<f64>,
+    ast: Option<f64>,
+    blk: Option<f64>,
+    stl: Option<f64>,
+    /// Derived eligibility status — see `classify_status`. One of
+    /// `declared` / `senior` / `international` / `g-league` / `prospect`.
+    status: &'static str,
+    /// Board school name (verbatim from Tankathon).
+    current_team: String,
+    /// Resolved cstat team — from the matched player's team, or a school-name
+    /// lookup so the team link works even for unmatched prospects.
+    team_id: Option<Uuid>,
+    team_name: Option<String>,
+    /// cstat player match. `None` for prospects with no college row this
+    /// season — internationals, G-Leaguers, the odd name we couldn't match.
+    player_id: Option<Uuid>,
+    /// CamPom v3 (`cam_gbpm_v3_psos`) and its percentile, from the matched
+    /// player. `None` when unmatched.
+    campom: Option<f64>,
+    campom_pct: Option<f64>,
+    primary_class: Option<String>,
+    secondary_class: Option<String>,
+    minutes_per_game: Option<f64>,
+    games_played: Option<i32>,
+}
+
+/// Derive the draft-eligibility status of a board prospect.
+///
+/// - `international` / `g-league` — not a college player; no cstat row.
+/// - `declared` — an underclassman on the early-entrant list (a formal
+///   early-entry declaration with the withdrawal deadline still ahead).
+/// - `senior` — automatically draft-eligible; no "early entry" needed.
+/// - `prospect` — on the board but hasn't declared; an underclassman with
+///   remaining eligibility (a name scouts are watching, not yet in).
+fn classify_status(class_year: Option<&str>, declared: bool) -> &'static str {
+    let cy = class_year.unwrap_or_default().to_ascii_lowercase();
+    if cy.contains("international") {
+        "international"
+    } else if cy.contains("g league") || cy.contains("g-league") {
+        "g-league"
+    } else if declared {
+        "declared"
+    } else if cy.starts_with("sr") || cy.starts_with("sen") {
+        "senior"
+    } else {
+        "prospect"
+    }
+}
+
+async fn draft_board(
+    State(state): State<Arc<AppState>>,
+    Path(year): Path<i32>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !(2000..=2100).contains(&year) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "year out of range" })),
+        ));
+    }
+
+    // The curated big board. A missing file just means we have no board for
+    // this draft cycle yet — a clean 404, not a server error.
+    let board_path = PathBuf::from("data/draft").join(format!("{year}_big_board.json"));
+    let board_raw = std::fs::read_to_string(&board_path).map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("no draft board for year {year}") })),
+        )
+    })?;
+    let board: Vec<BoardEntry> = serde_json::from_str(&board_raw).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("draft board parse failed: {e}") })),
+        )
+    })?;
+
+    // Cross-reference list: underclassmen who've formally declared. A board
+    // player whose (normalized) name is here is a pending early entry. The
+    // early-entrant list is only Fr/So/Jr by construction — seniors never
+    // appear — so a name hit unambiguously means "declared". Missing file
+    // degrades to "nobody declared" rather than failing the request.
+    let entrant_path = PathBuf::from("data/draft").join(format!("{year}_early_entrants.json"));
+    let declared: HashSet<String> = load_draft_entrants(&entrant_path)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| normalize(&e.name))
+        .collect();
+
+    // Every season player, so we can name-match the board against cstat in
+    // Rust through the same normalize() both sides go through. ~5K rows is
+    // small enough not to need an index-friendly join. Mirrors transfers.rs.
+    let candidates: Vec<DbCandidate> = sqlx::query_as::<_, DbCandidate>(
+        r#"
+        SELECT
+            p.id                     AS player_id,
+            p.name                   AS name,
+            t.id                     AS team_id,
+            COALESCE(t.short_name, t.name) AS team_name,
+            t.name                   AS team_full_name,
+            pss.minutes_per_game     AS minutes_per_game,
+            pss.games_played         AS games_played,
+            tps.cam_gbpm_v3_psos     AS campom,
+            tps.cam_gbpm_v3_psos_pct AS campom_pct,
+            pa.primary_class         AS primary_class,
+            pa.secondary_class       AS secondary_class
+        FROM player_season_stats pss
+        JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+        LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
+        LEFT JOIN torvik_player_stats tps
+            ON tps.player_id = p.id AND tps.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = p.id AND pa.season = pss.season
+        WHERE pss.season = $1
+        "#,
+    )
+    .bind(year)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("candidates query failed: {e}") })),
+        )
+    })?;
+
+    // Every team for the season, to resolve a board school name to a cstat
+    // team_id for the team link.
+    let teams: Vec<DbTeam> =
+        sqlx::query_as::<_, DbTeam>(r#"SELECT id, name, short_name FROM teams WHERE season = $1"#)
+            .bind(year)
+            .fetch_all(&state.db.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("teams query failed: {e}") })),
+                )
+            })?;
+
+    // Resolve a board school name ("Duke") to the team_id whose full name
+    // ("Duke Blue Devils") matches via the shared prefix/alias logic. The
+    // score tiebreaker prefers an alias hit over a blind prefix hit.
+    let resolve_team_id = |short: &str| -> Option<Uuid> {
+        teams
+            .iter()
+            .filter_map(|t| {
+                team_match_score(t.short_name.as_deref(), &t.name, short).map(|s| (s, t))
+            })
+            .min_by_key(|(s, _)| *s)
+            .map(|(_, t)| t.id)
+    };
+
+    // Group candidates by normalized name for O(1) per-prospect lookup.
+    let mut by_name: HashMap<String, Vec<DbCandidate>> = HashMap::new();
+    for c in candidates {
+        by_name.entry(normalize(&c.name)).or_default().push(c);
+    }
+
+    let prospects: Vec<Prospect> = board
+        .into_iter()
+        .map(|b| {
+            let key = normalize(&b.name);
+            let best: Option<&DbCandidate> = by_name.get(&key).and_then(|cands| {
+                // Prefer the candidate whose team matches the board school.
+                cands
+                    .iter()
+                    .find(|c| {
+                        team_matches(
+                            c.team_name.as_deref(),
+                            c.team_full_name.as_deref(),
+                            &b.current_team,
+                        )
+                    })
+                    // Fallback: most-played candidate (handles name collisions).
+                    .or_else(|| {
+                        cands.iter().max_by(|a, c| {
+                            a.minutes_per_game
+                                .unwrap_or(0.0)
+                                .partial_cmp(&c.minutes_per_game.unwrap_or(0.0))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    })
+            });
+
+            // Prefer the cstat team_id we matched the player to; fall back to
+            // a school-name lookup so unmatched prospects still get a link.
+            let team_id = best
+                .and_then(|c| c.team_id)
+                .or_else(|| resolve_team_id(&b.current_team));
+            let status = classify_status(b.class_year.as_deref(), declared.contains(&key));
+
+            Prospect {
+                draft_rank: b.rank,
+                name: b.name,
+                tier: b.tier,
+                position: b.position,
+                height: b.height,
+                weight: b.weight,
+                class_year: b.class_year,
+                age: b.age,
+                pts: b.stats.pts,
+                reb: b.stats.reb,
+                ast: b.stats.ast,
+                blk: b.stats.blk,
+                stl: b.stats.stl,
+                status,
+                team_id,
+                team_name: best.and_then(|c| c.team_name.clone()),
+                current_team: b.current_team,
+                player_id: best.map(|c| c.player_id),
+                campom: best.and_then(|c| c.campom),
+                campom_pct: best.and_then(|c| c.campom_pct),
+                primary_class: best.and_then(|c| c.primary_class.clone()),
+                secondary_class: best.and_then(|c| c.secondary_class.clone()),
+                minutes_per_game: best.and_then(|c| c.minutes_per_game),
+                games_played: best.and_then(|c| c.games_played),
+            }
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "year": year,
+        "prospects": prospects,
+        "total": prospects.len(),
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_status_covers_every_branch() {
+        // International / G League win regardless of declaration state —
+        // they're not college players, so the early-entrant list is moot.
+        assert_eq!(classify_status(Some("International"), false), "international");
+        assert_eq!(classify_status(Some("International"), true), "international");
+        assert_eq!(classify_status(Some("G League"), false), "g-league");
+        // An underclassman on the early-entrant list is a pending declaration.
+        assert_eq!(classify_status(Some("Freshman"), true), "declared");
+        assert_eq!(classify_status(Some("Sophomore"), true), "declared");
+        // An underclassman NOT on the list is a watch-list prospect.
+        assert_eq!(classify_status(Some("Junior"), false), "prospect");
+        // Seniors are auto-eligible — never on the early-entrant list.
+        assert_eq!(classify_status(Some("Senior"), false), "senior");
+        // Missing class year degrades to the watch-list bucket.
+        assert_eq!(classify_status(None, false), "prospect");
+    }
+
+    #[test]
+    fn board_entry_deserializes_real_schema() {
+        // Mirrors `data/draft/2026_big_board.json` exactly, including the
+        // `source` / `as_of` fields we deliberately don't model (serde
+        // ignores unknown keys) and a ranked + an unranked entry.
+        let raw = r#"[
+            { "rank": 1, "name": "Cameron Boozer", "current_team": "Duke",
+              "position": "PF", "height": "6-9", "weight": 250,
+              "class_year": "Freshman", "age": 18.9, "tier": "lottery",
+              "stats": { "pts": 24.2, "reb": 11.0, "ast": 4.4, "blk": 0.7, "stl": 1.5 },
+              "source": "tankathon", "as_of": "2026-05-10" },
+            { "rank": null, "name": "Some Walkon", "current_team": "Whoever",
+              "tier": "unranked" }
+        ]"#;
+        let board: Vec<BoardEntry> = serde_json::from_str(raw).expect("board parses");
+        assert_eq!(board.len(), 2);
+        assert_eq!(board[0].rank, Some(1));
+        assert_eq!(board[0].name, "Cameron Boozer");
+        assert_eq!(board[0].stats.pts, Some(24.2));
+        // The unranked tail: rank absent, optional blocks absent — every
+        // missing field must fall back to None via `#[serde(default)]`.
+        assert_eq!(board[1].rank, None);
+        assert_eq!(board[1].tier, "unranked");
+        assert_eq!(board[1].position, None);
+        assert_eq!(board[1].stats.pts, None);
+    }
+}

@@ -410,6 +410,45 @@ export function fetchTransfers(year: number) {
   );
 }
 
+// NBA Draft big board — one row per curated draft prospect for a given draft
+// cycle year, sourced from `data/draft/{year}_big_board.json` (Tankathon) and
+// joined to cstat players for CamPom. `campom` / `player_id` are null for
+// prospects with no college row this season (seniors who left, internationals,
+// G-Leaguers). `status` is derived: declared / senior / international /
+// g-league / prospect.
+export interface DraftProspect {
+  draft_rank: number | null;
+  name: string;
+  tier: string;
+  position: string | null;
+  height: string | null;
+  weight: number | null;
+  class_year: string | null;
+  age: number | null;
+  pts: number | null;
+  reb: number | null;
+  ast: number | null;
+  blk: number | null;
+  stl: number | null;
+  status: string;
+  current_team: string;
+  team_id: string | null;
+  team_name: string | null;
+  player_id: string | null;
+  campom: number | null;
+  campom_pct: number | null;
+  primary_class: string | null;
+  secondary_class: string | null;
+  minutes_per_game: number | null;
+  games_played: number | null;
+}
+
+export function fetchDraft(year: number) {
+  return fetchJson<{ year: number; prospects: DraftProspect[]; total: number }>(
+    `/draft/${year}`,
+  );
+}
+
 // HS recruit class — one row per 247Sports composite-ranked HS recruit for a
 // given recruiting class year. `year + 1` is the cstat-season they first play
 // in (class-of-2026 → cstat-season 2027). CamPom / archetype fields stay NULL
