@@ -6,7 +6,7 @@
 
 1. **Returning players** — last season's qualifying roster minus seniors, outbound portal commits, firm NBA-draft departures, and (in the floor scenario) declared-but-undecided draft entrants.
 2. **Incoming portal transfers** — players committed to this team in the matching portal cycle, with their *source-team* stats carried as their PlayerRow.
-3. **Incoming HS recruits** — class-of-`base_season` commits to this team, synthesized into a PlayerRow from a tier-mean freshman profile.
+3. **Incoming HS recruits** — class-of-`base_season` commits to this team. Each is given a per-recruit projected cam_v3 from the freshman-impact model; the tier-mean profile below supplies the box-stat scaffold and rank bucketing.
 
 Each scenario's roster is scored from its *projected* cam_v3 distribution (see *Feature extraction* and *Projected cam_v3* below); the raw model output is then blended with the team's actual baseline AdjEM (see *Scoring & calibration* below).
 
@@ -90,6 +90,8 @@ Headline tier signal (CamPom v3):
 | T4 | 185 | 14.1 | 4.9 | 0.184 | −0.57 |
 
 T3 vs T4 are nearly identical — composite rank stops being a strong signal past ~100. Don't claim more precision than the cohort supports.
+
+**What the projection actually scores**: `synthesize_freshman_row` sets each recruit's `cam_v3` to the **freshman-impact model's per-recruit prediction**, not the tier mean — so a 5★ projected to bust and a 5★ projected to star get different rows. The tier profile above supplies only the box-stat scaffold (unused by Phase B, which reads `cam_v3`) and the `composite_rank` → tier bucketing; the tier-mean `cam_v3` column is the population baseline the per-player model is calibrated against, and the last-resort fallback when the freshman model can't score a recruit.
 
 ## Scenarios
 

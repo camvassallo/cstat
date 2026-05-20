@@ -37,12 +37,11 @@ pub fn router() -> Router<Arc<AppState>> {
         )
 }
 
-/// Minimum (returning + arrivals) count we'll score. Below this, the
-/// projection is dominated by the few qualifying players' rate stats
-/// and the model produces wildly optimistic AdjEM (the v1 spot-check
-/// surfaced this — see ROADMAP §5b's "thin roster" caveat). Smaller
-/// rosters return null predictions and a `too_thin = true` flag so the
-/// UI can render them honestly without hiding the row.
+/// Minimum (returning + arrivals + recruits) count we'll score. Below
+/// this the roster is too sparse to be a real rotation — a 1–6 player
+/// roster can't be honestly projected — so smaller rosters return null
+/// predictions and a `too_thin = true` flag, letting the UI render them
+/// honestly (an explanation chip) instead of hiding the row.
 const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 
 /// Shape returned to the frontend. One row per team; ranked by midpoint
