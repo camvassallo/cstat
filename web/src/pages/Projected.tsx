@@ -283,6 +283,8 @@ function buildColumns(
       ...flexCol(2, 140),
       headerTooltip:
         "Incoming HS recruits committed to this team. Per-tier breakdown by cstat's freshman-impact model: each recruit is reassigned to T1 (≈+9 projected CamPom) / T2 (≈+2.4) / T3 (≈+0.7) / T4 (≈-0.6) based on which tier centroid is closest to their model-predicted freshman CamPom. The recruit's continuous prediction surfaces on the Recruits tab.",
+      // Sort by the impactful end of the class — T1 weighted 3×, T2 1× —
+      // not raw count, so one elite recruit outranks five walk-ons.
       comparator: (_a, _b, na, nb) => {
         const a = na.data as ProjectedTeam | undefined;
         const b = nb.data as ProjectedTeam | undefined;
@@ -487,7 +489,7 @@ function ProjectionView({ year }: { year: number }) {
           mean absolute error <strong>{accuracy.mae.toFixed(1)} AdjEM</strong>,
           mean bias {accuracy.bias >= 0 ? '+' : ''}
           {accuracy.bias.toFixed(1)} (
-          {accuracy.bias >= 0 ? 'slightly over-projected' : 'slightly under-projected'}
+          {accuracy.bias >= 0 ? 'over-projected on average' : 'under-projected on average'}
           ). See the <strong>Actual</strong> and <strong>Proj − Act</strong>{' '}
           columns per team.
         </div>
