@@ -116,7 +116,7 @@ function buildColumns(isMobile: boolean): ColDef<ProjectedTeam>[] {
       ...flexCol(1, 100),
       sort: 'desc',
       headerTooltip:
-        'Midpoint of (floor + ceiling) / 2. Shrunk 50% toward last year\'s AdjEM as a Bayesian prior (raw model swings were too extreme on lost-stars / heavy-portal teams).',
+        'Probability-weighted blend of the floor and ceiling bounds (weighted by the declared-draft cohort\'s mock-draft-implied odds of returning), then shrunk toward last year\'s AdjEM by 25-75% depending on how much of the roster returns.',
       // AG Grid's sort engine applies the comparator in ascending order
       // and then reverses for descending. So to anchor nulls (thin
       // rosters) to the visual bottom regardless of direction, we flip
@@ -351,8 +351,12 @@ export default function Projected2027() {
         <strong className="text-amber-300">v2 honesty caveats:</strong>{' '}
         Holistic projection: returners (minus seniors, outbound portal,
         firm draft departures, declared-draft `?` cohort) + incoming
-        portal commits + <strong>incoming HS recruits</strong>, then
-        shrunk 50% toward last season's actual AdjEM as a Bayesian prior.
+        portal commits + <strong>incoming HS recruits</strong>. The
+        projected roster is re-cast as a realistic full rotation ranked
+        by CamPom v3 — projected minutes go to the best projected
+        players, not last year's roles — then scored and shrunk toward
+        last season's actual AdjEM by 25-75%: more for teams that
+        return their core, less for heavily turned-over rosters.
         Recruits are synthesized from a tier-mean freshman profile keyed
         on 247 composite rank (T1=top-30, T2=31-100, T3=101-250,
         T4=251+/unranked) calibrated against the class-of-2024 and
@@ -361,10 +365,10 @@ export default function Projected2027() {
         specific players. A 5★ who busts and a 5★ All-American both
         get the same projected row. The per-player upgrade is the
         Phase 6 freshman-impact prior, gated on a few more paired
-        classes. <strong>Returning players use their 2025-26 stats
-        as-is</strong> — no growth model yet, so a junior expected to
-        break out as a senior shows up at his junior line. Absolute
-        AdjEM is calibrated at ~7.4 MAE per the model's
+        classes. <strong>Returning players carry their 2025-26 rate
+        stats</strong> — no growth model yet, so a junior expected to
+        break out as a senior shows up at his junior efficiency.
+        Absolute AdjEM is calibrated at ~7.4 MAE per the model's
         leave-one-season-out backtest; treat the ordering as
         <em>directional</em>, not point-estimates. Rosters with &lt;7
         qualifying players (returning + arrivals + recruits) are flagged
