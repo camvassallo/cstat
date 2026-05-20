@@ -102,11 +102,12 @@ _NEG = -1.0e9
 #     row exists for a resolved, ranked recruit in their first cstat season.
 # A player is almost always a returner XOR a freshman in season N, so the
 # two tables rarely both match one (player, season) — 4 rows in the
-# 2015-2026 corpus do, all upperclassmen wrongly carrying a freshman row
-# from a name-collision recruit misresolution. COALESCE puts trajectory
-# first deliberately: for a genuine returner the prior-season-based
-# projection is the right signal, and the precedence dodges that
-# misresolution artifact for free.
+# 2015-2026 corpus do: non-freshmen (So-Sr) that also carry a freshman OOF
+# row through a recruit-resolution edge case (a recruit linked to a
+# same-named player, or a recruit-year mismatch). COALESCE puts trajectory
+# first deliberately — for a genuine returner the prior-season projection
+# is the right signal, so the precedence resolves these 4 correctly
+# whatever the cause.
 # `campom_source` tags provenance for the coverage report in build_dataset.
 PLAYER_QUERY = """
 SELECT
