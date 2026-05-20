@@ -104,7 +104,7 @@ T3 vs T4 are nearly identical — composite rank stops being a strong signal pas
 | **Recruits** | **✓** | **✓** |
 | Uncertain (declared `?`) | ✗ | ✓ |
 
-Recruits are unconditional: a 5★ HS commit to Duke shows up in both the floor and ceiling projections. The band width reflects only the draft `?` cohort, not the recruit uncertainty (which is folded into the tier-mean profile's variance — wider for T1 because elite freshmen vary the most year to year).
+Recruits are unconditional: a 5★ HS commit to Duke shows up in both the floor and ceiling projections. The band width reflects only the draft `?` cohort; recruit projection uncertainty (the freshman model's q10–q90, widest for elite recruits) is surfaced per-player on the team-detail page, not in the team-level floor/ceiling band.
 
 ## Feature extraction (`roster_impact::build_roster_impact_features`)
 
@@ -143,8 +143,8 @@ shrink(r) = 0.55·baseline + 0.45·r + 0.0
 
 ## Limitations and upgrade paths
 
-- **Tier-mean is population average, not per-player.** A 5★ who busts and a 5★ All-American both project as +8.97 CamPom. The Phase 6 freshman-impact prior model is the upgrade.
-- **T4 includes everyone the 247 composite ranking doesn't reach.** True walk-ons (high school stars who walked on at a high-major) are projected with the same profile as low-major freshmen with light recruiting. The minute share they actually get is governed by the roster model's minutes-weighted aggregation — a heavy T4 cohort will see their MPG cap their team-level contribution naturally.
+- **Recruit cam_v3 is per-player, but pre-college signal is weak.** `synthesize_freshman_row` scores each recruit through the freshman-impact model — a 5★ projected to bust and one projected to star get different rows. But composite rank stops separating past ~100, so within-tier spread is modest and elite-recruit bands (q10–q90) are wide; the per-recruit point estimate is honest only as a directional read.
+- **T4 includes everyone the 247 composite ranking doesn't reach.** True walk-ons (high school stars who walked on at a high-major) are projected with the same profile as low-major freshmen with light recruiting. Their team-level contribution is capped naturally: a low projected `cam_v3` ranks them into a low-minute canonical slot, so they barely move the team number.
 - **Returner growth and freshman upside now count** (Phase B, shipped). The projection scores *projected* `cam_v3` — the trajectory model for returners / arrivals, the freshman model for recruits — so a junior breaking out as a senior, or an elite freshman, moves the number. Residual caveat: the trajectory model's documented elite-tail regression (≈−3.4 bias on +15–20 prior CamPom, pure extrapolation above +20) flows straight through the cam_v3 inputs. Phase B makes that error *attributable to the trajectory model* rather than masking it behind a roster-composition artifact + offset; more training seasons (Phase 6) is the remedy. See ROADMAP §5b "Projection bias fix".
 - **Recruit-to-team commit resolution is name + alias-based.** 305/305 of class-of-2026 committed recruits resolved; 303/307 of class-of-2024; 465/472 of class-of-2025. Residue is non-D1 schools (Le Moyne, NCAA-D2 / NAIA destinations).
 - **Walk-on freshmen not on 247's composite rankings are invisible.** Their teams get a slightly pessimistic projection, but the impact is small.
