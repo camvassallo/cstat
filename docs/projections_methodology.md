@@ -1,14 +1,14 @@
-# 2027 Projection Methodology (v2 — holistic roster)
+# 2027 Projection Methodology (v3 — Phase B impact-aggregation model)
 
 ## What it is
 
-`GET /api/projections/{year}` projects an upcoming season's team AdjEM band per team by composing a hypothetical N+1 roster from three sources and scoring it with the roster-only AdjEM ONNX model:
+`GET /api/projections/{year}` projects an upcoming season's team AdjEM band per team by composing a hypothetical N+1 roster from three sources and scoring it with the **Phase B impact-aggregation model** (`roster_impact_model.onnx`):
 
 1. **Returning players** — last season's qualifying roster minus seniors, outbound portal commits, firm NBA-draft departures, and (in the floor scenario) declared-but-undecided draft entrants.
 2. **Incoming portal transfers** — players committed to this team in the matching portal cycle, with their *source-team* stats carried as their PlayerRow.
 3. **Incoming HS recruits** — class-of-`base_season` commits to this team, synthesized into a PlayerRow from a tier-mean freshman profile.
 
-Before scoring, each scenario's roster is re-cast as a realistic cam_v3-ranked rotation (see *Rotation normalization* below); the raw model output is then blended with the team's actual baseline AdjEM and a calibration offset (see *Scoring & calibration* below).
+Each scenario's roster is scored from its *projected* cam_v3 distribution (see *Feature extraction* and *Projected cam_v3* below); the raw model output is then blended with the team's actual baseline AdjEM (see *Scoring & calibration* below).
 
 ## Composition (`crates/cstat-core/src/roster_projection.rs`)
 
@@ -104,35 +104,46 @@ T3 vs T4 are nearly identical — composite rank stops being a strong signal pas
 
 Recruits are unconditional: a 5★ HS commit to Duke shows up in both the floor and ceiling projections. The band width reflects only the draft `?` cohort, not the recruit uncertainty (which is folded into the tier-mean profile's variance — wider for T1 because elite freshmen vary the most year to year).
 
-## Rotation normalization (`roster_features::project_rotation`)
+## Feature extraction (`roster_impact::build_roster_impact_features`)
 
-The composed roster carries every player's *prior* minutes — returners at last year's role, recruits at a tier-fixed MPG, arrivals at their *source-team* MPG. Nobody is promoted into minutes vacated by departed seniors / drafted players, so a gutted roster sums to ~150 player-minutes and a portal-stacked one past 230 — both outside the ~221 Σmpg the roster model trained on. Feeding that to `predict_adj_em` is out-of-distribution extrapolation and was the dominant driver of top teams projecting absurdly low (Purdue, a +36 AdjEM team, scored at raw +3).
+Before feature extraction, every returner / arrival has its `cam_v3` overwritten with a *projected* next-season value (see *Projected cam_v3* below); recruits already carry the freshman model's per-player prediction.
 
-`project_rotation` fixes this before feature extraction: it ranks the scenario's players by `cam_v3` descending and assigns each rank a canonical MPG calibrated from 1,090 qualified team-seasons (2024–26):
+`build_roster_impact_features` ranks the roster by `cam_v3` descending, takes the top 13 as the rotation, and assigns each rank a canonical MPG calibrated from qualified team-seasons:
 
 `[32.0, 29.8, 27.8, 25.5, 23.0, 20.1, 17.2, 14.4, 11.9, 9.6, 8.2, 7.3, 6.9]`
 
-Rank ≥13 falls out of the rotation (0 MPG). Per-game counting stats (ppg/rpg/apg/spg/bpg/topg) are rescaled by `new_mpg / old_mpg` (clamped to ×0.4–×2.5); rate stats (TS/eFG/USG/`*_pct`/ft_rate) are minutes-invariant and pass through unchanged. This makes `cam_v3` — including the freshman model's per-recruit prediction — load-bearing for the projection *without* adding it as a roster-model feature (the train script forbids that: it collapses the model to the player-impact identity).
+It emits 25 features: the cam_v3 distribution (Σ, minutes-weighted mean, top-1/3/7, counts over +5/+10/+15), a minute-weighted experience mix (Fr/So/Jr/Sr share — returners aged up one season), and a minute-weighted archetype balance (12 D&D-class shares). Every aggregate uses the canonical-MPG weighting, *identical* in training (`train_roster_impact_model.py`) and at serve — so no out-of-distribution minutes, which was the Phase A failure mode. Phase B reads no per-game counting stats, so unlike the box-score model there is no stat rescaling.
+
+Why this is the right consumer for cam_v3: `train_roster_model.py` (the box-score model) deliberately *excludes* cam_v3 because `Σ(cam_v3 × minute_share) ≈ AdjEM` collapses it to the player-impact identity — fatal for the swap-Δ tool. For a *projection* that identity is exactly the goal, so Phase B is a clean calibrator and all projection error lives in the upstream cam_v3 predictions — honest and decomposable. The box-score `roster_model.onnx` is untouched and still serves swap-Δ.
+
+## Projected cam_v3 (`roster_projection::project_returner_cam_v3`)
+
+Each returner / arrival gets a forward-looking `cam_v3`:
+- **OOF-first**: for a historical target season the trajectory model trained on, `trajectory_oof_predictions` holds leave-one-pair-out (honest, not in-sample) predictions.
+- **Live trajectory inference** for everyone else — the forward year, and transitions the model didn't train on.
+- Recruits get the freshman-impact model's per-recruit prediction, baked into the synthesized PlayerRow by `synthesize_freshman_row`.
+
+This is what makes returner growth and freshman upside count: a junior projected to break out, or an elite freshman, moves the team projection through their `cam_v3`.
 
 ## Scoring & calibration
 
-Each scenario's normalized roster is scored by `predict_adj_em`, then blended:
+Each scenario's feature vector is scored by `predict_roster_impact`, then blended with the team's base-season AdjEM:
 
 ```
 midpoint  = p̄·shrink(ceiling_raw) + (1−p̄)·shrink(floor_raw)
-shrink(r) = 0.80·baseline + 0.20·r + 2.0
+shrink(r) = 0.55·baseline + 0.45·r + 0.0
 ```
 
-- **0.80 baseline weight + 2.0 offset** — tuned on a 496-team-year backtest of the whole pipeline against actual 2025 + 2026 AdjEM. The roster model is a same-season *descriptive* model; as a *projector* it is both noisy and biased low (raw MAE 9.97, bias −4.8) — last year's AdjEM alone is the better predictor (MAE 6.53). The blend leans on the baseline accordingly; the `+2.0` offset zeroes the blended pipeline's bias. Final pipeline MAE **6.23**, beating baseline-persistence; the MAE curve is flat over weight 0.75–0.82. An earlier continuity-weighted scheme (baseline weight scaled by returning-minutes share) was tried and reverted — the backtest showed it shifted weight away from the better predictor and widened the top-team error.
+- **0.55 baseline weight, 0.0 offset** — tuned on the end-to-end `cstat-ingest projections-backtest` against actual 2025 + 2026 AdjEM (496 pooled team-years). Phase B's raw output is a genuine projector (raw MAE 6.58, bias +0.44), not a same-season descriptive model used out of context, so the blend leans far less on baseline persistence than Phase A's box-score pipeline did (0.55 vs 0.80) and needs **no calibration offset** — Phase A's `+2.0` corrected a structural −4.8 bias the box-score model had as a projector; Phase B doesn't have it. The MAE curve is flat across weight 0.50–0.60; 0.55 is the optimum. **Blended pipeline MAE 5.88**, beating both baseline-persistence (6.53) and the old Phase A pipeline (6.23).
 - **p̄** is the mean probability the team's uncertain (declared-draft) cohort returns, from the Tankathon mock board: pick ≤30 → 0.05, 31–60 → 0.50, off-board → 0.85. It replaces a flat 50/50 floor/ceiling average, which over-penalized draft-talent-heavy (i.e. top) teams.
 
-**Re-tuning playbook**: temporarily set `SHRINK_WEIGHT = 0.0` / `PROJECTION_OFFSET = 0.0` in `routes/projections.rs`, capture `/api/projections/2025` and `/api/projections/2026` (their `midpoint_adj_em` is then raw model output), join to actual `team_season_stats.adj_efficiency_margin`, and grid-search `(weight, offset)` to minimize pooled MAE.
+**Re-tuning playbook**: run `cargo run --bin cstat-ingest -- projections-backtest` — it composes the full pipeline for 2025 / 2026 with held-out OOF cam_v3, prints Phase B raw vs Phase A vs baseline-persistence, and sweeps the blend weight. Set `SHRINK_WEIGHT` / `PROJECTION_OFFSET` in `routes/projections.rs` from the sweep's optimum.
 
 ## Limitations and upgrade paths
 
 - **Tier-mean is population average, not per-player.** A 5★ who busts and a 5★ All-American both project as +8.97 CamPom. The Phase 6 freshman-impact prior model is the upgrade.
 - **T4 includes everyone the 247 composite ranking doesn't reach.** True walk-ons (high school stars who walked on at a high-major) are projected with the same profile as low-major freshmen with light recruiting. The minute share they actually get is governed by the roster model's minutes-weighted aggregation — a heavy T4 cohort will see their MPG cap their team-level contribution naturally.
-- **Returning players use frozen prior-season rate stats.** `project_rotation` re-casts each player's *minutes* (and rescales counting stats to match), but the efficiency/usage profile is still last season's — no growth model. The Phase 5c trajectory model predicts next-season `cam_v3` but the box-score roster model can't consume it (it's box-score-only by design). The Phase B impact-aggregation model — which scores a roster from aggregated projected `cam_v3` — is the path to making returner growth and freshman upside count. See ROADMAP §5b "Projection bias fix".
+- **Returner growth and freshman upside now count** (Phase B, shipped). The projection scores *projected* `cam_v3` — the trajectory model for returners / arrivals, the freshman model for recruits — so a junior breaking out as a senior, or an elite freshman, moves the number. Residual caveat: the trajectory model's documented elite-tail regression (≈−3.4 bias on +15–20 prior CamPom, pure extrapolation above +20) flows straight through the cam_v3 inputs. Phase B makes that error *attributable to the trajectory model* rather than masking it behind a roster-composition artifact + offset; more training seasons (Phase 6) is the remedy. See ROADMAP §5b "Projection bias fix".
 - **Recruit-to-team commit resolution is name + alias-based.** 305/305 of class-of-2026 committed recruits resolved; 303/307 of class-of-2024; 465/472 of class-of-2025. Residue is non-D1 schools (Le Moyne, NCAA-D2 / NAIA destinations).
 - **Walk-on freshmen not on 247's composite rankings are invisible.** Their teams get a slightly pessimistic projection, but the impact is small.
 
