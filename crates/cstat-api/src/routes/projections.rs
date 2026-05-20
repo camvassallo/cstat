@@ -14,6 +14,7 @@ use cstat_core::inference::Predictor;
 use cstat_core::roster_features::build_roster_features;
 use cstat_core::roster_projection::{
     DraftScenario, FreshmanTier, ProjectedRoster, compose_all_projections, load_draft_entrants,
+    load_mock_draft, normalize_player_name,
 };
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -784,11 +785,27 @@ async fn projection_team_detail(
             })
         })
         .collect();
+    // Load the Tankathon mock-draft snapshot (Phase 1: informational
+    // chip on each ? row). Best-effort — when the file is missing we
+    // skip the chip rather than failing the route. Built once and
+    // shared across every uncertain row in the response.
+    let mock_path =
+        PathBuf::from("data/draft").join(format!("{}_mock_draft.json", base_season));
+    let mock_by_name: std::collections::HashMap<String, (i32, String)> = load_mock_draft(&mock_path)
+        .map(|md| {
+            md.picks
+                .into_iter()
+                .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let uncertain_json: Vec<Value> = projection
         .uncertain
         .iter()
         .map(|(row, meta)| {
             let (mean, lower, upper) = serialize_proj(&meta.player_id);
+            let mock_hit = mock_by_name.get(&normalize_player_name(&meta.name));
             json!({
                 "player_id": meta.player_id,
                 "name": meta.name,
@@ -799,6 +816,8 @@ async fn projection_team_detail(
                 "projected_campom_mean": mean,
                 "projected_campom_lower": lower,
                 "projected_campom_upper": upper,
+                "mock_pick": mock_hit.map(|(p, _)| *p),
+                "mock_team": mock_hit.map(|(_, t)| t.clone()),
             })
         })
         .collect();

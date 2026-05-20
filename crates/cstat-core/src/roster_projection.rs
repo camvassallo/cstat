@@ -464,6 +464,40 @@ pub fn load_draft_entrants(path: &Path) -> Result<Vec<DraftEntrant>, std::io::Er
     Ok(parsed)
 }
 
+/// One pick from the Tankathon mock draft. The API surfaces this on
+/// uncertain (`?`) draft entrants — players who've declared but haven't
+/// withdrawn — so users can eyeball "is this player projected to be
+/// drafted high enough to stay gone, or are they in the gray zone."
+/// Strictly informational in Phase 1: no auto-promotion to `gone`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MockPick {
+    pub pick: i32,
+    pub name: String,
+    pub team: String,
+    pub school: String,
+    pub position: String,
+}
+
+/// Top-level shape of `data/draft/{year}_mock_draft.json`. Produced by
+/// `scripts/draft/parse_tankathon_mock.py` from the raw Tankathon paste.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MockDraft {
+    pub meta: serde_json::Value,
+    pub picks: Vec<MockPick>,
+}
+
+/// Load + parse `data/draft/{year}_mock_draft.json`. Returns an empty
+/// MockDraft on missing file so the projection route can degrade
+/// gracefully when the snapshot isn't available — same pattern as
+/// `load_draft_entrants`, where missing data is logged and the
+/// projection proceeds without it. Phase 1 use is purely additive UI.
+pub fn load_mock_draft(path: &Path) -> Result<MockDraft, std::io::Error> {
+    let content = std::fs::read_to_string(path)?;
+    let parsed: MockDraft = serde_json::from_str(&content)
+        .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
+    Ok(parsed)
+}
+
 /// Helper struct for the batch roster fetch. We pull every qualified
 /// player on every team for the base season in one query; partition by
 /// team_id in Rust. PlayerRow fields plus team_id, full name (for

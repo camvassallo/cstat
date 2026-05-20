@@ -1084,28 +1084,59 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                   </div>
                 );
               })}
-              {uncertain.map((u) => (
-                <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
-                  <span className="text-sm text-gray-300 flex-1 min-w-0 truncate">{u.name}</span>
-                  <div className="flex items-center gap-2 text-xs tabular-nums">
-                    {u.projected_campom_mean != null && (
+              {uncertain.map((u) => {
+                // Tankathon mock-pick informational chip. Top-30 picks are
+                // green (the model effectively treats them as gone since
+                // withdrawal rates from the lottery are near zero), 31-60
+                // amber (real consideration but withdrawal common), and
+                // missing-from-board styled muted to flag "declared but
+                // not projected to be drafted — high withdrawal odds."
+                // Phase 1 is informational only; no auto-promotion.
+                const mockTone =
+                  u.mock_pick == null
+                    ? 'text-slate-400 border-slate-600/40'
+                    : u.mock_pick <= 30
+                      ? 'text-emerald-300 border-emerald-600/40'
+                      : 'text-amber-300 border-amber-600/40';
+                const mockLabel =
+                  u.mock_pick == null
+                    ? 'mock: NR'
+                    : `mock #${u.mock_pick}`;
+                const mockTitle =
+                  u.mock_pick == null
+                    ? 'Not on the current Tankathon mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
+                    : u.mock_pick <= 30
+                      ? `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
+                      : `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
+                return (
+                  <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
+                    <span className="text-sm text-gray-300 flex-1 min-w-0 truncate">{u.name}</span>
+                    <div className="flex items-center gap-2 text-xs tabular-nums">
+                      {u.projected_campom_mean != null && (
+                        <span
+                          className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
+                          title={
+                            u.projected_campom_lower != null && u.projected_campom_upper != null
+                              ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
+                              : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
+                          }
+                        >
+                          {u.projected_campom_mean.toFixed(1)}
+                        </span>
+                      )}
                       <span
-                        className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
-                        title={
-                          u.projected_campom_lower != null && u.projected_campom_upper != null
-                            ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
-                            : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
-                        }
+                        className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
+                        title={mockTitle}
                       >
-                        {u.projected_campom_mean.toFixed(1)}
+                        {mockLabel}
                       </span>
-                    )}
-                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
-                      ? draft (TBD)
-                    </span>
+                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
+                        ? draft (TBD)
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </>
           )}
         </RosterCard>

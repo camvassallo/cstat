@@ -587,6 +587,15 @@ export interface ProjectedUncertain {
   projected_campom_mean: number | null;
   projected_campom_lower: number | null;
   projected_campom_upper: number | null;
+  /// Tankathon mock-draft pick number when the player is on the current
+  /// snapshot, else null. Phase 1 surface — informational chip on each
+  /// ? row, no auto-promotion to "gone". Should be removed once the
+  /// withdrawal deadline passes (early June) since by then every player
+  /// is gone/staying definitively.
+  mock_pick?: number | null;
+  /// NBA team code from the same snapshot (e.g. "WAS"). Surfaces in the
+  /// tooltip alongside mock_pick.
+  mock_team?: string | null;
 }
 
 export function fetchProjectedTeam(year: number, teamId: string) {

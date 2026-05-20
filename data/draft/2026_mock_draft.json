@@ -1,0 +1,430 @@
+{
+  "meta": {
+    "source": "tankathon",
+    "as_of": "2026-05-20",
+    "year": 2026,
+    "count": 60
+  },
+  "picks": [
+    {
+      "pick": 1,
+      "name": "AJ Dybantsa",
+      "team": "WAS",
+      "school": "BYU",
+      "position": "SF"
+    },
+    {
+      "pick": 2,
+      "name": "Darryn Peterson",
+      "team": "UTA",
+      "school": "Kansas",
+      "position": "SG/PG"
+    },
+    {
+      "pick": 3,
+      "name": "Cameron Boozer",
+      "team": "MEM",
+      "school": "Duke",
+      "position": "PF"
+    },
+    {
+      "pick": 4,
+      "name": "Caleb Wilson",
+      "team": "CHI",
+      "school": "North Carolina",
+      "position": "SF/PF"
+    },
+    {
+      "pick": 5,
+      "name": "Keaton Wagler",
+      "team": "LAC",
+      "school": "Illinois",
+      "position": "SG/PG"
+    },
+    {
+      "pick": 6,
+      "name": "Kingston Flemings",
+      "team": "BKN",
+      "school": "Houston",
+      "position": "PG"
+    },
+    {
+      "pick": 7,
+      "name": "Darius Acuff Jr.",
+      "team": "SAC",
+      "school": "Arkansas",
+      "position": "PG"
+    },
+    {
+      "pick": 8,
+      "name": "Brayden Burries",
+      "team": "ATL",
+      "school": "Arizona",
+      "position": "SG/PG"
+    },
+    {
+      "pick": 9,
+      "name": "Mikel Brown Jr.",
+      "team": "DAL",
+      "school": "Louisville",
+      "position": "PG"
+    },
+    {
+      "pick": 10,
+      "name": "Nate Ament",
+      "team": "MIL",
+      "school": "Tennessee",
+      "position": "SF"
+    },
+    {
+      "pick": 11,
+      "name": "Yaxel Lendeborg",
+      "team": "GS",
+      "school": "Michigan",
+      "position": "PF"
+    },
+    {
+      "pick": 12,
+      "name": "Karim L\u00f3pez",
+      "team": "OKC",
+      "school": "New Zealand",
+      "position": "SF"
+    },
+    {
+      "pick": 13,
+      "name": "Labaron Philon Jr.",
+      "team": "MIA",
+      "school": "Alabama",
+      "position": "PG"
+    },
+    {
+      "pick": 14,
+      "name": "Aday Mara",
+      "team": "CHA",
+      "school": "Michigan",
+      "position": "C"
+    },
+    {
+      "pick": 15,
+      "name": "Cameron Carr",
+      "team": "CHI",
+      "school": "Baylor",
+      "position": "SG"
+    },
+    {
+      "pick": 16,
+      "name": "Chris Cenac Jr.",
+      "team": "MEM",
+      "school": "Houston",
+      "position": "PF/C"
+    },
+    {
+      "pick": 17,
+      "name": "Hannes Steinbach",
+      "team": "OKC",
+      "school": "Washington",
+      "position": "PF"
+    },
+    {
+      "pick": 18,
+      "name": "Morez Johnson Jr.",
+      "team": "CHA",
+      "school": "Michigan",
+      "position": "PF"
+    },
+    {
+      "pick": 19,
+      "name": "Bennett Stirtz",
+      "team": "TOR",
+      "school": "Iowa",
+      "position": "PG"
+    },
+    {
+      "pick": 20,
+      "name": "Jayden Quaintance",
+      "team": "SA",
+      "school": "Kentucky",
+      "position": "PF/C"
+    },
+    {
+      "pick": 21,
+      "name": "Koa Peat",
+      "team": "DET",
+      "school": "Arizona",
+      "position": "PF"
+    },
+    {
+      "pick": 22,
+      "name": "Allen Graves",
+      "team": "PHI",
+      "school": "Santa Clara",
+      "position": "PF"
+    },
+    {
+      "pick": 23,
+      "name": "Christian Anderson",
+      "team": "ATL",
+      "school": "Texas Tech",
+      "position": "PG"
+    },
+    {
+      "pick": 24,
+      "name": "Dailyn Swain",
+      "team": "NY",
+      "school": "Texas",
+      "position": "SG/SF"
+    },
+    {
+      "pick": 25,
+      "name": "Isaiah Evans",
+      "team": "LAL",
+      "school": "Duke",
+      "position": "SF"
+    },
+    {
+      "pick": 26,
+      "name": "Ebuka Okorie",
+      "team": "DEN",
+      "school": "Stanford",
+      "position": "PG"
+    },
+    {
+      "pick": 27,
+      "name": "Joshua Jefferson",
+      "team": "BOS",
+      "school": "Iowa State",
+      "position": "PF/SF"
+    },
+    {
+      "pick": 28,
+      "name": "Tounde Yessoufou",
+      "team": "MIN",
+      "school": "Baylor",
+      "position": "SG/SF"
+    },
+    {
+      "pick": 29,
+      "name": "Amari Allen",
+      "team": "CLE",
+      "school": "Alabama",
+      "position": "SF"
+    },
+    {
+      "pick": 30,
+      "name": "Meleek Thomas",
+      "team": "DAL",
+      "school": "Arkansas",
+      "position": "SG/PG"
+    },
+    {
+      "pick": 31,
+      "name": "Zuby Ejiofor",
+      "team": "NY",
+      "school": "St. John's",
+      "position": "PF"
+    },
+    {
+      "pick": 32,
+      "name": "Tyler Tanner",
+      "team": "MEM",
+      "school": "Vanderbilt",
+      "position": "PG"
+    },
+    {
+      "pick": 33,
+      "name": "Henri Veesaar",
+      "team": "BKN",
+      "school": "North Carolina",
+      "position": "C"
+    },
+    {
+      "pick": 34,
+      "name": "Tarris Reed Jr.",
+      "team": "SAC",
+      "school": "UConn",
+      "position": "C"
+    },
+    {
+      "pick": 35,
+      "name": "Alex Karaban",
+      "team": "SA",
+      "school": "UConn",
+      "position": "SF/PF"
+    },
+    {
+      "pick": 36,
+      "name": "Malachi Moreno",
+      "team": "LAC",
+      "school": "Kentucky",
+      "position": "C"
+    },
+    {
+      "pick": 37,
+      "name": "Ryan Conwell",
+      "team": "OKC",
+      "school": "Louisville",
+      "position": "SG"
+    },
+    {
+      "pick": 38,
+      "name": "Ugonna Onyenso",
+      "team": "CHI",
+      "school": "Virginia",
+      "position": "C"
+    },
+    {
+      "pick": 39,
+      "name": "Richie Saunders",
+      "team": "HOU",
+      "school": "BYU",
+      "position": "SG"
+    },
+    {
+      "pick": 40,
+      "name": "Luigi Suigo",
+      "team": "BOS",
+      "school": "KK Mega Basket",
+      "position": "C"
+    },
+    {
+      "pick": 41,
+      "name": "Andrej Stojakovic",
+      "team": "MIA",
+      "school": "Illinois",
+      "position": "SG"
+    },
+    {
+      "pick": 42,
+      "name": "Sergio de Larrea",
+      "team": "SA",
+      "school": "Valencia",
+      "position": "PG/SG"
+    },
+    {
+      "pick": 43,
+      "name": "Milan Momcilovic",
+      "team": "BKN",
+      "school": "Iowa State",
+      "position": "SF/PF"
+    },
+    {
+      "pick": 44,
+      "name": "Billy Richmond III",
+      "team": "SA",
+      "school": "Arkansas",
+      "position": "SG/SF"
+    },
+    {
+      "pick": 45,
+      "name": "Baba Miller",
+      "team": "SAC",
+      "school": "Cincinnati",
+      "position": "SF"
+    },
+    {
+      "pick": 46,
+      "name": "Jaden Bradley",
+      "team": "ORL",
+      "school": "Arizona",
+      "position": "PG"
+    },
+    {
+      "pick": 47,
+      "name": "Trevon Brazile",
+      "team": "PHX",
+      "school": "Arkansas",
+      "position": "PF"
+    },
+    {
+      "pick": 48,
+      "name": "Flory Bidunga",
+      "team": "DAL",
+      "school": "Kansas",
+      "position": "C"
+    },
+    {
+      "pick": 49,
+      "name": "Otega Oweh",
+      "team": "DEN",
+      "school": "Kentucky",
+      "position": "SG"
+    },
+    {
+      "pick": 50,
+      "name": "Rueben Chinyelu",
+      "team": "TOR",
+      "school": "Florida",
+      "position": "C"
+    },
+    {
+      "pick": 51,
+      "name": "Izaiyah Nelson",
+      "team": "WAS",
+      "school": "South Florida",
+      "position": "PF/C"
+    },
+    {
+      "pick": 52,
+      "name": "Braden Smith",
+      "team": "LAC",
+      "school": "Purdue",
+      "position": "PG"
+    },
+    {
+      "pick": 53,
+      "name": "Bruce Thornton",
+      "team": "HOU",
+      "school": "Ohio State",
+      "position": "PG"
+    },
+    {
+      "pick": 54,
+      "name": "Emanuel Sharp",
+      "team": "GS",
+      "school": "Houston",
+      "position": "SG"
+    },
+    {
+      "pick": 55,
+      "name": "Milos Uzan",
+      "team": "NY",
+      "school": "Houston",
+      "position": "PG"
+    },
+    {
+      "pick": 56,
+      "name": "Maliq Brown",
+      "team": "CHI",
+      "school": "Duke",
+      "position": "PF"
+    },
+    {
+      "pick": 57,
+      "name": "Felix Okpara",
+      "team": "ATL",
+      "school": "Tennessee",
+      "position": "C"
+    },
+    {
+      "pick": 58,
+      "name": "Nick Martinelli",
+      "team": "NO",
+      "school": "Northwestern",
+      "position": "SF"
+    },
+    {
+      "pick": 59,
+      "name": "Ja'Kobi Gillespie",
+      "team": "MIN",
+      "school": "Tennessee",
+      "position": "PG"
+    },
+    {
+      "pick": 60,
+      "name": "Pavle Backo",
+      "team": "WAS",
+      "school": "KK Mega Basket",
+      "position": "C"
+    }
+  ]
+}
