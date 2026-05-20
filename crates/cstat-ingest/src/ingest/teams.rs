@@ -32,17 +32,34 @@ pub async fn ingest_teams(
     Ok(count)
 }
 
+/// Pick the best human-readable name for a team JSON blob from NatStat.
+///
+/// NatStat's `/teamcodes` endpoint returns `"name": {}` (an empty object,
+/// not a string) for some teams with `&` in the name (ALAM, CWM, FAMU,
+/// NCAT, TAMC, TAMU, TMCM). `Value::as_str()` returns None on non-string
+/// values, so the chain falls through to `full_name`, then the bundled
+/// alias map, then the raw natstat code as a last resort.
+///
+/// The alias-map fallback writes the *short* name (e.g. "Texas A&M")
+/// into what becomes the `name` column. Cosmetic — `name` is rendered
+/// through `COALESCE(short_name, name)` everywhere user-facing, so the
+/// user sees the short_name regardless. Pulled out of `upsert_team` so
+/// the empty-object regression can be unit-tested without a DB.
+fn pick_team_name<'a>(team: &'a Value, natstat_id: &'a str) -> &'a str {
+    team.get("name")
+        .and_then(|n| n.as_str())
+        .or_else(|| team.get("full_name").and_then(|n| n.as_str()))
+        .or_else(|| team_aliases::short_name(natstat_id))
+        .unwrap_or(natstat_id)
+}
+
 async fn upsert_team(team: &Value, pool: &PgPool, season: i32) -> Result<bool, NatStatError> {
     let natstat_id = match team.get("code").and_then(|c| c.as_str()) {
         Some(id) => id,
         None => return Ok(false),
     };
 
-    let name = team
-        .get("name")
-        .or_else(|| team.get("full_name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or(natstat_id);
+    let name = pick_team_name(team, natstat_id);
 
     // Prefer the bundled Torvik-style short name; fall back to whatever NatStat
     // returns. Re-ingest is therefore idempotent and won't clobber the mapping.
@@ -233,4 +250,38 @@ pub async fn ingest_single_team_details(
     .await?;
 
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn pick_team_name_uses_string_name_when_present() {
+        let team = json!({"code": "DUKE", "name": "Duke Blue Devils"});
+        assert_eq!(pick_team_name(&team, "DUKE"), "Duke Blue Devils");
+    }
+
+    #[test]
+    fn pick_team_name_falls_back_to_alias_when_name_is_empty_object() {
+        // Regression: NatStat's /teamcodes returns `"name": {}` for the
+        // seven `&`-name teams. The fallback chain must land on the
+        // alias-map short_name, NOT the raw natstat_id.
+        let team = json!({"code": "ALAM", "name": {}});
+        assert_eq!(pick_team_name(&team, "ALAM"), "Alabama A&M");
+    }
+
+    #[test]
+    fn pick_team_name_falls_back_to_full_name_when_no_name() {
+        let team = json!({"code": "DUKE", "full_name": "Duke University Blue Devils"});
+        assert_eq!(pick_team_name(&team, "DUKE"), "Duke University Blue Devils");
+    }
+
+    #[test]
+    fn pick_team_name_falls_back_to_code_for_unknown_team() {
+        // Unaliased, no name fields at all — last-resort raw code.
+        let team = json!({"code": "XYZ"});
+        assert_eq!(pick_team_name(&team, "XYZ"), "XYZ");
+    }
 }

@@ -76,11 +76,14 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
   return [
     {
       headerName: 'Rank',
-      field: 'composite_rank',
-      width: 70,
+      field: 'campom_rank',
+      // minWidth (not width) so the grid's `fitCellContents` autoSize
+      // strategy can grow this column when the header demands more —
+      // a hard `width: 70` would clip "Rank" on narrow viewports.
+      minWidth: 70,
       pinned: 'left',
-      sort: 'asc',
-      headerTooltip: "247Sports composite national rank within the recruiting class",
+      headerTooltip:
+        "Our rank among 247-ranked recruits, sorted by projected freshman CamPom. Forward-looking — favors recruits the freshman-impact model expects to be more productive in year one, not just who 247 has ranked highest. '—' for unranked-by-247 recruits or rare projection failures.",
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="font-bold">{p.value}</span>
@@ -142,23 +145,9 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       ),
     },
     {
-      headerName: 'Hometown',
-      ...flexCol(2, 140),
-      sortable: false,
-      valueGetter: (p) => {
-        const c = p.data?.city;
-        const s = p.data?.state;
-        if (!c && !s) return '';
-        return [c, s].filter(Boolean).join(', ');
-      },
-      cellRenderer: (p: { value: string }) => (
-        <span className="text-gray-400 text-xs">{p.value || '—'}</span>
-      ),
-    },
-    {
       headerName: 'Committed To',
       field: 'committed_school',
-      ...flexCol(2, 160),
+      ...flexCol(2, 180),
       cellRenderer: (p: { data?: RecruitRow }) =>
         teamCellRenderer({
           // Prefer the cstat short name (resolved via team_match_score during
@@ -173,37 +162,9 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
         }),
     },
     {
-      headerName: 'Status',
-      field: 'commit_status',
-      ...flexCol(1, 110),
-      cellRenderer: (p: { value: string | null }) => (
-        <span
-          className={`inline-block px-2 py-0.5 rounded border text-xs ${statusChipClass(p.value)}`}
-        >
-          {p.value ?? '—'}
-        </span>
-      ),
-    },
-    {
-      headerName: 'Rating',
-      field: 'composite_rating',
-      ...flexCol(1, 90),
-      headerTooltip: '247Sports composite rating (0.0000–1.0000)',
-      valueFormatter: (p: { value: number | null }) =>
-        p.value != null ? p.value.toFixed(4) : '—',
-      cellRenderer: (p: { value: number | null }) =>
-        p.value != null ? (
-          <span className="text-gray-300 text-xs tabular-nums">
-            {p.value.toFixed(4)}
-          </span>
-        ) : (
-          <span className="text-gray-600 text-xs">—</span>
-        ),
-    },
-    {
       headerName: 'Projection',
       field: 'projected_campom_mean',
-      ...flexCol(1, 100),
+      ...flexCol(1, 110),
       headerTooltip:
         "cstat's freshman-impact projection (CamPom v3 for the recruit's first college season). Hover a cell to see the q10–q90 band. Wider band = thinner training-set support; tighter band = denser cohort. Selection-bias caveat: elite top-30 projections are calibrated on returners since the highest-rated freshmen leave for the draft.",
       sort: 'desc',
@@ -227,7 +188,25 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       },
     },
     {
-      headerName: 'Δ',
+      headerName: '247',
+      field: 'composite_rank',
+      ...flexCol(1, 70),
+      headerTooltip: '247Sports composite national rank within the recruiting class. — for unranked recruits.',
+      comparator: (a: number | null, b: number | null) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null }) =>
+        p.value != null ? (
+          <span className="text-gray-400 text-xs">{p.value}</span>
+        ) : (
+          <span className="text-gray-600 text-xs">—</span>
+        ),
+    },
+    {
+      headerName: 'Δ247',
       field: 'rank_delta',
       ...flexCol(1, 70),
       headerTooltip:
@@ -246,6 +225,20 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
         const text = v > 0 ? `+${v}` : `${v}`;
         return <span className={`text-xs font-semibold ${color}`}>{text}</span>;
       },
+    },
+    {
+      headerName: 'Hometown',
+      ...flexCol(2, 160),
+      sortable: false,
+      valueGetter: (p) => {
+        const c = p.data?.city;
+        const s = p.data?.state;
+        if (!c && !s) return '';
+        return [c, s].filter(Boolean).join(', ');
+      },
+      cellRenderer: (p: { value: string }) => (
+        <span className="text-gray-400 text-xs">{p.value || '—'}</span>
+      ),
     },
   ];
 }
@@ -418,6 +411,10 @@ export default function RecruitClass({ year }: Props) {
             resizable: true,
             suppressMovable: true,
           }}
+          // Size each column to its widest cell + header so nothing
+          // truncates; AG Grid surfaces a horizontal scrollbar
+          // automatically when the total width exceeds the container.
+          autoSizeStrategy={{ type: 'fitCellContents' }}
         />
       </div>
     </div>

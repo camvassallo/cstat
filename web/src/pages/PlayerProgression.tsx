@@ -7,8 +7,9 @@ import {
   PolarAngleAxis,
   PolarRadiusAxis,
   ResponsiveContainer,
-  LineChart,
+  ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   Tooltip,
@@ -99,6 +100,19 @@ export default function PlayerProgression() {
       projection_upper: null as number | null,
     }));
     if (data.trajectory) {
+      // Seed the projection mean + band at the latest actual CamPom point.
+      // The dashed mean-line becomes a continuation of the solid line, and
+      // the q10–q90 band widens from a single point to its full width at the
+      // projection — visually communicating that the projection is uncertain
+      // in a way a single dashed point can't.
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].campom != null) {
+          rows[i].projection = rows[i].campom;
+          rows[i].projection_lower = rows[i].campom;
+          rows[i].projection_upper = rows[i].campom;
+          break;
+        }
+      }
       rows.push({
         season: data.trajectory.target_season,
         label: `${seasonLabel(data.trajectory.target_season)} (proj)`,
@@ -119,15 +133,18 @@ export default function PlayerProgression() {
   // Reads naturally as career progression left → right.
   const seasonsAsc = [...data.seasons].sort((a, b) => a.season - b.season);
 
-  // Pick a Y-domain that contains the rendered points (raw CamPom +
-  // projection mean) with light headroom. The projection band's
-  // lower/upper are intentionally excluded — they're not drawn on the
-  // chart, so including them would stretch the Y-axis for nothing.
+  // Pick a Y-domain that contains every rendered shape: actual CamPom
+  // points, projected mean, and the q10–q90 cone bounds. Always include
+  // y=0 so the D-I-average reference line is visible — without that the
+  // axis can drift for elites (e.g. min=12, max=20) and the dotted
+  // baseline ends up off-screen.
   const renderedCam = campomSeries.flatMap((r) =>
-    [r.campom, r.projection].filter((v): v is number => v != null),
+    [r.campom, r.projection, r.projection_lower, r.projection_upper].filter(
+      (v): v is number => v != null,
+    ),
   );
-  const camMin = renderedCam.length ? Math.min(...renderedCam) - 1 : -2;
-  const camMax = renderedCam.length ? Math.max(...renderedCam) + 1 : 6;
+  const camMin = renderedCam.length ? Math.min(0, Math.min(...renderedCam) - 1) : -2;
+  const camMax = renderedCam.length ? Math.max(0, Math.max(...renderedCam) + 1) : 6;
   // Only render the chart if there's at least one real data point on
   // it — a multi-season player with no Torvik CamPom in any season
   // would otherwise render an empty plot with grid lines and nothing
@@ -218,32 +235,71 @@ export default function PlayerProgression() {
       {/* Time-series chart */}
       {hasCamSeries && (
         <div className="bg-gray-800 rounded-lg p-5">
-          <h2 className="text-lg font-bold mb-2">CamPom v3 over time</h2>
-          <p className="text-xs text-gray-400 mb-3">
-            Site-wide composite per season (Torvik GBPM, usage/minutes/sample/SOS adjusted).
-            {data.trajectory && ' Dashed point is the next-season projection from the trajectory model.'}
-          </p>
+          <h2 className="text-lg font-bold mb-3">CamPom over time</h2>
           <ResponsiveContainer width="100%" height={isMobile ? 220 : 280}>
-            <LineChart data={campomSeries} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}>
+            <ComposedChart data={campomSeries} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
               <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 12 }} />
-              <YAxis stroke="#94a3b8" domain={[camMin, camMax]} tick={{ fontSize: 12 }} />
+              <YAxis
+                stroke="#94a3b8"
+                domain={[camMin, camMax]}
+                tick={{ fontSize: 12 }}
+                tickFormatter={(v: number) => v.toFixed(1)}
+              />
               <Tooltip
                 contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6 }}
                 labelStyle={{ color: '#cbd5e1' }}
                 formatter={(value, name) => {
+                  // Range areas hand Recharts a [lower, upper] tuple; render
+                  // both bounds in the tooltip rather than the default "[a, b]".
+                  if (Array.isArray(value)) {
+                    const [lo, hi] = value;
+                    if (typeof lo === 'number' && typeof hi === 'number') {
+                      return [`${lo.toFixed(2)}–${hi.toFixed(2)}`, name];
+                    }
+                    return ['—', name];
+                  }
                   const v = typeof value === 'number' ? value : null;
                   if (v == null) return ['—', name];
                   return [v.toFixed(2), name];
                 }}
               />
-              {/* Only render the league-average reference line when 0
-                  actually falls inside the Y-domain — otherwise it
-                  vanishes off-axis and looks like the chart broke. For
-                  a player whose entire career sits above (or below) 0
-                  the reference is implicit anyway. */}
-              {camMin <= 0 && camMax >= 0 && (
-                <ReferenceLine y={0} stroke="#475569" />
+              {/* D-I average reference at y=0. CamPom v3 is centered such
+                  that 0 = league-average by construction; the Y-domain
+                  clamps already include 0 so the line is always
+                  visible. Dashed slate styling matches PlayerDetail's
+                  avg-PPG / avg-GameScore reference treatment. */}
+              <ReferenceLine
+                y={0}
+                stroke="#94a3b8"
+                strokeDasharray="4 4"
+                strokeOpacity={0.5}
+                label={{
+                  value: 'D-I Avg',
+                  fill: '#94a3b8',
+                  fontSize: 11,
+                  position: 'insideTopLeft',
+                }}
+              />
+              {/* Projection cone: q10–q90 band widening from the latest
+                  actual point (where lower = upper = current CamPom, so it
+                  starts as a vertex) out to the projected target season.
+                  Sits behind the dashed projection mean-line. */}
+              {data.trajectory && (
+                <Area
+                  type="monotone"
+                  dataKey={(d: { projection_lower: number | null; projection_upper: number | null }) =>
+                    d.projection_lower != null && d.projection_upper != null
+                      ? [d.projection_lower, d.projection_upper]
+                      : [null, null]
+                  }
+                  name="Projection range (q10–q90)"
+                  fill="#a78bfa"
+                  fillOpacity={0.18}
+                  stroke="none"
+                  isAnimationActive={false}
+                  activeDot={false}
+                />
               )}
               <Line
                 type="monotone"
@@ -265,7 +321,7 @@ export default function PlayerProgression() {
                   dot={{ r: 5 }}
                 />
               )}
-            </LineChart>
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
       )}

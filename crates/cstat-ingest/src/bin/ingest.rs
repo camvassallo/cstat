@@ -260,6 +260,14 @@ enum Commands {
         /// bulk loads can batch one compute pass at the end.
         #[arg(long)]
         also_compute: bool,
+
+        /// Skip the `/elo` ingest step. CSV exports don't include ELO ratings,
+        /// so we fetch them from the live API (~4 paginated calls per season,
+        /// trivial against the 500/hr budget). Pass `--no-elo` only for an
+        /// air-gapped load — otherwise leave it on so historical seasons land
+        /// with the same ELO coverage as the live `season` path.
+        #[arg(long)]
+        no_elo: bool,
     },
 
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
@@ -397,11 +405,18 @@ async fn main() -> Result<()> {
             year,
             dir,
             also_compute,
+            no_elo,
         } => {
             let report =
                 cstat_ingest::ingest::bootstrap_csv::bootstrap_from_csv_dir(&db.pool, year, &dir)
                     .await?;
             println!("{report}");
+            if !no_elo {
+                info!(year, "fetching /elo for CSV-bootstrapped season");
+                let elo_count =
+                    cstat_ingest::ingest::elo::ingest_elo_ratings(&client, &db.pool, year).await?;
+                println!("Ingested {elo_count} ELO ratings for {year}");
+            }
             if also_compute {
                 info!(year, "running compute_all after CSV bootstrap");
                 let compute = cstat_core::compute::compute_all(&db.pool, year).await?;

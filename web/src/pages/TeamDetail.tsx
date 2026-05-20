@@ -392,7 +392,7 @@ function ValueWithPctile({ value, pctile }: { value: string; pctile: number | nu
 function RosterTable({ roster }: { roster: RosterEntry[] }) {
   const [view, setView] = useState<RosterView>('raw');
   const [sort, setSort] = useState<{ key: RosterSortKey; dir: SortDir }>({
-    key: 'minutes_per_game',
+    key: 'campom',
     dir: 'desc',
   });
   const onSort = (key: RosterSortKey) => {
@@ -408,8 +408,8 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
     setView(next);
     const rawOnly: RosterSortKey[] = ['ppg', 'rpg', 'apg', 'spg', 'bpg', 'topg'];
     const rateOnly: RosterSortKey[] = ['ast_pct', 'tov_pct', 'orb_pct', 'drb_pct', 'stl_pct', 'blk_pct'];
-    if (next === 'rate' && rawOnly.includes(sort.key)) setSort({ key: 'minutes_per_game', dir: 'desc' });
-    if (next === 'raw' && rateOnly.includes(sort.key)) setSort({ key: 'minutes_per_game', dir: 'desc' });
+    if (next === 'rate' && rawOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
+    if (next === 'raw' && rateOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
   };
 
   const sorted = useMemo(() => {
@@ -828,6 +828,40 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
     data;
   const displayName = team.name ?? team.short_name ?? '(unknown team)';
 
+  // Sort each roster section by CamPom desc so the visual headline of
+  // each card is the most impactful player. Nulls sink to the bottom in
+  // every section.
+  //   - Returning / Arrivals: sort by projected next-season CamPom (the
+  //     forward-looking chip is the page's main number), fall back to
+  //     current CamPom when projection missing.
+  //   - Recruits: sort by projected freshman CamPom from the freshman
+  //     model (matches the only CamPom number shown on the row).
+  //   - Departures: sort by counterfactual projection ("what they'd
+  //     have been worth had they stayed"), falling back to base-season
+  //     CamPom when the trajectory qual gate dropped the row — biggest
+  //     losses first.
+  const cmpDesc = (a: number | null | undefined, b: number | null | undefined) => {
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    return b - a;
+  };
+  const returningSorted = [...returning].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
+  const arrivalsSorted = [...arrivals].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
+  const recruitsSorted = [...recruits].sort((x, y) =>
+    cmpDesc(x.projected_cam_v3, y.projected_cam_v3),
+  );
+  const departuresSorted = [...departures].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
+  const uncertainSorted = [...uncertain].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
+
   // Mid AdjEM chip color tier — mirrors `adjEmTone` on Projected2027 but
   // duplicated here rather than promoted to a shared module so the
   // Projected2027 page stays self-contained.
@@ -910,7 +944,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           {returning.length === 0 ? (
             <Empty label="No qualified returners" />
           ) : (
-            returning.map((r) => (
+            returningSorted.map((r) => (
               <PlayerCard
                 key={r.player_id}
                 mpg={r.mpg}
@@ -935,7 +969,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           {arrivals.length === 0 ? (
             <Empty label="No portal arrivals" />
           ) : (
-            arrivals.map((a) => (
+            arrivalsSorted.map((a) => (
               <PlayerCard
                 key={a.player_id}
                 mpg={a.mpg}
@@ -971,7 +1005,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           {recruits.length === 0 ? (
             <Empty label="No HS commits" />
           ) : (
-            recruits.map((r) => <RecruitCard key={r.recruit_id} r={r} />)
+            recruitsSorted.map((r) => <RecruitCard key={r.recruit_id} r={r} />)
           )}
         </RosterCard>
 
@@ -980,49 +1014,214 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No departures" />
           ) : (
             <>
-              {departures.map((d) => (
-                <div key={d.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
-                  <span className="text-sm text-gray-300">{d.name}</span>
-                  <span
-                    className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${
-                      d.kind === 'senior'
-                        ? 'text-slate-400'
-                        : d.kind === 'transferred'
-                          ? 'text-amber-400'
-                          : 'text-rose-400'
-                    }`}
-                    title={d.kind === 'transferred' && d.destination ? `to ${d.destination}` : undefined}
-                  >
-                    {d.kind === 'senior'
-                      ? 'Sr graduation'
-                      : d.kind === 'transferred'
-                        ? `→ ${d.destination ?? 'portal'}`
-                        : 'NBA draft'}
-                  </span>
-                </div>
-              ))}
-              {uncertain.map((u) => (
-                <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
-                  <span className="text-sm text-gray-300 flex-1 min-w-0 truncate">{u.name}</span>
-                  <div className="flex items-center gap-2 text-xs tabular-nums">
-                    {u.projected_campom_mean != null && (
+              {/* Draft prospects (?) render above firm departures — they're
+                  the highest-stakes uncertainty on the roster and deserve
+                  visual priority over confirmed departures the user can no
+                  longer act on. Each row carries the same name link +
+                  archetype chip + counterfactual "if they stayed"
+                  projection as the firm-departure rows, plus the Tankathon
+                  mock-pick chip. */}
+              {uncertainSorted.map((u) => {
+                // Tankathon mock-pick informational chip. Top-30 picks are
+                // green (the model effectively treats them as gone since
+                // withdrawal rates from the lottery are near zero), 31-60
+                // amber (real consideration but withdrawal common), and
+                // missing-from-board styled muted to flag "declared but
+                // not projected to be drafted — high withdrawal odds."
+                // Phase 1 is informational only; no auto-promotion.
+                const mockTone =
+                  u.mock_pick == null
+                    ? 'text-slate-400 border-slate-600/40'
+                    : u.mock_pick <= 30
+                      ? 'text-emerald-300 border-emerald-600/40'
+                      : 'text-amber-300 border-amber-600/40';
+                const mockLabel =
+                  u.mock_pick == null
+                    ? 'mock: NR'
+                    : `mock #${u.mock_pick}`;
+                const mockTitle =
+                  u.mock_pick == null
+                    ? 'Not on the current Tankathon mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
+                    : u.mock_pick <= 30
+                      ? `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
+                      : `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
+                return (
+                  <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <div className="truncate">
+                        <SeasonLink
+                          to={`/players/${u.player_id}?season=${base_season}`}
+                          className="text-blue-400 hover:underline"
+                        >
+                          {u.name}
+                        </SeasonLink>
+                      </div>
+                      {u.primary_class && (
+                        <span
+                          className="text-[10px] font-bold uppercase tracking-wide"
+                          style={{ color: classColor(u.primary_class) }}
+                        >
+                          {u.primary_class}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
+                      {u.mpg != null && (
+                        <span title="Prior-season MPG">{u.mpg.toFixed(0)}'</span>
+                      )}
+                      {u.projected_campom_mean != null ? (
+                        <span className="flex items-center gap-1.5">
+                          {u.cam_v3 != null && (
+                            <>
+                              <span
+                                className="text-[10px] text-gray-500"
+                                title="Prior-season CamPom v3"
+                              >
+                                {u.cam_v3.toFixed(1)}
+                              </span>
+                              <span className="text-gray-600 text-[10px]">→</span>
+                            </>
+                          )}
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
+                            title={
+                              u.projected_campom_lower != null && u.projected_campom_upper != null
+                                ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
+                                : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
+                            }
+                          >
+                            {u.projected_campom_mean.toFixed(1)}
+                          </span>
+                        </span>
+                      ) : (
+                        u.cam_v3 != null && (
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(u.cam_v3))}`}
+                            title={`Prior-season CamPom v3: ${u.cam_v3.toFixed(1)}`}
+                          >
+                            {u.cam_v3.toFixed(1)}
+                          </span>
+                        )
+                      )}
                       <span
-                        className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
-                        title={
-                          u.projected_campom_lower != null && u.projected_campom_upper != null
-                            ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
-                            : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
-                        }
+                        className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
+                        title={mockTitle}
                       >
-                        {u.projected_campom_mean.toFixed(1)}
+                        {mockLabel}
                       </span>
-                    )}
-                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
-                      ? draft (TBD)
-                    </span>
+                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
+                        ? draft (TBD)
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
+              {departuresSorted.map((d) => {
+                // Mirror PlayerCard's row shape: name · archetype on the
+                // left, stats + status chip on the right. The right-most
+                // pill replaces the "current → projected" chip pair
+                // (departures have no next-season projection) with a
+                // status indicator coloured by departure kind.
+                const statusClass =
+                  d.kind === 'senior'
+                    ? 'text-slate-300 border-slate-500/40'
+                    : d.kind === 'transferred'
+                      ? 'text-amber-300 border-amber-500/40'
+                      : 'text-rose-300 border-rose-500/40';
+                const statusLabel =
+                  d.kind === 'senior'
+                    ? 'Sr graduation'
+                    : d.kind === 'draft_gone'
+                      ? 'NBA draft'
+                      : `→ ${d.destination ?? 'portal'}`;
+                return (
+                  <div
+                    key={d.player_id}
+                    className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2"
+                  >
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <div className="truncate">
+                        <SeasonLink
+                          to={`/players/${d.player_id}?season=${d.prior_season}`}
+                          className="text-blue-400 hover:underline"
+                        >
+                          {d.name}
+                        </SeasonLink>
+                      </div>
+                      {d.primary_class && (
+                        <span
+                          className="text-[10px] font-bold uppercase tracking-wide"
+                          style={{ color: classColor(d.primary_class) }}
+                        >
+                          {d.primary_class}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
+                      {d.mpg != null && (
+                        <span title="Prior-season MPG">{d.mpg.toFixed(0)}'</span>
+                      )}
+                      {d.projected_campom_mean != null ? (
+                        // Counterfactual "if they stayed" projection — same
+                        // current → projected layout as Returning/Arrivals so
+                        // the visual rhythm matches across all four sections.
+                        <span className="flex items-center gap-1.5">
+                          {d.cam_v3 != null && (
+                            <>
+                              <span
+                                className="text-[10px] text-gray-500"
+                                title="Prior-season CamPom v3"
+                              >
+                                {d.cam_v3.toFixed(1)}
+                              </span>
+                              <span className="text-gray-600 text-[10px]">→</span>
+                            </>
+                          )}
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(d.projected_campom_mean))}`}
+                            title={
+                              d.projected_campom_lower != null && d.projected_campom_upper != null
+                                ? `Counterfactual: if they'd stayed, projected ${d.projected_campom_mean.toFixed(1)} (${d.projected_campom_lower.toFixed(1)}–${d.projected_campom_upper.toFixed(1)}). Current ${d.cam_v3 != null ? d.cam_v3.toFixed(1) : '—'}.`
+                                : `Counterfactual: if they'd stayed, projected ${d.projected_campom_mean.toFixed(1)}.`
+                            }
+                          >
+                            {d.projected_campom_mean.toFixed(1)}
+                          </span>
+                        </span>
+                      ) : (
+                        d.cam_v3 != null && (
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(d.cam_v3))}`}
+                            title={`Prior-season CamPom v3: ${d.cam_v3.toFixed(1)} (no counterfactual projection — trajectory qual gate failed or batch inference dropped the row).`}
+                          >
+                            {d.cam_v3.toFixed(1)}
+                          </span>
+                        )
+                      )}
+                      {d.kind === 'transferred' && d.destination_team_id ? (
+                        <SeasonLink
+                          to={`/teams/${d.destination_team_id}?season=${year}`}
+                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border hover:underline ${statusClass}`}
+                          title={`to ${d.destination}`}
+                        >
+                          {statusLabel}
+                        </SeasonLink>
+                      ) : (
+                        <span
+                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${statusClass}`}
+                          title={
+                            d.kind === 'transferred' && d.destination
+                              ? `to ${d.destination}`
+                              : undefined
+                          }
+                        >
+                          {statusLabel}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </>
           )}
         </RosterCard>
@@ -1137,14 +1336,8 @@ function PlayerCard({
 }
 
 function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
-  const tierTone =
-    r.tier === 't1'
-      ? 'bg-amber-900/30 border-amber-700 text-amber-300'
-      : r.tier === 't2'
-        ? 'bg-cyan-900/30 border-cyan-700 text-cyan-300'
-        : 'bg-slate-800 border-slate-700 text-slate-400';
   return (
-    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
+    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-sm text-gray-200 truncate">{r.name}</span>
         {r.composite_rank != null && (
@@ -1153,21 +1346,23 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
         {r.star_rating != null && (
           <span className="text-[10px] text-amber-300">{'★'.repeat(r.star_rating)}</span>
         )}
+        {r.position && (
+          <span
+            className="text-[11px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-900/40 border border-sky-700/60 text-sky-200 shrink-0"
+            title="247Sports listed position"
+          >
+            {r.position}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2 text-xs">
-        <span
-          className={`px-1.5 py-0.5 rounded border text-[10px] uppercase ${tierTone}`}
-          title={`Tier ${r.tier.slice(1).toUpperCase()} freshman profile`}
-        >
-          {r.tier.toUpperCase()}
-        </span>
         {r.projected_cam_v3 != null && (
           <span
             className={`px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`}
             title={
               r.projected_campom_lower != null && r.projected_campom_upper != null
-                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Per-player prediction from the freshman model — wide band on T1/T2 reflects elite-tail uncertainty.`
-                : 'Tier-mean projected CamPom v3 (batch inference fell back to tier-mean synthesis — no per-player band available).'
+                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Tier ${r.tier.slice(1).toUpperCase()} cohort — wide bands on T1/T2 reflect elite-tail uncertainty.`
+                : `Tier ${r.tier.slice(1).toUpperCase()} mean projected CamPom v3 (batch inference fell back to tier-mean synthesis — no per-player band available).`
             }
           >
             {r.projected_cam_v3.toFixed(1)}

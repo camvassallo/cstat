@@ -536,6 +536,8 @@ export interface ProjectedRecruitDetail {
   composite_rank: number | null;
   star_rating: number | null;
   tier: 't1' | 't2' | 't3' | 't4';
+  /// 247's listed position (e.g. "PG", "SF", "C"). Null when unset on 247.
+  position: string | null;
   // Mean predicted freshman-season CamPom from the freshman-impact
   // model. Same number as the chip on the Recruits tab; null when the
   // freshman batch fell back to tier-mean synthesis.
@@ -549,7 +551,34 @@ export interface ProjectedDeparture {
   kind: 'senior' | 'transferred' | 'draft_gone';
   player_id: string;
   name: string;
+  /// Base-season the player played for the source team. UI uses this to
+  /// link the name to the historical detail page rather than the new
+  /// season where they no longer exist as a roster row.
+  prior_season: number;
+  /// Player's D&D archetype primary class in base_season (e.g. "Wizard").
+  primary_class?: string | null;
+  /// Prior-season minutes-per-game. Null when the player didn't qualify
+  /// (rare for actual departures; mostly walk-ons who never broke rotation).
+  mpg?: number | null;
+  /// Prior-season CamPom v3 (Torvik passthrough). Null when the player
+  /// didn't have Torvik coverage for base_season.
+  cam_v3?: number | null;
+  /// Counterfactual trajectory projection — what we'd have forecast for
+  /// this player in the projected season if they had stayed. Renders
+  /// as "current → projected" chip pair matching Returning/Arrivals
+  /// rows. Null when the trajectory qual gate (≥5 GP, ≥5 MPG) failed
+  /// or batch inference dropped the row.
+  projected_campom_mean?: number | null;
+  projected_campom_lower?: number | null;
+  projected_campom_upper?: number | null;
+  /// Transfer destination institution name (text label from 247).
   destination?: string | null;
+  /// Base-season UUID of the destination team — set when destination
+  /// resolved to a D-I program in base_season, null for non-D1 dests.
+  /// The frontend uses this for `/teams/{id}?season={year}`; the route
+  /// transparently re-resolves to the projected-season team via
+  /// `natstat_id` so the cross-season hop is a single round-trip.
+  destination_team_id?: string | null;
 }
 export interface ProjectedUncertain {
   player_id: string;
@@ -569,6 +598,15 @@ export interface ProjectedUncertain {
   projected_campom_mean: number | null;
   projected_campom_lower: number | null;
   projected_campom_upper: number | null;
+  /// Tankathon mock-draft pick number when the player is on the current
+  /// snapshot, else null. Phase 1 surface — informational chip on each
+  /// ? row, no auto-promotion to "gone". Should be removed once the
+  /// withdrawal deadline passes (early June) since by then every player
+  /// is gone/staying definitively.
+  mock_pick?: number | null;
+  /// NBA team code from the same snapshot (e.g. "WAS"). Surfaces in the
+  /// tooltip alongside mock_pick.
+  mock_team?: string | null;
 }
 
 export function fetchProjectedTeam(year: number, teamId: string) {

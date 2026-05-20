@@ -69,10 +69,21 @@ pub enum DepartureReason {
     /// `class_year = 'Sr'` at season N → graduating.
     GraduatedSenior { player_id: Uuid, name: String },
     /// In the `transfers` table for portal class N, source = this team.
+    /// `destination_team_id` carries the **base-season** UUID of the
+    /// destination team — `resolve_team_id` runs against the same
+    /// `teams` vec the rest of compose_all_projections uses, which is
+    /// loaded for `base_season` (N), not the projection target (N+1).
+    /// The frontend links `/teams/{destination_team_id}?season={year}`;
+    /// when N+1 ≠ base_season, the route's `resolve_team_id_for_season`
+    /// re-maps via `natstat_id`, so the link still lands on the right
+    /// team — just with one extra resolution hop. None when the
+    /// destination string didn't match any base-season D-I team (non-D1
+    /// destination, name miss).
     Transferred {
         player_id: Uuid,
         name: String,
         destination: Option<String>,
+        destination_team_id: Option<Uuid>,
     },
     /// On the NBA-draft early-entrants list with status `gone` (firm
     /// commitment, not just `declared`). Always counts as departing.
@@ -111,6 +122,9 @@ pub struct RecruitMeta {
     /// tooltip ("synthesized from T1 top-30 profile, expect wide
     /// variance").
     pub tier: FreshmanTier,
+    /// 247's listed position (e.g. "PG", "SF", "C"). Free-text from the
+    /// scouting feed — surface verbatim, don't try to bucket on it.
+    pub position: Option<String>,
     /// Lower bound (q10) of the freshman-model projection. `None` when
     /// batch inference failed and we fell back to tier-mean synthesis;
     /// the synthesized PlayerRow's `cam_v3` field still carries the
@@ -451,6 +465,41 @@ pub struct DraftEntrant {
 pub fn load_draft_entrants(path: &Path) -> Result<Vec<DraftEntrant>, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
     let parsed: Vec<DraftEntrant> = serde_json::from_str(&content)
+        .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
+    Ok(parsed)
+}
+
+/// One pick from the Tankathon mock draft. The API surfaces this on
+/// uncertain (`?`) draft entrants — players who've declared but haven't
+/// withdrawn — so users can eyeball "is this player projected to be
+/// drafted high enough to stay gone, or are they in the gray zone."
+/// Strictly informational in Phase 1: no auto-promotion to `gone`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MockPick {
+    pub pick: i32,
+    pub name: String,
+    pub team: String,
+    pub school: String,
+    pub position: String,
+}
+
+/// Top-level shape of `data/draft/{year}_mock_draft.json`. Produced by
+/// `scripts/draft/parse_tankathon_mock.py` from the raw Tankathon paste.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MockDraft {
+    pub meta: serde_json::Value,
+    pub picks: Vec<MockPick>,
+}
+
+/// Load + parse `data/draft/{year}_mock_draft.json`. Returns Err on
+/// missing or malformed file — callers should `.map(...).unwrap_or_default()`
+/// the lookup hashmap derived from the result, not the MockDraft itself,
+/// to degrade gracefully when the snapshot isn't available. Same pattern
+/// as `load_draft_entrants`. Phase 1 use is purely additive UI; the
+/// projection still composes correctly without a mock-draft file.
+pub fn load_mock_draft(path: &Path) -> Result<MockDraft, std::io::Error> {
+    let content = std::fs::read_to_string(path)?;
+    let parsed: MockDraft = serde_json::from_str(&content)
         .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
     Ok(parsed)
 }
@@ -835,6 +884,7 @@ pub async fn compose_all_projections(
             composite_rank: r.composite_rank,
             star_rating: r.star_rating,
             tier: chosen_tier,
+            position: r.position,
             projected_campom_lower: pred.as_ref().map(|p| p.lower),
             projected_campom_upper: pred.as_ref().map(|p| p.upper),
         };
@@ -945,10 +995,12 @@ pub async fn compose_all_projections(
                         .find(|(p, _)| *p == pid)
                         .and_then(|(_, d)| d.clone())
                 });
+                let dest_team_id = dest.as_deref().and_then(|d| resolve_team_id(&teams, d));
                 departures.push(DepartureReason::Transferred {
                     player_id: pid,
                     name: name.clone(),
                     destination: dest,
+                    destination_team_id: dest_team_id,
                 });
                 continue;
             }
@@ -1077,6 +1129,7 @@ mod tests {
                     composite_rank: Some(5),
                     star_rating: Some(5),
                     tier: FreshmanTier::T1,
+                    position: None,
                     projected_campom_lower: None,
                     projected_campom_upper: None,
                 },
@@ -1089,6 +1142,7 @@ mod tests {
                     composite_rank: Some(180),
                     star_rating: Some(3),
                     tier: FreshmanTier::T3,
+                    position: None,
                     projected_campom_lower: None,
                     projected_campom_upper: None,
                 },
