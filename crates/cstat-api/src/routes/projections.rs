@@ -11,7 +11,7 @@ use axum::{
     routing::get,
 };
 use cstat_core::inference::Predictor;
-use cstat_core::roster_features::build_roster_features;
+use cstat_core::roster_features::{build_roster_features, project_rotation};
 use cstat_core::roster_projection::{
     DraftScenario, FreshmanTier, ProjectedRoster, compose_all_projections, load_draft_entrants,
     load_mock_draft, normalize_player_name,
@@ -62,7 +62,11 @@ struct ProjectedTeam {
     /// Headline AdjEM at the conservative bound (all declared draft
     /// entrants are gone). `None` for too-thin rosters.
     floor_adj_em: Option<f32>,
-    /// `(ceiling + floor) / 2`. A summary number for sortable display;
+    /// Probability-weighted blend of `ceiling` and `floor`:
+    /// `p̄·ceiling + (1−p̄)·floor`, where `p̄` is the mean chance the
+    /// uncertain (declared-draft) cohort returns (see
+    /// `mean_return_probability`). Collapses to the common value when
+    /// there are no uncertain players. The headline sortable number;
     /// `None` for too-thin rosters.
     midpoint_adj_em: Option<f32>,
     /// Count of qualifying returning players (excludes Sr, outbound
@@ -100,28 +104,95 @@ struct ProjectedTeam {
     baseline_adj_em: Option<f32>,
 }
 
-/// Weight given to the base-season AdjEM when shrinking the model's
-/// projection toward last year's number. `0.5` means "halfway between
-/// what the model says about the projected roster and what the team
-/// actually was a year ago" — a Bayesian-style prior that next-season
-/// AdjEM correlates strongly with current-season AdjEM (true
-/// empirically; teams don't usually move by more than ±15 AdjEM
-/// year-over-year). Without shrinkage the v1 spot-check produced
-/// implausible swings — Auburn 41.7 → 14.4 (−27 in one year), West
-/// Virginia 20.4 → −22 — driven by the model not seeing freshmen /
-/// growth. Half-weight on last year tames those swings to about half
-/// magnitude. When freshmen + growth lands (Phase 5c), this weight
-/// can be reduced.
-const BASELINE_SHRINK_WEIGHT: f32 = 0.5;
+/// Weight on the base-season AdjEM when blending it with the roster
+/// model's raw projection. Tuned on a backtest of the projection
+/// pipeline against actual 2025 + 2026 AdjEM (496 pooled team-years;
+/// see `docs/projections_methodology.md`): last season's AdjEM is, on
+/// its own, a far stronger next-season predictor than the roster model
+/// (6.53 vs 9.97 MAE), so the blend leans heavily toward the baseline
+/// while still letting roster turnover nudge a team off its prior. The
+/// MAE curve is flat from 0.75–0.82; `0.80` sits at the optimum
+/// (blended MAE 6.23, beating baseline-only 6.53). An earlier
+/// continuity-weighted scheme (weight scaled by returning-minutes
+/// share) was tried and reverted: the backtest showed it moved weight
+/// *away* from the better predictor and widened the top-team error.
+const SHRINK_WEIGHT: f32 = 0.80;
 
-/// Apply the shrinkage anchor: returns the convex combination of the
-/// raw model output and the baseline AdjEM. Returns the raw value
-/// unchanged when no baseline is available (e.g. new D-I program).
-fn shrink(model_value: f32, baseline: Option<f32>) -> f32 {
+/// Additive calibration offset applied to the blended projection. The
+/// roster model is a *same-season descriptive* model; used as a
+/// *projection* it runs systematically low (raw bias −4.8 on the
+/// 2025 + 2026 backtest) — it sees tier-mean freshmen and growth-
+/// frozen returners, never the upside tail that produces elite
+/// seasons. `+2.0` is the constant that zeroes the blended pipeline's
+/// mean signed error at `SHRINK_WEIGHT = 0.80`. The principled fix is
+/// the Phase B impact-aggregation model.
+const PROJECTION_OFFSET: f32 = 2.0;
+
+/// Blend the raw model output with the baseline AdjEM and apply the
+/// calibration offset. With no baseline (e.g. a brand-new D-I program)
+/// the blend collapses to the offset-corrected raw value — the offset
+/// was tuned for the blended case, so no-baseline teams stay mildly
+/// under-projected, which is acceptable for that rare cohort.
+fn shrink(raw: f32, baseline: Option<f32>) -> f32 {
     match baseline {
-        Some(b) => BASELINE_SHRINK_WEIGHT * b + (1.0 - BASELINE_SHRINK_WEIGHT) * model_value,
-        None => model_value,
+        Some(b) => SHRINK_WEIGHT * b + (1.0 - SHRINK_WEIGHT) * raw + PROJECTION_OFFSET,
+        None => raw + PROJECTION_OFFSET,
     }
+}
+
+/// P(a declared-for-draft player withdraws and returns to college),
+/// keyed off their Tankathon mock-draft pick. A projected top-30 pick
+/// almost never withdraws; a second-round projection is a genuine
+/// toss-up; a declared player absent from the 60-pick board most
+/// likely returns. `None` = declared but off the board.
+fn return_probability_from_pick(pick: Option<i32>) -> f32 {
+    match pick {
+        Some(p) if p <= 30 => 0.05,
+        Some(_) => 0.50,
+        None => 0.85,
+    }
+}
+
+/// Mean return probability across a team's uncertain (declared-draft)
+/// cohort. Used to probability-weight the floor/ceiling midpoint — a
+/// flat 50/50 average over-penalizes exactly the draft-talent-heavy
+/// (i.e. top) teams. Returns `0.5` for an empty cohort, where it's
+/// unused anyway (floor == ceiling, so the weight cancels).
+fn mean_return_probability(
+    p: &ProjectedRoster,
+    mock_by_name: &std::collections::HashMap<String, (i32, String)>,
+) -> f32 {
+    if p.uncertain.is_empty() {
+        return 0.5;
+    }
+    let sum: f32 = p
+        .uncertain
+        .iter()
+        .map(|(_, u)| {
+            let pick = mock_by_name
+                .get(&normalize_player_name(&u.name))
+                .map(|(pick, _)| *pick);
+            return_probability_from_pick(pick)
+        })
+        .sum();
+    sum / p.uncertain.len() as f32
+}
+
+/// Load the Tankathon mock-draft snapshot for `base_season` into a
+/// `normalized-name → (pick, team)` map. Best-effort: a missing or
+/// malformed file yields an empty map and callers degrade gracefully
+/// (no `?`-row chips; the floor/ceiling midpoint falls back to a flat
+/// 50/50 average).
+fn load_mock_by_name(base_season: i32) -> std::collections::HashMap<String, (i32, String)> {
+    let mock_path = PathBuf::from("data/draft").join(format!("{base_season}_mock_draft.json"));
+    load_mock_draft(&mock_path)
+        .map(|md| {
+            md.picks
+                .into_iter()
+                .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn projection_list(
@@ -183,10 +254,15 @@ async fn projection_list(
             )
         })?;
 
+    // Tankathon mock-draft snapshot — used to probability-weight each
+    // team's floor/ceiling midpoint (see `mean_return_probability`).
+    let mock_by_name = load_mock_by_name(base_season);
+
     let mut rows: Vec<ProjectedTeam> = Vec::with_capacity(projections.len());
     for p in &projections {
         let baseline = baseline_map.get(&p.team_id).copied();
-        let Some(row) = predict_team(p, &state.predictor, baseline) else {
+        let p_return = mean_return_probability(p, &mock_by_name);
+        let Some(row) = predict_team(p, &state.predictor, baseline, p_return) else {
             continue;
         };
         rows.push(row);
@@ -222,6 +298,7 @@ fn predict_team(
     p: &ProjectedRoster,
     predictor: &Predictor,
     baseline: Option<f32>,
+    p_return: f32,
 ) -> Option<ProjectedTeam> {
     // Recruits count toward the qualifying-size gate: a returners-thin
     // team with a strong freshman class (e.g. Duke with 4 incoming
@@ -278,7 +355,9 @@ fn predict_team(
         team_full_name: p.team_full_name.clone(),
         ceiling_adj_em: ceiling,
         floor_adj_em: floor,
-        midpoint_adj_em: floor.zip(ceiling).map(|(f, c)| (f + c) / 2.0),
+        midpoint_adj_em: floor
+            .zip(ceiling)
+            .map(|(f, c)| p_return * c + (1.0 - p_return) * f),
         returning_count: p.returning.len(),
         arrivals_count: p.arrivals.len(),
         recruits_count: p.recruits.len(),
@@ -298,8 +377,12 @@ fn predict_team(
         return Some(base(None, None, true));
     }
 
-    let floor_roster = p.for_scenario(DraftScenario::Floor);
-    let ceiling_roster = p.for_scenario(DraftScenario::Ceiling);
+    // Re-cast each scenario's materialized roster as a realistic
+    // cam_v3-ranked rotation before feature extraction. Without this
+    // the model sees frozen prior-season minutes that don't sum to a
+    // real team (see `project_rotation`).
+    let floor_roster = project_rotation(p.for_scenario(DraftScenario::Floor));
+    let ceiling_roster = project_rotation(p.for_scenario(DraftScenario::Ceiling));
     let floor_feats = build_roster_features(&floor_roster);
     let ceiling_feats = build_roster_features(&ceiling_roster);
 
@@ -318,8 +401,8 @@ fn predict_team(
         }
     };
 
-    // Apply baseline shrinkage to both bounds. The band shrinks in
-    // width by `(1 - BASELINE_SHRINK_WEIGHT)` but stays internally
+    // Bias-correct and baseline-shrink both bounds. The band shrinks
+    // in width by `(1 - SHRINK_WEIGHT)` but stays internally
     // consistent (ceiling ≥ floor preserved for non-anomaly teams;
     // negative-spread anomalies stay negative-spread).
     Some(base(
@@ -438,12 +521,18 @@ async fn projection_team_detail(
         })?;
     let baseline = baseline_map.get(&resolved_id).copied();
 
+    // Tankathon mock-draft snapshot — drives both the floor/ceiling
+    // midpoint weighting (via `mean_return_probability`) and the
+    // informational `?`-row chips further down.
+    let mock_by_name = load_mock_by_name(base_season);
+    let p_return = mean_return_probability(&projection, &mock_by_name);
+
     // `predict_team` returns None only when the ONNX session errors —
     // the too-thin gate still returns Some with null bounds. The list
     // route skips None rows (`continue`); a single-team detail page
     // can't skip, so surface it as 500 rather than handing the
     // frontend a `projection: null` it isn't typed for.
-    let Some(row) = predict_team(&projection, &state.predictor, baseline) else {
+    let Some(row) = predict_team(&projection, &state.predictor, baseline, p_return) else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -819,21 +908,6 @@ async fn projection_team_detail(
             })
         })
         .collect();
-    // Load the Tankathon mock-draft snapshot (Phase 1: informational
-    // chip on each ? row). Best-effort — when the file is missing we
-    // skip the chip rather than failing the route. Built once and
-    // shared across every uncertain row in the response.
-    let mock_path = PathBuf::from("data/draft").join(format!("{}_mock_draft.json", base_season));
-    let mock_by_name: std::collections::HashMap<String, (i32, String)> =
-        load_mock_draft(&mock_path)
-            .map(|md| {
-                md.picks
-                    .into_iter()
-                    .map(|p| (normalize_player_name(&p.name), (p.pick, p.team)))
-                    .collect()
-            })
-            .unwrap_or_default();
-
     let uncertain_json: Vec<Value> = projection
         .uncertain
         .iter()
@@ -908,28 +982,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shrink_is_50_50_midpoint_with_baseline() {
-        // Model says +30, last year was +25 → display +27.5.
-        let v = shrink(30.0, Some(25.0));
-        assert!((v - 27.5).abs() < 1e-6);
+    fn shrink_blends_raw_with_baseline_and_offset() {
+        let raw = 30.0_f32;
+        let baseline = 25.0_f32;
+        let expected = SHRINK_WEIGHT * baseline + (1.0 - SHRINK_WEIGHT) * raw + PROJECTION_OFFSET;
+        assert!((shrink(raw, Some(baseline)) - expected).abs() < 1e-5);
     }
 
     #[test]
-    fn shrink_passes_through_when_baseline_missing() {
-        // No baseline (new D-I program) → raw model output unchanged.
-        let v = shrink(12.3, None);
-        assert!((v - 12.3).abs() < 1e-6);
+    fn shrink_offsets_raw_when_baseline_missing() {
+        // No baseline (new D-I program) → offset-corrected raw, no anchor.
+        let raw = 12.3_f32;
+        assert!((shrink(raw, None) - (raw + PROJECTION_OFFSET)).abs() < 1e-5);
     }
 
     #[test]
-    fn shrink_preserves_negative_spread() {
-        // Floor > Ceiling at the raw model layer (declared cohort is a
-        // net drag); the shrinkage halves the spread but keeps the sign.
-        let f = shrink(50.0, Some(25.0)); // 37.5
-        let c = shrink(20.0, Some(25.0)); // 22.5
-        assert!(c < f, "negative-spread anomaly should survive shrinkage");
-        let raw_spread = 20.0_f32 - 50.0; // -30
-        let shrunk_spread = c - f; // -15
-        assert!((shrunk_spread - raw_spread / 2.0).abs() < 1e-5);
+    fn shrink_is_monotonic_in_raw() {
+        // The blend preserves ordering: a higher raw projection always
+        // yields a higher shrunk output (so floor ≤ ceiling survives).
+        assert!(shrink(50.0, Some(25.0)) > shrink(20.0, Some(25.0)));
+    }
+
+    #[test]
+    fn return_probability_buckets_by_pick() {
+        assert!((return_probability_from_pick(Some(1)) - 0.05).abs() < 1e-6);
+        assert!((return_probability_from_pick(Some(30)) - 0.05).abs() < 1e-6);
+        assert!((return_probability_from_pick(Some(31)) - 0.50).abs() < 1e-6);
+        assert!((return_probability_from_pick(Some(60)) - 0.50).abs() < 1e-6);
+        // Declared but off the 60-pick board → most likely returns.
+        assert!((return_probability_from_pick(None) - 0.85).abs() < 1e-6);
     }
 }

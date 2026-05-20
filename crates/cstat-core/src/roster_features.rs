@@ -385,6 +385,104 @@ pub fn normalize_rotation(roster: Vec<PlayerRow>) -> Vec<PlayerRow> {
     by_rank
 }
 
+/// Canonical MPG by rotation rank (rank 0 = most minutes), calibrated
+/// from 1,090 qualified team-seasons (2024–26): for each team the
+/// gp≥5 / mpg≥5 roster is ranked by MPG and the rank-r average taken
+/// across all teams. A typical D-I rotation runs ~11 deep and its
+/// per-player MPG averages sum to ~221 (the sum exceeds 200 because
+/// `minutes_per_game` is averaged over each player's *own* games
+/// played — injury fill-ins inflate the sum). `project_rotation`
+/// assigns these verbatim; ranks past index 12 fall out of the
+/// rotation (0 MPG).
+const CANONICAL_ROTATION_MPG: [f64; 13] = [
+    32.0, 29.8, 27.8, 25.5, 23.0, 20.1, 17.2, 14.4, 11.9, 9.6, 8.2, 7.3, 6.9,
+];
+
+/// Games-played count assumed for a projected season, used to convert
+/// projected MPG into the `total_min` weight the aggregator expects.
+/// Picked so a canonical ~11-man rotation lands `total_minutes` on the
+/// trained mean (~6,100): `Σ CANONICAL_ROTATION_MPG[..11] (≈219.5) ×
+/// 28 ≈ 6,150`.
+const PROJECTED_GAMES_PLAYED: f64 = 28.0;
+
+/// Clamp on the per-game-counting-stat rescale factor in
+/// `project_rotation`. Guards against small-sample `cam_v3` noise
+/// ranking a 5-MPG player into a 32-MPG slot and then 6×-ing their
+/// counting stats — or the inverse, zeroing a displaced starter.
+const STAT_RESCALE_MIN: f64 = 0.4;
+const STAT_RESCALE_MAX: f64 = 2.5;
+
+/// Multiply an `Option<f64>` per-game stat in place by `factor`.
+fn scale_opt(v: &mut Option<f64>, factor: f64) {
+    if let Some(x) = v {
+        *x *= factor;
+    }
+}
+
+/// Re-cast a projected roster (returning + arrivals + recruits, in any
+/// order) as a realistic ~220-minute rotation before feature extraction.
+///
+/// Why this exists: `compose_all_projections` carries every player's
+/// *prior* minutes — returners at last year's role, recruits at a
+/// tier-fixed MPG, arrivals at their *source-team* MPG. Nobody is
+/// promoted into the minutes their departed-senior / drafted teammates
+/// vacated, so a roster that lost its starters sums to ~150 player-
+/// minutes and a portal-stacked one can sum past 230 — both well
+/// outside the ~221 Σmpg the roster model trained on. Feeding that to
+/// `predict_adj_em` is out-of-distribution extrapolation and was the
+/// dominant driver of top teams projecting absurdly low (Purdue: a +36
+/// AdjEM team scored at raw +3 because its roster summed to ~150 MPG).
+///
+/// Method: rank every player by `cam_v3` descending (`None` sorts
+/// last — same convention as `swap_player` / `normalize_rotation`),
+/// assign MPG from `CANONICAL_ROTATION_MPG` by rank, and rescale each
+/// player's per-game counting stats (ppg/rpg/apg/spg/bpg/topg) by
+/// `new_mpg / old_mpg` (clamped to `[STAT_RESCALE_MIN, STAT_RESCALE_MAX]`).
+/// Rate stats (TS/eFG/USG/`*_pct`/ft_rate) are minutes-invariant and
+/// pass through unchanged. `total_min` is recomputed as `new_mpg ×
+/// PROJECTED_GAMES_PLAYED`.
+///
+/// Players ranked past slot 12 fall out of the rotation (0 MPG, 0
+/// total_min) — they stay in the returned `Vec` so `roster_size` is
+/// honest, but contribute zero weight to every minutes-weighted
+/// aggregate. The linear minutes→counting-stats rescale holds usage
+/// and efficiency fixed; it's a first-order approximation (a promoted
+/// bench player won't perfectly hold efficiency at higher usage) but
+/// is far closer to a real roster than the frozen-minutes input.
+pub fn project_rotation(roster: Vec<PlayerRow>) -> Vec<PlayerRow> {
+    if roster.is_empty() {
+        return roster;
+    }
+
+    let mut by_rank = roster;
+    by_rank.sort_by(|a, b| {
+        let aq = a.cam_v3.unwrap_or(f64::NEG_INFINITY);
+        let bq = b.cam_v3.unwrap_or(f64::NEG_INFINITY);
+        bq.partial_cmp(&aq).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (rank, p) in by_rank.iter_mut().enumerate() {
+        let new_mpg = CANONICAL_ROTATION_MPG.get(rank).copied().unwrap_or(0.0);
+        let stat_scale = if p.mpg > 0.0 && new_mpg > 0.0 {
+            (new_mpg / p.mpg).clamp(STAT_RESCALE_MIN, STAT_RESCALE_MAX)
+        } else {
+            // Benched past the rotation (or malformed 0-MPG input):
+            // zero the counting stats so the row carries no weight.
+            0.0
+        };
+        // Counting stats scale with minutes; rate stats do not.
+        scale_opt(&mut p.ppg, stat_scale);
+        scale_opt(&mut p.rpg, stat_scale);
+        scale_opt(&mut p.apg, stat_scale);
+        scale_opt(&mut p.spg, stat_scale);
+        scale_opt(&mut p.bpg, stat_scale);
+        scale_opt(&mut p.topg, stat_scale);
+        p.mpg = new_mpg;
+        p.total_min = new_mpg * PROJECTED_GAMES_PLAYED;
+    }
+    by_rank
+}
+
 /// Produce a swap-modified roster: insert the incoming player into the
 /// destination's MPG rotation at the rank their CamPom v3 earns them.
 ///
@@ -896,6 +994,65 @@ mod tests {
                 swap_feats[i],
             );
         }
+    }
+
+    #[test]
+    fn project_rotation_assigns_canonical_envelope_by_cam_v3() {
+        // Prior MPG deliberately anti-correlated with cam_v3 — the
+        // projection must re-rank by cam_v3, not carry prior minutes.
+        let roster = vec![
+            mk_q(Uuid::new_v4(), 8.0, 30.0, Some("Wizard"), 2.0), // low cam
+            mk_q(Uuid::new_v4(), 30.0, 30.0, Some("Bard"), 9.0),  // high cam
+            mk_q(Uuid::new_v4(), 15.0, 30.0, Some("Cleric"), 5.0), // mid cam
+        ];
+        let projected = project_rotation(roster);
+        // Ranked by cam_v3 desc: Bard(9) → Cleric(5) → Wizard(2).
+        assert_eq!(projected[0].primary_class.as_deref(), Some("Bard"));
+        assert_eq!(projected[1].primary_class.as_deref(), Some("Cleric"));
+        assert_eq!(projected[2].primary_class.as_deref(), Some("Wizard"));
+        // Canonical MPG envelope slots 0/1/2.
+        assert!((projected[0].mpg - 32.0).abs() < 1e-9);
+        assert!((projected[1].mpg - 29.8).abs() < 1e-9);
+        assert!((projected[2].mpg - 27.8).abs() < 1e-9);
+        // total_min = mpg × PROJECTED_GAMES_PLAYED (28).
+        assert!((projected[0].total_min - 32.0 * 28.0).abs() < 1e-6);
+        // Counting stat (ppg=10) rescaled by new/old mpg = 32/30.
+        assert!((projected[0].ppg.unwrap() - 10.0 * (32.0 / 30.0)).abs() < 1e-6);
+        // Rate stats are minutes-invariant — unchanged.
+        assert!((projected[0].ts.unwrap() - 0.55).abs() < 1e-9);
+        assert!((projected[0].usg.unwrap() - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn project_rotation_benches_past_envelope_and_sinks_missing_cam() {
+        // 13 cam-ranked players + 1 with no cam_v3. Slots past index 12
+        // get 0 MPG; the missing-cam player sinks below everyone with a
+        // value despite the highest prior minutes on the roster.
+        let mut roster: Vec<PlayerRow> = (0..13)
+            .map(|i| mk_q(Uuid::new_v4(), 20.0, 30.0, Some("Wizard"), 10.0 - i as f64))
+            .collect();
+        let no_cam_id = Uuid::new_v4();
+        roster.push(mk(no_cam_id, 35.0, 30.0, Some("Bard"))); // mk → cam_v3 None
+        let projected = project_rotation(roster);
+        assert_eq!(
+            projected.len(),
+            14,
+            "roster_size preserved (benched rows kept)"
+        );
+        // Missing-cam player sorts last → slot 13 → 0 MPG / 0 total_min.
+        let benched = projected.iter().find(|p| p.player_id == no_cam_id).unwrap();
+        assert!(
+            benched.mpg.abs() < 1e-9,
+            "missing cam_v3 sinks out of rotation"
+        );
+        assert!(benched.total_min.abs() < 1e-9);
+        // Slot 12 is the last with minutes (6.9).
+        assert!((projected[12].mpg - 6.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn project_rotation_empty_roster_is_noop() {
+        assert!(project_rotation(vec![]).is_empty());
     }
 
     #[test]
