@@ -836,8 +836,10 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   //     current CamPom when projection missing.
   //   - Recruits: sort by projected freshman CamPom from the freshman
   //     model (matches the only CamPom number shown on the row).
-  //   - Departures: no projection available; sort by base-season CamPom
-  //     so the team's biggest losses are listed first.
+  //   - Departures: sort by counterfactual projection ("what they'd
+  //     have been worth had they stayed"), falling back to base-season
+  //     CamPom when the trajectory qual gate dropped the row — biggest
+  //     losses first.
   const cmpDesc = (a: number | null | undefined, b: number | null | undefined) => {
     if (a == null && b == null) return 0;
     if (a == null) return 1;
@@ -853,7 +855,12 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   const recruitsSorted = [...recruits].sort((x, y) =>
     cmpDesc(x.projected_cam_v3, y.projected_cam_v3),
   );
-  const departuresSorted = [...departures].sort((x, y) => cmpDesc(x.cam_v3, y.cam_v3));
+  const departuresSorted = [...departures].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
+  const uncertainSorted = [...uncertain].sort((x, y) =>
+    cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
+  );
 
   // Mid AdjEM chip color tier — mirrors `adjEmTone` on Projected2027 but
   // duplicated here rather than promoted to a shared module so the
@@ -1007,6 +1014,105 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No departures" />
           ) : (
             <>
+              {/* Draft prospects (?) render above firm departures — they're
+                  the highest-stakes uncertainty on the roster and deserve
+                  visual priority over confirmed departures the user can no
+                  longer act on. Each row carries the same name link +
+                  archetype chip + counterfactual "if they stayed"
+                  projection as the firm-departure rows, plus the Tankathon
+                  mock-pick chip. */}
+              {uncertainSorted.map((u) => {
+                // Tankathon mock-pick informational chip. Top-30 picks are
+                // green (the model effectively treats them as gone since
+                // withdrawal rates from the lottery are near zero), 31-60
+                // amber (real consideration but withdrawal common), and
+                // missing-from-board styled muted to flag "declared but
+                // not projected to be drafted — high withdrawal odds."
+                // Phase 1 is informational only; no auto-promotion.
+                const mockTone =
+                  u.mock_pick == null
+                    ? 'text-slate-400 border-slate-600/40'
+                    : u.mock_pick <= 30
+                      ? 'text-emerald-300 border-emerald-600/40'
+                      : 'text-amber-300 border-amber-600/40';
+                const mockLabel =
+                  u.mock_pick == null
+                    ? 'mock: NR'
+                    : `mock #${u.mock_pick}`;
+                const mockTitle =
+                  u.mock_pick == null
+                    ? 'Not on the current Tankathon mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
+                    : u.mock_pick <= 30
+                      ? `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
+                      : `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
+                return (
+                  <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <div className="truncate">
+                        <SeasonLink
+                          to={`/players/${u.player_id}?season=${base_season}`}
+                          className="text-blue-400 hover:underline"
+                        >
+                          {u.name}
+                        </SeasonLink>
+                      </div>
+                      {u.primary_class && (
+                        <span
+                          className="text-[10px] font-bold uppercase tracking-wide"
+                          style={{ color: classColor(u.primary_class) }}
+                        >
+                          {u.primary_class}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs tabular-nums">
+                      {u.projected_campom_mean != null ? (
+                        <span className="flex items-center gap-1.5 text-gray-400">
+                          {u.cam_v3 != null && (
+                            <>
+                              <span
+                                className="text-[10px] text-gray-500"
+                                title="Prior-season CamPom v3"
+                              >
+                                {u.cam_v3.toFixed(1)}
+                              </span>
+                              <span className="text-gray-600 text-[10px]">→</span>
+                            </>
+                          )}
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
+                            title={
+                              u.projected_campom_lower != null && u.projected_campom_upper != null
+                                ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
+                                : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
+                            }
+                          >
+                            {u.projected_campom_mean.toFixed(1)}
+                          </span>
+                        </span>
+                      ) : (
+                        u.cam_v3 != null && (
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(u.cam_v3))}`}
+                            title={`Prior-season CamPom v3: ${u.cam_v3.toFixed(1)}`}
+                          >
+                            {u.cam_v3.toFixed(1)}
+                          </span>
+                        )
+                      )}
+                      <span
+                        className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
+                        title={mockTitle}
+                      >
+                        {mockLabel}
+                      </span>
+                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
+                        ? draft (TBD)
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
               {departuresSorted.map((d) => {
                 // Mirror PlayerCard's row shape: name · archetype on the
                 // left, stats + status chip on the right. The right-most
@@ -1052,13 +1158,42 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                       {d.mpg != null && (
                         <span title="Prior-season MPG">{d.mpg.toFixed(0)}'</span>
                       )}
-                      {d.cam_v3 != null && (
-                        <span
-                          className={`px-1.5 rounded border ${campomTierColor(campomTier(d.cam_v3))}`}
-                          title={`Prior-season CamPom v3: ${d.cam_v3.toFixed(1)}`}
-                        >
-                          {d.cam_v3.toFixed(1)}
+                      {d.projected_campom_mean != null ? (
+                        // Counterfactual "if they stayed" projection — same
+                        // current → projected layout as Returning/Arrivals so
+                        // the visual rhythm matches across all four sections.
+                        <span className="flex items-center gap-1.5">
+                          {d.cam_v3 != null && (
+                            <>
+                              <span
+                                className="text-[10px] text-gray-500"
+                                title="Prior-season CamPom v3"
+                              >
+                                {d.cam_v3.toFixed(1)}
+                              </span>
+                              <span className="text-gray-600 text-[10px]">→</span>
+                            </>
+                          )}
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(d.projected_campom_mean))}`}
+                            title={
+                              d.projected_campom_lower != null && d.projected_campom_upper != null
+                                ? `Counterfactual: if they'd stayed, projected ${d.projected_campom_mean.toFixed(1)} (${d.projected_campom_lower.toFixed(1)}–${d.projected_campom_upper.toFixed(1)}). Current ${d.cam_v3 != null ? d.cam_v3.toFixed(1) : '—'}.`
+                                : `Counterfactual: if they'd stayed, projected ${d.projected_campom_mean.toFixed(1)}.`
+                            }
+                          >
+                            {d.projected_campom_mean.toFixed(1)}
+                          </span>
                         </span>
+                      ) : (
+                        d.cam_v3 != null && (
+                          <span
+                            className={`px-1.5 rounded border ${campomTierColor(campomTier(d.cam_v3))}`}
+                            title={`Prior-season CamPom v3: ${d.cam_v3.toFixed(1)} (no counterfactual projection — trajectory qual gate failed or batch inference dropped the row).`}
+                          >
+                            {d.cam_v3.toFixed(1)}
+                          </span>
+                        )
                       )}
                       {d.kind === 'transferred' && d.destination_team_id ? (
                         <SeasonLink
@@ -1080,59 +1215,6 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                           {statusLabel}
                         </span>
                       )}
-                    </div>
-                  </div>
-                );
-              })}
-              {uncertain.map((u) => {
-                // Tankathon mock-pick informational chip. Top-30 picks are
-                // green (the model effectively treats them as gone since
-                // withdrawal rates from the lottery are near zero), 31-60
-                // amber (real consideration but withdrawal common), and
-                // missing-from-board styled muted to flag "declared but
-                // not projected to be drafted — high withdrawal odds."
-                // Phase 1 is informational only; no auto-promotion.
-                const mockTone =
-                  u.mock_pick == null
-                    ? 'text-slate-400 border-slate-600/40'
-                    : u.mock_pick <= 30
-                      ? 'text-emerald-300 border-emerald-600/40'
-                      : 'text-amber-300 border-amber-600/40';
-                const mockLabel =
-                  u.mock_pick == null
-                    ? 'mock: NR'
-                    : `mock #${u.mock_pick}`;
-                const mockTitle =
-                  u.mock_pick == null
-                    ? 'Not on the current Tankathon mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
-                    : u.mock_pick <= 30
-                      ? `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
-                      : `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
-                return (
-                  <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
-                    <span className="text-sm text-gray-300 flex-1 min-w-0 truncate">{u.name}</span>
-                    <div className="flex items-center gap-2 text-xs tabular-nums">
-                      {u.projected_campom_mean != null && (
-                        <span
-                          className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
-                          title={
-                            u.projected_campom_lower != null && u.projected_campom_upper != null
-                              ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
-                              : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
-                          }
-                        >
-                          {u.projected_campom_mean.toFixed(1)}
-                        </span>
-                      )}
-                      <span
-                        className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
-                        title={mockTitle}
-                      >
-                        {mockLabel}
-                      </span>
-                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
-                        ? draft (TBD)
-                      </span>
                     </div>
                   </div>
                 );
@@ -1255,14 +1337,19 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
     <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-sm text-gray-200 truncate">{r.name}</span>
-        {r.position && (
-          <span className="text-[10px] text-gray-400">{r.position}</span>
-        )}
         {r.composite_rank != null && (
           <span className="text-[10px] text-gray-500">#{r.composite_rank}</span>
         )}
         {r.star_rating != null && (
           <span className="text-[10px] text-amber-300">{'★'.repeat(r.star_rating)}</span>
+        )}
+        {r.position && (
+          <span
+            className="text-[11px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-900/40 border border-sky-700/60 text-sky-200 shrink-0"
+            title="247Sports listed position"
+          >
+            {r.position}
+          </span>
         )}
       </div>
       <div className="flex items-center gap-2 text-xs">

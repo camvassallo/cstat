@@ -544,6 +544,21 @@ async fn projection_team_detail(
     for (row, _) in &projection.uncertain {
         traj_ids.push(row.player_id);
     }
+    // Departures also get projected so the UI can render "if they had
+    // stayed, we'd have projected X" alongside the current cam_v3 chip.
+    // Applies to all kinds — seniors (counterfactual), transfers (used
+    // by their *destination* team's roster but the chip lives on the
+    // source row for context), and NBA-draft departures.
+    for d in &projection.departures {
+        let pid = match d {
+            cstat_core::roster_projection::DepartureReason::GraduatedSenior { player_id, .. }
+            | cstat_core::roster_projection::DepartureReason::Transferred { player_id, .. }
+            | cstat_core::roster_projection::DepartureReason::DraftGone { player_id, .. } => {
+                *player_id
+            }
+        };
+        traj_ids.push(pid);
+    }
     // Precedence: OOF (LOPO held-out) predictions first for any player
     // whose torvik_pid has a row in `trajectory_oof_predictions` at
     // target_season = year. For historical years (target_season the
@@ -772,6 +787,7 @@ async fn projection_team_detail(
                 } => (*player_id, "draft_gone", name.clone(), None, None),
             };
             let meta = departure_meta.get(&pid);
+            let (mean, lower, upper) = serialize_proj(&pid);
             json!({
                 "kind": kind,
                 "player_id": pid,
@@ -780,6 +796,9 @@ async fn projection_team_detail(
                 "primary_class": meta.and_then(|m| m.primary_class.clone()),
                 "mpg": meta.and_then(|m| m.mpg),
                 "cam_v3": meta.and_then(|m| m.cam_v3),
+                "projected_campom_mean": mean,
+                "projected_campom_lower": lower,
+                "projected_campom_upper": upper,
                 "destination": destination,
                 "destination_team_id": destination_team_id,
             })

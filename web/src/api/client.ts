@@ -563,6 +563,14 @@ export interface ProjectedDeparture {
   /// Prior-season CamPom v3 (Torvik passthrough). Null when the player
   /// didn't have Torvik coverage for base_season.
   cam_v3?: number | null;
+  /// Counterfactual trajectory projection — what we'd have forecast for
+  /// this player in the projected season if they had stayed. Renders
+  /// as "current → projected" chip pair matching Returning/Arrivals
+  /// rows. Null when the trajectory qual gate (≥5 GP, ≥5 MPG) failed
+  /// or batch inference dropped the row.
+  projected_campom_mean?: number | null;
+  projected_campom_lower?: number | null;
+  projected_campom_upper?: number | null;
   /// Transfer destination institution name (text label from 247).
   destination?: string | null;
   /// Projected-season UUID of the destination team. Set when destination
