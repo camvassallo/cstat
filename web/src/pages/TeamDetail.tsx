@@ -82,7 +82,7 @@ function FourFactors({ team, label }: { team: TeamProfile; label: string }) {
 /// at the wrapper layer so each mode's hooks live in their own
 /// component (Rules of Hooks). Triggered today by `?season=2027`
 /// links from the transfer-portal "next team" and recruit "committed
-/// to" cells, plus the Projected2027 page's team links.
+/// to" cells, plus the Projected page's team links.
 export default function TeamDetail() {
   const { id } = useParams<{ id: string }>();
   const { season } = useSeason();
@@ -797,7 +797,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // YYYY-YY label, e.g. "2026-27" for year=2027. Mirrors the
-  // ProjectedRecruit chip on PlayerDetail / the Projected2027 page.
+  // ProjectedRecruit chip on PlayerDetail / the Projected page.
   const seasonLabel = `${year - 1}-${(year % 100).toString().padStart(2, '0')}`;
   usePageTitle(data?.team?.name ? `${data.team.name} ${seasonLabel} projection` : null);
 
@@ -862,9 +862,9 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
     cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
   );
 
-  // Mid AdjEM chip color tier — mirrors `adjEmTone` on Projected2027 but
+  // Mid AdjEM chip color tier — mirrors `adjEmTone` on Projected but
   // duplicated here rather than promoted to a shared module so the
-  // Projected2027 page stays self-contained.
+  // Projected page stays self-contained.
   const tone = (v: number | null): string => {
     if (v == null) return 'bg-slate-800/40 border-slate-700 text-slate-400';
     if (v >= 25) return 'bg-emerald-900/50 border-emerald-700 text-emerald-200';
@@ -925,7 +925,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         </div>
       </div>
 
-      {/* Honesty band — minimal version of the Projected2027 banner. */}
+      {/* Honesty band — minimal version of the Projected banner. */}
       <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 leading-relaxed">
         <strong className="text-amber-300">Projection mode:</strong>{' '}
         This page is the {seasonLabel} forward-looking view, not a played season. Roster = returners

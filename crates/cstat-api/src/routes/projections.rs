@@ -101,6 +101,12 @@ struct ProjectedTeam {
     /// base-season row (rare; new D-I program, or team that didn't
     /// finish enough games to compute AdjEM).
     baseline_adj_em: Option<f32>,
+    /// The team's *actual* `adj_efficiency_margin` for the target season
+    /// (`year` itself). `None` for the live/upcoming forecast year (not
+    /// played yet) and for any team without a target-season row. Lets
+    /// the historical projection view render a "Projected vs Actual"
+    /// accuracy column — a user-facing backtest of a past forecast.
+    actual_adj_em: Option<f32>,
 }
 
 /// Weight on the base-season AdjEM when blending it with the Phase B
@@ -251,6 +257,19 @@ async fn projection_list(
             )
         })?;
 
+    // Actual target-season AdjEM, keyed by base-season team_id. Empty
+    // for the live forecast year (target season not played yet) — those
+    // teams get `actual_adj_em = None`. Powers the historical view's
+    // "Projected vs Actual" accuracy column.
+    let actual_map = fetch_actual_adj_em(&state.db.pool, base_season, year)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("actual-AdjEM fetch failed: {e}") })),
+            )
+        })?;
+
     // Tankathon mock-draft snapshot — used to probability-weight each
     // team's floor/ceiling midpoint (see `mean_return_probability`).
     let mock_by_name = load_mock_by_name(base_season);
@@ -285,9 +304,16 @@ async fn projection_list(
     let mut rows: Vec<ProjectedTeam> = Vec::with_capacity(projections.len());
     for p in &projections {
         let baseline = baseline_map.get(&p.team_id).copied();
+        let actual = actual_map.get(&p.team_id).copied();
         let p_return = mean_return_probability(p, &mock_by_name);
-        let Some(row) = predict_team(p, &state.predictor, baseline, p_return, &projected_cam)
-        else {
+        let Some(row) = predict_team(
+            p,
+            &state.predictor,
+            baseline,
+            actual,
+            p_return,
+            &projected_cam,
+        ) else {
             continue;
         };
         rows.push(row);
@@ -323,6 +349,7 @@ fn predict_team(
     p: &ProjectedRoster,
     predictor: &Predictor,
     baseline: Option<f32>,
+    actual: Option<f32>,
     p_return: f32,
     projected_cam: &std::collections::HashMap<Uuid, f64>,
 ) -> Option<ProjectedTeam> {
@@ -393,6 +420,7 @@ fn predict_team(
         departures_count: p.departures.len(),
         too_thin,
         baseline_adj_em: baseline,
+        actual_adj_em: actual,
     };
 
     if qualifying < MIN_QUALIFYING_FOR_PROJECTION {
@@ -548,6 +576,18 @@ async fn projection_team_detail(
             )
         })?;
     let baseline = baseline_map.get(&resolved_id).copied();
+
+    // Actual target-season AdjEM for this team (None for the live year).
+    let actual = fetch_actual_adj_em(pool, base_season, year)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("actual-AdjEM fetch failed: {e}") })),
+            )
+        })?
+        .get(&resolved_id)
+        .copied();
 
     // Tankathon mock-draft snapshot — drives both the floor/ceiling
     // midpoint weighting (via `mean_return_probability`) and the
@@ -753,6 +793,7 @@ async fn projection_team_detail(
         &projection,
         &state.predictor,
         baseline,
+        actual,
         p_return,
         &projected_cam,
     ) else {
@@ -1019,6 +1060,44 @@ async fn fetch_baseline_adj_em(
     Ok(rows
         .into_iter()
         .map(|r| (r.team_id, r.adj_efficiency_margin as f32))
+        .collect())
+}
+
+/// Pull the *target* season's actual `adj_efficiency_margin`, keyed by
+/// the **base-season** team_id. UUIDs are season-scoped, so a
+/// base-season `team_id` (what `ProjectedRoster` carries) can't index a
+/// target-season-keyed map directly — the join bridges the two via the
+/// cross-season `natstat_id`. Returns an empty map for the live forecast
+/// year (the target season has no `team_season_stats` rows yet), which
+/// surfaces as `actual_adj_em = None` per team.
+async fn fetch_actual_adj_em(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+    target_season: i32,
+) -> Result<std::collections::HashMap<Uuid, f32>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        base_team_id: Uuid,
+        adj_efficiency_margin: f64,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT t_base.id AS base_team_id, tss.adj_efficiency_margin
+        FROM teams t_base
+        JOIN teams t_tgt
+          ON t_tgt.natstat_id = t_base.natstat_id AND t_tgt.season = $2
+        JOIN team_season_stats tss
+          ON tss.team_id = t_tgt.id AND tss.season = $2
+        WHERE t_base.season = $1 AND tss.adj_efficiency_margin IS NOT NULL
+        "#,
+    )
+    .bind(base_season)
+    .bind(target_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.base_team_id, r.adj_efficiency_margin as f32))
         .collect())
 }
 
