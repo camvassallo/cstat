@@ -179,50 +179,6 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
         }),
     },
     {
-      headerName: 'Fit',
-      field: 'fit_score',
-      ...flexCol(1, 160),
-      headerTooltip:
-        "Archetype roster fit at destination. Positive (green) means the player's primary class fills a gap in the destination's projected next-season archetype distribution (e.g., team has no Cleric and this is a Cleric); negative (red) means they stack onto an already-overweighted class. Range [-1, +1]. Baseline is the destination's projected next-season roster (returning − departures + arrivals + recruits + uncertain ceiling), with this player's own contribution subtracted out so the score reflects their marginal effect — 5 Wizards arriving each score against the other 4, not against themselves.",
-      comparator: (a: number | null, b: number | null) => {
-        if (a == null && b == null) return 0;
-        if (a == null) return 1;
-        if (b == null) return -1;
-        return a - b;
-      },
-      cellRenderer: (p: { value: number | null; data?: RankedTransfer }) => {
-        const tier = p.data?.fit_tier;
-        const label = p.data?.fit_label;
-        const idx = p.data?.fit_primary_index;
-        if (p.value == null || !tier) {
-          return <span className="text-gray-600 text-xs">—</span>;
-        }
-        // Color tiers match the CamPom tier palette so users can read
-        // across columns: emerald = strong positive, slate = neutral,
-        // rose = strong negative.
-        const tone =
-          tier === 'strong-fit'
-            ? 'border-emerald-400/50 text-emerald-300 bg-emerald-500/10'
-            : tier === 'good-fit'
-              ? 'border-teal-400/40 text-teal-300 bg-teal-500/10'
-              : tier === 'neutral'
-                ? 'border-gray-600/50 text-gray-400 bg-gray-700/20'
-                : tier === 'some-redundancy'
-                  ? 'border-amber-400/40 text-amber-300 bg-amber-500/10'
-                  : 'border-rose-400/50 text-rose-300 bg-rose-500/10';
-        const idxStr =
-          idx != null ? ` Destination index for primary class: ${idx.toFixed(2)}× (1.0 = league average; >1 = overweighted; <1 = underweighted).` : '';
-        return (
-          <span
-            className={`px-1.5 rounded border text-xs whitespace-nowrap ${tone}`}
-            title={`${label ?? ''} (fit ${p.value >= 0 ? '+' : ''}${p.value.toFixed(2)}).${idxStr}`}
-          >
-            {label ?? '—'}
-          </span>
-        );
-      },
-    },
-    {
       headerName: 'Projection',
       field: 'projected_campom_mean',
       ...flexCol(1, 130),

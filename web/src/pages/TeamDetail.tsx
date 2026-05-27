@@ -162,8 +162,11 @@ function HistoricalTeamDetail() {
     [archetypeDist],
   );
 
-  // "Identity": classes the team rosters meaningfully more than the D-I norm.
-  // Filter on `team_share >= 5%` so we don't surface 1-game noise.
+  // "Concentrated": classes the team rosters meaningfully more than the
+  // D-I norm. Filter on `team_share >= 5%` so we don't surface 1-game
+  // noise. Whether the concentration is good or bad depends on class
+  // value (see docs/archetype_balance_finding.md) — this list is
+  // descriptive, not evaluative.
   const identity = useMemo(() => {
     return archetypeDist
       .filter((a) => a.index != null && a.index >= 1.3 && a.team_share >= 0.05)
@@ -171,9 +174,10 @@ function HistoricalTeamDetail() {
       .slice(0, 3);
   }, [archetypeDist]);
 
-  // "Gaps": classes that are common in D-I (>= 5% of league minutes) but
-  // either missing or underweighted on this team. Sorted ascending by index
-  // so missing classes (index = 0) come first.
+  // "Under-represented": classes that are common in D-I (>= 5% of
+  // league minutes) but absent or underweighted on this team. Sorted
+  // ascending by index so absent classes (index = 0) come first. Same
+  // descriptive-not-evaluative framing as concentration above.
   const gaps = useMemo(() => {
     return archetypeDist
       .filter(
@@ -275,13 +279,19 @@ function HistoricalTeamDetail() {
             ))}
           </div>
 
-          {/* Identity / Gaps callouts — the actual takeaway */}
+          {/* Concentration / Under-represented callouts — descriptive
+              only. Coloring is intentionally neutral: whether
+              concentration in a given class is good or bad depends on
+              the class (Druid is high-value, Fighter is low-value — see
+              docs/archetype_balance_finding.md). The panel describes
+              the team's distribution; readers apply their own
+              evaluation. */}
           {(identity.length > 0 || gaps.length > 0) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
               {identity.length > 0 && (
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
-                    Identity
+                    Concentrated in
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {identity.map((a) => (
@@ -301,7 +311,7 @@ function HistoricalTeamDetail() {
                           >
                             {a.primary_class}
                           </span>
-                          <span className="text-green-400 font-bold">
+                          <span className="text-gray-300 font-semibold">
                             {a.index != null ? `${a.index.toFixed(1)}×` : '—'}
                           </span>
                         </span>
@@ -313,7 +323,7 @@ function HistoricalTeamDetail() {
               {gaps.length > 0 && (
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
-                    Gaps
+                    Under-represented
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {gaps.map((a) => (
@@ -333,9 +343,9 @@ function HistoricalTeamDetail() {
                           >
                             {a.primary_class}
                           </span>
-                          <span className="text-red-400 font-bold">
+                          <span className="text-gray-400 font-semibold">
                             {a.index === 0
-                              ? 'missing'
+                              ? 'absent'
                               : a.index != null
                                 ? `${a.index.toFixed(1)}×`
                                 : '—'}

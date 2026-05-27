@@ -1,24 +1,33 @@
 //! Archetype-based roster fit scoring.
 //!
-//! Layers on top of the Identity/Gaps index (`queries::get_team_archetype_index`)
-//! that already powers the TeamDetail page. For a candidate player with a
-//! known primary (and optionally secondary) archetype class, this module
-//! scores how well they fit a given destination roster — positive when they
-//! fill a class the team is underweighted in, negative when they pile onto a
-//! class the team is already overweighted in.
+//! **Status: kept as building blocks for the archetype visualization
+//! layer (Phase 5b — 12-axis radial roster plot, Team Compare view).
+//! Not consumed by any production scoring surface.** A Fit chip shipped
+//! briefly on TransferPortal (v1, then v2) and was reverted after
+//! `training/validate_archetype_balance.py` showed the chip's
+//! balance-is-good prior has the wrong sign across 4,216 team-seasons.
+//! Per-archetype value spread is real (~8 CamPom from Druid to
+//! Fighter); concentration in high-value classes amplifies edge rather
+//! than diluting it; using categorical archetypes to *score* a
+//! candidate is strictly worse than ranking by the continuous CamPom
+//! signal that informs the clustering in the first place. Full
+//! rationale in `docs/archetype_balance_finding.md`.
 //!
-//! Two baselines:
+//! Two baselines preserved for visualization / debug use:
 //! - **v1** ([`compute_fit_score`]): destination's source-season archetype
 //!   distribution, looked up via `queries::get_team_archetype_index`.
-//!   Matches what TeamDetail's Identity/Gaps shows; doesn't account for
-//!   next-season turnover.
+//!   Matches what TeamDetail's Roster Archetypes panel shows.
 //! - **v2** ([`fit_score_against_projected`]): destination's projected
 //!   next-season distribution (returning − departures + arrivals +
 //!   recruits + uncertain), with the candidate's own contribution
 //!   subtracted out before scoring. Recruits and other archetype-less
 //!   players have their minutes distributed across the 12 classes via
-//!   the D-I prior so they don't bias the distribution toward "missing"
-//!   classes. Used by the Transfer Portal route.
+//!   the D-I prior. Requires running `compose_all_projections` upstream.
+//!
+//! If you are about to add a new product surface that uses these
+//! functions to *score* players or teams (best-fit destination, fit-
+//! adjusted Δrating, etc.), read the balance-finding doc first — the
+//! prior these functions encode is empirically wrong on average.
 
 use std::collections::HashMap;
 

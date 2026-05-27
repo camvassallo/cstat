@@ -1662,21 +1662,19 @@ pub async fn get_team_archetype_index(
 /// Bulk variant of `get_team_archetype_index`: returns the same per-class
 /// distribution for every team in `team_ids` in a single round-trip.
 ///
-/// Used by the transfers route to score roster fit across hundreds of
-/// destinations without firing one query per team. Output is a map of
-/// team_id → distribution rows; teams with zero archetype coverage for
-/// the season (no `player_archetypes` rows joining to their roster) are
-/// absent from the map, which `roster_fit::compute_fit_score` treats as
-/// a maximum-gap baseline.
+/// **Not consumed by any production scoring surface** — kept for ad-hoc
+/// validation work (e.g. `training/validate_archetype_balance.py`
+/// regresses team AdjEM against per-team archetype-balance metrics
+/// across all D-I) and for the upcoming archetype visualization layer
+/// (Phase 5b — Team Compare's side-by-side distribution view). The
+/// roster-fit chip that originally drove this query was reverted after
+/// the balance-is-good prior failed to validate; see
+/// `docs/archetype_balance_finding.md`.
 ///
 /// Weighting matches the single-team query: primary 1.0× + secondary
-/// 0.5×, both for team and D-I aggregates, so per-team shares are
-/// directly comparable to the Identity/Gaps UI on TeamDetail.
-///
-/// Note: classes the team has zero minutes in do not appear as rows.
-/// Callers should treat absence as `index = 0.0` (= the candidate fills
-/// a 100% gap), which is what `roster_fit::compute_fit_score` does by
-/// design.
+/// 0.5×, both for team and D-I aggregates. Classes a team has zero
+/// minutes in do not appear as rows; callers should treat absence as
+/// `index = 0.0`.
 pub async fn get_archetype_distributions_for_teams(
     pool: &PgPool,
     team_ids: &[Uuid],
@@ -1798,15 +1796,16 @@ pub async fn get_archetype_distributions_for_teams(
 ///
 /// Same `weighted` CTE as `get_team_archetype_index` (primary 1.0× +
 /// secondary 0.5×), but aggregated over the entire league with no team
-/// filter. Returns `primary_class → share` where shares sum to 1.0 across
-/// the 12 classes (modulo NULL-secondary players who only contribute to
-/// their primary).
+/// filter. Returns `primary_class → share` where shares sum to 1.0
+/// across the 12 classes (modulo NULL-secondary players who only
+/// contribute to their primary).
 ///
-/// Used by the projected-roster fit baseline (`roster_fit::build_projected_class_minutes`)
-/// for two purposes: the `index = team_share / d1_share` denominator, and
-/// the prior over which to disperse minutes from players with no
-/// archetype assignment (synthesized recruits and sub-D1 arrivals).
-/// Caller pays one query per request.
+/// **Not consumed by any production scoring surface** — paired with
+/// `roster_fit::build_projected_class_minutes` for the projected-roster
+/// fit pipeline, which is preserved for the upcoming archetype
+/// visualization layer (Phase 5b). See `docs/archetype_balance_finding.md`
+/// for why archetype balance was investigated and dropped as a scoring
+/// signal on the transfer surface.
 pub async fn get_d1_archetype_shares(
     pool: &PgPool,
     season: i32,
