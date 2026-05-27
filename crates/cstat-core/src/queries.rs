@@ -1,6 +1,7 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, types::JsonValue};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -1656,6 +1657,141 @@ pub async fn get_team_archetype_index(
     .bind(season)
     .fetch_all(pool)
     .await
+}
+
+/// Bulk variant of `get_team_archetype_index`: returns the same per-class
+/// distribution for every team in `team_ids` in a single round-trip.
+///
+/// Used by the transfers route to score roster fit across hundreds of
+/// destinations without firing one query per team. Output is a map of
+/// team_id → distribution rows; teams with zero archetype coverage for
+/// the season (no `player_archetypes` rows joining to their roster) are
+/// absent from the map, which `roster_fit::compute_fit_score` treats as
+/// a maximum-gap baseline.
+///
+/// Weighting matches the single-team query: primary 1.0× + secondary
+/// 0.5×, both for team and D-I aggregates, so per-team shares are
+/// directly comparable to the Identity/Gaps UI on TeamDetail.
+///
+/// Note: classes the team has zero minutes in do not appear as rows.
+/// Callers should treat absence as `index = 0.0` (= the candidate fills
+/// a 100% gap), which is what `roster_fit::compute_fit_score` does by
+/// design.
+pub async fn get_archetype_distributions_for_teams(
+    pool: &PgPool,
+    team_ids: &[Uuid],
+    season: i32,
+) -> Result<HashMap<Uuid, Vec<ArchetypeShare>>, sqlx::Error> {
+    if team_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    #[derive(FromRow)]
+    struct Row {
+        team_id: Uuid,
+        primary_class: String,
+        team_count: i64,
+        team_minutes: f64,
+        team_share: f64,
+        d1_share: f64,
+        index: Option<f64>,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        WITH player_min AS (
+            SELECT
+                pa.player_id,
+                pa.primary_class,
+                pa.secondary_class,
+                p.team_id,
+                COALESCE(pss.minutes_per_game * pss.games_played, 0) AS minutes
+            FROM player_archetypes pa
+            JOIN players p ON p.id = pa.player_id
+            LEFT JOIN player_season_stats pss
+                ON pss.player_id = p.id
+               AND pss.season = pa.season
+               AND pss.team_id = p.team_id
+            WHERE pa.season = $2
+        ),
+        weighted AS (
+            SELECT player_id, primary_class AS class, team_id,
+                   minutes AS weighted_minutes
+            FROM player_min
+            UNION ALL
+            SELECT player_id, secondary_class AS class, team_id,
+                   minutes * 0.5 AS weighted_minutes
+            FROM player_min
+            WHERE secondary_class IS NOT NULL
+        ),
+        team_class AS (
+            SELECT
+                team_id,
+                class,
+                COUNT(DISTINCT player_id) AS team_count,
+                SUM(weighted_minutes) AS team_minutes
+            FROM weighted
+            WHERE team_id = ANY($1)
+            GROUP BY team_id, class
+        ),
+        team_totals AS (
+            SELECT team_id, SUM(team_minutes) AS team_total
+            FROM team_class
+            GROUP BY team_id
+        ),
+        d1_class AS (
+            SELECT class, SUM(weighted_minutes) AS d1_minutes
+            FROM weighted
+            GROUP BY class
+        ),
+        d1_total AS (
+            SELECT SUM(weighted_minutes) AS d1_total FROM weighted
+        )
+        SELECT
+            tc.team_id,
+            tc.class AS primary_class,
+            tc.team_count,
+            tc.team_minutes,
+            CASE
+                WHEN tt.team_total > 0
+                    THEN tc.team_minutes / tt.team_total
+                ELSE 0.0
+            END AS team_share,
+            CASE
+                WHEN dt.d1_total > 0
+                    THEN d1c.d1_minutes / dt.d1_total
+                ELSE 0.0
+            END AS d1_share,
+            CASE
+                WHEN tt.team_total > 0 AND dt.d1_total > 0 AND d1c.d1_minutes > 0
+                    THEN (tc.team_minutes / tt.team_total)
+                       / (d1c.d1_minutes / dt.d1_total)
+                ELSE NULL
+            END AS index
+        FROM team_class tc
+        JOIN team_totals tt ON tt.team_id = tc.team_id
+        JOIN d1_class d1c ON d1c.class = tc.class
+        CROSS JOIN d1_total dt
+        ORDER BY tc.team_id, tc.team_minutes DESC
+        "#,
+    )
+    .bind(team_ids)
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out: HashMap<Uuid, Vec<ArchetypeShare>> = HashMap::new();
+    for row in rows {
+        out.entry(row.team_id).or_default().push(ArchetypeShare {
+            primary_class: row.primary_class,
+            team_count: row.team_count,
+            team_minutes: row.team_minutes,
+            team_share: row.team_share,
+            d1_share: row.d1_share,
+            index: row.index,
+        });
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ use axum::{
     response::Json,
     routing::get,
 };
+use cstat_core::queries::get_archetype_distributions_for_teams;
+use cstat_core::roster_fit::{FitTier, compute_fit_score};
 use cstat_core::roster_projection::normalize_player_name as normalize;
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use cstat_core::trajectory::{
@@ -86,6 +88,27 @@ struct EnrichedTransfer {
     projected_campom_mean: Option<f32>,
     projected_campom_lower: Option<f32>,
     projected_campom_upper: Option<f32>,
+    /// Archetype-based roster fit score in `[-1.0, +1.0]`. Positive
+    /// means the candidate's primary (+ secondary at half weight) class
+    /// fills a gap in the destination's current archetype distribution;
+    /// negative means it piles onto an already-overweighted class.
+    /// NULL when we don't have both a destination team_id and a
+    /// primary_class for the candidate. Baseline is the destination's
+    /// **source-season** archetype distribution — the same numbers
+    /// surfaced as Identity/Gaps on TeamDetail. Doesn't account for
+    /// next-season turnover (graduating seniors, outbound portal); v2
+    /// can hook into projected-roster distributions once recruit
+    /// archetypes are addressable.
+    fit_score: Option<f64>,
+    fit_tier: Option<FitTier>,
+    /// One-line rationale, e.g. "Fills Cleric gap", "Stacks Wizard
+    /// rotation", "Roster-neutral". Mirrors the `fit_score` null gate.
+    fit_label: Option<String>,
+    /// Destination's index ratio for the candidate's primary class
+    /// (team_share ÷ d1_share). Exposed so the tooltip can show raw
+    /// context — "Duke is 2.3× over-indexed in Wizard" — without
+    /// recomputing client-side.
+    fit_primary_index: Option<f64>,
 }
 
 /// One DB candidate row pulled by name match. We may have several per name
@@ -305,6 +328,10 @@ async fn transfer_list(
                 projected_campom_mean: None,
                 projected_campom_lower: None,
                 projected_campom_upper: None,
+                fit_score: None,
+                fit_tier: None,
+                fit_label: None,
+                fit_primary_index: None,
             }
         })
         .collect();
@@ -393,6 +420,65 @@ async fn transfer_list(
                         "trajectory features fetch failed for transfers; serving NULL projections for live-inference cohort",
                     );
                 }
+            }
+        }
+    }
+
+    // Archetype roster-fit scoring (v1). For each transfer with both a
+    // resolved destination team and a known primary archetype class,
+    // score how well the candidate fits the destination's current
+    // archetype distribution. Bulk-fetch all needed distributions in
+    // one round-trip; baseline season is `year` (the source season),
+    // since the destination's `year+1` archetype distribution doesn't
+    // exist yet for the in-flight portal cycle. Honest caveat in the
+    // EnrichedTransfer doc comment.
+    let fit_team_ids: Vec<Uuid> = {
+        let mut ids: Vec<Uuid> = enriched
+            .iter()
+            .filter_map(|e| {
+                if e.primary_class.is_some() {
+                    e.next_team_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    if !fit_team_ids.is_empty() {
+        match get_archetype_distributions_for_teams(&state.db.pool, &fit_team_ids, year).await {
+            Ok(dist_map) => {
+                // Teams absent from the map have no archetype coverage
+                // for the season; compute_fit_score treats every class
+                // as a max-strength gap given an empty slice, which is
+                // the right behavior (transition-period D-I teams
+                // genuinely have unknown rosters). Hoist the empty
+                // sentinel out of the row loop so we don't allocate
+                // per row.
+                let empty: Vec<cstat_core::queries::ArchetypeShare> = Vec::new();
+                for e in enriched.iter_mut() {
+                    let (Some(primary), Some(team_id)) =
+                        (e.primary_class.as_deref(), e.next_team_id)
+                    else {
+                        continue;
+                    };
+                    let dist = dist_map.get(&team_id).unwrap_or(&empty);
+                    let fit = compute_fit_score(primary, e.secondary_class.as_deref(), dist);
+                    e.fit_score = Some(fit.raw);
+                    e.fit_tier = Some(fit.tier);
+                    e.fit_label = Some(fit.label);
+                    e.fit_primary_index = Some(fit.primary_index);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = ?err,
+                    year,
+                    n = fit_team_ids.len(),
+                    "archetype distribution fetch failed for transfers; serving NULL fit scores",
+                );
             }
         }
     }
