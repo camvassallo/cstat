@@ -402,6 +402,21 @@ export interface TransferRow {
   projected_campom_mean: number | null;
   projected_campom_lower: number | null;
   projected_campom_upper: number | null;
+  // Archetype roster-fit (Phase 5b §"Roster fit scoring"). Positive =
+  // fills a gap at destination, negative = stacks redundancy.
+  // Baseline is destination's current-season archetype distribution
+  // (= same Identity/Gaps surface on TeamDetail). NULL when the
+  // candidate has no resolved destination team or no primary archetype.
+  fit_score: number | null;
+  fit_tier:
+    | 'strong-fit'
+    | 'good-fit'
+    | 'neutral'
+    | 'some-redundancy'
+    | 'redundant'
+    | null;
+  fit_label: string | null;
+  fit_primary_index: number | null;
 }
 
 export function fetchTransfers(year: number) {
