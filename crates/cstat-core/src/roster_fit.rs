@@ -2,9 +2,10 @@
 //!
 //! **Status: kept as building blocks for the archetype visualization
 //! layer (Phase 5b — 12-axis radial roster plot, Team Compare view).
-//! Not consumed by any production scoring surface.** A Fit chip shipped
-//! briefly on TransferPortal (v1, then v2) and was reverted after
-//! `training/validate_archetype_balance.py` showed the chip's
+//! Not consumed by any production scoring surface.** A v1 Fit chip
+//! shipped briefly on TransferPortal (PR #89) and a v2 successor was
+//! built in the same branch but never deployed; both were removed
+//! after `training/validate_archetype_balance.py` showed the chip's
 //! balance-is-good prior has the wrong sign across 4,216 team-seasons.
 //! Per-archetype value spread is real (~8 CamPom from Druid to
 //! Fighter); concentration in high-value classes amplifies edge rather

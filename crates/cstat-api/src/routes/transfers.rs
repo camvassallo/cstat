@@ -398,17 +398,18 @@ async fn transfer_list(
     }
 
     // Archetype roster-fit scoring intentionally NOT surfaced on this
-    // route. A v1 (source-season baseline) chip shipped briefly, then a
-    // v2 (projected-roster baseline + self-exclusion) chip replaced it,
-    // and v2's underlying balance-is-good prior was then empirically
-    // invalidated against 4,216 team-seasons (see
+    // route. A v1 chip (source-season baseline) shipped in PR #89 and a
+    // v2 successor (projected-roster baseline + self-exclusion) was
+    // built in this branch but never deployed; both were removed after
+    // the shared balance-is-good prior was empirically invalidated
+    // against 4,216 team-seasons (see
     // `training/validate_archetype_balance.py` +
     // `docs/archetype_balance_finding.md`). Per-archetype value spread
     // is real (~8 CamPom from Druid to Fighter) and concentration in
-    // high-value classes *amplifies* edge rather than diluting it —
-    // the opposite of what the v1/v2 chip claimed. Transfers rank by
-    // projected CamPom alone; archetypes stay a description-layer
-    // surface on TeamDetail rather than a scoring signal here.
+    // high-value classes *amplifies* edge rather than diluting it — the
+    // opposite of what the chip claimed. Transfers rank by projected
+    // CamPom alone; archetypes stay a description-layer surface on
+    // TeamDetail rather than a scoring signal here.
     //
     // The `roster_fit::{compute_fit_score, fit_score_against_projected,
     // build_projected_class_minutes}` helpers + the
