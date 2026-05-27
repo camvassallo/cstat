@@ -1,9 +1,10 @@
 # Archetype balance ≠ team strength — investigation and decision
 
-**Status**: investigated 2026-05-27. The roster-fit chip on TransferPortal was
-shipped (v1, then v2) and then deliberately removed after this analysis.
-Archetypes remain a *description* layer on TeamDetail; they are no longer
-used as a *scoring* signal anywhere on the site.
+**Status**: investigated 2026-05-27. A v1 roster-fit chip shipped to
+TransferPortal in PR #89; a v2 successor was built in the same branch but
+never deployed. Both were removed after this analysis. Archetypes remain a
+*description* layer on TeamDetail; they are no longer used as a *scoring*
+signal anywhere on the site.
 
 ## Background
 
