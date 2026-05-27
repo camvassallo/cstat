@@ -136,10 +136,18 @@ fn classify(raw: f64) -> FitTier {
 
 /// Build a one-line label describing the dominant story.
 ///
-/// Priority ordering when both primary and secondary classes have notable
-/// indices: primary always wins (it's the heavier-weighted signal) unless
-/// the primary is near-neutral and the secondary has a strong story to
-/// tell. "Fills missing X" is reserved for genuinely absent classes
+/// Thresholds (`<= 0.85` for "fills", `>= 1.15` for "stacks") are aligned
+/// with the *tier* boundaries — i.e., the cutoffs where `raw` itself
+/// crosses ±0.10 for primary-only contributions — so the label always
+/// tracks the chip color. Using the TeamDetail Identity threshold
+/// (≥1.30×) here instead would leave a dead zone in 1.15–1.30 where
+/// the chip reads SomeRedundancy but the label said "Roster-neutral."
+///
+/// Priority ordering: primary is the heavier-weighted signal, so if
+/// it's the side underweighted (or overweighted), name primary's class.
+/// Secondary only carries the label when primary is on the wrong side
+/// of 1.0 (the league average) and secondary has the opposite story.
+/// "Fills missing X" is reserved for genuinely absent classes
 /// (index < 0.15) since that reads differently from "underweighted."
 fn build_label(
     primary: &str,
@@ -148,30 +156,28 @@ fn build_label(
     secondary_index: Option<f64>,
     raw: f64,
 ) -> String {
-    let primary_strong_gap = primary_index < 0.70;
-    let primary_strong_red = primary_index > 1.30;
-
-    if raw >= 0.10 && primary_strong_gap {
+    if raw >= 0.10 && primary_index <= 0.85 {
         return if primary_index < 0.15 {
             format!("Fills missing {primary}")
         } else {
             format!("Fills {primary} gap")
         };
     }
-    if raw <= -0.10 && primary_strong_red {
+    if raw <= -0.10 && primary_index >= 1.15 {
         return format!("Stacks {primary} rotation");
     }
 
-    // Primary near-neutral — check secondary for a story worth surfacing.
+    // Primary doesn't carry the story (it's at-or-near league average
+    // for the direction `raw` reflects). Check secondary.
     if let (Some(sec), Some(sec_idx)) = (secondary, secondary_index) {
-        if raw >= 0.10 && sec_idx < 0.70 {
+        if raw >= 0.10 && sec_idx <= 0.85 {
             return if sec_idx < 0.15 {
                 format!("Secondary fills missing {sec}")
             } else {
                 format!("Secondary fills {sec} gap")
             };
         }
-        if raw <= -0.10 && sec_idx > 1.30 {
+        if raw <= -0.10 && sec_idx >= 1.15 {
             return format!("Secondary stacks {sec} rotation");
         }
     }
@@ -292,6 +298,50 @@ mod tests {
         // direct-NaN safety net inside signal_for_index.
         assert_eq!(signal_for_index(f64::NAN), 0.0);
         assert_eq!(signal_for_index(f64::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn label_tracks_tier_in_mild_redundancy_window() {
+        // Regression: primary_index 1.25 used to fall through to
+        // "Roster-neutral" even though raw -0.111 is SomeRedundancy.
+        // The label thresholds (≥1.15 / ≤0.85) now match the ±0.10
+        // tier boundaries so the chip color and the text agree.
+        let dist = vec![share("Wizard", 1.25)];
+        let fit = compute_fit_score("Wizard", None, &dist);
+        // signal = -(0.25/1.5) = -0.167, raw = -0.111.
+        assert!((fit.raw - (-0.111)).abs() < 0.01, "got raw {}", fit.raw);
+        assert_eq!(fit.tier, FitTier::SomeRedundancy);
+        assert!(
+            fit.label.contains("Stacks Wizard"),
+            "expected 'Stacks Wizard' label, got {}",
+            fit.label
+        );
+    }
+
+    #[test]
+    fn label_tracks_tier_in_mild_gap_window() {
+        // Mirror of the above: primary_index 0.80 is GoodFit territory
+        // (raw 0.133). Label should call out the gap.
+        let dist = vec![share("Cleric", 0.80)];
+        let fit = compute_fit_score("Cleric", None, &dist);
+        assert!((fit.raw - 0.133).abs() < 0.01, "got raw {}", fit.raw);
+        assert_eq!(fit.tier, FitTier::GoodFit);
+        assert!(
+            fit.label.contains("Cleric gap"),
+            "expected 'Cleric gap' label, got {}",
+            fit.label
+        );
+    }
+
+    #[test]
+    fn label_stays_neutral_when_no_class_is_overweighted() {
+        // Edge case: both classes mildly over-indexed (1.10/1.05)
+        // — combined raw stays inside the neutral band (-0.10, +0.10),
+        // so chip is Neutral and label should agree.
+        let dist = vec![share("Wizard", 1.10), share("Bard", 1.05)];
+        let fit = compute_fit_score("Wizard", Some("Bard"), &dist);
+        assert_eq!(fit.tier, FitTier::Neutral);
+        assert_eq!(fit.label, "Roster-neutral");
     }
 
     #[test]

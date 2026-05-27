@@ -450,18 +450,20 @@ async fn transfer_list(
     if !fit_team_ids.is_empty() {
         match get_archetype_distributions_for_teams(&state.db.pool, &fit_team_ids, year).await {
             Ok(dist_map) => {
+                // Teams absent from the map have no archetype coverage
+                // for the season; compute_fit_score treats every class
+                // as a max-strength gap given an empty slice, which is
+                // the right behavior (transition-period D-I teams
+                // genuinely have unknown rosters). Hoist the empty
+                // sentinel out of the row loop so we don't allocate
+                // per row.
+                let empty: Vec<cstat_core::queries::ArchetypeShare> = Vec::new();
                 for e in enriched.iter_mut() {
                     let (Some(primary), Some(team_id)) =
                         (e.primary_class.as_deref(), e.next_team_id)
                     else {
                         continue;
                     };
-                    // Teams absent from the map have no archetype coverage
-                    // for the season; compute_fit_score treats every class
-                    // as a max-strength gap given an empty slice, which is
-                    // the right behavior (transition-period D-I teams
-                    // genuinely have unknown rosters).
-                    let empty: Vec<_> = Vec::new();
                     let dist = dist_map.get(&team_id).unwrap_or(&empty);
                     let fit = compute_fit_score(primary, e.secondary_class.as_deref(), dist);
                     e.fit_score = Some(fit.raw);

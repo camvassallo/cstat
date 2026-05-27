@@ -1675,7 +1675,8 @@ pub async fn get_team_archetype_index(
 ///
 /// Note: classes the team has zero minutes in do not appear as rows.
 /// Callers should treat absence as `index = 0.0` (= the candidate fills
-/// a 100% gap) per `roster_fit::lookup_index`.
+/// a 100% gap), which is what `roster_fit::compute_fit_score` does by
+/// design.
 pub async fn get_archetype_distributions_for_teams(
     pool: &PgPool,
     team_ids: &[Uuid],
