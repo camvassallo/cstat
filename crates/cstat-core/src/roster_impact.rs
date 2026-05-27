@@ -226,6 +226,7 @@ mod tests {
             blk_pct: Some(1.5),
             ft_rate: Some(0.35),
             primary_class: arch.map(str::to_string),
+            secondary_class: None,
             class_year: class.map(str::to_string),
             cam_v3,
         }

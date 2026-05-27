@@ -5,9 +5,12 @@ use axum::{
     response::Json,
     routing::get,
 };
-use cstat_core::queries::get_archetype_distributions_for_teams;
-use cstat_core::roster_fit::{FitTier, compute_fit_score};
-use cstat_core::roster_projection::normalize_player_name as normalize;
+use cstat_core::queries::get_d1_archetype_shares;
+use cstat_core::roster_features::project_rotation;
+use cstat_core::roster_fit::{FitTier, build_projected_class_minutes, fit_score_against_projected};
+use cstat_core::roster_projection::{
+    DraftScenario, compose_all_projections, load_draft_entrants, normalize_player_name as normalize,
+};
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -16,6 +19,7 @@ use cstat_core::trajectory::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -90,15 +94,23 @@ struct EnrichedTransfer {
     projected_campom_upper: Option<f32>,
     /// Archetype-based roster fit score in `[-1.0, +1.0]`. Positive
     /// means the candidate's primary (+ secondary at half weight) class
-    /// fills a gap in the destination's current archetype distribution;
-    /// negative means it piles onto an already-overweighted class.
-    /// NULL when we don't have both a destination team_id and a
-    /// primary_class for the candidate. Baseline is the destination's
-    /// **source-season** archetype distribution — the same numbers
-    /// surfaced as Identity/Gaps on TeamDetail. Doesn't account for
-    /// next-season turnover (graduating seniors, outbound portal); v2
-    /// can hook into projected-roster distributions once recruit
-    /// archetypes are addressable.
+    /// fills a gap in the destination's projected next-season archetype
+    /// distribution; negative means it piles onto an already-
+    /// overweighted class. NULL when we don't have both a destination
+    /// team_id and a primary_class for the candidate, or the fit
+    /// pipeline failed (compose_all_projections / D-I-shares query —
+    /// see `tracing::warn!`s in the route).
+    ///
+    /// Baseline (v2): destination's projected **next-season** roster
+    /// (returning − departures + arrivals + recruits + uncertain
+    /// ceiling), with the candidate's own primary 1.0× + secondary
+    /// 0.5× minutes subtracted out so the score reflects their
+    /// *marginal* effect (5 Wizards arriving each register as +1
+    /// against the *other 4*, not as redundancy against themselves).
+    /// Archetype-less players (synthesized recruits, sub-D1 arrivals)
+    /// have their minutes dispersed across the 12 classes via the D-I
+    /// prior so they don't bias the distribution toward "missing"
+    /// classes. See `cstat_core::roster_fit::fit_score_against_projected`.
     fit_score: Option<f64>,
     fit_tier: Option<FitTier>,
     /// One-line rationale, e.g. "Fills Cleric gap", "Stacks Wizard
@@ -424,60 +436,102 @@ async fn transfer_list(
         }
     }
 
-    // Archetype roster-fit scoring (v1). For each transfer with both a
+    // Archetype roster-fit scoring (v2). For each transfer with both a
     // resolved destination team and a known primary archetype class,
-    // score how well the candidate fits the destination's current
-    // archetype distribution. Bulk-fetch all needed distributions in
-    // one round-trip; baseline season is `year` (the source season),
-    // since the destination's `year+1` archetype distribution doesn't
-    // exist yet for the in-flight portal cycle. Honest caveat in the
-    // EnrichedTransfer doc comment.
-    let fit_team_ids: Vec<Uuid> = {
-        let mut ids: Vec<Uuid> = enriched
-            .iter()
-            .filter_map(|e| {
-                if e.primary_class.is_some() {
-                    e.next_team_id
-                } else {
-                    None
+    // score how well the candidate fits the destination's *projected*
+    // next-season archetype distribution (returning − departures +
+    // arrivals + recruits + uncertain ceiling), with the candidate's
+    // own contribution subtracted out so the score reflects their
+    // marginal effect. This replaces v1's source-season baseline, which
+    // mis-scored candidates against the team's pre-turnover roster
+    // (gutted senior cores, ignored other arrivals/recruits).
+    //
+    // Cost: one extra compose_all_projections call per request (same
+    // pipeline /api/projections runs). Any failure in the projection,
+    // entrants load, or D-I-shares query logs once and serves NULL fit
+    // scores route-wide — graceful degradation matches the v1 policy.
+    let want_fit = enriched
+        .iter()
+        .any(|e| e.primary_class.is_some() && e.next_team_id.is_some());
+    if want_fit {
+        let entrants_path = PathBuf::from("data/draft").join(format!("{year}_early_entrants.json"));
+        let entrants = load_draft_entrants(&entrants_path).unwrap_or_else(|e| {
+            tracing::warn!(
+                path = %entrants_path.display(),
+                error = %e,
+                "draft entrants file unavailable for fit scoring; projecting without draft cohort",
+            );
+            Vec::new()
+        });
+        let projections_result =
+            compose_all_projections(&state.db.pool, year, &entrants, &state.predictor).await;
+        let d1_shares_result = get_d1_archetype_shares(&state.db.pool, year).await;
+        match (projections_result, d1_shares_result) {
+            (Ok(projections), Ok(d1_shares)) => {
+                // Per-team projected class-minutes + per-(team, player)
+                // canonical-MPG lookup. project_rotation re-ranks the
+                // ceiling-scenario roster by cam_v3 and assigns each
+                // slot a data-calibrated MPG so the team-level minutes
+                // match the ~220 Σmpg distribution v1 rosters live in.
+                let mut team_dist: HashMap<Uuid, HashMap<String, f64>> = HashMap::new();
+                let mut player_min: HashMap<(Uuid, Uuid), f64> = HashMap::new();
+                for p in &projections {
+                    let roster = project_rotation(p.for_scenario(DraftScenario::Ceiling));
+                    for player in &roster {
+                        player_min.insert((p.team_id, player.player_id), player.total_min);
+                    }
+                    team_dist.insert(
+                        p.team_id,
+                        build_projected_class_minutes(&roster, &d1_shares),
+                    );
                 }
-            })
-            .collect();
-        ids.sort();
-        ids.dedup();
-        ids
-    };
-    if !fit_team_ids.is_empty() {
-        match get_archetype_distributions_for_teams(&state.db.pool, &fit_team_ids, year).await {
-            Ok(dist_map) => {
-                // Teams absent from the map have no archetype coverage
-                // for the season; compute_fit_score treats every class
-                // as a max-strength gap given an empty slice, which is
-                // the right behavior (transition-period D-I teams
-                // genuinely have unknown rosters). Hoist the empty
-                // sentinel out of the row loop so we don't allocate
-                // per row.
-                let empty: Vec<cstat_core::queries::ArchetypeShare> = Vec::new();
                 for e in enriched.iter_mut() {
                     let (Some(primary), Some(team_id)) =
                         (e.primary_class.as_deref(), e.next_team_id)
                     else {
                         continue;
                     };
-                    let dist = dist_map.get(&team_id).unwrap_or(&empty);
-                    let fit = compute_fit_score(primary, e.secondary_class.as_deref(), dist);
+                    let Some(team_class_minutes) = team_dist.get(&team_id) else {
+                        // Destination team has no projected roster (no
+                        // base-season presence). Skip — same behavior
+                        // as v1 falling through to empty distribution.
+                        continue;
+                    };
+                    // Candidate's total_min on the projected destination
+                    // roster (rank-slot canonical MPG × GP). 0.0 when we
+                    // can't locate them — pathological case (resolved
+                    // player_id + next_team_id but absent from the
+                    // projected arrivals); self-exclusion silently
+                    // no-ops in that branch.
+                    let candidate_min = e
+                        .player_id
+                        .and_then(|pid| player_min.get(&(team_id, pid)).copied())
+                        .unwrap_or(0.0);
+                    let fit = fit_score_against_projected(
+                        primary,
+                        e.secondary_class.as_deref(),
+                        candidate_min,
+                        team_class_minutes,
+                        &d1_shares,
+                    );
                     e.fit_score = Some(fit.raw);
                     e.fit_tier = Some(fit.tier);
                     e.fit_label = Some(fit.label);
                     e.fit_primary_index = Some(fit.primary_index);
                 }
             }
-            Err(err) => {
+            (Err(err), _) => {
                 tracing::warn!(
                     error = ?err,
                     year,
-                    n = fit_team_ids.len(),
-                    "archetype distribution fetch failed for transfers; serving NULL fit scores",
+                    "compose_all_projections failed for transfers fit baseline; serving NULL fit scores",
+                );
+            }
+            (_, Err(err)) => {
+                tracing::warn!(
+                    error = ?err,
+                    year,
+                    "D-I archetype shares fetch failed for transfers fit baseline; serving NULL fit scores",
                 );
             }
         }

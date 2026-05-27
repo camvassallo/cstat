@@ -135,6 +135,15 @@ pub struct PlayerRow {
     pub blk_pct: Option<f64>,
     pub ft_rate: Option<f64>,
     pub primary_class: Option<String>,
+    /// Second-strongest archetype, when the player is hybrid enough that
+    /// the clustering pipeline assigns one. Consumed by the projected-
+    /// roster fit baseline (`roster_fit::build_projected_class_minutes`)
+    /// to mirror the primary 1.0× + secondary 0.5× weighting that
+    /// `queries::get_team_archetype_index` uses for the Identity/Gaps
+    /// surface. Not consumed by `build_roster_features` /
+    /// `build_roster_impact_features` (the ONNX feature contract is
+    /// primary-only). Nullable — most players have no secondary.
+    pub secondary_class: Option<String>,
     /// Player class year (`Fr` / `So` / `Jr` / `Sr`). On a *projected*
     /// roster this is the class for the season being projected — returners
     /// and arrivals are aged up one year from their base season by
@@ -178,6 +187,7 @@ pub async fn fetch_roster(
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
             pss.stl_pct, pss.blk_pct, pss.ft_rate,
             pa.primary_class,
+            pa.secondary_class,
             tps.cam_gbpm_v3_psos AS cam_v3
         FROM player_season_stats pss
         LEFT JOIN player_archetypes pa
@@ -694,6 +704,7 @@ mod tests {
             blk_pct: Some(1.5),
             ft_rate: Some(0.35),
             primary_class: class.map(str::to_string),
+            secondary_class: None,
             class_year: None,
             cam_v3: None,
         }

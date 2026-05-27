@@ -183,7 +183,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
       field: 'fit_score',
       ...flexCol(1, 160),
       headerTooltip:
-        "Archetype roster fit at destination. Positive (green) means the player's primary class fills a gap in the destination's archetype distribution (e.g., team has no Cleric and this is a Cleric); negative (red) means they stack onto an already-overweighted class. Range [-1, +1]. Baseline is the destination's current-season Identity/Gaps profile (same numbers shown on TeamDetail). Doesn't account for next-season turnover.",
+        "Archetype roster fit at destination. Positive (green) means the player's primary class fills a gap in the destination's projected next-season archetype distribution (e.g., team has no Cleric and this is a Cleric); negative (red) means they stack onto an already-overweighted class. Range [-1, +1]. Baseline is the destination's projected next-season roster (returning − departures + arrivals + recruits + uncertain ceiling), with this player's own contribution subtracted out so the score reflects their marginal effect — 5 Wizards arriving each score against the other 4, not against themselves.",
       comparator: (a: number | null, b: number | null) => {
         if (a == null && b == null) return 0;
         if (a == null) return 1;
