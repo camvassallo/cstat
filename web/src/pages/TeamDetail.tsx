@@ -17,6 +17,7 @@ import {
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterRadialPlot } from '../components/RosterRadialPlot';
+import { RosterAffinityHeatmap } from '../components/RosterAffinityHeatmap';
 import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
@@ -380,6 +381,29 @@ function HistoricalTeamDetail() {
           </p>
           <div className="flex justify-center">
             <RosterRadialPlot rosters={[{ label: team.name, roster }]} />
+          </div>
+
+          {/* Per-player affinity heatmap — the radial answers "where
+              do team minutes pile up across roles" (composition); this
+              answers "how pure or hybrid is each player's fit"
+              (profile). Rows sorted by minutes share; columns share
+              CLASS_ORDER with the radial so the two read the same way
+              around the dial. */}
+          <div className="mt-6 pt-5 border-t border-gray-700">
+            <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
+              <h4 className="text-sm font-semibold text-gray-300">
+                Per-player archetype affinity
+              </h4>
+              <span className="text-xs text-gray-500">
+                Brighter = stronger affinity (softmax across 12 classes)
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">
+              One row per rostered player, one column per archetype.
+              Multiple bright cells in a row = a hybrid; one dominant cell
+              = a pure-class fit.
+            </p>
+            <RosterAffinityHeatmap roster={roster} />
           </div>
         </div>
       )}
