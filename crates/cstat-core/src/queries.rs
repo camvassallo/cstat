@@ -1662,21 +1662,19 @@ pub async fn get_team_archetype_index(
 /// Bulk variant of `get_team_archetype_index`: returns the same per-class
 /// distribution for every team in `team_ids` in a single round-trip.
 ///
-/// Used by the transfers route to score roster fit across hundreds of
-/// destinations without firing one query per team. Output is a map of
-/// team_id → distribution rows; teams with zero archetype coverage for
-/// the season (no `player_archetypes` rows joining to their roster) are
-/// absent from the map, which `roster_fit::compute_fit_score` treats as
-/// a maximum-gap baseline.
+/// **Not consumed by any production scoring surface** — kept for ad-hoc
+/// validation work (e.g. `training/validate_archetype_balance.py`
+/// regresses team AdjEM against per-team archetype-balance metrics
+/// across all D-I) and for the upcoming archetype visualization layer
+/// (Phase 5b — Team Compare's side-by-side distribution view). The
+/// roster-fit chip that originally drove this query was reverted after
+/// the balance-is-good prior failed to validate; see
+/// `docs/archetype_balance_finding.md`.
 ///
 /// Weighting matches the single-team query: primary 1.0× + secondary
-/// 0.5×, both for team and D-I aggregates, so per-team shares are
-/// directly comparable to the Identity/Gaps UI on TeamDetail.
-///
-/// Note: classes the team has zero minutes in do not appear as rows.
-/// Callers should treat absence as `index = 0.0` (= the candidate fills
-/// a 100% gap), which is what `roster_fit::compute_fit_score` does by
-/// design.
+/// 0.5×, both for team and D-I aggregates. Classes a team has zero
+/// minutes in do not appear as rows; callers should treat absence as
+/// `index = 0.0`.
 pub async fn get_archetype_distributions_for_teams(
     pool: &PgPool,
     team_ids: &[Uuid],
@@ -1792,6 +1790,77 @@ pub async fn get_archetype_distributions_for_teams(
         });
     }
     Ok(out)
+}
+
+/// Per-class D-I-wide share of weighted minutes for the given season.
+///
+/// Same `weighted` CTE as `get_team_archetype_index` (primary 1.0× +
+/// secondary 0.5×), but aggregated over the entire league with no team
+/// filter. Returns `primary_class → share` where shares sum to 1.0
+/// across the 12 classes (modulo NULL-secondary players who only
+/// contribute to their primary).
+///
+/// **Not consumed by any production scoring surface** — paired with
+/// `roster_fit::build_projected_class_minutes` for the projected-roster
+/// fit pipeline, which is preserved for the upcoming archetype
+/// visualization layer (Phase 5b). See `docs/archetype_balance_finding.md`
+/// for why archetype balance was investigated and dropped as a scoring
+/// signal on the transfer surface.
+pub async fn get_d1_archetype_shares(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<String, f64>, sqlx::Error> {
+    #[derive(FromRow)]
+    struct Row {
+        primary_class: String,
+        share: f64,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        WITH player_min AS (
+            SELECT
+                pa.player_id,
+                pa.primary_class,
+                pa.secondary_class,
+                COALESCE(pss.minutes_per_game * pss.games_played, 0) AS minutes
+            FROM player_archetypes pa
+            JOIN players p ON p.id = pa.player_id
+            LEFT JOIN player_season_stats pss
+                ON pss.player_id = p.id
+               AND pss.season = pa.season
+               AND pss.team_id = p.team_id
+            WHERE pa.season = $1
+        ),
+        weighted AS (
+            SELECT primary_class AS class, minutes AS weighted_minutes
+            FROM player_min
+            UNION ALL
+            SELECT secondary_class AS class, minutes * 0.5 AS weighted_minutes
+            FROM player_min
+            WHERE secondary_class IS NOT NULL
+        ),
+        d1_class AS (
+            SELECT class, SUM(weighted_minutes) AS class_min
+            FROM weighted
+            GROUP BY class
+        ),
+        d1_total AS (
+            SELECT SUM(weighted_minutes) AS total FROM weighted
+        )
+        SELECT
+            d1c.class AS primary_class,
+            CASE WHEN dt.total > 0 THEN d1c.class_min / dt.total ELSE 0.0 END AS share
+        FROM d1_class d1c
+        CROSS JOIN d1_total dt
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.primary_class, r.share))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

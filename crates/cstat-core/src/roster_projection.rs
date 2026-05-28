@@ -396,6 +396,7 @@ pub fn synthesize_freshman_row(
         blk_pct: Some(p.blk_pct),
         ft_rate: Some(p.ft_rate),
         primary_class: None,
+        secondary_class: None,
         // Recruits are freshmen in the projected season by definition.
         class_year: Some("Fr".to_string()),
         cam_v3,
@@ -538,6 +539,7 @@ struct RosterRow {
     blk_pct: Option<f64>,
     ft_rate: Option<f64>,
     primary_class: Option<String>,
+    secondary_class: Option<String>,
     cam_v3: Option<f64>,
 }
 
@@ -591,6 +593,7 @@ impl RosterRow {
             blk_pct: self.blk_pct,
             ft_rate: self.ft_rate,
             primary_class: self.primary_class,
+            secondary_class: self.secondary_class,
             // Aged up one season — this PlayerRow is materialized into a
             // *projected* (next-season) roster.
             class_year: age_up_class_year(self.class_year),
@@ -755,6 +758,7 @@ pub async fn compose_all_projections(
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
             pss.stl_pct, pss.blk_pct, pss.ft_rate,
             pa.primary_class,
+            pa.secondary_class,
             tps.cam_gbpm_v3_psos AS cam_v3
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
@@ -1187,6 +1191,7 @@ mod tests {
             blk_pct: None,
             ft_rate: None,
             primary_class: Some("Wizard".into()),
+            secondary_class: None,
             class_year: None,
             cam_v3,
         }
