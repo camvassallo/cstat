@@ -17,6 +17,28 @@ export const CLASS_COLORS: Record<string, string> = {
   Fighter: '#737373',    // neutral gray — low-USG rotation depth
 };
 
+/// Canonical clockwise order for the 12 archetype classes around a radial
+/// chart. Groups roughly by role family — primary creators (Wizard / Bard /
+/// Sorcerer / Warlock) at the top, perimeter/wing roles down the right
+/// (Ranger / Rogue / Monk), interior roles along the bottom (Barbarian /
+/// Paladin / Druid / Cleric), low-usage depth (Fighter) closing the loop.
+/// Shared across the radial roster plot, Team Compare, and any future
+/// per-class small-multiples so spokes stay in lockstep.
+export const CLASS_ORDER: readonly string[] = [
+  'Wizard',
+  'Bard',
+  'Sorcerer',
+  'Warlock',
+  'Ranger',
+  'Rogue',
+  'Monk',
+  'Barbarian',
+  'Paladin',
+  'Druid',
+  'Cleric',
+  'Fighter',
+];
+
 export function classColor(cls: string | null | undefined): string {
   if (!cls) return '#64748b';
   return CLASS_COLORS[cls] ?? '#64748b';

@@ -16,6 +16,7 @@ import {
 } from '../api/client';
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
+import { RosterRadialPlot } from '../components/RosterRadialPlot';
 import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
@@ -358,6 +359,28 @@ function HistoricalTeamDetail() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Per-player archetype radial — sibling to the stacked-bar panel.
+          The bar shows aggregate composition; this shows per-player
+          placement so role concentration and gaps read at a glance. */}
+      {roster.length > 0 && (
+        <div className="bg-gray-800 rounded-lg p-5">
+          <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
+            <h3 className="text-lg font-bold">Roster Map</h3>
+            <span className="text-xs text-gray-500">
+              Angle = primary class · radius = minutes share
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">
+            Each dot is a rostered player at their primary archetype; the
+            dimmed dot at half-radius is their secondary. Tap or hover for
+            name, classes, and minutes share.
+          </p>
+          <div className="flex justify-center">
+            <RosterRadialPlot rosters={[{ label: team.name, roster }]} />
+          </div>
         </div>
       )}
 
