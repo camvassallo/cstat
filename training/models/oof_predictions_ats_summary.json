@@ -1,0 +1,10 @@
+{
+  "label": "5-fold OOF baseline",
+  "n_games": 12081,
+  "wins": 8563,
+  "loses": 3361,
+  "pushes": 157,
+  "win_pct": 62.123842592592595,
+  "roi_pct": 37.0984845689366,
+  "n_rows_in": 12081
+}

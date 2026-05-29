@@ -561,6 +561,35 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - The freshman-impact *prior model* is no longer soft-blocked — 558 paired classes is enough for a v1 fit. Wider bands than ideal until more classes accumulate, but the heuristic-vs-prior comparison is now an A/B we can actually run.
   - 5c is the natural neighbor for "year 1 → year 2 onward"; the prior model covers "year 0 → year 1". Together they project any player's next-season line regardless of where they are in their career arc.
 - [ ] Backtest models across multiple seasons
+- [x] **CamPom overfitting audit & point-in-time predict backtest** *(measurement phase shipped 2026-05-29; production wiring queued below)* — all three nested tests landed, full audit doc + infographic in `training/eval_history/honest_audit_findings_20260529.md` and `audit_final_comparison_20260529.png`. **Headline: honest predict AUC = 0.785 (vs. leaky 0.816), inflation = 0.031 AUC of intra-season lookahead.** cstat still beats NatStat ELO (0.722) by 0.063 AUC honestly.
+  - [x] **Constants sensitivity sweep** — `training/campom_sensitivity_sweep.py`. **All five `CAMPOM_*` knobs robust under ±20% perturbation** (Pearson r ≥ 0.997 vs. baseline, top-50 overlap 47-49/50). CamPom constants are NOT overfit; signal comes from the underlying GBPM/usage/minutes structure, not precisely-tuned weights. Verdict closes the "tuning-overfit" prong of the audit.
+  - [x] **Leave-one-season-out (LOSO) game-prediction backtest** — `training/train_loso.py`. Pooled AUC = **0.815** across 6 holdouts (2021-2026); per-season range 0.802-0.824. **Essentially identical to the leaky 5-fold OOF (0.816)** — the cross-season leak channel is ≈ 0. Leakage decomposition shows LOSO's coef on `leak_diff` = 3.35 (vs. 5-fold 3.46) — unchanged. The intra-season `torvik_player_stats.cam_gbpm_v3` aggregate is the entire leakage budget. Persisted: per-season models + OOF predictions in `training/models/loso/predict_{year}/`.
+  - [x] **Point-in-time CamPom backtest** *(gold standard)* — full pipeline shipped:
+    - Migration `022_torvik_player_game_stats.sql` (1.3M rows / 12 seasons backfilled via the new `cstat-ingest torvik --persist-games` flag — no new API calls; the gzip JSON was already being fetched for rebound backfill).
+    - Python prototype `training/compute_campom_at.py` validated against season aggregate at **Pearson r = 0.92** (no-SOS variant; Rust port should hit >0.99 with conf-SOS).
+    - `training/build_pit_lookup.py` precomputes a 14-day-cadence player×season×date grid (501k rows, 22 MB compressed).
+    - `features.py` patched with `GBPM_VARIANT=pit_cam_v3` asof-merging the pit grid into the standard 49-feature matrix.
+    - Retrained model in `models_experiments/pit_cam_v3/`: **AUC = 0.785 / MAE = 8.56 / ATS = 67.69% vs Vegas**. Leak coefficient cut in half (3.46 → 1.88); residual is honest signal via `diff_adj_efficiency_margin` correlating with team-improvement, not lookahead.
+  - **Four independent methods triangulate honest AUC ≈ 0.785**: pit retrain (0.785), linear leak subtraction (0.786), March-tournament games (0.794), no-leak-bucket regression (0.760).
+  - **Documentation**: full audit findings + recommendations in `training/eval_history/honest_audit_findings_20260529.md`. **Net publishable claim: cstat predict AUC is 0.785, not 0.816** — `docs/model_performance.md` needs to be updated as part of the production-promotion item below.
+- [ ] **Promote pit_cam_v3 to production (in-season usability)** — the audit proved the honest model exists at AUC 0.785; this item is the engineering work to make it the production-served model. **Today's predict path uses end-of-season state for historical games (admitted in `TeamDetail.tsx:736`); the in-season production path doesn't exist yet because pit features are Python-only and aren't computed on demand.** Five sub-steps, sequenced:
+  - **Port `compute_campom_at(date)` to Rust** in `cstat-core/src/compute.rs`. Should mirror the existing `compute_campom` step but parameterized on `as_of_date`, aggregating from `torvik_player_game_stats` instead of `torvik_player_stats`. Include the full conf-SOS adjustment (the Python prototype skipped it for speed — Rust should be cheap enough to include it). Acceptance: Pearson r > 0.99 vs persisted `cam_gbpm_v3` when called with `as_of_date = end-of-season`.
+  - **Daily `torvik --persist-games` in the cron** — fold into the live ingest path (see "Live in-season ingest hardening" below) so `torvik_player_game_stats` stays fresh. The full-season fetch via `barttorvik.com/{year}_all_advgames.json.gz` is one HTTP call; ~30s wall clock. No NatStat API budget impact.
+  - **Train a fresh ONNX model from `models_experiments/pit_cam_v3/`** and copy to `training/models/` with updated `model_meta.json`. Existing `export_onnx.py` works unchanged — just point it at the pit experiment dir.
+  - **Wire the `/api/predict` route to use pit features when `season=<current>`** (or accept an explicit `as_of_date` param). For historical-game predictions, gate on game_date so the UI can render "what we'd have predicted pre-game," not "what we'd predict now" — closes the long-standing `TeamDetail.tsx:736` caveat. Requires a Rust feature builder that calls `compute_campom_at` and assembles the 49-feature diff vector at request time. ~15-30ms expected at single-game inference (the matrix is small).
+  - **Update `docs/model_performance.md`** to publish AUC 0.785 / MAE 8.69 / honest ATS 67.7%. Strike the leaky 5-fold-CV 0.816 entirely. Add the four-method triangulation table from `eval_history/honest_audit_findings_20260529.md` as the methodology footnote.
+  - **Acceptance**: a `GET /api/predict?home=Duke&away=UNC&season=2027` call serves point-in-time features as of today; backfilled historical predictions use pit_cam_v3 at game_date − 1; `model_meta.json` carries `gbpm_variant = pit_cam_v3` and the published AUC is 0.785.
+- [ ] **Tighten the residual pit-retrain leak** *(low priority, opportunistic)* — the pit_cam_v3 retrain has a residual leak coef of 1.88 (vs 3.46 in leaky baseline). About half of that is `diff_adj_efficiency_margin` correlating with team-improvement (legitimate signal), but ~14-day cadence in the pit lookup grid means up to 13 days of stale CamPom contributes to some real residual leakage. Two cheap wins, only worth doing if calibration on early-season games disappoints:
+  - **Reduce pit lookup cadence from 14d to 1d during the season** — would give exact pre-game CamPom rather than "what we knew up to 2 weeks ago." Grows the pit lookup from 501k rows to ~6.5M rows; still well under 1 GB.
+  - **Quantify per-feature contribution to the residual leak coef** by holding `pit_diff` fixed and regressing `leak_diff` on each non-CamPom feature's contribution. If `diff_adj_efficiency_margin` explains most of 1.88, we're done. If not, hunt the remaining feature(s) for analogous point-in-time fixes.
+- [x] **ATS backtest harness** *(measurement-grade shipped 2026-05-29; LOSO-wired version queued below)* — Python harness `training/eval_ats.py` consumes any OOF CSV (or directory of LOSO OOFs), joins to `game_forecasts`, computes ATS win/loss/push + ROI at -110 vig with edge-bucketed reporting. Used to validate the audit findings: **leaky 5-fold OOF = 71.81% ATS / +37.10% ROI; LOSO = 72.22% / +37.87% (cross-season holdout unchanged); pit_cam_v3 honest = 67.69% / +29.22%.** The edge-bucket signature confirms the smoke test was lookahead (|edge|≥8 bucket: leaky 92.0%, LOSO 92.0%, honest 91.7% — most blowouts agree regardless of features; the middle buckets are where leakage was inflating the picks). Sample-of-record snapshotted to `eval_history/ats_smoke_20260529.json`.
+  - **CLI shape** *(new `cstat-ingest backtest-ats` subcommand)*: takes `--seasons`, `--sample N`, optional `--model-dir` override, optional `--asof-mode {endseason,pointintime}`. Pulls games from `game_forecasts` with non-null `spread` + both `home_moneyline` + `away_moneyline` + final score; runs each through the chosen model; writes a per-game result JSONL (`game_id`, `predicted_margin`, `abs_spread`, `fav_side` from more-negative ML, `bet_side`, `outcome`, `edge`) plus a summary table. Default `--asof-mode endseason` matches today's smoke-test behavior; `pointintime` unlocks once `compute_campom_at(date)` lands. Lives in `crates/cstat-ingest/src/backtest.rs` so it can call the live predictor in-process (no HTTP round-trip — the 400-game smoke test took 8s via HTTP; bumping to 15k full-coverage games at ~20ms in-process is ~5 min, viable for CI).
+  - **Edge-bucketed reporting** *(load-bearing)*: report ATS win% + ROI bucketed by `|cstat_margin − abs_spread|` at `<1 / <3 / <5 / <8 / ≥8`. A real edge shows a roughly flat curve peaking in the mid buckets; a leakage-inflated model shows the smoke-test signature (monotonic ramp from ~55% → 95%). The shape of the curve is more diagnostic than the headline number. Same buckets, separately, for moneyline-implied vs cstat win-probability — pairs with the §"Model accuracy dashboard with calibration tracking" item to give a two-eyed view (margin via ATS, prob via Brier / ECE / log loss vs market).
+  - **Cross-validation harness wiring** *(the unlock)*: once LOSO model artifacts exist from the overfitting-audit item above (`models/game_predict_loso/game_predict_{year}.onnx`), `backtest-ats` should pick the right held-out model per game so the in-season backtest is leak-free. Without this, every "honest" ATS run requires manual model-juggling. Mirror the trajectory model's per-season LOSO loader (`inference::TrajectoryModel`).
+  - **Comparison surfaces**: alongside cstat, include baseline columns for **NatStat ELO** (`home_win_exp` against ML-implied prob, treated as a margin proxy via `spread = Φ⁻¹(p) × 11`) and **flat-favorite** ("always bet favorite") + **flat-underdog** sanity-check baselines. Calibrated baselines make it obvious whether cstat's number is real signal or just "the market is bad on this slice."
+  - **Stretch — Kelly sizing report**: convert each bet's `edge` + market odds into a fractional-Kelly stake (cap at 1% of bankroll for sanity), compute compounded bankroll growth across the test window. Don't ship as a recommendation engine — ship as a "what if you'd bet flat-stake vs Kelly" comparison so the variance story is visible alongside the headline ROI. Easy to add once per-bet result rows exist.
+  - **Sample-of-record**: snapshot the 400-game smoke-test result (`/tmp/ats_results.json`) into `training/eval_history/ats_smoke_20260529.json` before that tmp file disappears. The delta between this end-of-season-state run and the eventual point-in-time run is the "leakage budget" measurement — load-bearing for any future "is the audit working?" check.
+  - **Acceptance**: the harness is honest infrastructure once it (a) runs cleanly against LOSO models, (b) sources CamPom point-in-time, (c) is consumed by the calibration dashboard, and (d) the |edge|≥8 bucket has collapsed from ~95% toward the 50–60% range. **Anti-acceptance**: do not surface ATS numbers publicly on the site under any framing — internal measurement only. The site is a college basketball analytics platform, not a betting tool, and `campom.org` should not become indexable as the latter.
 - [ ] Tournament bracket simulator (Monte Carlo, inspired by gravity project)
 - [ ] Season simulation engine
 - [ ] Model accuracy dashboard with calibration tracking
@@ -853,6 +882,42 @@ a small Python entrypoint the bootstrap script calls.
 Added `--also-compute` to `cstat-ingest team`. Default still ingest-only
 (power-user shape); the flag runs a season-wide `compute_all` after, since
 compute is season-scoped, not team-scoped.
+
+### Per-row `INSERT` in `persist_torvik_game_stats` (perf, not correctness)
+The function does one `INSERT … ON CONFLICT DO UPDATE` per row in a tight
+loop. ~113k rows/season × per-row round-trip = **~37s wall clock** per
+season on local Postgres. One-time backfills are fine, but the
+production-promotion item ("Promote pit_cam_v3 to production") wires this
+into the **nightly cron**, where ~37s per night is wasted on an idempotent
+re-ingest. Two cheap wins:
+- Wrap each season in a single `BEGIN; … COMMIT;` (saves the per-row
+  transaction overhead even if the SQL itself stays per-row).
+- Batch with `sqlx::QueryBuilder::push_values` at ~500 rows/chunk — should
+  cut wall time to a few seconds and matches the pattern already used in
+  `bootstrap_csv.rs` for the per-game stat loaders.
+The function correctness is fine today; this is purely a daily-ingest
+optimization. Touch it when wiring the cron.
+
+### `CREATE INDEX IF NOT EXISTS` convention for future migrations
+Migration `022_torvik_player_game_stats.sql` uses `CREATE TABLE IF NOT
+EXISTS` but plain `CREATE INDEX`. If the table was manually pre-created
+(or partially applied by a previous migration attempt), SQLx fails on the
+index step with "relation already exists" — caused real friction during
+the 2026-05-29 audit session when the migration had been applied via
+direct `psql` before SQLx booted. Going forward, `CREATE INDEX IF NOT
+EXISTS` should be the default for any index inside a migration. Not worth
+a migration to retro-fix 022 (it's applied cleanly everywhere now) — just
+a forward-looking convention.
+
+### Already-committed audit artifacts can be `git rm --cached`'d
+The 2026-05-29 audit landed several large generated files in
+`training/models/loso/` (~30 MB total of `oof_predictions.csv` + an
+~12k-line `loso_pooled_ats.jsonl`). The updated `.gitignore` blocks new
+ones, but the existing tracked copies still inflate the repo. They're
+regenerable from `python train_loso.py`; safe to `git rm --cached
+training/models/loso/predict_*/oof_predictions.csv
+training/models/loso/loso_pooled_ats*.json*` in a cleanup PR. Canonical
+audit snapshots live in `training/eval_history/` and stay tracked.
 
 ### Rate limiter unification (Fixed)
 Both call sites — `cstat-api::main` and `cstat-ingest::bin::ingest` — now

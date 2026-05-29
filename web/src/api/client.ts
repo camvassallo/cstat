@@ -428,8 +428,9 @@ export function fetchTransfers(year: number) {
 // cycle year, sourced from `data/draft/{year}_big_board.json` (Tankathon) and
 // joined to cstat players for CamPom. `campom` / `player_id` are null for
 // prospects with no college row this season (seniors who left, internationals,
-// G-Leaguers). `status` is derived: declared / senior / international /
-// g-league / prospect.
+// G-Leaguers). `status` is derived: gone / declared / senior / international /
+// g-league / prospect. (`gone` = on the early-entrant list and locked in
+// post-withdrawal-deadline; `declared` = declared with the window still open.)
 export interface DraftProspect {
   draft_rank: number | null;
   name: string;

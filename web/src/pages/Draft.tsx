@@ -74,12 +74,19 @@ const tierComparator = (a: string, b: string) =>
 // cross-reference + class year).
 function statusChip(status: string): { label: string; cls: string; title: string } {
   switch (status) {
+    case 'gone':
+      return {
+        label: 'In Draft',
+        cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+        title:
+          'Declared for the draft and did not withdraw before the deadline — locked into the draft, not returning to college.',
+      };
     case 'declared':
       return {
         label: 'Declared',
         cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
         title:
-          'Underclassman who has formally declared for the draft — the withdrawal deadline is still ahead, so this is not yet final.',
+          'Underclassman who has declared for the draft with the withdrawal window still open — not yet final.',
       };
     case 'senior':
       return {

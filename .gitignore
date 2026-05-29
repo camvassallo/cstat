@@ -62,6 +62,14 @@ __pycache__/
 # not source — re-derivable from `python train.py`. Seed data for downstream
 # work like the historical-prediction `game_forecasts` backfill.
 /training/models/*.csv
+# Same policy for nested experiment dirs (LOSO, future per-experiment dirs):
+# per-game OOF dumps and ATS jsonl outputs are regeneratable from the LOSO
+# pipeline; canonical summary numbers live in /training/eval_history/.
+/training/models/**/*.csv
+/training/models/**/*.jsonl
+/training/models/pit_cam_v3_lookup.csv.gz
+/training/models/oof_predictions_ats_summary.json
+/training/models/loso/loso_pooled_ats_summary.json
 
 # Raw API snapshots from `cstat-ingest transfers` — bootstrap data dumped
 # locally for repeatable seeds and offline dev. Re-derivable from the live

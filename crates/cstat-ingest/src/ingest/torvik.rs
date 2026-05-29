@@ -1,6 +1,6 @@
 //! Barttorvik data ingestion: player season stats and per-game rebound backfill.
 
-use crate::torvik::TorkvikClient;
+use crate::torvik::{TorkvikClient, TorkvikGameRow};
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
@@ -200,10 +200,164 @@ pub async fn ingest_torvik_player_stats(
     Ok((upserted, matched))
 }
 
+/// Persist all per-game Torvik rows into `torvik_player_game_stats`.
+///
+/// Uses the same gzip JSON as `backfill_rebounds_from_torvik` (one fetch
+/// per season). Rows with missing `pid` or unparseable `date_str` are
+/// skipped — both fields are NOT NULL in the schema.
+pub async fn persist_torvik_game_stats(
+    client: &TorkvikClient,
+    pool: &PgPool,
+    season: i32,
+) -> anyhow::Result<u64> {
+    let games = client.fetch_game_stats(season).await?;
+    apply_persist_torvik_game_stats(pool, &games, season).await
+}
+
+/// Same as `persist_torvik_game_stats`, but skips the network fetch and
+/// operates on a pre-fetched `games` slice. Lets callers that need *both*
+/// the rebound backfill and the per-game persistence share one fetch.
+pub async fn apply_persist_torvik_game_stats(
+    pool: &PgPool,
+    games: &[TorkvikGameRow],
+    season: i32,
+) -> anyhow::Result<u64> {
+    let mut inserted: u64 = 0;
+    let mut skipped: u64 = 0;
+
+    for g in games {
+        let pid = match g.pid {
+            Some(v) => v,
+            None => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let game_date = match chrono::NaiveDate::parse_from_str(&g.date_str, "%Y%m%d") {
+            Ok(d) => d,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let result = sqlx::query(
+            r#"INSERT INTO torvik_player_game_stats (
+                    pid, game_uid, season, game_date,
+                    team, opponent, location, class_year, height_inches,
+                    minutes_pct, o_rtg, usage, pts, oreb, dreb, ast, tov, stl, blk, pf,
+                    two_pm, two_pa, tpm, tpa, ftm, fta,
+                    rim_made, rim_attempted, mid_made, mid_attempted, dunks_made, dunks_attempted,
+                    bpm, obpm, dbpm, possessions
+               ) VALUES (
+                    $1, $2, $3, $4,
+                    $5, $6, $7, $8, $9,
+                    $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                    $21, $22, $23, $24, $25, $26,
+                    $27, $28, $29, $30, $31, $32,
+                    $33, $34, $35, $36
+               )
+               ON CONFLICT (pid, game_uid) DO UPDATE SET
+                    season = EXCLUDED.season,
+                    game_date = EXCLUDED.game_date,
+                    team = EXCLUDED.team,
+                    opponent = EXCLUDED.opponent,
+                    location = EXCLUDED.location,
+                    class_year = EXCLUDED.class_year,
+                    height_inches = EXCLUDED.height_inches,
+                    minutes_pct = EXCLUDED.minutes_pct,
+                    o_rtg = EXCLUDED.o_rtg,
+                    usage = EXCLUDED.usage,
+                    pts = EXCLUDED.pts,
+                    oreb = EXCLUDED.oreb,
+                    dreb = EXCLUDED.dreb,
+                    ast = EXCLUDED.ast,
+                    tov = EXCLUDED.tov,
+                    stl = EXCLUDED.stl,
+                    blk = EXCLUDED.blk,
+                    pf = EXCLUDED.pf,
+                    two_pm = EXCLUDED.two_pm,
+                    two_pa = EXCLUDED.two_pa,
+                    tpm = EXCLUDED.tpm,
+                    tpa = EXCLUDED.tpa,
+                    ftm = EXCLUDED.ftm,
+                    fta = EXCLUDED.fta,
+                    rim_made = EXCLUDED.rim_made,
+                    rim_attempted = EXCLUDED.rim_attempted,
+                    mid_made = EXCLUDED.mid_made,
+                    mid_attempted = EXCLUDED.mid_attempted,
+                    dunks_made = EXCLUDED.dunks_made,
+                    dunks_attempted = EXCLUDED.dunks_attempted,
+                    bpm = EXCLUDED.bpm,
+                    obpm = EXCLUDED.obpm,
+                    dbpm = EXCLUDED.dbpm,
+                    possessions = EXCLUDED.possessions"#,
+        )
+        .bind(pid)
+        .bind(&g.game_uid)
+        .bind(season)
+        .bind(game_date)
+        .bind(&g.team)
+        .bind(&g.opponent)
+        .bind(&g.location)
+        .bind(&g.class_year)
+        .bind(g.height_inches)
+        .bind(g.minutes_pct)
+        .bind(g.o_rtg)
+        .bind(g.usage)
+        .bind(g.pts)
+        .bind(g.oreb)
+        .bind(g.dreb)
+        .bind(g.ast)
+        .bind(g.tov)
+        .bind(g.stl)
+        .bind(g.blk)
+        .bind(g.pf)
+        .bind(g.two_pm)
+        .bind(g.two_pa)
+        .bind(g.tpm)
+        .bind(g.tpa)
+        .bind(g.ftm)
+        .bind(g.fta)
+        .bind(g.rim_made)
+        .bind(g.rim_attempted)
+        .bind(g.mid_made)
+        .bind(g.mid_attempted)
+        .bind(g.dunks_made)
+        .bind(g.dunks_attempted)
+        .bind(g.bpm)
+        .bind(g.obpm)
+        .bind(g.dbpm)
+        .bind(g.possessions)
+        .execute(pool)
+        .await?;
+
+        inserted += result.rows_affected();
+    }
+
+    info!(
+        season,
+        inserted, skipped, "Torvik per-game persistence complete"
+    );
+    Ok(inserted)
+}
+
 /// Backfill missing rebounds in player_game_stats from Torvik game-level data.
 pub async fn backfill_rebounds_from_torvik(
     client: &TorkvikClient,
     pool: &PgPool,
+    season: i32,
+) -> anyhow::Result<u64> {
+    let games = client.fetch_game_stats(season).await?;
+    apply_rebound_backfill(pool, &games, season).await
+}
+
+/// Same as `backfill_rebounds_from_torvik`, but skips the network fetch and
+/// operates on a pre-fetched `games` slice. Lets callers that need *both*
+/// the rebound backfill and the per-game persistence share one fetch.
+pub async fn apply_rebound_backfill(
+    pool: &PgPool,
+    games: &[TorkvikGameRow],
     season: i32,
 ) -> anyhow::Result<u64> {
     // Pre-build a lookup: normalized_name → Vec<player_id> for this season.
@@ -220,10 +374,9 @@ pub async fn backfill_rebounds_from_torvik(
         name_map.entry(normalize_name(name)).or_default().push(*id);
     }
 
-    let games = client.fetch_game_stats(season).await?;
     let mut updated: u64 = 0;
 
-    for g in &games {
+    for g in games {
         let oreb = match g.oreb {
             Some(v) => v as i32,
             None => continue,

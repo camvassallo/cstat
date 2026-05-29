@@ -51,8 +51,11 @@ use std::path::Path;
 use uuid::Uuid;
 
 /// Which NBA-draft scenario to materialize. The floor / ceiling pair is
-/// the API's honesty story: we don't know if a `declared` player will
-/// withdraw before the deadline, so we project both bounds.
+/// the API's honesty story for the *pre-deadline* window: while a player is
+/// only `declared` we don't know if they'll withdraw, so we project both
+/// bounds. Once the withdrawal deadline passes the entrant list records them
+/// as `gone` (a firm departure), the `uncertain` bucket empties, and floor
+/// and ceiling collapse to the same roster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DraftScenario {
     /// Treat every roster member flagged `declared` (NBA early entry,
