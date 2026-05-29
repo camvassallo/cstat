@@ -125,10 +125,6 @@ export interface RosterEntry {
   blk_pct_pct: number | null;
   primary_class: string | null;
   secondary_class: string | null;
-  /// Full 12-class affinity vector, keyed by class name. Powers the
-  /// affinity heatmap below the Roster Map on TeamDetail. `null` when
-  /// the player has no row in `player_archetypes`.
-  affinity_scores: Record<string, number> | null;
   /// Torvik shot-zone volumes — drive the team aggregate shot-diet
   /// panel on TeamDetail. `null` when the player has no Torvik row.
   rim_attempted: number | null;

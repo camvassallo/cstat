@@ -4,7 +4,7 @@ classes by minimizing total inter-spoke distance around the cycle.
 Reads cluster centroids from `archetype_models` (standardized feature
 space), builds a 12×12 cosine-distance matrix between class centroids,
 and solves the symmetric cyclic TSP exactly via bitmask DP (n=12 →
-~25M states, runs in seconds).
+12 * 2^12 = 49,152 states, runs in well under a second).
 
 Output is the canonical clockwise spoke order used by the radial roster
 plot and any future class-by-class radar viz. The result is a one-shot

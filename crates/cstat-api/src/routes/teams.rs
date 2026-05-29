@@ -99,19 +99,20 @@ async fn team_detail(
             )
         })?;
 
-    let (mut schedule, roster, archetype_distribution, available_seasons, total_teams) = tokio::try_join!(
-        queries::get_team_schedule(pool, resolved_id, season),
-        queries::get_team_roster(pool, resolved_id, season),
-        queries::get_team_archetype_index(pool, resolved_id, season),
-        queries::get_team_available_seasons(pool, resolved_id),
-        queries::get_season_team_count(pool, season),
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("query failed: {e}") })),
+    let (mut schedule, roster, archetype_distribution, available_seasons, total_teams) =
+        tokio::try_join!(
+            queries::get_team_schedule(pool, resolved_id, season),
+            queries::get_team_roster(pool, resolved_id, season),
+            queries::get_team_archetype_index(pool, resolved_id, season),
+            queries::get_team_available_seasons(pool, resolved_id),
+            queries::get_season_team_count(pool, season),
         )
-    })?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
 
     // Project every game using the existing predictor. Inference is fast
     // (sub-ms per call) so doing it inline keeps the team-detail endpoint a

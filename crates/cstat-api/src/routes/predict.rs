@@ -130,13 +130,7 @@ async fn predict(
     // perspective). Failures here downgrade to empty arrays rather than
     // tanking the prediction; the page degrades gracefully.
     let pool = &state.db.pool;
-    let (
-        roster_home,
-        roster_away,
-        prior_meetings_raw,
-        archetype_home,
-        archetype_away,
-    ) = tokio::join!(
+    let (roster_home, roster_away, prior_meetings_raw, archetype_home, archetype_away) = tokio::join!(
         queries::get_team_roster(pool, home_team.id, season),
         queries::get_team_roster(pool, away_team.id, season),
         queries::get_prior_meetings(pool, home_team.id, away_team.id, season),

@@ -287,11 +287,6 @@ pub struct RosterEntry {
     pub blk_pct_pct: Option<f64>,
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
-    /// Full 12-class affinity vector (softmax over negative distance to
-    /// each centroid), keyed by class name. Drives the affinity heatmap
-    /// below the Roster Map radial on TeamDetail. `NULL` when the player
-    /// has no row in `player_archetypes` (sub-D1, unqualified, etc.).
-    pub affinity_scores: Option<JsonValue>,
     /// Torvik shot-zone volumes (attempts) — drive the team
     /// aggregate shot diet panel on TeamDetail. `NULL` when the
     /// player has no Torvik row.
@@ -707,10 +702,7 @@ pub async fn get_team_available_seasons(
 /// the denominator when converting a per-stat rank into a percentile
 /// for the red→green tint on team-detail stat cards. Matches the
 /// rankings page's `teams.length` count for that season.
-pub async fn get_season_team_count(
-    pool: &PgPool,
-    season: i32,
-) -> Result<i64, sqlx::Error> {
+pub async fn get_season_team_count(pool: &PgPool, season: i32) -> Result<i64, sqlx::Error> {
     let row: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(*)
@@ -853,7 +845,7 @@ pub async fn get_team_roster(
             pp.usage_rate_pct,
             pp.ast_pct_pct, pp.tov_pct_pct,
             pp.orb_pct_pct, pp.drb_pct_pct, pp.stl_pct_pct, pp.blk_pct_pct,
-            pa.primary_class, pa.secondary_class, pa.affinity_scores,
+            pa.primary_class, pa.secondary_class,
             tps.rim_attempted, tps.mid_attempted, tps.tpa, tps.fta,
             tps.rim_made, tps.mid_made, tps.tpm, tps.ftm
         FROM players p
