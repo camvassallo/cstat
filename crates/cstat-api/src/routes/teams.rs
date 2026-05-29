@@ -152,11 +152,6 @@ async fn team_detail(
         } else {
             None
         };
-        // `as_of_date.is_some()` is the load-bearing flag: a completed
-        // game whose date can't be decremented (NaiveDate::MIN sentinel)
-        // falls through to the leaky path, and the frontend will
-        // correctly NOT label it as a pre-game projection.
-        entry.is_pre_game_projection = as_of_date.is_some();
         if let Ok(proj) = predict_projection(
             &state,
             host_id,
@@ -188,6 +183,16 @@ async fn team_detail(
             entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
             entry.projected_score_team = Some(score_team);
             entry.projected_score_opp = Some(score_opp);
+            // Honesty label travels with the projection — set ONLY when
+            // the predictor succeeds, so a failed prediction can't leave
+            // the row labelled "pre-game projection" with null margin
+            // (and frontend deep-links can't end up carrying as_of_date
+            // for a row whose pit prediction the server already failed).
+            // `as_of_date.is_some()` is the load-bearing flag: a
+            // completed game whose date can't be decremented
+            // (NaiveDate::MIN sentinel) falls through with as_of_date =
+            // None and is correctly NOT labelled pre-game.
+            entry.is_pre_game_projection = as_of_date.is_some();
         }
     }
 

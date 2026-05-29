@@ -410,7 +410,7 @@ function HistoricalTeamDetail() {
       <RosterTable roster={roster} />
 
       {/* Schedule */}
-      <ScheduleTable schedule={schedule} teamName={team.name} />
+      <ScheduleTable schedule={schedule} teamName={team.name} season={season} />
     </div>
   );
 }
@@ -669,9 +669,11 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
 function ScheduleTable({
   schedule,
   teamName,
+  season,
 }: {
   schedule: ScheduleEntry[];
   teamName: string;
+  season: number;
 }) {
   return (
     <div>
@@ -689,7 +691,7 @@ function ScheduleTable({
           </thead>
           <tbody>
             {schedule.map((g) => (
-              <ScheduleRow key={g.game_id} g={g} teamName={teamName} />
+              <ScheduleRow key={g.game_id} g={g} teamName={teamName} season={season} />
             ))}
             {schedule.length === 0 && (
               <tr>
@@ -705,7 +707,15 @@ function ScheduleTable({
   );
 }
 
-function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
+function ScheduleRow({
+  g,
+  teamName,
+  season,
+}: {
+  g: ScheduleEntry;
+  teamName: string;
+  season: number;
+}) {
   const won =
     g.team_score != null && g.opponent_score != null && g.team_score > g.opponent_score;
   const lost =
@@ -740,7 +750,15 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
       d.setUTCDate(d.getUTCDate() - 1);
       asOfParam = `&as_of_date=${d.toISOString().slice(0, 10)}`;
     }
-    predictTo = `/predict?home=${encodeURIComponent(host)}&away=${encodeURIComponent(visitor)}${venueParam}${asOfParam}`;
+    // Append `season` whenever it differs from the default — without it,
+    // a cross-season as_of_date (e.g. Feb 14 2025 from a Duke 2025 page)
+    // lands on /predict with the default season (2026), and the route's
+    // bounds validation rejects the otherwise-valid date with 400.
+    // `seasonHref` already encapsulates the "drop if default" rule.
+    predictTo = seasonHref(
+      `/predict?home=${encodeURIComponent(host)}&away=${encodeURIComponent(visitor)}${venueParam}${asOfParam}`,
+      season,
+    );
   }
 
   // Render the projected cell. Upcoming games get the current model's
