@@ -156,10 +156,13 @@ WHERE season = ANY(%(seasons)s)
 # Pre-2020 transfers data is sparse (2-7 rows/year vs. 1,000+ post-2020;
 # the portal as we know it only took off after the 2021 NCAA rule
 # change). Pre-portal-era team-seasons get `outbound_cam_v3_sum = 0`
-# from the LEFT JOIN below — the tree-based model naturally splits on
-# `> 0` (real portal era) vs `= 0` (no signal available), so the early
-# seasons stay informative for the cam_v3 distribution features without
-# polluting the outbound coefficient.
+# from the `df.merge(..., how='left').fillna(0.0)` in `build_dataset`
+# (this SQL uses INNER JOIN, so those teams simply don't appear in the
+# query result; the pandas LEFT JOIN supplies the 0 sentinel). The
+# tree-based model naturally splits on `> 0` (real portal era) vs `= 0`
+# (no signal available), so the early seasons stay informative for the
+# cam_v3 distribution features without polluting the outbound
+# coefficient.
 #
 # `team_id` is resolved cross-season via `teams.natstat_id` to the
 # *target-season* team UUID — `team_season_stats.team_id` (the join key

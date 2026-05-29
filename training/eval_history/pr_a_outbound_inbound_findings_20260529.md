@@ -29,10 +29,9 @@ silent SQL bug. We now know what the signals truly look like.
 
 ## The cross-season SQL bug
 
-`audit_preseason_projections.py::fetch_portal_signals` and
-`train_roster_impact_model.py::INBOUND_QUERY` (and the new
-`decompose_projection_error.py::fetch_portal_sums`) all joined
-target-season player rows via `players.natstat_id` alone:
+`audit_preseason_projections.py::fetch_portal_signals` (the only
+pre-existing committed site with the bug) joined target-season player
+rows via `players.natstat_id` alone:
 
 ```sql
 JOIN players p_tgt
@@ -69,15 +68,20 @@ JOIN players p_tgt
 | both matched (non-transfer) | 1,426 | 72.8% |
 
 The buggy SQL was dropping **503 out of 1,958 (25.7%) of inbound
-transfer signal**. Three call sites fixed.
+transfer signal**. Fixed in the audit; the two new sites in this PR
+(`train_roster_impact_model.py::INBOUND_QUERY` and
+`decompose_projection_error.py::fetch_portal_sums`) were authored
+against the same pattern to avoid reintroducing it. The new
+regression test (`training/test_cross_season_joins.py`) pins the
+correct behaviour for all three.
 
 ## Canonical case studies (Michigan vs Maryland mirror pair)
 
 Both teams' 2026 backtest entries now show the right portal sums after
 the SQL fix:
 
-| Team | baseline | pipeline | oracle (calibrator) | actual | outbound | inbound |
-| ---- | -------- | -------- | ------------------- | ------ | -------- | ------- |
+| Team | baseline | pipeline pred | oracle pred (calibrator given actual roster) | actual | outbound | inbound |
+| ---- | -------- | ------------- | -------------------------------------------- | ------ | -------- | ------- |
 | Maryland 2026 | +30.6 | +21.6 | +10.0 | +5.2  | **+38.6** | +9.6   |
 | Michigan 2026 | +28.1 | +33.7 | +35.4 | +44.6 | +12.1    | **+38.6** |
 
@@ -156,13 +160,18 @@ pass). Requires `DATABASE_URL`.
 
 ## Files changed
 
-- `training/train_roster_impact_model.py` — added OUTBOUND_QUERY + fixed
-  INBOUND_QUERY; +27-feature vector incl. outbound/inbound sums.
-- `training/audit_preseason_projections.py` — fixed `fetch_portal_signals`
-  inbound branch.
+- `training/train_roster_impact_model.py` — new OUTBOUND_QUERY +
+  INBOUND_QUERY (both with the correct `natstat_id OR torvik_pid`
+  cross-season pattern from the start); +27-feature vector incl.
+  outbound/inbound sums.
+- `training/audit_preseason_projections.py` — fixed a pre-existing
+  `natstat_id`-only join in `fetch_portal_signals` inbound branch
+  (the **only** site that was actually buggy in committed code).
 - `training/decompose_projection_error.py` — **new**; per-team
-  upstream/calibrator attribution.
-- `training/test_cross_season_joins.py` — **new**; regression tests.
+  upstream/calibrator attribution. Built with the correct
+  cross-season pattern from the start.
+- `training/test_cross_season_joins.py` — **new**; regression tests
+  that prevent any of the three sites from reverting to natstat_id-only.
 - `crates/cstat-core/src/roster_impact.rs` — 25 → 27 features, added
   outbound + inbound slots, new test.
 - `crates/cstat-core/src/roster_projection.rs` — `ProjectedRoster`
@@ -173,3 +182,5 @@ pass). Requires `DATABASE_URL`.
 - `crates/cstat-ingest/src/projections_backtest.rs` — ditto.
 - `training/models/roster_impact_model.onnx` + `_meta.json` — retrained.
 - `training/models/roster_impact_loso/roster_impact_model_{2025,2026}.onnx` — retrained.
+- `ROADMAP.md` — PR A marked shipped with findings doc reference;
+  PR B / C / D / E re-ordered per the decomposition's attribution.

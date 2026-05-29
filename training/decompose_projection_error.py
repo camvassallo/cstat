@@ -133,10 +133,11 @@ def fetch_team_roster(conn, target_team_id: str, season: int) -> pd.DataFrame:
     training so the "oracle" comparison is apples-to-apples: the only
     thing that differs between oracle and pipeline is *which players
     are in the roster*."""
-    # Build the parameterized query directly. Avoids the PLAYER_QUERY
-    # string surgery (the original is psycopg-style; sqlalchemy text
-    # binding doesn't expand a Python list into ANY without extra
-    # plumbing). One team-season, one bound int, one bound UUID string.
+    # SQL inlined here rather than imported from
+    # `train_roster_impact_model.PLAYER_QUERY`. The training-side query
+    # is psycopg-style (`%(name)s`) and bound against a list of seasons;
+    # rewriting it for sqlalchemy `text` binding + a single (team,
+    # season) filter is shorter than the rewrite would be.
     sql = text(
         """
         SELECT
