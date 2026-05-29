@@ -595,8 +595,8 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
        - [ ] **PR B — Freshman top-tail recalibration investigation**. The recruit signals all point the same way (more incoming top-tier recruits → under-projection), but none are individually significant at p<0.05. Partition Q4 bias attribution: how much comes from the trajectory model (returners), how much from the freshman model (recruits), how much from the roster-impact calibrator? Decide whether to retighten the freshman top-tail (selection-bias mitigation) or add a team-level recruit composite as a Phase B feature.
        - [ ] **PR C — Coaching-change indicator**. The under-projected breakouts (Florida 2025 / Auburn 2025 / Missouri 2025 / Maryland 2025) cluster around coaching turnover — unmeasured today. Curated `data/coaching_changes/YYYY.json` keyed by `natstat_id`, `new_hc_this_offseason: bool`. Cheap data, plausibly large lift on tail residuals.
        - [~] **Team-level recruiting class composite** — folded into PR B (the per-recruit cam_v3 the model already sees may average away the class composite; PR B investigates whether the class-level summary adds independent signal).
-       - [strikethrough] ~~**Returning-experience weight**~~ — audit shows this signal is flat across MAE buckets. Dropped.
-       - [strikethrough] ~~**Portfolio-style portal Δ as a count**~~ — count is borderline (β=+0.10, p>0.10); the cam_v3-weighted version (PR A) captured the same signal more sharply. Dropped as a separate feature.
+       - ~~**Returning-experience weight**~~ — *dropped*. Audit shows this signal is flat across MAE buckets.
+       - ~~**Portfolio-style portal Δ as a count**~~ — *dropped as a separate feature*. Count is borderline (β=+0.10, p>0.10); the cam_v3-weighted version (PR A) captured the same signal more sharply.
      - **Validation**: re-run (1)'s audit against the improved model; compare per-team MAE deltas. Only retain features that move the needle on (1)'s identified failure modes.
 
   3. **In-season blend (KenPom-style decay schedule)** *(the user-visible payoff)*

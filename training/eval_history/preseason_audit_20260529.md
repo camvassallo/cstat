@@ -178,13 +178,14 @@ fundamentally different inputs."
 
 The audit was framed as a prerequisite for the "Preseason × pit blend"
 work. Net read: **the preseason side is good enough to blend with the pit
-side**. MAE 5.88 is materially better than the open-Saturday in-season
-pit MAE (~13+), so blending will help early-season predictions. But the
-**per-team error has systematic structure on the tails**, and that
-structure will propagate into early-season blended predictions unless
-recommendations 1–3 land first. Top teams in particular will look weaker
-than they are during the first three weeks, simply because the preseason
-prior is under-projecting them.
+side**. MAE 5.88 is materially better than the early-season pit MAE
+(roadmap §6 estimates 18–20+ for the first three weeks based on the
+Duke–Army opening-night case; not yet measured), so blending will help
+opening-month predictions. But the **per-team error has systematic
+structure on the tails**, and that structure will propagate into
+early-season blended predictions unless recommendations 1–3 land first.
+Top teams in particular will look weaker than they are during the first
+three weeks, simply because the preseason prior is under-projecting them.
 
 Phase ordering proposed:
 - **PR A** (this PR's follow-up): land recommendation #1 (net portal
