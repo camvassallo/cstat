@@ -830,8 +830,8 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
 // season hasn't happened; we render the projected AdjEM band, a small
 // stat strip, and four roster cards (returning / arrivals / recruits /
 // departures + uncertain) so the user can see who composes the roster
-// the projection is built from. Future iteration: minutes-share radial
-// roster plot from §5b, projected schedule from the predict model.
+// the projection is built from. Future iteration: projected schedule
+// from the predict model.
 
 interface ProjectedTeamViewProps {
   id: string;

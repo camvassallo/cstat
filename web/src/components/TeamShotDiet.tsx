@@ -295,7 +295,12 @@ export function TeamShotDiet({ roster }: { roster: RosterEntry[] }) {
             onMouseLeave={onZoneLeave('rim')}
             onClick={onZoneClick('rim')}
           />
-          {/* FT semicircle */}
+          {/* FT semicircle. Fixed opacity (0.65) rather than the
+              `volOpacity` formula used by the FGA zones: FT isn't a
+              field-goal attempt, so it lives outside `totalFga` and a
+              volume-share denominator doesn't translate. The constant
+              keeps FT readable on every roster without re-normalizing
+              against an unrelated baseline. */}
           <path
             d="M 105 108 A 45 45 0 0 0 195 108"
             fill={ftColor}
