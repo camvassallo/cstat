@@ -440,6 +440,27 @@ pub struct ProjectedRoster {
     /// Audit trail: who left and why. Sized for UI display, not used by
     /// inference.
     pub departures: Vec<DepartureReason>,
+    /// Σ base-season cam_v3 of players who left this team in the spring
+    /// portal cycle moving them into the target season (positive = lost
+    /// talent). Fed to the Phase B roster-impact model so the calibrator
+    /// can learn "more outbound → reduce projection" — without this slot
+    /// the audit (`audit_preseason_projections.py`) found the top
+    /// quartile of teams was systematically over-projected by ≈−4 AdjEM
+    /// because high-portal-loss programs looked unchanged from their
+    /// returners alone. Mirrors the audit's `portal_outbound_cam_v3`
+    /// signal (β=+0.978, p<0.05 OLS).
+    pub outbound_cam_v3_sum: f32,
+    /// Σ base-season cam_v3 of players who arrived at this team from
+    /// another D-I program via the same portal cycle (positive = gained
+    /// talent). Symmetric to `outbound_cam_v3_sum`; encoded as a separate
+    /// feature rather than netted so the trees can learn asymmetric
+    /// effects. Audit OLS: β=−0.605, t=−1.44 (directionally right but
+    /// not significant at p<0.05).
+    ///
+    /// Both portal sums use base-season cam_v3. 0.0 for teams with no
+    /// movement or pre-portal-era seasons; missing torvik coverage on a
+    /// portal player contributes 0 (COALESCE convention).
+    pub inbound_cam_v3_sum: f32,
 }
 
 impl ProjectedRoster {
@@ -1085,6 +1106,40 @@ pub async fn compose_all_projections(
         let recruits: Vec<(PlayerRow, RecruitMeta)> =
             recruits_by_team.remove(&team.id).unwrap_or_default();
 
+        // Σ base-season cam_v3 across players who left/arrived in the
+        // portal cycle. The outbound + incoming lists already live in
+        // scope; player rows are in `player_row_lookup`. Missing torvik
+        // coverage on a portal player contributes 0 to either sum
+        // (matches the SQL COALESCE in the training pipeline and the
+        // audit). Identity-aligned with the audit signals that drove
+        // this PR.
+        let outbound_cam_v3_sum: f32 = outbound_by_team
+            .get(&team.id)
+            .map(|v| {
+                v.iter()
+                    .map(|(pid, _)| {
+                        player_row_lookup
+                            .get(pid)
+                            .and_then(|r| r.cam_v3)
+                            .unwrap_or(0.0) as f32
+                    })
+                    .sum()
+            })
+            .unwrap_or(0.0);
+        let inbound_cam_v3_sum: f32 = incoming_by_team
+            .get(&team.id)
+            .map(|pids| {
+                pids.iter()
+                    .map(|pid| {
+                        player_row_lookup
+                            .get(pid)
+                            .and_then(|r| r.cam_v3)
+                            .unwrap_or(0.0) as f32
+                    })
+                    .sum()
+            })
+            .unwrap_or(0.0);
+
         out.push(ProjectedRoster {
             team_id: team.id,
             team_name: team.short_name.clone().unwrap_or_else(|| team.name.clone()),
@@ -1094,6 +1149,8 @@ pub async fn compose_all_projections(
             recruits,
             uncertain,
             departures,
+            outbound_cam_v3_sum,
+            inbound_cam_v3_sum,
         });
     }
 
@@ -1221,6 +1278,8 @@ mod tests {
             recruits: vec![],
             uncertain,
             departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
@@ -1277,6 +1336,8 @@ mod tests {
             recruits,
             uncertain,
             departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
         };
         // Floor: 1 returning + 1 arrival + 2 recruits = 4
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);

@@ -447,7 +447,11 @@ fn predict_team(
     let score = |scenario| {
         let mut roster = p.for_scenario(scenario);
         apply_projected_cam_v3(&mut roster, projected_cam);
-        predictor.predict_roster_impact(&build_roster_impact_features(&roster))
+        predictor.predict_roster_impact(&build_roster_impact_features(
+            &roster,
+            p.outbound_cam_v3_sum,
+            p.inbound_cam_v3_sum,
+        ))
     };
     let floor_raw = match score(DraftScenario::Floor) {
         Ok(v) => v,

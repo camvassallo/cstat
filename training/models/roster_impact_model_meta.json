@@ -16,7 +16,7 @@
     2026
   ],
   "n_rows": 4255,
-  "n_features": 25,
+  "n_features": 27,
   "features": [
     "roster_size",
     "cam_wmean",
@@ -42,19 +42,21 @@
     "arch_cleric",
     "arch_druid",
     "arch_rogue",
-    "arch_fighter"
+    "arch_fighter",
+    "outbound_cam_v3_sum",
+    "inbound_cam_v3_sum"
   ],
   "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
   "cam_v3_source": "oof",
   "cam_v3_coverage": {
-    "n_player_rows": 46965,
-    "trajectory_oof": 24064,
-    "freshman_oof": 3248,
-    "actual_fallback": 18052,
-    "no_cam_v3": 1601,
-    "oof_pct": 58.2
+    "n_player_rows": 47132,
+    "trajectory_oof": 24063,
+    "freshman_oof": 3246,
+    "actual_fallback": 18088,
+    "no_cam_v3": 1735,
+    "oof_pct": 57.9
   },
-  "final_n_estimators": 187,
+  "final_n_estimators": 236,
   "loso_export_seasons": [
     2025,
     2026
@@ -81,199 +83,207 @@
   "backtest_loso": {
     "per_season": {
       "2015": {
-        "mae": 2.5885650768031305,
-        "rmse": 3.5384307471514944,
-        "r2": 0.9455186591309152,
+        "mae": 2.576089949897309,
+        "rmse": 3.504633799289333,
+        "r2": 0.9465544344007683,
         "n": 351
       },
       "2016": {
-        "mae": 3.581701084738346,
-        "rmse": 4.518664292191899,
-        "r2": 0.9093000159089495,
+        "mae": 3.5467759161391044,
+        "rmse": 4.482289916398899,
+        "r2": 0.9107543733523924,
         "n": 351
       },
       "2017": {
-        "mae": 3.805990788481047,
-        "rmse": 4.788872647294339,
-        "r2": 0.9017784799220885,
+        "mae": 3.77126590289505,
+        "rmse": 4.762467303305567,
+        "r2": 0.9028586601105208,
         "n": 351
       },
       "2018": {
-        "mae": 3.6175580519230826,
-        "rmse": 4.622833451928058,
-        "r2": 0.9024173091051325,
+        "mae": 3.65832602364316,
+        "rmse": 4.642789764478547,
+        "r2": 0.9015729810343441,
         "n": 351
       },
       "2019": {
-        "mae": 3.717699174141966,
-        "rmse": 4.700860949033298,
-        "r2": 0.8984804788597098,
+        "mae": 3.7119501516423763,
+        "rmse": 4.672971384162715,
+        "r2": 0.899681508347151,
         "n": 353
       },
       "2020": {
-        "mae": 3.444220388696532,
-        "rmse": 4.571434835766032,
-        "r2": 0.8999996734049381,
+        "mae": 3.438033574736956,
+        "rmse": 4.586593483566511,
+        "r2": 0.899335381750699,
         "n": 353
       },
       "2021": {
-        "mae": 4.325666657158939,
-        "rmse": 5.682044923539429,
-        "r2": 0.8593679583670363,
+        "mae": 4.343170817580382,
+        "rmse": 5.692925197720144,
+        "r2": 0.8588288636699346,
         "n": 341
       },
       "2022": {
-        "mae": 4.0222013394724225,
-        "rmse": 5.098195871097592,
-        "r2": 0.8764890096196262,
+        "mae": 4.03191348828992,
+        "rmse": 5.127418414903137,
+        "r2": 0.875069036917139,
         "n": 352
       },
       "2023": {
-        "mae": 3.7751630213236527,
-        "rmse": 4.79089609022756,
-        "r2": 0.88649835160217,
+        "mae": 3.7603912389522045,
+        "rmse": 4.750723345641082,
+        "r2": 0.8883938449309502,
         "n": 362
       },
       "2024": {
-        "mae": 3.661916012548893,
-        "rmse": 4.653494788426621,
-        "r2": 0.9043913983300031,
+        "mae": 3.6463593363707663,
+        "rmse": 4.692358889712167,
+        "r2": 0.9027877611775206,
         "n": 362
       },
       "2025": {
-        "mae": 3.772069689313985,
-        "rmse": 4.775319485907625,
-        "r2": 0.9122757438057021,
+        "mae": 3.696125389402112,
+        "rmse": 4.707434641339289,
+        "r2": 0.9147521515140594,
         "n": 364
       },
       "2026": {
-        "mae": 3.950739008359608,
-        "rmse": 5.000747703692024,
-        "r2": 0.9103601336980388,
+        "mae": 3.8592292832513286,
+        "rmse": 4.903968633908454,
+        "r2": 0.9137961466910869,
         "n": 364
       }
     },
     "pooled": {
-      "mae": 3.6883146531528643,
-      "rmse": 4.749902835936093,
-      "r2": 0.9013599643582844
+      "mae": 3.6692137594339194,
+      "rmse": 4.732342712060935,
+      "r2": 0.9020879495439594
     },
     "best_iterations": [
-      83,
-      154,
-      170,
-      150,
-      202,
-      138,
-      260,
-      197,
-      172,
+      85,
+      158,
+      280,
+      139,
       217,
-      270,
-      232
+      134,
+      363,
+      177,
+      169,
+      375,
+      275,
+      457
     ]
   },
   "cv_5fold": {
-    "mae": 3.6837737130759995,
-    "rmse": 4.723838343760562,
-    "r2": 0.9022352191649656
+    "mae": 3.676425526166773,
+    "rmse": 4.717405957893127,
+    "r2": 0.9025031243008057
   },
   "feature_importance": [
     {
       "name": "cam_sum",
-      "importance": 371
+      "importance": 405
     },
     {
       "name": "cam_wmean",
-      "importance": 285
+      "importance": 259
     },
     {
       "name": "arch_sorcerer",
-      "importance": 242
+      "importance": 250
     },
     {
       "name": "arch_bard",
-      "importance": 238
+      "importance": 249
+    },
+    {
+      "name": "arch_ranger",
+      "importance": 181
     },
     {
       "name": "arch_cleric",
       "importance": 166
     },
     {
-      "name": "arch_ranger",
-      "importance": 161
-    },
-    {
-      "name": "arch_druid",
-      "importance": 119
-    },
-    {
-      "name": "arch_rogue",
-      "importance": 112
-    },
-    {
-      "name": "arch_wizard",
-      "importance": 107
-    },
-    {
-      "name": "roster_size",
-      "importance": 100
-    },
-    {
-      "name": "arch_fighter",
-      "importance": 97
-    },
-    {
-      "name": "arch_monk",
-      "importance": 95
+      "name": "outbound_cam_v3_sum",
+      "importance": 158
     },
     {
       "name": "arch_paladin",
-      "importance": 94
+      "importance": 147
     },
     {
-      "name": "exp_fr_share",
-      "importance": 90
+      "name": "arch_rogue",
+      "importance": 136
     },
     {
-      "name": "exp_sr_share",
-      "importance": 86
+      "name": "arch_wizard",
+      "importance": 133
     },
     {
-      "name": "exp_jr_share",
-      "importance": 73
+      "name": "arch_druid",
+      "importance": 131
     },
     {
-      "name": "cam_top1",
-      "importance": 72
+      "name": "arch_fighter",
+      "importance": 128
     },
     {
-      "name": "exp_so_share",
-      "importance": 67
+      "name": "arch_monk",
+      "importance": 126
+    },
+    {
+      "name": "inbound_cam_v3_sum",
+      "importance": 116
     },
     {
       "name": "cam_top7_mean",
-      "importance": 64
+      "importance": 115
     },
     {
-      "name": "arch_warlock",
-      "importance": 59
+      "name": "roster_size",
+      "importance": 110
     },
     {
-      "name": "arch_barbarian",
-      "importance": 50
+      "name": "exp_fr_share",
+      "importance": 107
+    },
+    {
+      "name": "exp_sr_share",
+      "importance": 102
+    },
+    {
+      "name": "exp_so_share",
+      "importance": 97
     },
     {
       "name": "cam_top3_mean",
-      "importance": 44
+      "importance": 93
+    },
+    {
+      "name": "exp_jr_share",
+      "importance": 84
+    },
+    {
+      "name": "arch_barbarian",
+      "importance": 76
+    },
+    {
+      "name": "arch_warlock",
+      "importance": 72
+    },
+    {
+      "name": "cam_top1",
+      "importance": 68
     },
     {
       "name": "cam_count_gt5",
-      "importance": 13
+      "importance": 27
     },
     {
       "name": "cam_count_gt10",
-      "importance": 0
+      "importance": 4
     },
     {
       "name": "cam_count_gt15",

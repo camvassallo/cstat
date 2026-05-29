@@ -217,6 +217,15 @@ def fetch_portal_signals(conn, df: pd.DataFrame) -> pd.DataFrame:
                   AND p_base.team_id = :team_id
             ),
             inbound AS (
+                -- Cross-season player identity uses **natstat_id OR
+                -- torvik_pid**. natstat_id is reissued per team (gets
+                -- a new id at the new school), so a natstat_id-only
+                -- join silently misses every transfer. `torvik_pid`
+                -- is stable across transfers (per `reference_torvik_pid`
+                -- memory: 96% coverage, zero collisions). Audit's prior
+                -- inbound numbers (e.g. β=-0.605 OLS) were silently
+                -- under-counted by this bug — fixed here so future
+                -- audits measure the true portal signal.
                 SELECT t.cstat_player_id,
                        COALESCE(tps_base.cam_gbpm_v3_psos, 0) AS cam_v3
                 FROM transfers t
@@ -225,8 +234,14 @@ def fetch_portal_signals(conn, df: pd.DataFrame) -> pd.DataFrame:
                 LEFT JOIN torvik_player_stats tps_base
                   ON tps_base.player_id = p_base.id AND tps_base.season = :base
                 JOIN players p_tgt
-                  ON p_tgt.natstat_id = p_base.natstat_id
-                 AND p_tgt.season = :target
+                  ON p_tgt.season = :target
+                 AND (
+                      p_tgt.natstat_id = p_base.natstat_id
+                      OR (tps_base.torvik_pid IS NOT NULL AND p_tgt.id IN (
+                          SELECT player_id FROM torvik_player_stats
+                          WHERE torvik_pid = tps_base.torvik_pid AND season = :target
+                      ))
+                 )
                 JOIN target_team tt ON tt.id = p_tgt.team_id
                 WHERE t.year = :portal_year
             )

@@ -143,6 +143,110 @@ WHERE season = ANY(%(seasons)s)
   AND adj_efficiency_margin IS NOT NULL
 """
 
+# Per (source_team, target_season) sum of base-season cam_v3 for players
+# who left in the portal cycle that moves them into the target season.
+#
+# Convention: `transfers.year = target_season - 1` = spring of the base
+# season = portal moves INTO target season. The departed player's value
+# is read from `torvik_player_stats` at the BASE season (their level
+# when the source team "lost" them). Missing torvik coverage contributes
+# 0 to the sum — same COALESCE convention the audit
+# (`audit_preseason_projections.py::fetch_portal_signals`) uses.
+#
+# Pre-2020 transfers data is sparse (2-7 rows/year vs. 1,000+ post-2020;
+# the portal as we know it only took off after the 2021 NCAA rule
+# change). Pre-portal-era team-seasons get `outbound_cam_v3_sum = 0`
+# from the `df.merge(..., how='left').fillna(0.0)` in `build_dataset`
+# (this SQL uses INNER JOIN, so those teams simply don't appear in the
+# query result; the pandas LEFT JOIN supplies the 0 sentinel). The
+# tree-based model naturally splits on `> 0` (real portal era) vs `= 0`
+# (no signal available), so the early seasons stay informative for the
+# cam_v3 distribution features without polluting the outbound
+# coefficient.
+#
+# `team_id` is resolved cross-season via `teams.natstat_id` to the
+# *target-season* team UUID — `team_season_stats.team_id` (the join key
+# of the training frame) uses the target-season UUID, and team UUIDs
+# are season-scoped (Duke 2024 ≠ Duke 2025 by UUID; see CLAUDE.md
+# "UUIDs are season-scoped"). Without the natstat_id hop the merge
+# would silently produce zero coverage. The serve-side path in
+# `compose_all_projections` is keyed on the *base-season* UUID (the
+# only one that exists for the upcoming year), but the model only
+# sees the float, not the join key — the feature *value* is identical
+# either way.
+OUTBOUND_QUERY = """
+SELECT
+    tgt_team.id AS team_id,
+    (p_base.season + 1)::int4 AS season,
+    COALESCE(SUM(COALESCE(tps.cam_gbpm_v3_psos, 0)), 0)::float8 AS outbound_cam_v3_sum
+FROM transfers t
+JOIN players p_base
+    ON p_base.id = t.cstat_player_id
+   AND p_base.season = t.year
+JOIN teams base_team ON base_team.id = p_base.team_id
+JOIN teams tgt_team
+    ON tgt_team.natstat_id = base_team.natstat_id
+   AND tgt_team.season = p_base.season + 1
+LEFT JOIN torvik_player_stats tps
+    ON tps.player_id = p_base.id AND tps.season = t.year
+WHERE t.year = ANY(%(portal_years)s)
+GROUP BY tgt_team.id, p_base.season
+"""
+
+# Symmetric inbound query: for each transfer, locate the player's
+# *target-season* team and attribute their BASE-season cam_v3 to that
+# team's inbound total.
+#
+# Cross-season player identity uses **natstat_id OR torvik_pid**.
+# natstat_id is reissued per team — a player who transfers gets a new
+# natstat_id at the new school — so natstat_id-only joins silently miss
+# every transfer (empirically 503/1958 = 25.7% of the 2024+2025 inbound
+# cohort, per `test_cross_season_joins.py::coverage_invariant`).
+# `torvik_pid` is stable across transfers (per `reference_torvik_pid`
+# memory: stable cross-season, 96% coverage, zero collisions). The OR
+# catches both:
+#   - **non-transferring same-team players who happened to enter the
+#     portal then re-signed with their current team** (rare): natstat_id
+#     branch matches.
+#   - **actual transfers**: torvik_pid branch matches; natstat_id branch
+#     fails (fresh id at new school).
+#
+# `tps_base` is `LEFT JOIN`ed so transfers with no Torvik coverage still
+# contribute 0 to the sum (the COALESCE on cam_v3 absorbs the NULL); the
+# `OR`'s torvik branch only activates when base-side coverage exists.
+# Each transfer row matches AT MOST ONE `p_tgt` row: when both branches
+# return the same row (rare same-team case), SQL `OR` is idempotent —
+# the row appears once, not twice — so the SUM is safe without DISTINCT.
+#
+# Pairing outbound + inbound (rather than a single net_cam_v3_sum) lets
+# the model learn the asymmetry — a team can gain and lose simultaneously
+# and the effects aren't necessarily additive at the AdjEM level
+# (different roles, role fit, etc.).
+INBOUND_QUERY = """
+SELECT
+    tgt_team.id AS team_id,
+    p_tgt.season AS season,
+    COALESCE(SUM(COALESCE(tps_base.cam_gbpm_v3_psos, 0)), 0)::float8 AS inbound_cam_v3_sum
+FROM transfers t
+JOIN players p_base
+    ON p_base.id = t.cstat_player_id
+   AND p_base.season = t.year
+LEFT JOIN torvik_player_stats tps_base
+    ON tps_base.player_id = p_base.id AND tps_base.season = t.year
+JOIN players p_tgt
+    ON p_tgt.season = t.year + 1
+   AND (
+        p_tgt.natstat_id = p_base.natstat_id
+        OR (tps_base.torvik_pid IS NOT NULL AND p_tgt.id IN (
+            SELECT player_id FROM torvik_player_stats
+            WHERE torvik_pid = tps_base.torvik_pid AND season = t.year + 1
+        ))
+   )
+JOIN teams tgt_team ON tgt_team.id = p_tgt.team_id
+WHERE t.year = ANY(%(portal_years)s)
+GROUP BY tgt_team.id, p_tgt.season
+"""
+
 
 def normalize_class(cy) -> str | None:
     """Fold the inconsistently-stored class_year vocab ('Sr' / 'Senior' /
@@ -245,8 +349,20 @@ def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
     engine = get_engine()
     players = pd.read_sql(PLAYER_QUERY, engine, params={"seasons": list(SEASONS)})
     teams = pd.read_sql(TEAM_QUERY, engine, params={"seasons": list(SEASONS)})
+    # portal_year = target_season - 1 (spring portal moves INTO target).
+    portal_years = [s - 1 for s in SEASONS]
+    outbound = pd.read_sql(
+        OUTBOUND_QUERY, engine, params={"portal_years": portal_years}
+    )
+    inbound = pd.read_sql(
+        INBOUND_QUERY, engine, params={"portal_years": portal_years}
+    )
 
     print(f"Loaded {len(players):,} player-season rows, {len(teams):,} team-seasons.")
+    print(
+        f"Loaded {len(outbound):,} outbound + {len(inbound):,} inbound "
+        f"(team, target_season) portal rows."
+    )
     coverage = cam_v3_coverage(players)
 
     agg = (
@@ -255,6 +371,10 @@ def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
         .reset_index(drop=True)
     )
     df = agg.merge(teams, on=["team_id", "season"], how="inner")
+    df = df.merge(outbound, on=["team_id", "season"], how="left")
+    df = df.merge(inbound, on=["team_id", "season"], how="left")
+    df["outbound_cam_v3_sum"] = df["outbound_cam_v3_sum"].fillna(0.0)
+    df["inbound_cam_v3_sum"] = df["inbound_cam_v3_sum"].fillna(0.0)
     # Drop team-seasons with zero Torvik coverage across the whole
     # rotation — the cam_v3 features are NaN and the row can't be scored.
     pre = len(df)
@@ -262,6 +382,14 @@ def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
     if len(df) < pre:
         print(f"Dropped {pre - len(df)} team-seasons with no cam_v3 coverage / target.")
     print(f"After join: {len(df):,} team-seasons with target.")
+    nz_outbound = int((df["outbound_cam_v3_sum"] > 0).sum())
+    nz_inbound = int((df["inbound_cam_v3_sum"] > 0).sum())
+    print(
+        f"non-zero outbound: {nz_outbound:,}/{len(df):,} "
+        f"({100.0 * nz_outbound / len(df):.1f}%) | "
+        f"non-zero inbound: {nz_inbound:,}/{len(df):,} "
+        f"({100.0 * nz_inbound / len(df):.1f}%); pre-portal-era rows = 0.0."
+    )
 
     feature_cols = [
         c for c in df.columns
