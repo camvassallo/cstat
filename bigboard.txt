@@ -1,0 +1,1209 @@
+1	Duke
+Cameron Boozer
+PF | Duke
+6'9.5"
+253 lbs
+Freshman
+18.9 yrs
+pts
+24.2
+reb
+11.0
+ast
+4.4
+blk
+0.7
+stl
+1.5
+2	Kansas
+Darryn Peterson
+SG/PG | Kansas
+6'5.75"
+199 lbs
+Freshman
+19.4 yrs
+pts
+25.0
+reb
+5.2
+ast
+2.0
+blk
+0.8
+stl
+1.8
+3	BYU
+AJ Dybantsa
+SF | BYU
+6'9.75"
+217 lbs
+Freshman
+19.4 yrs
+pts
+26.4
+reb
+7.1
+ast
+3.8
+blk
+0.4
+stl
+1.1
+4	North Carolina
+Caleb Wilson
+SF/PF | North Carolina
+6'10.5"
+211 lbs
+Freshman
+19.9 yrs
+pts
+22.8
+reb
+10.8
+ast
+3.1
+blk
+1.6
+stl
+1.7
+TIER 2
+5	Illinois
+Keaton Wagler
+SG/PG | Illinois
+6'6.25"
+188 lbs
+Freshman
+19.4 yrs
+pts
+19.0
+reb
+5.4
+ast
+4.5
+blk
+0.4
+stl
+1.0
+6	Arkansas
+Darius Acuff Jr.
+PG | Arkansas
+6'3.25"
+186 lbs
+Freshman
+19.6 yrs
+pts
+24.1
+reb
+3.2
+ast
+6.6
+blk
+0.3
+stl
+0.9
+7	Houston
+Kingston Flemings
+PG | Houston
+6'3.75"
+183 lbs
+Freshman
+19.5 yrs
+pts
+18.2
+reb
+4.6
+ast
+5.9
+blk
+0.4
+stl
+1.7
+THE REST
+8	Arizona
+Brayden Burries
+SG/PG | Arizona
+6'5"
+215 lbs
+Freshman
+20.8 yrs
+pts
+19.4
+reb
+5.9
+ast
+2.9
+blk
+0.2
+stl
+1.8
+9	Louisville
+Mikel Brown Jr.
+PG | Louisville
+6'4.75"
+190 lbs
+Freshman
+20.2 yrs
+pts
+22.4
+reb
+4.1
+ast
+5.8
+blk
+0.2
+stl
+1.5
+10	Tennessee
+Nate Ament
+SF | Tennessee
+6'10.75"
+211 lbs
+Freshman
+19.5 yrs
+pts
+20.2
+reb
+7.7
+ast
+2.8
+blk
+0.8
+stl
+1.2
+11	Alabama
+Labaron Philon Jr.
+PG | Alabama
+6'3.75"
+176 lbs
+Sophomore
+20.6 yrs
+pts
+25.6
+reb
+4.1
+ast
+5.8
+blk
+0.2
+stl
+1.3
+12	Michigan
+Yaxel Lendeborg
+PF | Michigan
+6'10"
+241 lbs
+Senior
+23.7 yrs
+pts
+18.0
+reb
+8.1
+ast
+3.9
+blk
+1.5
+stl
+1.3
+13	Mexico
+Karim López
+SF | New Zealand
+6'9.5"
+222 lbs
+International
+19.2 yrs
+pts
+16.8
+reb
+8.5
+ast
+2.7
+blk
+1.5
+stl
+1.6
+14	Baylor
+Cameron Carr
+SG | Baylor
+6'5.75"
+184 lbs
+Sophomore
+21.6 yrs
+pts
+20.2
+reb
+6.2
+ast
+2.8
+blk
+1.4
+stl
+0.9
+15	Washington
+Hannes Steinbach
+PF | Washington
+6'11.5"
+248 lbs
+Freshman
+20.1 yrs
+pts
+19.3
+reb
+12.2
+ast
+1.6
+blk
+1.3
+stl
+1.1
+16	Houston
+Chris Cenac Jr.
+PF/C | Houston
+6'11.5"
+240 lbs
+Freshman
+19.4 yrs
+pts
+13.8
+reb
+11.4
+ast
+1.1
+blk
+0.7
+stl
+1.1
+17	Michigan
+Morez Johnson Jr.
+PF | Michigan
+6'10.25"
+251 lbs
+Sophomore
+20.4 yrs
+pts
+18.8
+reb
+10.5
+ast
+1.7
+blk
+1.6
+stl
+1.0
+18	Michigan
+Aday Mara
+C | Michigan
+7'4.25"
+260 lbs
+Junior
+21.2 yrs
+pts
+18.6
+reb
+10.4
+ast
+3.7
+blk
+4.0
+stl
+0.5
+19	Kentucky
+Jayden Quaintance
+PF/C | Kentucky
+6'10.25"
+253 lbs
+Sophomore
+18.9 yrs
+pts
+10.7
+reb
+10.7
+ast
+1.1
+blk
+1.6
+stl
+1.1
+20	Iowa
+Bennett Stirtz
+PG | Iowa
+6'3.75"
+186 lbs
+Senior
+22.7 yrs
+pts
+18.9
+reb
+2.5
+ast
+4.2
+blk
+0.2
+stl
+1.3
+21	Texas
+Dailyn Swain
+SG/SF | Texas
+6'7.75"
+211 lbs
+Junior
+20.9 yrs
+pts
+19.0
+reb
+8.3
+ast
+3.9
+blk
+0.3
+stl
+1.8
+22	Texas Tech
+Christian Anderson
+PG | Texas Tech
+6'2.25"
+180 lbs
+Sophomore
+20.2 yrs
+pts
+17.4
+reb
+3.4
+ast
+6.9
+blk
+0.2
+stl
+1.4
+23	Santa Clara
+Allen Graves
+PF | Santa Clara
+6'9"
+226 lbs
+Freshman
+19.9 yrs
+pts
+18.8
+reb
+10.4
+ast
+2.9
+blk
+1.5
+stl
+3.0
+24	Stanford
+Ebuka Okorie
+PG | Stanford
+6'2.5"
+186 lbs
+Freshman
+19.2 yrs
+pts
+23.8
+reb
+3.7
+ast
+3.7
+blk
+0.3
+stl
+1.6
+25	Arizona
+Koa Peat
+PF | Arizona
+6'8.25"
+245 lbs
+Freshman
+19.4 yrs
+pts
+18.3
+reb
+7.3
+ast
+3.3
+blk
+0.9
+stl
+0.8
+26	Duke
+Isaiah Evans
+SF | Duke
+6'6.75"
+186 lbs
+Sophomore
+20.5 yrs
+pts
+19.2
+reb
+4.1
+ast
+1.6
+blk
+0.8
+stl
+0.9
+27	Iowa State
+Joshua Jefferson
+PF/SF | Iowa State
+6'9"
+246 lbs
+Senior
+22.6 yrs
+pts
+19.1
+reb
+8.6
+ast
+5.6
+blk
+1.0
+stl
+1.9
+28	Arkansas
+Meleek Thomas
+SG/PG | Arkansas
+6'4.25"
+190 lbs
+Freshman
+19.9 yrs
+pts
+18.5
+reb
+4.5
+ast
+2.9
+blk
+0.2
+stl
+1.8
+29	North Carolina
+Henri Veesaar
+C | North Carolina
+7'0.5"
+227 lbs
+Junior
+22.2 yrs
+pts
+19.5
+reb
+10.0
+ast
+2.4
+blk
+1.4
+stl
+0.7
+30	UConn
+Tarris Reed Jr.
+C | UConn
+6'11"
+264 lbs
+Senior
+22.9 yrs
+pts
+19.4
+reb
+11.8
+ast
+3.0
+blk
+2.6
+stl
+1.2
+31	Spain
+Sergio de Larrea
+PG/SG | Valencia
+6'6"
+198 lbs
+International
+20.5 yrs
+pts
+17.8
+reb
+5.1
+ast
+7.3
+blk
+0.5
+stl
+1.2
+32	UConn
+Alex Karaban
+SF/PF | UConn
+6'8"
+225 lbs
+Senior
+23.6 yrs
+pts
+13.8
+reb
+5.5
+ast
+2.5
+blk
+0.9
+stl
+0.9
+33	St. John's
+Zuby Ejiofor
+PF | St. John's
+6'8.75"
+245 lbs
+Senior
+22.2 yrs
+pts
+19.6
+reb
+8.8
+ast
+4.3
+blk
+2.6
+stl
+1.4
+34	Italy
+Luigi Suigo
+C | KK Mega Basket
+7'4"
+289 lbs
+International
+19.4 yrs
+pts
+16.9
+reb
+10.6
+ast
+1.7
+blk
+2.0
+stl
+0.9
+35	BYU
+Richie Saunders
+SG | BYU
+6'6.25"
+205 lbs
+Senior
+24.8 yrs
+pts
+20.7
+reb
+6.6
+ast
+2.4
+blk
+0.3
+stl
+2.0
+36	Louisville
+Ryan Conwell
+SG | Louisville
+6'3.25"
+215 lbs
+Senior
+22.0 yrs
+pts
+21.9
+reb
+5.6
+ast
+3.1
+blk
+0.2
+stl
+1.3
+37	Virginia
+Ugonna Onyenso
+C | Virginia
+7'0.25"
+237 lbs
+Senior
+21.7 yrs
+pts
+12.6
+reb
+9.5
+ast
+1.1
+blk
+5.7
+stl
+1.2
+38	Arizona
+Jaden Bradley
+PG | Arizona
+6'3.75"
+205 lbs
+Senior
+22.8 yrs
+pts
+15.6
+reb
+4.0
+ast
+5.1
+blk
+0.1
+stl
+1.7
+39	Arkansas
+Trevon Brazile
+PF | Arkansas
+6'10.75"
+226 lbs
+Senior
+23.4 yrs
+pts
+14.9
+reb
+8.4
+ast
+1.8
+blk
+1.8
+stl
+1.7
+40	Cincinnati
+Baba Miller
+SF | Cincinnati
+6'11.75"
+208 lbs
+Senior
+22.4 yrs
+pts
+14.7
+reb
+11.7
+ast
+4.2
+blk
+1.3
+stl
+0.8
+41	Germany
+Jack Kayil
+PG | Alba Berlin
+6'3"
+174 lbs
+International
+20.4 yrs
+pts
+20.8
+reb
+4.8
+ast
+6.2
+blk
+0.3
+stl
+1.6
+42	Kentucky
+Otega Oweh
+SG | Kentucky
+6'5.5"
+216 lbs
+Senior
+22.9 yrs
+pts
+20.5
+reb
+5.3
+ast
+2.9
+blk
+0.3
+stl
+2.0
+43	Northwestern
+Nick Martinelli
+SF | Northwestern
+6'7.75"
+224 lbs
+Senior
+22.2 yrs
+pts
+23.3
+reb
+6.3
+ast
+2.0
+blk
+0.4
+stl
+0.8
+44	Tennessee
+Ja'Kobi Gillespie
+PG | Tennessee
+6'1"
+182 lbs
+Senior
+22.3 yrs
+pts
+19.1
+reb
+2.9
+ast
+5.6
+blk
+0.2
+stl
+2.2
+45	Houston
+Emanuel Sharp
+SG | Houston
+6'4"
+208 lbs
+Senior
+22.3 yrs
+pts
+18.9
+reb
+3.6
+ast
+2.1
+blk
+0.1
+stl
+1.5
+46	South Florida
+Izaiyah Nelson
+PF/C | South Florida
+6'9.5"
+219 lbs
+Senior
+22.7 yrs
+pts
+20.9
+reb
+12.6
+ast
+1.6
+blk
+1.9
+stl
+2.2
+47	Ohio State
+Bruce Thornton
+PG | Ohio State
+6'1.25"
+223 lbs
+Senior
+22.8 yrs
+pts
+19.6
+reb
+5.0
+ast
+3.9
+blk
+0.2
+stl
+1.1
+48	Houston
+Milos Uzan
+PG | Houston
+6'4.25"
+185 lbs
+Senior
+23.5 yrs
+pts
+12.1
+reb
+2.9
+ast
+4.4
+blk
+0.1
+stl
+1.1
+49	Vanderbilt
+Tyler Nickel
+SG | Vanderbilt
+6'7.25"
+217 lbs
+Senior
+22.8 yrs
+pts
+15.9
+reb
+3.8
+ast
+1.4
+blk
+0.6
+stl
+0.9
+50	Purdue
+Braden Smith
+PG | Purdue
+5'11.5"
+167 lbs
+Senior
+22.9 yrs
+pts
+14.9
+reb
+3.7
+ast
+9.2
+blk
+0.2
+stl
+1.8
+51	Duke
+Maliq Brown
+PF | Duke
+6'9.25"
+217 lbs
+Senior
+22.6 yrs
+pts
+8.8
+reb
+9.2
+ast
+2.9
+blk
+1.1
+stl
+3.2
+52	UCLA
+Tyler Bilodeau
+PF | UCLA
+6'8.5"
+228 lbs
+Senior
+22.2 yrs
+pts
+21.1
+reb
+6.7
+ast
+1.3
+blk
+0.4
+stl
+0.6
+53	Tennessee
+Felix Okpara
+C | Tennessee
+6'11.25"
+237 lbs
+Senior
+22.2 yrs
+pts
+10.7
+reb
+8.5
+ast
+0.7
+blk
+2.0
+stl
+0.6
+54	Iowa State
+Tamin Lipsey
+PG | Iowa State
+6'1"
+200 lbs
+Senior
+22.9 yrs
+pts
+15.4
+reb
+4.5
+ast
+5.8
+blk
+0.0
+stl
+2.6
+55	Serbia
+Pavle Backo
+C | KK Mega Basket
+6'11"
+262 lbs
+International
+18.9 yrs
+pts
+23.8
+reb
+8.8
+ast
+2.2
+blk
+2.3
+stl
+0.6
+56	Illinois
+Kylan Boswell
+PG | Illinois
+6'2.5"
+226 lbs
+Senior
+21.2 yrs
+pts
+14.7
+reb
+4.8
+ast
+3.6
+blk
+0.0
+stl
+0.9
+57	Virginia Tech
+Tobi Lawal
+PF | Virginia Tech
+6'8.5"
+214 lbs
+Senior
+23.1 yrs
+pts
+15.2
+reb
+10.5
+ast
+0.8
+blk
+1.4
+stl
+0.4
+58	George Washington
+Rafael Castro
+C | George Washington
+6'10.25"
+224 lbs
+Senior
+23.2 yrs
+pts
+20.1
+reb
+12.0
+ast
+2.2
+blk
+2.3
+stl
+2.3
+59	Auburn
+Keyshawn Hall
+SF | Auburn
+6'7.25"
+227 lbs
+Senior
+23.2 yrs
+pts
+20.6
+reb
+7.6
+ast
+2.8
+blk
+0.7
+stl
+0.8
+60	St. John's
+Dillon Mitchell
+SF | St. John's
+6'8"
+202 lbs
+Senior
+22.7 yrs
+pts
+10.7
+reb
+9.0
+ast
+3.8
+blk
+0.9
+stl
+1.6
+61	NC State
+Quadir Copeland
+PG/SG | NC State
+6'6"
+220 lbs
+Senior
+22.8 yrs
+pts
+17.4
+reb
+4.5
+ast
+8.1
+blk
+0.2
+stl
+2.2
+62	Wisconsin
+Nick Boyd
+PG/SG | Wisconsin
+6'2.25"
+176 lbs
+Senior
+25.2 yrs
+pts
+23.4
+reb
+4.3
+ast
+4.8
+blk
+0.0
+stl
+1.2
+63	Miami (Ohio)
+Peter Suder
+SG | Miami (Ohio)
+6'5"
+213 lbs
+Senior
+22.9 yrs
+pts
+17.1
+reb
+5.4
+ast
+4.7
+blk
+0.5
+stl
+1.5
+64	Oregon
+Nate Bittle
+C | Oregon
+7'0"
+250 lbs
+Senior
+23.0 yrs
+pts
+19.4
+reb
+8.0
+ast
+3.0
+blk
+2.1
+stl
+1.0
+65	Tennessee State
+Aaron Nkrumah
+SG | Tennessee State
+6'6.25"
+189 lbs
+Senior
+24.6 yrs
+pts
+20.3
+reb
+6.3
+ast
+3.5
+blk
+0.6
+stl
+3.2
+66	Purdue
+Trey Kaufman-Renn
+PF | Purdue
+6'9"
+241 lbs
+Senior
+23.8 yrs
+pts
+18.1
+reb
+10.7
+ast
+3.3
+blk
+0.3
+stl
+0.5
+67	St. John's
+Bryce Hopkins
+SF | St. John's
+6'7.25"
+219 lbs
+Senior
+23.8 yrs
+pts
+17.0
+reb
+7.8
+ast
+2.4
+blk
+0.3
+stl
+1.4
+68	Miami
+Malik Reneau
+PF | Miami
+6'9"
+238 lbs
+Senior
+23.2 yrs
+pts
+23.5
+reb
+8.1
+ast
+2.6
+blk
+1.0
+stl
+1.3
+69	Indiana
+Tucker DeVries
+SG/SF | Indiana
+6'7"
+220 lbs
+Senior
+23.5 yrs
+pts
+14.4
+reb
+5.5
+ast
+3.5
+blk
+0.6
+stl
+1.2
+70	NC State
+Darrion Williams
+SF | NC State
+6'5.75"
+236 lbs
+Senior
+23.2 yrs
+pts
+16.7
+reb
+5.5
+ast
+3.3
+blk
+0.4
+stl
+1.3
+71	Missouri
+Mark Mitchell
+SF/PF | Missouri
+6'9"
+230 lbs
+Senior
+22.8 yrs
+pts
+19.6
+reb
+5.5
+ast
+3.8
+blk
+0.5
+stl
+0.7

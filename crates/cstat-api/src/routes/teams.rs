@@ -99,11 +99,12 @@ async fn team_detail(
             )
         })?;
 
-    let (mut schedule, roster, archetype_distribution, available_seasons) = tokio::try_join!(
+    let (mut schedule, roster, archetype_distribution, available_seasons, total_teams) = tokio::try_join!(
         queries::get_team_schedule(pool, resolved_id, season),
         queries::get_team_roster(pool, resolved_id, season),
         queries::get_team_archetype_index(pool, resolved_id, season),
         queries::get_team_available_seasons(pool, resolved_id),
+        queries::get_season_team_count(pool, season),
     )
     .map_err(|e| {
         (
@@ -180,5 +181,6 @@ async fn team_detail(
         "roster": roster,
         "archetype_distribution": archetype_distribution,
         "available_seasons": available_seasons,
+        "total_teams": total_teams,
     })))
 }

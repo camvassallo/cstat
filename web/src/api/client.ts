@@ -129,6 +129,16 @@ export interface RosterEntry {
   /// affinity heatmap below the Roster Map on TeamDetail. `null` when
   /// the player has no row in `player_archetypes`.
   affinity_scores: Record<string, number> | null;
+  /// Torvik shot-zone volumes — drive the team aggregate shot-diet
+  /// panel on TeamDetail. `null` when the player has no Torvik row.
+  rim_attempted: number | null;
+  mid_attempted: number | null;
+  tpa: number | null;
+  fta: number | null;
+  rim_made: number | null;
+  mid_made: number | null;
+  tpm: number | null;
+  ftm: number | null;
 }
 
 export interface ArchetypeShare {
@@ -198,6 +208,10 @@ export function fetchTeamDetail(id: string, season?: number) {
     /// Seasons in which this team (joined cross-season via natstat_id) has
     /// any row. Drives the page-scoped season dropdown override.
     available_seasons: number[];
+    /// Count of D-I teams in this season — denominator for converting
+    /// per-stat ranks to percentiles on the stat-card tints. Matches
+    /// the rankings page's `teams.length`.
+    total_teams: number;
   }>(`/teams/${id}`, { season: season?.toString() });
 }
 

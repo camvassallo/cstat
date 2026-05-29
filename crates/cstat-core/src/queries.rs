@@ -292,6 +292,17 @@ pub struct RosterEntry {
     /// below the Roster Map radial on TeamDetail. `NULL` when the player
     /// has no row in `player_archetypes` (sub-D1, unqualified, etc.).
     pub affinity_scores: Option<JsonValue>,
+    /// Torvik shot-zone volumes (attempts) — drive the team
+    /// aggregate shot diet panel on TeamDetail. `NULL` when the
+    /// player has no Torvik row.
+    pub rim_attempted: Option<f64>,
+    pub mid_attempted: Option<f64>,
+    pub tpa: Option<i32>,
+    pub fta: Option<i32>,
+    pub rim_made: Option<f64>,
+    pub mid_made: Option<f64>,
+    pub tpm: Option<i32>,
+    pub ftm: Option<i32>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -692,6 +703,27 @@ pub async fn get_team_available_seasons(
     Ok(rows.into_iter().map(|(s,)| s).collect())
 }
 
+/// Count of teams in `team_season_stats` for the given season. Used as
+/// the denominator when converting a per-stat rank into a percentile
+/// for the red→green tint on team-detail stat cards. Matches the
+/// rankings page's `teams.length` count for that season.
+pub async fn get_season_team_count(
+    pool: &PgPool,
+    season: i32,
+) -> Result<i64, sqlx::Error> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM team_season_stats
+        WHERE season = $1
+        "#,
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
 pub async fn get_team_by_id(
     pool: &PgPool,
     team_id: Uuid,
@@ -821,7 +853,9 @@ pub async fn get_team_roster(
             pp.usage_rate_pct,
             pp.ast_pct_pct, pp.tov_pct_pct,
             pp.orb_pct_pct, pp.drb_pct_pct, pp.stl_pct_pct, pp.blk_pct_pct,
-            pa.primary_class, pa.secondary_class, pa.affinity_scores
+            pa.primary_class, pa.secondary_class, pa.affinity_scores,
+            tps.rim_attempted, tps.mid_attempted, tps.tpa, tps.fta,
+            tps.rim_made, tps.mid_made, tps.tpm, tps.ftm
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season

@@ -1,62 +1,177 @@
 [
-  { "name": "Matt Able", "current_team": "North Carolina State", "height": "6-6", "class_year": "Freshman", "status": "declared" },
-  { "name": "Darius Acuff Jr.", "current_team": "Arkansas", "height": "6-3", "class_year": "Freshman", "status": "declared" },
-  { "name": "Amari Allen", "current_team": "Alabama", "height": "6-8", "class_year": "Freshman", "status": "declared" },
-  { "name": "Nate Ament", "current_team": "Tennessee", "height": "6-10", "class_year": "Freshman", "status": "declared" },
-  { "name": "Christian Anderson Jr.", "current_team": "Texas Tech", "height": "6-3", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Alijah Arenas", "current_team": "USC", "height": "6-6", "class_year": "Freshman", "status": "declared" },
-  { "name": "Flory Bidunga", "current_team": "Kansas", "height": "6-10", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Finley Bizjack", "current_team": "Butler", "height": "6-4", "class_year": "Junior", "status": "declared" },
-  { "name": "John Blackwell", "current_team": "Wisconsin", "height": "6-4", "class_year": "Junior", "status": "declared" },
-  { "name": "Shane Blakeney", "current_team": "Drexel", "height": "6-5", "class_year": "Junior", "status": "declared" },
-  { "name": "Anton Bonke", "current_team": "Charlotte", "height": "7-2", "class_year": "Junior", "status": "declared" },
-  { "name": "Cameron Boozer", "current_team": "Duke", "height": "6-9", "class_year": "Freshman", "status": "declared" },
-  { "name": "Mikel Brown Jr.", "current_team": "Louisville", "height": "6-5", "class_year": "Freshman", "status": "declared" },
-  { "name": "Rowan Brumbaugh", "current_team": "Tulane", "height": "6-4", "class_year": "Junior", "status": "declared" },
-  { "name": "Brayden Burries", "current_team": "Arizona", "height": "6-4", "class_year": "Freshman", "status": "declared" },
-  { "name": "Elliot Cadeau", "current_team": "Michigan", "height": "6-1", "class_year": "Junior", "status": "declared" },
-  { "name": "Cameron Carr", "current_team": "Baylor", "height": "6-5", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Chris Cenac Jr.", "current_team": "Houston", "height": "6-11", "class_year": "Freshman", "status": "declared" },
-  { "name": "Rueben Chinyelu", "current_team": "Florida", "height": "6-10", "class_year": "Junior", "status": "declared" },
-  { "name": "Jacob Cofie", "current_team": "USC", "height": "6-10", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Cruz Davis", "current_team": "Hofstra", "height": "6-3", "class_year": "Junior", "status": "declared" },
-  { "name": "Kennard Davis Jr.", "current_team": "BYU", "height": "6-6", "class_year": "Junior", "status": "declared" },
-  { "name": "Keanu Dawes", "current_team": "Utah", "height": "6-9", "class_year": "Junior", "status": "declared" },
-  { "name": "AJ Dybantsa", "current_team": "BYU", "height": "6-9", "class_year": "Freshman", "status": "declared" },
-  { "name": "Gabe Dynes", "current_team": "USC", "height": "7-5", "class_year": "Junior", "status": "declared" },
-  { "name": "Eian Elmer", "current_team": "Miami (OH)", "height": "6-6", "class_year": "Junior", "status": "declared" },
-  { "name": "Isaiah Evans", "current_team": "Duke", "height": "6-6", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Jeremy Fears Jr.", "current_team": "Michigan State", "height": "6-2", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Kingston Flemings", "current_team": "Houston", "height": "6-4", "class_year": "Freshman", "status": "declared" },
-  { "name": "Colby Garland", "current_team": "San Jose State", "height": "6-0", "class_year": "Junior", "status": "declared" },
-  { "name": "Allen Graves", "current_team": "Santa Clara", "height": "6-9", "class_year": "Freshman", "status": "declared" },
-  { "name": "Juke Harris", "current_team": "Wake Forest", "height": "6-7", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Isiah Harwell", "current_team": "Houston", "height": "6-6", "class_year": "Freshman", "status": "declared" },
-  { "name": "Lou Hutchinson", "current_team": "Alabama A&M", "height": "6-7", "class_year": "Junior", "status": "declared" },
-  { "name": "Morez Johnson Jr.", "current_team": "Michigan", "height": "6-9", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Acaden Lewis", "current_team": "Villanova", "height": "6-2", "class_year": "Freshman", "status": "declared" },
-  { "name": "Aday Mara", "current_team": "Michigan", "height": "7-3", "class_year": "Junior", "status": "declared" },
-  { "name": "Milan Momcilovic", "current_team": "Iowa State", "height": "6-8", "class_year": "Junior", "status": "declared" },
-  { "name": "Malachi Moreno", "current_team": "Kentucky", "height": "7-0", "class_year": "Freshman", "status": "declared" },
-  { "name": "Paulius Murauskas", "current_team": "Saint Mary’s", "height": "6-8", "class_year": "Junior", "status": "declared" },
-  { "name": "Ebuka Okorie", "current_team": "Stanford", "height": "6-2", "class_year": "Freshman", "status": "declared" },
-  { "name": "Dennis Parker Jr.", "current_team": "Radford", "height": "6-6", "class_year": "Junior", "status": "declared" },
-  { "name": "Koa Peat", "current_team": "Arizona", "height": "6-8", "class_year": "Freshman", "status": "declared" },
-  { "name": "Darryn Peterson", "current_team": "Kansas", "height": "6-6", "class_year": "Freshman", "status": "declared" },
-  { "name": "Labaron Philon Jr.", "current_team": "Alabama", "height": "6-4", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Jayden Quaintance", "current_team": "Kentucky", "height": "6-10", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Sebastian Rancik", "current_team": "Colorado", "height": "6-11", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Billy Richmond III", "current_team": "Arkansas", "height": "6-6", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Hannes Steinbach", "current_team": "Washington", "height": "6-11", "class_year": "Freshman", "status": "declared" },
-  { "name": "Andrej Stojakovic", "current_team": "Illinois", "height": "6-7", "class_year": "Junior", "status": "declared" },
-  { "name": "Dailyn Swain", "current_team": "Texas", "height": "6-8", "class_year": "Junior", "status": "declared" },
-  { "name": "Tyler Tanner", "current_team": "Vanderbilt", "height": "6-0", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Meleek Thomas", "current_team": "Arkansas", "height": "6-5", "class_year": "Freshman", "status": "declared" },
-  { "name": "Aiden Tobiason", "current_team": "Temple", "height": "6-5", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Bryson Tucker", "current_team": "Washington", "height": "6-7", "class_year": "Sophomore", "status": "declared" },
-  { "name": "Henri Veesaar", "current_team": "North Carolina", "height": "7-0", "class_year": "Junior", "status": "declared" },
-  { "name": "Keaton Wagler", "current_team": "Illinois", "height": "6-6", "class_year": "Freshman", "status": "declared" },
-  { "name": "LeJuan Watts", "current_team": "Texas Tech", "height": "6-6", "class_year": "Junior", "status": "declared" },
-  { "name": "Caleb Wilson", "current_team": "North Carolina", "height": "6-10", "class_year": "Freshman", "status": "declared" },
-  { "name": "Tounde Yessoufou", "current_team": "Baylor", "height": "6-5", "class_year": "Freshman", "status": "declared" }
+  {
+    "name": "Darius Acuff Jr.",
+    "current_team": "Arkansas",
+    "height": "6-3",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Nate Ament",
+    "current_team": "Tennessee",
+    "height": "6-10",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Christian Anderson Jr.",
+    "current_team": "Texas Tech",
+    "height": "6-3",
+    "class_year": "Sophomore",
+    "status": "declared"
+  },
+  {
+    "name": "Cameron Boozer",
+    "current_team": "Duke",
+    "height": "6-9",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Mikel Brown Jr.",
+    "current_team": "Louisville",
+    "height": "6-5",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Brayden Burries",
+    "current_team": "Arizona",
+    "height": "6-4",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Cameron Carr",
+    "current_team": "Baylor",
+    "height": "6-5",
+    "class_year": "Sophomore",
+    "status": "declared"
+  },
+  {
+    "name": "Chris Cenac Jr.",
+    "current_team": "Houston",
+    "height": "6-11",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "AJ Dybantsa",
+    "current_team": "BYU",
+    "height": "6-9",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Isaiah Evans",
+    "current_team": "Duke",
+    "height": "6-6",
+    "class_year": "Sophomore",
+    "status": "declared"
+  },
+  {
+    "name": "Kingston Flemings",
+    "current_team": "Houston",
+    "height": "6-4",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Allen Graves",
+    "current_team": "Santa Clara",
+    "height": "6-9",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Morez Johnson Jr.",
+    "current_team": "Michigan",
+    "height": "6-9",
+    "class_year": "Sophomore",
+    "status": "declared"
+  },
+  {
+    "name": "Aday Mara",
+    "current_team": "Michigan",
+    "height": "7-3",
+    "class_year": "Junior",
+    "status": "declared"
+  },
+  {
+    "name": "Ebuka Okorie",
+    "current_team": "Stanford",
+    "height": "6-2",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Koa Peat",
+    "current_team": "Arizona",
+    "height": "6-8",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Darryn Peterson",
+    "current_team": "Kansas",
+    "height": "6-6",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Labaron Philon Jr.",
+    "current_team": "Alabama",
+    "height": "6-4",
+    "class_year": "Sophomore",
+    "status": "declared"
+  },
+  {
+    "name": "Jayden Quaintance",
+    "current_team": "Kentucky",
+    "height": "6-10",
+    "class_year": "Sophomore",
+    "status": "declared"
+  },
+  {
+    "name": "Hannes Steinbach",
+    "current_team": "Washington",
+    "height": "6-11",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Dailyn Swain",
+    "current_team": "Texas",
+    "height": "6-8",
+    "class_year": "Junior",
+    "status": "declared"
+  },
+  {
+    "name": "Meleek Thomas",
+    "current_team": "Arkansas",
+    "height": "6-5",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Henri Veesaar",
+    "current_team": "North Carolina",
+    "height": "7-0",
+    "class_year": "Junior",
+    "status": "declared"
+  },
+  {
+    "name": "Keaton Wagler",
+    "current_team": "Illinois",
+    "height": "6-6",
+    "class_year": "Freshman",
+    "status": "declared"
+  },
+  {
+    "name": "Caleb Wilson",
+    "current_team": "North Carolina",
+    "height": "6-10",
+    "class_year": "Freshman",
+    "status": "declared"
+  }
 ]
