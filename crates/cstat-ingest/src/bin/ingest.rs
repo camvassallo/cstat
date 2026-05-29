@@ -166,6 +166,12 @@ enum Commands {
         /// Target seasons to backtest (comma-separated). Defaults to 2025,2026.
         #[arg(long, value_delimiter = ',', default_values_t = [2025, 2026])]
         years: Vec<i32>,
+
+        /// Optional JSON dump of per-team predictions for downstream
+        /// residual analysis. One record per scored team:
+        /// `{team_id, team_name, season, phase_b, phase_a, baseline, actual}`.
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
     },
 
     /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
@@ -503,7 +509,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::ProjectionsBacktest { years } => {
+        Commands::ProjectionsBacktest { years, output } => {
             let model_dir =
                 std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
             let predictor =
@@ -514,6 +520,7 @@ async fn main() -> Result<()> {
                 &predictor,
                 std::path::Path::new(&model_dir),
                 &years,
+                output.as_deref(),
             )
             .await?;
         }

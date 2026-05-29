@@ -1,0 +1,4457 @@
+[
+  {
+    "actual": -29.4,
+    "baseline": -19.9,
+    "phase_a": -17.524578094482422,
+    "phase_b": -18.25575828552246,
+    "season": 2025,
+    "team_id": "72d2e856-e65c-4184-bc2e-38e805170efe",
+    "team_name": "Alabama A&M"
+  },
+  {
+    "actual": -9.7,
+    "baseline": -19.0,
+    "phase_a": -13.244382858276367,
+    "phase_b": -5.8901543617248535,
+    "season": 2025,
+    "team_id": "0b751b74-e572-43a0-b324-54eeefac4d5f",
+    "team_name": "William & Mary"
+  },
+  {
+    "actual": -19.2,
+    "baseline": -20.8,
+    "phase_a": -19.142118453979492,
+    "phase_b": -9.0347900390625,
+    "season": 2025,
+    "team_id": "76f1a5c6-76bb-4aee-be3b-87be20b9bf2e",
+    "team_name": "Florida A&M"
+  },
+  {
+    "actual": -18.5,
+    "baseline": -23.5,
+    "phase_a": -22.557010650634766,
+    "phase_b": -14.911887168884277,
+    "season": 2025,
+    "team_id": "38cf12f8-b27f-4c69-8f14-254930816a8b",
+    "team_name": "North Carolina A&T"
+  },
+  {
+    "actual": -2.3,
+    "baseline": -7.5,
+    "phase_a": -4.767573356628418,
+    "phase_b": -5.844593048095703,
+    "season": 2025,
+    "team_id": "26d69f75-49a0-4d07-968b-2b549e059c24",
+    "team_name": "Texas A&M Corpus Christi"
+  },
+  {
+    "actual": 26.3,
+    "baseline": 19.2,
+    "phase_a": 16.183595657348633,
+    "phase_b": 20.03166389465332,
+    "season": 2025,
+    "team_id": "ad741e6f-e15e-4f4d-8350-9973fa99916e",
+    "team_name": "Texas A&M"
+  },
+  {
+    "actual": -18.8,
+    "baseline": -21.6,
+    "phase_a": -17.567474365234375,
+    "phase_b": -14.687565803527832,
+    "season": 2025,
+    "team_id": "546e1911-9caa-499e-92f4-afa9c6b1e8c2",
+    "team_name": "East Texas A&M"
+  },
+  {
+    "actual": -31.0,
+    "baseline": -15.8,
+    "phase_a": -11.33032512664795,
+    "phase_b": -10.74379825592041,
+    "season": 2025,
+    "team_id": "cf6e9037-e27d-43e2-bbd6-6583598ce383",
+    "team_name": "Chicago St."
+  },
+  {
+    "actual": 13.3,
+    "baseline": 20.9,
+    "phase_a": 19.053356170654297,
+    "phase_b": 11.9038667678833,
+    "season": 2025,
+    "team_id": "0b9bc135-badd-4fc9-b7bc-bebccb08cbf1",
+    "team_name": "Utah"
+  },
+  {
+    "actual": -0.1,
+    "baseline": 5.7,
+    "phase_a": 6.017226219177246,
+    "phase_b": -0.9844933748245239,
+    "season": 2025,
+    "team_id": "10a27e98-10ab-4397-bb74-d3a92cc590dc",
+    "team_name": "Seattle"
+  },
+  {
+    "actual": 5.3,
+    "baseline": -2.6,
+    "phase_a": 2.4324872493743896,
+    "phase_b": -0.4172056317329407,
+    "season": 2025,
+    "team_id": "15de2bd3-69fa-45a8-b95c-4d5e91232ab9",
+    "team_name": "Lipscomb"
+  },
+  {
+    "actual": -10.2,
+    "baseline": -14.5,
+    "phase_a": -11.109197616577148,
+    "phase_b": -9.209680557250977,
+    "season": 2025,
+    "team_id": "17a3b4e9-cfab-43a8-b7ad-73508d4d890f",
+    "team_name": "Presbyterian"
+  },
+  {
+    "actual": 30.6,
+    "baseline": 13.8,
+    "phase_a": 14.375142097473145,
+    "phase_b": 16.89453887939453,
+    "season": 2025,
+    "team_id": "215ed27d-58e8-4e84-ab60-6d170d404304",
+    "team_name": "Maryland"
+  },
+  {
+    "actual": 6.7,
+    "baseline": 0.2,
+    "phase_a": 2.2891042232513428,
+    "phase_b": 0.12160257995128632,
+    "season": 2025,
+    "team_id": "2198dbfc-96fd-40be-99e1-e697e4c3d996",
+    "team_name": "Troy"
+  },
+  {
+    "actual": -7.0,
+    "baseline": -22.6,
+    "phase_a": -19.055837631225586,
+    "phase_b": -14.190167427062988,
+    "season": 2025,
+    "team_id": "23b31575-028e-4661-85ac-8d5835d6726f",
+    "team_name": "Northwestern St."
+  },
+  {
+    "actual": -0.8,
+    "baseline": -6.6,
+    "phase_a": -5.858169078826904,
+    "phase_b": -10.308136940002441,
+    "season": 2025,
+    "team_id": "2607ab7d-2f54-4540-9b2e-d27703407118",
+    "team_name": "Northern Colorado"
+  },
+  {
+    "actual": -16.2,
+    "baseline": -13.9,
+    "phase_a": -9.971244812011719,
+    "phase_b": -8.662373542785645,
+    "season": 2025,
+    "team_id": "2acb9682-4dbf-4e25-82b3-0124cb5c07cc",
+    "team_name": "Denver"
+  },
+  {
+    "actual": 13.7,
+    "baseline": 10.9,
+    "phase_a": 11.636491775512695,
+    "phase_b": 6.732365608215332,
+    "season": 2025,
+    "team_id": "2c8d46b6-8e8e-4229-85a4-0713fe1c6c4f",
+    "team_name": "McNeese St."
+  },
+  {
+    "actual": -0.6,
+    "baseline": 5.3,
+    "phase_a": 5.413610935211182,
+    "phase_b": -1.9733034372329712,
+    "season": 2025,
+    "team_id": "3280e439-7a98-4ebd-95dc-1a1281ccab00",
+    "team_name": "Charleston"
+  },
+  {
+    "actual": -1.3,
+    "baseline": 2.0,
+    "phase_a": 2.1323599815368652,
+    "phase_b": -5.291755676269531,
+    "season": 2025,
+    "team_id": "33176e8c-5f9d-4bcb-8c56-9a0a5f7d7f1c",
+    "team_name": "UNC Greensboro"
+  },
+  {
+    "actual": -7.7,
+    "baseline": -23.8,
+    "phase_a": -18.844430923461914,
+    "phase_b": -9.179930686950684,
+    "season": 2025,
+    "team_id": "84d66f69-10df-4b33-bbb9-5ba2ef708ea5",
+    "team_name": "Incarnate Word"
+  },
+  {
+    "actual": -21.5,
+    "baseline": -24.5,
+    "phase_a": -22.50919532775879,
+    "phase_b": -12.687777519226074,
+    "season": 2025,
+    "team_id": "8ce6b3fb-8bb0-49b5-acaa-caed76d542d7",
+    "team_name": "Central Arkansas"
+  },
+  {
+    "actual": -7.4,
+    "baseline": -14.9,
+    "phase_a": -14.67051887512207,
+    "phase_b": -9.627083778381348,
+    "season": 2025,
+    "team_id": "b1cbdf0c-474e-4b52-ae02-f856ceda214b",
+    "team_name": "SIU Edwardsville"
+  },
+  {
+    "actual": -11.2,
+    "baseline": -9.8,
+    "phase_a": -6.359652519226074,
+    "phase_b": -4.365516185760498,
+    "season": 2025,
+    "team_id": "c79306a4-5139-4f8b-8b55-21b42e22858f",
+    "team_name": "North Dakota"
+  },
+  {
+    "actual": 4.9,
+    "baseline": 8.8,
+    "phase_a": 9.77489185333252,
+    "phase_b": 12.227364540100098,
+    "season": 2025,
+    "team_id": "00a52b15-70b5-47b1-86c6-8e30652728c0",
+    "team_name": "Loyola Chicago"
+  },
+  {
+    "actual": -7.9,
+    "baseline": -4.6,
+    "phase_a": -2.085977077484131,
+    "phase_b": -0.2543430030345917,
+    "season": 2025,
+    "team_id": "00aed6ff-2151-4d45-8b3c-776ebb0a51da",
+    "team_name": "Longwood"
+  },
+  {
+    "actual": -14.3,
+    "baseline": -6.2,
+    "phase_a": -6.16813850402832,
+    "phase_b": -2.9704885482788086,
+    "season": 2025,
+    "team_id": "00b63e00-850e-4b09-b660-a5e698f46b61",
+    "team_name": "Saint Peter's"
+  },
+  {
+    "actual": -21.7,
+    "baseline": -17.7,
+    "phase_a": -15.828487396240234,
+    "phase_b": -10.82166862487793,
+    "season": 2025,
+    "team_id": "01300ab2-c4a7-4740-a5ac-3541d598620e",
+    "team_name": "Alcorn St."
+  },
+  {
+    "actual": -5.7,
+    "baseline": -12.3,
+    "phase_a": -8.779341697692871,
+    "phase_b": -7.639694690704346,
+    "season": 2025,
+    "team_id": "04119628-781b-40f9-ac7b-3c8fe82375cf",
+    "team_name": "Jacksonville"
+  },
+  {
+    "actual": -2.3,
+    "baseline": -4.3,
+    "phase_a": -7.130550384521484,
+    "phase_b": -3.4620423316955566,
+    "season": 2025,
+    "team_id": "051d13dc-5152-426a-affd-0cf01ef80268",
+    "team_name": "Cal Baptist"
+  },
+  {
+    "actual": -9.6,
+    "baseline": -28.8,
+    "phase_a": -22.99698829650879,
+    "phase_b": -9.550359725952148,
+    "season": 2025,
+    "team_id": "05aedf2a-3424-4acc-9537-4d52dccd6e02",
+    "team_name": "Pacific"
+  },
+  {
+    "actual": -15.5,
+    "baseline": -18.3,
+    "phase_a": -18.009510040283203,
+    "phase_b": -14.030404090881348,
+    "season": 2025,
+    "team_id": "05f1d3d6-8079-4142-beb6-628fd19c74ca",
+    "team_name": "Charleston Southern"
+  },
+  {
+    "actual": 33.2,
+    "baseline": 33.9,
+    "phase_a": 32.07223129272461,
+    "phase_b": 22.37504005432129,
+    "season": 2025,
+    "team_id": "09fca7ef-baed-4af0-a553-465ae1160049",
+    "team_name": "Arizona"
+  },
+  {
+    "actual": 3.9,
+    "baseline": 9.3,
+    "phase_a": 9.112432479858398,
+    "phase_b": 0.44666215777397156,
+    "season": 2025,
+    "team_id": "0c2a9ebe-8c6a-44ec-8643-1dbac7642ab9",
+    "team_name": "Louisiana Tech"
+  },
+  {
+    "actual": -22.2,
+    "baseline": -6.4,
+    "phase_a": -8.516202926635742,
+    "phase_b": -11.470067977905273,
+    "season": 2025,
+    "team_id": "0c8ee784-d7e9-4ac4-b0c7-3ca89567c515",
+    "team_name": "Fairfield"
+  },
+  {
+    "actual": 17.9,
+    "baseline": 17.2,
+    "phase_a": 19.01224136352539,
+    "phase_b": 20.652469635009766,
+    "season": 2025,
+    "team_id": "101749c8-ec05-4370-a95b-47f56c433623",
+    "team_name": "Iowa"
+  },
+  {
+    "actual": -6.1,
+    "baseline": -12.8,
+    "phase_a": -10.656534194946289,
+    "phase_b": -9.467193603515625,
+    "season": 2025,
+    "team_id": "113341aa-9630-4951-b161-71419ed62dbc",
+    "team_name": "Queens"
+  },
+  {
+    "actual": 12.1,
+    "baseline": 14.1,
+    "phase_a": 14.826539993286133,
+    "phase_b": 16.188007354736328,
+    "season": 2025,
+    "team_id": "115916ea-f145-4974-a257-5bb24f7c1ccc",
+    "team_name": "South Carolina"
+  },
+  {
+    "actual": 15.8,
+    "baseline": 16.2,
+    "phase_a": 17.895193099975586,
+    "phase_b": 16.225339889526367,
+    "season": 2025,
+    "team_id": "125fc4dc-8f42-45a8-b23a-3e50f4620499",
+    "team_name": "San Francisco"
+  },
+  {
+    "actual": 28.1,
+    "baseline": 8.6,
+    "phase_a": 11.500993728637695,
+    "phase_b": 21.226478576660156,
+    "season": 2025,
+    "team_id": "1394e3ce-706d-4097-9aaf-cad5d38aa5a0",
+    "team_name": "Michigan"
+  },
+  {
+    "actual": 13.4,
+    "baseline": 12.1,
+    "phase_a": 8.857488632202148,
+    "phase_b": 7.59868860244751,
+    "season": 2025,
+    "team_id": "1471dc4c-9cc0-4d35-84a1-3c61d9669d77",
+    "team_name": "Stanford"
+  },
+  {
+    "actual": 23.6,
+    "baseline": 19.9,
+    "phase_a": 21.012025833129883,
+    "phase_b": 26.143835067749023,
+    "season": 2025,
+    "team_id": "155c1dd9-ba93-42ee-a28c-238768724494",
+    "team_name": "Mississippi St."
+  },
+  {
+    "actual": -19.6,
+    "baseline": -24.6,
+    "phase_a": -23.589191436767578,
+    "phase_b": -20.758798599243164,
+    "season": 2025,
+    "team_id": "16aca559-5828-43a9-ada9-f35f973f4863",
+    "team_name": "Detroit Mercy"
+  },
+  {
+    "actual": -19.3,
+    "baseline": -13.0,
+    "phase_a": -9.192281723022461,
+    "phase_b": -4.95164155960083,
+    "season": 2025,
+    "team_id": "1814170b-a11b-4328-99b6-082f1e76f5c5",
+    "team_name": "Howard"
+  },
+  {
+    "actual": 4.8,
+    "baseline": -1.2,
+    "phase_a": 0.40057873725891113,
+    "phase_b": 10.369842529296875,
+    "season": 2025,
+    "team_id": "19b40071-00ca-4d8a-8188-a03d635e9811",
+    "team_name": "Saint Louis"
+  },
+  {
+    "actual": 26.6,
+    "baseline": 27.3,
+    "phase_a": 27.200979232788086,
+    "phase_b": 29.513200759887695,
+    "season": 2025,
+    "team_id": "1ac84e49-be83-4e9a-b4a7-0fb0b7465b32",
+    "team_name": "Baylor"
+  },
+  {
+    "actual": 0.0,
+    "baseline": -6.7,
+    "phase_a": -4.843157768249512,
+    "phase_b": -4.481164932250977,
+    "season": 2025,
+    "team_id": "1acd2c41-6945-469b-b33f-3c7b30f8359b",
+    "team_name": "Milwaukee"
+  },
+  {
+    "actual": 27.4,
+    "baseline": 23.5,
+    "phase_a": 20.64543914794922,
+    "phase_b": 21.380462646484375,
+    "season": 2025,
+    "team_id": "1b0dd005-3190-4ca9-b74d-111343f2fce0",
+    "team_name": "Kansas"
+  },
+  {
+    "actual": -14.9,
+    "baseline": -17.8,
+    "phase_a": -12.223090171813965,
+    "phase_b": -11.351150512695312,
+    "season": 2025,
+    "team_id": "1b1fcea3-d0ee-4307-b5a5-4c2a4a591484",
+    "team_name": "Bethune Cookman"
+  },
+  {
+    "actual": -12.2,
+    "baseline": -8.3,
+    "phase_a": -8.118635177612305,
+    "phase_b": -1.852793574333191,
+    "season": 2025,
+    "team_id": "1cabfd4b-0114-490e-8d0f-1257cd7f0ae1",
+    "team_name": "Bowling Green"
+  },
+  {
+    "actual": 7.1,
+    "baseline": 6.5,
+    "phase_a": 7.625247001647949,
+    "phase_b": 4.693434715270996,
+    "season": 2025,
+    "team_id": "1d3cac70-c7f5-47ea-bb26-00ba78e1acbd",
+    "team_name": "Northern Iowa"
+  },
+  {
+    "actual": -9.7,
+    "baseline": 2.6,
+    "phase_a": 1.3584403991699219,
+    "phase_b": -9.316672325134277,
+    "season": 2025,
+    "team_id": "228bf81e-d4c4-4b81-9b51-74ff2fd3f7c3",
+    "team_name": "Toledo"
+  },
+  {
+    "actual": -11.9,
+    "baseline": -9.9,
+    "phase_a": -7.697924613952637,
+    "phase_b": -7.129738807678223,
+    "season": 2025,
+    "team_id": "238b3f68-0b29-4056-97f6-6c10a093cd62",
+    "team_name": "North Florida"
+  },
+  {
+    "actual": 3.3,
+    "baseline": 2.6,
+    "phase_a": 3.979698657989502,
+    "phase_b": 2.117495059967041,
+    "season": 2025,
+    "team_id": "2408f22b-e753-4c5a-9353-be75a4fb2164",
+    "team_name": "Wichita St."
+  },
+  {
+    "actual": -14.8,
+    "baseline": -10.2,
+    "phase_a": -7.505077362060547,
+    "phase_b": -3.391820192337036,
+    "season": 2025,
+    "team_id": "2493388c-6fee-41f1-90b0-e82a447a607a",
+    "team_name": "Southern Utah"
+  },
+  {
+    "actual": 22.0,
+    "baseline": 11.5,
+    "phase_a": 13.959634780883789,
+    "phase_b": 16.994281768798828,
+    "season": 2025,
+    "team_id": "25f32a40-1a9b-47e3-ab20-74659cba9520",
+    "team_name": "Georgia"
+  },
+  {
+    "actual": -0.8,
+    "baseline": 12.6,
+    "phase_a": 14.275847434997559,
+    "phase_b": 13.326192855834961,
+    "season": 2025,
+    "team_id": "2851d469-fe75-448e-9d6b-4bde7ec96e06",
+    "team_name": "Miami FL"
+  },
+  {
+    "actual": -30.4,
+    "baseline": -30.5,
+    "phase_a": -29.83892250061035,
+    "phase_b": -25.305583953857422,
+    "season": 2025,
+    "team_id": "28e39e04-5ba3-41eb-808c-3ab653c2ef06",
+    "team_name": "Coppin St."
+  },
+  {
+    "actual": -10.4,
+    "baseline": -0.7,
+    "phase_a": 0.853360652923584,
+    "phase_b": -1.8321619033813477,
+    "season": 2025,
+    "team_id": "29fcbb70-fa3c-4806-8768-15b5ec4a8449",
+    "team_name": "UC Davis"
+  },
+  {
+    "actual": -14.2,
+    "baseline": -14.4,
+    "phase_a": -11.487990379333496,
+    "phase_b": -13.145634651184082,
+    "season": 2025,
+    "team_id": "2aed7aac-f38b-4fae-84ae-9e9c9ac71a3f",
+    "team_name": "Boston University"
+  },
+  {
+    "actual": 3.3,
+    "baseline": -4.0,
+    "phase_a": -1.2879834175109863,
+    "phase_b": -2.4531240463256836,
+    "season": 2025,
+    "team_id": "2ba07bf8-0306-417b-b7fe-b2d29b7d0eb1",
+    "team_name": "UC Santa Barbara"
+  },
+  {
+    "actual": -11.2,
+    "baseline": -13.4,
+    "phase_a": -9.727709770202637,
+    "phase_b": -7.310901641845703,
+    "season": 2025,
+    "team_id": "2ca82167-d915-492e-98e0-4ee592960583",
+    "team_name": "Georgia Southern"
+  },
+  {
+    "actual": -18.8,
+    "baseline": -28.7,
+    "phase_a": -27.6256046295166,
+    "phase_b": -13.188508033752441,
+    "season": 2025,
+    "team_id": "2d591dd3-d0ab-476f-aadc-1e636cb28d1e",
+    "team_name": "Stonehill"
+  },
+  {
+    "actual": -3.3,
+    "baseline": -6.7,
+    "phase_a": -3.8191823959350586,
+    "phase_b": -8.787601470947266,
+    "season": 2025,
+    "team_id": "2deaf391-9719-4c95-bb3c-acc6f8baba86",
+    "team_name": "Miami OH"
+  },
+  {
+    "actual": -0.8,
+    "baseline": -0.1,
+    "phase_a": 1.1222076416015625,
+    "phase_b": 0.8673220872879028,
+    "season": 2025,
+    "team_id": "2df495e6-2f8b-487f-b13a-e76f3397df82",
+    "team_name": "Illinois Chicago"
+  },
+  {
+    "actual": 36.7,
+    "baseline": 31.3,
+    "phase_a": 32.65431213378906,
+    "phase_b": 29.90748405456543,
+    "season": 2025,
+    "team_id": "2e49ce6d-63ef-45d9-9048-67fcdb01a46f",
+    "team_name": "Tennessee"
+  },
+  {
+    "actual": 0.7,
+    "baseline": -11.6,
+    "phase_a": -12.376993179321289,
+    "phase_b": -8.747576713562012,
+    "season": 2025,
+    "team_id": "2eaab3a4-18f9-4a39-a5ce-abf063bdeef9",
+    "team_name": "North Alabama"
+  },
+  {
+    "actual": -4.8,
+    "baseline": 2.5,
+    "phase_a": 0.8099033832550049,
+    "phase_b": -7.283155918121338,
+    "season": 2025,
+    "team_id": "2ed44d95-e306-4823-a4c3-196ffb777766",
+    "team_name": "Missouri St."
+  },
+  {
+    "actual": 19.3,
+    "baseline": 21.4,
+    "phase_a": 21.937210083007812,
+    "phase_b": 19.311504364013672,
+    "season": 2025,
+    "team_id": "2f0bd8d9-4435-45ed-9efe-045f835c15a8",
+    "team_name": "Pittsburgh"
+  },
+  {
+    "actual": -11.3,
+    "baseline": -17.1,
+    "phase_a": -12.14140510559082,
+    "phase_b": -8.525915145874023,
+    "season": 2025,
+    "team_id": "2f2d6799-40af-4256-9dd9-412be50aa14f",
+    "team_name": "Idaho"
+  },
+  {
+    "actual": 11.5,
+    "baseline": 13.7,
+    "phase_a": 14.486806869506836,
+    "phase_b": 14.95974349975586,
+    "season": 2025,
+    "team_id": "2f522e9f-f586-4f8b-816f-a83d9e6231fa",
+    "team_name": "Minnesota"
+  },
+  {
+    "actual": -12.1,
+    "baseline": -12.3,
+    "phase_a": -10.158024787902832,
+    "phase_b": -6.610670566558838,
+    "season": 2025,
+    "team_id": "31108a77-31cf-4228-9c6c-3a9665e9e17a",
+    "team_name": "Portland"
+  },
+  {
+    "actual": -14.7,
+    "baseline": -17.8,
+    "phase_a": -13.145523071289062,
+    "phase_b": -14.007203102111816,
+    "season": 2025,
+    "team_id": "312a943b-3a6a-4f8e-96a3-02cf6ff38b41",
+    "team_name": "Navy"
+  },
+  {
+    "actual": -0.1,
+    "baseline": -2.3,
+    "phase_a": -2.922971725463867,
+    "phase_b": -6.8471360206604,
+    "season": 2025,
+    "team_id": "324e37b8-f52e-449b-909c-366c81488fea",
+    "team_name": "Kent St."
+  },
+  {
+    "actual": -13.9,
+    "baseline": -13.6,
+    "phase_a": -12.579550743103027,
+    "phase_b": -15.715557098388672,
+    "season": 2025,
+    "team_id": "33a4f970-bbcb-47ad-9bfa-ae6f0eaf792f",
+    "team_name": "Texas Southern"
+  },
+  {
+    "actual": 7.2,
+    "baseline": 2.8,
+    "phase_a": 2.7149906158447266,
+    "phase_b": -1.6334673166275024,
+    "season": 2025,
+    "team_id": "3457262b-c7da-4834-a20d-ad6be302a671",
+    "team_name": "High Point"
+  },
+  {
+    "actual": 19.7,
+    "baseline": 15.3,
+    "phase_a": 15.311738967895508,
+    "phase_b": 22.01980972290039,
+    "season": 2025,
+    "team_id": "350fe1ba-284f-4709-8cdd-3f745fcff0f8",
+    "team_name": "Xavier"
+  },
+  {
+    "actual": 11.3,
+    "baseline": 9.7,
+    "phase_a": 11.990565299987793,
+    "phase_b": 14.976349830627441,
+    "season": 2025,
+    "team_id": "35d0a28f-e3d7-43ca-90cc-daaf0b7c278e",
+    "team_name": "Saint Joseph's"
+  },
+  {
+    "actual": -3.9,
+    "baseline": -9.4,
+    "phase_a": -6.7650346755981445,
+    "phase_b": -7.218290328979492,
+    "season": 2025,
+    "team_id": "371811fe-0533-4539-97b1-b56f642d0fd9",
+    "team_name": "Lamar"
+  },
+  {
+    "actual": 4.0,
+    "baseline": -9.0,
+    "phase_a": -5.186312198638916,
+    "phase_b": -1.791775107383728,
+    "season": 2025,
+    "team_id": "375514f8-f93e-4eec-ae0b-6615ec954e45",
+    "team_name": "South Alabama"
+  },
+  {
+    "actual": -12.0,
+    "baseline": -23.6,
+    "phase_a": -19.582225799560547,
+    "phase_b": -12.31081771850586,
+    "season": 2025,
+    "team_id": "39decbb3-b24d-444c-970a-39aa53a01ef6",
+    "team_name": "Tennessee Tech"
+  },
+  {
+    "actual": 24.4,
+    "baseline": 30.3,
+    "phase_a": 26.604719161987305,
+    "phase_b": 15.993842124938965,
+    "season": 2025,
+    "team_id": "3a30d561-24be-4bfa-8d8d-75e645c4ad5f",
+    "team_name": "Creighton"
+  },
+  {
+    "actual": -8.0,
+    "baseline": -22.6,
+    "phase_a": -24.168270111083984,
+    "phase_b": -11.130210876464844,
+    "season": 2025,
+    "team_id": "3a4357d0-0685-439d-863f-f854c35e4c42",
+    "team_name": "Hampton"
+  },
+  {
+    "actual": -23.1,
+    "baseline": -14.4,
+    "phase_a": -12.337323188781738,
+    "phase_b": -9.47349739074707,
+    "season": 2025,
+    "team_id": "3bdd846d-463f-4ddf-8719-13ed1e3f2634",
+    "team_name": "Wagner"
+  },
+  {
+    "actual": 2.7,
+    "baseline": -2.1,
+    "phase_a": 1.1657280921936035,
+    "phase_b": 4.861661434173584,
+    "season": 2025,
+    "team_id": "3d25723a-661f-48c9-9c5f-db713077997a",
+    "team_name": "Utah Valley"
+  },
+  {
+    "actual": -16.6,
+    "baseline": -1.7,
+    "phase_a": -1.174816608428955,
+    "phase_b": -1.3973770141601562,
+    "season": 2025,
+    "team_id": "3e3e940b-dd81-42f3-88f8-4e988278be04",
+    "team_name": "Louisiana"
+  },
+  {
+    "actual": -6.2,
+    "baseline": -19.8,
+    "phase_a": -17.493091583251953,
+    "phase_b": -12.307945251464844,
+    "season": 2025,
+    "team_id": "401408f8-2ce4-4ef1-97c2-5a68c979ec7e",
+    "team_name": "Dartmouth"
+  },
+  {
+    "actual": 11.9,
+    "baseline": 22.9,
+    "phase_a": 17.9959774017334,
+    "phase_b": 13.403244972229004,
+    "season": 2025,
+    "team_id": "409dd213-f612-4ab7-a0ae-8060dd9a6ef4",
+    "team_name": "Colorado"
+  },
+  {
+    "actual": 15.6,
+    "baseline": 15.8,
+    "phase_a": 12.85312271118164,
+    "phase_b": 10.057523727416992,
+    "season": 2025,
+    "team_id": "424f7a7a-158f-4ad0-adb1-4b3ebe25b11e",
+    "team_name": "Butler"
+  },
+  {
+    "actual": 30.1,
+    "baseline": 24.1,
+    "phase_a": 24.457727432250977,
+    "phase_b": 22.65761947631836,
+    "season": 2025,
+    "team_id": "439b6cee-3be6-4471-bddf-f7cb8c69cc85",
+    "team_name": "Michigan St."
+  },
+  {
+    "actual": -15.2,
+    "baseline": -18.4,
+    "phase_a": -16.23011589050293,
+    "phase_b": -10.842560768127441,
+    "season": 2025,
+    "team_id": "4494a75c-3ddb-41cf-b75c-67fb9c0537c9",
+    "team_name": "Eastern Michigan"
+  },
+  {
+    "actual": -11.6,
+    "baseline": -5.3,
+    "phase_a": -3.686605453491211,
+    "phase_b": -9.32924747467041,
+    "season": 2025,
+    "team_id": "45959b35-f1e9-462f-aecf-565395a6fb6d",
+    "team_name": "Air Force"
+  },
+  {
+    "actual": 9.2,
+    "baseline": 13.4,
+    "phase_a": 14.935997009277344,
+    "phase_b": 11.780779838562012,
+    "season": 2025,
+    "team_id": "48a6c30c-21c1-4d12-ac7f-590a1fdb0238",
+    "team_name": "Washington"
+  },
+  {
+    "actual": -16.5,
+    "baseline": -26.4,
+    "phase_a": -24.761810302734375,
+    "phase_b": -21.967496871948242,
+    "season": 2025,
+    "team_id": "48fce6fa-2dd6-4fad-b5ca-cf5cccdc3fa1",
+    "team_name": "Saint Francis"
+  },
+  {
+    "actual": -4.3,
+    "baseline": -6.2,
+    "phase_a": -5.5533552169799805,
+    "phase_b": -4.153956890106201,
+    "season": 2025,
+    "team_id": "4928acd4-6738-4045-be81-20132f6471c8",
+    "team_name": "Texas St."
+  },
+  {
+    "actual": 28.4,
+    "baseline": 41.0,
+    "phase_a": 38.2652702331543,
+    "phase_b": 30.907196044921875,
+    "season": 2025,
+    "team_id": "4a01023d-3637-4ac5-bf1f-37c08b2438a5",
+    "team_name": "Connecticut"
+  },
+  {
+    "actual": -28.9,
+    "baseline": -9.9,
+    "phase_a": -12.762380599975586,
+    "phase_b": -11.944945335388184,
+    "season": 2025,
+    "team_id": "4aa110b4-c8f4-438d-b44c-2d6a5c74ab8e",
+    "team_name": "The Citadel"
+  },
+  {
+    "actual": 9.7,
+    "baseline": 6.9,
+    "phase_a": 4.390554428100586,
+    "phase_b": 8.630631446838379,
+    "season": 2025,
+    "team_id": "4b83e4dc-410f-4835-a8a4-8ccffc29e016",
+    "team_name": "Notre Dame"
+  },
+  {
+    "actual": 5.9,
+    "baseline": 1.1,
+    "phase_a": 3.2762320041656494,
+    "phase_b": -8.324760437011719,
+    "season": 2025,
+    "team_id": "4b962e36-92f2-493d-a9d8-e62b725d5b76",
+    "team_name": "UNC Wilmington"
+  },
+  {
+    "actual": -10.9,
+    "baseline": -16.7,
+    "phase_a": -12.801790237426758,
+    "phase_b": -12.38598918914795,
+    "season": 2025,
+    "team_id": "4bbf6d9b-f4c6-4008-835e-8c31bf5324f2",
+    "team_name": "Northern Arizona"
+  },
+  {
+    "actual": 13.8,
+    "baseline": 11.8,
+    "phase_a": 13.117908477783203,
+    "phase_b": 22.31330680847168,
+    "season": 2025,
+    "team_id": "4c073afb-cc2c-4ed2-bd8f-2f545ae1bea5",
+    "team_name": "Kansas St."
+  },
+  {
+    "actual": 10.6,
+    "baseline": 12.3,
+    "phase_a": 9.996976852416992,
+    "phase_b": 2.097625970840454,
+    "season": 2025,
+    "team_id": "4c4cb93b-7b16-46b7-9d21-5ff908de25a6",
+    "team_name": "UNLV"
+  },
+  {
+    "actual": 15.7,
+    "baseline": 13.5,
+    "phase_a": 11.646767616271973,
+    "phase_b": 5.151431083679199,
+    "season": 2025,
+    "team_id": "4cf09375-7f70-4a97-934a-050f2304cc8d",
+    "team_name": "Penn St."
+  },
+  {
+    "actual": -10.2,
+    "baseline": -4.4,
+    "phase_a": -2.5334854125976562,
+    "phase_b": -1.1113840341567993,
+    "season": 2025,
+    "team_id": "4e6747c9-6a64-4fc5-b96c-e38ea635f22c",
+    "team_name": "Abilene Christian"
+  },
+  {
+    "actual": 16.7,
+    "baseline": 14.1,
+    "phase_a": 15.89276123046875,
+    "phase_b": 15.991162300109863,
+    "season": 2025,
+    "team_id": "4e9067f6-7760-4a2a-ba37-273c77915540",
+    "team_name": "Memphis"
+  },
+  {
+    "actual": -6.5,
+    "baseline": -22.7,
+    "phase_a": -19.601669311523438,
+    "phase_b": -18.22280502319336,
+    "season": 2025,
+    "team_id": "5091ac5b-fcb1-423a-9cf2-0981de634633",
+    "team_name": "Cal Poly"
+  },
+  {
+    "actual": 9.0,
+    "baseline": 15.7,
+    "phase_a": 15.584153175354004,
+    "phase_b": 11.059209823608398,
+    "season": 2025,
+    "team_id": "51a31921-d3f2-4514-821c-23df38e74559",
+    "team_name": "Virginia"
+  },
+  {
+    "actual": -10.3,
+    "baseline": -7.3,
+    "phase_a": -5.653653144836426,
+    "phase_b": -3.436682939529419,
+    "season": 2025,
+    "team_id": "52739295-a20d-42ea-b09c-a1e17be40d02",
+    "team_name": "Gardner Webb"
+  },
+  {
+    "actual": -7.4,
+    "baseline": 0.1,
+    "phase_a": -0.47191405296325684,
+    "phase_b": 5.44873046875,
+    "season": 2025,
+    "team_id": "5368fba0-1d0f-4310-9dea-c25c58762dd1",
+    "team_name": "Fordham"
+  },
+  {
+    "actual": -18.4,
+    "baseline": -18.0,
+    "phase_a": -13.802022933959961,
+    "phase_b": -8.494613647460938,
+    "season": 2025,
+    "team_id": "536cd39b-cd0d-40f5-8b6d-7a490d196262",
+    "team_name": "Eastern Illinois"
+  },
+  {
+    "actual": 28.5,
+    "baseline": 5.2,
+    "phase_a": 7.461799621582031,
+    "phase_b": 12.134944915771484,
+    "season": 2025,
+    "team_id": "550c3333-8e82-49d4-b9c6-ae13db14a84f",
+    "team_name": "Missouri"
+  },
+  {
+    "actual": 1.8,
+    "baseline": -3.5,
+    "phase_a": -1.3626518249511719,
+    "phase_b": -2.3163905143737793,
+    "season": 2025,
+    "team_id": "57144631-7473-4b46-a437-8e2d8c760f87",
+    "team_name": "Rhode Island"
+  },
+  {
+    "actual": -22.6,
+    "baseline": -21.7,
+    "phase_a": -16.384109497070312,
+    "phase_b": -9.57535457611084,
+    "season": 2025,
+    "team_id": "57c91ea3-1f48-4879-a664-232fba59cb1e",
+    "team_name": "New Orleans"
+  },
+  {
+    "actual": 23.2,
+    "baseline": 20.3,
+    "phase_a": 19.95929718017578,
+    "phase_b": 12.567072868347168,
+    "season": 2025,
+    "team_id": "58113924-4aef-47a7-a675-cddc9e355cd5",
+    "team_name": "Oklahoma"
+  },
+  {
+    "actual": -1.3,
+    "baseline": -6.7,
+    "phase_a": -3.3837809562683105,
+    "phase_b": -2.4557607173919678,
+    "season": 2025,
+    "team_id": "58617cc8-94d5-4f69-a677-9ab4cdc52a33",
+    "team_name": "East Tennessee St."
+  },
+  {
+    "actual": 8.4,
+    "baseline": 8.0,
+    "phase_a": 10.731021881103516,
+    "phase_b": 15.154685020446777,
+    "season": 2025,
+    "team_id": "5ace87dd-23fb-4317-bc7f-8d80556ae6b4",
+    "team_name": "Georgia Tech"
+  },
+  {
+    "actual": 1.2,
+    "baseline": 0.1,
+    "phase_a": 2.95402455329895,
+    "phase_b": 5.906312465667725,
+    "season": 2025,
+    "team_id": "5bd874c9-de44-4954-a4f6-428ed3fde8a6",
+    "team_name": "Murray St."
+  },
+  {
+    "actual": 14.5,
+    "baseline": 12.7,
+    "phase_a": 10.559866905212402,
+    "phase_b": 10.744551658630371,
+    "season": 2025,
+    "team_id": "5cae196d-fd0c-4944-8120-41d5abecb290",
+    "team_name": "North Texas"
+  },
+  {
+    "actual": -5.4,
+    "baseline": -7.5,
+    "phase_a": -4.2251877784729,
+    "phase_b": 0.42106348276138306,
+    "season": 2025,
+    "team_id": "5f480384-0cfc-4e90-837d-db9cc8d292dd",
+    "team_name": "UC Riverside"
+  },
+  {
+    "actual": 20.4,
+    "baseline": 5.9,
+    "phase_a": 5.631494522094727,
+    "phase_b": 11.075244903564453,
+    "season": 2025,
+    "team_id": "5fcb12dd-e3b1-4e57-ac30-33da456cd5db",
+    "team_name": "West Virginia"
+  },
+  {
+    "actual": 18.7,
+    "baseline": 20.7,
+    "phase_a": 22.187957763671875,
+    "phase_b": 22.314115524291992,
+    "season": 2025,
+    "team_id": "6068f6c0-7e92-4dc4-9da8-1bfbdb60cf2c",
+    "team_name": "Nebraska"
+  },
+  {
+    "actual": 25.0,
+    "baseline": 25.2,
+    "phase_a": 22.620328903198242,
+    "phase_b": 25.24244499206543,
+    "season": 2025,
+    "team_id": "60ee2d19-003f-4603-a2ad-838b3e6d6cc0",
+    "team_name": "Marquette"
+  },
+  {
+    "actual": -15.7,
+    "baseline": -13.5,
+    "phase_a": -12.098959922790527,
+    "phase_b": -12.822982788085938,
+    "season": 2025,
+    "team_id": "629710d8-479a-4efa-b5f3-d77767ddce70",
+    "team_name": "UMBC"
+  },
+  {
+    "actual": -0.8,
+    "baseline": -2.1,
+    "phase_a": -3.1378674507141113,
+    "phase_b": 3.0847535133361816,
+    "season": 2025,
+    "team_id": "629ca4e3-9243-47ce-8a02-ee7fe38e857c",
+    "team_name": "Temple"
+  },
+  {
+    "actual": 1.6,
+    "baseline": -1.4,
+    "phase_a": 1.2787048816680908,
+    "phase_b": 0.6263172030448914,
+    "season": 2025,
+    "team_id": "632ba9bb-afd9-4b5c-9c3b-4e60816c8e4f",
+    "team_name": "George Washington"
+  },
+  {
+    "actual": -3.9,
+    "baseline": -6.8,
+    "phase_a": -5.342978000640869,
+    "phase_b": -4.469913005828857,
+    "season": 2025,
+    "team_id": "63627b20-aa4c-4e0d-bcfc-40a5fe150e8a",
+    "team_name": "Florida Gulf Coast"
+  },
+  {
+    "actual": 7.9,
+    "baseline": 0.8,
+    "phase_a": 2.367563247680664,
+    "phase_b": -2.242388963699341,
+    "season": 2025,
+    "team_id": "638757a6-508b-49af-b5d8-661c0059c04c",
+    "team_name": "Arkansas St."
+  },
+  {
+    "actual": -1.3,
+    "baseline": -2.7,
+    "phase_a": -0.23361587524414062,
+    "phase_b": 6.177012920379639,
+    "season": 2025,
+    "team_id": "639774dc-a89b-435f-80d2-4c65549fd3c9",
+    "team_name": "UTEP"
+  },
+  {
+    "actual": -15.2,
+    "baseline": -17.0,
+    "phase_a": -14.465896606445312,
+    "phase_b": -10.30643367767334,
+    "season": 2025,
+    "team_id": "63eb578d-eef3-448b-b0ab-b4892ef058e0",
+    "team_name": "Lafayette"
+  },
+  {
+    "actual": 24.6,
+    "baseline": 19.0,
+    "phase_a": 19.97800636291504,
+    "phase_b": 26.487346649169922,
+    "season": 2025,
+    "team_id": "644a0213-9ca5-4238-af33-7c8ed45fc88b",
+    "team_name": "Ohio St."
+  },
+  {
+    "actual": 15.6,
+    "baseline": 20.9,
+    "phase_a": 21.32179832458496,
+    "phase_b": 22.147705078125,
+    "season": 2025,
+    "team_id": "64c5c3a9-f1f6-4f48-b571-1de27621f06c",
+    "team_name": "Wake Forest"
+  },
+  {
+    "actual": -0.7,
+    "baseline": -13.6,
+    "phase_a": -9.189300537109375,
+    "phase_b": -4.2251973152160645,
+    "season": 2025,
+    "team_id": "65c68c5f-fc3b-4781-a912-2a4b17be699e",
+    "team_name": "New Mexico St."
+  },
+  {
+    "actual": -0.5,
+    "baseline": 13.9,
+    "phase_a": 9.208041191101074,
+    "phase_b": -4.877900123596191,
+    "season": 2025,
+    "team_id": "65cf0d8a-0a5f-4572-8516-53809f66ba44",
+    "team_name": "Boston College"
+  },
+  {
+    "actual": -3.6,
+    "baseline": -6.0,
+    "phase_a": -1.6475791931152344,
+    "phase_b": -5.464108467102051,
+    "season": 2025,
+    "team_id": "696e6eb5-b8dd-4d44-8780-1e6c678615bd",
+    "team_name": "Cleveland St."
+  },
+  {
+    "actual": -1.2,
+    "baseline": 11.4,
+    "phase_a": 11.748950958251953,
+    "phase_b": 4.6913299560546875,
+    "season": 2025,
+    "team_id": "69e6a4c4-bb68-4c30-86d8-3cf7d51c7db7",
+    "team_name": "South Florida"
+  },
+  {
+    "actual": -8.9,
+    "baseline": -11.1,
+    "phase_a": -11.476061820983887,
+    "phase_b": -8.022439956665039,
+    "season": 2025,
+    "team_id": "6c5c20e6-a076-4fbd-b77d-61a1c7a3c5a4",
+    "team_name": "Central Michigan"
+  },
+  {
+    "actual": -8.0,
+    "baseline": -19.3,
+    "phase_a": -14.696718215942383,
+    "phase_b": -13.941518783569336,
+    "season": 2025,
+    "team_id": "6cc29af2-0d45-4399-b571-caa43e20e554",
+    "team_name": "South Dakota"
+  },
+  {
+    "actual": 40.2,
+    "baseline": 21.7,
+    "phase_a": 23.512462615966797,
+    "phase_b": 25.64413070678711,
+    "season": 2025,
+    "team_id": "6d3e1830-dbbe-4e70-b7e9-1eb765f0acf8",
+    "team_name": "Florida"
+  },
+  {
+    "actual": -21.1,
+    "baseline": -7.5,
+    "phase_a": -6.467942237854004,
+    "phase_b": -5.171016693115234,
+    "season": 2025,
+    "team_id": "6d9d7d3f-973c-4c5b-9fcb-6a018ac7ac2b",
+    "team_name": "Cal St. Fullerton"
+  },
+  {
+    "actual": -4.0,
+    "baseline": -1.5,
+    "phase_a": 0.20783329010009766,
+    "phase_b": 2.512019157409668,
+    "season": 2025,
+    "team_id": "6eb0ebaa-8c99-466d-8fad-68b897f2a9e2",
+    "team_name": "Sam Houston St."
+  },
+  {
+    "actual": 13.4,
+    "baseline": 22.8,
+    "phase_a": 24.441726684570312,
+    "phase_b": 24.24403190612793,
+    "season": 2025,
+    "team_id": "7048a12e-ec8b-4bf0-a475-1316775a4964",
+    "team_name": "Dayton"
+  },
+  {
+    "actual": 14.2,
+    "baseline": 2.5,
+    "phase_a": 7.2159929275512695,
+    "phase_b": 5.360828399658203,
+    "season": 2025,
+    "team_id": "717f3cf5-bc65-4a66-8f05-191decfbf380",
+    "team_name": "Liberty"
+  },
+  {
+    "actual": -22.5,
+    "baseline": -23.1,
+    "phase_a": -20.056686401367188,
+    "phase_b": -15.919857025146484,
+    "season": 2025,
+    "team_id": "7293bb2a-8d08-4752-b00d-104a80da0371",
+    "team_name": "Morgan St."
+  },
+  {
+    "actual": -21.1,
+    "baseline": -12.0,
+    "phase_a": -9.801865577697754,
+    "phase_b": -10.846563339233398,
+    "season": 2025,
+    "team_id": "73a80df0-15db-447f-b97c-418cc82a508d",
+    "team_name": "Western Illinois"
+  },
+  {
+    "actual": 7.6,
+    "baseline": 18.6,
+    "phase_a": 18.203937530517578,
+    "phase_b": 13.810762405395508,
+    "season": 2025,
+    "team_id": "73db7905-652b-4320-aac7-243f2f2f70a2",
+    "team_name": "N.C. State"
+  },
+  {
+    "actual": -24.3,
+    "baseline": -12.4,
+    "phase_a": -10.849489212036133,
+    "phase_b": -12.257271766662598,
+    "season": 2025,
+    "team_id": "74434c65-ac07-4a97-9998-737791311fb1",
+    "team_name": "Northern Illinois"
+  },
+  {
+    "actual": 19.6,
+    "baseline": 14.5,
+    "phase_a": 17.030176162719727,
+    "phase_b": 23.111143112182617,
+    "season": 2025,
+    "team_id": "754d9f26-9ca3-4bb8-8aa3-065bcf9ec6df",
+    "team_name": "USC"
+  },
+  {
+    "actual": 0.7,
+    "baseline": -3.8,
+    "phase_a": -1.042248249053955,
+    "phase_b": -3.0079424381256104,
+    "season": 2025,
+    "team_id": "76748a8f-7de8-46dc-b80c-a1a7fbcb84ea",
+    "team_name": "Wofford"
+  },
+  {
+    "actual": 31.9,
+    "baseline": 26.5,
+    "phase_a": 27.45499610900879,
+    "phase_b": 27.384490966796875,
+    "season": 2025,
+    "team_id": "7747d9fc-9e15-4b0f-911e-ba64828748ed",
+    "team_name": "Gonzaga"
+  },
+  {
+    "actual": -4.1,
+    "baseline": -6.5,
+    "phase_a": -5.771852493286133,
+    "phase_b": 1.9000065326690674,
+    "season": 2025,
+    "team_id": "79479954-cdbe-4601-a82c-35936960a7dd",
+    "team_name": "UTSA"
+  },
+  {
+    "actual": 0.3,
+    "baseline": -15.8,
+    "phase_a": -14.669052124023438,
+    "phase_b": -13.720386505126953,
+    "season": 2025,
+    "team_id": "79bf464f-0d3a-4992-b310-86d2abbc2244",
+    "team_name": "Robert Morris"
+  },
+  {
+    "actual": 1.8,
+    "baseline": -9.6,
+    "phase_a": -8.717248916625977,
+    "phase_b": -5.665960788726807,
+    "season": 2025,
+    "team_id": "7af1094c-c99d-43dd-b41a-1b72a81abfb3",
+    "team_name": "North Dakota St."
+  },
+  {
+    "actual": -11.0,
+    "baseline": -0.4,
+    "phase_a": 1.0371822118759155,
+    "phase_b": -0.2567301094532013,
+    "season": 2025,
+    "team_id": "7ca95dca-8ca9-42a6-b9a5-307d339df9b7",
+    "team_name": "Stephen F. Austin"
+  },
+  {
+    "actual": -16.7,
+    "baseline": -24.5,
+    "phase_a": -22.085453033447266,
+    "phase_b": -15.4242582321167,
+    "season": 2025,
+    "team_id": "7d57c2ad-190c-4c1b-8987-ab2007a42023",
+    "team_name": "Loyola MD"
+  },
+  {
+    "actual": 6.8,
+    "baseline": 6.4,
+    "phase_a": 9.096297264099121,
+    "phase_b": 11.541147232055664,
+    "season": 2025,
+    "team_id": "7eefd1e5-aea4-463e-ae74-c628b0fe170e",
+    "team_name": "UAB"
+  },
+  {
+    "actual": -2.2,
+    "baseline": -5.9,
+    "phase_a": -8.848134994506836,
+    "phase_b": -13.167546272277832,
+    "season": 2025,
+    "team_id": "7f63e419-1d15-4c08-84b6-dc393ca0146a",
+    "team_name": "Radford"
+  },
+  {
+    "actual": -16.1,
+    "baseline": -10.7,
+    "phase_a": -9.031776428222656,
+    "phase_b": -7.978498458862305,
+    "season": 2025,
+    "team_id": "8044cdf8-5fd0-47d9-8a07-8a29b2ca7b9a",
+    "team_name": "Lehigh"
+  },
+  {
+    "actual": -11.5,
+    "baseline": -7.2,
+    "phase_a": -6.554697036743164,
+    "phase_b": -10.144331932067871,
+    "season": 2025,
+    "team_id": "82ee0a8d-e51c-4a87-bd7b-72707ec8b342",
+    "team_name": "Marist"
+  },
+  {
+    "actual": 15.4,
+    "baseline": 8.8,
+    "phase_a": 6.747025012969971,
+    "phase_b": 6.367526054382324,
+    "season": 2025,
+    "team_id": "853125a0-ce88-45ba-9815-9387fac3d278",
+    "team_name": "Rutgers"
+  },
+  {
+    "actual": -11.9,
+    "baseline": -4.9,
+    "phase_a": -3.453982353210449,
+    "phase_b": -0.680515468120575,
+    "season": 2025,
+    "team_id": "873b654a-5825-415c-8a11-5e5b15bd2ac8",
+    "team_name": "Monmouth"
+  },
+  {
+    "actual": -17.4,
+    "baseline": -22.2,
+    "phase_a": -22.31788444519043,
+    "phase_b": -17.66162109375,
+    "season": 2025,
+    "team_id": "887d2364-968e-43c5-83af-c227595022bd",
+    "team_name": "Army"
+  },
+  {
+    "actual": -5.3,
+    "baseline": 10.1,
+    "phase_a": 9.897647857666016,
+    "phase_b": 8.172582626342773,
+    "season": 2025,
+    "team_id": "89949731-8bb3-45c7-a6f6-798934261b61",
+    "team_name": "Princeton"
+  },
+  {
+    "actual": -7.6,
+    "baseline": -8.9,
+    "phase_a": -6.926425933837891,
+    "phase_b": -3.946439743041992,
+    "season": 2025,
+    "team_id": "8a753611-1c3e-422d-8c6c-5721763b5574",
+    "team_name": "Northeastern"
+  },
+  {
+    "actual": -7.0,
+    "baseline": -3.6,
+    "phase_a": -0.8411288261413574,
+    "phase_b": -0.576292097568512,
+    "season": 2025,
+    "team_id": "8a7ae133-e612-4f1b-911a-a72870f8b4d6",
+    "team_name": "La Salle"
+  },
+  {
+    "actual": -6.5,
+    "baseline": -4.3,
+    "phase_a": -5.87359619140625,
+    "phase_b": -4.119539260864258,
+    "season": 2025,
+    "team_id": "8ae6c27f-063b-4e7b-bbfb-653f496560d6",
+    "team_name": "Brown"
+  },
+  {
+    "actual": -0.9,
+    "baseline": -2.7,
+    "phase_a": -1.1343774795532227,
+    "phase_b": 5.361618518829346,
+    "season": 2025,
+    "team_id": "8af88029-6520-4f85-a99b-0f10d820a167",
+    "team_name": "East Carolina"
+  },
+  {
+    "actual": -7.3,
+    "baseline": -25.9,
+    "phase_a": -20.552059173583984,
+    "phase_b": -16.594127655029297,
+    "season": 2025,
+    "team_id": "8b8c3790-682d-4010-b304-45ce213ad62f",
+    "team_name": "Southeast Missouri St."
+  },
+  {
+    "actual": 18.3,
+    "baseline": 9.5,
+    "phase_a": 10.89431381225586,
+    "phase_b": 3.7170069217681885,
+    "season": 2025,
+    "team_id": "8c121ba7-b028-4d29-8ac0-bfc3c1ff7b57",
+    "team_name": "Santa Clara"
+  },
+  {
+    "actual": -20.7,
+    "baseline": -19.2,
+    "phase_a": -16.776229858398438,
+    "phase_b": -18.00724983215332,
+    "season": 2025,
+    "team_id": "8cd2a215-aea9-48bb-babb-e5d8cf0cb9fd",
+    "team_name": "Southern Indiana"
+  },
+  {
+    "actual": -29.5,
+    "baseline": -8.1,
+    "phase_a": -7.668140411376953,
+    "phase_b": -11.375431060791016,
+    "season": 2025,
+    "team_id": "8e26bcb3-616b-4c7c-a709-bf30d2ddce41",
+    "team_name": "New Hampshire"
+  },
+  {
+    "actual": -14.3,
+    "baseline": -8.9,
+    "phase_a": -5.605908393859863,
+    "phase_b": -7.631308078765869,
+    "season": 2025,
+    "team_id": "8fce643e-75f7-4242-b565-2a4818e1eeba",
+    "team_name": "Ball St."
+  },
+  {
+    "actual": -15.7,
+    "baseline": -17.1,
+    "phase_a": -14.432313919067383,
+    "phase_b": -11.866430282592773,
+    "season": 2025,
+    "team_id": "92acff47-2510-4313-84af-f3cf5f3c0235",
+    "team_name": "Alabama St."
+  },
+  {
+    "actual": -14.4,
+    "baseline": -18.1,
+    "phase_a": -17.816932678222656,
+    "phase_b": -4.1253437995910645,
+    "season": 2025,
+    "team_id": "92b76481-ab53-4e96-a0ec-5f522c031417",
+    "team_name": "UT Rio Grande Valley"
+  },
+  {
+    "actual": -1.1,
+    "baseline": 20.0,
+    "phase_a": 17.581567764282227,
+    "phase_b": 9.304295539855957,
+    "season": 2025,
+    "team_id": "95466c2d-a184-48f8-849c-d6957bd1df52",
+    "team_name": "Seton Hall"
+  },
+  {
+    "actual": -15.3,
+    "baseline": -5.8,
+    "phase_a": -2.804600715637207,
+    "phase_b": -3.6650776863098145,
+    "season": 2025,
+    "team_id": "9611a021-de39-4ca5-8188-6387e4c99fbc",
+    "team_name": "Penn"
+  },
+  {
+    "actual": -11.1,
+    "baseline": -14.8,
+    "phase_a": -11.900869369506836,
+    "phase_b": -12.408714294433594,
+    "season": 2025,
+    "team_id": "99b16ea6-899f-484c-8a9d-b2b5bb872d9d",
+    "team_name": "Tennessee St."
+  },
+  {
+    "actual": 7.4,
+    "baseline": -8.5,
+    "phase_a": -4.430758476257324,
+    "phase_b": 11.29947280883789,
+    "season": 2025,
+    "team_id": "9b6f0f32-d8f1-4921-aad2-a16c420f3183",
+    "team_name": "DePaul"
+  },
+  {
+    "actual": 9.6,
+    "baseline": 6.5,
+    "phase_a": 7.052587032318115,
+    "phase_b": 10.425222396850586,
+    "season": 2025,
+    "team_id": "9c1431a3-21c9-46c9-8335-1b85a6022223",
+    "team_name": "Oklahoma St."
+  },
+  {
+    "actual": 17.9,
+    "baseline": 20.0,
+    "phase_a": 18.15791130065918,
+    "phase_b": 8.578614234924316,
+    "season": 2025,
+    "team_id": "9ccf2901-b49f-4aa3-8a4a-d59d017dfabc",
+    "team_name": "New Mexico"
+  },
+  {
+    "actual": 30.8,
+    "baseline": 27.5,
+    "phase_a": 27.168540954589844,
+    "phase_b": 21.47186851501465,
+    "season": 2025,
+    "team_id": "9cde2e64-799a-42f1-84dc-71779b1219f5",
+    "team_name": "Illinois"
+  },
+  {
+    "actual": 13.5,
+    "baseline": 19.8,
+    "phase_a": 19.373010635375977,
+    "phase_b": 15.748066902160645,
+    "season": 2025,
+    "team_id": "9f152b52-7847-49c3-83b6-8c68295d484a",
+    "team_name": "TCU"
+  },
+  {
+    "actual": -14.6,
+    "baseline": -9.1,
+    "phase_a": -9.603153228759766,
+    "phase_b": -10.966351509094238,
+    "season": 2025,
+    "team_id": "a4e0b7c0-e98b-4e65-9408-e26a9aedac8d",
+    "team_name": "Southern Miss"
+  },
+  {
+    "actual": -8.5,
+    "baseline": -15.6,
+    "phase_a": -13.716523170471191,
+    "phase_b": -13.946403503417969,
+    "season": 2025,
+    "team_id": "a55b69f4-dd79-46c3-9a31-9b9aa050e901",
+    "team_name": "Campbell"
+  },
+  {
+    "actual": -12.7,
+    "baseline": -7.5,
+    "phase_a": -5.2408599853515625,
+    "phase_b": -1.6824653148651123,
+    "season": 2025,
+    "team_id": "a64af70e-61a8-4777-8e8d-9a7815f78f3e",
+    "team_name": "Iona"
+  },
+  {
+    "actual": 17.6,
+    "baseline": 20.6,
+    "phase_a": 19.55380630493164,
+    "phase_b": 13.057391166687012,
+    "season": 2025,
+    "team_id": "a66213c2-5ad6-4d77-a7ec-85700a223ed1",
+    "team_name": "San Diego St."
+  },
+  {
+    "actual": 25.4,
+    "baseline": 17.6,
+    "phase_a": 17.603527069091797,
+    "phase_b": 19.581893920898438,
+    "season": 2025,
+    "team_id": "a7951831-d013-4591-8037-4212b4a85c3d",
+    "team_name": "Oregon"
+  },
+  {
+    "actual": 31.2,
+    "baseline": 30.4,
+    "phase_a": 29.189395904541016,
+    "phase_b": 30.923952102661133,
+    "season": 2025,
+    "team_id": "a7e91e1e-3644-4f3c-bda9-edddb9602a27",
+    "team_name": "Iowa St."
+  },
+  {
+    "actual": -9.4,
+    "baseline": -9.3,
+    "phase_a": -9.05889892578125,
+    "phase_b": -8.571264266967773,
+    "season": 2025,
+    "team_id": "a7f405f8-389a-4a00-bb71-6d07d48f4fe8",
+    "team_name": "Cal St. Bakersfield"
+  },
+  {
+    "actual": 20.0,
+    "baseline": 19.1,
+    "phase_a": 17.52197265625,
+    "phase_b": 9.236849784851074,
+    "season": 2025,
+    "team_id": "a9569511-9e5c-45d1-b958-3e29c52f612e",
+    "team_name": "Northwestern"
+  },
+  {
+    "actual": -9.6,
+    "baseline": -11.6,
+    "phase_a": -7.982568740844727,
+    "phase_b": -6.313523292541504,
+    "season": 2025,
+    "team_id": "ad9b8341-2ebd-49c4-8bf9-bf5d4811bc0c",
+    "team_name": "Southern"
+  },
+  {
+    "actual": 22.2,
+    "baseline": 3.5,
+    "phase_a": 2.5469369888305664,
+    "phase_b": -0.33852407336235046,
+    "season": 2025,
+    "team_id": "b1b6c3d6-c825-484c-a8fd-a4e0816d19fa",
+    "team_name": "UC San Diego"
+  },
+  {
+    "actual": 0.4,
+    "baseline": 1.2,
+    "phase_a": 3.036792278289795,
+    "phase_b": 2.4583561420440674,
+    "season": 2025,
+    "team_id": "b20b957b-b406-4f6d-8f7a-2f88e3b49bd5",
+    "team_name": "South Dakota St."
+  },
+  {
+    "actual": 14.9,
+    "baseline": 11.3,
+    "phase_a": 11.68366527557373,
+    "phase_b": 17.381244659423828,
+    "season": 2025,
+    "team_id": "b255fc28-3428-4006-adf1-9c1001ecb1a3",
+    "team_name": "LSU"
+  },
+  {
+    "actual": 4.7,
+    "baseline": 16.7,
+    "phase_a": 13.413357734680176,
+    "phase_b": 5.019986629486084,
+    "season": 2025,
+    "team_id": "b2d5fddd-b407-4fe6-9d70-e921ab7b7e1a",
+    "team_name": "Florida Atlantic"
+  },
+  {
+    "actual": 15.5,
+    "baseline": 13.9,
+    "phase_a": 13.548516273498535,
+    "phase_b": 17.491456985473633,
+    "season": 2025,
+    "team_id": "b4c9b613-0bc6-4295-b293-3b56c2020f1b",
+    "team_name": "UCF"
+  },
+  {
+    "actual": -13.9,
+    "baseline": -12.9,
+    "phase_a": -10.108795166015625,
+    "phase_b": -7.752376556396484,
+    "season": 2025,
+    "team_id": "b7c2bf0a-248a-40d4-aa1d-bf6329590a4f",
+    "team_name": "Western Michigan"
+  },
+  {
+    "actual": 19.6,
+    "baseline": 13.7,
+    "phase_a": 15.099493026733398,
+    "phase_b": 21.638940811157227,
+    "season": 2025,
+    "team_id": "b7f069ed-b9be-4147-b87e-fe1bef8386b4",
+    "team_name": "Indiana"
+  },
+  {
+    "actual": 8.1,
+    "baseline": 22.7,
+    "phase_a": 19.87388801574707,
+    "phase_b": 11.301698684692383,
+    "season": 2025,
+    "team_id": "b80e54ae-3b74-40f3-9954-a1b0805cd1e8",
+    "team_name": "Washington St."
+  },
+  {
+    "actual": -7.5,
+    "baseline": -16.0,
+    "phase_a": -12.065693855285645,
+    "phase_b": -8.265972137451172,
+    "season": 2025,
+    "team_id": "b9428966-4d6b-4db6-a403-5cd503366633",
+    "team_name": "South Carolina St."
+  },
+  {
+    "actual": 46.2,
+    "baseline": 29.5,
+    "phase_a": 31.1602783203125,
+    "phase_b": 33.67815017700195,
+    "season": 2025,
+    "team_id": "b9e1a15d-9de2-45e6-9fc8-b3444d1bc0b5",
+    "team_name": "Duke"
+  },
+  {
+    "actual": -19.3,
+    "baseline": -18.1,
+    "phase_a": -12.204630851745605,
+    "phase_b": -10.949256896972656,
+    "season": 2025,
+    "team_id": "ba18ddb3-432e-438e-a69a-4129a671b3b1",
+    "team_name": "Delaware St."
+  },
+  {
+    "actual": -10.0,
+    "baseline": 5.1,
+    "phase_a": 7.5369157791137695,
+    "phase_b": 5.120728015899658,
+    "season": 2025,
+    "team_id": "bb505898-cdd5-4c4e-9ea1-301ff6a4b981",
+    "team_name": "Vermont"
+  },
+  {
+    "actual": -15.1,
+    "baseline": -17.1,
+    "phase_a": -17.72925567626953,
+    "phase_b": -11.88578987121582,
+    "season": 2025,
+    "team_id": "be683752-ceea-4783-ae94-66be0178e1d1",
+    "team_name": "Jackson St."
+  },
+  {
+    "actual": -14.5,
+    "baseline": -11.8,
+    "phase_a": -8.994312286376953,
+    "phase_b": -8.310087203979492,
+    "season": 2025,
+    "team_id": "c0dfc734-0d40-4cba-86b5-fb2ad5c73da1",
+    "team_name": "Utah Tech"
+  },
+  {
+    "actual": -3.1,
+    "baseline": -11.5,
+    "phase_a": -10.486289024353027,
+    "phase_b": -10.296852111816406,
+    "season": 2025,
+    "team_id": "c3681649-6e1d-4bf8-9b47-1d2868dca3e9",
+    "team_name": "Valparaiso"
+  },
+  {
+    "actual": 3.8,
+    "baseline": 10.6,
+    "phase_a": 9.571770668029785,
+    "phase_b": 11.10236644744873,
+    "season": 2025,
+    "team_id": "c51998cc-ad65-43ec-88c6-a0f160ff7902",
+    "team_name": "Syracuse"
+  },
+  {
+    "actual": -10.0,
+    "baseline": -10.0,
+    "phase_a": -8.83709716796875,
+    "phase_b": -8.562140464782715,
+    "season": 2025,
+    "team_id": "c58166c3-f02a-4e33-9fd0-9fa7b0711d94",
+    "team_name": "Maine"
+  },
+  {
+    "actual": -6.6,
+    "baseline": -6.3,
+    "phase_a": -3.824162006378174,
+    "phase_b": -0.5294299125671387,
+    "season": 2025,
+    "team_id": "c58c3009-46ec-43bd-b27b-b0d683ab2cad",
+    "team_name": "UMKC"
+  },
+  {
+    "actual": -20.6,
+    "baseline": -15.2,
+    "phase_a": -13.055459976196289,
+    "phase_b": -10.719961166381836,
+    "season": 2025,
+    "team_id": "cb1440b2-adac-4775-96c8-c4f00641d353",
+    "team_name": "Sacramento St."
+  },
+  {
+    "actual": 20.3,
+    "baseline": 17.9,
+    "phase_a": 11.90250015258789,
+    "phase_b": -0.6870597004890442,
+    "season": 2025,
+    "team_id": "cc07b31b-464b-4cb9-89d2-ac26ffe3e5f4",
+    "team_name": "Colorado St."
+  },
+  {
+    "actual": -19.5,
+    "baseline": -15.0,
+    "phase_a": -13.063074111938477,
+    "phase_b": -14.759398460388184,
+    "season": 2025,
+    "team_id": "cd57c823-e9d8-49c1-bbe2-af9da08499bc",
+    "team_name": "North Carolina Central"
+  },
+  {
+    "actual": 28.5,
+    "baseline": 23.9,
+    "phase_a": 21.922903060913086,
+    "phase_b": 19.040327072143555,
+    "season": 2025,
+    "team_id": "cd9eea44-8a6c-4bd4-ad4d-74e461fdefd3",
+    "team_name": "Wisconsin"
+  },
+  {
+    "actual": -15.7,
+    "baseline": -24.5,
+    "phase_a": -24.36727523803711,
+    "phase_b": -20.10405921936035,
+    "season": 2025,
+    "team_id": "cf2f7a41-56d5-4c2a-b4f4-fb9d1c933b22",
+    "team_name": "LIU"
+  },
+  {
+    "actual": 10.1,
+    "baseline": 0.8,
+    "phase_a": 1.1795601844787598,
+    "phase_b": 11.438117027282715,
+    "season": 2025,
+    "team_id": "d2ae40ba-651b-4006-8b22-61c6b9ce0e33",
+    "team_name": "Georgetown"
+  },
+  {
+    "actual": -11.3,
+    "baseline": -12.4,
+    "phase_a": -13.788660049438477,
+    "phase_b": -7.28300666809082,
+    "season": 2025,
+    "team_id": "d74a1fb4-3afe-43b0-9bd1-7e0552ba73ed",
+    "team_name": "American"
+  },
+  {
+    "actual": 21.2,
+    "baseline": 14.1,
+    "phase_a": 15.904825210571289,
+    "phase_b": 11.38940143585205,
+    "season": 2025,
+    "team_id": "d7b7310f-6983-4a09-bb56-fda96e9f761d",
+    "team_name": "SMU"
+  },
+  {
+    "actual": -4.1,
+    "baseline": 1.1,
+    "phase_a": 1.1538379192352295,
+    "phase_b": -1.7386234998703003,
+    "season": 2025,
+    "team_id": "d8cd723a-1d76-4abe-be2e-516e52724947",
+    "team_name": "Towson"
+  },
+  {
+    "actual": -12.7,
+    "baseline": -21.8,
+    "phase_a": -19.685382843017578,
+    "phase_b": -12.252398490905762,
+    "season": 2025,
+    "team_id": "d8e747fb-453e-4894-9a8f-08598fead336",
+    "team_name": "Manhattan"
+  },
+  {
+    "actual": 24.8,
+    "baseline": 23.7,
+    "phase_a": 21.34748077392578,
+    "phase_b": 12.639871597290039,
+    "season": 2025,
+    "team_id": "da6142ab-a5fa-48a0-b6ec-864a8119be75",
+    "team_name": "Saint Mary's"
+  },
+  {
+    "actual": 2.7,
+    "baseline": 5.3,
+    "phase_a": 3.459191083908081,
+    "phase_b": -3.4609720706939697,
+    "season": 2025,
+    "team_id": "da828fff-cee9-4151-bc4d-983ee436f573",
+    "team_name": "Belmont"
+  },
+  {
+    "actual": 41.7,
+    "baseline": 32.6,
+    "phase_a": 30.964853286743164,
+    "phase_b": 18.141950607299805,
+    "season": 2025,
+    "team_id": "dac01aea-9f35-463a-9dce-75d4575160dd",
+    "team_name": "Auburn"
+  },
+  {
+    "actual": -6.3,
+    "baseline": -1.6,
+    "phase_a": 1.2664483785629272,
+    "phase_b": 3.9650537967681885,
+    "season": 2025,
+    "team_id": "db9d85a6-59a4-47ff-a287-b40442bf460b",
+    "team_name": "Tulsa"
+  },
+  {
+    "actual": -0.7,
+    "baseline": 6.7,
+    "phase_a": 3.793901205062866,
+    "phase_b": -2.0819644927978516,
+    "season": 2025,
+    "team_id": "dde8f534-10a1-430c-af83-43b026e7ab68",
+    "team_name": "Samford"
+  },
+  {
+    "actual": 3.8,
+    "baseline": -12.1,
+    "phase_a": -9.443266868591309,
+    "phase_b": -8.286291122436523,
+    "season": 2025,
+    "team_id": "dedb6ed5-06d8-4ba6-a1cc-e3134a2c7937",
+    "team_name": "Middle Tennessee"
+  },
+  {
+    "actual": -5.5,
+    "baseline": -0.5,
+    "phase_a": 2.4136908054351807,
+    "phase_b": -9.700809478759766,
+    "season": 2025,
+    "team_id": "df1d6c5c-77eb-4d21-b5dc-6cd579f74d2b",
+    "team_name": "Wright St."
+  },
+  {
+    "actual": -3.4,
+    "baseline": -6.6,
+    "phase_a": -7.254474639892578,
+    "phase_b": -6.161908149719238,
+    "season": 2025,
+    "team_id": "df2a7293-fc74-4f81-a93d-98c8989ea725",
+    "team_name": "Montana St."
+  },
+  {
+    "actual": 1.8,
+    "baseline": -5.2,
+    "phase_a": -1.6946170330047607,
+    "phase_b": 1.8634744882583618,
+    "season": 2025,
+    "team_id": "dfdc9d0d-4a83-4244-9c07-9b3660ba4f6f",
+    "team_name": "San Jose St."
+  },
+  {
+    "actual": 19.4,
+    "baseline": -0.8,
+    "phase_a": 0.05727982521057129,
+    "phase_b": 15.477370262145996,
+    "season": 2025,
+    "team_id": "e06623a6-8f03-43b1-83f4-b653f6819ea2",
+    "team_name": "Vanderbilt"
+  },
+  {
+    "actual": -8.1,
+    "baseline": -14.2,
+    "phase_a": -11.757965087890625,
+    "phase_b": -12.369670867919922,
+    "season": 2025,
+    "team_id": "e0cc707c-bdef-43a1-a3f0-c1ddfefdadd3",
+    "team_name": "FIU"
+  },
+  {
+    "actual": -6.0,
+    "baseline": -7.5,
+    "phase_a": -6.390127182006836,
+    "phase_b": -12.82831859588623,
+    "season": 2025,
+    "team_id": "e12ab562-dd12-4b55-909f-669834d3d963",
+    "team_name": "Eastern Kentucky"
+  },
+  {
+    "actual": -0.6,
+    "baseline": 12.0,
+    "phase_a": 10.443243980407715,
+    "phase_b": 2.443586826324463,
+    "season": 2025,
+    "team_id": "e1ef03af-e420-475d-8a35-c6e5380e9f6d",
+    "team_name": "James Madison"
+  },
+  {
+    "actual": 2.7,
+    "baseline": 4.4,
+    "phase_a": 3.8028719425201416,
+    "phase_b": -4.116737365722656,
+    "season": 2025,
+    "team_id": "e250c58f-f6a5-4da7-aff3-c6770b9a14da",
+    "team_name": "Cornell"
+  },
+  {
+    "actual": 26.3,
+    "baseline": 9.5,
+    "phase_a": 11.686850547790527,
+    "phase_b": 22.83380126953125,
+    "season": 2025,
+    "team_id": "e308f5e0-c422-490c-901a-575bb49f1c7e",
+    "team_name": "UCLA"
+  },
+  {
+    "actual": -8.1,
+    "baseline": -11.6,
+    "phase_a": -7.786397933959961,
+    "phase_b": -6.459628105163574,
+    "season": 2025,
+    "team_id": "e30e79ea-8947-4c58-9842-25781182ec2e",
+    "team_name": "Bucknell"
+  },
+  {
+    "actual": -15.9,
+    "baseline": -9.8,
+    "phase_a": -7.866167068481445,
+    "phase_b": -1.9655011892318726,
+    "season": 2025,
+    "team_id": "e3158bc2-1467-4311-8540-c4f77e10aab2",
+    "team_name": "Albany"
+  },
+  {
+    "actual": 19.6,
+    "baseline": 16.2,
+    "phase_a": 15.4673433303833,
+    "phase_b": 6.057380676269531,
+    "season": 2025,
+    "team_id": "e42183ad-b44a-4746-8c0b-148ad61bab43",
+    "team_name": "Utah St."
+  },
+  {
+    "actual": 23.8,
+    "baseline": 21.9,
+    "phase_a": 19.894065856933594,
+    "phase_b": 16.233028411865234,
+    "season": 2025,
+    "team_id": "e51fb2de-db51-4fbd-ab63-2a069c126779",
+    "team_name": "Texas"
+  },
+  {
+    "actual": -2.7,
+    "baseline": -11.7,
+    "phase_a": -8.631159782409668,
+    "phase_b": -14.763387680053711,
+    "season": 2025,
+    "team_id": "e5bf7042-0036-4e9d-81f3-3126a9675ce0",
+    "team_name": "Nebraska Omaha"
+  },
+  {
+    "actual": 8.2,
+    "baseline": 7.1,
+    "phase_a": 5.902521133422852,
+    "phase_b": 5.114979267120361,
+    "season": 2025,
+    "team_id": "e5fae797-082f-4354-8c20-2c1c22c6ac8f",
+    "team_name": "California"
+  },
+  {
+    "actual": 2.2,
+    "baseline": -6.3,
+    "phase_a": -3.7800183296203613,
+    "phase_b": -8.330452919006348,
+    "season": 2025,
+    "team_id": "e6b0799b-abce-441c-929c-964306f8fc27",
+    "team_name": "Jacksonville St."
+  },
+  {
+    "actual": 28.1,
+    "baseline": 21.7,
+    "phase_a": 21.505313873291016,
+    "phase_b": 28.230432510375977,
+    "season": 2025,
+    "team_id": "e7f5f157-7a33-43ad-8282-59e1c4ad9b25",
+    "team_name": "St. John's"
+  },
+  {
+    "actual": 22.1,
+    "baseline": 20.7,
+    "phase_a": 19.270017623901367,
+    "phase_b": 24.816682815551758,
+    "season": 2025,
+    "team_id": "e8e72618-33f8-4013-8305-43775a278752",
+    "team_name": "Cincinnati"
+  },
+  {
+    "actual": -6.4,
+    "baseline": -18.1,
+    "phase_a": -14.294952392578125,
+    "phase_b": -9.450983047485352,
+    "season": 2025,
+    "team_id": "e9813fa7-c976-4ad4-a455-2f05235e93cf",
+    "team_name": "Elon"
+  },
+  {
+    "actual": -13.5,
+    "baseline": -0.2,
+    "phase_a": 0.38015615940093994,
+    "phase_b": -3.8571691513061523,
+    "season": 2025,
+    "team_id": "ea8c66b5-8fe3-41dd-a56a-b85bfdc613c3",
+    "team_name": "Tarleton St."
+  },
+  {
+    "actual": -13.1,
+    "baseline": -8.1,
+    "phase_a": -6.82366943359375,
+    "phase_b": -6.408660411834717,
+    "season": 2025,
+    "team_id": "ebf92b73-233d-4523-8429-ab00d5af1966",
+    "team_name": "San Diego"
+  },
+  {
+    "actual": 8.4,
+    "baseline": 7.4,
+    "phase_a": 6.670670986175537,
+    "phase_b": 0.3573760688304901,
+    "season": 2025,
+    "team_id": "ec7d9da7-9286-4c01-98ce-3a10ec231612",
+    "team_name": "Yale"
+  },
+  {
+    "actual": -4.5,
+    "baseline": 0.1,
+    "phase_a": 3.796210289001465,
+    "phase_b": 1.7662677764892578,
+    "season": 2025,
+    "team_id": "ed50f577-3ab9-4627-80f9-bc931ee42370",
+    "team_name": "Youngstown St."
+  },
+  {
+    "actual": 11.9,
+    "baseline": 20.2,
+    "phase_a": 19.008771896362305,
+    "phase_b": 16.288604736328125,
+    "season": 2025,
+    "team_id": "ede9d6c2-b888-41b7-8674-8638c41d2034",
+    "team_name": "Providence"
+  },
+  {
+    "actual": 7.6,
+    "baseline": 16.3,
+    "phase_a": 14.721056938171387,
+    "phase_b": 8.576970100402832,
+    "season": 2025,
+    "team_id": "f162ea30-6b86-48f3-bdc5-48c97448256c",
+    "team_name": "Grand Canyon"
+  },
+  {
+    "actual": 15.4,
+    "baseline": 20.2,
+    "phase_a": 18.114425659179688,
+    "phase_b": 10.71066951751709,
+    "season": 2025,
+    "team_id": "f18598d0-e0e1-4f15-95f2-e11df8bc3126",
+    "team_name": "Nevada"
+  },
+  {
+    "actual": -32.8,
+    "baseline": -25.0,
+    "phase_a": -18.745197296142578,
+    "phase_b": -20.102828979492188,
+    "season": 2025,
+    "team_id": "f1c92057-9fa5-4bdd-b404-96dd624192b3",
+    "team_name": "Maryland Eastern Shore"
+  },
+  {
+    "actual": -13.1,
+    "baseline": -4.9,
+    "phase_a": -5.544168472290039,
+    "phase_b": -5.468480110168457,
+    "season": 2025,
+    "team_id": "f1cb5c3c-2ff5-444d-8c0d-5c1244f07909",
+    "team_name": "Harvard"
+  },
+  {
+    "actual": 1.8,
+    "baseline": 10.6,
+    "phase_a": 10.020699501037598,
+    "phase_b": 4.872908115386963,
+    "season": 2025,
+    "team_id": "f245c41f-897e-4985-9153-43034bb26bfa",
+    "team_name": "Duquesne"
+  },
+  {
+    "actual": -22.2,
+    "baseline": -18.8,
+    "phase_a": -18.93231773376465,
+    "phase_b": -14.592215538024902,
+    "season": 2025,
+    "team_id": "f2e0429e-8513-40eb-b536-1aca6697aee5",
+    "team_name": "Louisiana Monroe"
+  },
+  {
+    "actual": -6.8,
+    "baseline": 1.0,
+    "phase_a": 1.148376703262329,
+    "phase_b": 0.8763664960861206,
+    "season": 2025,
+    "team_id": "f3cf8061-767a-4873-9e24-5cc4c9a6a1b0",
+    "team_name": "Ohio"
+  },
+  {
+    "actual": -2.9,
+    "baseline": -7.5,
+    "phase_a": -6.956064224243164,
+    "phase_b": -2.548851251602173,
+    "season": 2025,
+    "team_id": "f48b0b87-86fe-4b7b-8bf3-9d541f495284",
+    "team_name": "Marshall"
+  },
+  {
+    "actual": -14.5,
+    "baseline": -7.2,
+    "phase_a": -2.564621925354004,
+    "phase_b": -7.014693260192871,
+    "season": 2025,
+    "team_id": "f73ebf9c-90d9-4d66-b403-056ea4ea6b30",
+    "team_name": "Columbia"
+  },
+  {
+    "actual": 30.3,
+    "baseline": 24.1,
+    "phase_a": 26.53412628173828,
+    "phase_b": 31.021726608276367,
+    "season": 2025,
+    "team_id": "f92587ee-8d25-4b09-9a60-6203f75c974f",
+    "team_name": "Kentucky"
+  },
+  {
+    "actual": -19.4,
+    "baseline": -10.9,
+    "phase_a": -8.297581672668457,
+    "phase_b": -6.8580169677734375,
+    "season": 2025,
+    "team_id": "f93c4c92-e869-45e6-8970-2a02d80141c9",
+    "team_name": "Old Dominion"
+  },
+  {
+    "actual": -21.8,
+    "baseline": -8.3,
+    "phase_a": -5.298407554626465,
+    "phase_b": -9.235376358032227,
+    "season": 2025,
+    "team_id": "f9c26112-b1ea-411e-b273-e74e8ce3f1ff",
+    "team_name": "Stetson"
+  },
+  {
+    "actual": -17.2,
+    "baseline": -27.3,
+    "phase_a": -22.67068099975586,
+    "phase_b": -13.416267395019531,
+    "season": 2025,
+    "team_id": "fc499722-6277-4897-893a-4abae917abf7",
+    "team_name": "Holy Cross"
+  },
+  {
+    "actual": -12.0,
+    "baseline": -27.3,
+    "phase_a": -25.207921981811523,
+    "phase_b": -17.27836036682129,
+    "season": 2025,
+    "team_id": "fd42047c-b7c6-4dbe-93e7-69cfd125995c",
+    "team_name": "Siena"
+  },
+  {
+    "actual": 26.0,
+    "baseline": 0.8,
+    "phase_a": 7.507625579833984,
+    "phase_b": 28.378517150878906,
+    "season": 2025,
+    "team_id": "fd495afa-fc22-4081-905c-24f40ff2656c",
+    "team_name": "Louisville"
+  },
+  {
+    "actual": -18.9,
+    "baseline": -29.4,
+    "phase_a": -25.786876678466797,
+    "phase_b": -15.16903018951416,
+    "season": 2026,
+    "team_id": "7cf9cb31-3bfd-486a-90fa-8fa6f3bb44a1",
+    "team_name": "Alabama A&M"
+  },
+  {
+    "actual": -1.2,
+    "baseline": -9.7,
+    "phase_a": -8.269791603088379,
+    "phase_b": -9.2662992477417,
+    "season": 2026,
+    "team_id": "d2d39132-b6f8-4e0d-96d2-4e89419550fa",
+    "team_name": "William & Mary"
+  },
+  {
+    "actual": -12.9,
+    "baseline": -18.5,
+    "phase_a": -13.24210262298584,
+    "phase_b": -8.485494613647461,
+    "season": 2026,
+    "team_id": "5c7c373d-1822-4c63-aa7f-64745cc99c52",
+    "team_name": "North Carolina A&T"
+  },
+  {
+    "actual": 18.8,
+    "baseline": 26.3,
+    "phase_a": 24.494192123413086,
+    "phase_b": 15.604752540588379,
+    "season": 2026,
+    "team_id": "0562b0a8-dbba-404d-9aa5-930ebe50c9b3",
+    "team_name": "Texas A&M"
+  },
+  {
+    "actual": -17.7,
+    "baseline": -18.8,
+    "phase_a": -17.97381019592285,
+    "phase_b": -10.379040718078613,
+    "season": 2026,
+    "team_id": "46a5f9e6-fe34-4ea4-867d-ba4e31297465",
+    "team_name": "East Texas A&M"
+  },
+  {
+    "actual": 9.9,
+    "baseline": 12.1,
+    "phase_a": 13.80621337890625,
+    "phase_b": 16.468597412109375,
+    "season": 2026,
+    "team_id": "03e9598c-4271-4840-ae88-7c7c36f2b10e",
+    "team_name": "South Carolina"
+  },
+  {
+    "actual": 18.8,
+    "baseline": 22.1,
+    "phase_a": 22.24799346923828,
+    "phase_b": 20.628448486328125,
+    "season": 2026,
+    "team_id": "08e7a657-2b9a-4055-beee-621379cea4b7",
+    "team_name": "Cincinnati"
+  },
+  {
+    "actual": -19.7,
+    "baseline": -15.2,
+    "phase_a": -12.811797142028809,
+    "phase_b": -10.541733741760254,
+    "season": 2026,
+    "team_id": "0a4ebb69-d8f5-4c7e-a7bf-b7ce3968f57a",
+    "team_name": "Lafayette"
+  },
+  {
+    "actual": 14.8,
+    "baseline": 26.2,
+    "phase_a": 24.25365447998047,
+    "phase_b": 13.9678373336792,
+    "season": 2026,
+    "team_id": "0b297e0e-e039-449d-b07f-f8e1ae96e3db",
+    "team_name": "Mississippi"
+  },
+  {
+    "actual": 13.3,
+    "baseline": 15.6,
+    "phase_a": 15.597739219665527,
+    "phase_b": 11.526156425476074,
+    "season": 2026,
+    "team_id": "0eb90dc3-2a1e-43d8-80ac-bab6d917f78a",
+    "team_name": "Butler"
+  },
+  {
+    "actual": 11.9,
+    "baseline": 7.1,
+    "phase_a": 6.634829998016357,
+    "phase_b": 6.420796871185303,
+    "season": 2026,
+    "team_id": "0f0aab5c-26db-447a-b6b5-a264da5b140a",
+    "team_name": "Northern Iowa"
+  },
+  {
+    "actual": 7.2,
+    "baseline": 13.3,
+    "phase_a": 15.676563262939453,
+    "phase_b": 14.393041610717773,
+    "season": 2026,
+    "team_id": "0f0ea376-1ea4-4b1f-9a4f-e7301a0318a4",
+    "team_name": "Utah"
+  },
+  {
+    "actual": -13.5,
+    "baseline": -7.7,
+    "phase_a": -6.170347213745117,
+    "phase_b": -2.9411306381225586,
+    "season": 2026,
+    "team_id": "0f2c89e1-1c22-4add-af3e-a7d9982de167",
+    "team_name": "Incarnate Word"
+  },
+  {
+    "actual": -6.2,
+    "baseline": -11.1,
+    "phase_a": -6.904840469360352,
+    "phase_b": -4.145730495452881,
+    "season": 2026,
+    "team_id": "12d2dbd5-0799-448a-a49a-671c218c8bbd",
+    "team_name": "Tennessee St."
+  },
+  {
+    "actual": -28.2,
+    "baseline": -15.1,
+    "phase_a": -9.785507202148438,
+    "phase_b": -5.463469982147217,
+    "season": 2026,
+    "team_id": "17eb5319-07ae-4f0e-b1d2-8e828b07ed79",
+    "team_name": "Jackson St."
+  },
+  {
+    "actual": -0.3,
+    "baseline": -5.5,
+    "phase_a": -5.547036170959473,
+    "phase_b": -10.343729019165039,
+    "season": 2026,
+    "team_id": "031d384c-ac9d-469a-985f-3214f2b9972b",
+    "team_name": "Wright St."
+  },
+  {
+    "actual": 14.8,
+    "baseline": 3.3,
+    "phase_a": 6.133195877075195,
+    "phase_b": 3.139025926589966,
+    "season": 2026,
+    "team_id": "571d2904-70d9-4de6-abfb-1d716ba43f0b",
+    "team_name": "Wichita St."
+  },
+  {
+    "actual": -14.6,
+    "baseline": -8.0,
+    "phase_a": -4.982173919677734,
+    "phase_b": -11.383934020996094,
+    "season": 2026,
+    "team_id": "5858896e-5e67-463c-a38c-c7431f157945",
+    "team_name": "South Dakota"
+  },
+  {
+    "actual": -11.0,
+    "baseline": -12.7,
+    "phase_a": -9.80321979522705,
+    "phase_b": -10.136597633361816,
+    "season": 2026,
+    "team_id": "5896c71f-aaee-4983-9da1-2e953c561786",
+    "team_name": "Iona"
+  },
+  {
+    "actual": -12.2,
+    "baseline": -7.9,
+    "phase_a": -6.8727569580078125,
+    "phase_b": -10.651887893676758,
+    "season": 2026,
+    "team_id": "58d76bcb-6251-4be3-9fce-6e748e521d87",
+    "team_name": "Longwood"
+  },
+  {
+    "actual": -3.9,
+    "baseline": 1.0,
+    "phase_a": 4.138408660888672,
+    "phase_b": -2.8276753425598145,
+    "season": 2026,
+    "team_id": "58fdb1cf-11b4-437d-a338-e497be161811",
+    "team_name": "Furman"
+  },
+  {
+    "actual": 3.5,
+    "baseline": -4.0,
+    "phase_a": -8.15240478515625,
+    "phase_b": -9.339784622192383,
+    "season": 2026,
+    "team_id": "593820ae-e46e-43a0-a5b3-904904eb9cef",
+    "team_name": "Sam Houston St."
+  },
+  {
+    "actual": 37.7,
+    "baseline": 40.2,
+    "phase_a": 39.24576187133789,
+    "phase_b": 30.61134910583496,
+    "season": 2026,
+    "team_id": "5a320db8-a83e-4f46-9418-25176d12a65f",
+    "team_name": "Florida"
+  },
+  {
+    "actual": -41.2,
+    "baseline": -49.2,
+    "phase_a": -42.824222564697266,
+    "phase_b": -25.427047729492188,
+    "season": 2026,
+    "team_id": "5b376c94-fc8d-4e0b-9977-1748d898ff24",
+    "team_name": "Mississippi Valley St."
+  },
+  {
+    "actual": -19.0,
+    "baseline": -5.7,
+    "phase_a": -4.189455986022949,
+    "phase_b": -6.008703231811523,
+    "season": 2026,
+    "team_id": "5c86ee1e-ee35-4d51-bc08-bbca68bc90f1",
+    "team_name": "Jacksonville"
+  },
+  {
+    "actual": 9.4,
+    "baseline": 5.0,
+    "phase_a": 7.734188079833984,
+    "phase_b": 4.8594794273376465,
+    "season": 2026,
+    "team_id": "5d005d94-2060-493e-af42-31885c78962f",
+    "team_name": "Illinois St."
+  },
+  {
+    "actual": -14.7,
+    "baseline": -23.1,
+    "phase_a": -17.9694766998291,
+    "phase_b": -11.551962852478027,
+    "season": 2026,
+    "team_id": "5d66e35c-66aa-44ac-b72b-33066edb3e20",
+    "team_name": "Mercyhurst"
+  },
+  {
+    "actual": 10.1,
+    "baseline": 0.0,
+    "phase_a": 2.3255631923675537,
+    "phase_b": -0.028697974979877472,
+    "season": 2026,
+    "team_id": "5ea1ef3c-5f24-4989-854e-a24a9e31ac74",
+    "team_name": "Wyoming"
+  },
+  {
+    "actual": 13.0,
+    "baseline": 10.1,
+    "phase_a": 12.591695785522461,
+    "phase_b": 20.97640609741211,
+    "season": 2026,
+    "team_id": "5f1bdada-9e34-442e-b575-0b6a9114f1ae",
+    "team_name": "Georgetown"
+  },
+  {
+    "actual": 2.2,
+    "baseline": -7.8,
+    "phase_a": -5.943862438201904,
+    "phase_b": -2.996054172515869,
+    "season": 2026,
+    "team_id": "628efcd7-4ae6-4bba-9542-11e108d22d8d",
+    "team_name": "Richmond"
+  },
+  {
+    "actual": 16.7,
+    "baseline": 11.9,
+    "phase_a": 13.163836479187012,
+    "phase_b": 15.878142356872559,
+    "season": 2026,
+    "team_id": "62c787d1-5e5d-4e44-b6e8-1c208f874eba",
+    "team_name": "Providence"
+  },
+  {
+    "actual": 14.6,
+    "baseline": 12.5,
+    "phase_a": 11.89756965637207,
+    "phase_b": 4.214001178741455,
+    "season": 2026,
+    "team_id": "62d54283-52d6-4daf-901e-b6ae1bdf29c0",
+    "team_name": "Florida St."
+  },
+  {
+    "actual": 15.4,
+    "baseline": 28.5,
+    "phase_a": 27.910131454467773,
+    "phase_b": 20.941967010498047,
+    "season": 2026,
+    "team_id": "641dc594-03c5-4ae6-8564-0ccb3c8edc77",
+    "team_name": "Missouri"
+  },
+  {
+    "actual": 6.2,
+    "baseline": 15.4,
+    "phase_a": 16.785903930664062,
+    "phase_b": 17.429468154907227,
+    "season": 2026,
+    "team_id": "33efd80d-8446-4d83-97fc-e864b132a0c8",
+    "team_name": "Rutgers"
+  },
+  {
+    "actual": -7.7,
+    "baseline": -0.4,
+    "phase_a": -0.4870166778564453,
+    "phase_b": -0.6267986297607422,
+    "season": 2026,
+    "team_id": "35163246-626a-4e63-899d-7a3798e88277",
+    "team_name": "Pepperdine"
+  },
+  {
+    "actual": -20.6,
+    "baseline": -16.7,
+    "phase_a": -14.906734466552734,
+    "phase_b": -6.944551467895508,
+    "season": 2026,
+    "team_id": "36b120f2-51ac-4dec-94ea-549d266507b5",
+    "team_name": "Loyola MD"
+  },
+  {
+    "actual": -7.8,
+    "baseline": -6.8,
+    "phase_a": -5.1621174812316895,
+    "phase_b": -4.001104831695557,
+    "season": 2026,
+    "team_id": "375d7498-7795-4ff1-bcf0-e13cdaccd9e5",
+    "team_name": "Ohio"
+  },
+  {
+    "actual": 32.2,
+    "baseline": 37.9,
+    "phase_a": 34.62294387817383,
+    "phase_b": 21.286434173583984,
+    "season": 2026,
+    "team_id": "397b5601-d70b-43a8-b259-1a752c68bb1f",
+    "team_name": "Alabama"
+  },
+  {
+    "actual": 11.7,
+    "baseline": 3.8,
+    "phase_a": 7.4878387451171875,
+    "phase_b": 11.608709335327148,
+    "season": 2026,
+    "team_id": "144de2cb-963b-480b-84b4-10b39d4562ef",
+    "team_name": "Syracuse"
+  },
+  {
+    "actual": -8.1,
+    "baseline": -7.0,
+    "phase_a": -5.42926025390625,
+    "phase_b": -9.125519752502441,
+    "season": 2026,
+    "team_id": "66244ae3-7fd6-49a7-9304-4ae41bea9ab3",
+    "team_name": "La Salle"
+  },
+  {
+    "actual": 8.1,
+    "baseline": 10.7,
+    "phase_a": 8.75451946258545,
+    "phase_b": 0.12912803888320923,
+    "season": 2026,
+    "team_id": "69293aea-705f-44e4-81db-36e52bcb1813",
+    "team_name": "George Mason"
+  },
+  {
+    "actual": 8.4,
+    "baseline": -3.3,
+    "phase_a": -0.6640191078186035,
+    "phase_b": 0.30399230122566223,
+    "season": 2026,
+    "team_id": "1835c2ee-1e17-4d18-9ab8-a1bb3678b947",
+    "team_name": "Miami OH"
+  },
+  {
+    "actual": -25.4,
+    "baseline": -29.5,
+    "phase_a": -23.308937072753906,
+    "phase_b": -16.68819808959961,
+    "season": 2026,
+    "team_id": "1b9c388c-a2e4-42dd-9e21-4841ed46cf4d",
+    "team_name": "New Hampshire"
+  },
+  {
+    "actual": -14.7,
+    "baseline": -7.0,
+    "phase_a": -8.167898178100586,
+    "phase_b": -6.2164177894592285,
+    "season": 2026,
+    "team_id": "241f50fd-2121-4b74-abd9-2ddb98d74a2e",
+    "team_name": "Northwestern St."
+  },
+  {
+    "actual": -15.5,
+    "baseline": -13.9,
+    "phase_a": -13.653417587280273,
+    "phase_b": -7.500105857849121,
+    "season": 2026,
+    "team_id": "24cced85-1369-4dbe-8abf-92fb8d456618",
+    "team_name": "Western Michigan"
+  },
+  {
+    "actual": 28.6,
+    "baseline": 17.9,
+    "phase_a": 18.30579948425293,
+    "phase_b": 20.744312286376953,
+    "season": 2026,
+    "team_id": "27bf19a7-be0b-4fa0-8dac-8d9b7df5f363",
+    "team_name": "Iowa"
+  },
+  {
+    "actual": -8.9,
+    "baseline": -15.5,
+    "phase_a": -12.351752281188965,
+    "phase_b": -9.350829124450684,
+    "season": 2026,
+    "team_id": "2866b25a-1e5a-42be-8763-ad87278ec1d9",
+    "team_name": "Charleston Southern"
+  },
+  {
+    "actual": -27.8,
+    "baseline": -16.5,
+    "phase_a": -14.380064010620117,
+    "phase_b": -12.101022720336914,
+    "season": 2026,
+    "team_id": "ba18e6aa-cbe6-493b-b91d-b0c8d4e8b0fa",
+    "team_name": "Saint Francis"
+  },
+  {
+    "actual": -29.3,
+    "baseline": -32.8,
+    "phase_a": -28.8917236328125,
+    "phase_b": -12.930761337280273,
+    "season": 2026,
+    "team_id": "ba48df8b-809b-401f-a758-25c39aa2d50b",
+    "team_name": "Maryland Eastern Shore"
+  },
+  {
+    "actual": -6.0,
+    "baseline": -15.7,
+    "phase_a": -10.630148887634277,
+    "phase_b": -9.614063262939453,
+    "season": 2026,
+    "team_id": "c59d7c9d-7fd0-4a58-bdba-7904baeb0abd",
+    "team_name": "LIU"
+  },
+  {
+    "actual": 23.9,
+    "baseline": 22.0,
+    "phase_a": 22.390666961669922,
+    "phase_b": 26.20015525817871,
+    "season": 2026,
+    "team_id": "c6cabd85-4834-4f62-94ab-57143286b512",
+    "team_name": "Georgia"
+  },
+  {
+    "actual": 11.7,
+    "baseline": 19.7,
+    "phase_a": 20.057661056518555,
+    "phase_b": 10.189574241638184,
+    "season": 2026,
+    "team_id": "c7345766-a5fd-40e1-9757-26d62af0b9af",
+    "team_name": "Xavier"
+  },
+  {
+    "actual": 13.4,
+    "baseline": 9.6,
+    "phase_a": 10.683981895446777,
+    "phase_b": 14.439196586608887,
+    "season": 2026,
+    "team_id": "c75216c6-4563-402a-b8d6-b8434793ea38",
+    "team_name": "Oklahoma St."
+  },
+  {
+    "actual": 12.1,
+    "baseline": 2.7,
+    "phase_a": 3.61527156829834,
+    "phase_b": 1.909112572669983,
+    "season": 2026,
+    "team_id": "c7e47abb-629e-4b69-8d41-c87333fbe6b4",
+    "team_name": "Belmont"
+  },
+  {
+    "actual": -24.0,
+    "baseline": -20.7,
+    "phase_a": -16.621938705444336,
+    "phase_b": -13.498900413513184,
+    "season": 2026,
+    "team_id": "c87682db-2ff7-4c63-9820-df6c8409d5b3",
+    "team_name": "Southern Indiana"
+  },
+  {
+    "actual": 4.6,
+    "baseline": 11.3,
+    "phase_a": 14.764873504638672,
+    "phase_b": 13.41043472290039,
+    "season": 2026,
+    "team_id": "1799ef2d-85d7-4ba9-8048-33b1956ab3db",
+    "team_name": "Saint Joseph's"
+  },
+  {
+    "actual": -22.5,
+    "baseline": -17.7,
+    "phase_a": -15.263603210449219,
+    "phase_b": -12.775714874267578,
+    "season": 2026,
+    "team_id": "a46fdb60-30d0-4807-a2b1-e29d8d7c22b2",
+    "team_name": "Fairleigh Dickinson"
+  },
+  {
+    "actual": 5.3,
+    "baseline": 5.9,
+    "phase_a": 5.696702480316162,
+    "phase_b": -7.530752182006836,
+    "season": 2026,
+    "team_id": "a564f5c9-0e8d-44c8-a75d-b3b355370dbf",
+    "team_name": "UNC Wilmington"
+  },
+  {
+    "actual": 17.9,
+    "baseline": 20.0,
+    "phase_a": 17.089357376098633,
+    "phase_b": 9.56937313079834,
+    "season": 2026,
+    "team_id": "a5ebc512-a148-4140-b60c-147132b3097c",
+    "team_name": "Northwestern"
+  },
+  {
+    "actual": -15.4,
+    "baseline": -9.6,
+    "phase_a": -7.623898506164551,
+    "phase_b": -4.400348663330078,
+    "season": 2026,
+    "team_id": "a6dd499a-eb6b-4f8e-9094-d8eb96b3547a",
+    "team_name": "Southern"
+  },
+  {
+    "actual": 17.1,
+    "baseline": 21.6,
+    "phase_a": 20.63860511779785,
+    "phase_b": 16.995418548583984,
+    "season": 2026,
+    "team_id": "7e01ae0c-d2c7-4d9c-beea-2da953b4c037",
+    "team_name": "Boise St."
+  },
+  {
+    "actual": -10.8,
+    "baseline": 0.7,
+    "phase_a": 0.33994436264038086,
+    "phase_b": -5.11713171005249,
+    "season": 2026,
+    "team_id": "7e838ebf-74ed-42de-9f2e-d8057aa77de5",
+    "team_name": "Wofford"
+  },
+  {
+    "actual": 0.6,
+    "baseline": 13.8,
+    "phase_a": 13.601327896118164,
+    "phase_b": 4.3823041915893555,
+    "season": 2026,
+    "team_id": "3a2cf934-5d3b-4406-a458-0c76b7b9d65a",
+    "team_name": "Oregon St."
+  },
+  {
+    "actual": -6.3,
+    "baseline": -22.4,
+    "phase_a": -17.63474464416504,
+    "phase_b": -11.264727592468262,
+    "season": 2026,
+    "team_id": "3aedc020-716e-4a2c-a7f8-ab1abaf53d87",
+    "team_name": "Buffalo"
+  },
+  {
+    "actual": -11.4,
+    "baseline": -10.2,
+    "phase_a": -7.891181945800781,
+    "phase_b": -7.138978481292725,
+    "season": 2026,
+    "team_id": "3bc11d41-6e7a-4932-b0d5-e15a8f310406",
+    "team_name": "Presbyterian"
+  },
+  {
+    "actual": 2.2,
+    "baseline": -0.8,
+    "phase_a": 1.263098120689392,
+    "phase_b": -1.5693717002868652,
+    "season": 2026,
+    "team_id": "3be5fa30-2fd3-4af3-bfc0-39db2dcb523e",
+    "team_name": "Temple"
+  },
+  {
+    "actual": 23.2,
+    "baseline": 4.8,
+    "phase_a": 5.582472801208496,
+    "phase_b": 5.2024760246276855,
+    "season": 2026,
+    "team_id": "3c9cd500-c6f0-4eca-b722-405eefd74003",
+    "team_name": "Saint Louis"
+  },
+  {
+    "actual": 33.9,
+    "baseline": 28.4,
+    "phase_a": 29.460710525512695,
+    "phase_b": 30.681184768676758,
+    "season": 2026,
+    "team_id": "f9261c55-02c0-49db-9993-f5d64a97b21e",
+    "team_name": "Connecticut"
+  },
+  {
+    "actual": 25.7,
+    "baseline": 24.6,
+    "phase_a": 23.881568908691406,
+    "phase_b": 24.07534408569336,
+    "season": 2026,
+    "team_id": "f9a35e93-6a9b-427a-8901-d74cf3f23676",
+    "team_name": "Ohio St."
+  },
+  {
+    "actual": -1.7,
+    "baseline": 2.7,
+    "phase_a": 1.7800421714782715,
+    "phase_b": -8.167986869812012,
+    "season": 2026,
+    "team_id": "fa9fae48-c4f0-419f-97d7-5e2ba9d47858",
+    "team_name": "Cornell"
+  },
+  {
+    "actual": -15.5,
+    "baseline": -11.8,
+    "phase_a": -11.174184799194336,
+    "phase_b": -9.093878746032715,
+    "season": 2026,
+    "team_id": "fe967dc0-fdb0-46b0-9629-0fd108949abe",
+    "team_name": "Houston Christian"
+  },
+  {
+    "actual": 9.8,
+    "baseline": 1.6,
+    "phase_a": 2.6108322143554688,
+    "phase_b": 9.99915599822998,
+    "season": 2026,
+    "team_id": "ff2fa864-282d-4503-9a88-8c10619b0e3d",
+    "team_name": "George Washington"
+  },
+  {
+    "actual": -1.3,
+    "baseline": -0.6,
+    "phase_a": -1.589137315750122,
+    "phase_b": -1.803117036819458,
+    "season": 2026,
+    "team_id": "07c201cc-5a34-4a3b-9fc9-bae4c20b7c9f",
+    "team_name": "Charleston"
+  },
+  {
+    "actual": 18.2,
+    "baseline": 17.6,
+    "phase_a": 17.939645767211914,
+    "phase_b": 16.1518497467041,
+    "season": 2026,
+    "team_id": "46f85354-63b8-4744-8b13-341ea0a30c2a",
+    "team_name": "San Diego St."
+  },
+  {
+    "actual": 5.5,
+    "baseline": 16.7,
+    "phase_a": 13.655710220336914,
+    "phase_b": 5.668785095214844,
+    "season": 2026,
+    "team_id": "de0352b5-4ae9-49af-a027-b0dc86a005da",
+    "team_name": "Memphis"
+  },
+  {
+    "actual": -0.2,
+    "baseline": 3.3,
+    "phase_a": 3.1687259674072266,
+    "phase_b": -0.4294634163379669,
+    "season": 2026,
+    "team_id": "de50cb63-b08e-4760-ad25-62eceb6c4120",
+    "team_name": "UC Santa Barbara"
+  },
+  {
+    "actual": -23.1,
+    "baseline": -10.0,
+    "phase_a": -7.699385643005371,
+    "phase_b": -11.399577140808105,
+    "season": 2026,
+    "team_id": "e1c5e9f4-197f-4a7b-b871-bdf72ca0cf3a",
+    "team_name": "Maine"
+  },
+  {
+    "actual": -4.7,
+    "baseline": -11.5,
+    "phase_a": -8.819342613220215,
+    "phase_b": -12.830240249633789,
+    "season": 2026,
+    "team_id": "e383167f-2c53-465a-b2fe-0d6bd7c69b27",
+    "team_name": "Marist"
+  },
+  {
+    "actual": -3.2,
+    "baseline": 2.1,
+    "phase_a": 2.1696557998657227,
+    "phase_b": -3.1847739219665527,
+    "season": 2026,
+    "team_id": "185c12ee-a2a7-4588-84f2-4b4b270a75a6",
+    "team_name": "Montana"
+  },
+  {
+    "actual": 4.8,
+    "baseline": 14.2,
+    "phase_a": 17.058231353759766,
+    "phase_b": 8.949936866760254,
+    "season": 2026,
+    "team_id": "195318b0-fa80-45e8-96b2-e83346e70a64",
+    "team_name": "Liberty"
+  },
+  {
+    "actual": -11.6,
+    "baseline": -7.4,
+    "phase_a": -6.3339738845825195,
+    "phase_b": -8.132767677307129,
+    "season": 2026,
+    "team_id": "19b01b27-3931-468b-a50c-6636aef39c7e",
+    "team_name": "SIU Edwardsville"
+  },
+  {
+    "actual": -12.0,
+    "baseline": -5.3,
+    "phase_a": -3.699028968811035,
+    "phase_b": -4.494799613952637,
+    "season": 2026,
+    "team_id": "6a154b5a-b7dc-4299-86a1-c9ecd354b8c2",
+    "team_name": "Princeton"
+  },
+  {
+    "actual": 32.7,
+    "baseline": 19.4,
+    "phase_a": 22.608457565307617,
+    "phase_b": 26.24623680114746,
+    "season": 2026,
+    "team_id": "6b776d4e-7c15-4c08-b195-ddf7052c762c",
+    "team_name": "Vanderbilt"
+  },
+  {
+    "actual": 17.3,
+    "baseline": -1.2,
+    "phase_a": 5.339277744293213,
+    "phase_b": 8.172778129577637,
+    "season": 2026,
+    "team_id": "6ba99b19-8a61-49da-9325-3e04939d3d5f",
+    "team_name": "South Florida"
+  },
+  {
+    "actual": -29.9,
+    "baseline": -19.9,
+    "phase_a": -18.887296676635742,
+    "phase_b": -15.501580238342285,
+    "season": 2026,
+    "team_id": "6cd07c06-66e5-421d-a8d3-84cd9833bce3",
+    "team_name": "Rider"
+  },
+  {
+    "actual": 27.2,
+    "baseline": 30.3,
+    "phase_a": 31.279850006103516,
+    "phase_b": 30.407743453979492,
+    "season": 2026,
+    "team_id": "7f0a740b-2a56-4bec-87c8-7bf2baf05d58",
+    "team_name": "Kentucky"
+  },
+  {
+    "actual": -22.1,
+    "baseline": -34.1,
+    "phase_a": -28.169902801513672,
+    "phase_b": -22.813617706298828,
+    "season": 2026,
+    "team_id": "f0929311-9f5c-421d-8573-4b4bee0c314f",
+    "team_name": "Arkansas Pine Bluff"
+  },
+  {
+    "actual": -13.6,
+    "baseline": -14.8,
+    "phase_a": -10.98190975189209,
+    "phase_b": -9.07096004486084,
+    "season": 2026,
+    "team_id": "f1e9470d-a3c7-4ef1-8583-6bb917490ac3",
+    "team_name": "Southern Utah"
+  },
+  {
+    "actual": -27.0,
+    "baseline": -28.4,
+    "phase_a": -27.698360443115234,
+    "phase_b": -13.364954948425293,
+    "season": 2026,
+    "team_id": "f22ee0eb-5079-4c19-b46d-7d40e14d7636",
+    "team_name": "Canisius"
+  },
+  {
+    "actual": -10.2,
+    "baseline": -7.3,
+    "phase_a": -3.689352035522461,
+    "phase_b": -4.654327392578125,
+    "season": 2026,
+    "team_id": "6d128962-ec20-462b-bbdf-1e785b40d288",
+    "team_name": "Southeast Missouri St."
+  },
+  {
+    "actual": -0.6,
+    "baseline": -11.3,
+    "phase_a": -8.868814468383789,
+    "phase_b": -5.782649993896484,
+    "season": 2026,
+    "team_id": "6f9a1a81-2dbf-490a-ba3c-8f8fadddd9d4",
+    "team_name": "Idaho"
+  },
+  {
+    "actual": -4.4,
+    "baseline": -15.5,
+    "phase_a": -12.53553581237793,
+    "phase_b": -12.410189628601074,
+    "season": 2026,
+    "team_id": "6fd295ef-9c37-4478-af91-536cbf316358",
+    "team_name": "Weber St."
+  },
+  {
+    "actual": 3.5,
+    "baseline": 9.9,
+    "phase_a": 10.372227668762207,
+    "phase_b": 1.7169559001922607,
+    "season": 2026,
+    "team_id": "700f42bb-65b8-4e08-bfdf-8dba2e0bd260",
+    "team_name": "Bradley"
+  },
+  {
+    "actual": 6.8,
+    "baseline": -9.6,
+    "phase_a": -7.257546424865723,
+    "phase_b": -1.5819504261016846,
+    "season": 2026,
+    "team_id": "70746950-a861-447f-a9ba-f53e329c27c1",
+    "team_name": "Pacific"
+  },
+  {
+    "actual": -22.7,
+    "baseline": -25.7,
+    "phase_a": -22.26888656616211,
+    "phase_b": -18.311494827270508,
+    "season": 2026,
+    "team_id": "714115a3-e87c-4c38-be62-cfe9dada315e",
+    "team_name": "NJIT"
+  },
+  {
+    "actual": 6.4,
+    "baseline": 23.6,
+    "phase_a": 23.792701721191406,
+    "phase_b": 18.13901138305664,
+    "season": 2026,
+    "team_id": "76eb53c2-0367-4d59-b619-799a7aea658b",
+    "team_name": "Mississippi St."
+  },
+  {
+    "actual": 6.7,
+    "baseline": 15.8,
+    "phase_a": 14.88028335571289,
+    "phase_b": 8.042326927185059,
+    "season": 2026,
+    "team_id": "78d97761-b499-435e-9097-b9d553f3ee67",
+    "team_name": "San Francisco"
+  },
+  {
+    "actual": -27.5,
+    "baseline": -21.7,
+    "phase_a": -18.108301162719727,
+    "phase_b": -12.734901428222656,
+    "season": 2026,
+    "team_id": "79c6b473-0e11-4c2b-aa4c-8523cc9afa48",
+    "team_name": "Alcorn St."
+  },
+  {
+    "actual": -19.5,
+    "baseline": -11.6,
+    "phase_a": -10.61237907409668,
+    "phase_b": -7.454407215118408,
+    "season": 2026,
+    "team_id": "7a78a9a6-0d5b-4fae-8fb4-98bc816ed903",
+    "team_name": "Air Force"
+  },
+  {
+    "actual": 5.3,
+    "baseline": 1.2,
+    "phase_a": 2.114506721496582,
+    "phase_b": 1.2864654064178467,
+    "season": 2026,
+    "team_id": "8226bdf0-6c2b-4e2b-841d-e2a01a5e5145",
+    "team_name": "Murray St."
+  },
+  {
+    "actual": 6.6,
+    "baseline": -6.1,
+    "phase_a": -6.045280456542969,
+    "phase_b": -4.985936164855957,
+    "season": 2026,
+    "team_id": "82d0fc94-2404-4659-9764-1b8186e037b7",
+    "team_name": "Hawaii"
+  },
+  {
+    "actual": -6.2,
+    "baseline": -15.7,
+    "phase_a": -17.21261215209961,
+    "phase_b": -13.411507606506348,
+    "season": 2026,
+    "team_id": "83384eea-0854-4284-a875-f47d9b0c31d8",
+    "team_name": "UMBC"
+  },
+  {
+    "actual": 9.7,
+    "baseline": 7.4,
+    "phase_a": 8.093486785888672,
+    "phase_b": 6.13589334487915,
+    "season": 2026,
+    "team_id": "851d8a88-2edc-45bf-b180-7b6c1744f5fe",
+    "team_name": "DePaul"
+  },
+  {
+    "actual": -21.3,
+    "baseline": -15.9,
+    "phase_a": -12.451675415039062,
+    "phase_b": -7.0996479988098145,
+    "season": 2026,
+    "team_id": "85708ae1-7d66-437a-9d70-bcb680bdfa86",
+    "team_name": "Albany"
+  },
+  {
+    "actual": -14.6,
+    "baseline": -7.5,
+    "phase_a": -4.818037033081055,
+    "phase_b": -4.933864116668701,
+    "season": 2026,
+    "team_id": "860f5485-6d1e-442c-ac88-7bb31afda5df",
+    "team_name": "Southeastern Louisiana"
+  },
+  {
+    "actual": -21.7,
+    "baseline": -17.2,
+    "phase_a": -14.71841049194336,
+    "phase_b": -14.03931999206543,
+    "season": 2026,
+    "team_id": "861b8733-b443-47d5-9c5e-f56373a8fb9c",
+    "team_name": "Holy Cross"
+  },
+  {
+    "actual": -13.8,
+    "baseline": -11.2,
+    "phase_a": -9.318258285522461,
+    "phase_b": -5.983257293701172,
+    "season": 2026,
+    "team_id": "871751b8-eb3a-4919-bc58-ab82887e29c6",
+    "team_name": "North Dakota"
+  },
+  {
+    "actual": -8.8,
+    "baseline": -11.3,
+    "phase_a": -8.402984619140625,
+    "phase_b": -7.582878589630127,
+    "season": 2026,
+    "team_id": "231d7720-fba0-4331-b1da-8412227395f7",
+    "team_name": "Colgate"
+  },
+  {
+    "actual": 30.5,
+    "baseline": 32.8,
+    "phase_a": 33.289520263671875,
+    "phase_b": 27.734819412231445,
+    "season": 2026,
+    "team_id": "02361e70-3d89-4b56-8d25-73ea2ee389ef",
+    "team_name": "Texas Tech"
+  },
+  {
+    "actual": 25.2,
+    "baseline": 19.6,
+    "phase_a": 18.77806854248047,
+    "phase_b": 13.365345001220703,
+    "season": 2026,
+    "team_id": "0420bfac-8b45-41ad-b228-89893a037d4a",
+    "team_name": "Utah St."
+  },
+  {
+    "actual": 18.4,
+    "baseline": 9.2,
+    "phase_a": 8.988860130310059,
+    "phase_b": 9.794147491455078,
+    "season": 2026,
+    "team_id": "050cf087-6e1b-42ef-84fe-368ac1929774",
+    "team_name": "Washington"
+  },
+  {
+    "actual": 1.5,
+    "baseline": 1.8,
+    "phase_a": 5.635716915130615,
+    "phase_b": 5.500471591949463,
+    "season": 2026,
+    "team_id": "06f12e7c-35a4-46e1-a2ed-0cacb16f9b68",
+    "team_name": "Duquesne"
+  },
+  {
+    "actual": 22.7,
+    "baseline": 21.7,
+    "phase_a": 21.309139251708984,
+    "phase_b": 10.084074974060059,
+    "season": 2026,
+    "team_id": "07b4923a-16cd-4490-8ae5-d61599212ab1",
+    "team_name": "Villanova"
+  },
+  {
+    "actual": -26.5,
+    "baseline": -28.9,
+    "phase_a": -25.096317291259766,
+    "phase_b": -17.778345108032227,
+    "season": 2026,
+    "team_id": "3d3b199e-7c4f-4c53-b683-a77a8d8e697a",
+    "team_name": "The Citadel"
+  },
+  {
+    "actual": 22.7,
+    "baseline": 23.8,
+    "phase_a": 23.88369369506836,
+    "phase_b": 20.153799057006836,
+    "season": 2026,
+    "team_id": "40960630-05f9-471c-b4a6-0eea2cb6345d",
+    "team_name": "Texas"
+  },
+  {
+    "actual": -15.3,
+    "baseline": 3.9,
+    "phase_a": 6.253534317016602,
+    "phase_b": -4.967234134674072,
+    "season": 2026,
+    "team_id": "416d2dd1-15bd-48e9-82e6-9277c0ab829c",
+    "team_name": "Chattanooga"
+  },
+  {
+    "actual": -32.7,
+    "baseline": -7.5,
+    "phase_a": -6.062135696411133,
+    "phase_b": -10.762145042419434,
+    "season": 2026,
+    "team_id": "8860a6b6-e60d-437e-afc3-b42e8cab8d79",
+    "team_name": "South Carolina St."
+  },
+  {
+    "actual": -17.3,
+    "baseline": -23.4,
+    "phase_a": -19.612258911132812,
+    "phase_b": -16.072860717773438,
+    "season": 2026,
+    "team_id": "88ae8bb6-fbd8-444d-8d22-f485d82d2e67",
+    "team_name": "USC Upstate"
+  },
+  {
+    "actual": -4.2,
+    "baseline": -11.5,
+    "phase_a": -10.41936206817627,
+    "phase_b": -8.127676963806152,
+    "season": 2026,
+    "team_id": "88e83e71-3235-4c21-85a8-da368f34e5fd",
+    "team_name": "Mercer"
+  },
+  {
+    "actual": -24.7,
+    "baseline": -31.0,
+    "phase_a": -29.007951736450195,
+    "phase_b": -8.387749671936035,
+    "season": 2026,
+    "team_id": "8bbfa6f2-6178-4c2b-bf17-66fba7623c4e",
+    "team_name": "Chicago St."
+  },
+  {
+    "actual": 3.1,
+    "baseline": -0.5,
+    "phase_a": 1.6389130353927612,
+    "phase_b": 9.13357162475586,
+    "season": 2026,
+    "team_id": "8bdfa757-6fe1-4ee1-a1c5-279e7f35fa1e",
+    "team_name": "Boston College"
+  },
+  {
+    "actual": 5.2,
+    "baseline": 30.6,
+    "phase_a": 26.419940948486328,
+    "phase_b": 20.588701248168945,
+    "season": 2026,
+    "team_id": "8d515064-54c5-4eeb-a095-ad7ac6839d0c",
+    "team_name": "Maryland"
+  },
+  {
+    "actual": -9.3,
+    "baseline": -3.9,
+    "phase_a": -2.4088969230651855,
+    "phase_b": -4.67814302444458,
+    "season": 2026,
+    "team_id": "8dae6732-0634-481a-90ac-d73bf6a19566",
+    "team_name": "Florida Gulf Coast"
+  },
+  {
+    "actual": 0.4,
+    "baseline": 2.1,
+    "phase_a": 2.580217123031616,
+    "phase_b": -0.20591598749160767,
+    "season": 2026,
+    "team_id": "8deb21ba-48b8-491c-89ab-0b360062d211",
+    "team_name": "Kennesaw St."
+  },
+  {
+    "actual": 16.5,
+    "baseline": 15.6,
+    "phase_a": 13.535064697265625,
+    "phase_b": 12.259417533874512,
+    "season": 2026,
+    "team_id": "8fdfa7ed-88da-45ac-9520-9a9e9fbe2586",
+    "team_name": "Wake Forest"
+  },
+  {
+    "actual": -5.3,
+    "baseline": -6.5,
+    "phase_a": -5.5823869705200195,
+    "phase_b": -4.54375696182251,
+    "season": 2026,
+    "team_id": "2389c341-a290-43f4-b0e8-08ee6a15c14c",
+    "team_name": "Cal Poly"
+  },
+  {
+    "actual": 23.7,
+    "baseline": 19.6,
+    "phase_a": 19.05231285095215,
+    "phase_b": 8.534062385559082,
+    "season": 2026,
+    "team_id": "2a57c531-b461-42be-bbd4-b080f188a160",
+    "team_name": "Indiana"
+  },
+  {
+    "actual": -1.9,
+    "baseline": -8.1,
+    "phase_a": -6.885753631591797,
+    "phase_b": -2.2506561279296875,
+    "season": 2026,
+    "team_id": "2c1fdbd4-c0c7-4750-b829-f7a6b7bc5710",
+    "team_name": "FIU"
+  },
+  {
+    "actual": -29.5,
+    "baseline": -15.7,
+    "phase_a": -11.481585502624512,
+    "phase_b": -10.274331092834473,
+    "season": 2026,
+    "team_id": "2dbbcf87-baa5-4154-8071-c62e522990c6",
+    "team_name": "VMI"
+  },
+  {
+    "actual": 18.0,
+    "baseline": 4.1,
+    "phase_a": 4.662064075469971,
+    "phase_b": 10.81119155883789,
+    "season": 2026,
+    "team_id": "2fa161f0-e26c-49a0-8eb0-b2810c4d4845",
+    "team_name": "Virginia Tech"
+  },
+  {
+    "actual": -33.9,
+    "baseline": -19.3,
+    "phase_a": -15.291219711303711,
+    "phase_b": -12.851360321044922,
+    "season": 2026,
+    "team_id": "2fe58a98-ca14-421d-83f6-aac80bab3780",
+    "team_name": "Delaware St."
+  },
+  {
+    "actual": -5.9,
+    "baseline": -5.9,
+    "phase_a": -6.821046829223633,
+    "phase_b": -2.7233991622924805,
+    "season": 2026,
+    "team_id": "308dd2dd-d731-4927-9bf5-e8aad5900158",
+    "team_name": "Drexel"
+  },
+  {
+    "actual": -3.7,
+    "baseline": -2.9,
+    "phase_a": -5.285505294799805,
+    "phase_b": -5.291236877441406,
+    "season": 2026,
+    "team_id": "33652259-8f29-48e9-b213-0eabac8d926f",
+    "team_name": "Marshall"
+  },
+  {
+    "actual": 17.0,
+    "baseline": 15.5,
+    "phase_a": 14.906034469604492,
+    "phase_b": 11.156379699707031,
+    "season": 2026,
+    "team_id": "05005d1e-02c0-46c0-8b4d-19dc825698c0",
+    "team_name": "UCF"
+  },
+  {
+    "actual": -24.2,
+    "baseline": -24.3,
+    "phase_a": -23.427658081054688,
+    "phase_b": -11.278772354125977,
+    "season": 2026,
+    "team_id": "904ecc4d-857b-4150-b986-50e605d84b61",
+    "team_name": "Northern Illinois"
+  },
+  {
+    "actual": 1.4,
+    "baseline": 3.1,
+    "phase_a": 2.353022336959839,
+    "phase_b": -4.30631685256958,
+    "season": 2026,
+    "team_id": "935d92c1-aca9-4b21-9e0d-b6c396fb067c",
+    "team_name": "St. Bonaventure"
+  },
+  {
+    "actual": -21.1,
+    "baseline": -4.1,
+    "phase_a": -2.8258938789367676,
+    "phase_b": 0.9655702114105225,
+    "season": 2026,
+    "team_id": "983c0982-0fb8-45e4-829e-306cf787ba2e",
+    "team_name": "UTSA"
+  },
+  {
+    "actual": -19.9,
+    "baseline": -7.4,
+    "phase_a": -7.895892143249512,
+    "phase_b": -11.147653579711914,
+    "season": 2026,
+    "team_id": "41e19184-6f6d-4838-b789-d8553db45753",
+    "team_name": "Little Rock"
+  },
+  {
+    "actual": 16.1,
+    "baseline": 14.9,
+    "phase_a": 15.4322509765625,
+    "phase_b": 12.303472518920898,
+    "season": 2026,
+    "team_id": "41ff62eb-8cb9-4e63-9c2f-50989d3e65c1",
+    "team_name": "LSU"
+  },
+  {
+    "actual": 29.2,
+    "baseline": 26.9,
+    "phase_a": 27.2701416015625,
+    "phase_b": 21.171794891357422,
+    "season": 2026,
+    "team_id": "42833efc-4047-4751-b5dd-8f5c6d05e355",
+    "team_name": "BYU"
+  },
+  {
+    "actual": -16.9,
+    "baseline": -18.6,
+    "phase_a": -15.553764343261719,
+    "phase_b": -14.993795394897461,
+    "season": 2026,
+    "team_id": "4319d016-ec3c-434b-9398-c88b1bfab01e",
+    "team_name": "Grambling St."
+  },
+  {
+    "actual": 11.9,
+    "baseline": 9.7,
+    "phase_a": 8.231639862060547,
+    "phase_b": 7.96428108215332,
+    "season": 2026,
+    "team_id": "43624e99-f362-48c4-b203-9af174b24be3",
+    "team_name": "Notre Dame"
+  },
+  {
+    "actual": -6.6,
+    "baseline": 0.4,
+    "phase_a": 2.0133941173553467,
+    "phase_b": 0.17519718408584595,
+    "season": 2026,
+    "team_id": "44242fcd-cd9f-43aa-afc2-5a12ea89394c",
+    "team_name": "South Dakota St."
+  },
+  {
+    "actual": -10.7,
+    "baseline": -2.2,
+    "phase_a": -2.8781399726867676,
+    "phase_b": -1.751926302909851,
+    "season": 2026,
+    "team_id": "46671d80-ebfc-4f9a-8eae-19249794115f",
+    "team_name": "Radford"
+  },
+  {
+    "actual": 6.5,
+    "baseline": 1.0,
+    "phase_a": -0.5943479537963867,
+    "phase_b": -4.978935718536377,
+    "season": 2026,
+    "team_id": "47b99bcc-2f9a-41d7-8d7c-3f9e93809210",
+    "team_name": "Davidson"
+  },
+  {
+    "actual": -5.7,
+    "baseline": -22.6,
+    "phase_a": -21.533466339111328,
+    "phase_b": -11.48349380493164,
+    "season": 2026,
+    "team_id": "483b9ce0-4c9d-43d0-979d-831c7298213f",
+    "team_name": "New Orleans"
+  },
+  {
+    "actual": 43.7,
+    "baseline": 46.2,
+    "phase_a": 46.17984390258789,
+    "phase_b": 35.38005447387695,
+    "season": 2026,
+    "team_id": "48dab38d-2a0b-4201-94d9-c6ffaf736974",
+    "team_name": "Duke"
+  },
+  {
+    "actual": -7.5,
+    "baseline": -17.8,
+    "phase_a": -13.478133201599121,
+    "phase_b": -12.41186237335205,
+    "season": 2026,
+    "team_id": "48f318bf-54e1-4e42-b6e9-47c3bdaf4fb8",
+    "team_name": "Tennessee Martin"
+  },
+  {
+    "actual": -10.3,
+    "baseline": -21.0,
+    "phase_a": -19.110754013061523,
+    "phase_b": -9.159632682800293,
+    "season": 2026,
+    "team_id": "4926f0f3-ac12-4ca0-9cbf-eb99f9aafb78",
+    "team_name": "Western Carolina"
+  },
+  {
+    "actual": 4.8,
+    "baseline": 8.1,
+    "phase_a": 8.800052642822266,
+    "phase_b": -2.905616521835327,
+    "season": 2026,
+    "team_id": "4a976ca8-f51c-487c-ba87-dae41ddaee24",
+    "team_name": "Washington St."
+  },
+  {
+    "actual": -3.8,
+    "baseline": 1.5,
+    "phase_a": 1.0099811553955078,
+    "phase_b": -1.9041804075241089,
+    "season": 2026,
+    "team_id": "4b6cd009-754d-44ee-9433-124bad801b02",
+    "team_name": "Tulane"
+  },
+  {
+    "actual": 9.0,
+    "baseline": 10.6,
+    "phase_a": 10.059488296508789,
+    "phase_b": 4.41807222366333,
+    "season": 2026,
+    "team_id": "50ac73d5-f2f3-4160-add7-d0993eec32cf",
+    "team_name": "UNLV"
+  },
+  {
+    "actual": -10.1,
+    "baseline": -23.6,
+    "phase_a": -18.41840362548828,
+    "phase_b": -9.051512718200684,
+    "season": 2026,
+    "team_id": "51d48e8a-41da-4087-b00f-c65fc8fc1ce7",
+    "team_name": "Stony Brook"
+  },
+  {
+    "actual": -15.3,
+    "baseline": -16.1,
+    "phase_a": -11.685175895690918,
+    "phase_b": -12.761622428894043,
+    "season": 2026,
+    "team_id": "9a0196e9-6b45-40b9-b0d0-df6bb1c90dc7",
+    "team_name": "Lehigh"
+  },
+  {
+    "actual": -20.5,
+    "baseline": -18.1,
+    "phase_a": -15.472347259521484,
+    "phase_b": -12.69969654083252,
+    "season": 2026,
+    "team_id": "9b729374-1ae8-46e9-bfe6-2348cf00056a",
+    "team_name": "IU Indy"
+  },
+  {
+    "actual": -18.8,
+    "baseline": -9.4,
+    "phase_a": -7.433439254760742,
+    "phase_b": -6.261031627655029,
+    "season": 2026,
+    "team_id": "9ba0c75f-bad2-428f-9038-d695c2385098",
+    "team_name": "Cal St. Bakersfield"
+  },
+  {
+    "actual": 36.3,
+    "baseline": 30.8,
+    "phase_a": 30.299776077270508,
+    "phase_b": 32.83578872680664,
+    "season": 2026,
+    "team_id": "9df3af06-d207-48e8-a010-41797b070072",
+    "team_name": "Purdue"
+  },
+  {
+    "actual": -11.7,
+    "baseline": -19.4,
+    "phase_a": -14.19525146484375,
+    "phase_b": -7.428384780883789,
+    "season": 2026,
+    "team_id": "9fb181a8-2807-4e27-9442-8e09de6c9575",
+    "team_name": "Old Dominion"
+  },
+  {
+    "actual": -10.0,
+    "baseline": -14.8,
+    "phase_a": -12.58692455291748,
+    "phase_b": -10.324966430664062,
+    "season": 2026,
+    "team_id": "a0bfc386-3dd9-4417-be3e-42f45cee6c22",
+    "team_name": "Long Beach St."
+  },
+  {
+    "actual": 32.1,
+    "baseline": 30.1,
+    "phase_a": 30.524045944213867,
+    "phase_b": 26.308507919311523,
+    "season": 2026,
+    "team_id": "a1594c03-e784-493e-8435-66f585997595",
+    "team_name": "Michigan St."
+  },
+  {
+    "actual": -11.4,
+    "baseline": -10.2,
+    "phase_a": -8.112007141113281,
+    "phase_b": -5.183300971984863,
+    "season": 2026,
+    "team_id": "a79a95b3-2101-4649-8f36-782b24edba79",
+    "team_name": "Abilene Christian"
+  },
+  {
+    "actual": 8.5,
+    "baseline": 19.3,
+    "phase_a": 21.01566505432129,
+    "phase_b": 13.807551383972168,
+    "season": 2026,
+    "team_id": "ab5be1d8-ac8b-4c5c-8e26-320585a8bdef",
+    "team_name": "Pittsburgh"
+  },
+  {
+    "actual": -14.6,
+    "baseline": -19.6,
+    "phase_a": -17.127132415771484,
+    "phase_b": -10.846044540405273,
+    "season": 2026,
+    "team_id": "ab7c4477-bd9f-4098-989f-243e41356323",
+    "team_name": "Morehead St."
+  },
+  {
+    "actual": -15.8,
+    "baseline": -6.5,
+    "phase_a": -1.9590396881103516,
+    "phase_b": -2.1324517726898193,
+    "season": 2026,
+    "team_id": "abb24ec9-06c7-4ac8-a0a7-299760b256d3",
+    "team_name": "Brown"
+  },
+  {
+    "actual": 14.7,
+    "baseline": 11.5,
+    "phase_a": 12.093138694763184,
+    "phase_b": 10.567778587341309,
+    "season": 2026,
+    "team_id": "ac42cc2e-26ce-4ace-8d1f-28d21a1c77b2",
+    "team_name": "Minnesota"
+  },
+  {
+    "actual": -14.6,
+    "baseline": -7.6,
+    "phase_a": -7.036733627319336,
+    "phase_b": -3.8892579078674316,
+    "season": 2026,
+    "team_id": "ad9fa352-0a34-41df-8ad8-38855ef63d91",
+    "team_name": "Northeastern"
+  },
+  {
+    "actual": -16.7,
+    "baseline": -21.8,
+    "phase_a": -16.93894386291504,
+    "phase_b": -17.041484832763672,
+    "season": 2026,
+    "team_id": "aecf6cf2-725b-4450-9b49-8491e6a4ee0f",
+    "team_name": "Stetson"
+  },
+  {
+    "actual": 4.7,
+    "baseline": -14.4,
+    "phase_a": -11.508720397949219,
+    "phase_b": -10.462698936462402,
+    "season": 2026,
+    "team_id": "af50adaf-e9ac-42bd-a6a9-7ae8e4dc4a8b",
+    "team_name": "UT Rio Grande Valley"
+  },
+  {
+    "actual": -19.3,
+    "baseline": -13.7,
+    "phase_a": -12.996633529663086,
+    "phase_b": -12.02624797821045,
+    "season": 2026,
+    "team_id": "b04e184a-6805-475b-95bd-7e19d2fe95c9",
+    "team_name": "Sacred Heart"
+  },
+  {
+    "actual": -19.1,
+    "baseline": -12.0,
+    "phase_a": -10.004523277282715,
+    "phase_b": -12.59672737121582,
+    "season": 2026,
+    "team_id": "b0ebd027-95a6-4e7b-abfd-c26d14470857",
+    "team_name": "Tennessee Tech"
+  },
+  {
+    "actual": -10.1,
+    "baseline": -15.9,
+    "phase_a": -13.607732772827148,
+    "phase_b": -14.036317825317383,
+    "season": 2026,
+    "team_id": "b31c989d-1667-4be6-8a91-193cda486b3f",
+    "team_name": "Coastal Carolina"
+  },
+  {
+    "actual": -13.3,
+    "baseline": -14.2,
+    "phase_a": -10.967629432678223,
+    "phase_b": -10.826031684875488,
+    "season": 2026,
+    "team_id": "b67edcbb-77d5-4a29-aa67-e1733b9a001a",
+    "team_name": "Boston University"
+  },
+  {
+    "actual": 39.4,
+    "baseline": 30.8,
+    "phase_a": 30.097572326660156,
+    "phase_b": 31.651622772216797,
+    "season": 2026,
+    "team_id": "b6c7c93e-bdd7-4df7-b73a-c1fbe953199d",
+    "team_name": "Illinois"
+  },
+  {
+    "actual": -10.6,
+    "baseline": -10.0,
+    "phase_a": -9.726604461669922,
+    "phase_b": -10.639877319335938,
+    "season": 2026,
+    "team_id": "b704622d-2904-4237-b9a0-a9865096fefd",
+    "team_name": "Vermont"
+  },
+  {
+    "actual": -4.8,
+    "baseline": -4.8,
+    "phase_a": -4.443048477172852,
+    "phase_b": -2.635627508163452,
+    "season": 2026,
+    "team_id": "b8772a3e-c4fb-4396-8eb8-b30c8a36abb7",
+    "team_name": "Missouri St."
+  },
+  {
+    "actual": -2.0,
+    "baseline": -10.4,
+    "phase_a": -11.365806579589844,
+    "phase_b": -9.107754707336426,
+    "season": 2026,
+    "team_id": "bb02a3be-6beb-4745-b200-3a49f5224f0e",
+    "team_name": "UC Davis"
+  },
+  {
+    "actual": 8.8,
+    "baseline": 7.2,
+    "phase_a": 9.230363845825195,
+    "phase_b": 1.2902065515518188,
+    "season": 2026,
+    "team_id": "bd53017b-0998-4291-a0d1-1c9f45306402",
+    "team_name": "High Point"
+  },
+  {
+    "actual": 13.6,
+    "baseline": 19.6,
+    "phase_a": 22.019704818725586,
+    "phase_b": 25.500425338745117,
+    "season": 2026,
+    "team_id": "be595032-d4ed-4bea-95de-22a18feb02c7",
+    "team_name": "USC"
+  },
+  {
+    "actual": 0.4,
+    "baseline": -0.8,
+    "phase_a": -0.04970240592956543,
+    "phase_b": -4.649782657623291,
+    "season": 2026,
+    "team_id": "be9af39b-8a19-4b9d-89a3-bc6dd35defa3",
+    "team_name": "Northern Colorado"
+  },
+  {
+    "actual": -23.3,
+    "baseline": -17.4,
+    "phase_a": -15.064111709594727,
+    "phase_b": -11.26576042175293,
+    "season": 2026,
+    "team_id": "bf32f747-5e9d-417d-890c-89407933c4c6",
+    "team_name": "Army"
+  },
+  {
+    "actual": -27.0,
+    "baseline": -6.6,
+    "phase_a": -5.054200649261475,
+    "phase_b": -5.524672031402588,
+    "season": 2026,
+    "team_id": "bfd9aeef-b698-4868-8a44-436dd23e4ae1",
+    "team_name": "UMKC"
+  },
+  {
+    "actual": -10.7,
+    "baseline": -2.7,
+    "phase_a": -2.1566925048828125,
+    "phase_b": -1.4560809135437012,
+    "season": 2026,
+    "team_id": "c333af2f-2819-4e30-8541-dbb64eb01cbd",
+    "team_name": "Nebraska Omaha"
+  },
+  {
+    "actual": 13.2,
+    "baseline": 20.3,
+    "phase_a": 15.345848083496094,
+    "phase_b": 1.188273549079895,
+    "season": 2026,
+    "team_id": "c4101885-e600-4596-80ff-bc637c56221d",
+    "team_name": "Colorado St."
+  },
+  {
+    "actual": 10.4,
+    "baseline": 8.4,
+    "phase_a": 10.403459548950195,
+    "phase_b": 6.306236267089844,
+    "season": 2026,
+    "team_id": "bc9cb402-a9b1-4644-acdd-ae7e0571be90",
+    "team_name": "Yale"
+  },
+  {
+    "actual": -12.6,
+    "baseline": -22.6,
+    "phase_a": -18.228052139282227,
+    "phase_b": -11.781064987182617,
+    "season": 2026,
+    "team_id": "c878fb5c-c2e2-4f40-a5a0-f297cc0e51b8",
+    "team_name": "Bellarmine"
+  },
+  {
+    "actual": -5.6,
+    "baseline": -8.5,
+    "phase_a": -6.101322174072266,
+    "phase_b": -5.073728084564209,
+    "season": 2026,
+    "team_id": "c921ba85-0782-4ce6-80e2-44f0c43d4f16",
+    "team_name": "Campbell"
+  },
+  {
+    "actual": 23.0,
+    "baseline": 21.2,
+    "phase_a": 19.413097381591797,
+    "phase_b": 14.110255241394043,
+    "season": 2026,
+    "team_id": "c9bad532-d6c4-4187-8958-37ef239495a4",
+    "team_name": "SMU"
+  },
+  {
+    "actual": 16.2,
+    "baseline": 8.2,
+    "phase_a": 9.67271614074707,
+    "phase_b": 8.978017807006836,
+    "season": 2026,
+    "team_id": "cabaff64-a388-4861-9374-977555d19efb",
+    "team_name": "California"
+  },
+  {
+    "actual": -2.2,
+    "baseline": -2.7,
+    "phase_a": -1.3018639087677002,
+    "phase_b": -7.75439453125,
+    "season": 2026,
+    "team_id": "cb86bdfe-2665-485f-9a44-846b23bdb2c3",
+    "team_name": "Appalachian St."
+  },
+  {
+    "actual": -4.9,
+    "baseline": -12.0,
+    "phase_a": -6.14842414855957,
+    "phase_b": -3.580312967300415,
+    "season": 2026,
+    "team_id": "cc0e2cc0-da4b-4021-8739-c0e7e235467b",
+    "team_name": "Siena"
+  },
+  {
+    "actual": 30.7,
+    "baseline": 28.1,
+    "phase_a": 26.59178924560547,
+    "phase_b": 19.327404022216797,
+    "season": 2026,
+    "team_id": "cc4cdd9c-0563-41d0-bbb7-29b825db8e55",
+    "team_name": "St. John's"
+  },
+  {
+    "actual": -11.9,
+    "baseline": -17.9,
+    "phase_a": -15.326171875,
+    "phase_b": -11.153564453125,
+    "season": 2026,
+    "team_id": "ccaa9380-5136-4fd2-b639-f5f54936ac7d",
+    "team_name": "Lindenwood"
+  },
+  {
+    "actual": 13.2,
+    "baseline": 13.4,
+    "phase_a": 16.409339904785156,
+    "phase_b": 15.191825866699219,
+    "season": 2026,
+    "team_id": "cd6bef67-d192-4740-b7be-731c52686c54",
+    "team_name": "Dayton"
+  },
+  {
+    "actual": 30.9,
+    "baseline": 18.7,
+    "phase_a": 17.487743377685547,
+    "phase_b": 15.318056106567383,
+    "season": 2026,
+    "team_id": "ce88cc81-96d4-48c0-ad06-ee0c2d3d7663",
+    "team_name": "Nebraska"
+  },
+  {
+    "actual": -9.5,
+    "baseline": -20.6,
+    "phase_a": -16.501293182373047,
+    "phase_b": -8.936421394348145,
+    "season": 2026,
+    "team_id": "d0c9e56a-ea87-4a77-8ea1-93b43e2aa99f",
+    "team_name": "Sacramento St."
+  },
+  {
+    "actual": 0.8,
+    "baseline": -8.7,
+    "phase_a": -7.943489074707031,
+    "phase_b": -8.201387405395508,
+    "season": 2026,
+    "team_id": "d1dca835-9ba3-4f00-89e0-533fcfd2b27f",
+    "team_name": "Charlotte"
+  },
+  {
+    "actual": 24.0,
+    "baseline": 7.6,
+    "phase_a": 9.893844604492188,
+    "phase_b": 23.259462356567383,
+    "season": 2026,
+    "team_id": "d26d7563-983a-4b9f-bf04-fa2777e0beb0",
+    "team_name": "N.C. State"
+  },
+  {
+    "actual": -10.4,
+    "baseline": -13.5,
+    "phase_a": -11.957915306091309,
+    "phase_b": -7.402280330657959,
+    "season": 2026,
+    "team_id": "d65f3ef9-cd07-4472-b901-9b3ba2b35764",
+    "team_name": "Tarleton St."
+  },
+  {
+    "actual": 17.0,
+    "baseline": 13.4,
+    "phase_a": 9.460758209228516,
+    "phase_b": 7.785685062408447,
+    "season": 2026,
+    "team_id": "d756733f-2d8f-4ed6-8b7f-dc7804a270af",
+    "team_name": "Stanford"
+  },
+  {
+    "actual": -0.2,
+    "baseline": -7.4,
+    "phase_a": -7.022348403930664,
+    "phase_b": -2.057743549346924,
+    "season": 2026,
+    "team_id": "d75e1814-b8c9-4246-b06c-afe60d661528",
+    "team_name": "Fordham"
+  },
+  {
+    "actual": -28.5,
+    "baseline": -22.5,
+    "phase_a": -17.333908081054688,
+    "phase_b": -14.435773849487305,
+    "season": 2026,
+    "team_id": "d8940484-2c3e-4ae3-b77c-e5e00f048ec7",
+    "team_name": "Morgan St."
+  },
+  {
+    "actual": -12.3,
+    "baseline": -11.3,
+    "phase_a": -10.867940902709961,
+    "phase_b": -10.682609558105469,
+    "season": 2026,
+    "team_id": "d8e2daca-6b8a-4f31-93d4-8cf6dd93fda7",
+    "team_name": "American"
+  },
+  {
+    "actual": 29.8,
+    "baseline": 23.1,
+    "phase_a": 22.58022689819336,
+    "phase_b": 21.22476577758789,
+    "season": 2026,
+    "team_id": "d9a1f4af-a23a-4734-a595-6ecba98452c2",
+    "team_name": "Arkansas"
+  },
+  {
+    "actual": 18.2,
+    "baseline": 20.4,
+    "phase_a": 18.435293197631836,
+    "phase_b": 10.222395896911621,
+    "season": 2026,
+    "team_id": "d9fdf72a-562e-4e19-ba2f-faa3de20ace5",
+    "team_name": "West Virginia"
+  },
+  {
+    "actual": -0.3,
+    "baseline": -14.7,
+    "phase_a": -9.810263633728027,
+    "phase_b": -8.61856460571289,
+    "season": 2026,
+    "team_id": "daea7f8b-7386-4fa6-8921-870a3e848b4a",
+    "team_name": "Navy"
+  },
+  {
+    "actual": 11.3,
+    "baseline": 25.0,
+    "phase_a": 21.056440353393555,
+    "phase_b": 11.730030059814453,
+    "season": 2026,
+    "team_id": "db5b4ba8-4030-4125-845c-337b3ed300b4",
+    "team_name": "Marquette"
+  },
+  {
+    "actual": -19.7,
+    "baseline": -15.7,
+    "phase_a": -12.6770601272583,
+    "phase_b": -7.701109409332275,
+    "season": 2026,
+    "team_id": "dbd1798b-2cf1-49c5-9f33-caefec39594e",
+    "team_name": "Alabama St."
+  },
+  {
+    "actual": 34.9,
+    "baseline": 31.2,
+    "phase_a": 30.210636138916016,
+    "phase_b": 18.8223819732666,
+    "season": 2026,
+    "team_id": "f2fcffd8-915c-4fdb-a632-8b5b621bc999",
+    "team_name": "Iowa St."
+  },
+  {
+    "actual": 26.3,
+    "baseline": 28.5,
+    "phase_a": 27.510543823242188,
+    "phase_b": 22.79454231262207,
+    "season": 2026,
+    "team_id": "f829b41d-4185-4fb9-98e0-bd7bd9b6bd7d",
+    "team_name": "Wisconsin"
+  },
+  {
+    "actual": -5.5,
+    "baseline": -14.5,
+    "phase_a": -12.157870292663574,
+    "phase_b": -12.905863761901855,
+    "season": 2026,
+    "team_id": "51ff831a-13fe-411d-a486-ed3c7ea2fb5e",
+    "team_name": "Columbia"
+  },
+  {
+    "actual": -18.7,
+    "baseline": -18.4,
+    "phase_a": -15.779939651489258,
+    "phase_b": -7.63320779800415,
+    "season": 2026,
+    "team_id": "52355b41-c560-4fd9-b83e-3bec2763822d",
+    "team_name": "Eastern Illinois"
+  },
+  {
+    "actual": -13.7,
+    "baseline": -8.0,
+    "phase_a": -4.513214588165283,
+    "phase_b": -6.422149658203125,
+    "season": 2026,
+    "team_id": "52414cfe-b45b-4eab-a88b-e509aa446dfb",
+    "team_name": "Hampton"
+  },
+  {
+    "actual": 0.5,
+    "baseline": -13.1,
+    "phase_a": -10.78398609161377,
+    "phase_b": -6.073301792144775,
+    "season": 2026,
+    "team_id": "17900399-e4eb-42bb-81ed-06f5be1309b7",
+    "team_name": "Harvard"
+  },
+  {
+    "actual": 18.1,
+    "baseline": -1.1,
+    "phase_a": -1.8006093502044678,
+    "phase_b": 3.264490842819214,
+    "season": 2026,
+    "team_id": "f8ed9667-67c8-4fc7-a946-d81c4cbe8fed",
+    "team_name": "Seton Hall"
+  },
+  {
+    "actual": -4.0,
+    "baseline": -14.5,
+    "phase_a": -12.281755447387695,
+    "phase_b": -8.41109561920166,
+    "season": 2026,
+    "team_id": "307416ce-030c-4156-8d62-1e2632e9e26c",
+    "team_name": "Utah Tech"
+  },
+  {
+    "actual": -14.2,
+    "baseline": -8.9,
+    "phase_a": -6.033097267150879,
+    "phase_b": -2.584376573562622,
+    "season": 2026,
+    "team_id": "561ee565-69fc-4571-95fe-32ac563e53f0",
+    "team_name": "Evansville"
+  },
+  {
+    "actual": -3.4,
+    "baseline": -14.5,
+    "phase_a": -10.246170043945312,
+    "phase_b": -5.247852325439453,
+    "season": 2026,
+    "team_id": "5717b8ad-bb6c-432d-b223-01a330a59686",
+    "team_name": "Austin Peay"
+  },
+  {
+    "actual": -6.4,
+    "baseline": -4.5,
+    "phase_a": -3.5259737968444824,
+    "phase_b": -6.107105255126953,
+    "season": 2026,
+    "team_id": "02073ad7-1bb6-47dd-a1fb-fae5e0bc2ed7",
+    "team_name": "Youngstown St."
+  },
+  {
+    "actual": 0.0,
+    "baseline": -15.3,
+    "phase_a": -13.09988784790039,
+    "phase_b": -15.059622764587402,
+    "season": 2026,
+    "team_id": "e66c14f4-c6eb-48be-8caf-0deb5a03ec15",
+    "team_name": "Penn"
+  },
+  {
+    "actual": -5.9,
+    "baseline": -13.1,
+    "phase_a": -13.14814567565918,
+    "phase_b": -2.589414119720459,
+    "season": 2026,
+    "team_id": "e732f6ff-8488-4df9-8756-f1cbcec88e33",
+    "team_name": "San Diego"
+  },
+  {
+    "actual": 3.7,
+    "baseline": 14.5,
+    "phase_a": 13.55825138092041,
+    "phase_b": 0.4016733169555664,
+    "season": 2026,
+    "team_id": "eb0507e2-4c2c-4860-ba0c-7a0a815425fe",
+    "team_name": "North Texas"
+  },
+  {
+    "actual": 25.9,
+    "baseline": 24.4,
+    "phase_a": 22.685609817504883,
+    "phase_b": 23.397741317749023,
+    "season": 2026,
+    "team_id": "eb7098ac-5154-42da-b703-d3b3958b198c",
+    "team_name": "North Carolina"
+  },
+  {
+    "actual": 4.1,
+    "baseline": -1.3,
+    "phase_a": 0.022782087326049805,
+    "phase_b": -0.3802638351917267,
+    "season": 2026,
+    "team_id": "ed973a10-a469-4337-9742-eed664c61168",
+    "team_name": "Southern Illinois"
+  },
+  {
+    "actual": 44.6,
+    "baseline": 28.1,
+    "phase_a": 27.802141189575195,
+    "phase_b": 32.7520751953125,
+    "season": 2026,
+    "team_id": "6e056aa7-1906-4546-b6db-5910356fee72",
+    "team_name": "Michigan"
+  },
+  {
+    "actual": 25.4,
+    "baseline": 26.3,
+    "phase_a": 27.39280891418457,
+    "phase_b": 29.12771224975586,
+    "season": 2026,
+    "team_id": "31a5142f-21b1-4d3a-87fa-d39f7746b7a8",
+    "team_name": "UCLA"
+  },
+  {
+    "actual": 20.7,
+    "baseline": 13.5,
+    "phase_a": 12.19903564453125,
+    "phase_b": 14.065600395202637,
+    "season": 2026,
+    "team_id": "31a68979-4cbf-4e59-be9e-82043f581ff6",
+    "team_name": "TCU"
+  },
+  {
+    "actual": -1.0,
+    "baseline": -9.7,
+    "phase_a": -7.481022834777832,
+    "phase_b": -6.012138843536377,
+    "season": 2026,
+    "team_id": "325d11bf-595b-429a-8342-97fe68b1a3cc",
+    "team_name": "Toledo"
+  },
+  {
+    "actual": 20.4,
+    "baseline": 26.6,
+    "phase_a": 26.990427017211914,
+    "phase_b": 27.44927978515625,
+    "season": 2026,
+    "team_id": "c91670da-50fe-4e29-9e0d-e0a2d01897cf",
+    "team_name": "Baylor"
+  },
+  {
+    "actual": -7.6,
+    "baseline": -6.4,
+    "phase_a": -9.259952545166016,
+    "phase_b": -9.88735580444336,
+    "season": 2026,
+    "team_id": "75628733-1eec-40f9-a6cf-07501979c4b3",
+    "team_name": "Elon"
+  },
+  {
+    "actual": 15.3,
+    "baseline": 24.4,
+    "phase_a": 23.048791885375977,
+    "phase_b": 16.542465209960938,
+    "season": 2026,
+    "team_id": "75d1bc49-ce2b-4e7f-82f2-26e690f29375",
+    "team_name": "Creighton"
+  },
+  {
+    "actual": 5.1,
+    "baseline": 1.5,
+    "phase_a": 2.4355406761169434,
+    "phase_b": 0.5418043732643127,
+    "season": 2026,
+    "team_id": "75dd9179-8700-4b34-aeaf-2cf608aec25a",
+    "team_name": "St. Thomas"
+  },
+  {
+    "actual": 19.2,
+    "baseline": 23.0,
+    "phase_a": 22.4946346282959,
+    "phase_b": 8.402405738830566,
+    "season": 2026,
+    "team_id": "a2a4c8c1-e611-4717-92f2-fccc9217a883",
+    "team_name": "VCU"
+  }
+]
