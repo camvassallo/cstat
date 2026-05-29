@@ -472,20 +472,26 @@ async fn main() -> Result<()> {
                 "Torvik player stats: {upserted} upserted, {matched} matched to cstat players"
             );
 
-            if rebounds {
-                let updated = cstat_ingest::ingest::torvik::backfill_rebounds_from_torvik(
-                    &torvik, &db.pool, year,
-                )
-                .await?;
-                println!("Rebound backfill: {updated} game rows updated");
-            }
-
-            if persist_games {
-                let inserted = cstat_ingest::ingest::torvik::persist_torvik_game_stats(
-                    &torvik, &db.pool, year,
-                )
-                .await?;
-                println!("Torvik per-game persistence: {inserted} rows upserted");
+            // Both flags consume the same gzip JSON from
+            // `barttorvik.com/{year}_all_advgames.json.gz` — fetch once and
+            // dispatch so a `--rebounds --persist-games` daily-ingest call
+            // doesn't pull ~25 MB twice.
+            if rebounds || persist_games {
+                let games = torvik.fetch_game_stats(year).await?;
+                if rebounds {
+                    let updated = cstat_ingest::ingest::torvik::apply_rebound_backfill(
+                        &db.pool, &games, year,
+                    )
+                    .await?;
+                    println!("Rebound backfill: {updated} game rows updated");
+                }
+                if persist_games {
+                    let inserted = cstat_ingest::ingest::torvik::apply_persist_torvik_game_stats(
+                        &db.pool, &games, year,
+                    )
+                    .await?;
+                    println!("Torvik per-game persistence: {inserted} rows upserted");
+                }
             }
         }
 

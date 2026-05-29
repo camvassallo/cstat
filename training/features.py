@@ -196,10 +196,9 @@ def _load_pit_torvik_stats(engine, seasons) -> pd.DataFrame:
 
     Returns one row per (player_id, season, cutoff_date) with gbpm/ogbpm/dgbpm
     columns set to pit values. The 'gbpm' canonical column uses
-    cam_gbpm_v3_no_sos; ogbpm and dgbpm use the cumulative-weighted
-    OBPM/DBPM contributions from torvik_player_game_stats.
+    cam_gbpm_v3_no_sos; ogbpm and dgbpm pass through directly as the
+    cumulative-weighted OBPM/DBPM contributions from torvik_player_game_stats.
     """
-    import os
     from pathlib import Path
 
     path = Path(os.environ.get(
@@ -219,11 +218,7 @@ def _load_pit_torvik_stats(engine, seasons) -> pd.DataFrame:
     pid_map = pd.read_sql(map_sql, engine, params={"seasons": seasons})
 
     df = lookup.merge(pid_map, on=["pid", "season"], how="inner")
-    df = df.rename(columns={
-        "cam_gbpm_v3_no_sos": "gbpm",
-        "ogbpm": "ogbpm",  # cumulative OBPM contribution
-        "dgbpm": "dgbpm",  # cumulative DBPM contribution
-    })
+    df = df.rename(columns={"cam_gbpm_v3_no_sos": "gbpm"})
     return df[["player_id", "season", "cutoff_date", "gbpm", "ogbpm", "dgbpm"]]
 
 

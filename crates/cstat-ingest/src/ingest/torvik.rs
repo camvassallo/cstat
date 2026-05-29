@@ -1,6 +1,6 @@
 //! Barttorvik data ingestion: player season stats and per-game rebound backfill.
 
-use crate::torvik::TorkvikClient;
+use crate::torvik::{TorkvikClient, TorkvikGameRow};
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
@@ -211,10 +211,21 @@ pub async fn persist_torvik_game_stats(
     season: i32,
 ) -> anyhow::Result<u64> {
     let games = client.fetch_game_stats(season).await?;
+    apply_persist_torvik_game_stats(pool, &games, season).await
+}
+
+/// Same as `persist_torvik_game_stats`, but skips the network fetch and
+/// operates on a pre-fetched `games` slice. Lets callers that need *both*
+/// the rebound backfill and the per-game persistence share one fetch.
+pub async fn apply_persist_torvik_game_stats(
+    pool: &PgPool,
+    games: &[TorkvikGameRow],
+    season: i32,
+) -> anyhow::Result<u64> {
     let mut inserted: u64 = 0;
     let mut skipped: u64 = 0;
 
-    for g in &games {
+    for g in games {
         let pid = match g.pid {
             Some(v) => v,
             None => {
@@ -337,6 +348,18 @@ pub async fn backfill_rebounds_from_torvik(
     pool: &PgPool,
     season: i32,
 ) -> anyhow::Result<u64> {
+    let games = client.fetch_game_stats(season).await?;
+    apply_rebound_backfill(pool, &games, season).await
+}
+
+/// Same as `backfill_rebounds_from_torvik`, but skips the network fetch and
+/// operates on a pre-fetched `games` slice. Lets callers that need *both*
+/// the rebound backfill and the per-game persistence share one fetch.
+pub async fn apply_rebound_backfill(
+    pool: &PgPool,
+    games: &[TorkvikGameRow],
+    season: i32,
+) -> anyhow::Result<u64> {
     // Pre-build a lookup: normalized_name → Vec<player_id> for this season.
     // This avoids running REGEXP_REPLACE in SQL for every one of 113k rows.
     let players =
@@ -351,10 +374,9 @@ pub async fn backfill_rebounds_from_torvik(
         name_map.entry(normalize_name(name)).or_default().push(*id);
     }
 
-    let games = client.fetch_game_stats(season).await?;
     let mut updated: u64 = 0;
 
-    for g in &games {
+    for g in games {
         let oreb = match g.oreb {
             Some(v) => v as i32,
             None => continue,

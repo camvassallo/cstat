@@ -18,5 +18,6 @@ pub use season::{
 };
 pub use teams::{ingest_single_team_details, ingest_team_details};
 pub use torvik::{
-    backfill_rebounds_from_torvik, ingest_torvik_player_stats, persist_torvik_game_stats,
+    apply_persist_torvik_game_stats, apply_rebound_backfill, backfill_rebounds_from_torvik,
+    ingest_torvik_player_stats, persist_torvik_game_stats,
 };

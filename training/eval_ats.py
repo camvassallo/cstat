@@ -27,11 +27,10 @@ The harness doesn't care which it is; it just scores whatever you give it.
 
 import argparse
 import json
-import math
-import os
 from pathlib import Path
 
 import pandas as pd
+from sklearn.metrics import roc_auc_score
 from sqlalchemy import text
 
 from db import get_engine
@@ -202,7 +201,6 @@ def summarize(df: pd.DataFrame, label: str):
         if "pred_home_win_prob" in sub.columns:
             actual = (sub["home_score"] > sub["away_score"]).astype(int)
             try:
-                from sklearn.metrics import roc_auc_score
                 auc = roc_auc_score(actual, sub["pred_home_win_prob"])
                 auc_s = f"{auc:.3f}"
             except Exception:
