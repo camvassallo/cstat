@@ -122,6 +122,9 @@ fn compute_stats(preds: &[f64], actuals: &[f64]) -> Stats {
 
 /// One team's three predictions plus its actual AdjEM.
 struct TeamResult {
+    team_id: Uuid,
+    team_name: String,
+    season: i32,
     phase_b: f64,
     phase_a: f64,
     baseline: f64,
@@ -247,6 +250,9 @@ async fn backtest_year(
             + PHASE_A_OFFSET;
 
         results.push(TeamResult {
+            team_id: p.team_id,
+            team_name: p.team_name.clone(),
+            season: year,
             phase_b: phase_b as f64,
             phase_a: phase_a as f64,
             baseline,
@@ -322,11 +328,18 @@ fn blend_sweep(results: &[TeamResult]) -> (f64, f64) {
 /// Run the backtest across `years` and print the report. Returns Ok even
 /// when Phase B underperforms — this is a diagnostic, not a CI gate; the
 /// printed verdict carries the conclusion.
+///
+/// When `output_path` is `Some`, also dumps per-team predictions to a
+/// JSON file (one record per scored team) so downstream audit scripts can
+/// join projection error against per-team explanatory variables. The
+/// dump is the full pre-pooling cohort — same row set the report blocks
+/// summarize.
 pub async fn run(
     pool: &PgPool,
     predictor: &Predictor,
     model_dir: &Path,
     years: &[i32],
+    output_path: Option<&Path>,
 ) -> Result<()> {
     println!("{}", "=".repeat(72));
     println!("Phase B projection backtest — target seasons: {years:?}");
@@ -411,5 +424,42 @@ pub async fn run(
          in-sample leak from the roster model); recruit cam_v3 still uses \
          live freshman inference (mildly in-sample). See module docs.",
     );
+
+    if let Some(path) = output_path {
+        dump_per_team_json(path, &pooled)?;
+        println!("  wrote per-team dump → {}", path.display());
+    }
+    Ok(())
+}
+
+/// Dump per-team predictions to JSON for downstream residual analysis.
+/// Schema: a flat array of `{team_id, team_name, season, phase_b,
+/// phase_a, baseline, actual}` records — one per scored team. Floats
+/// kept at their native f64 precision; downstream audit code handles
+/// rounding.
+fn dump_per_team_json(path: &Path, results: &[TeamResult]) -> Result<()> {
+    use serde_json::{Value, json};
+    let arr: Vec<Value> = results
+        .iter()
+        .map(|r| {
+            json!({
+                "team_id": r.team_id,
+                "team_name": r.team_name,
+                "season": r.season,
+                "phase_b": r.phase_b,
+                "phase_a": r.phase_a,
+                "baseline": r.baseline,
+                "actual": r.actual,
+            })
+        })
+        .collect();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all {}", parent.display()))?;
+    }
+    let f = std::fs::File::create(path)
+        .with_context(|| format!("create dump file {}", path.display()))?;
+    serde_json::to_writer_pretty(f, &arr)
+        .with_context(|| format!("write JSON dump {}", path.display()))?;
     Ok(())
 }

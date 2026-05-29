@@ -1,0 +1,672 @@
+{
+  "generated_at": "2026-05-29T19:36:06.282870Z",
+  "blend": {
+    "baseline_weight": 0.5,
+    "offset": 0.0
+  },
+  "headline": {
+    "phase_b_blended": {
+      "n": 495,
+      "mae": 5.882128026580268,
+      "bias": -0.09146364975306713,
+      "rmse": 7.3552775097395315
+    },
+    "phase_b_raw": {
+      "n": 495,
+      "mae": 6.442108608830457,
+      "bias": 0.6267696701908352,
+      "rmse": 8.012518916232853
+    },
+    "baseline_persistence": {
+      "n": 495,
+      "mae": 6.526464646464647,
+      "bias": -0.8096969696969697,
+      "rmse": 8.281943362435284
+    }
+  },
+  "per_season": {
+    "2025": {
+      "blended": {
+        "n": 263,
+        "mae": 5.717002458711766,
+        "bias": -0.2038008962463971,
+        "rmse": 7.1885339631554235
+      },
+      "phase_b_raw": {
+        "n": 263,
+        "mae": 6.147459691955563,
+        "bias": 0.6296605649216546,
+        "rmse": 7.647110176224145
+      },
+      "baseline_persistence": {
+        "n": 263,
+        "mae": 6.4532319391635,
+        "bias": -1.0372623574144488,
+        "rmse": 8.29175228124527
+      }
+    },
+    "2026": {
+      "blended": {
+        "n": 232,
+        "mae": 6.069317786707061,
+        "bias": 0.0358841770906644,
+        "rmse": 7.539843215162328
+      },
+      "phase_b_raw": {
+        "n": 232,
+        "mae": 6.776128717184323,
+        "bias": 0.6234924921123632,
+        "rmse": 8.407569470253696
+      },
+      "baseline_persistence": {
+        "n": 232,
+        "mae": 6.60948275862069,
+        "bias": -0.5517241379310345,
+        "rmse": 8.270809700594512
+      }
+    }
+  },
+  "by_actual_quartile": [
+    {
+      "bucket": "Q1 bottom",
+      "actual_lo": null,
+      "actual_hi": -12.25,
+      "n": 124,
+      "mae_blended": 7.045491894502795,
+      "bias_blended": 6.086620766789683,
+      "mae_baseline": 6.604032258064516
+    },
+    {
+      "bucket": "Q2 below-median",
+      "actual_lo": -12.25,
+      "actual_hi": -1.9000000000000001,
+      "n": 124,
+      "mae_blended": 4.880710205820299,
+      "bias_blended": -0.7906562150486054,
+      "mae_baseline": 6.266935483870969
+    },
+    {
+      "bucket": "Q3 above-median",
+      "actual_lo": -1.9000000000000001,
+      "actual_hi": 12.55,
+      "n": 123,
+      "mae_blended": 5.726671271080652,
+      "bias_blended": -1.3183172054104204,
+      "mae_baseline": 6.995934959349594
+    },
+    {
+      "bucket": "Q4 top",
+      "actual_lo": 12.55,
+      "actual_hi": null,
+      "n": 124,
+      "mae_blended": 5.874385051405238,
+      "bias_blended": -4.353395925630486,
+      "mae_baseline": 6.242741935483871
+    }
+  ],
+  "by_returning_share_quartile": [
+    {
+      "bucket": "Q1 low-return",
+      "lo": null,
+      "hi": 0.493185793150618,
+      "n": 124,
+      "mae_blended": 5.975839959619748,
+      "bias_blended": 0.2916533294644568,
+      "mae_baseline": 7.0193548387096785
+    },
+    {
+      "bucket": "Q2",
+      "lo": 0.493185793150618,
+      "hi": 0.6281271129141311,
+      "n": 124,
+      "mae_blended": 5.22957845520108,
+      "bias_blended": 0.2875315893801949,
+      "mae_baseline": 5.758064516129032
+    },
+    {
+      "bucket": "Q3",
+      "lo": 0.6281271129141311,
+      "hi": 0.7431452494211486,
+      "n": 123,
+      "mae_blended": 6.415652081140173,
+      "bias_blended": -1.0623811155678782,
+      "mae_baseline": 6.971544715447155
+    },
+    {
+      "bucket": "Q4 high-return",
+      "lo": 0.7431452494211486,
+      "hi": null,
+      "n": 124,
+      "mae_blended": 5.9117442237033,
+      "bias_blended": 0.10951161814793474,
+      "mae_baseline": 6.360483870967743
+    }
+  ],
+  "signal_correlations": [
+    {
+      "signal": "returning_minutes_share",
+      "n": 495,
+      "corr_signed_err": 0.006563231000596321,
+      "corr_abs_err": 0.025823245123971272,
+      "signal_mean": 0.6179159329446788,
+      "signal_std": 0.1761423269754557
+    },
+    {
+      "signal": "portal_inbound_count",
+      "n": 495,
+      "corr_signed_err": -0.10310137580132764,
+      "corr_abs_err": -0.0272159071331117,
+      "signal_mean": 2.175757575757576,
+      "signal_std": 2.0995994850903545
+    },
+    {
+      "signal": "portal_outbound_count",
+      "n": 495,
+      "corr_signed_err": -0.10056634020701735,
+      "corr_abs_err": 0.07662957147729356,
+      "signal_mean": 3.1858585858585857,
+      "signal_std": 2.2750632905290735
+    },
+    {
+      "signal": "portal_net_count",
+      "n": 495,
+      "corr_signed_err": 0.00568285862861333,
+      "corr_abs_err": -0.10674716983978005,
+      "signal_mean": -1.0101010101010102,
+      "signal_std": 2.1684849348919233
+    },
+    {
+      "signal": "portal_inbound_cam_v3",
+      "n": 495,
+      "corr_signed_err": -0.1440437289023251,
+      "corr_abs_err": -0.01608333756323109,
+      "signal_mean": 1.8173360401769079,
+      "signal_std": 8.869786135368921
+    },
+    {
+      "signal": "portal_outbound_cam_v3",
+      "n": 495,
+      "corr_signed_err": -0.009751459210036737,
+      "corr_abs_err": -0.002720761932162323,
+      "signal_mean": 1.810670465978669,
+      "signal_std": 8.792736645403608
+    },
+    {
+      "signal": "portal_net_cam_v3",
+      "n": 495,
+      "corr_signed_err": -0.12329501782104342,
+      "corr_abs_err": -0.012282260292533369,
+      "signal_mean": 0.006665574198238557,
+      "signal_std": 9.667017190365394
+    },
+    {
+      "signal": "recruit_count",
+      "n": 495,
+      "corr_signed_err": -0.16686388980095704,
+      "corr_abs_err": 0.0469589447039917,
+      "signal_mean": 1.107070707070707,
+      "signal_std": 1.3432431390548474
+    },
+    {
+      "signal": "recruit_avg_rating",
+      "n": 495,
+      "corr_signed_err": -0.1430350159931102,
+      "corr_abs_err": 0.0012107530491407207,
+      "signal_mean": 0.48840904986760897,
+      "signal_std": 0.4530363233816284
+    },
+    {
+      "signal": "recruit_top30_count",
+      "n": 495,
+      "corr_signed_err": -0.10455175090459738,
+      "corr_abs_err": 0.07606687883949427,
+      "signal_mean": 0.08282828282828283,
+      "signal_std": 0.3912091719304533
+    },
+    {
+      "signal": "recruit_top100_count",
+      "n": 495,
+      "corr_signed_err": -0.15102255802997808,
+      "corr_abs_err": 0.02113229239448284,
+      "signal_mean": 0.30505050505050507,
+      "signal_std": 0.732332215017596
+    }
+  ],
+  "ols_residual_model": {
+    "n": 495,
+    "r2": 0.051757807575345205,
+    "rmse": 7.161848343166885,
+    "coefficients": [
+      {
+        "feature": "intercept",
+        "beta_std": -0.09146364975306692,
+        "t_stat": -0.2815409305745292
+      },
+      {
+        "feature": "returning_minutes_share",
+        "beta_std": -0.29453513435690615,
+        "t_stat": -0.8583856344609697
+      },
+      {
+        "feature": "portal_inbound_count",
+        "beta_std": -0.41210419827645234,
+        "t_stat": -0.980838460577007
+      },
+      {
+        "feature": "portal_outbound_count",
+        "beta_std": -0.29201341172149153,
+        "t_stat": -0.7126249009954934
+      },
+      {
+        "feature": "portal_inbound_cam_v3",
+        "beta_std": -0.604728955234902,
+        "t_stat": -1.4355323079824103
+      },
+      {
+        "feature": "portal_outbound_cam_v3",
+        "beta_std": 0.9780144651709196,
+        "t_stat": 2.527207587011266
+      },
+      {
+        "feature": "recruit_count",
+        "beta_std": -0.9874079069149123,
+        "t_stat": -1.5643994833286228
+      },
+      {
+        "feature": "recruit_avg_rating",
+        "beta_std": 0.07350073222972456,
+        "t_stat": 0.13246147035240277
+      },
+      {
+        "feature": "recruit_top100_count",
+        "beta_std": -0.522581428829717,
+        "t_stat": -1.1473418815342862
+      }
+    ],
+    "note": "betas are on standardized signals (z-scored). |t| > 2 \u2248 significant at p<0.05. positive beta_std on a signal means higher signal \u2192 projection OVER-shoots actual; negative means projection UNDER-shoots."
+  },
+  "regression_to_mean": {
+    "n": 495,
+    "intercept_a": 0.09284841636506917,
+    "slope_b": 1.0508708401633409,
+    "slope_se": 0.02328559584016812,
+    "t_stat_b_vs_one": 2.184648420101308,
+    "mae_raw": 5.882128026580268,
+    "mae_after_correction": 5.832831961197854,
+    "mae_lift": 0.04929606538241327,
+    "interpretation": "slope=1.051  |t vs 1.0|=2.18. Pred range narrower than actual \u21d2 projection compresses tails (under-projects top, over-projects bottom when binned by actual). Linear de-shrinkage lift: +0.049 MAE."
+  },
+  "worst_misses": {
+    "most_under_projected": [
+      {
+        "team_name": "UC San Diego",
+        "season": 2025,
+        "blended": 1.580737963318825,
+        "actual": 22.2,
+        "err_blended": -20.619262036681175,
+        "returning_minutes_share": 0.6538999650227352,
+        "portal_net_count": -2,
+        "portal_net_cam_v3": -1.7203200827696639,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Missouri",
+        "season": 2025,
+        "blended": 8.667472457885742,
+        "actual": 28.5,
+        "err_blended": -19.832527542114256,
+        "returning_minutes_share": 0.4444634021498038,
+        "portal_net_count": 0,
+        "portal_net_cam_v3": 24.38416118718868,
+        "recruit_avg_rating": 0.9611400008201599,
+        "recruit_top100_count": 3
+      },
+      {
+        "team_name": "Saint Louis",
+        "season": 2026,
+        "blended": 5.001238012313842,
+        "actual": 23.2,
+        "err_blended": -18.198761987686158,
+        "returning_minutes_share": 0.31519490851233095,
+        "portal_net_count": -4,
+        "portal_net_cam_v3": -1.2673997752370783,
+        "recruit_avg_rating": 0.8889999836683273,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "UT Rio Grande Valley",
+        "season": 2026,
+        "blended": -12.4313494682312,
+        "actual": 4.7,
+        "err_blended": -17.1313494682312,
+        "returning_minutes_share": 0.6531540438995452,
+        "portal_net_count": -3,
+        "portal_net_cam_v3": 5.260024750768434,
+        "recruit_avg_rating": 0.8349999785423279,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Seton Hall",
+        "season": 2026,
+        "blended": 1.082245421409607,
+        "actual": 18.1,
+        "err_blended": -17.017754578590395,
+        "returning_minutes_share": 0.8005931612002791,
+        "portal_net_count": -3,
+        "portal_net_cam_v3": 1.5744735634701934,
+        "recruit_avg_rating": 0.9718999862670898,
+        "recruit_top100_count": 1
+      },
+      {
+        "team_name": "Florida",
+        "season": 2025,
+        "blended": 23.672065353393556,
+        "actual": 40.2,
+        "err_blended": -16.527934646606447,
+        "returning_minutes_share": 0.6325971058644326,
+        "portal_net_count": 1,
+        "portal_net_cam_v3": 8.308318767844401,
+        "recruit_avg_rating": 0.897350013256073,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Auburn",
+        "season": 2025,
+        "blended": 25.370975303649903,
+        "actual": 41.7,
+        "err_blended": -16.3290246963501,
+        "returning_minutes_share": 0.7406052544063851,
+        "portal_net_count": -1,
+        "portal_net_cam_v3": -1.815715417934511,
+        "recruit_avg_rating": 0.9821500182151794,
+        "recruit_top100_count": 2
+      },
+      {
+        "team_name": "Maryland",
+        "season": 2025,
+        "blended": 15.347269439697266,
+        "actual": 30.6,
+        "err_blended": -15.252730560302735,
+        "returning_minutes_share": 0.31329113924050633,
+        "portal_net_count": -1,
+        "portal_net_cam_v3": 13.3590858587654,
+        "recruit_avg_rating": 0.9571000039577484,
+        "recruit_top100_count": 1
+      },
+      {
+        "team_name": "Penn",
+        "season": 2026,
+        "blended": -15.179811382293702,
+        "actual": 0.0,
+        "err_blended": -15.179811382293702,
+        "returning_minutes_share": 0.7354002973030367,
+        "portal_net_count": -1,
+        "portal_net_cam_v3": -1.9168699052411873,
+        "recruit_avg_rating": 0.8299999833106995,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Robert Morris",
+        "season": 2025,
+        "blended": -14.760193252563477,
+        "actual": 0.30000000000000004,
+        "err_blended": -15.060193252563478,
+        "returning_minutes_share": 0.5299756295694558,
+        "portal_net_count": 2,
+        "portal_net_cam_v3": -0.021548587703774658,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Duke",
+        "season": 2025,
+        "blended": 31.589075088500977,
+        "actual": 46.2,
+        "err_blended": -14.610924911499026,
+        "returning_minutes_share": 0.6308411214953271,
+        "portal_net_count": -4,
+        "portal_net_cam_v3": -10.86361566263561,
+        "recruit_avg_rating": 0.9940166672070821,
+        "recruit_top100_count": 6
+      },
+      {
+        "team_name": "Michigan",
+        "season": 2026,
+        "blended": 30.42603759765625,
+        "actual": 44.6,
+        "err_blended": -14.17396240234375,
+        "returning_minutes_share": 0.5653549807374794,
+        "portal_net_count": -5,
+        "portal_net_cam_v3": -12.080006346118589,
+        "recruit_avg_rating": 0.9413333336512247,
+        "recruit_top100_count": 2
+      },
+      {
+        "team_name": "Middle Tennessee",
+        "season": 2025,
+        "blended": -10.193145561218262,
+        "actual": 3.8,
+        "err_blended": -13.993145561218263,
+        "returning_minutes_share": 0.7071579977172673,
+        "portal_net_count": 0,
+        "portal_net_cam_v3": -5.03042586190615,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Cal Poly",
+        "season": 2025,
+        "blended": -20.46140251159668,
+        "actual": -6.5,
+        "err_blended": -13.961402511596681,
+        "returning_minutes_share": 0.8524738172625497,
+        "portal_net_count": -2,
+        "portal_net_cam_v3": 0.1334533438926515,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Southeast Missouri St.",
+        "season": 2025,
+        "blended": -21.247063827514648,
+        "actual": -7.3,
+        "err_blended": -13.947063827514647,
+        "returning_minutes_share": 0.7052469135802469,
+        "portal_net_count": -2,
+        "portal_net_cam_v3": 9.79589449025497,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      }
+    ],
+    "most_over_projected": [
+      {
+        "team_name": "South Carolina St.",
+        "season": 2026,
+        "blended": -9.131072521209717,
+        "actual": -32.7,
+        "err_blended": 23.568927478790286,
+        "returning_minutes_share": 0.6702297383535418,
+        "portal_net_count": -2,
+        "portal_net_cam_v3": 1.2536973253762975,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "UMKC",
+        "season": 2026,
+        "blended": -6.062336015701294,
+        "actual": -27.0,
+        "err_blended": 20.937663984298705,
+        "returning_minutes_share": 0.8005766458433445,
+        "portal_net_count": -3,
+        "portal_net_cam_v3": -0.6298654548519396,
+        "recruit_avg_rating": 0.8644000291824341,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Maryland",
+        "season": 2026,
+        "blended": 25.594350624084473,
+        "actual": 5.2,
+        "err_blended": 20.394350624084474,
+        "returning_minutes_share": 0.46672504378283713,
+        "portal_net_count": -8,
+        "portal_net_cam_v3": -38.58675606331492,
+        "recruit_avg_rating": 0.9246333241462708,
+        "recruit_top100_count": 1
+      },
+      {
+        "team_name": "New Hampshire",
+        "season": 2025,
+        "blended": -9.737715530395509,
+        "actual": -29.5,
+        "err_blended": 19.76228446960449,
+        "returning_minutes_share": 0.395703787450537,
+        "portal_net_count": 2,
+        "portal_net_cam_v3": -0.8277425981975275,
+        "recruit_avg_rating": 0.8622000217437744,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "UTSA",
+        "season": 2026,
+        "blended": -1.5672148942947388,
+        "actual": -21.1,
+        "err_blended": 19.532785105705262,
+        "returning_minutes_share": 0.43793584379358436,
+        "portal_net_count": -7,
+        "portal_net_cam_v3": -2.916276169916939,
+        "recruit_avg_rating": 0.8896499872207642,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "The Citadel",
+        "season": 2025,
+        "blended": -10.922472667694091,
+        "actual": -28.9,
+        "err_blended": 17.977527332305907,
+        "returning_minutes_share": 0.5290918081424097,
+        "portal_net_count": -3,
+        "portal_net_cam_v3": 5.619250026832525,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Jackson St.",
+        "season": 2026,
+        "blended": -10.281734991073609,
+        "actual": -28.2,
+        "err_blended": 17.91826500892639,
+        "returning_minutes_share": 0.5079623009424764,
+        "portal_net_count": -1,
+        "portal_net_cam_v3": 1.3661003021278832,
+        "recruit_avg_rating": 0.8843499720096588,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Delaware St.",
+        "season": 2026,
+        "blended": -16.07568016052246,
+        "actual": -33.9,
+        "err_blended": 17.82431983947754,
+        "returning_minutes_share": 0.4579016763985685,
+        "portal_net_count": -4,
+        "portal_net_cam_v3": 7.114334214062312,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Chicago St.",
+        "season": 2025,
+        "blended": -13.271899127960205,
+        "actual": -31.0,
+        "err_blended": 17.728100872039796,
+        "returning_minutes_share": 0.7089767520787374,
+        "portal_net_count": -1,
+        "portal_net_cam_v3": 1.2463921361255401,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "VMI",
+        "season": 2026,
+        "blended": -12.987165546417236,
+        "actual": -29.5,
+        "err_blended": 16.512834453582762,
+        "returning_minutes_share": 0.6171820098383697,
+        "portal_net_count": -1,
+        "portal_net_cam_v3": 0.0,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Seton Hall",
+        "season": 2025,
+        "blended": 14.652147769927979,
+        "actual": -1.1,
+        "err_blended": 15.752147769927978,
+        "returning_minutes_share": 0.536986301369863,
+        "portal_net_count": 0,
+        "portal_net_cam_v3": -26.572712083335997,
+        "recruit_avg_rating": 0.9161500036716461,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Vermont",
+        "season": 2025,
+        "blended": 5.110364007949829,
+        "actual": -10.0,
+        "err_blended": 15.11036400794983,
+        "returning_minutes_share": 0.7338391945133518,
+        "portal_net_count": 1,
+        "portal_net_cam_v3": -2.858143038814447,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Louisiana",
+        "season": 2025,
+        "blended": -1.548688507080078,
+        "actual": -16.6,
+        "err_blended": 15.051311492919924,
+        "returning_minutes_share": 0.8333333333333334,
+        "portal_net_count": -1,
+        "portal_net_cam_v3": 2.9938074003815838,
+        "recruit_avg_rating": 0.8614000082015991,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Chattanooga",
+        "season": 2026,
+        "blended": -0.5336170673370362,
+        "actual": -15.3,
+        "err_blended": 14.766382932662964,
+        "returning_minutes_share": 0.42452574525745257,
+        "portal_net_count": 1,
+        "portal_net_cam_v3": -6.4185354417482055,
+        "recruit_avg_rating": 0.8299999833106995,
+        "recruit_top100_count": 0
+      },
+      {
+        "team_name": "Cal St. Fullerton",
+        "season": 2025,
+        "blended": -6.335508346557617,
+        "actual": -21.1,
+        "err_blended": 14.764491653442384,
+        "returning_minutes_share": 0.30242360379346683,
+        "portal_net_count": 0,
+        "portal_net_cam_v3": -1.0864430764155262,
+        "recruit_avg_rating": 0.0,
+        "recruit_top100_count": 0
+      }
+    ]
+  },
+  "trajectory_honesty": {
+    "loso_pooled_mae": 2.133394131887966,
+    "kfold_5_pooled_mae": 2.1297096845415022,
+    "verdict": "tight (model is honest)",
+    "note": "`backtest_lopo` is leave-one-PAIR-out where each pair is a unique (target_season-1, target_season) \u2014 i.e. true LOSO at the target-season level. Predictions persisted to `trajectory_oof_predictions` are these LOSO predictions, so the projection backtest IS leak-free at the season level for the trajectory model. The 5-fold CV is reported as a sanity-check that the model isn't fitting season-specific patterns; a tight LOSO\u2248k-fold gap is the honesty signature.",
+    "gap_loso_minus_kfold": 0.0036844473464636707
+  }
+}
