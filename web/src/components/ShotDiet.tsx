@@ -1,23 +1,6 @@
 import { useId } from 'react';
 import type { TorkvikStats } from '../api/client';
-
-// Saturated red → yellow → green gradient for shot efficiency (percentile 0-1).
-const efficiencyColor = (pctile: number | null | undefined) => {
-  if (pctile == null) return '#4b5563';
-  const p = Math.max(0, Math.min(1, pctile));
-  if (p <= 0.5) {
-    const t = p / 0.5;
-    const r = Math.round(239 + (250 - 239) * t);
-    const g = Math.round(68 + (204 - 68) * t);
-    const b = Math.round(68 + (21 - 68) * t);
-    return `rgb(${r},${g},${b})`;
-  }
-  const t = (p - 0.5) / 0.5;
-  const r = Math.round(250 + (34 - 250) * t);
-  const g = Math.round(204 + (211 - 204) * t);
-  const b = Math.round(21 + (103 - 21) * t);
-  return `rgb(${r},${g},${b})`;
-};
+import { efficiencyColor } from './shotEfficiency';
 
 export function ShotDietCourt({ torvik }: { torvik: TorkvikStats }) {
   const filterId = `zone-glow-${useId().replace(/:/g, '')}`;

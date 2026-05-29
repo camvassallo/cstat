@@ -125,6 +125,16 @@ export interface RosterEntry {
   blk_pct_pct: number | null;
   primary_class: string | null;
   secondary_class: string | null;
+  /// Torvik shot-zone volumes — drive the team aggregate shot-diet
+  /// panel on TeamDetail. `null` when the player has no Torvik row.
+  rim_attempted: number | null;
+  mid_attempted: number | null;
+  tpa: number | null;
+  fta: number | null;
+  rim_made: number | null;
+  mid_made: number | null;
+  tpm: number | null;
+  ftm: number | null;
 }
 
 export interface ArchetypeShare {
@@ -194,6 +204,10 @@ export function fetchTeamDetail(id: string, season?: number) {
     /// Seasons in which this team (joined cross-season via natstat_id) has
     /// any row. Drives the page-scoped season dropdown override.
     available_seasons: number[];
+    /// Count of D-I teams in this season — denominator for converting
+    /// per-stat ranks to percentiles on the stat-card tints. Matches
+    /// the rankings page's `teams.length`.
+    total_teams: number;
   }>(`/teams/${id}`, { season: season?.toString() });
 }
 
@@ -911,6 +925,11 @@ export interface PredictionResult {
   /// by the underlying query — slice top N on the frontend for display.
   roster_home: RosterEntry[];
   roster_away: RosterEntry[];
+  /// Minute-weighted archetype distribution per team. Same shape /
+  /// methodology as the field on the team-detail endpoint — drives
+  /// the per-team RosterWaffle panels on the Predict page.
+  archetype_distribution_home: ArchetypeShare[];
+  archetype_distribution_away: ArchetypeShare[];
   /// Completed games between these two teams this season, newest first.
   /// Empty when they haven't played yet.
   prior_meetings: PriorMeeting[];

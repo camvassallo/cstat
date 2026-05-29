@@ -17,6 +17,40 @@ export const CLASS_COLORS: Record<string, string> = {
   Fighter: '#737373',    // neutral gray — low-USG rotation depth
 };
 
+/// Canonical clockwise order for the 12 archetype classes around a radial
+/// chart, derived by minimizing total cosine distance between adjacent
+/// cluster centroids in standardized feature space (cyclic TSP over the
+/// 12 nodes). Rotated to keep Wizard at 12 o'clock so the UI landmark
+/// stays put across reorderings.
+///
+/// The resulting arc reads as a continuous spectrum: primary creators at
+/// the top (Wizard → Bard → Sorcerer), defensive disruptors and
+/// low-usage glue (Rogue → Fighter → Ranger), perimeter and rotation
+/// wings (Warlock → Monk), then the four big-man archetypes
+/// (Barbarian → Cleric → Paladin → Druid) clustered together along the
+/// bottom-left arc. Two-way and creator roles sit on opposite sides of
+/// the circle; tour cost ≈ 6.70 on the 2026 centroids.
+///
+/// Re-derive with `python training/derive_class_order.py` if archetype
+/// training is re-run with different features or seasons.
+///
+/// Shared across the radial roster plot, Team Compare, and any future
+/// per-class small-multiples so spokes stay in lockstep.
+export const CLASS_ORDER: readonly string[] = [
+  'Wizard',
+  'Bard',
+  'Sorcerer',
+  'Rogue',
+  'Fighter',
+  'Ranger',
+  'Warlock',
+  'Monk',
+  'Barbarian',
+  'Cleric',
+  'Paladin',
+  'Druid',
+];
+
 export function classColor(cls: string | null | undefined): string {
   if (!cls) return '#64748b';
   return CLASS_COLORS[cls] ?? '#64748b';

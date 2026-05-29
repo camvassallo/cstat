@@ -16,6 +16,8 @@ import { usePageTitle } from '../components/usePageTitle';
 import { campomTier, campomTierColor } from '../components/campom';
 import { classColor, classTitle } from '../components/archetypeColors';
 import { shortDate } from '../components/format';
+import { RosterWaffle } from '../components/RosterWaffle';
+import { TeamShotDiet } from '../components/TeamShotDiet';
 import { Link } from 'react-router-dom';
 
 const TEAM_1_COLOR = '#3b82f6'; // blue (matches PlayerCompare PLAYER_COLORS[0])
@@ -196,6 +198,8 @@ export default function Predict() {
               played, so absent-history matchups still flow cleanly. */}
           <ResultHeadline result={result} team1Prob={team1Prob} />
           <SideBySideStats result={result} teams={teams} />
+          <ArchetypeRow result={result} />
+          <ShotDietRow result={result} />
           <RosterCompare result={result} />
           <PreviousMatchups result={result} />
         </div>
@@ -205,10 +209,155 @@ export default function Predict() {
 }
 
 // ---------------------------------------------------------------------------
-// Roster Compare panel — embedded TeamCompare. Shipped before the §5b radial
-// plot lands, so for now it's a side-by-side roster table (top 8 by CamPom
-// per team) with archetype chips and rate stats. The radial-roster overlay
-// from §5b drops into this same component when it ships.
+// Archetype + Shot Diet rows. Mirror the TeamDetail panels, rendered side
+// by side per team so the matchup reads as two roster identities you can
+// compare without leaving the page. The waffle's canonical CLASS_ORDER
+// means each archetype lands in the same waffle position on both sides,
+// so the eye compares blocks-in-the-same-region rather than hunting.
+// ---------------------------------------------------------------------------
+
+function ArchetypeRow({ result }: { result: PredictionResult }) {
+  const hasHome = result.archetype_distribution_home?.some((a) => a.team_share > 0);
+  const hasAway = result.archetype_distribution_away?.some((a) => a.team_share > 0);
+  if (!hasHome && !hasAway) return null;
+  return (
+    <div className="bg-gray-800 rounded-lg p-6">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
+          Roster Archetypes
+        </h2>
+        <div className="text-[11px] text-gray-500">
+          1% of team minutes per square
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <TeamPanel
+          teamName={result.home_team}
+          teamId={result.home_team_id}
+          season={result.season}
+          color={TEAM_1_COLOR}
+        >
+          {hasHome ? (
+            <div className="flex justify-center">
+              <RosterWaffle archetypeDist={result.archetype_distribution_home} />
+            </div>
+          ) : (
+            <EmptyNote>No archetype data</EmptyNote>
+          )}
+        </TeamPanel>
+        <TeamPanel
+          teamName={result.away_team}
+          teamId={result.away_team_id}
+          season={result.season}
+          color={TEAM_2_COLOR}
+        >
+          {hasAway ? (
+            <div className="flex justify-center">
+              <RosterWaffle archetypeDist={result.archetype_distribution_away} />
+            </div>
+          ) : (
+            <EmptyNote>No archetype data</EmptyNote>
+          )}
+        </TeamPanel>
+      </div>
+    </div>
+  );
+}
+
+function ShotDietRow({ result }: { result: PredictionResult }) {
+  const hasHome = result.roster_home.some((p) => (p.rim_attempted ?? 0) + (p.mid_attempted ?? 0) + (p.tpa ?? 0) > 0);
+  const hasAway = result.roster_away.some((p) => (p.rim_attempted ?? 0) + (p.mid_attempted ?? 0) + (p.tpa ?? 0) > 0);
+  if (!hasHome && !hasAway) return null;
+  return (
+    <div className="bg-gray-800 rounded-lg p-6">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
+          Shot Diet
+        </h2>
+        <div className="text-[11px] text-gray-500">
+          Hover a zone for top contributors
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <TeamPanel
+          teamName={result.home_team}
+          teamId={result.home_team_id}
+          season={result.season}
+          color={TEAM_1_COLOR}
+        >
+          {hasHome ? (
+            <TeamShotDiet roster={result.roster_home} />
+          ) : (
+            <EmptyNote>No Torvik shot data</EmptyNote>
+          )}
+        </TeamPanel>
+        <TeamPanel
+          teamName={result.away_team}
+          teamId={result.away_team_id}
+          season={result.season}
+          color={TEAM_2_COLOR}
+        >
+          {hasAway ? (
+            <TeamShotDiet roster={result.roster_away} />
+          ) : (
+            <EmptyNote>No Torvik shot data</EmptyNote>
+          )}
+        </TeamPanel>
+      </div>
+    </div>
+  );
+}
+
+/// Light wrapper that prints the team name + a color-coded link to
+/// the team page above each side of the two-team comparison rows.
+/// Keeps the per-team header treatment consistent between the
+/// archetype and shot-diet sections.
+function TeamPanel({
+  teamName,
+  teamId,
+  season,
+  color,
+  children,
+}: {
+  teamName: string;
+  teamId: string;
+  season: number;
+  color: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-3 flex items-baseline gap-2">
+        <span
+          className="inline-block w-2 h-2 rounded-full"
+          style={{ background: color }}
+        />
+        <Link
+          to={seasonHref(`/teams/${teamId}`, season)}
+          className="text-sm font-semibold hover:underline truncate"
+          style={{ color }}
+        >
+          {teamName}
+        </Link>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function EmptyNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-xs text-gray-500 italic text-center py-8">
+      {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Roster Compare panel — side-by-side roster table (top 8 by CamPom per
+// team) with archetype chips and rate stats. The Archetype + Shot Diet
+// rows above already render the visual identity per team; this panel
+// drills into the specific players carrying it.
 // ---------------------------------------------------------------------------
 
 const ROSTER_PANEL_LIMIT = 8;

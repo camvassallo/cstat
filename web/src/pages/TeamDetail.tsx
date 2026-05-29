@@ -16,6 +16,8 @@ import {
 } from '../api/client';
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
+import { RosterWaffle } from '../components/RosterWaffle';
+import { TeamShotDiet } from '../components/TeamShotDiet';
 import { campomTier, campomTierColor } from '../components/campom';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
@@ -34,43 +36,87 @@ const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) :
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
 const rkStr = (v: number | null | undefined) => (v != null ? `#${v}` : undefined);
 
-function StatCard({ label, value, rank }: { label: string; value: string; rank?: string }) {
+function StatCard({
+  label,
+  value,
+  rank,
+  rankNum,
+  totalTeams,
+}: {
+  label: string;
+  value: string;
+  rank?: string;
+  /// Numeric rank (1-based). Used together with `totalTeams` to tint
+  /// the `#N` display along the red→white→green percentile gradient
+  /// shared with the rankings page. When either is missing the rank
+  /// falls back to muted gray.
+  rankNum?: number | null;
+  totalTeams?: number | null;
+}) {
+  const pctile =
+    rankNum != null && totalTeams != null && totalTeams > 1
+      ? 1 - (rankNum - 1) / (totalTeams - 1)
+      : null;
+  const rankColor = pctile != null ? pctileTextColor(pctile) : '#6b7280';
   return (
     <div className="bg-gray-800 rounded-lg p-4 text-center">
       <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</div>
       <div className="text-2xl font-bold">{value}</div>
-      {rank && <div className="text-xs text-gray-500 mt-1">{rank}</div>}
+      {rank && (
+        <div className="text-xs mt-1 tabular-nums" style={{ color: rankColor }}>
+          {rank}
+        </div>
+      )}
     </div>
   );
 }
 
-function FourFactors({ team, label }: { team: TeamProfile; label: string }) {
+function FourFactors({
+  team,
+  label,
+  totalTeams,
+}: {
+  team: TeamProfile;
+  label: string;
+  totalTeams: number | null;
+}) {
   const isOffense = label === 'Offense';
   const items = isOffense
     ? [
-        { label: 'eFG%', value: pct(team.effective_fg_pct), rank: rkStr(team.effective_fg_pct_rank) },
-        { label: 'TOV%', value: pct(team.turnover_pct), rank: rkStr(team.turnover_pct_rank) },
-        { label: 'ORB%', value: pct(team.off_rebound_pct), rank: rkStr(team.off_rebound_pct_rank) },
-        { label: 'FT Rate', value: fmt(team.ft_rate, 2), rank: rkStr(team.ft_rate_rank) },
+        { label: 'eFG%', value: pct(team.effective_fg_pct), rank: rkStr(team.effective_fg_pct_rank), rankNum: team.effective_fg_pct_rank },
+        { label: 'TOV%', value: pct(team.turnover_pct), rank: rkStr(team.turnover_pct_rank), rankNum: team.turnover_pct_rank },
+        { label: 'ORB%', value: pct(team.off_rebound_pct), rank: rkStr(team.off_rebound_pct_rank), rankNum: team.off_rebound_pct_rank },
+        { label: 'FT Rate', value: fmt(team.ft_rate, 2), rank: rkStr(team.ft_rate_rank), rankNum: team.ft_rate_rank },
       ]
     : [
-        { label: 'eFG%', value: pct(team.opp_effective_fg_pct), rank: rkStr(team.opp_effective_fg_pct_rank) },
-        { label: 'TOV%', value: pct(team.opp_turnover_pct), rank: rkStr(team.opp_turnover_pct_rank) },
-        { label: 'DRB%', value: pct(team.def_rebound_pct), rank: rkStr(team.def_rebound_pct_rank) },
-        { label: 'FT Rate', value: fmt(team.opp_ft_rate, 2), rank: rkStr(team.opp_ft_rate_rank) },
+        { label: 'eFG%', value: pct(team.opp_effective_fg_pct), rank: rkStr(team.opp_effective_fg_pct_rank), rankNum: team.opp_effective_fg_pct_rank },
+        { label: 'TOV%', value: pct(team.opp_turnover_pct), rank: rkStr(team.opp_turnover_pct_rank), rankNum: team.opp_turnover_pct_rank },
+        { label: 'DRB%', value: pct(team.def_rebound_pct), rank: rkStr(team.def_rebound_pct_rank), rankNum: team.def_rebound_pct_rank },
+        { label: 'FT Rate', value: fmt(team.opp_ft_rate, 2), rank: rkStr(team.opp_ft_rate_rank), rankNum: team.opp_ft_rate_rank },
       ];
 
   return (
     <div className="bg-gray-800 rounded-lg p-4">
       <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">{label} Four Factors</h3>
       <div className="grid grid-cols-4 gap-3 text-center">
-        {items.map((item) => (
-          <div key={item.label}>
-            <div className="text-xs text-gray-500">{item.label}</div>
-            <div className="font-semibold">{item.value}</div>
-            {item.rank && <div className="text-[10px] text-gray-500">{item.rank}</div>}
-          </div>
-        ))}
+        {items.map((item) => {
+          const pctile =
+            item.rankNum != null && totalTeams != null && totalTeams > 1
+              ? 1 - (item.rankNum - 1) / (totalTeams - 1)
+              : null;
+          const rankColor = pctile != null ? pctileTextColor(pctile) : '#6b7280';
+          return (
+            <div key={item.label}>
+              <div className="text-xs text-gray-500">{item.label}</div>
+              <div className="font-semibold">{item.value}</div>
+              {item.rank && (
+                <div className="text-[10px] tabular-nums" style={{ color: rankColor }}>
+                  {item.rank}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -101,6 +147,7 @@ function HistoricalTeamDetail() {
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [archetypeDist, setArchetypeDist] = useState<ArchetypeShare[]>([]);
+  const [totalTeams, setTotalTeams] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   // Tab title tracks the loaded team and reflects the season selector so a
   // shared `/teams/<id>?season=2025` link reads "Duke 2025 — CamPom".
@@ -130,6 +177,7 @@ function HistoricalTeamDetail() {
         setSchedule(r.schedule);
         setRoster(r.roster);
         setArchetypeDist(r.archetype_distribution);
+        setTotalTeams(r.total_teams);
         setLoading(false);
       })
       .catch(() => {
@@ -142,6 +190,7 @@ function HistoricalTeamDetail() {
         setSchedule([]);
         setRoster([]);
         setArchetypeDist([]);
+        setTotalTeams(null);
         setLoading(false);
       });
     return () => {
@@ -205,157 +254,153 @@ function HistoricalTeamDetail() {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard label="AdjEM" value={fmt(team.adj_efficiency_margin)} rank={rkStr(team.adj_efficiency_margin_rank)} />
-        <StatCard label="AdjO" value={fmt(team.adj_offense)} rank={rkStr(team.adj_offense_rank)} />
-        <StatCard label="AdjD" value={fmt(team.adj_defense)} rank={rkStr(team.adj_defense_rank)} />
-        <StatCard label="Tempo" value={fmt(team.adj_tempo)} rank={rkStr(team.adj_tempo_rank)} />
-        <StatCard label="SOS" value={fmt(team.sos, 2)} rank={team.sos_rank ? `#${team.sos_rank}` : undefined} />
-        <StatCard label="ELO" value={fmt(team.elo_rating, 0)} rank={team.elo_rank ? `#${team.elo_rank}` : undefined} />
+        <StatCard label="AdjEM" value={fmt(team.adj_efficiency_margin)} rank={rkStr(team.adj_efficiency_margin_rank)} rankNum={team.adj_efficiency_margin_rank} totalTeams={totalTeams} />
+        <StatCard label="AdjO" value={fmt(team.adj_offense)} rank={rkStr(team.adj_offense_rank)} rankNum={team.adj_offense_rank} totalTeams={totalTeams} />
+        <StatCard label="AdjD" value={fmt(team.adj_defense)} rank={rkStr(team.adj_defense_rank)} rankNum={team.adj_defense_rank} totalTeams={totalTeams} />
+        <StatCard label="Tempo" value={fmt(team.adj_tempo)} rank={rkStr(team.adj_tempo_rank)} rankNum={team.adj_tempo_rank} totalTeams={totalTeams} />
+        <StatCard label="SOS" value={fmt(team.sos, 2)} rank={team.sos_rank ? `#${team.sos_rank}` : undefined} rankNum={team.sos_rank} totalTeams={totalTeams} />
+        <StatCard label="ELO" value={fmt(team.elo_rating, 0)} rank={team.elo_rank ? `#${team.elo_rank}` : undefined} rankNum={team.elo_rank} totalTeams={totalTeams} />
       </div>
 
       {/* Four Factors */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FourFactors team={team} label="Offense" />
-        <FourFactors team={team} label="Defense" />
+        <FourFactors team={team} label="Offense" totalTeams={totalTeams} />
+        <FourFactors team={team} label="Defense" totalTeams={totalTeams} />
       </div>
 
-      {/* Archetype index vs D-I norm */}
-      {present.length > 0 && (
-        <div className="bg-gray-800 rounded-lg p-5">
-          <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
-            <SeasonLink
-              to="/archetypes"
-              title="Learn about archetypes"
-              className="group inline-flex items-baseline gap-1.5 text-lg font-bold hover:underline"
-            >
-              Roster Archetypes
-              <svg
-                viewBox="0 0 16 16"
-                className="w-3.5 h-3.5 self-center opacity-50 group-hover:opacity-100 transition-opacity"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm.75 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM7 7h1.5v5H10v1H6v-1h1V8H6V7h1z" />
-              </svg>
-            </SeasonLink>
-            <span className="text-xs text-gray-500">
-              Indexed vs D-I average · 1.0× = league norm
-            </span>
-          </div>
-          <p className="text-xs text-gray-500 mb-3">
-            Minute-weighted share of each class on this roster (primary at full
-            weight, secondary at half), compared against the D-I cohort. Hover
-            the bar for counts.
-          </p>
-
-          {/* Stacked bar — present classes only, sized by team_share */}
-          <div className="flex h-3 rounded overflow-hidden bg-gray-900">
-            {present.map((a) => (
-              <div
-                key={a.primary_class}
-                style={{ flexBasis: `${a.team_share * 100}%` }}
-              >
-                <ClassTooltip
-                  cls={a.primary_class}
-                  asBlock
-                  extra={
-                    <>
-                      {(a.team_share * 100).toFixed(1)}% of minutes ·{' '}
-                      {a.team_count} {a.team_count === 1 ? 'player' : 'players'}
-                      {a.index != null && (
-                        <>
-                          {' '}· {a.index.toFixed(2)}× vs D-I
-                        </>
-                      )}
-                    </>
-                  }
+      {/* Roster identity row — two complementary "what kind of team
+          is this" panels. Waffle answers "who plays" (role
+          composition); shot diet answers "what they shoot" (offensive
+          identity). Side-by-side at `lg`+, stacked on mobile. */}
+      {(present.length > 0 || roster.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {present.length > 0 && (
+            <div className="bg-gray-800 rounded-lg p-5">
+              <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
+                <SeasonLink
+                  to="/archetypes"
+                  title="Learn about archetypes"
+                  className="group inline-flex items-baseline gap-1.5 text-lg font-bold hover:underline"
                 >
-                  <div
-                    className="h-3 w-full"
-                    style={{ background: classColor(a.primary_class) }}
-                  />
-                </ClassTooltip>
+                  Roster Archetypes
+                  <svg
+                    viewBox="0 0 16 16"
+                    className="w-3.5 h-3.5 self-center opacity-50 group-hover:opacity-100 transition-opacity"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm.75 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM7 7h1.5v5H10v1H6v-1h1V8H6V7h1z" />
+                  </svg>
+                </SeasonLink>
+                <span className="text-xs text-gray-500">
+                  Indexed vs D-I average · 1.0× = league norm
+                </span>
               </div>
-            ))}
-          </div>
+              <p className="text-xs text-gray-500 mb-3">
+                Minute-weighted share of each class (primary at full
+                weight, secondary at half). 100 squares = team's minutes
+                budget. Hover a square for share and index vs D-I.
+              </p>
 
-          {/* Concentration / Under-represented callouts — descriptive
-              only. Coloring is intentionally neutral: whether
-              concentration in a given class is good or bad depends on
-              the class (Druid is high-value, Fighter is low-value — see
-              docs/archetype_balance_finding.md). The panel describes
-              the team's distribution; readers apply their own
-              evaluation. */}
-          {(identity.length > 0 || gaps.length > 0) && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
-              {identity.length > 0 && (
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
-                    Concentrated in
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {identity.map((a) => (
-                      <ClassTooltip
-                        key={a.primary_class}
-                        cls={a.primary_class}
-                        extra={`${(a.team_share * 100).toFixed(1)}% team · ${(a.d1_share * 100).toFixed(1)}% D-I`}
-                      >
-                        <span className="inline-flex items-baseline gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
-                          <span
-                            className="inline-block w-2 h-2 rounded-full"
-                            style={{ background: classColor(a.primary_class) }}
-                          />
-                          <span
-                            className="font-semibold"
-                            style={{ color: classColor(a.primary_class) }}
+              <div className="flex justify-center">
+                <RosterWaffle archetypeDist={archetypeDist} />
+              </div>
+
+              {/* Concentration / Under-represented callouts —
+                  descriptive only. Whether concentration in a given
+                  class is good or bad depends on the class (Druid is
+                  high-value, Fighter is low-value — see
+                  docs/archetype_balance_finding.md). */}
+              {(identity.length > 0 || gaps.length > 0) && (
+                <div className="flex flex-col gap-3 mt-4">
+                  {identity.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
+                        Concentrated in
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {identity.map((a) => (
+                          <ClassTooltip
+                            key={a.primary_class}
+                            cls={a.primary_class}
+                            extra={`${(a.team_share * 100).toFixed(1)}% team · ${(a.d1_share * 100).toFixed(1)}% D-I`}
                           >
-                            {a.primary_class}
-                          </span>
-                          <span className="text-gray-300 font-semibold">
-                            {a.index != null ? `${a.index.toFixed(1)}×` : '—'}
-                          </span>
-                        </span>
-                      </ClassTooltip>
-                    ))}
-                  </div>
+                            <span className="inline-flex items-baseline gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
+                              <span
+                                className="inline-block w-2 h-2 rounded-full"
+                                style={{ background: classColor(a.primary_class) }}
+                              />
+                              <span
+                                className="font-semibold"
+                                style={{ color: classColor(a.primary_class) }}
+                              >
+                                {a.primary_class}
+                              </span>
+                              <span className="text-gray-300 font-semibold">
+                                {a.index != null ? `${a.index.toFixed(1)}×` : '—'}
+                              </span>
+                            </span>
+                          </ClassTooltip>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {gaps.length > 0 && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
+                        Under-represented
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {gaps.map((a) => (
+                          <ClassTooltip
+                            key={a.primary_class}
+                            cls={a.primary_class}
+                            extra={`${(a.team_share * 100).toFixed(1)}% team · ${(a.d1_share * 100).toFixed(1)}% D-I`}
+                          >
+                            <span className="inline-flex items-baseline gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
+                              <span
+                                className="inline-block w-2 h-2 rounded-full opacity-50"
+                                style={{ background: classColor(a.primary_class) }}
+                              />
+                              <span
+                                className="font-semibold opacity-70"
+                                style={{ color: classColor(a.primary_class) }}
+                              >
+                                {a.primary_class}
+                              </span>
+                              <span className="text-gray-400 font-semibold">
+                                {a.index === 0
+                                  ? 'absent'
+                                  : a.index != null
+                                    ? `${a.index.toFixed(1)}×`
+                                    : '—'}
+                              </span>
+                            </span>
+                          </ClassTooltip>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
-              {gaps.length > 0 && (
-                <div>
-                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
-                    Under-represented
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {gaps.map((a) => (
-                      <ClassTooltip
-                        key={a.primary_class}
-                        cls={a.primary_class}
-                        extra={`${(a.team_share * 100).toFixed(1)}% team · ${(a.d1_share * 100).toFixed(1)}% D-I`}
-                      >
-                        <span className="inline-flex items-baseline gap-1.5 text-xs px-2 py-1 rounded bg-gray-900">
-                          <span
-                            className="inline-block w-2 h-2 rounded-full opacity-50"
-                            style={{ background: classColor(a.primary_class) }}
-                          />
-                          <span
-                            className="font-semibold opacity-70"
-                            style={{ color: classColor(a.primary_class) }}
-                          >
-                            {a.primary_class}
-                          </span>
-                          <span className="text-gray-400 font-semibold">
-                            {a.index === 0
-                              ? 'absent'
-                              : a.index != null
-                                ? `${a.index.toFixed(1)}×`
-                                : '—'}
-                          </span>
-                        </span>
-                      </ClassTooltip>
-                    ))}
-                  </div>
-                </div>
-              )}
+            </div>
+          )}
+
+          {roster.length > 0 && (
+            <div className="bg-gray-800 rounded-lg p-5">
+              <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
+                <h3 className="text-lg font-bold">Team Shot Diet</h3>
+                <span className="text-xs text-gray-500">
+                  Volume by zone size · FG% by color
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mb-3">
+                Zone brightness scales with the team's shot volume from
+                that area; color tracks FG% against rough D-I
+                benchmarks. Hover a zone for the team aggregate and
+                top contributors.
+              </p>
+              <TeamShotDiet roster={roster} />
             </div>
           )}
         </div>
@@ -785,8 +830,8 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
 // season hasn't happened; we render the projected AdjEM band, a small
 // stat strip, and four roster cards (returning / arrivals / recruits /
 // departures + uncertain) so the user can see who composes the roster
-// the projection is built from. Future iteration: minutes-share radial
-// roster plot from §5b, projected schedule from the predict model.
+// the projection is built from. Future iteration: projected schedule
+// from the predict model.
 
 interface ProjectedTeamViewProps {
   id: string;
