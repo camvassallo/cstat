@@ -5,6 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -47,6 +48,14 @@ struct PredictParams {
     #[serde(default)]
     neutral: bool,
     season: Option<i32>,
+    /// Optional point-in-time cutoff (`YYYY-MM-DD`). When set, the
+    /// prediction is rebuilt from features available *up to and
+    /// including* that date — the leak-free path tied to the pit
+    /// model bundle. Caller responsibility: pass `game_date - 1 day`
+    /// for completed games (so the model sees pre-game state, not the
+    /// game itself), or `Today` for live predictions. Omitting it
+    /// preserves the legacy end-of-season behavior.
+    as_of_date: Option<NaiveDate>,
 }
 
 impl PredictParams {
@@ -65,6 +74,46 @@ async fn predict(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let season = params.season.unwrap_or_else(crate::default_season);
     let venue = params.resolved_venue();
+
+    // Bound-check `as_of_date` before doing any DB work. Future dates can't
+    // be honest by construction (no data exists yet); dates before the
+    // start of the requested season produce an empty pit cohort that the
+    // model silently dilutes into a degenerate "bias-only" prediction
+    // labelled as honest. Reject loudly instead — the alternative is the
+    // user shipping a confidently-labelled garbage forecast.
+    if let Some(d) = params.as_of_date {
+        let today = chrono::Utc::now().date_naive();
+        if d > today {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!(
+                        "as_of_date {d} is in the future; honest predictions can only \
+                         reflect data through today ({today})"
+                    ),
+                })),
+            ));
+        }
+        // Seasons in this codebase use end-year numbering (season 2026 =
+        // 2025-26 college season). Allow as_of_date down to Sep 1 of the
+        // prior calendar year so the user can probe preseason / opening
+        // night, but reject further-back dates that obviously belong to
+        // another season — those would silently route to a wrong-season
+        // pit cohort lookup.
+        let earliest =
+            chrono::NaiveDate::from_ymd_opt(season - 1, 9, 1).expect("Sep 1 always valid");
+        if d < earliest {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!(
+                        "as_of_date {d} is before season {season} starts ({earliest}); \
+                         pick a date in this season or change the season parameter"
+                    ),
+                })),
+            ));
+        }
+    }
 
     let home_team = find_team(&state.db.pool, &params.home, season)
         .await
@@ -99,6 +148,7 @@ async fn predict(
         season,
         venue,
         is_conference,
+        params.as_of_date,
     )
     .await
     .map_err(|e| {
@@ -190,6 +240,17 @@ async fn predict(
     let predicted_home_score = ((total + margin) / 2.0).round() as i32;
     let predicted_away_score = ((total - margin) / 2.0).round() as i32;
 
+    // Server-side label for which bundle produced the response. The
+    // frontend's honest-mode chip reads this rather than inferring from
+    // its own state — that way a request that drops `as_of_date` in
+    // transit (proxy rewrite, stale cache, future memoization layer)
+    // can't paint a leaky prediction as honest.
+    let prediction_basis = if params.as_of_date.is_some() {
+        "pit"
+    } else {
+        "leaky"
+    };
+
     Ok(Json(json!({
         "home_team": home_team.name,
         "home_team_id": home_team.id,
@@ -197,6 +258,8 @@ async fn predict(
         "away_team_id": away_team.id,
         "season": season,
         "venue": venue_str,
+        "as_of_date": params.as_of_date,
+        "prediction_basis": prediction_basis,
         "predicted_margin": (explained.prediction.predicted_margin as f64 * 10.0).round() / 10.0,
         "home_win_probability": (explained.prediction.home_win_probability * 1000.0).round() / 1000.0,
         "predicted_total": (total * 10.0).round() / 10.0,
@@ -234,6 +297,7 @@ async fn predict_with_venue(
     season: i32,
     venue: Venue,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<Explained, String> {
     match venue {
         Venue::Home => {
@@ -244,6 +308,7 @@ async fn predict_with_venue(
                 season,
                 false,
                 is_conference,
+                as_of_date,
             )
             .await
         }
@@ -269,6 +334,7 @@ async fn predict_with_venue(
                 season,
                 false,
                 is_conference,
+                as_of_date,
             )
             .await?;
             let mut feature_values = swapped.feature_values;
@@ -295,8 +361,15 @@ async fn predict_with_venue(
             })
         }
         Venue::Neutral => {
-            predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference)
-                .await
+            predict_neutral_symmetric(
+                state,
+                home_team_id,
+                away_team_id,
+                season,
+                is_conference,
+                as_of_date,
+            )
+            .await
         }
     }
 }
@@ -321,6 +394,7 @@ async fn predict_neutral_symmetric(
     away_team_id: Uuid,
     season: i32,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<Explained, String> {
     let (fwd, rev) = tokio::try_join!(
         run_predict(
@@ -329,7 +403,8 @@ async fn predict_neutral_symmetric(
             away_team_id,
             season,
             true,
-            is_conference
+            is_conference,
+            as_of_date,
         ),
         run_predict(
             state,
@@ -337,7 +412,8 @@ async fn predict_neutral_symmetric(
             home_team_id,
             season,
             true,
-            is_conference
+            is_conference,
+            as_of_date,
         ),
     )?;
 
@@ -370,7 +446,7 @@ async fn predict_neutral_symmetric(
     Ok(Explained {
         prediction: Prediction {
             predicted_margin: symmetric_margin,
-            home_win_probability: margin_to_win_prob(symmetric_margin),
+            home_win_probability: margin_to_win_prob(symmetric_margin, as_of_date.is_some()),
             predicted_total: symmetric_total,
         },
         feature_values,
@@ -413,9 +489,18 @@ pub async fn predict_projection(
     season: i32,
     is_neutral: bool,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<ProjectionSummary, String> {
     let explained = if is_neutral {
-        predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference).await?
+        predict_neutral_symmetric(
+            state,
+            home_team_id,
+            away_team_id,
+            season,
+            is_conference,
+            as_of_date,
+        )
+        .await?
     } else {
         run_predict(
             state,
@@ -424,6 +509,7 @@ pub async fn predict_projection(
             season,
             false,
             is_conference,
+            as_of_date,
         )
         .await?
     };
@@ -444,31 +530,69 @@ async fn run_predict(
     season: i32,
     is_neutral: bool,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<Explained, String> {
     // Single DB-fetch pass produces both the 49-element diff vector
     // (margin/win input) and the 58-element diff+sum vector (totals
     // input). The feature extraction is the expensive step.
-    let f = cstat_core::features::build_all_features(
-        &state.db.pool,
-        home_team_id,
-        away_team_id,
-        season,
-        is_neutral,
-        is_conference,
-    )
-    .await
-    .map_err(|e| format!("feature extraction failed: {e}"))?;
+    //
+    // When `as_of_date` is set, we route through the pit feature builder
+    // (CamPom v3 aggregated from torvik_player_game_stats up to the
+    // cutoff) and serve the pit model bundle — train/serve parity is the
+    // load-bearing invariant: feeding pit features to the end-of-season
+    // model (or vice versa) would reintroduce the ~3 AUC points of
+    // lookahead inflation the predict-honesty audit caught.
+    let f = match as_of_date {
+        Some(d) => cstat_core::features::build_all_features_pit(
+            &state.db.pool,
+            home_team_id,
+            away_team_id,
+            season,
+            is_neutral,
+            is_conference,
+            d,
+        )
+        .await
+        .map_err(|e| format!("pit feature extraction failed: {e}"))?,
+        None => cstat_core::features::build_all_features(
+            &state.db.pool,
+            home_team_id,
+            away_team_id,
+            season,
+            is_neutral,
+            is_conference,
+        )
+        .await
+        .map_err(|e| format!("feature extraction failed: {e}"))?,
+    };
 
     // Margin + TreeSHAP from the diff vector; totals from the diff+sum
-    // vector. Two ONNX sessions (+ TreeSHAP), one DB round-trip.
-    let attributed = state
-        .predictor
-        .predict_with_contributions(&f.diff)
-        .map_err(|e| format!("prediction failed: {e}"))?;
-    let predicted_total = state
-        .predictor
-        .predict_total(&f.diff_and_sum)
-        .map_err(|e| format!("totals prediction failed: {e}"))?;
+    // vector. Pit and end-of-season paths use distinct model bundles —
+    // see `Predictor::predict_*` doc comments.
+    let (attributed, predicted_total) = match as_of_date {
+        Some(_) => {
+            let attributed = state
+                .predictor
+                .predict_pit_with_contributions(&f.diff)
+                .map_err(|e| format!("pit prediction failed: {e}"))?;
+            let predicted_total = state
+                .predictor
+                .predict_pit_total(&f.diff_and_sum)
+                .map_err(|e| format!("pit totals prediction failed: {e}"))?;
+            (attributed, predicted_total)
+        }
+        None => {
+            let attributed = state
+                .predictor
+                .predict_with_contributions(&f.diff)
+                .map_err(|e| format!("prediction failed: {e}"))?;
+            let predicted_total = state
+                .predictor
+                .predict_total(&f.diff_and_sum)
+                .map_err(|e| format!("totals prediction failed: {e}"))?;
+            (attributed, predicted_total)
+        }
+    };
 
     // Override the standalone win-classifier output with a margin-derived
     // win probability. The two LightGBM models (margin + win) are trained
@@ -480,7 +604,10 @@ async fn run_predict(
     Ok(Explained {
         prediction: Prediction {
             predicted_margin: attributed.predicted_margin,
-            home_win_probability: margin_to_win_prob(attributed.predicted_margin),
+            home_win_probability: margin_to_win_prob(
+                attributed.predicted_margin,
+                as_of_date.is_some(),
+            ),
             predicted_total,
         },
         feature_values: f.diff,
@@ -581,17 +708,22 @@ fn round1(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
-/// Standard deviation of college basketball game-margin residuals. Sourced
-/// from the trained margin model's chronological-backtest residuals — see
-/// `backtest_residual_stddev` in `training/models/model_meta.json`.
-/// Re-measure and update this constant whenever the model is retrained;
-/// the value materially affects how aggressively `home_win_probability`
-/// moves away from 0.5 per point of predicted margin.
+/// Standard deviation of college basketball game-margin residuals, by
+/// bundle. Sourced from each model's `backtest_margin.rmse` in
+/// `training/models/{,pit_}model_meta.json` — re-measure and update
+/// whenever the bundle is retrained; the value materially affects how
+/// aggressively `home_win_probability` moves away from 0.5 per point of
+/// predicted margin.
 ///
-/// Current value: 10.3, fit on the 2024+2025+2026 cohort. KenPom uses 11.0
-/// as a cross-era constant; cstat's narrower σ reflects tighter residuals
-/// on the backtest window plus the model's reliance on Torvik GBPM.
-const PREDICT_SIGMA: f64 = 10.3;
+/// Current values from the 12-season retrain artifacts:
+///   - Prod (end-of-season): 10.46, fit on 2014–2026 cohort.
+///   - Pit (`pit_cam_v3`):   11.03 — point-in-time features carry more
+///     residual variance, so the win-prob calibration is correspondingly
+///     less sharp. Reusing the prod σ for pit margins (as the prior
+///     single-constant code did) over-confidence-ed honest predictions
+///     by ~0.5pp near the 50/50 boundary.
+const PREDICT_SIGMA_PROD: f64 = 10.46;
+const PREDICT_SIGMA_PIT: f64 = 11.03;
 
 /// Logistic approximation of `Φ(margin / σ)` — the probability that the
 /// actual margin exceeds zero given a predicted margin and a residual
@@ -599,9 +731,18 @@ const PREDICT_SIGMA: f64 = 10.3;
 /// standard normal CDF; the two agree to ≤1pp across the realistic
 /// prediction range. We use logistic instead of erf to avoid pulling in a
 /// numerics dependency for a single call site.
-fn margin_to_win_prob(margin: f32) -> f64 {
+///
+/// `is_pit` picks the matching bundle's σ — feeding a pit margin through
+/// the prod σ (or vice versa) is the same flavor of train/serve skew the
+/// audit caught for features, just on the calibration side.
+fn margin_to_win_prob(margin: f32, is_pit: bool) -> f64 {
     const LOGISTIC_GAUSSIAN_SCALE: f64 = 1.6;
-    let z = LOGISTIC_GAUSSIAN_SCALE * (margin as f64) / PREDICT_SIGMA;
+    let sigma = if is_pit {
+        PREDICT_SIGMA_PIT
+    } else {
+        PREDICT_SIGMA_PROD
+    };
+    let z = LOGISTIC_GAUSSIAN_SCALE * (margin as f64) / sigma;
     1.0 / (1.0 + (-z).exp())
 }
 
@@ -671,6 +812,7 @@ mod tests {
             venue,
             neutral,
             season: None,
+            as_of_date: None,
         }
     }
 
@@ -700,6 +842,51 @@ mod tests {
     }
 
     #[test]
+    fn as_of_date_bounds() {
+        // The bound logic in `predict` is straightforward arithmetic on
+        // chrono dates; test it directly rather than spinning up the full
+        // route. Future dates and far-past dates should both be rejected.
+        let season = 2026_i32;
+        let earliest = chrono::NaiveDate::from_ymd_opt(season - 1, 9, 1).unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
+
+        // OK: within bounds.
+        for d in ["2025-11-01", "2026-01-15", "2026-04-06"] {
+            let d = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap();
+            assert!(d >= earliest && d <= today, "{d} should be in-bounds");
+        }
+        // Reject: future.
+        let fut = chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
+        assert!(fut > today, "future date should be rejected");
+        // Reject: before season window. 2024-12-15 belongs to season 2025,
+        // not 2026, so it slips by intent (silently pulls the wrong-season
+        // cohort) unless the bound rejects it.
+        let early = chrono::NaiveDate::from_ymd_opt(2024, 12, 15).unwrap();
+        assert!(early < earliest, "wrong-season date should be rejected");
+    }
+
+    #[test]
+    fn parses_as_of_date_from_url_query_string() {
+        // The audit's R5 plumbing rides on this serialize round-trip — a
+        // typo'd field name or a mis-quoted serde rename would silently
+        // produce `None` and the leaky model would always win.
+        let p: PredictParams =
+            serde_urlencoded::from_str("home=A&away=B&as_of_date=2026-02-14").unwrap();
+        assert_eq!(p.as_of_date, NaiveDate::from_ymd_opt(2026, 2, 14));
+
+        // Absent param defaults to None (legacy end-of-season path).
+        let p: PredictParams = serde_urlencoded::from_str("home=A&away=B").unwrap();
+        assert_eq!(p.as_of_date, None);
+
+        // Malformed dates surface as a deserialize error rather than silent
+        // None — caller gets a 400 instead of a leaky prediction labelled
+        // as honest. axum's Query handler maps this to a 400 automatically.
+        let err: Result<PredictParams, _> =
+            serde_urlencoded::from_str("home=A&away=B&as_of_date=not-a-date");
+        assert!(err.is_err(), "malformed date should fail deserialization");
+    }
+
+    #[test]
     fn venue_explicit_overrides_legacy_neutral() {
         // Explicit venue always wins, even if `neutral=true` is set.
         assert_eq!(params(Some("home"), true).resolved_venue(), Venue::Home);
@@ -719,40 +906,51 @@ mod tests {
 
     #[test]
     fn margin_to_win_prob_is_well_calibrated() {
-        // 0 margin → exact 50/50.
-        assert!((margin_to_win_prob(0.0) - 0.5).abs() < 1e-9);
+        for is_pit in [false, true] {
+            // 0 margin → exact 50/50 regardless of bundle.
+            assert!((margin_to_win_prob(0.0, is_pit) - 0.5).abs() < 1e-9);
 
-        // Antisymmetric around 0: p(m) + p(-m) = 1. This is the property
-        // that guarantees `predicted_winner` derived from win prob always
-        // agrees with the sign of the margin.
-        for m in [1.0, 5.0, 11.0, 25.0, -3.0, -17.5_f32] {
-            let neg_m = -m;
-            let p = margin_to_win_prob(m);
-            let p_neg = margin_to_win_prob(neg_m);
-            assert!(
-                (p + p_neg - 1.0).abs() < 1e-9,
-                "p({m}) + p({neg_m}) = {p} + {p_neg} ≠ 1.0",
-            );
+            // Antisymmetric around 0: p(m) + p(-m) = 1. Guarantees
+            // `predicted_winner` derived from win prob always agrees with
+            // the sign of the margin.
+            for m in [1.0, 5.0, 11.0, 25.0, -3.0, -17.5_f32] {
+                let p = margin_to_win_prob(m, is_pit);
+                let p_neg = margin_to_win_prob(-m, is_pit);
+                assert!(
+                    (p + p_neg - 1.0).abs() < 1e-9,
+                    "is_pit={is_pit} p({m}) + p({}) = {p} + {p_neg} ≠ 1.0",
+                    -m,
+                );
+            }
+
+            // Monotonic in margin.
+            for (lo, hi) in [(0.0_f32, 1.0_f32), (1.0, 5.0), (5.0, 15.0), (-2.0, 2.0)] {
+                assert!(
+                    margin_to_win_prob(lo, is_pit) < margin_to_win_prob(hi, is_pit),
+                    "is_pit={is_pit} p({lo}) ≥ p({hi}) — monotonicity broken",
+                );
+            }
+
+            // Sanity: margin-sign and (prob > 0.5) agree.
+            for m in [-10.0, -1.0, -0.1, 0.1, 1.0, 10.0_f32] {
+                let p = margin_to_win_prob(m, is_pit);
+                assert_eq!(
+                    m > 0.0,
+                    p > 0.5,
+                    "is_pit={is_pit} sign disagreement at margin={m}: prob={p}",
+                );
+            }
         }
 
-        // Monotonic in margin.
-        let pairs = [(0.0_f32, 1.0_f32), (1.0, 5.0), (5.0, 15.0), (-2.0, 2.0)];
-        for (lo, hi) in pairs {
+        // Cross-bundle: at any margin > 0, the pit bundle (larger σ) is
+        // less confident than the prod bundle. This is the load-bearing
+        // calibration property that motivated the fix.
+        for m in [1.0_f32, 5.0, 10.0, 20.0] {
+            let p_prod = margin_to_win_prob(m, false);
+            let p_pit = margin_to_win_prob(m, true);
             assert!(
-                margin_to_win_prob(lo) < margin_to_win_prob(hi),
-                "p({lo}) ≥ p({hi}) — monotonicity broken",
-            );
-        }
-
-        // Sanity: margin-sign and (prob > 0.5) agree, so the headline
-        // contradiction (Predicted winner = X, X has 49% win prob) is
-        // impossible by construction.
-        for m in [-10.0, -1.0, -0.1, 0.1, 1.0, 10.0_f32] {
-            let p = margin_to_win_prob(m);
-            assert_eq!(
-                m > 0.0,
-                p > 0.5,
-                "sign disagreement at margin={m}: prob={p}",
+                p_pit < p_prod,
+                "pit bundle should be less confident than prod at margin={m}: pit={p_pit} prod={p_prod}",
             );
         }
     }

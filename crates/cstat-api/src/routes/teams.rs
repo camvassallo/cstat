@@ -121,11 +121,14 @@ async fn team_detail(
     // Sign convention: `projected_margin` is from the *requested team's*
     // perspective (positive = requested team favored), regardless of host.
     //
-    // We project completed games too (not just upcoming) so the column is
-    // useful in the offseason and on historical browsing. The caveat is
-    // that for completed games the projection uses *current* team state,
-    // not pre-game state — true pre-game predictions are tracked as a
-    // future roadmap item (see "point-in-time historical predictions").
+    // Honest projections for completed games: when both teams' scores are
+    // populated, we treat the row as historical and pass `as_of_date =
+    // game_date - 1 day` to the predictor so it rebuilds CamPom v3 from
+    // pre-game state via the pit model bundle. Upcoming games pass `None`
+    // (current behavior — "today" is the only honest cutoff for an unplayed
+    // game). This closes the audit's R3 surface: the column is no longer
+    // a leaky "we'd predict X today" on rows where we already know the
+    // outcome.
     for entry in schedule.iter_mut() {
         let opp_id = match entry.opponent_id {
             Some(id) => id,
@@ -143,6 +146,12 @@ async fn team_detail(
         } else {
             (opp_id, resolved_id)
         };
+        let is_played = entry.team_score.is_some() && entry.opponent_score.is_some();
+        let as_of_date = if is_played {
+            entry.game_date.pred_opt()
+        } else {
+            None
+        };
         if let Ok(proj) = predict_projection(
             &state,
             host_id,
@@ -150,6 +159,7 @@ async fn team_detail(
             season,
             is_neutral,
             is_conference,
+            as_of_date,
         )
         .await
         {
@@ -173,6 +183,16 @@ async fn team_detail(
             entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
             entry.projected_score_team = Some(score_team);
             entry.projected_score_opp = Some(score_opp);
+            // Honesty label travels with the projection — set ONLY when
+            // the predictor succeeds, so a failed prediction can't leave
+            // the row labelled "pre-game projection" with null margin
+            // (and frontend deep-links can't end up carrying as_of_date
+            // for a row whose pit prediction the server already failed).
+            // `as_of_date.is_some()` is the load-bearing flag: a
+            // completed game whose date can't be decremented
+            // (NaiveDate::MIN sentinel) falls through with as_of_date =
+            // None and is correctly NOT labelled pre-game.
+            entry.is_pre_game_projection = as_of_date.is_some();
         }
     }
 

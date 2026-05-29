@@ -51,10 +51,22 @@ function PastTile({ g, season }: { g: GameResult; season: number }) {
   // back to a static tile when team names are missing (Predict looks teams
   // up by name and would 404 on the placeholder "—"). team_id isn't needed
   // because the deep-link uses names, not IDs.
+  //
+  // For completed games, carry `as_of_date = game_date − 1` so the Predict
+  // page reproduces the honest pre-game projection rather than serving a
+  // current-state forecast — same shape TeamDetail's schedule row uses.
+  // Date arithmetic mirrors ScheduleRow at TeamDetail.tsx: parse as UTC
+  // midnight, subtract one day, slice the ISO date.
   const canDeepLink = g.home_team_name != null && g.away_team_name != null;
   if (!canDeepLink) return <div className={TILE_CLASSES}>{body}</div>;
   const venueParam = g.is_neutral_site ? '&venue=neutral' : '';
-  const predictTo = `/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}${venueParam}`;
+  let asOfParam = '';
+  if (g.game_date) {
+    const d = new Date(`${g.game_date}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    asOfParam = `&as_of_date=${d.toISOString().slice(0, 10)}`;
+  }
+  const predictTo = `/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}${venueParam}${asOfParam}`;
   return (
     <Link to={seasonHref(predictTo, season)} className={TILE_CLASSES}>
       {body}

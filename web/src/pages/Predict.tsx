@@ -32,10 +32,17 @@ export default function Predict() {
   const urlVenue = searchParams.get('venue') as Venue | null;
   const initialVenue: Venue =
     urlVenue === 'home' || urlVenue === 'away' || urlVenue === 'neutral' ? urlVenue : 'home';
+  // Point-in-time cutoff. When present (`YYYY-MM-DD`), the prediction is
+  // routed through the pit model bundle so the displayed forecast
+  // reflects only data available up to and including that date — the
+  // honest counterfactual for a historical matchup. Empty → live
+  // end-of-season state.
+  const urlAsOfDate = searchParams.get('as_of_date') ?? '';
 
   const [team1, setTeam1] = useState(urlHome);
   const [team2, setTeam2] = useState(urlAway);
   const [venue, setVenue] = useState<Venue>(initialVenue);
+  const [asOfDate, setAsOfDate] = useState(urlAsOfDate);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -67,11 +74,18 @@ export default function Predict() {
     setTeam1(urlHome);
     setTeam2(urlAway);
     setVenue(initialVenue);
+    setAsOfDate(urlAsOfDate);
     let alive = true;
     setLoading(true);
     setError('');
     setResult(null);
-    fetchPrediction(urlHome.trim(), urlAway.trim(), initialVenue, season)
+    fetchPrediction(
+      urlHome.trim(),
+      urlAway.trim(),
+      initialVenue,
+      season,
+      urlAsOfDate || undefined,
+    )
       .then((r) => {
         if (alive) setResult(r);
       })
@@ -90,7 +104,7 @@ export default function Predict() {
     // (which is in the deps), so reading its current value inside the effect
     // is correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlHome, urlAway, urlVenue, season]);
+  }, [urlHome, urlAway, urlVenue, urlAsOfDate, season]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -99,7 +113,13 @@ export default function Predict() {
     setError('');
     setResult(null);
     try {
-      const r = await fetchPrediction(team1.trim(), team2.trim(), venue, season);
+      const r = await fetchPrediction(
+        team1.trim(),
+        team2.trim(),
+        venue,
+        season,
+        asOfDate.trim() || undefined,
+      );
       setResult(r);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Prediction failed');
@@ -171,6 +191,27 @@ export default function Predict() {
               </button>
             ))}
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="as-of-date" className="block text-sm text-gray-400 mb-1.5">
+            As of <span className="text-gray-600">(optional, for historical projections)</span>
+          </label>
+          <input
+            id="as-of-date"
+            type="date"
+            value={asOfDate}
+            onChange={(e) => setAsOfDate(e.target.value)}
+            className="bg-gray-900 border border-gray-700 text-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+          />
+          {asOfDate && (
+            <p className="mt-1 text-xs text-amber-400">
+              Point-in-time projection: CamPom rebuilt from game-by-game Torvik data
+              up to {asOfDate}. Team-level features (AdjEM, SOS, four factors)
+              remain end-of-season aggregates — see roadmap §4b for the residual
+              leak budget.
+            </p>
+          )}
         </div>
 
         <button
@@ -1202,10 +1243,28 @@ function ResultHeadline({
         ? `at ${result.home_team}`
         : `at ${result.away_team}`;
 
+  // Server-confirmed honesty label. Reads `result.prediction_basis`
+  // (set in routes/predict.rs) so a request that drops as_of_date in
+  // transit — proxy rewrite, stale cache, future memoization keyed
+  // only on home/away/venue — paints the response with what was
+  // actually served, not what the page meant to ask for.
+  const basisChip =
+    result.prediction_basis === 'pit' && result.as_of_date ? (
+      <span
+        className="ml-2 inline-flex items-center text-[10px] font-medium uppercase tracking-wide bg-amber-900/60 text-amber-300 px-1.5 py-0.5 rounded"
+        title={`Point-in-time CamPom v3 as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`}
+      >
+        Point-in-time
+      </span>
+    ) : null;
+
   return (
     <div className="bg-gray-800 rounded-lg p-6 space-y-5">
       <div className="text-center">
-        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">{venueText}</div>
+        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">
+          {venueText}
+          {basisChip}
+        </div>
         {/* Projected final score, winner first. KenPom-style approximation
             (totals model backtest MAE ~13.6 vs margin ~8.2). Team names
             link to detail pages so the headline acts as a navigation

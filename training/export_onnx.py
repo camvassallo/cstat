@@ -3,6 +3,7 @@ Export trained LightGBM models to ONNX format for Rust inference via the `ort` c
 """
 
 import json
+import os
 from pathlib import Path
 
 import lightgbm as lgb
@@ -11,7 +12,10 @@ import onnx
 import onnxmltools
 from onnxmltools.convert.common.data_types import FloatTensorType
 
-MODEL_DIR = Path(__file__).parent / "models"
+# MODEL_DIR is env-overridable so the same exporter handles both the
+# production end-of-season models and the experimental pit_cam_v3 retrain
+# (`training/models_experiments/pit_cam_v3/`) without forking the script.
+MODEL_DIR = Path(os.environ.get("MODEL_DIR", Path(__file__).parent / "models"))
 
 
 def _remove_zipmap(onnx_model):
