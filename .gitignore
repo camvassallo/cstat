@@ -49,6 +49,10 @@ __pycache__/
 !/training/models/freshman_mean_model.onnx
 !/training/models/freshman_q10_model.onnx
 !/training/models/freshman_q90_model.onnx
+!/training/models/pit_margin_model.onnx
+!/training/models/pit_win_model.onnx
+!/training/models/pit_total_model.onnx
+!/training/models/pit_margin_model.lgb
 
 # Training experiment side-by-side outputs. Results live in ROADMAP §4f;
 # artifacts here are reproducible from the GBPM_VARIANT env var.

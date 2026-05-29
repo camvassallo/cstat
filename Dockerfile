@@ -65,6 +65,11 @@ COPY training/models/margin_model.onnx \
      training/models/roster_impact_model_meta.json \
      training/models/trajectory_model_meta.json \
      training/models/freshman_model_meta.json \
+     training/models/pit_margin_model.onnx \
+     training/models/pit_win_model.onnx \
+     training/models/pit_total_model.onnx \
+     training/models/pit_margin_model.lgb \
+     training/models/pit_model_meta.json \
      /app/training/models/
 
 # Draft early-entrants + big-board JSONs. The projections route reads

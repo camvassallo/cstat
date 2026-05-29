@@ -5,6 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
+use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -47,6 +48,14 @@ struct PredictParams {
     #[serde(default)]
     neutral: bool,
     season: Option<i32>,
+    /// Optional point-in-time cutoff (`YYYY-MM-DD`). When set, the
+    /// prediction is rebuilt from features available *up to and
+    /// including* that date — the leak-free path tied to the pit
+    /// model bundle. Caller responsibility: pass `game_date - 1 day`
+    /// for completed games (so the model sees pre-game state, not the
+    /// game itself), or `Today` for live predictions. Omitting it
+    /// preserves the legacy end-of-season behavior.
+    as_of_date: Option<NaiveDate>,
 }
 
 impl PredictParams {
@@ -99,6 +108,7 @@ async fn predict(
         season,
         venue,
         is_conference,
+        params.as_of_date,
     )
     .await
     .map_err(|e| {
@@ -234,6 +244,7 @@ async fn predict_with_venue(
     season: i32,
     venue: Venue,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<Explained, String> {
     match venue {
         Venue::Home => {
@@ -244,6 +255,7 @@ async fn predict_with_venue(
                 season,
                 false,
                 is_conference,
+                as_of_date,
             )
             .await
         }
@@ -269,6 +281,7 @@ async fn predict_with_venue(
                 season,
                 false,
                 is_conference,
+                as_of_date,
             )
             .await?;
             let mut feature_values = swapped.feature_values;
@@ -295,8 +308,15 @@ async fn predict_with_venue(
             })
         }
         Venue::Neutral => {
-            predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference)
-                .await
+            predict_neutral_symmetric(
+                state,
+                home_team_id,
+                away_team_id,
+                season,
+                is_conference,
+                as_of_date,
+            )
+            .await
         }
     }
 }
@@ -321,6 +341,7 @@ async fn predict_neutral_symmetric(
     away_team_id: Uuid,
     season: i32,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<Explained, String> {
     let (fwd, rev) = tokio::try_join!(
         run_predict(
@@ -329,7 +350,8 @@ async fn predict_neutral_symmetric(
             away_team_id,
             season,
             true,
-            is_conference
+            is_conference,
+            as_of_date,
         ),
         run_predict(
             state,
@@ -337,7 +359,8 @@ async fn predict_neutral_symmetric(
             home_team_id,
             season,
             true,
-            is_conference
+            is_conference,
+            as_of_date,
         ),
     )?;
 
@@ -413,9 +436,18 @@ pub async fn predict_projection(
     season: i32,
     is_neutral: bool,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<ProjectionSummary, String> {
     let explained = if is_neutral {
-        predict_neutral_symmetric(state, home_team_id, away_team_id, season, is_conference).await?
+        predict_neutral_symmetric(
+            state,
+            home_team_id,
+            away_team_id,
+            season,
+            is_conference,
+            as_of_date,
+        )
+        .await?
     } else {
         run_predict(
             state,
@@ -424,6 +456,7 @@ pub async fn predict_projection(
             season,
             false,
             is_conference,
+            as_of_date,
         )
         .await?
     };
@@ -444,31 +477,69 @@ async fn run_predict(
     season: i32,
     is_neutral: bool,
     is_conference: bool,
+    as_of_date: Option<NaiveDate>,
 ) -> Result<Explained, String> {
     // Single DB-fetch pass produces both the 49-element diff vector
     // (margin/win input) and the 58-element diff+sum vector (totals
     // input). The feature extraction is the expensive step.
-    let f = cstat_core::features::build_all_features(
-        &state.db.pool,
-        home_team_id,
-        away_team_id,
-        season,
-        is_neutral,
-        is_conference,
-    )
-    .await
-    .map_err(|e| format!("feature extraction failed: {e}"))?;
+    //
+    // When `as_of_date` is set, we route through the pit feature builder
+    // (CamPom v3 aggregated from torvik_player_game_stats up to the
+    // cutoff) and serve the pit model bundle — train/serve parity is the
+    // load-bearing invariant: feeding pit features to the end-of-season
+    // model (or vice versa) would reintroduce the ~3 AUC points of
+    // lookahead inflation the predict-honesty audit caught.
+    let f = match as_of_date {
+        Some(d) => cstat_core::features::build_all_features_pit(
+            &state.db.pool,
+            home_team_id,
+            away_team_id,
+            season,
+            is_neutral,
+            is_conference,
+            d,
+        )
+        .await
+        .map_err(|e| format!("pit feature extraction failed: {e}"))?,
+        None => cstat_core::features::build_all_features(
+            &state.db.pool,
+            home_team_id,
+            away_team_id,
+            season,
+            is_neutral,
+            is_conference,
+        )
+        .await
+        .map_err(|e| format!("feature extraction failed: {e}"))?,
+    };
 
     // Margin + TreeSHAP from the diff vector; totals from the diff+sum
-    // vector. Two ONNX sessions (+ TreeSHAP), one DB round-trip.
-    let attributed = state
-        .predictor
-        .predict_with_contributions(&f.diff)
-        .map_err(|e| format!("prediction failed: {e}"))?;
-    let predicted_total = state
-        .predictor
-        .predict_total(&f.diff_and_sum)
-        .map_err(|e| format!("totals prediction failed: {e}"))?;
+    // vector. Pit and end-of-season paths use distinct model bundles —
+    // see `Predictor::predict_*` doc comments.
+    let (attributed, predicted_total) = match as_of_date {
+        Some(_) => {
+            let attributed = state
+                .predictor
+                .predict_pit_with_contributions(&f.diff)
+                .map_err(|e| format!("pit prediction failed: {e}"))?;
+            let predicted_total = state
+                .predictor
+                .predict_pit_total(&f.diff_and_sum)
+                .map_err(|e| format!("pit totals prediction failed: {e}"))?;
+            (attributed, predicted_total)
+        }
+        None => {
+            let attributed = state
+                .predictor
+                .predict_with_contributions(&f.diff)
+                .map_err(|e| format!("prediction failed: {e}"))?;
+            let predicted_total = state
+                .predictor
+                .predict_total(&f.diff_and_sum)
+                .map_err(|e| format!("totals prediction failed: {e}"))?;
+            (attributed, predicted_total)
+        }
+    };
 
     // Override the standalone win-classifier output with a margin-derived
     // win probability. The two LightGBM models (margin + win) are trained
@@ -671,6 +742,7 @@ mod tests {
             venue,
             neutral,
             season: None,
+            as_of_date: None,
         }
     }
 
@@ -697,6 +769,27 @@ mod tests {
         // Legacy neutral=true still works when venue is absent.
         let p: PredictParams = serde_urlencoded::from_str("home=A&away=B&neutral=true").unwrap();
         assert_eq!(p.resolved_venue(), Venue::Neutral);
+    }
+
+    #[test]
+    fn parses_as_of_date_from_url_query_string() {
+        // The audit's R5 plumbing rides on this serialize round-trip — a
+        // typo'd field name or a mis-quoted serde rename would silently
+        // produce `None` and the leaky model would always win.
+        let p: PredictParams =
+            serde_urlencoded::from_str("home=A&away=B&as_of_date=2026-02-14").unwrap();
+        assert_eq!(p.as_of_date, NaiveDate::from_ymd_opt(2026, 2, 14));
+
+        // Absent param defaults to None (legacy end-of-season path).
+        let p: PredictParams = serde_urlencoded::from_str("home=A&away=B").unwrap();
+        assert_eq!(p.as_of_date, None);
+
+        // Malformed dates surface as a deserialize error rather than silent
+        // None — caller gets a 400 instead of a leaky prediction labelled
+        // as honest. axum's Query handler maps this to a 400 automatically.
+        let err: Result<PredictParams, _> =
+            serde_urlencoded::from_str("home=A&away=B&as_of_date=not-a-date");
+        assert!(err.is_err(), "malformed date should fail deserialization");
     }
 
     #[test]

@@ -479,6 +479,18 @@ pub struct Predictor {
     freshman_q10_session: Mutex<Session>,
     freshman_q90_session: Mutex<Session>,
     margin_lgb: LgbModel,
+
+    // Point-in-time predict bundle. Same 49/58 feature shape as the
+    // production models, but trained on point-in-time CamPom v3 features
+    // (GBPM_VARIANT=pit_cam_v3) per the predict-honesty audit. Inputs are
+    // built by `features::build_all_features_pit` and routed here when the
+    // request carries an `as_of_date`. Backtest AUC 0.785 (vs the leaky
+    // 0.816 of the end-of-season model) — see
+    // `training/eval_history/honest_audit_findings_20260529.md`.
+    pit_margin_session: Mutex<Session>,
+    pit_win_session: Mutex<Session>,
+    pit_total_session: Mutex<Session>,
+    pit_margin_lgb: LgbModel,
 }
 
 impl Predictor {
@@ -565,6 +577,28 @@ impl Predictor {
             });
         }
 
+        // Point-in-time bundle (pit_cam_v3 training variant). Required —
+        // the API now serves honest predictions whenever a request carries
+        // an `as_of_date`, and silently falling back to the leaky model
+        // would defeat the audit. Same 49/58 feature shape; the difference
+        // is *what was fed into training*, not the model topology.
+        let pit_margin_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("pit_margin_model.onnx"))?;
+        let pit_win_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("pit_win_model.onnx"))?;
+        let pit_total_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("pit_total_model.onnx"))?;
+        let pit_margin_lgb = LgbModel::load(&model_dir.join("pit_margin_model.lgb"))?;
+        if pit_margin_lgb.num_features != NUM_FEATURES {
+            return Err(LoadError::FeatureCountMismatch {
+                expected: NUM_FEATURES,
+                actual: pit_margin_lgb.num_features,
+            });
+        }
+
         Ok(Self {
             margin_session: Mutex::new(margin_session),
             win_session: Mutex::new(win_session),
@@ -578,6 +612,10 @@ impl Predictor {
             freshman_q10_session: Mutex::new(freshman_q10_session),
             freshman_q90_session: Mutex::new(freshman_q90_session),
             margin_lgb,
+            pit_margin_session: Mutex::new(pit_margin_session),
+            pit_win_session: Mutex::new(pit_win_session),
+            pit_total_session: Mutex::new(pit_total_session),
+            pit_margin_lgb,
         })
     }
 
@@ -623,6 +661,57 @@ impl Predictor {
         // Total model: single float output, 58-feature input
         let total_input = TensorRef::from_array_view((total_shape, diff_and_sum.as_slice()))?;
         let mut total_session = self.total_session.lock().unwrap();
+        let total_outputs = total_session.run(ort::inputs![total_input])?;
+        let (_, total_data) = total_outputs[0].try_extract_tensor::<f32>()?;
+        let predicted_total = total_data[0];
+
+        Ok(Prediction {
+            predicted_margin,
+            home_win_probability,
+            predicted_total,
+        })
+    }
+
+    /// Point-in-time variant of `predict`. Same input shapes, but the
+    /// margin/win/total inference uses the `pit_*` model bundle whose
+    /// training distribution matches `features::build_all_features_pit`'s
+    /// output. The right pairing is enforced at the call site by routing
+    /// `as_of_date` consistently through feature construction and
+    /// prediction — feeding a pit feature vector to the end-of-season
+    /// model (or vice versa) is the train/serve skew the audit warned
+    /// against (~3 AUC points of lookahead inflation).
+    pub fn predict_pit(
+        &self,
+        diff: &[f32; NUM_FEATURES],
+        diff_and_sum: &[f32; TOTAL_NUM_FEATURES],
+    ) -> Result<Prediction, ort::Error> {
+        use ort::value::TensorRef;
+
+        let diff_shape = [1_usize, NUM_FEATURES];
+        let total_shape = [1_usize, TOTAL_NUM_FEATURES];
+
+        let margin_input = TensorRef::from_array_view((diff_shape, diff.as_slice()))?;
+        let mut margin_session = self.pit_margin_session.lock().unwrap();
+        let margin_outputs = margin_session.run(ort::inputs![margin_input])?;
+        let (_, margin_data) = margin_outputs[0].try_extract_tensor::<f32>()?;
+        let predicted_margin = margin_data[0];
+        drop(margin_outputs);
+        drop(margin_session);
+
+        let win_input = TensorRef::from_array_view((diff_shape, diff.as_slice()))?;
+        let mut win_session = self.pit_win_session.lock().unwrap();
+        let win_outputs = win_session.run(ort::inputs![win_input])?;
+        let (_, probs) = win_outputs[1].try_extract_tensor::<f32>()?;
+        let home_win_probability = if probs.len() >= 2 {
+            probs[1] as f64
+        } else {
+            probs[0] as f64
+        };
+        drop(win_outputs);
+        drop(win_session);
+
+        let total_input = TensorRef::from_array_view((total_shape, diff_and_sum.as_slice()))?;
+        let mut total_session = self.pit_total_session.lock().unwrap();
         let total_outputs = total_session.run(ort::inputs![total_input])?;
         let (_, total_data) = total_outputs[0].try_extract_tensor::<f32>()?;
         let predicted_total = total_data[0];
@@ -990,6 +1079,57 @@ impl Predictor {
             contributions,
         })
     }
+
+    /// Point-in-time companion to `predict_with_contributions`. Same
+    /// semantics — ONNX margin + TreeSHAP from the parsed `.lgb` — but
+    /// reads the pit margin model bundle. The Keys panel on the Predict
+    /// page stays interpretable for honest predictions because feature
+    /// attributions come from the model the prediction came from.
+    pub fn predict_pit_with_contributions(
+        &self,
+        features: &[f32; NUM_FEATURES],
+    ) -> Result<PredictionWithContributions, ort::Error> {
+        use ort::value::TensorRef;
+
+        let shape = [1_usize, NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, features.as_slice()))?;
+        let mut session = self.pit_margin_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, preds) = outputs[0].try_extract_tensor::<f32>()?;
+        let predicted_margin = preds[0];
+        drop(outputs);
+        drop(session);
+
+        let mut features_f64 = [0.0_f64; NUM_FEATURES];
+        for (i, &v) in features.iter().enumerate() {
+            features_f64[i] = v as f64;
+        }
+        let shap = tree_shap(&self.pit_margin_lgb, &features_f64);
+
+        let mut contributions = [0.0_f32; NUM_FEATURES];
+        for (i, v) in shap.iter().enumerate() {
+            contributions[i] = *v as f32;
+        }
+
+        Ok(PredictionWithContributions {
+            predicted_margin,
+            contributions,
+        })
+    }
+
+    /// Pit variant of `predict_total`. Same input shape, different model.
+    pub fn predict_pit_total(
+        &self,
+        diff_and_sum: &[f32; TOTAL_NUM_FEATURES],
+    ) -> Result<f32, ort::Error> {
+        use ort::value::TensorRef;
+        let shape = [1_usize, TOTAL_NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, diff_and_sum.as_slice()))?;
+        let mut session = self.pit_total_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
+        Ok(data[0])
+    }
 }
 
 /// Run the roster-impact ONNX session on one 25-feature vector. Shared by
@@ -1260,6 +1400,10 @@ mod tests {
             "freshman_q10_model.onnx",
             "freshman_q90_model.onnx",
             "freshman_model_meta.json",
+            "pit_margin_model.onnx",
+            "pit_win_model.onnx",
+            "pit_total_model.onnx",
+            "pit_margin_model.lgb",
         ];
         for f in REQUIRED {
             assert!(
@@ -1390,6 +1534,40 @@ mod tests {
         assert!(
             (50.0..=250.0).contains(&pred.predicted_total),
             "total {} is outside plausible D1 range",
+            pred.predicted_total
+        );
+    }
+
+    #[test]
+    fn load_models_and_predict_pit_zeros() {
+        // Mirror of `load_models_and_predict_zeros` for the pit bundle:
+        // verifies the pit_margin/pit_win/pit_total sessions load and
+        // produce in-range outputs. Pinning a model-meta delta would
+        // catch a shipped-but-broken pit ONNX before the API boots; this
+        // catches the simpler shape/load failure.
+        let dir = model_dir();
+        require_model_files(&dir);
+
+        let predictor = Predictor::load(&dir).expect("failed to load models");
+        let features = [0.0_f32; NUM_FEATURES];
+        let total_features = [0.0_f32; TOTAL_NUM_FEATURES];
+        let pred = predictor
+            .predict_pit(&features, &total_features)
+            .expect("pit prediction failed");
+
+        assert!(
+            pred.predicted_margin.abs() < 20.0,
+            "pit margin {} unreasonably large for zero features",
+            pred.predicted_margin
+        );
+        assert!(
+            (0.0..=1.0).contains(&pred.home_win_probability),
+            "pit win probability {} out of range",
+            pred.home_win_probability
+        );
+        assert!(
+            pred.predicted_total.is_finite() && (50.0..=250.0).contains(&pred.predicted_total),
+            "pit total {} implausible",
             pred.predicted_total
         );
     }

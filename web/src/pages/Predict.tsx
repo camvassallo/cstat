@@ -32,10 +32,17 @@ export default function Predict() {
   const urlVenue = searchParams.get('venue') as Venue | null;
   const initialVenue: Venue =
     urlVenue === 'home' || urlVenue === 'away' || urlVenue === 'neutral' ? urlVenue : 'home';
+  // Point-in-time cutoff. When present (`YYYY-MM-DD`), the prediction is
+  // routed through the pit model bundle so the displayed forecast
+  // reflects only data available up to and including that date — the
+  // honest counterfactual for a historical matchup. Empty → live
+  // end-of-season state.
+  const urlAsOfDate = searchParams.get('as_of_date') ?? '';
 
   const [team1, setTeam1] = useState(urlHome);
   const [team2, setTeam2] = useState(urlAway);
   const [venue, setVenue] = useState<Venue>(initialVenue);
+  const [asOfDate, setAsOfDate] = useState(urlAsOfDate);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -67,11 +74,18 @@ export default function Predict() {
     setTeam1(urlHome);
     setTeam2(urlAway);
     setVenue(initialVenue);
+    setAsOfDate(urlAsOfDate);
     let alive = true;
     setLoading(true);
     setError('');
     setResult(null);
-    fetchPrediction(urlHome.trim(), urlAway.trim(), initialVenue, season)
+    fetchPrediction(
+      urlHome.trim(),
+      urlAway.trim(),
+      initialVenue,
+      season,
+      urlAsOfDate || undefined,
+    )
       .then((r) => {
         if (alive) setResult(r);
       })
@@ -90,7 +104,7 @@ export default function Predict() {
     // (which is in the deps), so reading its current value inside the effect
     // is correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlHome, urlAway, urlVenue, season]);
+  }, [urlHome, urlAway, urlVenue, urlAsOfDate, season]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -99,7 +113,13 @@ export default function Predict() {
     setError('');
     setResult(null);
     try {
-      const r = await fetchPrediction(team1.trim(), team2.trim(), venue, season);
+      const r = await fetchPrediction(
+        team1.trim(),
+        team2.trim(),
+        venue,
+        season,
+        asOfDate.trim() || undefined,
+      );
       setResult(r);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Prediction failed');
@@ -171,6 +191,25 @@ export default function Predict() {
               </button>
             ))}
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="as-of-date" className="block text-sm text-gray-400 mb-1.5">
+            As of <span className="text-gray-600">(optional, for historical projections)</span>
+          </label>
+          <input
+            id="as-of-date"
+            type="date"
+            value={asOfDate}
+            onChange={(e) => setAsOfDate(e.target.value)}
+            className="bg-gray-900 border border-gray-700 text-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+          />
+          {asOfDate && (
+            <p className="mt-1 text-xs text-amber-400">
+              Honest pre-game projection: CamPom rebuilt from game-by-game Torvik data
+              up to {asOfDate}. No lookahead.
+            </p>
+          )}
         </div>
 
         <button

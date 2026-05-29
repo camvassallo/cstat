@@ -713,8 +713,11 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
 
   // "View matchup" link: routes to /predict pre-loaded with these two teams
   // and the correct venue (host=this team if is_home, opponent if not, neutral
-  // overrides). Only active when the opponent name is populated — Predict
-  // resolves teams by name, so a missing opponent_name would 404.
+  // overrides). For completed games, also carry an `as_of_date` of the
+  // day before tip-off so the Predict page reproduces the honest pre-game
+  // forecast surfaced inline in this row's Projected cell. Only active
+  // when the opponent name is populated — Predict resolves teams by name,
+  // so a missing opponent_name would 404.
   const opponentName = g.opponent_name;
   let predictTo: string | null = null;
   if (opponentName) {
@@ -725,15 +728,26 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
       visitor = teamName;
     }
     const venueParam = g.is_neutral ? '&venue=neutral' : '';
-    predictTo = `/predict?home=${encodeURIComponent(host)}&away=${encodeURIComponent(visitor)}${venueParam}`;
+    // YYYY-MM-DD minus one day. game_date is already an ISO date string
+    // from the API; constructing a Date and subtracting 86400000 ms
+    // handles month/year rollovers without pulling in a date library.
+    let asOfParam = '';
+    if (g.team_score != null && g.game_date) {
+      const d = new Date(`${g.game_date}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - 1);
+      asOfParam = `&as_of_date=${d.toISOString().slice(0, 10)}`;
+    }
+    predictTo = `/predict?home=${encodeURIComponent(host)}&away=${encodeURIComponent(visitor)}${venueParam}${asOfParam}`;
   }
 
-  // Render the projected cell. Always show when a projection is available —
-  // upcoming games get the current model's pre-game forecast; completed
-  // games show what we'd project *today* (current team state, not pre-game),
-  // muted so it doesn't compete with the actual result. Proper pre-game
-  // predictions for historical games are queued as a future roadmap item
-  // (point-in-time historical predictions in `game_forecasts`).
+  // Render the projected cell. Upcoming games get the current model's
+  // pre-game forecast (end-of-season-trained model, fed live team state —
+  // the only honest cutoff for an unplayed game). Completed games get an
+  // **honest pre-game projection**: the backend reroutes those rows
+  // through the pit model bundle with `as_of_date = game_date − 1`, so
+  // the displayed forecast reflects only data available before tip-off.
+  // Closes the predict-honesty audit's R3 caveat — historical rows used
+  // to be the leaky "we'd predict today" path.
   const projected = (() => {
     if (g.projected_margin == null) return null;
     const completed = g.team_score != null;
@@ -755,7 +769,7 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
         : 'text-gray-300';
     const subdued = completed ? 'text-gray-600' : 'text-gray-500';
     const title = completed
-      ? `If we replayed this matchup today: ${teamName} ${spread}. Not a pre-game prediction.`
+      ? `Pre-game projection from ${teamName}'s perspective (point-in-time CamPom as of ${g.game_date}).`
       : `Predicted from ${teamName}'s perspective`;
     return (
       <span className={`font-mono ${colorClass}`} title={title}>

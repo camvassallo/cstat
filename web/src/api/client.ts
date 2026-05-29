@@ -1004,12 +1004,18 @@ export function fetchPrediction(
   away: string,
   venue: Venue,
   season?: number,
+  asOfDate?: string,
 ) {
   return fetchJson<PredictionResult>('/predict', {
     home,
     away,
     venue,
     season: season?.toString(),
+    // YYYY-MM-DD. Backend rebuilds CamPom v3 from per-game Torvik rows
+    // up to this date and serves the pit-trained margin/win/total
+    // bundle — see the predict-honesty audit. Omit for the legacy
+    // end-of-season prediction.
+    as_of_date: asOfDate,
   });
 }
 

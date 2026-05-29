@@ -1,7 +1,10 @@
+use chrono::NaiveDate;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::inference::{NUM_FEATURES, TOTAL_NUM_FEATURES};
+use crate::pit_campom::{PitCamPom, compute_pit_campom};
 
 /// Feature vectors for both the margin/win path (49 diffs) and the totals
 /// path (49 diffs + 9 level-sensitive sums). Built in a single DB-fetch
@@ -116,6 +119,56 @@ async fn get_team_stats(
     .await
 }
 
+/// Point-in-time roster impact values keyed by cstat player_id. Constructed
+/// once per request and shared across home/away roster aggregations.
+type PitByPlayer = HashMap<Uuid, PitCamPom>;
+
+/// Compute pit CamPom v3 (no-SOS) for the entire season cohort as of a
+/// cutoff date and map the result onto cstat `players.id`.
+///
+/// Mirrors the Python `pit_cam_v3` GBPM_VARIANT path in `training/features.py`:
+/// the season-aggregate `torvik_player_stats.gbpm/ogbpm/dgbpm` columns are
+/// the leaky channel identified by the predict-honesty audit
+/// (`training/eval_history/honest_audit_findings_20260529.md`); the pit
+/// aggregate from `torvik_player_game_stats` is the leak-free replacement.
+async fn build_pit_by_player(
+    pool: &PgPool,
+    season: i32,
+    as_of_date: NaiveDate,
+) -> Result<PitByPlayer, sqlx::Error> {
+    let by_pid = compute_pit_campom(pool, season, as_of_date).await?;
+    if by_pid.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // Map (torvik_pid, season) → cstat player_id. Skipping rows with NULL
+    // player_id (~1-2% of torvik rows that don't match into cstat); those
+    // players fall back to LEFT JOIN NULL in the roster aggregation, which
+    // is the same train-time behavior.
+    let pids: Vec<i32> = by_pid.keys().copied().collect();
+    let mapped: Vec<(i32, Uuid)> = sqlx::query_as(
+        r#"
+        SELECT torvik_pid, player_id
+        FROM torvik_player_stats
+        WHERE season = $1
+          AND torvik_pid = ANY($2)
+          AND player_id IS NOT NULL
+        "#,
+    )
+    .bind(season)
+    .bind(&pids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = HashMap::with_capacity(mapped.len());
+    for (tpid, player_id) in mapped {
+        if let Some(pit) = by_pid.get(&tpid) {
+            out.insert(player_id, *pit);
+        }
+    }
+    Ok(out)
+}
+
 async fn get_roster_agg(
     pool: &PgPool,
     team_id: Uuid,
@@ -179,6 +232,107 @@ async fn get_roster_agg(
     )
     .bind(team_id)
     .bind(season)
+    .fetch_one(pool)
+    .await
+}
+
+/// Roster aggregation with point-in-time CamPom values substituted for the
+/// season-aggregate `torvik_player_stats.gbpm/ogbpm/dgbpm` channel.
+///
+/// Identical to `get_roster_agg` except the impact join is fed by the
+/// caller-supplied `PitByPlayer` map (passed in as parallel UNNEST arrays)
+/// instead of the season-aggregate Torvik columns. Filter / weighting /
+/// star-pick logic is intentionally unchanged — only the leaky channel is
+/// swapped, matching the `pit_cam_v3` training variant the audit measured
+/// at AUC 0.785.
+async fn get_roster_agg_pit(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+    pit: &PitByPlayer,
+) -> Result<RosterAgg, sqlx::Error> {
+    // Flatten the map into parallel arrays for UNNEST. Players with no pit
+    // entry fall through the LEFT JOIN as NULL, matching how train-time
+    // unmapped Torvik rows behave.
+    let (pids, gbpms, ogbpms, dgbpms): (Vec<Uuid>, Vec<f64>, Vec<f64>, Vec<f64>) = pit.iter().fold(
+        (
+            Vec::with_capacity(pit.len()),
+            Vec::with_capacity(pit.len()),
+            Vec::with_capacity(pit.len()),
+            Vec::with_capacity(pit.len()),
+        ),
+        |(mut p, mut g, mut o, mut d), (player_id, cam)| {
+            p.push(*player_id);
+            g.push(cam.cam_gbpm_v3_no_sos);
+            o.push(cam.ogbpm);
+            d.push(cam.dgbpm);
+            (p, g, o, d)
+        },
+    );
+
+    sqlx::query_as::<_, RosterAgg>(
+        r#"
+        WITH pit AS (
+            SELECT * FROM UNNEST($3::uuid[], $4::float8[], $5::float8[], $6::float8[])
+                AS t(player_id, gbpm, ogbpm, dgbpm)
+        ),
+        qualified AS (
+            SELECT pss.*,
+                   pss.minutes_per_game * pss.games_played AS total_minutes,
+                   pit.gbpm   AS torvik_gbpm,
+                   pit.ogbpm  AS torvik_ogbpm,
+                   pit.dgbpm  AS torvik_dgbpm
+            FROM player_season_stats pss
+            LEFT JOIN pit ON pit.player_id = pss.player_id
+            WHERE pss.team_id = $1
+              AND pss.season = $2
+              AND pss.games_played >= 5
+              AND pss.minutes_per_game >= 10
+        ),
+        star AS (
+            SELECT ppg          AS star_ppg,
+                   torvik_gbpm  AS star_gbpm,
+                   torvik_ogbpm AS star_ogbpm,
+                   torvik_dgbpm AS star_dgbpm,
+                   offensive_rating AS star_ortg
+            FROM qualified
+            ORDER BY total_minutes DESC
+            LIMIT 1
+        ),
+        agg AS (
+            SELECT
+                COUNT(*)::bigint AS roster_size,
+                SUM(ppg * total_minutes)           / NULLIF(SUM(total_minutes), 0) AS w_ppg,
+                SUM(rpg * total_minutes)           / NULLIF(SUM(total_minutes), 0) AS w_rpg,
+                SUM(apg * total_minutes)           / NULLIF(SUM(total_minutes), 0) AS w_apg,
+                SUM(spg * total_minutes)           / NULLIF(SUM(total_minutes), 0) AS w_spg,
+                SUM(bpg * total_minutes)           / NULLIF(SUM(total_minutes), 0) AS w_bpg,
+                SUM(topg * total_minutes)          / NULLIF(SUM(total_minutes), 0) AS w_topg,
+                SUM(true_shooting_pct * total_minutes)  / NULLIF(SUM(total_minutes), 0) AS w_ts_pct,
+                SUM(effective_fg_pct * total_minutes)   / NULLIF(SUM(total_minutes), 0) AS w_efg_pct,
+                SUM(usage_rate * total_minutes)    / NULLIF(SUM(total_minutes), 0) AS w_usage,
+                SUM(player_sos * total_minutes)    / NULLIF(SUM(total_minutes), 0) AS w_player_sos,
+                SUM(offensive_rating * total_minutes)   / NULLIF(SUM(total_minutes), 0) AS w_ortg,
+                SUM(ast_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_ast_pct,
+                SUM(tov_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_tov_pct,
+                SUM(stl_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_stl_pct,
+                SUM(blk_pct * total_minutes)       / NULLIF(SUM(total_minutes), 0) AS w_blk_pct,
+                SUM(torvik_gbpm  * total_minutes)  / NULLIF(SUM(CASE WHEN torvik_gbpm  IS NOT NULL THEN total_minutes END), 0) AS w_gbpm,
+                SUM(torvik_ogbpm * total_minutes)  / NULLIF(SUM(CASE WHEN torvik_ogbpm IS NOT NULL THEN total_minutes END), 0) AS w_ogbpm,
+                SUM(torvik_dgbpm * total_minutes)  / NULLIF(SUM(CASE WHEN torvik_dgbpm IS NOT NULL THEN total_minutes END), 0) AS w_dgbpm,
+                STDDEV(minutes_per_game) AS minutes_stddev
+            FROM qualified
+        )
+        SELECT agg.*, star.*
+        FROM agg CROSS JOIN star
+        "#,
+    )
+    .bind(team_id)
+    .bind(season)
+    .bind(&pids)
+    .bind(&gbpms)
+    .bind(&ogbpms)
+    .bind(&dgbpms)
     .fetch_one(pool)
     .await
 }
@@ -275,15 +429,83 @@ pub async fn build_all_features(
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<GameFeatures, sqlx::Error> {
-    // Fetch all data in parallel
-    let (home_ts, away_ts, home_roster, away_roster, home_form, away_form) = tokio::try_join!(
-        get_team_stats(pool, home_team_id, season),
-        get_team_stats(pool, away_team_id, season),
-        get_roster_agg(pool, home_team_id, season),
-        get_roster_agg(pool, away_team_id, season),
-        get_rolling_form(pool, home_team_id, season),
-        get_rolling_form(pool, away_team_id, season),
-    )?;
+    build_all_features_inner(
+        pool,
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+        None,
+    )
+    .await
+}
+
+/// Point-in-time companion to `build_all_features`. Roster impact (gbpm /
+/// ogbpm / dgbpm) is rebuilt by aggregating `torvik_player_game_stats` up
+/// to `as_of_date` instead of reading the season-aggregate
+/// `torvik_player_stats` columns. All other features stay end-of-season —
+/// this matches the `pit_cam_v3` training variant whose backtest AUC of
+/// 0.785 is the production-ready honest number per the predict-honesty
+/// audit (`training/eval_history/honest_audit_findings_20260529.md`).
+///
+/// Pair with `Predictor::predict_pit` to keep the model that receives
+/// these features the one that was trained on them.
+pub async fn build_all_features_pit(
+    pool: &PgPool,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    season: i32,
+    is_neutral: bool,
+    is_conference: bool,
+    as_of_date: NaiveDate,
+) -> Result<GameFeatures, sqlx::Error> {
+    build_all_features_inner(
+        pool,
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+        Some(as_of_date),
+    )
+    .await
+}
+
+async fn build_all_features_inner(
+    pool: &PgPool,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    season: i32,
+    is_neutral: bool,
+    is_conference: bool,
+    as_of_date: Option<NaiveDate>,
+) -> Result<GameFeatures, sqlx::Error> {
+    // Build the pit map once when as_of_date is set — the season-cohort
+    // aggregate is shared across home/away roster queries.
+    let pit_map = match as_of_date {
+        Some(d) => Some(build_pit_by_player(pool, season, d).await?),
+        None => None,
+    };
+
+    let (home_ts, away_ts, home_roster, away_roster, home_form, away_form) = match &pit_map {
+        Some(map) => tokio::try_join!(
+            get_team_stats(pool, home_team_id, season),
+            get_team_stats(pool, away_team_id, season),
+            get_roster_agg_pit(pool, home_team_id, season, map),
+            get_roster_agg_pit(pool, away_team_id, season, map),
+            get_rolling_form(pool, home_team_id, season),
+            get_rolling_form(pool, away_team_id, season),
+        )?,
+        None => tokio::try_join!(
+            get_team_stats(pool, home_team_id, season),
+            get_team_stats(pool, away_team_id, season),
+            get_roster_agg(pool, home_team_id, season),
+            get_roster_agg(pool, away_team_id, season),
+            get_rolling_form(pool, home_team_id, season),
+            get_rolling_form(pool, away_team_id, season),
+        )?,
+    };
 
     let d = |home: Option<f64>, away: Option<f64>| -> f32 {
         (home.unwrap_or(0.0) - away.unwrap_or(0.0)) as f32
