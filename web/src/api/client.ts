@@ -929,6 +929,11 @@ export interface PredictionResult {
   /// by the underlying query — slice top N on the frontend for display.
   roster_home: RosterEntry[];
   roster_away: RosterEntry[];
+  /// Minute-weighted archetype distribution per team. Same shape /
+  /// methodology as the field on the team-detail endpoint — drives
+  /// the per-team RosterWaffle panels on the Predict page.
+  archetype_distribution_home: ArchetypeShare[];
+  archetype_distribution_away: ArchetypeShare[];
   /// Completed games between these two teams this season, newest first.
   /// Empty when they haven't played yet.
   prior_meetings: PriorMeeting[];

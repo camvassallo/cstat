@@ -130,14 +130,24 @@ async fn predict(
     // perspective). Failures here downgrade to empty arrays rather than
     // tanking the prediction; the page degrades gracefully.
     let pool = &state.db.pool;
-    let (roster_home, roster_away, prior_meetings_raw) = tokio::join!(
+    let (
+        roster_home,
+        roster_away,
+        prior_meetings_raw,
+        archetype_home,
+        archetype_away,
+    ) = tokio::join!(
         queries::get_team_roster(pool, home_team.id, season),
         queries::get_team_roster(pool, away_team.id, season),
         queries::get_prior_meetings(pool, home_team.id, away_team.id, season),
+        queries::get_team_archetype_index(pool, home_team.id, season),
+        queries::get_team_archetype_index(pool, away_team.id, season),
     );
     let roster_home = roster_home.unwrap_or_default();
     let roster_away = roster_away.unwrap_or_default();
     let prior_meetings_raw = prior_meetings_raw.unwrap_or_default();
+    let archetype_home = archetype_home.unwrap_or_default();
+    let archetype_away = archetype_away.unwrap_or_default();
 
     // Box score data: only fetch when there's at least one prior meeting.
     // Saves two empty-array round-trips on the common case (no rematch yet).
@@ -203,6 +213,8 @@ async fn predict(
         "contributions_by_group": contributions_by_group,
         "roster_home": roster_home,
         "roster_away": roster_away,
+        "archetype_distribution_home": archetype_home,
+        "archetype_distribution_away": archetype_away,
         "prior_meetings": prior_meetings,
     })))
 }
