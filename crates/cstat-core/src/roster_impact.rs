@@ -25,8 +25,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Feature count for `roster_impact_model.onnx`. Layout:
-/// `[roster_size, 8×cam_*, 4×exp_*_share, 12×arch_*]`.
-pub const ROSTER_IMPACT_NUM_FEATURES: usize = 25;
+/// `[roster_size, 8×cam_*, 4×exp_*_share, 12×arch_*, outbound_cam_v3_sum,
+///   inbound_cam_v3_sum]`.
+pub const ROSTER_IMPACT_NUM_FEATURES: usize = 27;
 
 /// Feature names, wire-locked to the ONNX input column order. Must match
 /// `roster_impact_model_meta.json::features` byte-for-byte — the boot
@@ -57,6 +58,8 @@ pub const ROSTER_IMPACT_FEATURE_NAMES: [&str; ROSTER_IMPACT_NUM_FEATURES] = [
     "arch_druid",
     "arch_rogue",
     "arch_fighter",
+    "outbound_cam_v3_sum",
+    "inbound_cam_v3_sum",
 ];
 
 /// Map an inconsistently-stored `class_year` to an experience bucket
@@ -96,7 +99,7 @@ pub fn apply_projected_cam_v3(roster: &mut [PlayerRow], projected: &HashMap<Uuid
     }
 }
 
-/// Build the 25-feature Phase B vector for one projected roster.
+/// Build the 27-feature Phase B vector for one projected roster.
 ///
 /// Expects each `PlayerRow.cam_v3` to already carry the *projected*
 /// next-season value (call `apply_projected_cam_v3` first). The roster is
@@ -105,9 +108,34 @@ pub fn apply_projected_cam_v3(roster: &mut [PlayerRow], projected: &HashMap<Uuid
 /// weight for every minutes-weighted aggregate — identical to the
 /// training-side aggregation in `train_roster_impact_model.py`.
 ///
-/// An empty roster yields an all-zero vector.
-pub fn build_roster_impact_features(roster: &[PlayerRow]) -> [f32; ROSTER_IMPACT_NUM_FEATURES] {
+/// `outbound_cam_v3_sum` is the team's portal loss: the sum of base-season
+/// cam_v3 across players who left this team via the spring portal cycle
+/// moving them into the target season (positive = lost talent).
+/// `inbound_cam_v3_sum` is the symmetric portal gain: sum of base-season
+/// cam_v3 across players who arrived from other D-I teams.
+///
+/// Both sums use base-season cam_v3 (the player's level when last
+/// observed). Missing torvik coverage on a portal player contributes 0
+/// (`COALESCE` convention, matches the audit script and the SQL in
+/// `train_roster_impact_model.py::{OUTBOUND_QUERY, INBOUND_QUERY}`).
+/// 0.0 is the sentinel for pre-portal-era seasons or teams with no
+/// movement; the tree-based model naturally splits on `> 0` vs `= 0`.
+/// They live as separate features (rather than a single net) so the
+/// trees can learn asymmetric effects — a team gaining and losing
+/// equivalent CamPom isn't necessarily AdjEM-neutral (different roles,
+/// system fit, etc.).
+///
+/// An empty roster yields an all-zero vector except for the portal
+/// slots, which still record the team's portal movement — a team can
+/// have 0 qualifying returners and still have lost / gained talent.
+pub fn build_roster_impact_features(
+    roster: &[PlayerRow],
+    outbound_cam_v3_sum: f32,
+    inbound_cam_v3_sum: f32,
+) -> [f32; ROSTER_IMPACT_NUM_FEATURES] {
     let mut out = [0.0_f32; ROSTER_IMPACT_NUM_FEATURES];
+    out[25] = outbound_cam_v3_sum;
+    out[26] = inbound_cam_v3_sum;
     if roster.is_empty() {
         return out;
     }
@@ -242,7 +270,7 @@ mod tests {
 
     #[test]
     fn empty_roster_is_all_zero() {
-        let out = build_roster_impact_features(&[]);
+        let out = build_roster_impact_features(&[], 0.0, 0.0);
         assert!(out.iter().all(|&v| v == 0.0));
     }
 
@@ -252,7 +280,7 @@ mod tests {
         let roster: Vec<PlayerRow> = (0..15)
             .map(|i| row(Some(i as f64), Some("Fr"), Some("Wizard")))
             .collect();
-        let out = build_roster_impact_features(&roster);
+        let out = build_roster_impact_features(&roster, 0.0, 0.0);
         assert_eq!(out[0], 13.0, "roster_size should cap at 13");
     }
 
@@ -263,7 +291,7 @@ mod tests {
             .iter()
             .map(|&c| row(Some(c), Some("So"), Some("Sorcerer")))
             .collect();
-        let out = build_roster_impact_features(&roster);
+        let out = build_roster_impact_features(&roster, 0.0, 0.0);
         assert!((out[2] - 30.0).abs() < 1e-4, "cam_sum");
         assert!((out[3] - 10.0).abs() < 1e-4, "cam_top1");
         assert!((out[4] - 8.0).abs() < 1e-4, "cam_top3_mean = (10+8+6)/3");
@@ -286,7 +314,7 @@ mod tests {
             row(Some(8.0), Some("Jr"), Some("Druid")),
             row(None, Some("Jr"), Some("Druid")),
         ];
-        let out = build_roster_impact_features(&roster);
+        let out = build_roster_impact_features(&roster, 0.0, 0.0);
         assert_eq!(out[0], 3.0, "uncovered player still holds a rotation slot");
         assert!((out[2] - 20.0).abs() < 1e-4, "cam_sum over the 2 covered");
         // All three are Jr → exp_jr_share == 1.0.
@@ -300,7 +328,7 @@ mod tests {
             row(Some(15.0), Some("Senior"), Some("Wizard")),
             row(Some(5.0), Some("Fr"), Some("Bard")),
         ];
-        let out = build_roster_impact_features(&roster);
+        let out = build_roster_impact_features(&roster, 0.0, 0.0);
         let total = 32.0 + 29.8;
         // exp_sr_share = 32 / 61.8 ; exp_fr_share = 29.8 / 61.8.
         assert!((out[12] - (32.0 / total)).abs() < 1e-4, "exp_sr_share");
@@ -308,6 +336,22 @@ mod tests {
         // arch_wizard at index 13, arch_bard at index 16.
         assert!((out[13] - (32.0 / total)).abs() < 1e-4, "arch_wizard share");
         assert!((out[16] - (29.8 / total)).abs() < 1e-4, "arch_bard share");
+    }
+
+    #[test]
+    fn portal_sums_land_in_trailing_slots() {
+        let roster = vec![row(Some(10.0), Some("Jr"), Some("Wizard"))];
+        let out = build_roster_impact_features(&roster, 8.5, 3.25);
+        assert!((out[25] - 8.5).abs() < 1e-4, "outbound_cam_v3_sum slot");
+        assert!((out[26] - 3.25).abs() < 1e-4, "inbound_cam_v3_sum slot");
+        // A team can be empty AND still have moved portal talent — verify
+        // both portal slots are populated even with zero rotation.
+        let empty = build_roster_impact_features(&[], 12.0, 7.0);
+        assert!((empty[25] - 12.0).abs() < 1e-4, "outbound on empty roster");
+        assert!((empty[26] - 7.0).abs() < 1e-4, "inbound on empty roster");
+        for &v in &empty[..25] {
+            assert_eq!(v, 0.0, "non-portal slots stay zero on empty roster");
+        }
     }
 
     #[test]

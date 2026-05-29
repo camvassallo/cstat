@@ -237,7 +237,11 @@ async fn backtest_year(
         let mut roster_b = p.for_scenario(DraftScenario::Ceiling);
         apply_projected_cam_v3(&mut roster_b, &projected_cam);
         let phase_b = loso_model
-            .predict(&build_roster_impact_features(&roster_b))
+            .predict(&build_roster_impact_features(
+                &roster_b,
+                p.outbound_cam_v3_sum,
+                p.inbound_cam_v3_sum,
+            ))
             .map_err(|e| anyhow::anyhow!("LOSO roster-impact predict ({}): {e}", p.team_name))?;
 
         // --- Phase A: box-score pipeline with the shipped blend. --------
