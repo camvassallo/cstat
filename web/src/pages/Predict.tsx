@@ -354,10 +354,10 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Roster Compare panel — embedded TeamCompare. Shipped before the §5b radial
-// plot lands, so for now it's a side-by-side roster table (top 8 by CamPom
-// per team) with archetype chips and rate stats. The radial-roster overlay
-// from §5b drops into this same component when it ships.
+// Roster Compare panel — side-by-side roster table (top 8 by CamPom per
+// team) with archetype chips and rate stats. The Archetype + Shot Diet
+// rows above already render the visual identity per team; this panel
+// drills into the specific players carrying it.
 // ---------------------------------------------------------------------------
 
 const ROSTER_PANEL_LIMIT = 8;
