@@ -195,20 +195,25 @@ GROUP BY tgt_team.id, p_base.season
 # team's inbound total.
 #
 # Cross-season player identity uses **natstat_id OR torvik_pid**.
-# natstat_id is reissued per team (transfers get a new id at the new
-# school), so a natstat_id-only join silently misses every transfer —
-# the exact bug we're trying to measure. `torvik_pid` is stable across
-# transfers (per `reference_torvik_pid` memory: stable cross-season,
-# 96% coverage, zero collisions), so it catches the transfer cohort.
-# For non-transferring same-team continuity (rare here — by definition
-# this query is over transfers) natstat_id matches first.
+# natstat_id is reissued per team — a player who transfers gets a new
+# natstat_id at the new school — so natstat_id-only joins silently miss
+# every transfer (empirically 503/1958 = 25.7% of the 2024+2025 inbound
+# cohort, per `test_cross_season_joins.py::coverage_invariant`).
+# `torvik_pid` is stable across transfers (per `reference_torvik_pid`
+# memory: stable cross-season, 96% coverage, zero collisions). The OR
+# catches both:
+#   - **non-transferring same-team players who happened to enter the
+#     portal then re-signed with their current team** (rare): natstat_id
+#     branch matches.
+#   - **actual transfers**: torvik_pid branch matches; natstat_id branch
+#     fails (fresh id at new school).
 #
 # `tps_base` is `LEFT JOIN`ed so transfers with no Torvik coverage still
-# contribute 0 to the sum; the `OR` only activates the torvik_pid fallback
-# branch when base-side coverage exists. Each transfer row is matched
-# at most once: for a real transfer, only the torvik_pid branch fires
-# (natstat_id is freshly minted); for the rare same-team case, both
-# branches return the SAME `p_tgt` row, not two — `OR` doesn't duplicate.
+# contribute 0 to the sum (the COALESCE on cam_v3 absorbs the NULL); the
+# `OR`'s torvik branch only activates when base-side coverage exists.
+# Each transfer row matches AT MOST ONE `p_tgt` row: when both branches
+# return the same row (rare same-team case), SQL `OR` is idempotent —
+# the row appears once, not twice — so the SUM is safe without DISTINCT.
 #
 # Pairing outbound + inbound (rather than a single net_cam_v3_sum) lets
 # the model learn the asymmetry — a team can gain and lose simultaneously

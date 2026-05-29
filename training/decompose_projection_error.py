@@ -50,26 +50,27 @@ import pandas as pd
 from sqlalchemy import text
 
 from db import get_engine
-from train_roster_impact_model import (
-    ARCHETYPES,
-    CANONICAL_ROTATION_MPG,
-    INBOUND_QUERY,
-    OUTBOUND_QUERY,
-    PLAYER_QUERY,
-    _NEG,
-    aggregate_team_season,
-)
+from train_roster_impact_model import aggregate_team_season
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVAL_DIR = REPO_ROOT / "training" / "eval_history"
-LOSO_MODELS_DIR = REPO_ROOT / "training" / "models" / "roster_impact_loso"
+MODELS_DIR = REPO_ROOT / "training" / "models"
+LOSO_MODELS_DIR = MODELS_DIR / "roster_impact_loso"
+META_PATH = MODELS_DIR / "roster_impact_model_meta.json"
 PER_TEAM_DUMP_GLOB = "projections_backtest_per_team_*.json"
 
-# Must mirror `train_roster_impact_model.py::OUTBOUND_QUERY` / `INBOUND_QUERY`
-# but filtered to a single (season, team) for the per-team oracle build.
-# `:team_id` is the target-season team UUID (the same one the backtest
-# dump carries) — matches what the training pipeline uses as the merge
-# key after the natstat_id hop.
+
+def load_feature_contract() -> list[str]:
+    """Read the ONNX-input feature names from the model meta JSON, in
+    the order the model expects.
+
+    The training script writes this list verbatim into
+    `roster_impact_model_meta.json::features`; the Rust boot validator
+    pins `ROSTER_IMPACT_FEATURE_NAMES` against it. Reading from disk
+    here keeps Python parity with both — a feature added in training
+    propagates here automatically rather than silently drifting and
+    producing wrong oracle predictions."""
+    return json.loads(META_PATH.read_text())["features"]
 
 
 def load_per_team() -> pd.DataFrame:
@@ -230,40 +231,53 @@ def fetch_portal_sums(conn, target_team_id: str, season: int) -> tuple[float, fl
 
 
 def build_feature_vector(
-    roster: pd.DataFrame, outbound_sum: float, inbound_sum: float
+    roster: pd.DataFrame,
+    outbound_sum: float,
+    inbound_sum: float,
+    feature_names: list[str],
 ) -> np.ndarray:
     """Reuse `aggregate_team_season` (the training-side aggregator) so
-    parity is byte-for-byte with the model's training inputs."""
+    parity is byte-for-byte with the model's training inputs.
+    `feature_names` is the ONNX feature contract (`load_feature_contract`),
+    used to enforce wire order without duplicating it in this file —
+    same drift defence the Rust `validate_roster_impact_meta` provides."""
+    n_features = len(feature_names)
     if len(roster) == 0:
-        # All-zero feature vector except the portal slots — matches the
-        # Rust side's `build_roster_impact_features` empty-roster path.
-        vec = np.zeros(27, dtype=np.float32)
-        vec[25] = outbound_sum
-        vec[26] = inbound_sum
+        # All-zero except the two portal slots (the trailing pair of
+        # the contract). Matches `build_roster_impact_features`'s
+        # empty-roster path on the Rust side.
+        vec = np.zeros(n_features, dtype=np.float32)
+        vec[feature_names.index("outbound_cam_v3_sum")] = outbound_sum
+        vec[feature_names.index("inbound_cam_v3_sum")] = inbound_sum
         return vec.reshape(1, -1)
-    # aggregate_team_season expects a DataFrame group; pass roster as one.
     agg = aggregate_team_season(roster)
-    # Order must match `ROSTER_IMPACT_FEATURE_NAMES` exactly.
-    feature_order = [
-        "roster_size", "cam_wmean", "cam_sum", "cam_top1", "cam_top3_mean",
-        "cam_top7_mean", "cam_count_gt5", "cam_count_gt10", "cam_count_gt15",
-        "exp_fr_share", "exp_so_share", "exp_jr_share", "exp_sr_share",
-        "arch_wizard", "arch_sorcerer", "arch_warlock", "arch_bard",
-        "arch_ranger", "arch_barbarian", "arch_paladin", "arch_monk",
-        "arch_cleric", "arch_druid", "arch_rogue", "arch_fighter",
-    ]
-    vec = [float(agg.get(name, 0.0)) for name in feature_order]
-    # NaN guards — when no cam_v3 coverage across the rotation, the cam
-    # aggregates come back NaN. The model can't score NaN; sentinel-0
-    # matches the training behaviour (those rows are dropped in
-    # build_dataset, so this is only used when we re-score them here).
-    vec = [0.0 if (v is None or (isinstance(v, float) and np.isnan(v))) else v for v in vec]
-    vec.extend([outbound_sum, inbound_sum])
+    # Sentinel-0 NaN replacement matches `build_dataset`, which drops
+    # rows with `cam_wmean = NaN` — we end up here only when re-scoring
+    # such a row (oracle path); fall back to 0 so the model can still
+    # produce SOMETHING, but the caller should treat low-coverage
+    # oracle predictions with skepticism.
+    portal_values = {
+        "outbound_cam_v3_sum": outbound_sum,
+        "inbound_cam_v3_sum": inbound_sum,
+    }
+    vec: list[float] = []
+    for name in feature_names:
+        if name in portal_values:
+            vec.append(portal_values[name])
+            continue
+        v = agg.get(name, 0.0)
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            v = 0.0
+        vec.append(float(v))
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
 
 def oracle_pred(
-    conn, session: ort.InferenceSession, base_team_id: str, season: int
+    conn,
+    session: ort.InferenceSession,
+    base_team_id: str,
+    season: int,
+    feature_names: list[str],
 ) -> tuple[float | None, dict]:
     """Build the actual-roster + actual-portal-sums feature vector and
     score it. Returns (prediction, diagnostic_dict). Prediction is None
@@ -274,14 +288,14 @@ def oracle_pred(
         return None, {"resolved_target_id": None}
     roster = fetch_team_roster(conn, target_id, season)
     out_sum, in_sum = fetch_portal_sums(conn, target_id, season)
-    vec = build_feature_vector(roster, out_sum, in_sum)
+    vec = build_feature_vector(roster, out_sum, in_sum, feature_names)
     raw = session.run(None, {session.get_inputs()[0].name: vec})[0]
     pred = float(np.asarray(raw).flatten()[0])
     diag = {
         "resolved_target_id": target_id,
         "actual_roster_size": int(len(roster)),
-        "actual_cam_sum": float(vec[0, 2]),
-        "actual_cam_top1": float(vec[0, 3]),
+        "actual_cam_sum": float(vec[0, feature_names.index("cam_sum")]),
+        "actual_cam_top1": float(vec[0, feature_names.index("cam_top1")]),
         "outbound_cam_v3_sum": out_sum,
         "inbound_cam_v3_sum": in_sum,
     }
@@ -346,7 +360,9 @@ def case_studies(df: pd.DataFrame, names: list[str]) -> list[dict]:
 def main() -> None:
     df = load_per_team()
     sessions = load_loso_models()
+    feature_names = load_feature_contract()
     print(f"per-team dump: {len(df)} rows ({sorted(df.season.unique())})")
+    print(f"feature contract: {len(feature_names)} features from {META_PATH.name}")
 
     engine = get_engine()
     oracle_preds = []
@@ -358,7 +374,9 @@ def main() -> None:
                 oracle_preds.append(np.nan)
                 diags.append({})
                 continue
-            pred, diag = oracle_pred(conn, sessions[season], row["team_id"], season)
+            pred, diag = oracle_pred(
+                conn, sessions[season], row["team_id"], season, feature_names
+            )
             oracle_preds.append(pred if pred is not None else np.nan)
             diags.append(diag)
             if (i + 1) % 50 == 0:
