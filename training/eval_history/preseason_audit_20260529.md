@@ -57,14 +57,20 @@ By **actual AdjEM** quartile — this is the load-bearing finding:
 | Q3 above-median      | 123 | 5.73 | −1.32 | 7.00         | Mild under-projection                             |
 | Q4 top (best)        | 124 | 5.87 | −4.35 | 6.24         | **Under-projects top teams by 4 AdjEM** on average |
 
-Classic regression-to-mean signature, but the global slope test
-(`actual ~ blended`) returns slope=1.051 — i.e., the projection is
-unbiased on average. The **conditional-on-actual** binning is what
-exposes the structure: predictions cluster too narrowly around the
-center mass; the tails of the actual distribution are under-served.
+Classic regression-to-mean signature. The global slope test (OLS
+`actual = a + b·blended`) returns b=1.051 (|t vs 1.0|=2.18), intercept
+near zero — predictions are roughly unbiased *on average*, but the
+slope > 1 means the predicted range is narrower than the actual range
+(i.e., projections are compressed relative to reality). The
+**conditional-on-actual** binning is what exposes the structure:
+predictions cluster too narrowly around the center mass; the tails of
+the actual distribution are under-served.
 
-A pure linear de-shrinkage (rescale to slope=1.0) only buys +0.05 MAE
-because most teams sit near the center. **The fix has to come from
+Applying the implied linear de-shrinkage (`corrected = a + b·blended`)
+only buys +0.05 MAE because most teams sit near the center where the
+correction is small. The per-quartile bias at the tails is much larger
+than what a linear rescale captures, suggesting the pred↔actual
+relationship is **non-linear at the tails**. **The fix has to come from
 better tail features**, not a global rescale.
 
 By **returning-minutes share** (continuity proxy):

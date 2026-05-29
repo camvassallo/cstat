@@ -9,34 +9,36 @@ class composite, returning-minutes fraction, portal turnover) — i.e.,
 the signals the §6 "Preseason projection improvements" candidate list was
 betting on.
 
-Audit also surfaces the headline honesty story:
-- The roster-impact model is leave-one-season-out (no in-sample leak from
-  the model itself).
-- The trajectory model's OOF predictions are *5-fold random*, not LOSO —
-  for a 2026 backtest, the OOF predictions for 2025→2026 returner pairs
-  came from a model that DID see other 2025→2026 pairs in training. This
-  is the prime residual leakage channel and is reported as a follow-up.
-- The freshman model is LOCO (leave-one-class-out) — leak-free at the
-  class level.
+Audit also surfaces the headline honesty story (verified by
+`trajectory_honesty_check` below — all three components are leak-free at
+the season level for this backtest):
+- **Roster-impact** is leave-one-season-out (the projection backtest
+  loads the per-target LOSO model from `models/roster_impact_loso/`).
+- **Trajectory**: `leave_one_pair_out` in `train_trajectory_model.py` is
+  misnamed — it holds out each unique `(s_n, s_np1)` pair, which IS true
+  leave-one-target-season-out at the pair level. Predictions persisted
+  to `trajectory_oof_predictions` (consumed by the backtest) are those
+  LOSO predictions. LOSO pooled MAE ≈ 5-fold MAE, no season-level
+  memorization.
+- **Freshman** is leave-one-class-out (LOCO).
 
 Inputs:
-- `training/eval_history/projections_backtest_per_team.json` (one record
-  per scored team; produced by `cstat-ingest projections-backtest
-  --output ...`)
-- Live Postgres (`DATABASE_URL`) for per-team signals.
+- `training/eval_history/projections_backtest_per_team_{date}.json` (one
+  record per scored team; produced by `cstat-ingest projections-backtest
+  --output PATH`). The audit script picks the most-recent dated dump.
+- Live Postgres (`DATABASE_URL`) for per-team explanatory signals.
 
 Outputs:
 - `training/eval_history/preseason_audit_{date}_summary.json` (machine-
   readable findings)
 - `training/eval_history/preseason_audit_{date}.md` (human-readable
-  one-page report)
+  one-page report, hand-written from the summary JSON)
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -48,7 +50,11 @@ from db import get_engine
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVAL_DIR = REPO_ROOT / "training" / "eval_history"
-PER_TEAM_DUMP = EVAL_DIR / "projections_backtest_per_team.json"
+# Per-team dumps are date-stamped to match the rest of `eval_history/`
+# (sample-of-record convention). We pick the most-recent dump on each
+# audit run so the snapshot trio (per-team + summary + .md) stays
+# load-bearing for the published findings.
+PER_TEAM_DUMP_GLOB = "projections_backtest_per_team_*.json"
 
 # Phase B's shipped blend (matches routes/projections.rs and
 # projections_backtest.rs after the v2 OOF retrain). Pred =
@@ -58,14 +64,18 @@ BLEND_OFFSET = 0.0
 
 
 def load_per_team() -> pd.DataFrame:
-    """Load the per-team prediction dump from the Rust backtest."""
-    if not PER_TEAM_DUMP.exists():
+    """Load the most-recent per-team prediction dump from the Rust backtest."""
+    dumps = sorted(EVAL_DIR.glob(PER_TEAM_DUMP_GLOB))
+    if not dumps:
+        suggested = EVAL_DIR / f"projections_backtest_per_team_{dt.datetime.utcnow():%Y%m%d}.json"
         sys.exit(
-            f"missing {PER_TEAM_DUMP}.\n"
+            f"no per-team dump found in {EVAL_DIR} (glob: {PER_TEAM_DUMP_GLOB}).\n"
             f"  run: cargo run --release --bin cstat-ingest -- "
-            f"projections-backtest --output {PER_TEAM_DUMP}"
+            f"projections-backtest --output {suggested}"
         )
-    df = pd.read_json(PER_TEAM_DUMP)
+    dump_path = dumps[-1]
+    print(f"loading per-team dump: {dump_path.name}")
+    df = pd.read_json(dump_path)
     df["blended"] = BLEND_W * df["baseline"] + (1 - BLEND_W) * df["phase_b"] + BLEND_OFFSET
     df["err_blended"] = df["blended"] - df["actual"]
     df["err_phase_b"] = df["phase_b"] - df["actual"]
@@ -75,7 +85,7 @@ def load_per_team() -> pd.DataFrame:
     return df
 
 
-def fetch_returning_share(engine, df: pd.DataFrame) -> pd.DataFrame:
+def fetch_returning_share(conn, df: pd.DataFrame) -> pd.DataFrame:
     """For each (team_id, target_season), compute the share of *base-season*
     minutes that returned to ANY D-I team in the target season.
 
@@ -143,7 +153,7 @@ def fetch_returning_share(engine, df: pd.DataFrame) -> pd.DataFrame:
             LEFT JOIN returned r ON r.player_id = bwm.player_id
             """
         )
-        result = engine.execute(
+        result = conn.execute(
             sql, {"team_id": team_id, "base": base, "target": target}
         ).fetchone()
         base_min = result.base_minutes
@@ -159,7 +169,7 @@ def fetch_returning_share(engine, df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def fetch_portal_signals(engine, df: pd.DataFrame) -> pd.DataFrame:
+def fetch_portal_signals(conn, df: pd.DataFrame) -> pd.DataFrame:
     """Per-team portal turnover from the `transfers` table.
 
     For backtest target season N, the relevant portal cycle is
@@ -227,7 +237,7 @@ def fetch_portal_signals(engine, df: pd.DataFrame) -> pd.DataFrame:
                 (SELECT COALESCE(SUM(cam_v3), 0)::FLOAT FROM inbound) AS inbound_cam_v3
             """
         )
-        result = engine.execute(
+        result = conn.execute(
             sql,
             {
                 "team_id": team_id,
@@ -251,7 +261,7 @@ def fetch_portal_signals(engine, df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def fetch_recruit_signals(engine, df: pd.DataFrame) -> pd.DataFrame:
+def fetch_recruit_signals(conn, df: pd.DataFrame) -> pd.DataFrame:
     """Per-team incoming-recruit-class strength.
 
     For backtest target N, recruits.year = N - 1 (class-of-(N-1) plays
@@ -289,7 +299,7 @@ def fetch_recruit_signals(engine, df: pd.DataFrame) -> pd.DataFrame:
             FROM recruits_for_team
             """
         )
-        result = engine.execute(
+        result = conn.execute(
             sql, {"team_id": team_id, "recruit_year": recruit_year}
         ).fetchone()
         rows.append(
@@ -358,17 +368,22 @@ def fit_ols_residual_model(df: pd.DataFrame, signals: list[str]) -> dict:
     sd[sd == 0] = 1.0
     Xs = (X - mu) / sd
     Xs = np.column_stack([np.ones(len(Xs)), Xs])
-    beta, *_ = np.linalg.lstsq(Xs, y, rcond=None)
-    y_hat = Xs @ beta
-    resid = y - y_hat
-    ss_res = float(np.sum(resid**2))
-    ss_tot = float(np.sum((y - y.mean()) ** 2))
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    n, p = Xs.shape
-    sigma2 = ss_res / (n - p) if n > p else float("nan")
-    cov = sigma2 * np.linalg.pinv(Xs.T @ Xs)
-    se = np.sqrt(np.diag(cov))
-    t = beta / se
+    # Suppress numerically-benign overflow warnings from intermediate
+    # SIMD ops when feature columns are near-collinear (portal counts vs
+    # cam_v3 sums correlate strongly). The OLS solve itself is stable
+    # via lstsq + pinv; final coefficients are checked at the call site.
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        beta, *_ = np.linalg.lstsq(Xs, y, rcond=None)
+        y_hat = Xs @ beta
+        resid = y - y_hat
+        ss_res = float(np.sum(resid**2))
+        ss_tot = float(np.sum((y - y.mean()) ** 2))
+        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        n, p = Xs.shape
+        sigma2 = ss_res / (n - p) if n > p else float("nan")
+        cov = sigma2 * np.linalg.pinv(Xs.T @ Xs)
+        se = np.sqrt(np.diag(cov))
+        t = beta / se
     coefs = []
     for i, name in enumerate(["intercept"] + signals):
         coefs.append(
@@ -423,16 +438,23 @@ def by_returning_share_buckets(df: pd.DataFrame) -> list[dict]:
 
 
 def regression_to_mean_diagnostic(df: pd.DataFrame) -> dict:
-    """Fit the OLS line `actual ~ a + b * predicted` and report whether
-    the slope is significantly < 1 — the signature of regression-to-mean
-    bias in the projection. Also reports the bias-corrected MAE that
-    would result from rescaling `pred → pred*b + a` to match.
+    """Fit the OLS line `actual = a + b * predicted` and test the slope
+    against the null `b = 1.0` (no compression). Also reports the
+    bias-corrected MAE that would result from rescaling `pred → a + b*pred`.
 
-    Slope < 1 means the projection compresses the tails: it under-projects
-    top teams and over-projects bottom teams, with the bias growing with
-    |true AdjEM|. That's what the by-quartile bias columns visualize; this
-    function quantifies the systematic component as a single linear
-    correction and reports the MAE lift achievable from de-shrinking.
+    Slope direction in this parameterization:
+      - **b > 1** ⇒ pred range is *narrower* than actual range — the
+        projection compresses tails (under-projects top, over-projects
+        bottom when binned by actual). De-shrinking expands.
+      - **b < 1** ⇒ pred range is *wider* than actual range — projection
+        exaggerates tails. De-shrinking compresses.
+      - **b ≈ 1** ⇒ calibrated on average.
+
+    Caveat: a near-1 slope can still hide large per-quartile bias if the
+    pred↔actual relationship is non-linear (the linear fit averages
+    tail divergence into the bulk). The by-actual-quartile diagnostic is
+    the load-bearing per-bucket view; this slope test is the global
+    single-number summary.
     """
     sub = df[["blended", "actual"]].dropna()
     n = len(sub)
@@ -454,6 +476,18 @@ def regression_to_mean_diagnostic(df: pd.DataFrame) -> dict:
     corrected = a + b * x
     mae_raw = float(np.mean(np.abs(x - y)))
     mae_corrected = float(np.mean(np.abs(corrected - y)))
+    if b > 1.0:
+        direction = (
+            "Pred range narrower than actual ⇒ projection compresses tails "
+            "(under-projects top, over-projects bottom when binned by actual)."
+        )
+    elif b < 1.0:
+        direction = (
+            "Pred range wider than actual ⇒ projection exaggerates tails "
+            "(over-projects top, under-projects bottom when binned by actual)."
+        )
+    else:
+        direction = "Slope ≈ 1 ⇒ globally calibrated."
     return {
         "n": int(n),
         "intercept_a": a,
@@ -464,10 +498,8 @@ def regression_to_mean_diagnostic(df: pd.DataFrame) -> dict:
         "mae_after_correction": mae_corrected,
         "mae_lift": float(mae_raw - mae_corrected),
         "interpretation": (
-            f"slope={b:.3f}; |t vs 1.0|={abs(t_b_vs_1):.2f}. "
-            f"Slope<1 ⇒ projection compresses tails (under-projects top, "
-            f"over-projects bottom). Rescaling to slope=1 would lift MAE "
-            f"by {mae_raw - mae_corrected:+.3f}."
+            f"slope={b:.3f}  |t vs 1.0|={abs(t_b_vs_1):.2f}. {direction} "
+            f"Linear de-shrinkage lift: {mae_raw - mae_corrected:+.3f} MAE."
         ),
     }
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-29T19:19:35.359162Z",
+  "generated_at": "2026-05-29T19:36:06.282870Z",
   "blend": {
     "baseline_weight": 0.5,
     "offset": 0.0
@@ -294,7 +294,7 @@
     "mae_raw": 5.882128026580268,
     "mae_after_correction": 5.832831961197854,
     "mae_lift": 0.04929606538241327,
-    "interpretation": "slope=1.051; |t vs 1.0|=2.18. Slope<1 \u21d2 projection compresses tails (under-projects top, over-projects bottom). Rescaling to slope=1 would lift MAE by +0.049."
+    "interpretation": "slope=1.051  |t vs 1.0|=2.18. Pred range narrower than actual \u21d2 projection compresses tails (under-projects top, over-projects bottom when binned by actual). Linear de-shrinkage lift: +0.049 MAE."
   },
   "worst_misses": {
     "most_under_projected": [
