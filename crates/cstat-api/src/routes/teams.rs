@@ -152,6 +152,11 @@ async fn team_detail(
         } else {
             None
         };
+        // `as_of_date.is_some()` is the load-bearing flag: a completed
+        // game whose date can't be decremented (NaiveDate::MIN sentinel)
+        // falls through to the leaky path, and the frontend will
+        // correctly NOT label it as a pre-game projection.
+        entry.is_pre_game_projection = as_of_date.is_some();
         if let Ok(proj) = predict_projection(
             &state,
             host_id,

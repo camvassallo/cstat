@@ -124,49 +124,25 @@ async fn get_team_stats(
 type PitByPlayer = HashMap<Uuid, PitCamPom>;
 
 /// Compute pit CamPom v3 (no-SOS) for the entire season cohort as of a
-/// cutoff date and map the result onto cstat `players.id`.
+/// cutoff date, keyed by cstat `players.id`.
 ///
 /// Mirrors the Python `pit_cam_v3` GBPM_VARIANT path in `training/features.py`:
 /// the season-aggregate `torvik_player_stats.gbpm/ogbpm/dgbpm` columns are
 /// the leaky channel identified by the predict-honesty audit
 /// (`training/eval_history/honest_audit_findings_20260529.md`); the pit
 /// aggregate from `torvik_player_game_stats` is the leak-free replacement.
+///
+/// The torvik_pid → player_id join lives inside `compute_pit_campom`'s
+/// SQL, so this is now a thin pass-through. Mid-season transfers (multiple
+/// torvik_pid rows for the same player_id in one season) are aggregated
+/// into a single combined row by the database, not silently overwritten
+/// in app code.
 async fn build_pit_by_player(
     pool: &PgPool,
     season: i32,
     as_of_date: NaiveDate,
 ) -> Result<PitByPlayer, sqlx::Error> {
-    let by_pid = compute_pit_campom(pool, season, as_of_date).await?;
-    if by_pid.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // Map (torvik_pid, season) → cstat player_id. Skipping rows with NULL
-    // player_id (~1-2% of torvik rows that don't match into cstat); those
-    // players fall back to LEFT JOIN NULL in the roster aggregation, which
-    // is the same train-time behavior.
-    let pids: Vec<i32> = by_pid.keys().copied().collect();
-    let mapped: Vec<(i32, Uuid)> = sqlx::query_as(
-        r#"
-        SELECT torvik_pid, player_id
-        FROM torvik_player_stats
-        WHERE season = $1
-          AND torvik_pid = ANY($2)
-          AND player_id IS NOT NULL
-        "#,
-    )
-    .bind(season)
-    .bind(&pids)
-    .fetch_all(pool)
-    .await?;
-
-    let mut out = HashMap::with_capacity(mapped.len());
-    for (tpid, player_id) in mapped {
-        if let Some(pit) = by_pid.get(&tpid) {
-            out.insert(player_id, *pit);
-        }
-    }
-    Ok(out)
+    compute_pit_campom(pool, season, as_of_date).await
 }
 
 async fn get_roster_agg(

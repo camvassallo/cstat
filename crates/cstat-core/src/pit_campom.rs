@@ -15,6 +15,7 @@
 use chrono::NaiveDate;
 use sqlx::PgPool;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 use crate::compute::{
     CAMPOM_DEFENSE_DISCOUNT, CAMPOM_GP_K, CAMPOM_MINUTES_EXPONENT, CAMPOM_OFFENSE_EXPONENT,
@@ -40,10 +41,13 @@ pub struct PitCamPom {
     pub cam_gbpm_v3_no_sos: f64,
 }
 
-/// Raw per-player aggregate fetched from `torvik_player_game_stats`.
+/// Raw per-player aggregate fetched from `torvik_player_game_stats`,
+/// joined through `torvik_player_stats` so multiple in-season Torvik
+/// stints for the same cstat player (mid-season transfers) collapse
+/// into one combined row before CamPom is derived.
 #[derive(sqlx::FromRow, Debug)]
 struct PitAggRow {
-    pid: i32,
+    player_id: Uuid,
     gp: i64,
     ogbpm: Option<f64>,
     dgbpm: Option<f64>,
@@ -55,37 +59,47 @@ struct PitAggRow {
 /// season as of a cutoff date.
 ///
 /// Filters to players with at least `PIT_MIN_GP` games played by the cutoff.
-/// Returns a map keyed by Torvik `pid` — callers join through
-/// `torvik_player_stats.torvik_pid → torvik_player_stats.player_id` to recover
-/// the cstat `players.id`.
+/// Returns a map keyed by cstat `players.id` — the join through
+/// `torvik_player_stats.torvik_pid → torvik_player_stats.player_id` is done
+/// inside the SQL so that transferring players (multiple Torvik pids per
+/// season, all resolving to the same cstat `player_id`) aggregate into a
+/// single row instead of overwriting each other in app code.
 ///
-/// The cohort mean of `min_pct` is computed over the qualified set as of the
-/// cutoff (not the full season), matching the Python prototype. This is what
-/// makes the `mp_factor` honest: at a December cutoff, the normalizer reflects
-/// who was playing in December, not the eventual end-of-season cohort.
+/// The cohort mean of `min_pct` is computed over the qualified, post-join
+/// set as of the cutoff. This matches the Python prototype's intent (the
+/// normalizer reflects who was playing as of the cutoff) and correctly
+/// treats one human as one cohort member rather than counting each stint.
 pub async fn compute_pit_campom(
     pool: &PgPool,
     season: i32,
     as_of_date: NaiveDate,
-) -> Result<HashMap<i32, PitCamPom>, sqlx::Error> {
+) -> Result<HashMap<Uuid, PitCamPom>, sqlx::Error> {
     // Possession-weighted ogbpm / dgbpm; minutes-pct-weighted usg; simple-mean
-    // min_pct. Matches `training/compute_campom_at.py::compute_at`.
+    // min_pct. Mirrors `training/compute_campom_at.py::compute_at`, but
+    // GROUP BYs cstat `player_id` (resolved via `torvik_player_stats`) so
+    // mid-season transfers collapse into one row. NULL `player_id` rows
+    // (~1-2% of torvik stints don't match into cstat) are filtered out
+    // here so callers don't have to handle the missing-id case downstream.
     let rows = sqlx::query_as::<_, PitAggRow>(
         r#"
         SELECT
-            pid,
+            tps.player_id,
             COUNT(*) AS gp,
-            SUM(obpm * COALESCE(possessions, 0))
-                / NULLIF(SUM(COALESCE(possessions, 0)), 0) AS ogbpm,
-            SUM(dbpm * COALESCE(possessions, 0))
-                / NULLIF(SUM(COALESCE(possessions, 0)), 0) AS dgbpm,
-            SUM(usage * COALESCE(minutes_pct, 0))
-                / NULLIF(SUM(COALESCE(minutes_pct, 0)), 0) AS usg,
-            AVG(minutes_pct) AS min_pct
-        FROM torvik_player_game_stats
-        WHERE season = $1
-          AND game_date <= $2
-        GROUP BY pid
+            SUM(tpgs.obpm * COALESCE(tpgs.possessions, 0))
+                / NULLIF(SUM(COALESCE(tpgs.possessions, 0)), 0) AS ogbpm,
+            SUM(tpgs.dbpm * COALESCE(tpgs.possessions, 0))
+                / NULLIF(SUM(COALESCE(tpgs.possessions, 0)), 0) AS dgbpm,
+            SUM(tpgs.usage * COALESCE(tpgs.minutes_pct, 0))
+                / NULLIF(SUM(COALESCE(tpgs.minutes_pct, 0)), 0) AS usg,
+            AVG(tpgs.minutes_pct) AS min_pct
+        FROM torvik_player_game_stats tpgs
+        JOIN torvik_player_stats tps
+          ON tps.torvik_pid = tpgs.pid
+         AND tps.season = tpgs.season
+         AND tps.player_id IS NOT NULL
+        WHERE tpgs.season = $1
+          AND tpgs.game_date <= $2
+        GROUP BY tps.player_id
         HAVING COUNT(*) >= $3
         "#,
     )
@@ -121,7 +135,7 @@ pub async fn compute_pit_campom(
             r.gp,
             mean_min_pct,
         );
-        out.insert(r.pid, cam);
+        out.insert(r.player_id, cam);
     }
     Ok(out)
 }

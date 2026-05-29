@@ -65,10 +65,11 @@ export interface ScheduleEntry {
   is_conference: boolean | null;
   is_postseason: boolean | null;
   /// Predicted margin from the requested team's perspective (positive =
-  /// requested team favored). Populated for every game on the schedule —
-  /// upcoming games get the model's pre-game forecast, completed games get
-  /// a "what we'd predict today" projection (current team state, not
-  /// pre-game; muted in the UI). Null when prediction inputs are missing.
+  /// requested team favored). Populated for every game on the schedule.
+  /// Upcoming games get the current-state pre-game forecast; completed
+  /// games get the honest point-in-time projection from the pit bundle.
+  /// Read `is_pre_game_projection` to decide framing — don't recompute
+  /// "played" from team_score/opponent_score on this side.
   projected_margin: number | null;
   /// Probability the requested team wins, derived from `projected_margin`.
   projected_win_prob: number | null;
@@ -77,6 +78,10 @@ export interface ScheduleEntry {
   projected_score_team: number | null;
   /// Projected integer score for the opponent.
   projected_score_opp: number | null;
+  /// Server-side flag: the projection above came from the point-in-time
+  /// bundle (`as_of_date = game_date − 1`). Single source of truth for
+  /// "is this a pre-game projection" — don't derive your own predicate.
+  is_pre_game_projection: boolean;
 }
 
 export interface RosterEntry {
@@ -902,6 +907,14 @@ export interface PredictionResult {
   away_team_id: string;
   season: number;
   venue: Venue;
+  /// YYYY-MM-DD cutoff the prediction was built for, when the request
+  /// carried one. Null on legacy (end-of-season-state) responses.
+  as_of_date?: string | null;
+  /// Server-side label for which model bundle produced the response.
+  /// "pit" = point-in-time bundle; "leaky" = end-of-season bundle.
+  /// Read this rather than inferring from local state so UI honesty
+  /// claims always match what the server actually served.
+  prediction_basis: 'pit' | 'leaky';
   predicted_margin: number;
   home_win_probability: number;
   /// Total points (home + away). Materially less precise than margin

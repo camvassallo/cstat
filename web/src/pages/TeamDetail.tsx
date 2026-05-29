@@ -728,11 +728,14 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
       visitor = teamName;
     }
     const venueParam = g.is_neutral ? '&venue=neutral' : '';
-    // YYYY-MM-DD minus one day. game_date is already an ISO date string
-    // from the API; constructing a Date and subtracting 86400000 ms
-    // handles month/year rollovers without pulling in a date library.
+    // Use the server's authoritative `is_pre_game_projection` to decide
+    // whether to carry an `as_of_date` query param — keeps the
+    // standalone Predict page reproducing the *same* projection shown
+    // inline here. Re-computing "played" from team_score/opponent_score
+    // would drift on partial box-score ingest (one score populated,
+    // the other not).
     let asOfParam = '';
-    if (g.team_score != null && g.game_date) {
+    if (g.is_pre_game_projection && g.game_date) {
       const d = new Date(`${g.game_date}T00:00:00Z`);
       d.setUTCDate(d.getUTCDate() - 1);
       asOfParam = `&as_of_date=${d.toISOString().slice(0, 10)}`;
@@ -750,7 +753,10 @@ function ScheduleRow({ g, teamName }: { g: ScheduleEntry; teamName: string }) {
   // to be the leaky "we'd predict today" path.
   const projected = (() => {
     if (g.projected_margin == null) return null;
-    const completed = g.team_score != null;
+    // Server flag is the single source of truth — see ScheduleEntry's
+    // `is_pre_game_projection` doc. Recomputing from team_score alone
+    // would silently mislabel partial-ingest rows.
+    const completed = g.is_pre_game_projection;
     const m = g.projected_margin;
     const fav = m > 0;
     const spread = `${fav ? '−' : '+'}${Math.abs(m).toFixed(1)}`;

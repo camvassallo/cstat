@@ -220,12 +220,12 @@ pub struct ScheduleEntry {
     pub is_postseason: Option<bool>,
     /// Predicted margin **from the requested team's perspective** (positive =
     /// requested team favored). Populated by the API layer for every game on
-    /// the schedule — upcoming games get the model's pre-game forecast,
-    /// completed games get a "what we'd predict today" projection (current
-    /// team state, not pre-game; muted in the UI). Left null only when
-    /// prediction inputs are missing (no opponent UUID resolved, feature
-    /// extraction failed). Pre-game predictions for historical games are a
-    /// future roadmap item (point-in-time `game_forecasts` backfill).
+    /// the schedule. Upcoming games get the current-state pre-game forecast
+    /// from the end-of-season model bundle; completed games get an honest
+    /// point-in-time projection from the `pit` bundle with `as_of_date =
+    /// game_date − 1`. Which bundle was used is surfaced via
+    /// `is_pre_game_projection` below — read that, not your own copy of the
+    /// "played" predicate, when deciding how to frame the cell.
     #[sqlx(default)]
     pub projected_margin: Option<f64>,
     /// Probability the requested team wins, derived from `projected_margin`.
@@ -238,6 +238,15 @@ pub struct ScheduleEntry {
     /// Projected score for the opponent.
     #[sqlx(default)]
     pub projected_score_opp: Option<i32>,
+    /// True iff the projection above came from the point-in-time bundle
+    /// (`as_of_date = game_date − 1`). Mirrors the server-side rule for
+    /// "this game is in the past" so the frontend doesn't have to derive
+    /// its own predicate from `team_score` / `opponent_score` and
+    /// produce a copy that drifts. Set by the API layer alongside the
+    /// projection itself; serialized to JSON so the URL builders and
+    /// chip-tinting paths can read it directly.
+    #[sqlx(default)]
+    pub is_pre_game_projection: bool,
 }
 
 #[derive(Debug, Serialize, FromRow)]

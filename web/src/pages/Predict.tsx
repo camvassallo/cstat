@@ -206,8 +206,10 @@ export default function Predict() {
           />
           {asOfDate && (
             <p className="mt-1 text-xs text-amber-400">
-              Honest pre-game projection: CamPom rebuilt from game-by-game Torvik data
-              up to {asOfDate}. No lookahead.
+              Point-in-time projection: CamPom rebuilt from game-by-game Torvik data
+              up to {asOfDate}. Team-level features (AdjEM, SOS, four factors)
+              remain end-of-season aggregates — see roadmap §4b for the residual
+              leak budget.
             </p>
           )}
         </div>
@@ -1241,10 +1243,28 @@ function ResultHeadline({
         ? `at ${result.home_team}`
         : `at ${result.away_team}`;
 
+  // Server-confirmed honesty label. Reads `result.prediction_basis`
+  // (set in routes/predict.rs) so a request that drops as_of_date in
+  // transit — proxy rewrite, stale cache, future memoization keyed
+  // only on home/away/venue — paints the response with what was
+  // actually served, not what the page meant to ask for.
+  const basisChip =
+    result.prediction_basis === 'pit' && result.as_of_date ? (
+      <span
+        className="ml-2 inline-flex items-center text-[10px] font-medium uppercase tracking-wide bg-amber-900/60 text-amber-300 px-1.5 py-0.5 rounded"
+        title={`Point-in-time CamPom v3 as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`}
+      >
+        Point-in-time
+      </span>
+    ) : null;
+
   return (
     <div className="bg-gray-800 rounded-lg p-6 space-y-5">
       <div className="text-center">
-        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">{venueText}</div>
+        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">
+          {venueText}
+          {basisChip}
+        </div>
         {/* Projected final score, winner first. KenPom-style approximation
             (totals model backtest MAE ~13.6 vs margin ~8.2). Team names
             link to detail pages so the headline acts as a navigation
