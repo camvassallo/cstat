@@ -17,4 +17,6 @@ pub use season::{
     UpdateReport,
 };
 pub use teams::{ingest_single_team_details, ingest_team_details};
-pub use torvik::{backfill_rebounds_from_torvik, ingest_torvik_player_stats};
+pub use torvik::{
+    backfill_rebounds_from_torvik, ingest_torvik_player_stats, persist_torvik_game_stats,
+};

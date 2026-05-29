@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use cstat_core::team_name_match::team_match_score;
 use serde_json::Value;
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 use tracing::{info, warn};
@@ -54,6 +54,10 @@ pub struct TransferIngestReport {
     pub year: i32,
     pub total_pages: u32,
     pub upserts: u64,
+    /// Rows deleted by the post-fetch prune (players who fell out of 247's
+    /// portal list since our last sweep). Always 0 for incremental runs and
+    /// snapshot bootstraps, which can't safely tell "gone" from "not seen".
+    pub pruned: u64,
     pub last_updated: Option<String>,
 }
 
@@ -89,13 +93,23 @@ pub async fn ingest_live(
         year,
         total_pages,
         upserts: 0,
+        pruned: 0,
         last_updated: first.last_updated.clone(),
     };
-    report.upserts += apply_page(&first.players, pool, year, cursor).await?;
+    // Every tfs_key 247 returned this sweep. Doubles as the dedup guard:
+    // 247's pagination is NOT a clean partition — the same player reappears on
+    // multiple pages, sometimes with a STALE status (e.g. Graves shows
+    // `Withdrawn` on page 1 but `Entered` on page 53). Pages are ordered
+    // newest-first, so the FIRST time we see a key is its freshest record;
+    // `apply_page` skips any key already in `seen`, making the sweep
+    // first-write-wins instead of the old last-write-wins (which let a stale
+    // later page clobber the truth). The same set then drives the prune.
+    let mut seen: HashSet<i64> = HashSet::new();
+    report.upserts += apply_page(&first.players, pool, year, cursor, &mut seen).await?;
 
     for page_num in 2..=total_pages {
         let page = client.fetch_page(year, page_num).await?;
-        let applied = apply_page(&page.players, pool, year, cursor).await?;
+        let applied = apply_page(&page.players, pool, year, cursor, &mut seen).await?;
         report.upserts += applied;
 
         // Incremental short-circuit: if this entire page predates our cursor,
@@ -110,8 +124,45 @@ pub async fn ingest_live(
         }
     }
 
-    info!(year, upserts = report.upserts, "live ingest complete");
+    // Prune rows for players who left 247's portal list entirely (e.g. an
+    // early entrant who withdrew the portal and went pro). A full sweep just
+    // observed every row 247 currently lists, so any DB row whose tfs_key is
+    // absent is stale. Guarded to full runs: an incremental run may have
+    // short-circuited without seeing later pages, so its `seen` is partial and
+    // pruning against it would wrongly delete live rows.
+    if !incremental {
+        report.pruned = prune_unseen(pool, year, &seen).await?;
+    }
+
+    info!(
+        year,
+        upserts = report.upserts,
+        pruned = report.pruned,
+        "live ingest complete"
+    );
     Ok(report)
+}
+
+/// Delete `transfers` rows for `year` whose `tfs_key` is not in `seen`.
+/// Empty `seen` is treated as a no-op (a fetch that returned zero rows is far
+/// more likely an API hiccup than a genuinely empty portal — never nuke the
+/// whole year on it).
+async fn prune_unseen(
+    pool: &PgPool,
+    year: i32,
+    seen: &HashSet<i64>,
+) -> Result<u64, TransferIngestError> {
+    if seen.is_empty() {
+        warn!(year, "skipping prune: live fetch returned zero tfs_keys");
+        return Ok(0);
+    }
+    let keys: Vec<i64> = seen.iter().copied().collect();
+    let result = sqlx::query("DELETE FROM transfers WHERE year = $1 AND tfs_key <> ALL($2)")
+        .bind(year)
+        .bind(&keys)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
 }
 
 /// Load a previously-captured full-fetch snapshot and upsert every row.
@@ -157,7 +208,10 @@ pub async fn bootstrap_from_snapshot(
         "bootstrapping transfers from snapshot"
     );
 
-    let upserts = apply_page(players, pool, year, None).await?;
+    // Snapshot bootstraps get their own dedup set (same first-write-wins
+    // guard), but it's discarded afterward — bootstraps never prune.
+    let mut seen: HashSet<i64> = HashSet::new();
+    let upserts = apply_page(players, pool, year, None, &mut seen).await?;
     let last_updated = body
         .get("last_updated")
         .or_else(|| body.get("lastUpdated"))
@@ -168,21 +222,42 @@ pub async fn bootstrap_from_snapshot(
         year,
         total_pages: 1,
         upserts,
+        // A snapshot is a point-in-time capture, not a live sweep — we can't
+        // distinguish "player left the portal" from "not in this file", so we
+        // never prune from a bootstrap.
+        pruned: 0,
         last_updated,
     })
 }
 
 /// Apply a slice of player objects to the DB. Returns the number of rows
-/// upserted (skipped rows — predating the incremental cursor, or malformed —
-/// don't count).
+/// upserted (skipped rows — predating the incremental cursor, already seen
+/// this sweep, or malformed — don't count).
+///
+/// `seen` accumulates every `key` processed across the whole sweep and serves
+/// two purposes: (1) **dedup** — 247's pages overlap and a player can reappear
+/// on a later page with a *stale* status, so the first sighting (freshest,
+/// since pages are newest-first) wins and repeats are skipped; (2) it's the
+/// authoritative "present in 247 right now" set the caller prunes against.
 async fn apply_page(
     players: &[Value],
     pool: &PgPool,
     year: i32,
     cursor: Option<DateTime<Utc>>,
+    seen: &mut HashSet<i64>,
 ) -> Result<u64, TransferIngestError> {
     let mut applied = 0u64;
     for player in players {
+        // Dedup on 247's stable `key`: skip a player we've already upserted
+        // earlier in this sweep so a stale later page can't clobber the
+        // fresher earlier one. Recording the key still counts it as "present"
+        // for the prune. Rows without a `key` fall through to upsert_player,
+        // which skips + warns on them.
+        if let Some(k) = player.get("key").and_then(|v| v.as_i64())
+            && !seen.insert(k)
+        {
+            continue;
+        }
         if let Some(c) = cursor
             && let Some(last) = player
                 .get("lastUpdateDate")

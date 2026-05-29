@@ -9,7 +9,7 @@ use cstat_core::roster_projection::{load_draft_entrants, normalize_player_name a
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -80,7 +80,8 @@ struct Prospect {
     /// International / G League).
     class_year: Option<String>,
     /// Derived eligibility status — see `classify_status`. One of
-    /// `declared` / `senior` / `international` / `g-league` / `prospect`.
+    /// `gone` / `declared` / `senior` / `international` / `g-league` /
+    /// `prospect`.
     status: &'static str,
     /// Board school name (verbatim from Tankathon).
     current_team: String,
@@ -96,26 +97,34 @@ struct Prospect {
     campom: Option<f64>,
 }
 
-/// Derive the draft-eligibility status of a board prospect.
+/// Derive the draft-eligibility status of a board prospect. `entrant_status`
+/// is the player's status on the early-entrant list (`None` if they aren't
+/// on it), passed through from `data/draft/{year}_early_entrants.json`.
 ///
 /// - `international` / `g-league` — not a college player; no cstat row.
-/// - `declared` — an underclassman on the early-entrant list (a formal
-///   early-entry declaration with the withdrawal deadline still ahead).
+/// - `gone` — on the early-entrant list and firmly in the draft (the
+///   withdrawal deadline has passed without a withdrawal). Counts as a
+///   final departure everywhere.
+/// - `declared` — on the early-entrant list with the withdrawal window still
+///   open; an early-entry declaration that could still be pulled.
 /// - `senior` — automatically draft-eligible; no "early entry" needed.
-/// - `prospect` — on the board but hasn't declared; an underclassman with
-///   remaining eligibility (a name scouts are watching, not yet in).
-fn classify_status(class_year: Option<&str>, declared: bool) -> &'static str {
+/// - `prospect` — on the board but not on the entrant list; an underclassman
+///   with remaining eligibility (a name scouts are watching, not yet in).
+fn classify_status(class_year: Option<&str>, entrant_status: Option<&str>) -> &'static str {
     let cy = class_year.unwrap_or_default().to_ascii_lowercase();
     if cy.contains("international") {
         "international"
     } else if cy.contains("g league") || cy.contains("g-league") {
         "g-league"
-    } else if declared {
-        "declared"
-    } else if cy.starts_with("sr") || cy.starts_with("sen") {
-        "senior"
     } else {
-        "prospect"
+        match entrant_status {
+            Some("gone") => "gone",
+            Some("declared") => "declared",
+            // Not on the entrant list (or some other status) → fall back to
+            // the class-year-derived bucket.
+            _ if cy.starts_with("sr") || cy.starts_with("sen") => "senior",
+            _ => "prospect",
+        }
     }
 }
 
@@ -146,16 +155,17 @@ async fn draft_board(
         )
     })?;
 
-    // Cross-reference list: underclassmen who've formally declared. A board
-    // player whose (normalized) name is here is a pending early entry. The
+    // Cross-reference list: underclassmen who've declared for the draft,
+    // keyed by normalized name → status (`declared` while the withdrawal
+    // window is open, `gone` once they're locked in post-deadline). The
     // early-entrant list is only Fr/So/Jr by construction — seniors never
-    // appear — so a name hit unambiguously means "declared". Missing file
-    // degrades to "nobody declared" rather than failing the request.
+    // appear. Missing file degrades to "nobody declared" rather than
+    // failing the request.
     let entrant_path = PathBuf::from("data/draft").join(format!("{year}_early_entrants.json"));
-    let declared: HashSet<String> = load_draft_entrants(&entrant_path)
+    let entrants: HashMap<String, String> = load_draft_entrants(&entrant_path)
         .unwrap_or_default()
         .into_iter()
-        .map(|e| normalize(&e.name))
+        .map(|e| (normalize(&e.name), e.status))
         .collect();
 
     // Every season player, so we can name-match the board against cstat in
@@ -253,7 +263,10 @@ async fn draft_board(
             let team_id = best
                 .and_then(|c| c.team_id)
                 .or_else(|| resolve_team_id(&b.current_team));
-            let status = classify_status(b.class_year.as_deref(), declared.contains(&key));
+            let status = classify_status(
+                b.class_year.as_deref(),
+                entrants.get(&key).map(String::as_str),
+            );
 
             Prospect {
                 draft_rank: b.rank,
@@ -284,26 +297,31 @@ mod tests {
 
     #[test]
     fn classify_status_covers_every_branch() {
-        // International / G League win regardless of declaration state —
+        // International / G League win regardless of entrant state —
         // they're not college players, so the early-entrant list is moot.
         assert_eq!(
-            classify_status(Some("International"), false),
+            classify_status(Some("International"), None),
             "international"
         );
         assert_eq!(
-            classify_status(Some("International"), true),
+            classify_status(Some("International"), Some("gone")),
             "international"
         );
-        assert_eq!(classify_status(Some("G League"), false), "g-league");
-        // An underclassman on the early-entrant list is a pending declaration.
-        assert_eq!(classify_status(Some("Freshman"), true), "declared");
-        assert_eq!(classify_status(Some("Sophomore"), true), "declared");
+        assert_eq!(classify_status(Some("G League"), None), "g-league");
+        // On the entrant list, locked in post-deadline → firmly in the draft.
+        assert_eq!(classify_status(Some("Freshman"), Some("gone")), "gone");
+        assert_eq!(classify_status(Some("Sophomore"), Some("gone")), "gone");
+        // On the list, withdrawal window still open → pending declaration.
+        assert_eq!(
+            classify_status(Some("Freshman"), Some("declared")),
+            "declared"
+        );
         // An underclassman NOT on the list is a watch-list prospect.
-        assert_eq!(classify_status(Some("Junior"), false), "prospect");
+        assert_eq!(classify_status(Some("Junior"), None), "prospect");
         // Seniors are auto-eligible — never on the early-entrant list.
-        assert_eq!(classify_status(Some("Senior"), false), "senior");
+        assert_eq!(classify_status(Some("Senior"), None), "senior");
         // Missing class year degrades to the watch-list bucket.
-        assert_eq!(classify_status(None, false), "prospect");
+        assert_eq!(classify_status(None, None), "prospect");
     }
 
     #[test]

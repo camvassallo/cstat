@@ -147,6 +147,11 @@ async fn transfer_list(
             player_profile_url
         FROM transfers
         WHERE year = $1
+          -- Hide players who withdrew from the portal (went pro, returned to
+          -- their school, etc.) so the page mirrors 247's default "top portal"
+          -- view, which drops them. The rows stay in the table for the
+          -- projection engine; this filter is display-only.
+          AND status <> 'Withdrawn'
         ORDER BY transfer_rank NULLS LAST, full_name
         "#,
     )

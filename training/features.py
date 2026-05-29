@@ -26,11 +26,17 @@ SEASONS = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 202
 # - "raw"         : ogbpm / dgbpm / gbpm from torvik_player_stats (production)
 # - "cam_v3"      : cam_o_gbpm_v3 / cam_d_gbpm_v3 / cam_gbpm_v3 (conf-SOS)
 # - "cam_v3_psos" : cam_o_gbpm_v3_psos / cam_d_gbpm_v3_psos / cam_gbpm_v3_psos
+# - "pit_cam_v3"  : point-in-time CamPom v3 (no SOS) from torvik_player_game_stats.
+#                   Substitutes per (player_id, game_date) instead of per
+#                   (player_id, season) — leak-free for the predict-model
+#                   honesty audit. Requires `models/pit_cam_v3_lookup.csv.gz`
+#                   built by `build_pit_lookup.py`.
 GBPM_VARIANT = os.environ.get("GBPM_VARIANT", "raw").strip()
 _GBPM_COLUMNS = {
     "raw":         ("gbpm",             "ogbpm",             "dgbpm"),
     "cam_v3":      ("cam_gbpm_v3",      "cam_o_gbpm_v3",     "cam_d_gbpm_v3"),
     "cam_v3_psos": ("cam_gbpm_v3_psos", "cam_o_gbpm_v3_psos", "cam_d_gbpm_v3_psos"),
+    "pit_cam_v3":  ("pit_synthetic",    "pit_synthetic",     "pit_synthetic"),
 }
 if GBPM_VARIANT not in _GBPM_COLUMNS:
     raise ValueError(
@@ -163,8 +169,15 @@ def load_torvik_stats(engine, seasons=None) -> pd.DataFrame:
     canonical column names ``gbpm`` / ``ogbpm`` / ``dgbpm`` so downstream
     aggregation stays variant-agnostic and the trained-feature names are
     stable.
+
+    For pit_cam_v3, returns one row per (player_id, season, cutoff_date)
+    instead of one per (player_id, season) — downstream code handles the
+    asof merge separately.
     """
     seasons = seasons or SEASONS
+    if GBPM_VARIANT == "pit_cam_v3":
+        return _load_pit_torvik_stats(engine, seasons)
+
     g, og, dg = _GBPM_COLUMNS[GBPM_VARIANT]
     sql = f"""
         SELECT player_id, season,
@@ -176,6 +189,42 @@ def load_torvik_stats(engine, seasons=None) -> pd.DataFrame:
           AND season = ANY(%(seasons)s)
     """
     return pd.read_sql(sql, engine, params={"seasons": seasons})
+
+
+def _load_pit_torvik_stats(engine, seasons) -> pd.DataFrame:
+    """Load the point-in-time CamPom v3 lookup, joined to cstat player_id.
+
+    Returns one row per (player_id, season, cutoff_date) with gbpm/ogbpm/dgbpm
+    columns set to pit values. The 'gbpm' canonical column uses
+    cam_gbpm_v3_no_sos; ogbpm and dgbpm use the cumulative-weighted
+    OBPM/DBPM contributions from torvik_player_game_stats.
+    """
+    import os
+    from pathlib import Path
+
+    path = Path(os.environ.get(
+        "PIT_LOOKUP_PATH",
+        str(Path(__file__).parent / "models" / "pit_cam_v3_lookup.csv.gz"),
+    ))
+    lookup = pd.read_csv(path, parse_dates=["cutoff_date"])
+    lookup = lookup[lookup["season"].isin(seasons)]
+
+    map_sql = """
+        SELECT torvik_pid AS pid, player_id, season
+        FROM torvik_player_stats
+        WHERE torvik_pid IS NOT NULL
+          AND player_id IS NOT NULL
+          AND season = ANY(%(seasons)s)
+    """
+    pid_map = pd.read_sql(map_sql, engine, params={"seasons": seasons})
+
+    df = lookup.merge(pid_map, on=["pid", "season"], how="inner")
+    df = df.rename(columns={
+        "cam_gbpm_v3_no_sos": "gbpm",
+        "ogbpm": "ogbpm",  # cumulative OBPM contribution
+        "dgbpm": "dgbpm",  # cumulative DBPM contribution
+    })
+    return df[["player_id", "season", "cutoff_date", "gbpm", "ogbpm", "dgbpm"]]
 
 
 # ---------------------------------------------------------------------------
@@ -557,16 +606,40 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
 
     player_cum_df = pd.concat(player_cum, ignore_index=True)
 
-    # Merge Torvik GBPM/OGBPM/DGBPM (season-level metrics) onto per-player entries
+    # Merge Torvik GBPM/OGBPM/DGBPM onto per-player entries.
+    # For pit_cam_v3 variant: asof join on game_date so each game gets
+    # the most recent pre-game point-in-time CamPom value.
     if torvik_df is not None and not torvik_df.empty:
-        player_cum_df = player_cum_df.merge(
-            torvik_df[["player_id", "season", "gbpm", "ogbpm", "dgbpm"]].rename(
-                columns={"gbpm": "torvik_gbpm", "ogbpm": "torvik_ogbpm", "dgbpm": "torvik_dgbpm"}
-            ),
-            left_on=["player_id", "season"],
-            right_on=["player_id", "season"],
-            how="left",
-        )
+        if "cutoff_date" in torvik_df.columns:
+            # Point-in-time variant: asof merge
+            left = player_cum_df.sort_values("game_date").reset_index(drop=True)
+            left["game_date_ts"] = pd.to_datetime(left["game_date"])
+            right = torvik_df.rename(columns={
+                "gbpm": "torvik_gbpm",
+                "ogbpm": "torvik_ogbpm",
+                "dgbpm": "torvik_dgbpm",
+                "cutoff_date": "game_date_ts",
+            }).sort_values("game_date_ts").reset_index(drop=True)
+            merged = pd.merge_asof(
+                left,
+                right[["player_id", "season", "game_date_ts",
+                       "torvik_gbpm", "torvik_ogbpm", "torvik_dgbpm"]],
+                on="game_date_ts",
+                by=["player_id", "season"],
+                direction="backward",
+                allow_exact_matches=False,
+            )
+            merged = merged.drop(columns=["game_date_ts"])
+            player_cum_df = merged
+        else:
+            player_cum_df = player_cum_df.merge(
+                torvik_df[["player_id", "season", "gbpm", "ogbpm", "dgbpm"]].rename(
+                    columns={"gbpm": "torvik_gbpm", "ogbpm": "torvik_ogbpm", "dgbpm": "torvik_dgbpm"}
+                ),
+                left_on=["player_id", "season"],
+                right_on=["player_id", "season"],
+                how="left",
+            )
     else:
         player_cum_df["torvik_gbpm"] = np.nan
         player_cum_df["torvik_ogbpm"] = np.nan

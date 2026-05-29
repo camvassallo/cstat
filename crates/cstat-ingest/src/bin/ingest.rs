@@ -152,6 +152,11 @@ enum Commands {
         /// Also backfill missing rebounds from Torvik game-level data.
         #[arg(long)]
         rebounds: bool,
+
+        /// Also persist per-game Torvik rows into `torvik_player_game_stats`.
+        /// Prereq for point-in-time CamPom (see ROADMAP §"CamPom overfitting audit").
+        #[arg(long)]
+        persist_games: bool,
     },
 
     /// End-to-end backtest for the Phase B impact-aggregation projection
@@ -454,7 +459,11 @@ async fn main() -> Result<()> {
             println!("Removed {removed} expired cache entries");
         }
 
-        Commands::Torvik { year, rebounds } => {
+        Commands::Torvik {
+            year,
+            rebounds,
+            persist_games,
+        } => {
             let torvik = TorkvikClient::new();
             let (upserted, matched) =
                 cstat_ingest::ingest::torvik::ingest_torvik_player_stats(&torvik, &db.pool, year)
@@ -469,6 +478,14 @@ async fn main() -> Result<()> {
                 )
                 .await?;
                 println!("Rebound backfill: {updated} game rows updated");
+            }
+
+            if persist_games {
+                let inserted = cstat_ingest::ingest::torvik::persist_torvik_game_stats(
+                    &torvik, &db.pool, year,
+                )
+                .await?;
+                println!("Torvik per-game persistence: {inserted} rows upserted");
             }
         }
 
@@ -520,8 +537,8 @@ async fn main() -> Result<()> {
                         .await?
                 };
                 println!(
-                    "transfers {}: {} upserted across {} page(s)",
-                    report.year, report.upserts, report.total_pages
+                    "transfers {}: {} upserted, {} pruned across {} page(s)",
+                    report.year, report.upserts, report.pruned, report.total_pages
                 );
 
                 if !no_resolve_players {

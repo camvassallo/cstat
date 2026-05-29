@@ -1,0 +1,10 @@
+{
+  "label": "LOSO (cross-season honest)",
+  "n_games": 12178,
+  "wins": 8681,
+  "loses": 3340,
+  "pushes": 157,
+  "win_pct": 62.66551525618883,
+  "roi_pct": 37.86620996589301,
+  "n_rows_in": 12178
+}
