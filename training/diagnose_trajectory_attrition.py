@@ -199,9 +199,11 @@ def campom_bucket(v: float) -> str:
     return "?"
 
 
-def summarize_quartiles(df: pd.DataFrame) -> list[dict]:
+def summarize_quartiles(df: pd.DataFrame) -> tuple[list[dict], list[float], list[str]]:
     """Bias by attrition quartile (pooled across CamPom). Quartile edges
-    from the full population so the returner/transfer slices share bins."""
+    from the full population so the returner/transfer slices share bins.
+    Returns (per-quartile records, bin bounds, bin labels) — the bounds and
+    labels are reused by `grid()` so its columns line up with these rows."""
     edges = df["attrition"].quantile([0.25, 0.5, 0.75]).values
     bounds = [-np.inf, edges[0], edges[1], edges[2], np.inf]
     labels = [
@@ -292,22 +294,42 @@ def team_level_cut() -> dict | None:
         print(f"  {lab:<20}{rec['n']:>5}{rec['mean_attrition']:>7.2f}"
               f"{rec['mae']:>7.2f}{rec['bias']:>+8.2f}{rec['mean_actual']:>+9.2f}")
 
-    # Bust slice: bottom actual quartile (the Q1 cohort), split by attrition.
+    # Bust slice: bottom actual quartile (the Q1 cohort). A median split
+    # degenerates because >50% of bust teams have attrition = 1.0 (they
+    # retained ~zero positive cam_v3) — the median IS 1.0, leaving an empty
+    # high bin. That clustering is itself the point: most busts gutted their
+    # roster. The decisive test is the *other* tail — bust teams that KEPT
+    # most of their talent (attrition < 0.5) and STILL busted. If those are
+    # over-projected just as much, attrition cannot separate the
+    # over-projected busts. We also report the within-bust correlation of
+    # attrition vs error — near-zero means no monotone signal to learn.
     bust = m[m["actual"] <= m["actual"].quantile(0.25)]
-    bust_hi = bust[bust["attrition"] > edges[1]]
-    bust_lo = bust[bust["attrition"] <= edges[0]]
+    KEPT_THRESHOLD = 0.5  # lost < half their productive cam_v3
+    bust_kept = bust[bust["attrition"] < KEPT_THRESHOLD]  # kept talent, still busted
+    bust_lost = bust[bust["attrition"] >= KEPT_THRESHOLD]  # gutted roster
+    attr_err_corr = (
+        float(bust["attrition"].corr(bust["err"])) if len(bust) > 2 else float("nan")
+    )
     bust_rec = {
         "n": int(len(bust)), "bias": float(bust["err"].mean()),
         "mean_attrition": float(bust["attrition"].mean()),
-        "high_attrition": {"n": int(len(bust_hi)), "bias": float(bust_hi["err"].mean())},
-        "low_attrition": {"n": int(len(bust_lo)), "bias": float(bust_lo["err"].mean())},
+        "attrition_err_corr": attr_err_corr,
+        "kept_threshold": KEPT_THRESHOLD,
+        "kept_talent": {"n": int(len(bust_kept)),
+                        "bias": float(bust_kept["err"].mean()) if len(bust_kept) else None},
+        "lost_talent": {"n": int(len(bust_lost)),
+                        "bias": float(bust_lost["err"].mean()) if len(bust_lost) else None},
     }
     print(f"\n  Bust teams (bottom actual quartile): n={bust_rec['n']} "
-          f"bias={bust_rec['bias']:+.2f} mean_attr={bust_rec['mean_attrition']:.2f}")
-    print(f"    bust + HIGH attrition: n={bust_rec['high_attrition']['n']} "
-          f"bias={bust_rec['high_attrition']['bias']:+.2f}")
-    print(f"    bust + LOW  attrition: n={bust_rec['low_attrition']['n']} "
-          f"bias={bust_rec['low_attrition']['bias']:+.2f}")
+          f"bias={bust_rec['bias']:+.2f} mean_attr={bust_rec['mean_attrition']:.2f}  "
+          f"corr(attrition, err)={attr_err_corr:+.2f}")
+    kt, lt = bust_rec["kept_talent"], bust_rec["lost_talent"]
+    print(f"    bust + KEPT talent (attr<{KEPT_THRESHOLD}): n={kt['n']} "
+          f"bias={kt['bias']:+.2f}" if kt["bias"] is not None else
+          f"    bust + KEPT talent (attr<{KEPT_THRESHOLD}): n={kt['n']} (none)")
+    print(f"    bust + LOST talent (attr≥{KEPT_THRESHOLD}): n={lt['n']} "
+          f"bias={lt['bias']:+.2f}" if lt["bias"] is not None else
+          f"    bust + LOST talent (attr≥{KEPT_THRESHOLD}): n={lt['n']} (none)")
     return {"by_attrition_tercile": by_attr, "bust_slice": bust_rec}
 
 

@@ -154,6 +154,14 @@ def main() -> None:
     df["total"] = df["phase_b"] - df["actual"]  # = sum of the three
     comps = ["total", "composition", "cam_value", "calibrator_floor"]
 
+    # The split is a telescoping sum by construction
+    # (A−B)+(B−C)+(C−actual) = A−actual — assert it so a future refactor that
+    # breaks one term (wrong oracle, sign flip) fails loudly rather than
+    # silently mis-attributing the bias.
+    recon = df["composition"] + df["cam_value"] + df["calibrator_floor"]
+    max_resid = float((recon - df["total"]).abs().max())
+    assert max_resid < 1e-6, f"decomposition identity broken: max residual {max_resid}"
+
     findings = {
         "generated_at": dt.datetime.utcnow().isoformat() + "Z",
         "n": int(len(df)),

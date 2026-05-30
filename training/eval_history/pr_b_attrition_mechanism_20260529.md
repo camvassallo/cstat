@@ -59,18 +59,25 @@ and drives Q4 (top teams), not Q1 (bust teams).
 
 ### Team level: bust teams are over-projected regardless of attrition
 
+(Numbers below regenerated on the 5-season / 1,326-team dump with the fixed
+bust-split; see `trajectory_attrition_20260530_summary.json`.)
+
 ```
-Bust teams (bottom actual quartile): n=109  bias +7.92  mean attrition 0.75
-  bust + LOW attrition (≤0.65):      n=28   bias +7.94
+Bust teams (bottom actual quartile): n=292  bias +7.33  mean attrition 0.67
+  corr(attrition, err) within busts = −0.05
+  bust + KEPT talent (attr<0.5):  n=92   bias +7.50
+  bust + LOST talent (attr≥0.5):  n=200  bias +7.25
 ```
 
-The killer slice: bust teams that lost **little** talent (low attrition)
-are over-projected by **+7.94** — statistically identical to the full bust
-cohort's +7.92. Roster attrition has **zero discriminative power** for the
-team-level over-projection. (The tercile binning degenerates because
-positive-cam attrition piles up near 1.0 for most programs; the
-bust-low-attrition slice is the clean within-cohort comparison and it is
-decisive.)
+The killer slice: bust teams that **kept** most of their talent (attrition
+< 0.5) are over-projected by **+7.50** — statistically identical to the
+teams that gutted their roster (+7.25) and to the pooled bust cohort
+(+7.33). The within-bust correlation between attrition and over-projection
+is **−0.05** (zero). Roster attrition has **zero discriminative power** for
+the team-level over-projection. (>50% of bust teams have attrition = 1.0 —
+they retained ~zero positive cam_v3 — so the cohort can't be split on a
+median; the fixed-threshold "kept vs lost talent" split plus the
+correlation is the honest comparison.)
 
 ## Conclusion
 
