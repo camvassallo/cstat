@@ -40,6 +40,7 @@
 use crate::freshman_model::{FreshmanFeatureRow, FreshmanPrediction, build_freshman_features};
 use crate::inference::Predictor;
 use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
+use crate::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use crate::team_name_match::team_match_score;
 use crate::trajectory::{
     build_trajectory_features, fetch_player_trajectory_rows, fetch_trajectory_oof,
@@ -1223,6 +1224,77 @@ pub async fn project_returner_cam_v3(
         }
     }
     Ok(out)
+}
+
+/// Baseline-shrink weight for the *served* projection:
+/// `shrink = w·baseline + (1−w)·raw + offset`. Canonical home for the
+/// calibration constants the `/api/projections` route and the
+/// `cstat-ingest compute-projections` step share — a recalibration touches
+/// one place and both surfaces stay in lockstep. Tuned on the LOSO backtest
+/// (ROADMAP §5b v2): w=0.50 / offset=0.0 minimize pooled MAE.
+pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.50;
+/// Additive bias correction applied after the baseline shrink. Phase B's
+/// raw residual at `PROJECTION_SHRINK_WEIGHT` is ≈−0.10 — within noise, so
+/// the offset stays 0.0 (Phase A's +2.0 box-score-model hack is retired).
+pub const PROJECTION_OFFSET: f32 = 0.0;
+/// Minimum (returning + arrivals + recruits) roster size to score a team.
+/// Below this the rate-stat aggregates over-weight the few starters and the
+/// projection isn't honest.
+pub const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
+
+/// Blend the raw model output toward the baseline AdjEM and apply the
+/// calibration offset. With no baseline (brand-new D-I program) the blend
+/// collapses to the offset-corrected raw value.
+pub fn shrink_adj_em(raw: f32, baseline: Option<f32>) -> f32 {
+    match baseline {
+        Some(b) => {
+            PROJECTION_SHRINK_WEIGHT * b
+                + (1.0 - PROJECTION_SHRINK_WEIGHT) * raw
+                + PROJECTION_OFFSET
+        }
+        None => raw + PROJECTION_OFFSET,
+    }
+}
+
+/// Score one composed roster's (floor, ceiling, midpoint) projected AdjEM —
+/// the *served* projection number. The `/api/projections` route and the
+/// persisted `team_preseason_projection` table both call this so they can't
+/// diverge. `projected_cam` overwrites each returner/arrival's cam_v3 with
+/// the trajectory model's projection (recruits already carry the freshman
+/// model's value); `build_roster_impact_features` then does its own
+/// cam_v3-ranked canonical-MPG rotation normalization.
+///
+/// `p_return` weights the midpoint between floor (all draft-`?` players
+/// leave) and ceiling (all return). Both bounds are baseline-shrunk first,
+/// so the midpoint is over the shrunk band. Returns `None` for too-thin
+/// rosters (below [`MIN_QUALIFYING_FOR_PROJECTION`]) or ONNX errors —
+/// callers treat that as "can't project this team".
+pub fn score_projection_adj_em(
+    p: &ProjectedRoster,
+    predictor: &Predictor,
+    baseline: Option<f32>,
+    p_return: f32,
+    projected_cam: &HashMap<Uuid, f64>,
+) -> Option<(f32, f32, f32)> {
+    let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
+    if qualifying < MIN_QUALIFYING_FOR_PROJECTION {
+        return None;
+    }
+    let score = |scenario| {
+        let mut roster = p.for_scenario(scenario);
+        apply_projected_cam_v3(&mut roster, projected_cam);
+        predictor.predict_roster_impact(&build_roster_impact_features(
+            &roster,
+            p.outbound_cam_v3_sum,
+            p.inbound_cam_v3_sum,
+        ))
+    };
+    let floor_raw = score(DraftScenario::Floor).ok()?;
+    let ceiling_raw = score(DraftScenario::Ceiling).ok()?;
+    let floor = shrink_adj_em(floor_raw, baseline);
+    let ceiling = shrink_adj_em(ceiling_raw, baseline);
+    let midpoint = p_return * ceiling + (1.0 - p_return) * floor;
+    Some((floor, ceiling, midpoint))
 }
 
 #[cfg(test)]

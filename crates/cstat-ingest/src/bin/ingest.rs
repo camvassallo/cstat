@@ -176,6 +176,18 @@ enum Commands {
         output: Option<std::path::PathBuf>,
     },
 
+    /// Materialize the preseason roster-impact projection per (season, team)
+    /// into `team_preseason_projection`. Runs the same season-wide Phase B
+    /// composition `/api/projections` does, once per target year, and writes
+    /// each team's projected AdjEM so the predict route can read it cheaply
+    /// for the preseason × pit early-season blend (ROADMAP §6).
+    ComputeProjections {
+        /// Target seasons to compute (comma-separated). Each needs
+        /// `transfers(year − 1)` + recruits + a played base season.
+        #[arg(long, value_delimiter = ',', default_values_t = [2024, 2025, 2026])]
+        years: Vec<i32>,
+    },
+
     /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
     /// Pass condition: max abs diff < 0.01 across every CamPom intermediate and final.
     CampomParity {
@@ -525,6 +537,15 @@ async fn main() -> Result<()> {
                 output.as_deref(),
             )
             .await?;
+        }
+
+        Commands::ComputeProjections { years } => {
+            let model_dir =
+                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let predictor =
+                cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
+                    .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
+            cstat_ingest::compute_projections::run(&db.pool, &predictor, &years).await?;
         }
 
         Commands::Transfers {

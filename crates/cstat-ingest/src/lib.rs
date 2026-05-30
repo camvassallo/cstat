@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod campom_parity;
 pub mod client;
+pub mod compute_projections;
 pub mod ingest;
 pub mod projections_backtest;
 pub mod rate_limiter;

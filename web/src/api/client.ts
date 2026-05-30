@@ -910,11 +910,15 @@ export interface PredictionResult {
   /// YYYY-MM-DD cutoff the prediction was built for, when the request
   /// carried one. Null on legacy (end-of-season-state) responses.
   as_of_date?: string | null;
-  /// Server-side label for which model bundle produced the response.
-  /// "pit" = point-in-time bundle; "leaky" = end-of-season bundle.
-  /// Read this rather than inferring from local state so UI honesty
-  /// claims always match what the server actually served.
-  prediction_basis: 'pit' | 'leaky';
+  /// Server-side label for which regime produced the response.
+  /// "leaky" = end-of-season-state bundle (no as_of_date).
+  /// With an as_of_date the honest path applies the preseason × pit blend
+  /// (ROADMAP §6): "preseason" = full preseason-projection weight (early,
+  /// pre-Nov-1 cutoffs), "blended" = decaying mix, "pit" = pure
+  /// point-in-time (mid-January onward, or when a team has no preseason
+  /// projection row). Read this rather than inferring from local state so
+  /// UI honesty claims always match what the server actually served.
+  prediction_basis: 'preseason' | 'blended' | 'pit' | 'leaky';
   predicted_margin: number;
   home_win_probability: number;
   /// Total points (home + away). Materially less precise than margin

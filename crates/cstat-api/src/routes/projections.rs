@@ -42,7 +42,8 @@ pub fn router() -> Router<Arc<AppState>> {
 /// roster can't be honestly projected — so smaller rosters return null
 /// predictions and a `too_thin = true` flag, letting the UI render them
 /// honestly (an explanation chip) instead of hiding the row.
-const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
+const MIN_QUALIFYING_FOR_PROJECTION: usize =
+    cstat_core::roster_projection::MIN_QUALIFYING_FOR_PROJECTION;
 
 /// Shape returned to the frontend. One row per team; ranked by midpoint
 /// AdjEM by default (route returns them sorted so JSON-fetch consumers
@@ -126,7 +127,7 @@ struct ProjectedTeam {
 /// leave-one-season-out models — so 5.86 is leak-free, where the v1
 /// `0.55`/5.88 figure carried a small in-sample leak. The better-
 /// calibrated raw projector earns marginally more trust (0.55 → 0.50).
-const SHRINK_WEIGHT: f32 = 0.50;
+const SHRINK_WEIGHT: f32 = cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT;
 
 /// Additive calibration offset applied to the blended projection.
 ///
@@ -138,7 +139,7 @@ const SHRINK_WEIGHT: f32 = 0.50;
 /// backtest noise. The offset is kept as a named `0.0` knob so the
 /// methodology doc's re-tuning playbook (grid-search weight *and*
 /// offset) stays valid.
-const PROJECTION_OFFSET: f32 = 0.0;
+const PROJECTION_OFFSET: f32 = cstat_core::roster_projection::PROJECTION_OFFSET;
 
 /// Blend the raw model output with the baseline AdjEM and apply the
 /// calibration offset. With no baseline (e.g. a brand-new D-I program)
