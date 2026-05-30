@@ -1,0 +1,72 @@
+{
+  "generated_at": "2026-05-29T22:02:38.395360Z",
+  "n": 1326,
+  "headline": {
+    "total": {
+      "mae": 6.261969622697114,
+      "bias": 0.8969260441406236
+    },
+    "composition": {
+      "mae": 4.363218202139075,
+      "bias": 0.7430711202239154
+    },
+    "cam_value": {
+      "mae": 3.8187531843236444,
+      "bias": -0.30152504566669197
+    },
+    "calibrator_floor": {
+      "mae": 2.8035918510792888,
+      "bias": 0.45537996958340005
+    }
+  },
+  "per_actual_quartile": [
+    {
+      "bucket": "Q1 bottom",
+      "n": 336,
+      "total_mae": 8.29538775223884,
+      "total_bias": 7.7673111069326595,
+      "composition_mae": 5.98394106275269,
+      "composition_bias": 5.131926749345093,
+      "cam_value_mae": 4.05086978706753,
+      "cam_value_bias": 3.5774171792769005,
+      "calibrator_floor_mae": 2.969915671859469,
+      "calibrator_floor_bias": -0.942032821689333
+    },
+    {
+      "bucket": "Q2 below-median",
+      "n": 328,
+      "total_mae": 4.674810402790402,
+      "total_bias": 0.6753861801698804,
+      "composition_mae": 3.594391638708369,
+      "composition_bias": 0.2507068986163997,
+      "cam_value_mae": 2.8888914438600586,
+      "cam_value_bias": 0.7167450891716814,
+      "calibrator_floor_mae": 2.4175174565349775,
+      "calibrator_floor_bias": -0.2920658076182008
+    },
+    {
+      "bucket": "Q3 above-median",
+      "n": 330,
+      "total_mae": 5.729630413120895,
+      "total_bias": -1.6466568143959297,
+      "composition_mae": 3.754696758915529,
+      "composition_bias": -0.9156184609979391,
+      "cam_value_mae": 3.5313867369045813,
+      "cam_value_bias": -1.5540312141518702,
+      "calibrator_floor_mae": 2.625197882568746,
+      "calibrator_floor_bias": 0.8229928607538793
+    },
+    {
+      "bucket": "Q4 top",
+      "n": 332,
+      "total_mae": 6.301221646081254,
+      "total_bias": -3.309103963084249,
+      "composition_mae": 4.087387804256146,
+      "composition_bias": -1.5635326896984894,
+      "cam_value_mae": 4.788133907210396,
+      "cam_value_bias": -3.988242383642369,
+      "calibrator_floor_mae": 3.1940063307084237,
+      "calibrator_floor_bias": 2.242671110256609
+    }
+  ]
+}
