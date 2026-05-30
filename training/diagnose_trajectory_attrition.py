@@ -229,7 +229,9 @@ def summarize_quartiles(df: pd.DataFrame) -> tuple[list[dict], list[float], list
     return out, bounds, labels
 
 
-def grid(df: pd.DataFrame, bounds: list[float], attr_labels: list[str]) -> pd.DataFrame:
+def grid(
+    df: pd.DataFrame, bounds: list[float], attr_labels: list[str]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Mean bias in each (attrition quartile × prior-CamPom bucket) cell.
     The load-bearing view: within a CamPom band, does bias climb with
     attrition?"""
@@ -251,7 +253,7 @@ def grid(df: pd.DataFrame, bounds: list[float], attr_labels: list[str]) -> pd.Da
 def team_level_cut() -> dict | None:
     """Bridge the player-level finding to the team-level Q1 over-projection.
     Joins the latest projections backtest dump to base-roster attrition and
-    reports pipeline bias (phase_b − actual) by attrition quartile, plus the
+    reports pipeline bias (phase_b − actual) by attrition tercile, plus the
     bust-team (bottom-actual-quartile) slice split by attrition. If bust
     teams are over-projected regardless of attrition, the trajectory
     attrition feature won't move Q1."""
