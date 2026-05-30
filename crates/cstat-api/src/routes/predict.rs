@@ -1113,4 +1113,41 @@ mod tests {
             "totals should be equal under team swap"
         );
     }
+
+    #[test]
+    fn preseason_blend_weight_schedule() {
+        // cstat-season 2026 runs Nov 2025 → Apr 2026, so the schedule
+        // anchors are 2025-11-01 (w=1) and 2026-01-15 (w=0).
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+
+        // Before / at the Nov 1 anchor → full preseason weight.
+        assert_eq!(preseason_blend_weight(d(2025, 9, 15), 2026), 1.0);
+        assert_eq!(preseason_blend_weight(d(2025, 11, 1), 2026), 1.0);
+
+        // At / after the Jan 15 anchor → pure pit.
+        assert_eq!(preseason_blend_weight(d(2026, 1, 15), 2026), 0.0);
+        assert_eq!(preseason_blend_weight(d(2026, 2, 1), 2026), 0.0);
+        assert_eq!(preseason_blend_weight(d(2026, 4, 1), 2026), 0.0);
+
+        // Monotonically decreasing strictly inside the window.
+        let mid_nov = preseason_blend_weight(d(2025, 11, 20), 2026);
+        let mid_dec = preseason_blend_weight(d(2025, 12, 15), 2026);
+        let early_jan = preseason_blend_weight(d(2026, 1, 5), 2026);
+        assert!(mid_nov > mid_dec && mid_dec > early_jan);
+        assert!((0.0..=1.0).contains(&mid_nov));
+        assert!((0.0..=1.0).contains(&early_jan));
+
+        // Roughly halfway: the Nov 1 → Jan 15 span is 75 days, so its
+        // midpoint (day ≈37.5) lands around Dec 8.
+        let halfway = preseason_blend_weight(d(2025, 12, 8), 2026);
+        assert!(
+            (halfway - 0.5).abs() < 0.05,
+            "midpoint weight {halfway} should be ≈0.5",
+        );
+
+        // Season-relative: the same calendar offset in 2025's season
+        // (Nov 2024 → Jan 2025) decays identically.
+        assert_eq!(preseason_blend_weight(d(2024, 11, 1), 2025), 1.0);
+        assert_eq!(preseason_blend_weight(d(2025, 1, 15), 2025), 0.0);
+    }
 }
