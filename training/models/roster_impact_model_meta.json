@@ -56,12 +56,18 @@
     "no_cam_v3": 1735,
     "oof_pct": 57.9
   },
-  "final_n_estimators": 236,
+  "final_n_estimators": 211,
   "loso_export_seasons": [
+    2022,
+    2023,
+    2024,
     2025,
     2026
   ],
   "loso_train_rows": {
+    "2022": 3903,
+    "2023": 3893,
+    "2024": 3893,
     "2025": 3891,
     "2026": 3891
   },
@@ -83,203 +89,203 @@
   "backtest_loso": {
     "per_season": {
       "2015": {
-        "mae": 2.576089949897309,
-        "rmse": 3.504633799289333,
-        "r2": 0.9465544344007683,
+        "mae": 2.5731033193243817,
+        "rmse": 3.5107552208355197,
+        "r2": 0.9463675683385689,
         "n": 351
       },
       "2016": {
-        "mae": 3.5467759161391044,
-        "rmse": 4.482289916398899,
-        "r2": 0.9107543733523924,
+        "mae": 3.5676850694470397,
+        "rmse": 4.500796814822235,
+        "r2": 0.9100158805098081,
         "n": 351
       },
       "2017": {
-        "mae": 3.77126590289505,
-        "rmse": 4.762467303305567,
-        "r2": 0.9028586601105208,
+        "mae": 3.765144768035467,
+        "rmse": 4.747789016836447,
+        "r2": 0.9034565313427074,
         "n": 351
       },
       "2018": {
-        "mae": 3.65832602364316,
-        "rmse": 4.642789764478547,
-        "r2": 0.9015729810343441,
+        "mae": 3.6565269628968524,
+        "rmse": 4.638575470082071,
+        "r2": 0.9017515857943353,
         "n": 351
       },
       "2019": {
-        "mae": 3.7119501516423763,
-        "rmse": 4.672971384162715,
-        "r2": 0.899681508347151,
+        "mae": 3.7043220618612644,
+        "rmse": 4.663676483413934,
+        "r2": 0.9000801938894627,
         "n": 353
       },
       "2020": {
-        "mae": 3.438033574736956,
-        "rmse": 4.586593483566511,
-        "r2": 0.899335381750699,
+        "mae": 3.446185713925044,
+        "rmse": 4.592824031046804,
+        "r2": 0.8990617051385146,
         "n": 353
       },
       "2021": {
-        "mae": 4.343170817580382,
-        "rmse": 5.692925197720144,
-        "r2": 0.8588288636699346,
+        "mae": 4.338643775268481,
+        "rmse": 5.677190597493643,
+        "r2": 0.8596081473054666,
         "n": 341
       },
       "2022": {
-        "mae": 4.03191348828992,
-        "rmse": 5.127418414903137,
-        "r2": 0.875069036917139,
+        "mae": 4.030580691758721,
+        "rmse": 5.126001729853463,
+        "r2": 0.8751380632234824,
         "n": 352
       },
       "2023": {
-        "mae": 3.7603912389522045,
-        "rmse": 4.750723345641082,
-        "r2": 0.8883938449309502,
+        "mae": 3.761226539964502,
+        "rmse": 4.744281871660483,
+        "r2": 0.8886962918260072,
         "n": 362
       },
       "2024": {
-        "mae": 3.6463593363707663,
-        "rmse": 4.692358889712167,
-        "r2": 0.9027877611775206,
+        "mae": 3.6511857682730704,
+        "rmse": 4.679530942442214,
+        "r2": 0.9033185513135444,
         "n": 362
       },
       "2025": {
-        "mae": 3.696125389402112,
-        "rmse": 4.707434641339289,
-        "r2": 0.9147521515140594,
+        "mae": 3.6946292689767777,
+        "rmse": 4.703666834051751,
+        "r2": 0.9148885608099105,
         "n": 364
       },
       "2026": {
-        "mae": 3.8592292832513286,
-        "rmse": 4.903968633908454,
-        "r2": 0.9137961466910869,
+        "mae": 3.874529029451539,
+        "rmse": 4.899955858085898,
+        "r2": 0.9139371652160191,
         "n": 364
       }
     },
     "pooled": {
-      "mae": 3.6692137594339194,
-      "rmse": 4.732342712060935,
-      "r2": 0.9020879495439594
+      "mae": 3.6712718105626583,
+      "rmse": 4.728399071954151,
+      "r2": 0.9022510691759398
     },
     "best_iterations": [
       85,
       158,
-      280,
-      139,
-      217,
-      134,
-      363,
-      177,
-      169,
-      375,
+      285,
+      143,
+      245,
+      129,
+      239,
+      173,
+      170,
+      265,
       275,
-      457
+      360
     ]
   },
   "cv_5fold": {
-    "mae": 3.676425526166773,
-    "rmse": 4.717405957893127,
-    "r2": 0.9025031243008057
+    "mae": 3.6756325505530305,
+    "rmse": 4.718098789313628,
+    "r2": 0.902475230424382
   },
   "feature_importance": [
     {
       "name": "cam_sum",
-      "importance": 405
+      "importance": 387
     },
     {
       "name": "cam_wmean",
-      "importance": 259
-    },
-    {
-      "name": "arch_sorcerer",
-      "importance": 250
+      "importance": 251
     },
     {
       "name": "arch_bard",
-      "importance": 249
+      "importance": 233
+    },
+    {
+      "name": "arch_sorcerer",
+      "importance": 218
     },
     {
       "name": "arch_ranger",
-      "importance": 181
+      "importance": 179
     },
     {
       "name": "arch_cleric",
-      "importance": 166
+      "importance": 155
     },
     {
       "name": "outbound_cam_v3_sum",
-      "importance": 158
-    },
-    {
-      "name": "arch_paladin",
-      "importance": 147
+      "importance": 135
     },
     {
       "name": "arch_rogue",
-      "importance": 136
-    },
-    {
-      "name": "arch_wizard",
-      "importance": 133
-    },
-    {
-      "name": "arch_druid",
-      "importance": 131
-    },
-    {
-      "name": "arch_fighter",
-      "importance": 128
-    },
-    {
-      "name": "arch_monk",
       "importance": 126
     },
     {
-      "name": "inbound_cam_v3_sum",
-      "importance": 116
+      "name": "arch_wizard",
+      "importance": 121
     },
     {
-      "name": "cam_top7_mean",
+      "name": "arch_druid",
+      "importance": 120
+    },
+    {
+      "name": "arch_paladin",
       "importance": 115
     },
     {
+      "name": "arch_fighter",
+      "importance": 113
+    },
+    {
+      "name": "arch_monk",
+      "importance": 108
+    },
+    {
       "name": "roster_size",
-      "importance": 110
+      "importance": 101
     },
     {
-      "name": "exp_fr_share",
-      "importance": 107
+      "name": "cam_top7_mean",
+      "importance": 99
     },
     {
-      "name": "exp_sr_share",
-      "importance": 102
-    },
-    {
-      "name": "exp_so_share",
+      "name": "inbound_cam_v3_sum",
       "importance": 97
     },
     {
-      "name": "cam_top3_mean",
-      "importance": 93
+      "name": "exp_sr_share",
+      "importance": 90
+    },
+    {
+      "name": "exp_fr_share",
+      "importance": 88
+    },
+    {
+      "name": "exp_so_share",
+      "importance": 78
     },
     {
       "name": "exp_jr_share",
-      "importance": 84
+      "importance": 77
     },
     {
       "name": "arch_barbarian",
-      "importance": 76
+      "importance": 70
     },
     {
-      "name": "arch_warlock",
-      "importance": 72
-    },
-    {
-      "name": "cam_top1",
+      "name": "cam_top3_mean",
       "importance": 68
     },
     {
+      "name": "cam_top1",
+      "importance": 63
+    },
+    {
+      "name": "arch_warlock",
+      "importance": 49
+    },
+    {
       "name": "cam_count_gt5",
-      "importance": 27
+      "importance": 20
     },
     {
       "name": "cam_count_gt10",

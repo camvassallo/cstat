@@ -69,11 +69,16 @@ SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 202
 
 # Target seasons that get an exported leave-one-season-out model for the
 # end-to-end `cstat-ingest projections-backtest` (ROADMAP §5b v2 Part 2).
-# Only these are backtestable: the backtest's `compose_all_projections`
-# needs portal-`transfers` data (ingested 2024+) AND a finished actual
-# AdjEM to score against, so 2025 / 2026 are the sole meaningful targets.
-# Extend when a new season finishes with transfers data ingested.
-LOSO_EXPORT_SEASONS = (2025, 2026)
+# Backtestable = the backtest's `compose_all_projections` can reconstruct
+# the projected roster (needs `transfers(target − 1)` + recruits for that
+# class + trajectory/freshman OOF) AND a finished actual AdjEM to score
+# against. After the historical transfer backfill (`transfers` is solid
+# 2021→2026: 621/734/943/1224/1636/1511) and the recruit backfill
+# (class-of-2014→2026), targets 2022→2026 are all reconstructable — so the
+# backtest now spans 5 seasons (~1.8k team-seasons), 3.6× the prior
+# 2-season sample. Extend backward (2021 needs transfers(2020)=371, still
+# usable) or forward as new seasons finish with transfers ingested.
+LOSO_EXPORT_SEASONS = (2022, 2023, 2024, 2025, 2026)
 ARCHETYPES = (
     "Wizard", "Sorcerer", "Warlock", "Bard", "Ranger", "Barbarian",
     "Paladin", "Monk", "Cleric", "Druid", "Rogue", "Fighter",

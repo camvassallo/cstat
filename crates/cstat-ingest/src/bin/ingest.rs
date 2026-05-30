@@ -163,8 +163,10 @@ enum Commands {
     /// pipeline. Composes projected rosters for each target season, scores
     /// them with roster_impact_model.onnx, and compares to actual AdjEM.
     ProjectionsBacktest {
-        /// Target seasons to backtest (comma-separated). Defaults to 2025,2026.
-        #[arg(long, value_delimiter = ',', default_values_t = [2025, 2026])]
+        /// Target seasons to backtest (comma-separated). Defaults to
+        /// 2022..2026 — every season the projected roster can be
+        /// reconstructed for (transfers solid 2021+, recruits 2014+).
+        #[arg(long, value_delimiter = ',', default_values_t = [2022, 2023, 2024, 2025, 2026])]
         years: Vec<i32>,
 
         /// Optional JSON dump of per-team predictions for downstream

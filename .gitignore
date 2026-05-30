@@ -75,6 +75,17 @@ __pycache__/
 /training/models/oof_predictions_ats_summary.json
 /training/models/loso/loso_pooled_ats_summary.json
 
+# Per-team projection-backtest dumps. These are large (1 record/team-season;
+# the 5-season dump is ~12k lines / 1.3k teams) and fully regenerable via
+# `cstat-ingest projections-backtest --output PATH`. They were the source of
+# huge PR diffs (89% of one PR). Keep the SUMMARY artifacts in eval_history
+# (decomposition_*, q1_attribution_*, trajectory_attrition_* — small, the
+# canonical sample-of-record) tracked; ignore the raw per-team dumps.
+# Downstream diagnostics (decompose_projection_error.py,
+# attribute_q1_overprojection.py) glob the newest local dump, so regenerate
+# before re-running them.
+/training/eval_history/projections_backtest_per_team_*.json
+
 # Raw API snapshots from `cstat-ingest transfers` — bootstrap data dumped
 # locally for repeatable seeds and offline dev. Re-derivable from the live
 # 247 API. The canonical store is the `transfers` DB table.
