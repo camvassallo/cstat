@@ -106,8 +106,9 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
         let projected_cam = project_returner_cam_v3(pool, predictor, &traj_ids, base_season, year)
             .await
             .unwrap_or_else(|e| {
-                eprintln!(
-                    "  warn: trajectory cam_v3 projection failed ({e}); using current cam_v3"
+                tracing::warn!(
+                    error = %e,
+                    "trajectory cam_v3 projection failed; falling back to current-season cam_v3"
                 );
                 HashMap::new()
             });
