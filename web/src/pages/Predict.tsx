@@ -1243,20 +1243,45 @@ function ResultHeadline({
         ? `at ${result.home_team}`
         : `at ${result.away_team}`;
 
-  // Server-confirmed honesty label. Reads `result.prediction_basis`
+  // Server-confirmed regime label. Reads `result.prediction_basis`
   // (set in routes/predict.rs) so a request that drops as_of_date in
   // transit — proxy rewrite, stale cache, future memoization keyed
   // only on home/away/venue — paints the response with what was
   // actually served, not what the page meant to ask for.
-  const basisChip =
-    result.prediction_basis === 'pit' && result.as_of_date ? (
-      <span
-        className="ml-2 inline-flex items-center text-[10px] font-medium uppercase tracking-wide bg-amber-900/60 text-amber-300 px-1.5 py-0.5 rounded"
-        title={`Point-in-time CamPom v3 as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`}
-      >
-        Point-in-time
-      </span>
-    ) : null;
+  //
+  // Early-season honest predictions blend the preseason roster
+  // projection (r=0.88) with point-in-time form, decaying preseason out
+  // from Nov 1 to mid-January (ROADMAP §6) — the chip tells the user
+  // which regime produced the number.
+  const basisMeta: Record<
+    string,
+    { label: string; cls: string; title: string } | undefined
+  > = {
+    preseason: {
+      label: 'Preseason',
+      cls: 'bg-sky-900/60 text-sky-300',
+      title: `Preseason roster projection (r≈0.88) as of ${result.as_of_date}. Too early in the season for in-game data to carry weight, so the forecast is the roster-based projection.`,
+    },
+    blended: {
+      label: 'Blended',
+      cls: 'bg-teal-900/60 text-teal-300',
+      title: `Blend of the preseason roster projection and point-in-time form as of ${result.as_of_date}. Preseason weight decays from Nov 1 to mid-January as in-season data accumulates.`,
+    },
+    pit: {
+      label: 'Point-in-time',
+      cls: 'bg-amber-900/60 text-amber-300',
+      title: `Point-in-time CamPom v3 as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`,
+    },
+  };
+  const meta = result.as_of_date ? basisMeta[result.prediction_basis] : undefined;
+  const basisChip = meta ? (
+    <span
+      className={`ml-2 inline-flex items-center text-[10px] font-medium uppercase tracking-wide ${meta.cls} px-1.5 py-0.5 rounded`}
+      title={meta.title}
+    >
+      {meta.label}
+    </span>
+  ) : null;
 
   return (
     <div className="bg-gray-800 rounded-lg p-6 space-y-5">

@@ -158,7 +158,42 @@ async fn predict(
         )
     })?;
 
-    let predicted_winner = if explained.prediction.predicted_margin > 0.0 {
+    // Early-season preseason × pit blend (ROADMAP §6). Only on the honest
+    // pit path (`as_of_date` set); the leaky full-state path is untouched.
+    // While the in-season pit cohort is thin (Nov–Dec), anchor on the
+    // preseason projection (r=0.88), decaying to pit by mid-January. Output
+    // blend: scalar mix of the already-venue-resolved margins, so neutral
+    // symmetry and away-flip are preserved (both legs are antisymmetric
+    // under team swap). Totals stay pit — the preseason model has no totals
+    // (ROADMAP defers the totals blend).
+    let pit_margin = explained.prediction.predicted_margin;
+    let mut blended_margin = pit_margin;
+    let mut prediction_basis = if params.as_of_date.is_some() {
+        "pit"
+    } else {
+        "leaky"
+    };
+    // Weight on the preseason leg (0.0 when no as_of_date, or post-decay).
+    let w = params
+        .as_of_date
+        .map(|asof| preseason_blend_weight(asof, season))
+        .unwrap_or(0.0);
+    let pre_margin = if w > 0.0 {
+        fetch_preseason_margin(&state.db.pool, season, home_team.id, away_team.id, venue).await
+    } else {
+        None
+    };
+    if let Some(pre_margin) = pre_margin {
+        blended_margin = w * pre_margin + (1.0 - w) * pit_margin;
+        prediction_basis = if w >= 0.999 { "preseason" } else { "blended" };
+    }
+    let blended_win_prob = if (blended_margin - pit_margin).abs() < f32::EPSILON {
+        explained.prediction.home_win_probability
+    } else {
+        margin_to_win_prob(blended_margin, params.as_of_date.is_some())
+    };
+
+    let predicted_winner = if blended_margin > 0.0 {
         &home_team.name
     } else {
         &away_team.name
@@ -235,21 +270,17 @@ async fn predict(
     // 1-decimal `predicted_margin` are. If the totals number ever
     // gets surfaced alongside the score pair, switch to
     // `away_score = round(total) - home_score` for sum reconciliation.
+    // Scores derive from the *blended* margin so they stay consistent with
+    // the headline (total stays pit — preseason has no totals model).
     let total = explained.prediction.predicted_total as f64;
-    let margin = explained.prediction.predicted_margin as f64;
+    let margin = blended_margin as f64;
     let predicted_home_score = ((total + margin) / 2.0).round() as i32;
     let predicted_away_score = ((total - margin) / 2.0).round() as i32;
 
-    // Server-side label for which bundle produced the response. The
-    // frontend's honest-mode chip reads this rather than inferring from
-    // its own state — that way a request that drops `as_of_date` in
-    // transit (proxy rewrite, stale cache, future memoization layer)
-    // can't paint a leaky prediction as honest.
-    let prediction_basis = if params.as_of_date.is_some() {
-        "pit"
-    } else {
-        "leaky"
-    };
+    // `prediction_basis` ("preseason" | "blended" | "pit" | "leaky") is set
+    // above alongside the blend so the frontend chip reads which regime is
+    // active rather than inferring from its own state — a request that drops
+    // `as_of_date` in transit can't paint a leaky prediction as honest.
 
     Ok(Json(json!({
         "home_team": home_team.name,
@@ -260,8 +291,8 @@ async fn predict(
         "venue": venue_str,
         "as_of_date": params.as_of_date,
         "prediction_basis": prediction_basis,
-        "predicted_margin": (explained.prediction.predicted_margin as f64 * 10.0).round() / 10.0,
-        "home_win_probability": (explained.prediction.home_win_probability * 1000.0).round() / 1000.0,
+        "predicted_margin": (blended_margin as f64 * 10.0).round() / 10.0,
+        "home_win_probability": (blended_win_prob * 1000.0).round() / 1000.0,
         "predicted_total": (total * 10.0).round() / 10.0,
         "predicted_home_score": predicted_home_score,
         "predicted_away_score": predicted_away_score,
@@ -513,11 +544,36 @@ pub async fn predict_projection(
         )
         .await?
     };
+    // Same early-season preseason × pit blend as the `/api/predict` handler,
+    // so TeamDetail's Projected column and the ScoreTicker tiles agree with
+    // the Predict page on the same matchup (ROADMAP §6). `home_team_id` is
+    // always the host here, so the venue is Home (or Neutral); the blend is
+    // a scalar mix of the venue-resolved margin, preserving neutral symmetry.
+    let pit_margin = explained.prediction.predicted_margin;
+    let mut blended_margin = pit_margin;
+    let mut home_win_prob = explained.prediction.home_win_probability;
+    let w = as_of_date
+        .map(|d| preseason_blend_weight(d, season))
+        .unwrap_or(0.0);
+    if w > 0.0 {
+        let venue = if is_neutral {
+            Venue::Neutral
+        } else {
+            Venue::Home
+        };
+        if let Some(pre_margin) =
+            fetch_preseason_margin(&state.db.pool, season, home_team_id, away_team_id, venue).await
+        {
+            blended_margin = w * pre_margin + (1.0 - w) * pit_margin;
+            home_win_prob = margin_to_win_prob(blended_margin, as_of_date.is_some());
+        }
+    }
+
     let total = explained.prediction.predicted_total as f64;
-    let margin = explained.prediction.predicted_margin as f64;
+    let margin = blended_margin as f64;
     Ok(ProjectionSummary {
-        margin: explained.prediction.predicted_margin,
-        home_win_prob: explained.prediction.home_win_probability,
+        margin: blended_margin,
+        home_win_prob,
         home_score: ((total + margin) / 2.0).round() as i32,
         away_score: ((total - margin) / 2.0).round() as i32,
     })
@@ -744,6 +800,70 @@ fn margin_to_win_prob(margin: f32, is_pit: bool) -> f64 {
     };
     let z = LOGISTIC_GAUSSIAN_SCALE * (margin as f64) / sigma;
     1.0 / (1.0 + (-z).exp())
+}
+
+/// Home-court advantage in points, added to the preseason AdjEM-diff margin
+/// for home games. The preseason projection is a *neutral* team-strength
+/// delta (the pit/predict model bakes HCA into its margin via the venue
+/// flag; the AdjEM diff does not), so the blend's preseason leg must add it
+/// explicitly. ~3.5 is the college-basketball consensus; the blend backtest
+/// (`measure-blend-accuracy`) can retune it.
+const PRESEASON_HOME_COURT_ADVANTAGE: f32 = 3.5;
+
+/// Weight on the PRESEASON projection in the early-season blend: 1.0 before
+/// Nov 1, linear decay to 0.0 by Jan 15, then 0.0 (pure pit). cstat-season
+/// `S` runs Nov (S−1) → Apr S, so the anchors are `(S−1)-11-01` and
+/// `S-01-15`. Piecewise-linear v1 (ROADMAP §6); `measure-blend-accuracy`
+/// calibrates the crossover dates against per-week rolling MAE.
+fn preseason_blend_weight(as_of: NaiveDate, season: i32) -> f32 {
+    let (Some(full), Some(pit_only)) = (
+        NaiveDate::from_ymd_opt(season - 1, 11, 1),
+        NaiveDate::from_ymd_opt(season, 1, 15),
+    ) else {
+        return 0.0;
+    };
+    if as_of < full {
+        return 1.0;
+    }
+    if as_of >= pit_only {
+        return 0.0;
+    }
+    let span = (pit_only - full).num_days() as f32;
+    let elapsed = (as_of - full).num_days() as f32;
+    (1.0 - elapsed / span).clamp(0.0, 1.0)
+}
+
+/// Preseason game margin (home-team perspective) from the two teams'
+/// persisted projected AdjEM plus venue HCA. `None` when either team has no
+/// projection row (too-thin roster, or a season `compute-projections` hasn't
+/// run for) — the caller then falls back to pit-only.
+async fn fetch_preseason_margin(
+    pool: &PgPool,
+    season: i32,
+    home_id: Uuid,
+    away_id: Uuid,
+    venue: Venue,
+) -> Option<f32> {
+    async fn adjem(pool: &PgPool, season: i32, id: Uuid) -> Option<f32> {
+        sqlx::query_scalar::<_, f32>(
+            "SELECT projected_adj_em FROM team_preseason_projection \
+             WHERE season = $1 AND team_id = $2",
+        )
+        .bind(season)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+    }
+    let (home_adjem, away_adjem) =
+        tokio::join!(adjem(pool, season, home_id), adjem(pool, season, away_id));
+    let hca = match venue {
+        Venue::Home => PRESEASON_HOME_COURT_ADVANTAGE,
+        Venue::Away => -PRESEASON_HOME_COURT_ADVANTAGE,
+        Venue::Neutral => 0.0,
+    };
+    Some(home_adjem? - away_adjem? + hca)
 }
 
 #[derive(sqlx::FromRow)]
@@ -992,5 +1112,42 @@ mod tests {
             (t_ab - t_ba).abs() < 1e-9,
             "totals should be equal under team swap"
         );
+    }
+
+    #[test]
+    fn preseason_blend_weight_schedule() {
+        // cstat-season 2026 runs Nov 2025 → Apr 2026, so the schedule
+        // anchors are 2025-11-01 (w=1) and 2026-01-15 (w=0).
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+
+        // Before / at the Nov 1 anchor → full preseason weight.
+        assert_eq!(preseason_blend_weight(d(2025, 9, 15), 2026), 1.0);
+        assert_eq!(preseason_blend_weight(d(2025, 11, 1), 2026), 1.0);
+
+        // At / after the Jan 15 anchor → pure pit.
+        assert_eq!(preseason_blend_weight(d(2026, 1, 15), 2026), 0.0);
+        assert_eq!(preseason_blend_weight(d(2026, 2, 1), 2026), 0.0);
+        assert_eq!(preseason_blend_weight(d(2026, 4, 1), 2026), 0.0);
+
+        // Monotonically decreasing strictly inside the window.
+        let mid_nov = preseason_blend_weight(d(2025, 11, 20), 2026);
+        let mid_dec = preseason_blend_weight(d(2025, 12, 15), 2026);
+        let early_jan = preseason_blend_weight(d(2026, 1, 5), 2026);
+        assert!(mid_nov > mid_dec && mid_dec > early_jan);
+        assert!((0.0..=1.0).contains(&mid_nov));
+        assert!((0.0..=1.0).contains(&early_jan));
+
+        // Roughly halfway: the Nov 1 → Jan 15 span is 75 days, so its
+        // midpoint (day ≈37.5) lands around Dec 8.
+        let halfway = preseason_blend_weight(d(2025, 12, 8), 2026);
+        assert!(
+            (halfway - 0.5).abs() < 0.05,
+            "midpoint weight {halfway} should be ≈0.5",
+        );
+
+        // Season-relative: the same calendar offset in 2025's season
+        // (Nov 2024 → Jan 2025) decays identically.
+        assert_eq!(preseason_blend_weight(d(2024, 11, 1), 2025), 1.0);
+        assert_eq!(preseason_blend_weight(d(2025, 1, 15), 2025), 0.0);
     }
 }
