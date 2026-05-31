@@ -191,12 +191,19 @@ impl TorkvikClient {
     pub async fn fetch_coachdict(&self) -> anyhow::Result<BTreeMap<i32, HashMap<String, String>>> {
         let url = "https://barttorvik.com/coachdict.json";
         info!("fetching Torvik coach dictionary");
-        let raw: HashMap<String, HashMap<String, String>> =
+        // Coach values are tolerated as `Option<String>` so a stray null
+        // anywhere in the 130+ years of history can't fail the whole
+        // (current-season) ingest — null/missing coaches are simply dropped.
+        let raw: HashMap<String, HashMap<String, Option<String>>> =
             self.http.get(url).send().await?.json().await?;
         let mut out: BTreeMap<i32, HashMap<String, String>> = BTreeMap::new();
         for (year, teams) in raw {
             if let Ok(y) = year.parse::<i32>() {
-                out.insert(y, teams);
+                let cleaned = teams
+                    .into_iter()
+                    .filter_map(|(team, coach)| coach.map(|c| (team, c)))
+                    .collect();
+                out.insert(y, cleaned);
             }
         }
         info!(seasons = out.len(), "parsed Torvik coach dictionary");

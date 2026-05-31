@@ -88,7 +88,7 @@ def main():
     chg = [x for x in rows if x["changed"]]
     same = [x for x in rows if not x["changed"]]
 
-    print(f"=== PR E de-risk: coaching-change signal in projection residuals ===")
+    print("=== PR E de-risk: coaching-change signal in projection residuals ===")
     print(f"joined team-seasons: {len(rows)}  (dropped {no_flag} w/o coach in Y or Y-1)")
     print(f"  changed-coach:   {len(chg)} ({100*len(chg)/len(rows):.1f}%)")
     print(f"  unchanged-coach: {len(same)}")
@@ -158,10 +158,6 @@ def main():
             print(f"  {key[0]} {key[1]}: not in joined set")
 
 
-if __name__ == "__main__":
-    main()
-
-
 def conditional_analysis():
     """Is the changed-coach residual DIRECTION predictable from roster strength?
     Hypothesis: new coach at a weak team = rebuild hire (trends up); new coach at
@@ -219,9 +215,6 @@ def conditional_analysis():
     print(f"  excess reversion from coaching change: {r - r2:+.3f}")
 
 
-conditional_analysis()
-
-
 def mae_ceiling():
     """Optimistic ceiling: apply the BEST in-sample linear correction to changed-coach
     teams (resid ~ a + b*served), recompute global MAE. In-sample => upper bound on
@@ -260,4 +253,7 @@ def mae_ceiling():
     print(f"  boolean-only (mean-shift) lift: {base - mean(corr2):+.4f} MAE")
 
 
-mae_ceiling()
+if __name__ == "__main__":
+    main()
+    conditional_analysis()
+    mae_ceiling()
