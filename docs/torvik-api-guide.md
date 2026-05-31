@@ -13,6 +13,7 @@ Unofficial documentation for the barttorvik.com data endpoints used for college 
 | Player Stats | `https://barttorvik.com/getadvstats.php?year={year}&csv=1` | CSV | None | Season averages for all D1 players |
 | Team Stats | `https://barttorvik.com/{year}_team_results.json` | JSON | None | Team-level rankings and efficiency metrics |
 | Game Stats | `https://barttorvik.com/{year}_all_advgames.json.gz` | JSON | Gzip | Per-game, per-player box scores for all D1 games |
+| Coach Dictionary | `https://barttorvik.com/coachdict.json` | JSON | None | Head coach per team per season, all seasons in one file (no `{year}`) |
 
 ### Authentication
 
@@ -306,6 +307,41 @@ curl -s "https://barttorvik.com/2026_all_advgames.json.gz" | gunzip | head -c 50
   ...
 ]
 ```
+
+---
+
+## 4. Coach Dictionary
+
+**URL:** `GET https://barttorvik.com/coachdict.json`
+
+**Format:** JSON (nested object). **Note:** unlike the other endpoints, this URL has **no `{year}` parameter** — it returns every season in one file.
+
+**Response:** A single object keyed by season year, each value an object mapping Torvik-style team name → head coach name for that season.
+
+```json
+{
+  "1893": { "Yale": "...", ... },
+  ...
+  "2026": { "Duke": "Jon Scheyer", "North Carolina": "Hubert Davis", "Auburn": "Steven Pearl", ... },
+  "2027": { ... }
+}
+```
+
+### Coverage (observed 2026-05-31)
+
+| Property | Value |
+|---|---|
+| Season range | `1893` → `2027` (135 seasons) |
+| Teams per recent season | ~366 (2024), ~373 (2025), ~375 (2026), ~378 (2027) |
+| Size | ~850 KB (full file) |
+| Blank/missing coaches (2026) | 0 |
+
+### Notes
+
+- **Team names are Torvik short names** (`North Carolina` not `UNC`, `St.` abbreviations like `Portland St.`, `UC Santa Barbara`) — the same naming convention as the player/game endpoints. Join to cstat's `natstat_id` via the existing Torvik→NatStat reconciliation (`cstat-ingest::ingest::team_aliases`, `torvik.rs` normalize + fuzzy-match, `data/team_short_names.json`, `team_match_score`).
+- **Season year convention matches the rest of Torvik**: the spring calendar year (2025-26 season = `2026`).
+- **Coaching-change signal** is derivable directly: a team changed head coaches before season `Y` iff `coachdict[Y][team] != coachdict[Y-1][team]`. This is the data source behind the planned preseason-projection coaching-change feature (ROADMAP §6 PR E / "New-signal hunt"), for which no NatStat or Torvik *stats* endpoint provides coach data.
+- **Forward-looking rows**: the file includes the upcoming season (`2027` present as of 2026-05-31), so next-season coach assignments are available for preseason projections before any games are played.
 
 ---
 
