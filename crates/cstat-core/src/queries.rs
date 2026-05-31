@@ -2164,7 +2164,8 @@ pub async fn get_coach_leaderboard(
               WHERE cs2.coach_id = c.id AND cs2.season = $3
             )
           )
-        ORDER BY cr.cae_shrunk DESC
+        -- canonical_name breaks exact-tie CAE so paging/order is stable.
+        ORDER BY cr.cae_shrunk DESC, c.canonical_name
         LIMIT $2
         "#,
     )
@@ -2230,7 +2231,7 @@ pub async fn get_coach_season_leaderboard(
             LIMIT 1
         ) tm ON TRUE
         WHERE csc.season = $1
-        ORDER BY csc.cae_raw DESC
+        ORDER BY csc.cae_raw DESC, c.canonical_name
         LIMIT $2
         "#,
     )
@@ -2400,6 +2401,10 @@ pub async fn get_team_coach(
         JOIN coaches c ON c.id = cs.coach_id
         LEFT JOIN coach_ratings cr ON cr.coach_id = c.id
         WHERE cs.team_id = $1
+        -- A team can have two coach_seasons rows (coachdict name variants) that
+        -- resolve to the same coach but may differ on is_new_hc; pick
+        -- deterministically, preferring a row with a known flag.
+        ORDER BY (cs.is_new_hc IS NOT NULL) DESC, cs.coachdict_team_name
         LIMIT 1
         "#,
     )

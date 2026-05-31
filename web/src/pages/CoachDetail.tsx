@@ -15,9 +15,9 @@ function Sparkline({ seasons }: { seasons: CoachSeasonRow[] }) {
   const W = 520;
   const H = 120;
   const PAD = 24;
-  const pts = seasons.map((s) => ({ season: s.season, v: s.cae_raw }));
 
   const { xy, zeroY } = useMemo(() => {
+    const pts = seasons.map((s) => ({ season: s.season, v: s.cae_raw }));
     if (pts.length === 0) return { xy: [], zeroY: H / 2 };
     const vs = pts.map((p) => p.v);
     const lo = Math.min(0, ...vs);
@@ -30,7 +30,7 @@ function Sparkline({ seasons }: { seasons: CoachSeasonRow[] }) {
       xy: pts.map((p, i) => ({ ...p, x: x(i), y: y(p.v) })),
       zeroY: y(0),
     };
-  }, [pts]);
+  }, [seasons]);
 
   if (xy.length === 0) return null;
 
