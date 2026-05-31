@@ -136,8 +136,8 @@ def debias_by_projection_quartile(rows: list[dict]) -> list[dict]:
     """Subtract the projection-quartile mean residual from each row's cae_raw.
 
     Quartiles are cut on phase_b (the projection), NOT on the actual outcome.
-    Mutates rows in place (adds `cae_debiased`, `proj_q`) and returns the
-    per-bucket bias table for the summary."""
+    Mutates rows in place (adds `cae_debiased`) and returns the per-bucket bias
+    table for the summary."""
     srt = sorted(rows, key=lambda x: x["phase_b"])
     n = len(srt)
     bounds = [n * i // N_QUARTILES for i in range(N_QUARTILES + 1)]
@@ -148,7 +148,6 @@ def debias_by_projection_quartile(rows: list[dict]) -> list[dict]:
         lo, hi = g[0]["phase_b"], g[-1]["phase_b"]
         for x in g:
             x["cae_debiased"] = x["cae_raw"] - bias
-            x["proj_q"] = i
         buckets.append({"q": i + 1, "n": len(g), "phase_b_lo": lo,
                         "phase_b_hi": hi, "mean_resid": bias})
     return buckets
@@ -203,14 +202,14 @@ def main() -> None:
                                  for x in rows])
         if v is None:
             raise SystemExit("variance components unavailable (need ≥2 multi-season coaches)")
-        s2w, s2b, n0, C, N = v
+        s2w, s2b, _n0, C, N = v
         icc = s2b / (s2b + s2w) if (s2b + s2w) else 0.0
         k = s2w / s2b if s2b > 0 else float("inf")
         return {"s2w": s2w, "s2b": s2b, "icc": icc, "k": k, "C": C, "N": N}
 
     vraw = vc_of("cae_raw")
     vdeb = vc_of("cae_debiased")
-    s2w, s2b, icc, k = vraw["s2w"], vraw["s2b"], vraw["icc"], vraw["k"]
+    s2w, s2b, icc = vraw["s2w"], vraw["s2b"], vraw["icc"]
     print(f"\nvariance components (coaches ≥2: C={vraw['C']}, N={vraw['N']}):")
     print(f"  RAW (headline)   σ²_w={vraw['s2w']:.2f} σ²_b={vraw['s2b']:.2f} "
           f"(σ={vraw['s2b']**0.5:.2f})  ICC={vraw['icc']:.3f}  k={vraw['k']:.1f}")
@@ -245,17 +244,17 @@ def main() -> None:
     eligible = [r for r in ratings if r["n"] >= MIN_SEASONS_FACE]
     prestige_corr = corr([r["raw_mean"] for r in eligible],
                          [r["phase_b_mean"] for r in eligible])
-    print(f"\nguards (headline = RAW):")
+    print("\nguards (headline = RAW):")
     print(f"  ICC                         {icc:.3f}  (min {MIN_ICC})  "
           f"{'OK' if icc > MIN_ICC else 'FAIL'}")
     print(f"  split-half (odd/even yrs)   {sh_raw:+.3f} n={sh_n}  (min {MIN_SPLIT_HALF})  "
           f"{'OK' if sh_raw > MIN_SPLIT_HALF else 'FAIL'}")
     print(f"  CAE vs projection corr      {prestige_corr:+.3f}  "
-          f"(reported; coach×program confound, not gated)")
+          "(reported; coach×program confound, not gated)")
     print(f"  [de-biased split-half       {sh_deb:+.3f} — prestige-adjusted lower bound]")
 
     print(f"\ntop 15 by shrunk CAE (≥{MIN_SEASONS_FACE} seasons) — face-validity check:")
-    for r in [r for r in eligible][:15]:
+    for r in eligible[:15]:
         print(f"  {r['coach']:24s} CAE={r['shrunk']:+5.2f} "
               f"[{r['ci_low']:+5.2f},{r['ci_high']:+5.2f}] "
               f"raw={r['raw_mean']:+5.2f} n={r['n']} ({r['first_season']}–{r['last_season']})")
