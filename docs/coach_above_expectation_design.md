@@ -74,11 +74,20 @@ bands (new-coach teams are 1.12× noisier — the PR E salvage), not a point fea
    `023_team_preseason_projection.sql` already materializes the served projection, but CAE needs
    the **pre-blend roster-only** number, so either persist `phase_b` alongside it or recompute via
    `cstat_core::roster_projection`.
-2. **De-bias the projection per-quartile before differencing** (safeguard). The projection has
-   known Q1/Q4 tail bias (Q1 over-, Q4 under-projected); left in, it leaks into CAE as fake
-   coach credit at perennially-elite/weak programs. Subtract the per-actual-quartile mean bias
-   (from `decompose_projection_error.py`) first. **Acceptance check:** the top-CAE list must not
-   gain blue-blood dominance after de-bias, and CAE must be ~uncorrelated with program prestige.
+2. **De-bias by the PROJECTION quartile, not the actual quartile — and ship RAW as the headline
+   (decided at build, PR2).** The original plan was to de-bias by *actual* quartile, but that bakes
+   in outcome-conditioned regression-to-the-mean ([[project_projection_q1_bias_refuted]]). Cutting
+   quartiles on `phase_b` instead is artifact-free: it found the projection is miscalibrated **only
+   at its low end** (phase_b-Q1/Q2 ≈ −1.7, Q3/Q4 ≈ 0) — there is **no phase_b-Q4 under-projection**,
+   so the feared "free CAE credit at blue-bloods" never materializes (the raw top list is already
+   mid-major overachievers). Empirically the de-bias *strips the program component*: it removes
+   same-team persistence (+0.047 → −0.009) while preserving the moved-teams transferable signal
+   (+0.112 → +0.083), and drops overall split-half below significance (+0.114 → +0.049, z 2.1 → 0.9).
+   So the de-biased value is the **conservative prestige-adjusted lower bound**, stored alongside
+   (`cae_*adj*`), and the **headline is RAW** — "coach×program over-expectation" (§2), the only
+   significant-persistence variant. **Acceptance check (met):** raw top-CAE is *not* blue-blood
+   dominated; the residual CAE-vs-projection corr (+0.41 raw / +0.30 adj) is reported as the
+   acknowledged confound, not gated to zero.
 3. **Empirical-Bayes shrinkage.** `CAE_hat = (n/(n+k))·mean_resid`, k ≈ 6.4 (re-estimate from
    the variance components at build time). Report `n`, the shrunk value, and a credibility
    interval. Default-sort the leaderboard by shrunk CAE, not raw.
@@ -96,11 +105,14 @@ bands (new-coach teams are 1.12× noisier — the PR E salvage), not a point fea
   `docs/torvik-api-guide.md` §4) → normalized **`coach_seasons`** table
   `(coach_id, team_natstat_id, season)` + a **`coaches`** entity table `(coach_id, canonical_name)`
   for dedup. Snapshot the raw JSON to `data/coaches/` for reproducibility/offline.
-- **Compute**: CAE residual = (per-quartile-debiased) actual AdjEM − roster-only projection, then
-  EB-shrink per coach → **`coach_ratings`** `(coach_id, season|career, cae_raw, cae_shrunk, n, ci)`.
-  Start as an **offline Python job** (reuses the backtest + `decompose_projection_error.py`
-  infra; the feasibility metrics in `cae_feasibility.py` become regression guards). Promote to a
-  Rust compute step only if it needs to refresh in-season.
+- **Compute** (SHIPPED, PR2): `training/compute_cae.py` — joins the backtest dump to
+  `coach_seasons` (via `teams.natstat_id`, since the dump records the base-season UUID), computes
+  the raw + projection-quartile-de-biased residual, EB-shrinks per coach, and upserts
+  **`coach_season_cae`** (per team-season: `cae_raw`, `cae_debiased` — the sparkline) +
+  **`coach_ratings`** (career: `cae_raw_mean`, `cae_shrunk`, `cae_adj_mean`, `cae_adj_shrunk`,
+  `n_seasons`, `reliability`, `ci_low/high`, `first/last_season`). Offline Python (reuses the
+  backtest; `cae_feasibility.py` metrics are the regression guards); promote to Rust only if it
+  needs in-season refresh. `--write` gates on the guards.
 - **API**: `GET /api/coaches` (leaderboard), `GET /api/coaches/:id` (tenure, team history,
   per-season CAE sparkline), and a coach field on `GET /api/teams/:id`.
 - **Frontend**: `/coaches` leaderboard page (shrunk CAE, tenure, teams, sparkline); coach card on
@@ -120,9 +132,15 @@ bands (new-coach teams are 1.12× noisier — the PR E salvage), not a point fea
   Baptist→Christian** rename is season-dependent and stays unmatched for pre-rename seasons —
   re-resolve via `natstat_id` continuity in PR2 if those team-seasons matter. Rick ≠ Richard
   Pitino verified distinct. The flag is `coach[Y]≠coach[Y−1]` over the same table.
-- **PR 2 — CAE computation.** Persist the roster-only projection, per-quartile de-bias, EB
-  shrinkage → `coach_ratings`. Offline Python first; `cae_feasibility.py` thresholds as guards
-  (ICC>0, positive split-half, top-list face validity, no prestige correlation post-de-bias).
+- **PR 2 — CAE computation. SHIPPED 2026-05-31.** Migration `025_coach_ratings.sql`
+  (`coach_season_cae` + `coach_ratings`), `training/compute_cae.py`. Result: 1,326 team-seasons
+  joined (100% of the 5-season backtest via the `natstat_id` hop), **491 coach ratings**, 265
+  coaches with ≥3 seasons. Headline = RAW (coach×program); guards pass on raw (**ICC 0.135,
+  split-half +0.114 / z≈2.1**). Top-15 face validity: Schertz, R. Pitino, DeVries, Sendek, Calhoun,
+  Golden (Florida), Willard (Maryland), Collins (Northwestern) — mid-major overachievers + elite
+  developers, *no* blue-blood dominance; bottom is struggling low-majors. Key build decision: ship
+  RAW, store the projection-quartile-de-biased value as the conservative prestige-adjusted lower
+  bound (`cae_adj_*`) — see §4.2. Re-run: `python3 compute_cae.py --write`.
 - **PR 3 — surfaces.** `/api/coaches` + `/coaches` page + TeamDetail coach card.
 - **PR 4 (optional/later).** Recruiting-inclusive variant; extend the backtest to pre-2022 to
   raise reliability; the separately-gated predictive-feature test.
