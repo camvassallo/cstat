@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-05-31T19:15:51.704487Z",
+  "denominator": "phase_b",
+  "headline": "raw (coach\u00d7program over-expectation)",
+  "n_team_seasons": 1326,
+  "n_coaches": 491,
+  "variance_components_raw": {
+    "s2w": 52.710560355263,
+    "s2b": 8.2493879713,
+    "icc": 0.13532472053794983,
+    "k": 6.389632847751308,
+    "C": 364,
+    "N": 1199
+  },
+  "variance_components_debiased": {
+    "s2w": 54.98357233707353,
+    "s2b": 5.289568693778926,
+    "icc": 0.08775996411189713,
+    "k": 10.394717512930656,
+    "C": 364,
+    "N": 1199
+  },
+  "guards": {
+    "icc": 0.13532472053794983,
+    "split_half_raw": 0.113780803862406,
+    "split_half_debiased": 0.048811832805892894,
+    "split_half_n": 336,
+    "prestige_corr": 0.4061509234066953,
+    "passed": true
+  },
+  "debias_buckets": [
+    {
+      "q": 1,
+      "n": 331,
+      "phase_b_lo": -27.07166290283203,
+      "phase_b_hi": -9.544242858886719,
+      "mean_resid": -1.6796913953706227
+    },
+    {
+      "q": 2,
+      "n": 332,
+      "phase_b_lo": -9.527294158935547,
+      "phase_b_hi": -2.6800520420074463,
+      "mean_resid": -1.70448533296585
+    },
+    {
+      "q": 3,
+      "n": 331,
+      "phase_b_lo": -2.647864580154419,
+      "phase_b_hi": 9.40172290802002,
+      "mean_resid": -0.04502835583245659
+    },
+    {
+      "q": 4,
+      "n": 332,
+      "phase_b_lo": 9.40538501739502,
+      "phase_b_hi": 36.935123443603516,
+      "mean_resid": -0.15829086246260682
+    }
+  ],
+  "top15": [
+    {
+      "coach": "Josh Schertz",
+      "n": 4,
+      "raw_mean": 11.13228532075882,
+      "shrunk": 4.285920584063083,
+      "ci_low": -0.128815920453607,
+      "ci_high": 8.700657088579774,
+      "first_season": 2023,
+      "last_season": 2026
+    },
+    {
+      "coach": "Richard Pitino",
+      "n": 5,
+      "raw_mean": 9.117415351867674,
+      "shrunk": 4.002506258868456,
+      "ci_low": -0.2139735564028955,
+      "ci_high": 8.218986074139806,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Darian DeVries",
+      "n": 4,
+      "raw_mean": 10.096661281585693,
+      "shrunk": 3.8872061908408924,
+      "ci_low": -0.5275303136757978,
+      "ci_high": 8.301942695357582,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Herb Sendek",
+      "n": 4,
+      "raw_mean": 8.063993453979492,
+      "shrunk": 3.1046307688244563,
+      "ci_low": -1.3101057356922339,
+      "ci_high": 7.519367273341146,
+      "first_season": 2022,
+      "last_season": 2025
+    },
+    {
+      "coach": "Jerrod Calhoun",
+      "n": 5,
+      "raw_mean": 6.734997799396515,
+      "shrunk": 2.9566351652530343,
+      "ci_low": -1.2598446500183171,
+      "ci_high": 7.173114980524385,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Todd Golden",
+      "n": 5,
+      "raw_mean": 6.48227430343628,
+      "shrunk": 2.845690633792509,
+      "ci_low": -1.3707891814788424,
+      "ci_high": 7.06217044906386,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Mark Byington",
+      "n": 5,
+      "raw_mean": 6.348818106651306,
+      "shrunk": 2.787103935446336,
+      "ci_low": -1.4293758798250153,
+      "ci_high": 7.003583750717688,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Randy Bennett",
+      "n": 3,
+      "raw_mean": 8.598480733235677,
+      "shrunk": 2.747225862604915,
+      "ci_low": -1.8966497923011545,
+      "ci_high": 7.391101517510984,
+      "first_season": 2022,
+      "last_season": 2025
+    },
+    {
+      "coach": "Takayo Siddle",
+      "n": 5,
+      "raw_mean": 6.008921236991883,
+      "shrunk": 2.6378906665890653,
+      "ci_low": -1.578589148682286,
+      "ci_high": 6.854370481860417,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Danny Sprinkle",
+      "n": 5,
+      "raw_mean": 5.679987230300903,
+      "shrunk": 2.493490047584072,
+      "ci_low": -1.7229897676872796,
+      "ci_high": 6.709969862855424,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Will Wade",
+      "n": 4,
+      "raw_mean": 6.404551148414611,
+      "shrunk": 2.465746862190915,
+      "ci_low": -1.9489896423257753,
+      "ci_high": 6.880483366707605,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Mark Madsen",
+      "n": 5,
+      "raw_mean": 5.561683449745178,
+      "shrunk": 2.4415551950137004,
+      "ci_low": -1.774924620257651,
+      "ci_high": 6.658035010285052,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Casey Alexander",
+      "n": 4,
+      "raw_mean": 6.241660851240157,
+      "shrunk": 2.4030342333381216,
+      "ci_low": -2.0117022711785686,
+      "ci_high": 6.817770737854811,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Kevin Willard",
+      "n": 3,
+      "raw_mean": 7.439910252888997,
+      "shrunk": 2.3770610758238826,
+      "ci_low": -2.2668145790821868,
+      "ci_high": 7.020936730729952,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Chris Collins",
+      "n": 5,
+      "raw_mean": 5.247238388061524,
+      "shrunk": 2.3035151607619655,
+      "ci_low": -1.912964654509386,
+      "ci_high": 6.519994976033317,
+      "first_season": 2022,
+      "last_season": 2026
+    }
+  ]
+}
