@@ -8,7 +8,7 @@ import PlayerProgression from './pages/PlayerProgression';
 import PlayerCompare from './pages/PlayerCompare';
 import Predict from './pages/Predict';
 import Archetypes from './pages/Archetypes';
-import Projected from './pages/Projected';
+import Projected, { ProjectedYearRedirect } from './pages/Projected';
 import Draft from './pages/Draft';
 
 export default function App() {
@@ -24,7 +24,10 @@ export default function App() {
           <Route path="/players/:id/progression" element={<PlayerProgression />} />
           <Route path="/predict" element={<Predict />} />
           <Route path="/archetypes" element={<Archetypes />} />
-          <Route path="/projected/:year" element={<Projected />} />
+          <Route path="/projected" element={<Projected />} />
+          {/* Back-compat: the page used to live at /projected/:year before
+              the navbar season picker took over via ?season=. */}
+          <Route path="/projected/:year" element={<ProjectedYearRedirect />} />
           <Route path="/draft" element={<Draft />} />
         </Route>
       </Routes>

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, Navigate } from 'react-router-dom';
+import { useParams, Navigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchProjections, type ProjectedTeam } from '../api/client';
 import { gridTheme } from '../theme';
 import { SeasonLink } from '../components/SeasonLink';
-import { AVAILABLE_SEASONS_FALLBACK } from '../components/season';
+import { AVAILABLE_SEASONS_FALLBACK, setPageSeasons, useSeason } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 
 // The upcoming (not-yet-played) season — the default projection target.
@@ -341,19 +341,31 @@ function buildColumns(
   ];
 }
 
-/// Routing shim — validate the `:year` param before mounting the data
-/// view, so an out-of-range URL redirects instead of 400-ing the API.
-/// Keeps the hook-bearing `ProjectionView` mounted at a stable position.
+/// Routing shim — the navbar season picker drives this page through the
+/// global `?season=` param (same control the rest of the site uses). We
+/// read the year from the very same `useSeason()` the navbar binds to,
+/// so the two can't disagree — crucially, when the user selects the
+/// default season the picker drops the param, and `useSeason()` resolves
+/// the absent param right back to that default. The `Future` nav link
+/// carries `?season=2027`, so the page still *lands* on the upcoming
+/// forecast. A non-projectable season (e.g. one carried over from
+/// elsewhere) redirects to the forecast instead of 400-ing the API.
 export default function Projected() {
-  const { year: yearParam } = useParams<{ year: string }>();
-  const year = Number(yearParam);
+  const { season: year } = useSeason();
   if (!PROJECTABLE_YEARS.includes(year)) {
-    return <Navigate to={`/projected/${UPCOMING_YEAR}`} replace />;
+    return <Navigate to={`/projected?season=${UPCOMING_YEAR}`} replace />;
   }
   // `key={year}` remounts the view on a year switch, so its state
   // (teams / error) resets to the loading state without an in-effect
   // setState reset.
   return <ProjectionView key={year} year={year} />;
+}
+
+/// Back-compat shim for the page's old `/projected/:year` home, before
+/// the navbar picker took over via `?season=`. Redirects to the new form.
+export function ProjectedYearRedirect() {
+  const { year } = useParams<{ year: string }>();
+  return <Navigate to={`/projected?season=${year ?? UPCOMING_YEAR}`} replace />;
 }
 
 function ProjectionView({ year }: { year: number }) {
@@ -362,7 +374,15 @@ function ProjectionView({ year }: { year: number }) {
   const [baseSeason, setBaseSeason] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const isMobile = useIsMobile();
-  const navigate = useNavigate();
+
+  // Publish the projectable years to the site-wide season picker in the
+  // navbar (the same mechanism the team/player detail pages use). The
+  // navbar dropdown then lists the forecast + backtest years and its
+  // selection flows back in through `?season=`. Released on unmount.
+  useEffect(() => {
+    setPageSeasons(PROJECTABLE_YEARS);
+    return () => setPageSeasons(null);
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -427,27 +447,9 @@ function ProjectionView({ year }: { year: number }) {
   return (
     <div className="p-4">
       <div className="flex flex-wrap items-center gap-3 mb-2">
+        {/* The year is driven by the site-wide season picker in the navbar
+            (see the `setPageSeasons` effect above) — no page-local picker. */}
         <h1 className="text-2xl font-bold">Projected {seasonLabel(year)}</h1>
-        {/* Season selector — the same dropdown style as the site-wide
-            season picker. Page-local (it navigates the /projected/:year
-            route rather than the ?season= param) because the projectable
-            set includes the upcoming, not-yet-played forecast year that
-            isn't in the global season list. */}
-        <label className="flex items-center gap-2 text-xs text-gray-400">
-          <span className="uppercase tracking-wide">Season</span>
-          <select
-            value={year}
-            onChange={(e) => navigate(`/projected/${e.target.value}`)}
-            className="bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:border-blue-500"
-          >
-            {PROJECTABLE_YEARS.map((y) => (
-              <option key={y} value={y}>
-                {seasonLabel(y)}
-                {y === UPCOMING_YEAR ? ' (forecast)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
       <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 mb-3 leading-relaxed">
         <strong className="text-amber-300">v3 honesty caveats:</strong>{' '}

@@ -1019,7 +1019,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal commits +
         HS-recruit class commits. Recruits use a tier-mean profile keyed on 247 composite rank — see
         the{' '}
-        <SeasonLink to="/projected/2027" className="text-amber-200 underline hover:text-amber-100">
+        <SeasonLink to="/projected?season=2027" className="text-amber-200 underline hover:text-amber-100">
           Projected {seasonLabel} grid
         </SeasonLink>{' '}
         for full methodology + cross-team rankings.
