@@ -1119,12 +1119,51 @@ export interface CoachLeaderboardRow {
   last_season: number;
   last_team_id: string | null;
   last_team_name: string | null;
+  last_team_season: number | null;
 }
 
-export function fetchCoaches(params: { minSeasons?: number; limit?: number } = {}) {
-  return fetchJson<{ min_seasons: number; coaches: CoachLeaderboardRow[] }>('/coaches', {
+export function fetchCoaches(
+  params: { minSeasons?: number; limit?: number; season?: number } = {},
+) {
+  return fetchJson<{
+    mode: 'career';
+    min_seasons: number;
+    season: number | null;
+    available_seasons: number[];
+    coaches: CoachLeaderboardRow[];
+  }>('/coaches', {
     min_seasons: params.minSeasons?.toString(),
     limit: params.limit?.toString(),
+    season: params.season?.toString(),
+  });
+}
+
+// Season-mode leaderboard: that year's single-season CAE, ranked by raw
+// residual. Noisier than the career board (single seasons are mostly noise) —
+// framed as a "who overachieved this year" view, not a trustworthy rating.
+export interface CoachSeasonLeaderboardRow {
+  coach_id: string;
+  name: string;
+  season: number;
+  team_id: string | null;
+  team_name: string | null;
+  actual_adjem: number;
+  projection: number;
+  cae_raw: number;
+  cae_debiased: number;
+  is_new_hc: boolean | null;
+}
+
+export function fetchCoachSeasonBoard(season: number, limit?: number) {
+  return fetchJson<{
+    mode: 'season';
+    season: number;
+    available_seasons: number[];
+    coaches: CoachSeasonLeaderboardRow[];
+  }>('/coaches', {
+    mode: 'season',
+    season: season.toString(),
+    limit: limit?.toString(),
   });
 }
 

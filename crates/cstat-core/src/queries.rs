@@ -2103,19 +2103,28 @@ pub struct CoachLeaderboardRow {
     pub n_seasons: i32,
     pub first_season: i32,
     pub last_season: i32,
-    /// The team the coach held in their most recent scored season (for the
-    /// "current team" column + link). NULL if no matched team row.
+    /// The team shown in the leaderboard's "Team" column. When the query is
+    /// season-scoped this is the team the coach held *that* season; otherwise
+    /// their most recent scored team. NULL if no matched team row.
     pub last_team_id: Option<Uuid>,
     pub last_team_name: Option<String>,
+    /// The season of `last_team_*`, so the team link deep-links to the right
+    /// season-scoped page. NULL when there's no matched team.
+    pub last_team_season: Option<i32>,
 }
 
-/// Career leaderboard ranked by `cae_shrunk` DESC. `min_seasons` defaults to 3
-/// at the API layer (thin tenures shrink toward 0 and would otherwise top the
-/// board on noise); `limit` caps the page size.
+/// Career leaderboard ranked by `cae_shrunk` DESC. The CAE rating is always
+/// career-aggregated; `season`, when set, scopes the *list* to coaches who
+/// actually coached that season (and shows that season's team), so the navbar
+/// season picker is meaningful without changing the rating semantics. `None`
+/// season = all-time. `min_seasons` defaults to 3 at the API layer (thin
+/// tenures shrink toward 0 and would otherwise top the board on noise); `limit`
+/// caps the page size.
 pub async fn get_coach_leaderboard(
     pool: &PgPool,
     min_seasons: i32,
     limit: i64,
+    season: Option<i32>,
 ) -> Result<Vec<CoachLeaderboardRow>, sqlx::Error> {
     sqlx::query_as::<_, CoachLeaderboardRow>(
         r#"
@@ -2132,26 +2141,118 @@ pub async fn get_coach_leaderboard(
             cr.first_season,
             cr.last_season,
             lt.team_id      AS last_team_id,
-            lt.team_name    AS last_team_name
+            lt.team_name    AS last_team_name,
+            lt.team_season  AS last_team_season
         FROM coach_ratings cr
         JOIN coaches c ON c.id = cr.coach_id
         LEFT JOIN LATERAL (
-            SELECT cs.team_id, COALESCE(t.short_name, t.name) AS team_name
+            SELECT cs.team_id, cs.season AS team_season,
+                   COALESCE(t.short_name, t.name) AS team_name
             FROM coach_seasons cs
             LEFT JOIN teams t ON t.id = cs.team_id
             WHERE cs.coach_id = c.id AND cs.team_id IS NOT NULL
-            ORDER BY cs.season DESC
+            -- Prefer the selected season's team when scoped; else most recent.
+            ORDER BY (CASE WHEN $3::int IS NOT NULL AND cs.season = $3 THEN 0 ELSE 1 END),
+                     cs.season DESC
             LIMIT 1
         ) lt ON TRUE
         WHERE cr.n_seasons >= $1
+          AND (
+            $3::int IS NULL
+            OR EXISTS (
+              SELECT 1 FROM coach_seasons cs2
+              WHERE cs2.coach_id = c.id AND cs2.season = $3
+            )
+          )
         ORDER BY cr.cae_shrunk DESC
         LIMIT $2
         "#,
     )
     .bind(min_seasons)
     .bind(limit)
+    .bind(season)
     .fetch_all(pool)
     .await
+}
+
+/// One row of the *season* leaderboard (the "This season" toggle): a coach's
+/// single-season CAE for the selected year, ranked by `cae_raw` DESC. This view
+/// is noisier than the career board on purpose — single-season residuals are
+/// mostly noise (which is why the career view shrinks them) — so it reads as a
+/// "who overachieved this year" board, not a trustworthy rating.
+#[derive(Debug, Serialize, FromRow)]
+pub struct CoachSeasonLeaderboardRow {
+    pub coach_id: Uuid,
+    pub name: String,
+    pub season: i32,
+    pub team_id: Option<Uuid>,
+    pub team_name: Option<String>,
+    pub actual_adjem: f64,
+    pub projection: f64,
+    pub cae_raw: f64,
+    pub cae_debiased: f64,
+    pub is_new_hc: Option<bool>,
+}
+
+/// Single-season CAE leaderboard for `season`, ranked by raw residual DESC.
+pub async fn get_coach_season_leaderboard(
+    pool: &PgPool,
+    season: i32,
+    limit: i64,
+) -> Result<Vec<CoachSeasonLeaderboardRow>, sqlx::Error> {
+    sqlx::query_as::<_, CoachSeasonLeaderboardRow>(
+        r#"
+        SELECT
+            c.id            AS coach_id,
+            c.canonical_name AS name,
+            csc.season,
+            tm.team_id,
+            tm.team_name,
+            csc.actual_adjem,
+            csc.projection,
+            csc.cae_raw,
+            csc.cae_debiased,
+            tm.is_new_hc
+        FROM coach_season_cae csc
+        JOIN coaches c ON c.id = csc.coach_id
+        -- Dedup the coach_seasons join to ONE team row: coachdict carries
+        -- redundant name variants for some teams (e.g. "Tennessee Martin" +
+        -- "UT Martin", "Saint Joseph's" + "St. Joseph's"), which would otherwise
+        -- fan a coach out to two leaderboard rows — one with the matched team,
+        -- one with an unmatched (NULL) team. Prefer the matched variant.
+        LEFT JOIN LATERAL (
+            SELECT cs.team_id, cs.is_new_hc,
+                   COALESCE(t.short_name, t.name) AS team_name
+            FROM coach_seasons cs
+            LEFT JOIN teams t ON t.id = cs.team_id
+            WHERE cs.coach_id = csc.coach_id AND cs.season = csc.season
+            ORDER BY (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
+            LIMIT 1
+        ) tm ON TRUE
+        WHERE csc.season = $1
+        ORDER BY csc.cae_raw DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(season)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Seasons that have scored CAE rows — used to constrain the navbar season
+/// picker on the /coaches page to the metric's coverage (2022–2026 today),
+/// newest first. The leaderboard is bounded by roster-projection coverage, not
+/// coachdict coverage.
+pub async fn get_coach_cae_seasons(pool: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT season FROM coach_season_cae ORDER BY season DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(s,)| s).collect())
 }
 
 /// Career-level rating row for the coach detail page header.
@@ -2226,17 +2327,27 @@ pub async fn get_coach_seasons(
         r#"
         SELECT
             csc.season,
-            cs.team_id,
-            COALESCE(t.short_name, t.name) AS team_name,
+            tm.team_id,
+            tm.team_name,
             csc.actual_adjem,
             csc.projection,
             csc.cae_raw,
             csc.cae_debiased,
-            cs.is_new_hc
+            tm.is_new_hc
         FROM coach_season_cae csc
-        LEFT JOIN coach_seasons cs
-            ON cs.coach_id = csc.coach_id AND cs.season = csc.season
-        LEFT JOIN teams t ON t.id = cs.team_id
+        -- One team row per season — coachdict name-variant dedup, prefer the
+        -- matched team (see get_coach_season_leaderboard for the full rationale).
+        -- Without this, the detail sparkline doubles a season for affected
+        -- coaches (Shulman, Donahue, Gallagher, …).
+        LEFT JOIN LATERAL (
+            SELECT cs.team_id, cs.is_new_hc,
+                   COALESCE(t.short_name, t.name) AS team_name
+            FROM coach_seasons cs
+            LEFT JOIN teams t ON t.id = cs.team_id
+            WHERE cs.coach_id = csc.coach_id AND cs.season = csc.season
+            ORDER BY (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
+            LIMIT 1
+        ) tm ON TRUE
         WHERE csc.coach_id = $1
         ORDER BY csc.season
         "#,
