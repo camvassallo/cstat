@@ -505,14 +505,12 @@ export function fetchRecruits(year: number) {
 }
 
 /// One synthesized HS recruit from the route's `top_recruits` payload.
-/// Source: `recruits` table joined to committed_team_id; the tier maps
-/// to a freshman impact profile (T1 elite / T2 top-100 / T3 / T4).
+/// Source: `recruits` table joined to committed_team_id. Surfaced in the
+/// Recruits-column hover (name + composite rank + star rating).
 export interface ProjectedRecruit {
   name: string;
   composite_rank: number | null;
   star_rating: number | null;
-  /// Snake-case tier label from the route — `"t1"`, `"t2"`, `"t3"`, `"t4"`.
-  tier: 't1' | 't2' | 't3' | 't4';
 }
 
 export interface ProjectedTeam {
@@ -540,8 +538,6 @@ export interface ProjectedTeam {
   /// Σ *projected* freshman-season CamPom of the recruit class (forward
   /// projection from the freshman-impact model, not prior production).
   recruits_cam_v3_sum: number;
-  /// Per-tier breakdown of the recruits, e.g. `{t1: 1, t2: 2, t3: 0, t4: 0}`.
-  recruits_by_tier: { t1: number; t2: number; t3: number; t4: number };
   /// Up to 5 highest-ranked recruits for UI display.
   top_recruits: ProjectedRecruit[];
   uncertain_count: number;

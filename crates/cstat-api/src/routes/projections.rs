@@ -13,8 +13,8 @@ use axum::{
 use cstat_core::inference::Predictor;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, FreshmanTier, ProjectedRoster, compose_all_projections, load_draft_entrants,
-    load_mock_draft, normalize_player_name, project_returner_cam_v3,
+    DraftScenario, ProjectedRoster, compose_all_projections, load_draft_entrants, load_mock_draft,
+    normalize_player_name, project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -92,10 +92,6 @@ struct ProjectedTeam {
     /// forward projection, not last-season production). The Future grid's
     /// "Recruits" column surfaces this instead of the raw count.
     recruits_cam_v3_sum: f32,
-    /// Per-tier breakdown of the recruit class, e.g. `{"t1": 1, "t2": 2}`.
-    /// Surfaced separately so the UI can render "1× elite · 2× top-100"
-    /// without re-counting client-side.
-    recruits_by_tier: serde_json::Value,
     /// Up to the top 5 recruits by composite_rank for UI display. Each
     /// entry is `{name, composite_rank, star_rating, tier}` from
     /// `RecruitMeta`.
@@ -386,24 +382,6 @@ fn predict_team(
     // sees them via build_roster_impact_features just like returners.
     let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
 
-    // Per-tier counts for the UI breakdown chip.
-    let mut tier_counts: [u32; 4] = [0; 4];
-    for (_, meta) in &p.recruits {
-        let idx = match meta.tier {
-            FreshmanTier::T1 => 0,
-            FreshmanTier::T2 => 1,
-            FreshmanTier::T3 => 2,
-            FreshmanTier::T4 => 3,
-        };
-        tier_counts[idx] += 1;
-    }
-    let recruits_by_tier = json!({
-        "t1": tier_counts[0],
-        "t2": tier_counts[1],
-        "t3": tier_counts[2],
-        "t4": tier_counts[3],
-    });
-
     // Per-cohort Σ CamPom for the UI's roster-flow columns. Returning
     // uses prior-season production; recruits use the synthesized
     // freshman-model projection their PlayerRow already carries (no prior
@@ -436,7 +414,6 @@ fn predict_team(
                 "name": m.name,
                 "composite_rank": m.composite_rank,
                 "star_rating": m.star_rating,
-                "tier": m.tier,
             })
         })
         .collect();
@@ -459,7 +436,6 @@ fn predict_team(
         arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
         recruits_count: p.recruits.len(),
         recruits_cam_v3_sum,
-        recruits_by_tier: recruits_by_tier.clone(),
         top_recruits: top_recruits.clone(),
         uncertain_count: p.uncertain.len(),
         departures_count: p.departures.len(),
