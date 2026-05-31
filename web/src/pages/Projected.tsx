@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, Navigate } from 'react-router-dom';
+import { useParams, Navigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchProjections, type ProjectedTeam } from '../api/client';
 import { gridTheme } from '../theme';
 import { SeasonLink } from '../components/SeasonLink';
-import { AVAILABLE_SEASONS_FALLBACK } from '../components/season';
+import { AVAILABLE_SEASONS_FALLBACK, setPageSeasons, useSeason } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 
 // The upcoming (not-yet-played) season — the default projection target.
@@ -60,47 +60,59 @@ function nullsLast(
   return a - b;
 }
 
-// Render the floor → ceiling band as a small horizontal bar. Width
-// proportional to (ceiling - floor); flagged with a tooltip when the
-// spread is negative (declared cohort is a net drag per the model —
-// counterintuitive but a real signal worth surfacing per ROADMAP §5b
-// spot-check notes).
-function bandRenderer(p: { data?: ProjectedTeam }) {
-  const t = p.data;
-  if (!t) return null;
-  if (t.too_thin) {
+type CamSumField =
+  | 'returning_cam_v3_sum'
+  | 'arrivals_cam_v3_sum'
+  | 'recruits_cam_v3_sum'
+  | 'departures_cam_v3_sum';
+type CamCountField =
+  | 'returning_count'
+  | 'arrivals_count'
+  | 'recruits_count'
+  | 'departures_count';
+
+// Render a Σ-CamPom roster-flow column as a signed number. `polarity`
+// sets the framing:
+//   gain — incoming talent (green +); a negative Σ flips to a red loss.
+//   loss — departing talent (red −); the stored Σ is positive (talent
+//          leaving), so we negate it for display.
+//   base — the standing cohort (returning / recruits). Neutral slate;
+//          it's "what you have", not a flow, so no gain/loss coloring.
+// The player count and raw Σ live in the tooltip. `campomBasis` labels
+// whether the Σ is prior-season production or a forward projection.
+function camSumRenderer(
+  sumField: CamSumField,
+  countField: CamCountField,
+  polarity: 'gain' | 'loss' | 'base',
+  noun: string,
+  campomBasis: string,
+) {
+  return (p: { data?: ProjectedTeam }) => {
+    const t = p.data;
+    // ΣCamPom is a fact about the roster (not a gated prediction), so it
+    // renders even for thin-roster teams — for a gutted roster the
+    // departures total is exactly the signal that explains the thinness.
+    if (!t || t[countField] === 0) {
+      return <span className="text-slate-600 text-xs">—</span>;
+    }
+    const sum = t[sumField];
+    const effect = polarity === 'loss' ? -sum : sum;
+    const tone =
+      polarity === 'base'
+        ? 'text-slate-300'
+        : effect >= 0
+          ? 'text-emerald-400'
+          : 'text-rose-400';
+    const text = effect >= 0 ? `+${effect.toFixed(1)}` : effect.toFixed(1);
     return (
-      <span className="text-slate-500 text-xs italic" title="Roster too thin to project — <7 qualifying players (returning + arrivals + recruits). See honesty banner.">
-        thin roster
+      <span
+        className={`text-xs font-mono font-semibold ${tone}`}
+        title={`${t[countField]} ${noun} · Σ ${campomBasis} CamPom ${sum >= 0 ? '+' : ''}${sum.toFixed(1)}`}
+      >
+        {text}
       </span>
     );
-  }
-  const f = t.floor_adj_em;
-  const c = t.ceiling_adj_em;
-  if (f == null || c == null) return <span className="text-slate-600">—</span>;
-  const spread = c - f;
-  const isNegative = spread < -0.1;
-  const collapsed = Math.abs(spread) < 0.1;
-  return (
-    <div
-      className="flex items-center gap-2"
-      title={
-        isNegative
-          ? `Declared cohort is a net drag per the model (floor ${f.toFixed(1)} > ceiling ${c.toFixed(1)}). Probably means the declared players have box-score profiles the model penalizes; surface as-is rather than hiding.`
-          : `Floor ${f.toFixed(1)} → Ceiling ${c.toFixed(1)} (range = ${spread.toFixed(1)} AdjEM)`
-      }
-    >
-      <span className={`text-xs font-mono ${isNegative ? 'text-amber-400' : 'text-slate-400'}`}>
-        {f.toFixed(1)}
-      </span>
-      <span
-        className={`inline-block h-1 rounded ${collapsed ? 'w-1' : 'w-12'} ${isNegative ? 'bg-amber-700' : 'bg-slate-600'}`}
-      />
-      <span className={`text-xs font-mono ${isNegative ? 'text-amber-400' : 'text-slate-400'}`}>
-        {c.toFixed(1)}
-      </span>
-    </div>
-  );
+  };
 }
 
 // `showActual` adds the Actual + projection-error columns — populated
@@ -191,12 +203,12 @@ function buildColumns(
       ),
     },
     {
-      headerName: 'Mid AdjEM',
+      headerName: 'Proj AdjEM',
       field: 'midpoint_adj_em',
       ...flexCol(1, 100),
       sort: 'desc',
       headerTooltip:
-        "Probability-weighted blend of the floor and ceiling bounds (by the declared-draft cohort's mock-draft-implied odds of returning), then blended 55/45 with last year's actual AdjEM (45% the Phase B impact model's projected-roster output, 55% last year).",
+        "The projected AdjEM for this roster: the Phase B impact model's projected-roster output blended 55/45 with last season's actual AdjEM (55% last year, 45% the model).",
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         const chip = adjEmChip(p.value);
@@ -250,116 +262,110 @@ function buildColumns(
       },
     },
     {
-      headerName: 'Floor ↔ Ceiling',
-      colId: 'band',
-      ...flexCol(2, 160),
-      sortable: false,
+      headerName: 'Returning',
+      colId: 'returning',
+      ...flexCol(1, 120),
       headerTooltip:
-        'Floor = AdjEM if every declared NBA-draft player is gone. Ceiling = if they all withdraw and return. Spread is roughly proportional to the count of uncertain players.',
-      cellRenderer: bandRenderer,
-    },
-    {
-      headerName: 'Ret',
-      field: 'returning_count',
-      ...flexCol(1, 60),
-      headerTooltip:
-        'Returning players (excludes Sr, outbound portal, firm draft departures, declared draft cohort)',
-      cellRenderer: (p: { value: number }) => (
-        <span className="text-slate-300 text-xs">{p.value}</span>
+        'Returning players — total CamPom retained, summing each returner\'s prior-season production (excludes graduating seniors, outbound portal, and firm draft departures). Hover for the headcount.',
+      comparator: (_a, _b, na, nb) =>
+        ((na.data as ProjectedTeam | undefined)?.returning_cam_v3_sum ?? 0) -
+        ((nb.data as ProjectedTeam | undefined)?.returning_cam_v3_sum ?? 0),
+      cellRenderer: camSumRenderer(
+        'returning_cam_v3_sum',
+        'returning_count',
+        'base',
+        'returning',
+        'prior-season',
       ),
     },
     {
-      headerName: 'Arr',
-      field: 'arrivals_count',
-      ...flexCol(1, 60),
-      headerTooltip: 'Incoming portal arrivals committed to this team',
-      cellRenderer: (p: { value: number }) => (
-        <span className="text-emerald-400 text-xs">{p.value > 0 ? `+${p.value}` : '0'}</span>
+      headerName: 'Incoming transfers',
+      colId: 'incoming',
+      ...flexCol(1, 130),
+      headerTooltip:
+        'Incoming portal arrivals — total CamPom gained, summing each arrival\'s prior-school production. Hover for the headcount.',
+      comparator: (_a, _b, na, nb) =>
+        ((na.data as ProjectedTeam | undefined)?.arrivals_cam_v3_sum ?? 0) -
+        ((nb.data as ProjectedTeam | undefined)?.arrivals_cam_v3_sum ?? 0),
+      cellRenderer: camSumRenderer(
+        'arrivals_cam_v3_sum',
+        'arrivals_count',
+        'gain',
+        'transfers in',
+        'prior-season',
       ),
     },
     {
-      headerName: 'Rec',
-      field: 'recruits_count',
-      ...flexCol(2, 140),
+      headerName: 'Recruits',
+      colId: 'recruits',
+      ...flexCol(1, 130),
       headerTooltip:
-        "Incoming HS recruits committed to this team. Per-tier breakdown by cstat's freshman-impact model: each recruit is reassigned to T1 (≈+9 projected CamPom) / T2 (≈+2.4) / T3 (≈+0.7) / T4 (≈-0.6) based on which tier centroid is closest to their model-predicted freshman CamPom. The recruit's continuous prediction surfaces on the Recruits tab.",
-      // Sort by the impactful end of the class — T1 weighted 3×, T2 1× —
-      // not raw count, so one elite recruit outranks five walk-ons.
-      comparator: (_a, _b, na, nb) => {
-        const a = na.data as ProjectedTeam | undefined;
-        const b = nb.data as ProjectedTeam | undefined;
-        const wa = (a?.recruits_by_tier?.t1 ?? 0) * 3 + (a?.recruits_by_tier?.t2 ?? 0);
-        const wb = (b?.recruits_by_tier?.t1 ?? 0) * 3 + (b?.recruits_by_tier?.t2 ?? 0);
-        return wa - wb;
-      },
+        "Incoming HS recruits — total projected freshman-season CamPom from cstat's freshman-impact model (recruits have no prior season, so this is a forward projection). Hover for the top commits by composite rank.",
+      comparator: (_a, _b, na, nb) =>
+        ((na.data as ProjectedTeam | undefined)?.recruits_cam_v3_sum ?? 0) -
+        ((nb.data as ProjectedTeam | undefined)?.recruits_cam_v3_sum ?? 0),
       cellRenderer: (p: { data?: ProjectedTeam }) => {
         const t = p.data;
         if (!t || t.recruits_count === 0) {
           return <span className="text-slate-600 text-xs">—</span>;
         }
-        const by = t.recruits_by_tier;
-        const top = t.top_recruits;
-        const tooltip = top.length
-          ? top
-              .map((r) => `${r.composite_rank ? `#${r.composite_rank} ` : ''}${r.name} (${r.star_rating ?? '?'}★)`)
-              .join('\n')
-          : 'recruits';
+        const sum = t.recruits_cam_v3_sum;
+        const names = t.top_recruits
+          .map((r) => `${r.composite_rank ? `#${r.composite_rank} ` : ''}${r.name} (${r.star_rating ?? '?'}★)`)
+          .join('\n');
+        const tooltip = `${t.recruits_count} recruits · Σ projected CamPom ${sum >= 0 ? '+' : ''}${sum.toFixed(1)}${names ? `\n${names}` : ''}`;
         return (
-          <span className="inline-flex items-center gap-1 text-xs" title={tooltip}>
-            {by.t1 > 0 && (
-              <span className="px-1.5 py-0.5 rounded border border-amber-700/60 bg-amber-900/30 text-amber-300">
-                {by.t1}×T1
-              </span>
-            )}
-            {by.t2 > 0 && (
-              <span className="px-1.5 py-0.5 rounded border border-cyan-700/60 bg-cyan-900/30 text-cyan-300">
-                {by.t2}×T2
-              </span>
-            )}
-            {by.t3 > 0 && <span className="text-slate-400">{by.t3}×T3</span>}
-            {by.t4 > 0 && <span className="text-slate-500">{by.t4}×T4</span>}
+          <span className="text-xs font-mono font-semibold text-slate-300" title={tooltip}>
+            {sum >= 0 ? `+${sum.toFixed(1)}` : sum.toFixed(1)}
           </span>
         );
       },
     },
     {
-      headerName: 'Unc',
-      field: 'uncertain_count',
-      ...flexCol(1, 60),
+      headerName: 'Departures',
+      colId: 'departures',
+      ...flexCol(1, 130),
       headerTooltip:
-        "Declared NBA-draft entrants with status still pending (treated as 'gone' in floor, 'staying' in ceiling)",
-      cellRenderer: (p: { value: number }) =>
-        p.value > 0 ? (
-          <span className="text-amber-400 text-xs">?{p.value}</span>
-        ) : (
-          <span className="text-slate-600 text-xs">—</span>
-        ),
-    },
-    {
-      headerName: 'Dep',
-      field: 'departures_count',
-      ...flexCol(1, 60),
-      headerTooltip: 'Sr graduations + outbound portal + firm draft departures',
-      cellRenderer: (p: { value: number }) => (
-        <span className="text-rose-400 text-xs">−{p.value}</span>
+        'Graduating seniors + outbound portal + firm draft departures — total CamPom leaving the program, summing each departure\'s prior-season production. Hover for the headcount.',
+      comparator: (_a, _b, na, nb) =>
+        ((na.data as ProjectedTeam | undefined)?.departures_cam_v3_sum ?? 0) -
+        ((nb.data as ProjectedTeam | undefined)?.departures_cam_v3_sum ?? 0),
+      cellRenderer: camSumRenderer(
+        'departures_cam_v3_sum',
+        'departures_count',
+        'loss',
+        'departures',
+        'prior-season',
       ),
     },
   ];
 }
 
-/// Routing shim — validate the `:year` param before mounting the data
-/// view, so an out-of-range URL redirects instead of 400-ing the API.
-/// Keeps the hook-bearing `ProjectionView` mounted at a stable position.
+/// Routing shim — the navbar season picker drives this page through the
+/// global `?season=` param (same control the rest of the site uses). We
+/// read the year from the very same `useSeason()` the navbar binds to,
+/// so the two can't disagree — crucially, when the user selects the
+/// default season the picker drops the param, and `useSeason()` resolves
+/// the absent param right back to that default. The `Future` nav link
+/// carries `?season=2027`, so the page still *lands* on the upcoming
+/// forecast. A non-projectable season (e.g. one carried over from
+/// elsewhere) redirects to the forecast instead of 400-ing the API.
 export default function Projected() {
-  const { year: yearParam } = useParams<{ year: string }>();
-  const year = Number(yearParam);
+  const { season: year } = useSeason();
   if (!PROJECTABLE_YEARS.includes(year)) {
-    return <Navigate to={`/projected/${UPCOMING_YEAR}`} replace />;
+    return <Navigate to={`/projected?season=${UPCOMING_YEAR}`} replace />;
   }
   // `key={year}` remounts the view on a year switch, so its state
   // (teams / error) resets to the loading state without an in-effect
   // setState reset.
   return <ProjectionView key={year} year={year} />;
+}
+
+/// Back-compat shim for the page's old `/projected/:year` home, before
+/// the navbar picker took over via `?season=`. Redirects to the new form.
+export function ProjectedYearRedirect() {
+  const { year } = useParams<{ year: string }>();
+  return <Navigate to={`/projected?season=${year ?? UPCOMING_YEAR}`} replace />;
 }
 
 function ProjectionView({ year }: { year: number }) {
@@ -368,7 +374,15 @@ function ProjectionView({ year }: { year: number }) {
   const [baseSeason, setBaseSeason] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const isMobile = useIsMobile();
-  const navigate = useNavigate();
+
+  // Publish the projectable years to the site-wide season picker in the
+  // navbar (the same mechanism the team/player detail pages use). The
+  // navbar dropdown then lists the forecast + backtest years and its
+  // selection flows back in through `?season=`. Released on unmount.
+  useEffect(() => {
+    setPageSeasons(PROJECTABLE_YEARS);
+    return () => setPageSeasons(null);
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -433,36 +447,15 @@ function ProjectionView({ year }: { year: number }) {
   return (
     <div className="p-4">
       <div className="flex flex-wrap items-center gap-3 mb-2">
+        {/* The year is driven by the site-wide season picker in the navbar
+            (see the `setPageSeasons` effect above) — no page-local picker. */}
         <h1 className="text-2xl font-bold">Projected {seasonLabel(year)}</h1>
-        {/* Year selector — switch between the upcoming forecast and the
-            played seasons we can grade it against. */}
-        <div className="inline-flex rounded border border-gray-700 overflow-hidden">
-          {PROJECTABLE_YEARS.map((y) => (
-            <button
-              key={y}
-              type="button"
-              onClick={() => navigate(`/projected/${y}`)}
-              className={`px-2.5 py-1 text-xs font-semibold ${
-                y === year
-                  ? 'bg-blue-900/60 text-blue-200'
-                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-              }`}
-              title={
-                y === UPCOMING_YEAR
-                  ? `${seasonLabel(y)} — upcoming forecast`
-                  : `${seasonLabel(y)} — projected vs actual`
-              }
-            >
-              {seasonLabel(y)}
-            </button>
-          ))}
-        </div>
       </div>
       <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 mb-3 leading-relaxed">
         <strong className="text-amber-300">v3 honesty caveats:</strong>{' '}
         Holistic projection: returners (minus seniors, outbound portal,
-        firm draft departures, declared-draft `?` cohort) + incoming
-        portal commits + <strong>incoming HS recruits</strong>. Every
+        and firm draft departures) + incoming portal commits +{' '}
+        <strong>incoming HS recruits</strong>. Every
         player is scored on a <strong>projected</strong> next-season
         CamPom v3 — the trajectory model for returners and arrivals, the
         freshman-impact model for recruits — so returner growth and

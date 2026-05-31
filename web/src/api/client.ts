@@ -505,14 +505,12 @@ export function fetchRecruits(year: number) {
 }
 
 /// One synthesized HS recruit from the route's `top_recruits` payload.
-/// Source: `recruits` table joined to committed_team_id; the tier maps
-/// to a freshman impact profile (T1 elite / T2 top-100 / T3 / T4).
+/// Source: `recruits` table joined to committed_team_id. Surfaced in the
+/// Recruits-column hover (name + composite rank + star rating).
 export interface ProjectedRecruit {
   name: string;
   composite_rank: number | null;
   star_rating: number | null;
-  /// Snake-case tier label from the route — `"t1"`, `"t2"`, `"t3"`, `"t4"`.
-  tier: 't1' | 't2' | 't3' | 't4';
 }
 
 export interface ProjectedTeam {
@@ -528,17 +526,24 @@ export interface ProjectedTeam {
   /// (ceiling + floor) / 2, or null when the prediction is gated out.
   midpoint_adj_em: number | null;
   returning_count: number;
+  /// Σ base-season CamPom of the returning players (talent retained).
+  returning_cam_v3_sum: number;
   arrivals_count: number;
+  /// Σ base-season CamPom of the incoming portal arrivals (talent gained).
+  arrivals_cam_v3_sum: number;
   /// Number of HS recruits committed to this team (class-of-`base_season`).
   /// Each contributes a synthesized PlayerRow drawn from a tier-mean
   /// freshman profile.
   recruits_count: number;
-  /// Per-tier breakdown of the recruits, e.g. `{t1: 1, t2: 2, t3: 0, t4: 0}`.
-  recruits_by_tier: { t1: number; t2: number; t3: number; t4: number };
+  /// Σ *projected* freshman-season CamPom of the recruit class (forward
+  /// projection from the freshman-impact model, not prior production).
+  recruits_cam_v3_sum: number;
   /// Up to 5 highest-ranked recruits for UI display.
   top_recruits: ProjectedRecruit[];
   uncertain_count: number;
   departures_count: number;
+  /// Σ base-season CamPom across all departures (Sr + portal-out + draft).
+  departures_cam_v3_sum: number;
   /// True when (returning + arrivals + recruits) is below the projection
   /// threshold — render '—' instead of the prediction columns.
   too_thin: boolean;

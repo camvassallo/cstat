@@ -955,7 +955,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
     cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
   );
 
-  // Mid AdjEM chip color tier — mirrors `adjEmTone` on Projected but
+  // Proj AdjEM chip color tier — mirrors `adjEmTone` on Projected but
   // duplicated here rather than promoted to a shared module so the
   // Projected page stays self-contained.
   const tone = (v: number | null): string => {
@@ -992,17 +992,11 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             minus departures + portal arrivals + HS commits.
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-3 min-w-[400px]">
+        <div className="grid grid-cols-2 gap-3 min-w-[280px]">
           <div className="bg-gray-800 rounded-lg p-3 text-center">
-            <div className="text-[10px] text-gray-400 uppercase tracking-wide">Mid AdjEM</div>
+            <div className="text-[10px] text-gray-400 uppercase tracking-wide">Proj AdjEM</div>
             <div className={`mt-1 inline-block px-2 py-0.5 rounded border ${tone(p.midpoint_adj_em)}`}>
               <span className="text-xl font-bold">{signed(p.midpoint_adj_em)}</span>
-            </div>
-          </div>
-          <div className="bg-gray-800 rounded-lg p-3 text-center">
-            <div className="text-[10px] text-gray-400 uppercase tracking-wide">Floor → Ceiling</div>
-            <div className="mt-1 text-sm font-mono text-gray-300">
-              {signed(p.floor_adj_em)} → {signed(p.ceiling_adj_em)}
             </div>
           </div>
           <div className="bg-gray-800 rounded-lg p-3 text-center">
@@ -1025,7 +1019,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal commits +
         HS-recruit class commits. Recruits use a tier-mean profile keyed on 247 composite rank — see
         the{' '}
-        <SeasonLink to="/projected/2027" className="text-amber-200 underline hover:text-amber-100">
+        <SeasonLink to="/projected?season=2027" className="text-amber-200 underline hover:text-amber-100">
           Projected {seasonLabel} grid
         </SeasonLink>{' '}
         for full methodology + cross-team rankings.

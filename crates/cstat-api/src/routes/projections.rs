@@ -13,8 +13,8 @@ use axum::{
 use cstat_core::inference::Predictor;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, FreshmanTier, ProjectedRoster, compose_all_projections, load_draft_entrants,
-    load_mock_draft, normalize_player_name, project_returner_cam_v3,
+    DraftScenario, ProjectedRoster, compose_all_projections, load_draft_entrants, load_mock_draft,
+    normalize_player_name, project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -72,16 +72,26 @@ struct ProjectedTeam {
     /// Count of qualifying returning players (excludes Sr, outbound
     /// portal, firm draft departures, and uncertain draft cohort).
     returning_count: usize,
+    /// Σ base-season cam_v3 of the returning players (talent retained,
+    /// measured by their prior-season production). The Future grid's
+    /// "Returning" column surfaces this instead of the raw count.
+    returning_cam_v3_sum: f32,
     /// Count of incoming portal arrivals committed to this team.
     arrivals_count: usize,
+    /// Σ base-season cam_v3 of the incoming portal arrivals (talent
+    /// gained, measured by their prior-school production). The Future
+    /// grid's "Incoming" column surfaces this instead of the raw count.
+    arrivals_cam_v3_sum: f32,
     /// Count of incoming HS recruits committed to this team. Each
     /// recruit is synthesized from a tier-mean freshman profile (see
     /// `FreshmanTier` in `roster_projection.rs`).
     recruits_count: usize,
-    /// Per-tier breakdown of the recruit class, e.g. `{"t1": 1, "t2": 2}`.
-    /// Surfaced separately so the UI can render "1× elite · 2× top-100"
-    /// without re-counting client-side.
-    recruits_by_tier: serde_json::Value,
+    /// Σ *projected* freshman-season cam_v3 across the recruit class —
+    /// the freshman-impact model's per-recruit point estimate (recruits
+    /// have no prior season, so unlike the other cohorts this is a
+    /// forward projection, not last-season production). The Future grid's
+    /// "Recruits" column surfaces this instead of the raw count.
+    recruits_cam_v3_sum: f32,
     /// Up to the top 5 recruits by composite_rank for UI display. Each
     /// entry is `{name, composite_rank, star_rating, tier}` from
     /// `RecruitMeta`.
@@ -91,6 +101,11 @@ struct ProjectedTeam {
     uncertain_count: usize,
     /// Count of recorded departures (Sr + outbound + firm draft-gone).
     departures_count: usize,
+    /// Σ base-season cam_v3 across all departures (graduating seniors +
+    /// outbound portal + firm draft-gone) — talent leaving the program.
+    /// The Future grid's "Departures" column surfaces this instead of the
+    /// raw count.
+    departures_cam_v3_sum: f32,
     /// True when `returning + arrivals < MIN_QUALIFYING_FOR_PROJECTION`.
     /// Frontend should render an explanation chip rather than the
     /// (null) prediction columns when this is set.
@@ -367,23 +382,20 @@ fn predict_team(
     // sees them via build_roster_impact_features just like returners.
     let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
 
-    // Per-tier counts for the UI breakdown chip.
-    let mut tier_counts: [u32; 4] = [0; 4];
-    for (_, meta) in &p.recruits {
-        let idx = match meta.tier {
-            FreshmanTier::T1 => 0,
-            FreshmanTier::T2 => 1,
-            FreshmanTier::T3 => 2,
-            FreshmanTier::T4 => 3,
-        };
-        tier_counts[idx] += 1;
-    }
-    let recruits_by_tier = json!({
-        "t1": tier_counts[0],
-        "t2": tier_counts[1],
-        "t3": tier_counts[2],
-        "t4": tier_counts[3],
-    });
+    // Per-cohort Σ CamPom for the UI's roster-flow columns. Returning
+    // uses prior-season production; recruits use the synthesized
+    // freshman-model projection their PlayerRow already carries (no prior
+    // season exists). Missing cam_v3 contributes 0.
+    let returning_cam_v3_sum: f32 = p
+        .returning
+        .iter()
+        .map(|r| r.cam_v3.unwrap_or(0.0))
+        .sum::<f64>() as f32;
+    let recruits_cam_v3_sum: f32 = p
+        .recruits
+        .iter()
+        .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
+        .sum::<f64>() as f32;
 
     // Top 5 recruits by composite_rank (NULL ranks last). Cloned so the
     // closure capture is move-friendly.
@@ -402,7 +414,6 @@ fn predict_team(
                 "name": m.name,
                 "composite_rank": m.composite_rank,
                 "star_rating": m.star_rating,
-                "tier": m.tier,
             })
         })
         .collect();
@@ -420,12 +431,15 @@ fn predict_team(
             .zip(ceiling)
             .map(|(f, c)| p_return * c + (1.0 - p_return) * f),
         returning_count: p.returning.len(),
+        returning_cam_v3_sum,
         arrivals_count: p.arrivals.len(),
+        arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
         recruits_count: p.recruits.len(),
-        recruits_by_tier: recruits_by_tier.clone(),
+        recruits_cam_v3_sum,
         top_recruits: top_recruits.clone(),
         uncertain_count: p.uncertain.len(),
         departures_count: p.departures.len(),
+        departures_cam_v3_sum: p.departures_cam_v3_sum,
         too_thin,
         baseline_adj_em: baseline,
         actual_adj_em: actual,

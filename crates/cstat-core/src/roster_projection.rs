@@ -462,6 +462,14 @@ pub struct ProjectedRoster {
     /// movement or pre-portal-era seasons; missing torvik coverage on a
     /// portal player contributes 0 (COALESCE convention).
     pub inbound_cam_v3_sum: f32,
+    /// Σ base-season cam_v3 across *all* departures (graduating seniors +
+    /// outbound portal + firm draft-gone), positive = talent leaving the
+    /// program. Distinct from `outbound_cam_v3_sum`, which is the portal
+    /// subset only — this is the full "talent out" the Future grid's
+    /// Departures column surfaces, so a roster losing a senior star or an
+    /// NBA-bound declaree shows the loss the portal-only sum would miss.
+    /// Missing torvik coverage contributes 0 (COALESCE convention).
+    pub departures_cam_v3_sum: f32,
 }
 
 impl ProjectedRoster {
@@ -1036,6 +1044,10 @@ pub async fn compose_all_projections(
         let mut returning: Vec<PlayerRow> = Vec::new();
         let mut uncertain: Vec<(PlayerRow, UncertainPlayer)> = Vec::new();
         let mut departures: Vec<DepartureReason> = Vec::new();
+        // Σ base-season cam_v3 across all departures (seniors + portal-out
+        // + draft-gone). Accumulated here where each departing player's
+        // RosterRow (and its cam_v3) is in scope; missing torvik → 0.
+        let mut departures_cam_v3_sum: f32 = 0.0;
 
         for (row, name) in rows {
             let pid = row.player_id;
@@ -1050,6 +1062,7 @@ pub async fn compose_all_projections(
                     player_id: pid,
                     name: name.clone(),
                 });
+                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
                 continue;
             }
             // Outbound portal commit?
@@ -1066,6 +1079,7 @@ pub async fn compose_all_projections(
                     destination: dest,
                     destination_team_id: dest_team_id,
                 });
+                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
                 continue;
             }
             // Firm NBA draft departure?
@@ -1074,6 +1088,7 @@ pub async fn compose_all_projections(
                     player_id: pid,
                     name: name.clone(),
                 });
+                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
                 continue;
             }
             // Declared (uncertain) → bucket separately so the route can
@@ -1152,6 +1167,7 @@ pub async fn compose_all_projections(
             departures,
             outbound_cam_v3_sum,
             inbound_cam_v3_sum,
+            departures_cam_v3_sum,
         });
     }
 
@@ -1352,6 +1368,7 @@ mod tests {
             departures: vec![],
             outbound_cam_v3_sum: 0.0,
             inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum: 0.0,
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
@@ -1410,6 +1427,7 @@ mod tests {
             departures: vec![],
             outbound_cam_v3_sum: 0.0,
             inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum: 0.0,
         };
         // Floor: 1 returning + 1 arrival + 2 recruits = 4
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);
