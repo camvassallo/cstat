@@ -89,7 +89,10 @@ function camSumRenderer(
 ) {
   return (p: { data?: ProjectedTeam }) => {
     const t = p.data;
-    if (!t || t.too_thin || t[countField] === 0) {
+    // ΣCamPom is a fact about the roster (not a gated prediction), so it
+    // renders even for thin-roster teams — for a gutted roster the
+    // departures total is exactly the signal that explains the thinness.
+    if (!t || t[countField] === 0) {
       return <span className="text-slate-600 text-xs">—</span>;
     }
     const sum = t[sumField];
@@ -303,7 +306,7 @@ function buildColumns(
         ((nb.data as ProjectedTeam | undefined)?.recruits_cam_v3_sum ?? 0),
       cellRenderer: (p: { data?: ProjectedTeam }) => {
         const t = p.data;
-        if (!t || t.too_thin || t.recruits_count === 0) {
+        if (!t || t.recruits_count === 0) {
           return <span className="text-slate-600 text-xs">—</span>;
         }
         const sum = t.recruits_cam_v3_sum;
