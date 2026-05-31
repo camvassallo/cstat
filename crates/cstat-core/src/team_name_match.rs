@@ -33,6 +33,16 @@ pub const TEAM_ALIASES: &[(&str, &str)] = &[
     // sweeping in Penn State or other related programs.
     ("kansas city", "missouri-kansas city kangaroos"),
     ("pennsylvania", "penn quakers"),
+    // barttorvik coachdict spellings that differ from cstat's hyphenated full
+    // names (the truncation/hyphen drops the bare-prefix branch). "Texas A&M
+    // Corpus Chris" is coachdict's truncation of Corpus Christi — two team-name
+    // variants exist across seasons (hyphenated "…-Corpus Christi Islanders"
+    // early, bare "Texas A&M Corpus Christi" recently), so both targets are
+    // listed under the one key; the scorer checks every alias entry.
+    ("texas a&m corpus chris", "texas a&m-corpus christi"),
+    ("texas a&m corpus chris", "texas a&m corpus christi"),
+    ("ut martin", "tennessee-martin"),
+    ("arkansas little rock", "arkansas-little rock"),
 ];
 
 /// Score how well a cstat team matches a 247 short name. Lower is better;

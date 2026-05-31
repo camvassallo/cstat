@@ -159,6 +159,19 @@ enum Commands {
         persist_games: bool,
     },
 
+    /// Ingest head coaches from barttorvik's `coachdict.json` into the
+    /// `coaches` / `coach_seasons` tables. One HTTP call covers every season;
+    /// we land the seasons we carry teams for, resolving each coachdict team
+    /// name to a cstat team and flagging offseason coaching changes (`is_new_hc`).
+    /// Foundation for the Coach-Above-Expectation metric — see
+    /// `docs/coach_above_expectation_design.md`.
+    Coaches {
+        /// Restrict ingest to a single season. Defaults to all seasons present
+        /// in the `teams` table. (The change-flag still reads the full dict.)
+        #[arg(short, long)]
+        year: Option<i32>,
+    },
+
     /// End-to-end backtest for the Phase B impact-aggregation projection
     /// pipeline. Composes projected rosters for each target season, scores
     /// them with roster_impact_model.onnx, and compares to actual AdjEM.
@@ -513,6 +526,21 @@ async fn main() -> Result<()> {
                     println!("Torvik per-game persistence: {inserted} rows upserted");
                 }
             }
+        }
+
+        Commands::Coaches { year } => {
+            let torvik = TorkvikClient::new();
+            let report =
+                cstat_ingest::ingest::coaches::ingest_coaches(&torvik, &db.pool, year).await?;
+            println!(
+                "coachdict: {} coach-seasons across {} season(s) — {} teams matched, {} unmatched, {} distinct coaches, {} new-HC flags",
+                report.rows,
+                report.seasons,
+                report.matched_teams,
+                report.unmatched_teams,
+                report.distinct_coaches,
+                report.new_hc,
+            );
         }
 
         Commands::CampomParity { year, baseline } => {

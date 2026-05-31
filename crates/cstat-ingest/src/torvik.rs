@@ -6,6 +6,7 @@
 use flate2::read::GzDecoder;
 use reqwest::Client;
 use serde_json::Value;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use tracing::info;
 
@@ -181,6 +182,25 @@ impl TorkvikClient {
         let games: Vec<TorkvikGameRow> = rows.iter().filter_map(|r| parse_game_row(r)).collect();
         info!(year, count = games.len(), "parsed Torvik game stats");
         Ok(games)
+    }
+
+    /// Fetch the head-coach dictionary: every season in one file, mapping
+    /// team name → head coach. Shape: `{"2026": {"Duke": "Jon Scheyer", ...}}`.
+    /// No `{year}` param — the endpoint returns all seasons (1893→present).
+    /// Returns year → (team name → coach), with non-numeric year keys skipped.
+    pub async fn fetch_coachdict(&self) -> anyhow::Result<BTreeMap<i32, HashMap<String, String>>> {
+        let url = "https://barttorvik.com/coachdict.json";
+        info!("fetching Torvik coach dictionary");
+        let raw: HashMap<String, HashMap<String, String>> =
+            self.http.get(url).send().await?.json().await?;
+        let mut out: BTreeMap<i32, HashMap<String, String>> = BTreeMap::new();
+        for (year, teams) in raw {
+            if let Ok(y) = year.parse::<i32>() {
+                out.insert(y, teams);
+            }
+        }
+        info!(seasons = out.len(), "parsed Torvik coach dictionary");
+        Ok(out)
     }
 }
 

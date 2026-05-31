@@ -108,9 +108,18 @@ bands (new-coach teams are 1.12× noisier — the PR E salvage), not a point fea
 
 ## 6. Phasing
 
-- **PR 1 — coachdict ingest + entity model.** `coachdict` subcommand, `coaches` + `coach_seasons`
-  tables, name dedup, team-name join. *Also delivers the PR E "new coach" flag* (uncertainty-band
-  tint) for free, since the flag is `coach[Y]≠coach[Y−1]` over the same table.
+- **PR 1 — coachdict ingest + entity model. SHIPPED 2026-05-31.** Migration `024_coaches.sql`
+  (`coaches` entity + `coach_seasons` mapping), `TorkvikClient::fetch_coachdict`,
+  `ingest/coaches.rs`, `cstat-ingest coaches [--year]`. Result: 12 seasons (2015–2026), 4,294
+  coach-seasons, **99.4% team match** (27 NULLs all genuinely-absent team-seasons), 735 distinct
+  coaches, **657 `is_new_hc` flags** (PR E new-coach signal, free). Findings worth carrying into
+  PR2: (a) coachdict has redundant **inverted entries** (`coach→team` alongside `team→coach`) —
+  filtered via `is_inverted_entry` (mirror + value-is-team + key-isn't, so legit unmatched teams
+  survive); (b) added three coachdict-spelling aliases to the shared `team_name_match` (Texas A&M
+  Corpus Christi w/ both hyphen variants, UT Martin, Arkansas Little Rock); (c) **Houston
+  Baptist→Christian** rename is season-dependent and stays unmatched for pre-rename seasons —
+  re-resolve via `natstat_id` continuity in PR2 if those team-seasons matter. Rick ≠ Richard
+  Pitino verified distinct. The flag is `coach[Y]≠coach[Y−1]` over the same table.
 - **PR 2 — CAE computation.** Persist the roster-only projection, per-quartile de-bias, EB
   shrinkage → `coach_ratings`. Offline Python first; `cae_feasibility.py` thresholds as guards
   (ICC>0, positive split-half, top-list face validity, no prestige correlation post-de-bias).
