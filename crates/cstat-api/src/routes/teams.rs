@@ -18,6 +18,35 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/teams/rankings", get(rankings))
         .route("/api/teams/{id}", get(team_detail))
+        .route("/api/teams/{id}/coach", get(team_coach))
+}
+
+/// `GET /api/teams/{id}/coach` — the coach card for a team-detail page.
+///
+/// Deliberately a DEDICATED route, NOT folded into `team_detail`: that handler
+/// is latency-bound by its serial ~30-game `predict_projection` loop (point-in-
+/// time CamPom rebuild per completed game). This query is two indexed lookups
+/// (`coach_seasons` → `coach_ratings`) and must not wait on that loop, so the
+/// frontend fetches it in parallel and the card paints immediately. See
+/// ROADMAP "API latency — team-detail schedule projections".
+///
+/// Returns `{ "coach": null }` (200) when coachdict has no entry for the
+/// (team, season) — an unmatched team-season is an expected empty state, not an
+/// error.
+async fn team_coach(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let coach = queries::get_team_coach(&state.db.pool, id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+    Ok(Json(json!({ "coach": coach })))
 }
 
 #[derive(Deserialize)]

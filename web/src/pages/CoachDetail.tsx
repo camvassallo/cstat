@@ -1,0 +1,223 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import {
+  fetchCoachDetail,
+  type CoachRating,
+  type CoachSeasonRow,
+} from '../api/client';
+import { usePageTitle } from '../components/usePageTitle';
+import { caeColor, fmtCae, tenureSpan } from '../components/cae';
+
+/** Per-season CAE sparkline: the raw residual (actual − projection) over time,
+ *  with a zero baseline. Points tinted by sign; this is the visual the detail
+ *  page leads with. Values are pre-stored, so no inference runs here. */
+function Sparkline({ seasons }: { seasons: CoachSeasonRow[] }) {
+  const W = 520;
+  const H = 120;
+  const PAD = 24;
+  const pts = seasons.map((s) => ({ season: s.season, v: s.cae_raw }));
+
+  const { xy, zeroY } = useMemo(() => {
+    if (pts.length === 0) return { xy: [], zeroY: H / 2 };
+    const vs = pts.map((p) => p.v);
+    const lo = Math.min(0, ...vs);
+    const hi = Math.max(0, ...vs);
+    const span = hi - lo || 1;
+    const x = (i: number) =>
+      pts.length === 1 ? W / 2 : PAD + (i * (W - 2 * PAD)) / (pts.length - 1);
+    const y = (v: number) => H - PAD - ((v - lo) / span) * (H - 2 * PAD);
+    return {
+      xy: pts.map((p, i) => ({ ...p, x: x(i), y: y(p.v) })),
+      zeroY: y(0),
+    };
+  }, [pts]);
+
+  if (xy.length === 0) return null;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="CAE by season">
+      {/* zero baseline */}
+      <line x1={PAD} y1={zeroY} x2={W - PAD} y2={zeroY} stroke="#374151" strokeWidth={1} strokeDasharray="3 3" />
+      {/* connecting path */}
+      {xy.length > 1 && (
+        <polyline
+          fill="none"
+          stroke="#4b5563"
+          strokeWidth={1.5}
+          points={xy.map((p) => `${p.x},${p.y}`).join(' ')}
+        />
+      )}
+      {xy.map((p) => (
+        <g key={p.season}>
+          <line x1={p.x} y1={zeroY} x2={p.x} y2={p.y} stroke={caeColor(p.v)} strokeWidth={1} opacity={0.4} />
+          <circle cx={p.x} cy={p.y} r={4} fill={caeColor(p.v)} />
+          <text x={p.x} y={H - 6} textAnchor="middle" className="fill-gray-500" fontSize={10}>
+            {String(p.season).slice(2)}
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function Stat({ label, value, color, title }: { label: string; value: string; color?: string; title?: string }) {
+  return (
+    <div className="bg-gray-800 rounded-lg p-4 text-center" title={title}>
+      <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</div>
+      <div className="text-2xl font-bold tabular-nums" style={color ? { color } : undefined}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+export function CoachDetail() {
+  const { id } = useParams<{ id: string }>();
+  const [rating, setRating] = useState<CoachRating | null>(null);
+  const [seasons, setSeasons] = useState<CoachSeasonRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  usePageTitle(rating?.name ?? 'Coach');
+
+  // No synchronous `setLoading(true)` — initial `loading` covers first paint
+  // (project convention; see Rankings.tsx / PlayerDetail.tsx).
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    fetchCoachDetail(id)
+      .then((res) => {
+        if (cancelled) return;
+        setRating(res.rating);
+        setSeasons(res.seasons);
+        setError(null);
+      })
+      .catch((e) => !cancelled && setError(e.message))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  if (loading) return <div className="text-gray-400">Loading…</div>;
+  if (error) return <div className="text-red-400">{error}</div>;
+
+  // Derive a display name from the season rows if the coach has no rating.
+  const name = rating?.name ?? '(coach)';
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <Link to="/coaches" className="text-sm text-blue-300 hover:underline">
+          ← Coaches
+        </Link>
+        <h1 className="text-3xl font-bold mt-1">{name}</h1>
+        {rating && (
+          <div className="text-gray-400">
+            {tenureSpan(rating.first_season, rating.last_season)} · {rating.n_seasons}{' '}
+            scored {rating.n_seasons === 1 ? 'season' : 'seasons'}
+          </div>
+        )}
+      </div>
+
+      {rating ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Stat
+            label="CAE"
+            value={fmtCae(rating.cae_shrunk)}
+            color={caeColor(rating.cae_shrunk)}
+            title="Shrunk Coach-Above-Expectation — the headline rating, in AdjEM points above roster projection."
+          />
+          <Stat
+            label="95% CI"
+            value={`${fmtCae(rating.ci_low)} … ${fmtCae(rating.ci_high)}`}
+            title="Credibility interval on the shrunk rating."
+          />
+          <Stat
+            label="Reliability"
+            value={rating.reliability.toFixed(2)}
+            title="n / (n + k). Low = thin tenure; treat the rating as soft."
+          />
+          <Stat
+            label="Prestige-adj"
+            value={fmtCae(rating.cae_adj_shrunk)}
+            title="Projection-quartile-de-biased CAE — a conservative lower bound that strips the program component."
+          />
+        </div>
+      ) : (
+        <div className="bg-gray-800 rounded-lg p-4 text-sm text-gray-400">
+          No career rating — this coach didn't land in the scored roster-projection backtest.
+        </div>
+      )}
+
+      {seasons.length > 0 && (
+        <div className="bg-gray-800 rounded-lg p-5">
+          <h2 className="text-lg font-bold mb-1">Above expectation by season</h2>
+          <p className="text-xs text-gray-500 mb-3">
+            Actual team AdjEM minus the roster-only projection. Positive bars = the team beat the
+            talent on hand. Single seasons are noisy; the headline rating shrinks the average toward
+            zero.
+          </p>
+          <Sparkline seasons={seasons} />
+
+          <div className="overflow-x-auto mt-4">
+            <table className="min-w-full text-sm whitespace-nowrap">
+              <thead>
+                <tr className="text-gray-400 border-b border-gray-700 text-left">
+                  <th className="py-2 px-2">Season</th>
+                  <th className="py-2 px-2">Team</th>
+                  <th className="py-2 px-2 text-right">Actual</th>
+                  <th className="py-2 px-2 text-right">Projected</th>
+                  <th className="py-2 px-2 text-right" title="Actual − projected (raw CAE).">
+                    CAE
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {seasons.map((s) => (
+                  <tr key={s.season} className="border-b border-gray-800">
+                    <td className="py-1.5 px-2 tabular-nums">
+                      {s.season}
+                      {s.is_new_hc && (
+                        <span
+                          className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                          title="First season at this team."
+                        >
+                          new
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-1.5 px-2 text-gray-300">
+                      {s.team_id && s.team_name ? (
+                        <Link
+                          to={`/teams/${s.team_id}?season=${s.season}`}
+                          className="hover:underline"
+                        >
+                          {s.team_name}
+                        </Link>
+                      ) : (
+                        s.team_name ?? '—'
+                      )}
+                    </td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">{s.actual_adjem.toFixed(1)}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                      {s.projection.toFixed(1)}
+                    </td>
+                    <td
+                      className="py-1.5 px-2 text-right tabular-nums font-semibold"
+                      style={{ color: caeColor(s.cae_raw) }}
+                    >
+                      {fmtCae(s.cae_raw)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default CoachDetail;
