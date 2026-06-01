@@ -183,6 +183,13 @@ def posterior_ci(mean_resid: float, n: int, s2w: float, s2b: float):
         shrink   = n/(n+k),  k = σ²_w/σ²_b
         post_sd  = sqrt(σ²_b · k/(n+k))
     Returns (shrunk, reliability, ci_low, ci_high)."""
+    # No between-coach variance (variance_components clamps σ²_b at 0) → no
+    # signal to shrink toward, so the posterior collapses to the prior mean 0.
+    # Guards the season-centered path especially: centering pushes MS_between
+    # toward MS_within, so the clamp can fire on some cohorts. (vc_of guards
+    # k the same way; posterior_ci hadn't.)
+    if s2b <= 0:
+        return 0.0, 0.0, 0.0, 0.0
     k = s2w / s2b
     rel = n / (n + k)
     shrunk = rel * mean_resid
