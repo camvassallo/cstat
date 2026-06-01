@@ -9,6 +9,9 @@
 export function fmtCae(v: number | null | undefined, d = 1): string {
   if (v == null) return '—';
   const s = v.toFixed(d);
+  // Values that round to zero render unsigned — avoids a stray "-0.0" on the
+  // many near-zero CAE grades (e.g. -0.04 → "0.0", not "-0.0").
+  if (Number(s) === 0) return (0).toFixed(d);
   return v > 0 ? `+${s}` : s;
 }
 
