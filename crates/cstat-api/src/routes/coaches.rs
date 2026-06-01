@@ -68,11 +68,15 @@ async fn coach_leaderboard(
     }
 
     let min_seasons = params.min_seasons.unwrap_or(3).max(1);
-    let (coaches, available_seasons) = tokio::try_join!(
+    let (mut coaches, available_seasons) = tokio::try_join!(
         queries::get_coach_leaderboard(pool, min_seasons, limit, params.season),
         queries::get_coach_cae_seasons(pool),
     )
     .map_err(internal_error)?;
+
+    // Display-only "results + overperformance" lens — z(CAE) + z(career AdjEM)
+    // over this qualified population. Computed here, never an input to forecasts.
+    queries::apply_career_blend(&mut coaches);
 
     Ok(Json(json!({
         "mode": "career",

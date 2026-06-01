@@ -150,6 +150,37 @@ export function CoachDetail() {
         </div>
       )}
 
+      {/* Career team strength — descriptive context (how strong the coach's
+          teams actually were), explicitly NOT a CAE component or projection
+          input. Only rendered when the scored seasons resolved to team stats. */}
+      {rating && rating.career_adj_em != null && (
+        <div>
+          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">
+            Career team strength{' '}
+            <span className="normal-case tracking-normal text-gray-600">
+              · descriptive context, not part of CAE
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Stat
+              label="Team AdjEM"
+              value={rating.career_adj_em.toFixed(1)}
+              title="Career-mean adjusted efficiency margin of the coach's teams. Opponent-adjusted, so it already accounts for schedule strength."
+            />
+            <Stat
+              label="Team AdjO"
+              value={rating.career_adj_o != null ? rating.career_adj_o.toFixed(1) : '—'}
+              title="Career-mean adjusted offensive efficiency (points per 100 possessions)."
+            />
+            <Stat
+              label="Team AdjD"
+              value={rating.career_adj_d != null ? rating.career_adj_d.toFixed(1) : '—'}
+              title="Career-mean adjusted defensive efficiency (points allowed per 100 possessions; lower is better)."
+            />
+          </div>
+        </div>
+      )}
+
       {seasons.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
           <h2 className="text-lg font-bold mb-1">Above expectation by season</h2>
@@ -166,7 +197,15 @@ export function CoachDetail() {
                 <tr className="text-gray-400 border-b border-gray-700 text-left">
                   <th className="py-2 px-2">Season</th>
                   <th className="py-2 px-2">Team</th>
-                  <th className="py-2 px-2 text-right">Actual</th>
+                  <th className="py-2 px-2 text-right" title="The team's actual AdjEM that season.">
+                    AdjEM
+                  </th>
+                  <th className="py-2 px-2 text-right" title="Team adjusted offensive efficiency that season.">
+                    AdjO
+                  </th>
+                  <th className="py-2 px-2 text-right" title="Team adjusted defensive efficiency that season (lower is better).">
+                    AdjD
+                  </th>
                   <th className="py-2 px-2 text-right">Projected</th>
                   <th className="py-2 px-2 text-right" title="Actual − projected (raw CAE).">
                     CAE
@@ -200,6 +239,12 @@ export function CoachDetail() {
                       )}
                     </td>
                     <td className="py-1.5 px-2 text-right tabular-nums">{s.actual_adjem.toFixed(1)}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                      {s.adj_offense != null ? s.adj_offense.toFixed(1) : '—'}
+                    </td>
+                    <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                      {s.adj_defense != null ? s.adj_defense.toFixed(1) : '—'}
+                    </td>
                     <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
                       {s.projection.toFixed(1)}
                     </td>

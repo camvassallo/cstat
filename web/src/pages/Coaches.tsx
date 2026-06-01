@@ -59,9 +59,19 @@ type CareerSortKey =
   | 'cae_shrunk'
   | 'cae_adj_shrunk'
   | 'cae_centered_shrunk'
+  | 'career_adj_em'
+  | 'career_adj_o'
+  | 'career_adj_d'
+  | 'blend'
   | 'reliability'
   | 'n_seasons'
   | 'last_team_name';
+
+/** Plain fixed-decimal for the display-only team-strength columns; `—` for the
+ *  coaches whose scored seasons never resolved to a team-stats row. */
+function fmtStrength(v: number | null, d = 1): string {
+  return v == null ? '—' : v.toFixed(d);
+}
 
 function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
   const [sort, setSort] = useState<{ key: CareerSortKey; dir: SortDir }>({
@@ -95,6 +105,14 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
               title="Prestige-adjusted CAE (projection-quartile-de-biased) — a conservative lower bound that strips the program component." />
             <SortHeader label="Era±" sortKey="cae_centered_shrunk" current={sort} onSort={onSort} align="right"
               title="Season-centered CAE — each season's mean residual removed for era-neutral COMPARISON between coaches. Use to rank coaches on equal footing across eras; it deliberately discards season-level signal, so it is not a 'how much' measure like the headline CAE." />
+            <SortHeader label="AdjEM" sortKey="career_adj_em" current={sort} onSort={onSort} align="right"
+              title="Career-mean team AdjEM (adjusted efficiency margin) across scored seasons — how strong the coach's teams actually were. Opponent-adjusted, so it already rewards hard schedules. Descriptive context, NOT an input to any projection." />
+            <SortHeader label="AdjO" sortKey="career_adj_o" current={sort} onSort={onSort} align="right"
+              title="Career-mean team adjusted offensive efficiency (points per 100 possessions, opponent-adjusted)." />
+            <SortHeader label="AdjD" sortKey="career_adj_d" current={sort} onSort={onSort} align="right"
+              title="Career-mean team adjusted defensive efficiency (points allowed per 100 possessions; lower is better)." />
+            <SortHeader label="Blend" sortKey="blend" current={sort} onSort={onSort} align="right"
+              title="Evaluative composite: z(CAE) + z(career AdjEM) over this board — rewards coaches who field strong, tough-schedule teams AND squeeze extra out of the roster. A lens for human comparison, not a rigorous metric, and never fed back into forecasts." />
             <SortHeader label="Rel." sortKey="reliability" current={sort} onSort={onSort} align="right"
               title="Reliability = n / (n + k). Shrinkage weight; low = thin tenure, treat the rating as soft." />
             <SortHeader label="Yrs" sortKey="n_seasons" current={sort} onSort={onSort} align="right"
@@ -122,6 +140,12 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
               </td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_adj_shrunk)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_centered_shrunk)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-300">{fmtStrength(c.career_adj_em)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.career_adj_o)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.career_adj_d)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums font-medium" style={{ color: caeColor(c.blend) }}>
+                {c.blend == null ? '—' : fmtCae(c.blend, 2)}
+              </td>
               <td className="py-1.5 px-2"><ReliabilityBar value={c.reliability} /></td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-300">{c.n_seasons}</td>
             </tr>
@@ -269,7 +293,10 @@ export function Coaches() {
               Coaches active in <span className="text-gray-300 font-semibold">{season}</span>, ranked
               by their <span className="text-gray-300">career</span> CAE (shrunk over tenure, so thin
               tenures pull toward 0 — see the Rel. column for confidence). Changing the season swaps
-              which coaches show and their team; the ranking is career-wide. Coverage 2022–2026.
+              which coaches show and their team; the ranking is career-wide. Coverage 2016–2026. The{' '}
+              <span className="text-gray-300">AdjEM/AdjO/AdjD</span> columns show how strong the
+              coach's teams actually were (descriptive context, not a projection input); sort by{' '}
+              <span className="text-gray-300">Blend</span> for a "results + overperformance" view.
             </p>
           ) : (
             <p className="text-xs text-gray-500 mt-1 max-w-2xl">

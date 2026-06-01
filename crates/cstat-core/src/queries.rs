@@ -2107,6 +2107,22 @@ pub struct CoachLeaderboardRow {
     pub n_seasons: i32,
     pub first_season: i32,
     pub last_season: i32,
+    /// Career mean of the team's actual AdjEM / AdjO / AdjD across the coach's
+    /// scored seasons — DISPLAY-ONLY team-strength context ("who delivers strong,
+    /// tough-schedule teams"; AdjEM is opponent-adjusted, so SOS is baked in).
+    /// NULL when no scored season resolved to a `team_season_stats` row. These
+    /// columns must NEVER feed projections: raw AdjEM *is* the projection target,
+    /// so round-tripping it is direct leakage (see ROADMAP "Coach rankings").
+    pub career_adj_em: Option<f64>,
+    pub career_adj_o: Option<f64>,
+    pub career_adj_d: Option<f64>,
+    /// Evaluative composite `z(cae_shrunk) + z(career_adj_em)` over the qualified
+    /// leaderboard population — an alternate "results + overperformance" sort, a
+    /// lens not a truth. Computed in Rust post-fetch via [`apply_career_blend`],
+    /// so it carries `#[sqlx(default)]` (no backing column) and is `None` until
+    /// populated (degenerate populations leave it `None`).
+    #[sqlx(default)]
+    pub blend: Option<f64>,
     /// The team shown in the leaderboard's "Team" column. When the query is
     /// season-scoped this is the team the coach held *that* season; otherwise
     /// their most recent scored team. NULL if no matched team row.
@@ -2115,6 +2131,54 @@ pub struct CoachLeaderboardRow {
     /// The season of `last_team_*`, so the team link deep-links to the right
     /// season-scoped page. NULL when there's no matched team.
     pub last_team_season: Option<i32>,
+}
+
+/// Populate the display-only `blend` lens on a set of career leaderboard rows:
+/// `z(cae_shrunk) + z(career_adj_em)`, z-scored over the supplied (already
+/// qualified) population. This is an *evaluative* composite — "results +
+/// overperformance" — NOT a rigorous metric, and it must NEVER reach a
+/// projection: it contains raw AdjEM, the forecast's own target.
+///
+/// Coaches missing a `career_adj_em` (no matched team rows) contribute only the
+/// CAE z-term (the AdjEM term is treated as 0 — population-average). A
+/// degenerate population (n < 2 or zero variance in a term) leaves that term at
+/// 0; if both terms are undefined every `blend` stays `None`.
+pub fn apply_career_blend(rows: &mut [CoachLeaderboardRow]) {
+    if rows.len() < 2 {
+        return;
+    }
+    let (mu_cae, sd_cae) = population_mean_std(rows.iter().map(|r| r.cae_shrunk));
+    let (mu_em, sd_em) = population_mean_std(rows.iter().filter_map(|r| r.career_adj_em));
+    // Nothing to score on — leave every `blend` at its `None` default.
+    if sd_cae.is_none() && sd_em.is_none() {
+        return;
+    }
+    for r in rows.iter_mut() {
+        let z_cae = sd_cae.map_or(0.0, |sd| (r.cae_shrunk - mu_cae) / sd);
+        let z_em = match (r.career_adj_em, sd_em) {
+            (Some(em), Some(sd)) => (em - mu_em) / sd,
+            _ => 0.0,
+        };
+        r.blend = Some(z_cae + z_em);
+    }
+}
+
+/// Population mean and population standard deviation of a sample. `sd` is `None`
+/// when there are fewer than two values or the variance is 0 — the cases where a
+/// z-score is undefined; callers treat a `None` sd as a 0 contribution.
+fn population_mean_std(vals: impl Iterator<Item = f64>) -> (f64, Option<f64>) {
+    let v: Vec<f64> = vals.collect();
+    let n = v.len() as f64;
+    if v.is_empty() {
+        return (0.0, None);
+    }
+    let mu = v.iter().sum::<f64>() / n;
+    if v.len() < 2 {
+        return (mu, None);
+    }
+    let var = v.iter().map(|x| (x - mu).powi(2)).sum::<f64>() / n;
+    let sd = var.sqrt();
+    (mu, (sd > 0.0).then_some(sd))
 }
 
 /// Career leaderboard ranked by `cae_shrunk` DESC. The CAE rating is always
@@ -2145,11 +2209,29 @@ pub async fn get_coach_leaderboard(
             cr.n_seasons,
             cr.first_season,
             cr.last_season,
+            st.career_adj_em,
+            st.career_adj_o,
+            st.career_adj_d,
             lt.team_id      AS last_team_id,
             lt.team_name    AS last_team_name,
             lt.team_season  AS last_team_season
         FROM coach_ratings cr
         JOIN coaches c ON c.id = cr.coach_id
+        -- Display-only team-strength means over the coach's scored seasons.
+        -- coach_season_cae carries (team_natstat_id, season); resolve each to
+        -- the season-scoped team_season_stats via the cross-season natstat key.
+        -- AdjEM is opponent-adjusted, so a strength sort inherently rewards hard
+        -- schedules — no separate SOS term. NEVER fed back into projections.
+        LEFT JOIN LATERAL (
+            SELECT
+                AVG(tss.adj_efficiency_margin) AS career_adj_em,
+                AVG(tss.adj_offense)           AS career_adj_o,
+                AVG(tss.adj_defense)           AS career_adj_d
+            FROM coach_season_cae csc
+            JOIN teams t2 ON t2.natstat_id = csc.team_natstat_id AND t2.season = csc.season
+            JOIN team_season_stats tss ON tss.team_id = t2.id AND tss.season = csc.season
+            WHERE csc.coach_id = cr.coach_id
+        ) st ON TRUE
         LEFT JOIN LATERAL (
             SELECT cs.team_id, cs.season AS team_season,
                    COALESCE(t.short_name, t.name) AS team_name
@@ -2282,6 +2364,13 @@ pub struct CoachRating {
     pub n_seasons: i32,
     pub first_season: i32,
     pub last_season: i32,
+    /// Career-mean team AdjEM / AdjO / AdjD across scored seasons — DISPLAY-ONLY
+    /// team-strength context for the detail header. NULL when no scored season
+    /// resolved to a `team_season_stats` row. Same hard wall as the leaderboard
+    /// columns: never an input to any projection.
+    pub career_adj_em: Option<f64>,
+    pub career_adj_o: Option<f64>,
+    pub career_adj_d: Option<f64>,
 }
 
 /// One scored (coach, team, season) — the detail-page sparkline + season table.
@@ -2297,6 +2386,11 @@ pub struct CoachSeasonRow {
     pub cae_debiased: f64,
     /// Season-centered residual — comparison-only (this season's mean removed).
     pub cae_centered: f64,
+    /// That season's team AdjO / AdjD — DISPLAY-ONLY strength context next to the
+    /// stored `actual_adjem` (which is the season's AdjEM). NULL when the team
+    /// row didn't resolve. Same no-leakage wall as the career columns.
+    pub adj_offense: Option<f64>,
+    pub adj_defense: Option<f64>,
     /// Whether this was the coach's first season at the team (PR E flag).
     pub is_new_hc: Option<bool>,
 }
@@ -2323,9 +2417,24 @@ pub async fn get_coach_rating(
             cr.ci_high,
             cr.n_seasons,
             cr.first_season,
-            cr.last_season
+            cr.last_season,
+            st.career_adj_em,
+            st.career_adj_o,
+            st.career_adj_d
         FROM coach_ratings cr
         JOIN coaches c ON c.id = cr.coach_id
+        -- Display-only team-strength means (see get_coach_leaderboard for the
+        -- join rationale and the no-leakage wall).
+        LEFT JOIN LATERAL (
+            SELECT
+                AVG(tss.adj_efficiency_margin) AS career_adj_em,
+                AVG(tss.adj_offense)           AS career_adj_o,
+                AVG(tss.adj_defense)           AS career_adj_d
+            FROM coach_season_cae csc
+            JOIN teams t2 ON t2.natstat_id = csc.team_natstat_id AND t2.season = csc.season
+            JOIN team_season_stats tss ON tss.team_id = t2.id AND tss.season = csc.season
+            WHERE csc.coach_id = cr.coach_id
+        ) st ON TRUE
         WHERE cr.coach_id = $1
         "#,
     )
@@ -2350,6 +2459,8 @@ pub async fn get_coach_seasons(
             csc.cae_raw,
             csc.cae_debiased,
             csc.cae_centered,
+            ts.adj_offense,
+            ts.adj_defense,
             tm.is_new_hc
         FROM coach_season_cae csc
         -- One team row per season — coachdict name-variant dedup, prefer the
@@ -2365,6 +2476,10 @@ pub async fn get_coach_seasons(
             ORDER BY (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
             LIMIT 1
         ) tm ON TRUE
+        -- That season's AdjO/AdjD via the cross-season natstat key (display-only
+        -- strength context; AdjEM is already stored as actual_adjem).
+        LEFT JOIN teams t2 ON t2.natstat_id = csc.team_natstat_id AND t2.season = csc.season
+        LEFT JOIN team_season_stats ts ON ts.team_id = t2.id AND ts.season = csc.season
         WHERE csc.coach_id = $1
         ORDER BY csc.season
         "#,
@@ -2427,4 +2542,68 @@ pub async fn get_team_coach(
     .bind(team_id)
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(cae_shrunk: f64, career_adj_em: Option<f64>) -> CoachLeaderboardRow {
+        CoachLeaderboardRow {
+            coach_id: Uuid::nil(),
+            name: String::new(),
+            cae_shrunk,
+            cae_raw_mean: 0.0,
+            cae_adj_shrunk: 0.0,
+            cae_centered_shrunk: 0.0,
+            reliability: 0.0,
+            ci_low: 0.0,
+            ci_high: 0.0,
+            n_seasons: 0,
+            first_season: 0,
+            last_season: 0,
+            career_adj_em,
+            career_adj_o: None,
+            career_adj_d: None,
+            blend: None,
+            last_team_id: None,
+            last_team_name: None,
+            last_team_season: None,
+        }
+    }
+
+    #[test]
+    fn blend_is_sum_of_two_zscores() {
+        // Two coaches, opposite on both axes — the blend is z(CAE)+z(AdjEM).
+        // With two symmetric points the population z-scores are ±1 each, so the
+        // blend is ±2.
+        let mut rows = vec![row(4.0, Some(20.0)), row(-4.0, Some(-20.0))];
+        apply_career_blend(&mut rows);
+        assert!((rows[0].blend.unwrap() - 2.0).abs() < 1e-9);
+        assert!((rows[1].blend.unwrap() + 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn missing_adjem_contributes_only_cae_term() {
+        // The coach with no career AdjEM gets the CAE z-term only (AdjEM term 0).
+        let mut rows = vec![row(4.0, None), row(-4.0, Some(-20.0)), row(0.0, Some(20.0))];
+        apply_career_blend(&mut rows);
+        // CAE population is {4,-4,0}: mean 0, sd = sqrt(32/3). z(4) for row 0.
+        let sd_cae = (32.0_f64 / 3.0).sqrt();
+        let expected = 4.0 / sd_cae; // AdjEM term is 0 — no career_adj_em.
+        assert!((rows[0].blend.unwrap() - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn degenerate_population_leaves_blend_none() {
+        // A single row can't be z-scored — blend stays None.
+        let mut rows = vec![row(3.0, Some(10.0))];
+        apply_career_blend(&mut rows);
+        assert!(rows[0].blend.is_none());
+
+        // Zero variance in both terms — every term undefined, blend stays None.
+        let mut flat = vec![row(2.0, Some(5.0)), row(2.0, Some(5.0))];
+        apply_career_blend(&mut flat);
+        assert!(flat.iter().all(|r| r.blend.is_none()));
+    }
 }
