@@ -526,9 +526,10 @@ function ProjectionView({ year }: { year: number }) {
         projected-CamPom distribution is scored by the Phase B
         impact-aggregation model, then blended <strong>55/45 with last
         season's actual AdjEM</strong> (no calibration offset — the model
-        is near-unbiased). The pipeline backtests at <strong>5.88 AdjEM
-        MAE</strong> against actual next-season results (2025 + 2026) —
-        treat the ordering as <em>directional</em>, not point-estimates.
+        is near-unbiased). The pipeline backtests at <strong>5.7 AdjEM
+        MAE</strong> against actual next-season results across the{' '}
+        <strong>2016–2026</strong> seasons — treat the ordering as{' '}
+        <em>directional</em>, not point-estimates.
         Elite returners regress hard: the trajectory model under-projects
         the +15-and-up CamPom tail <em>by design</em> (it's calibrated on
         returners who stayed, and +20 is past its training range), so a

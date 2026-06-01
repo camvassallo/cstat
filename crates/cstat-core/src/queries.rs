@@ -2250,7 +2250,7 @@ pub async fn get_coach_season_leaderboard(
 }
 
 /// Seasons that have scored CAE rows — used to constrain the navbar season
-/// picker on the /coaches page to the metric's coverage (2022–2026 today),
+/// picker on the /coaches page to the metric's coverage (2016–2026 today),
 /// newest first. The leaderboard is bounded by roster-projection coverage, not
 /// coachdict coverage.
 pub async fn get_coach_cae_seasons(pool: &PgPool) -> Result<Vec<i32>, sqlx::Error> {

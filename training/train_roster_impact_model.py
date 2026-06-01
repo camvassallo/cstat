@@ -72,19 +72,14 @@ SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 202
 # Backtestable = the backtest's `compose_all_projections` can reconstruct
 # the projected roster (needs `transfers(target − 1)` + recruits for that
 # class + trajectory/freshman OOF) AND a finished actual AdjEM to score
-# against. After the historical transfer backfill (`transfers` is solid
-# 2021→2026: 621/734/943/1224/1636/1511) and the recruit backfill
-# (class-of-2014→2026), targets 2022→2026 are all reconstructable — so the
-# backtest now spans 5 seasons (~1.8k team-seasons), 3.6× the prior
-# 2-season sample. Extend backward (2021 needs transfers(2020)=371, still
-# usable) or forward as new seasons finish with transfers ingested.
-#
-# Extended back to 2016 (the earliest target `compose_all_projections` can
-# reconstruct: needs base-season 2015 player data + trajectory_oof, which
-# starts at target_season 2016). Pre-2022 transfer data is sparse, so those
-# seasons' outbound/inbound flow features fall back to 0 — a faithful
+# against. With the recruit backfill (class-of-2014→2026) and the
+# `draft_entrants` table removing drafted players, every target 2016→2026 is
+# reconstructable — so the backtest spans 11 seasons (~3.4k team-seasons).
+# 2016 is the floor: it needs base-season 2015 player data + trajectory_oof,
+# which starts at target_season 2016. Pre-2022 transfer data is sparse, so
+# those seasons' outbound/inbound flow features fall back to 0 — a faithful
 # representation of the pre-portal era, not a gap. Powers the 2016→2026 CAE
-# backfill on the Coaches page.
+# backfill on the Coaches page. Extend forward as new seasons finish.
 LOSO_EXPORT_SEASONS = (2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
 ARCHETYPES = (
     "Wizard", "Sorcerer", "Warlock", "Bard", "Ranger", "Barbarian",
