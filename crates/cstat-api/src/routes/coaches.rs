@@ -60,8 +60,13 @@ async fn coach_leaderboard(
         .map_err(internal_error)?;
 
         // Display-only single-season "results + overperformance" lens — z(CAE) +
-        // z(AdjEM) over this season's board. Never an input to forecasts.
-        queries::apply_season_blend(&mut coaches);
+        // z(AdjEM) over this season's board. Never an input to forecasts. Skip it
+        // on a truncated page (a full page may be cut by `limit`, which would
+        // z-score a biased slice); the season-scoped frontend is always well
+        // under the cap, so it always blends.
+        if (coaches.len() as i64) < limit {
+            queries::apply_season_blend(&mut coaches);
+        }
 
         return Ok(Json(json!({
             "mode": "season",
@@ -80,7 +85,13 @@ async fn coach_leaderboard(
 
     // Display-only "results + overperformance" lens — z(CAE) + z(career AdjEM)
     // over this qualified population. Computed here, never an input to forecasts.
-    queries::apply_career_blend(&mut coaches);
+    // Skip on a truncated page: blend z-scores are only meaningful over the
+    // COMPLETE board, and a full page may have been cut by `limit` (the unbounded
+    // all-time path has ~690 coaches > the 500 cap). The frontend always
+    // season-scopes (≤ ~360 < cap), so it always gets blended.
+    if (coaches.len() as i64) < limit {
+        queries::apply_career_blend(&mut coaches);
+    }
 
     Ok(Json(json!({
         "mode": "career",

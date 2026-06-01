@@ -2138,6 +2138,12 @@ pub struct CoachLeaderboardRow {
 /// qualified) population. This is an *evaluative* composite — "results +
 /// overperformance" — NOT a rigorous metric, and it must NEVER reach a
 /// projection: it contains raw AdjEM, the forecast's own target.
+///
+/// INVARIANT: `rows` must be the **complete** qualified board, not a truncated
+/// page — the z-scores are only meaningful over the full population. The
+/// frontend satisfies this by season-scoping every call (≤ ~360 coaches, well
+/// under the 500 row cap); the unbounded all-time path does not, so the caller
+/// must not blend a truncated board (see `coach_leaderboard`).
 pub fn apply_career_blend(rows: &mut [CoachLeaderboardRow]) {
     apply_blend(
         rows,
