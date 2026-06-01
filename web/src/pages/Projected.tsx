@@ -146,7 +146,7 @@ function buildColumns(
           cellRenderer: (p: { value: number | null }) => adjEmChip(p.value),
         },
         {
-          headerName: 'Proj − Act',
+          headerName: 'Δ vs act',
           colId: 'proj_error',
           ...flexCol(1, 100),
           headerTooltip:
@@ -176,7 +176,7 @@ function buildColumns(
           },
         },
         {
-          headerName: 'Proj − Act Rk',
+          headerName: 'Δ rank',
           colId: 'rank_error',
           ...flexCol(1, 100),
           headerTooltip:
