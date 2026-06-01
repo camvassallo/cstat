@@ -13,7 +13,7 @@ use axum::{
 use cstat_core::inference::Predictor;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, ProjectedRoster, compose_all_projections, load_draft_entrants, load_mock_draft,
+    DraftScenario, ProjectedRoster, compose_all_projections, fetch_draft_entrants, load_mock_draft,
     normalize_player_name, project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
@@ -225,11 +225,15 @@ async fn projection_list(
     State(state): State<Arc<AppState>>,
     Path(year): Path<i32>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !(2025..=2030).contains(&year) {
+    // Floor at 2016, the earliest target we can compose: projections need a
+    // played base season (`year - 1`) plus that base season's
+    // trajectory_oof_predictions, which start at target_season 2016 (a 2015
+    // target would need 2014 base data we don't ingest).
+    if !(2016..=2030).contains(&year) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "year out of range — projections supported for 2025–2030",
+                "error": "year out of range — projections supported for 2016–2030",
             })),
         ));
     }
@@ -241,22 +245,17 @@ async fn projection_list(
     let base_season = year - 1;
 
     // Load the declared/gone NBA draft entrants for the matching
-    // spring cycle. Missing-file failures are logged and the projection
-    // proceeds with an empty cohort (every player who isn't a Sr or in
-    // the portal returns) — partial coverage is better than 500.
-    let entrants_path =
-        PathBuf::from("data/draft").join(format!("{}_early_entrants.json", base_season));
-    let entrants = match load_draft_entrants(&entrants_path) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                path = %entrants_path.display(),
-                error = %e,
-                "draft entrants file unavailable; projecting without draft cohort",
-            );
-            vec![]
-        }
-    };
+    // spring cycle, read from the `draft_entrants` table. An empty result
+    // (year not loaded) degrades to seniors + portal-only departures — partial
+    // coverage beats a 500. A DB error is real and bubbles up.
+    let entrants = fetch_draft_entrants(&state.db.pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("fetch_draft_entrants failed: {e}") })),
+            )
+        })?;
 
     let projections =
         compose_all_projections(&state.db.pool, base_season, &entrants, &state.predictor)
@@ -508,11 +507,11 @@ async fn projection_team_detail(
     State(state): State<Arc<AppState>>,
     Path((year, team_id)): Path<(i32, Uuid)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !(2025..=2030).contains(&year) {
+    if !(2016..=2030).contains(&year) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "year out of range — projections supported for 2025–2030",
+                "error": "year out of range — projections supported for 2016–2030",
             })),
         ));
     }
@@ -546,19 +545,14 @@ async fn projection_team_detail(
     // Composition is fast (one season's worth of fetches in 3 queries);
     // single-team filtering after the fact is simpler than carving out a
     // single-team code path that risks drifting from the list route.
-    let entrants_path =
-        PathBuf::from("data/draft").join(format!("{}_early_entrants.json", base_season));
-    // Match the list route's behavior: missing-file failures are logged
-    // and the projection proceeds with an empty cohort (so a single
-    // team page doesn't 500 just because the draft list is unavailable).
-    let entrants = load_draft_entrants(&entrants_path).unwrap_or_else(|e| {
-        tracing::warn!(
-            path = %entrants_path.display(),
-            error = %e,
-            "draft entrants file unavailable; projecting without draft cohort",
-        );
-        vec![]
-    });
+    // Same source as the list route: the `draft_entrants` table. Empty result
+    // (year not loaded) degrades to seniors + portal-only departures.
+    let entrants = fetch_draft_entrants(pool, base_season).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("fetch_draft_entrants failed: {e}") })),
+        )
+    })?;
     let projections = compose_all_projections(pool, base_season, &entrants, &state.predictor)
         .await
         .map_err(|e| {

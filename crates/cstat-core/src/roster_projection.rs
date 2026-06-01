@@ -490,22 +490,43 @@ impl ProjectedRoster {
     }
 }
 
-/// One row of the draft early-entrants JSON. Fields match the v1 shape
-/// described in `data/draft/2026_early_entrants.json`.
-#[derive(Debug, Clone, Deserialize)]
+/// One draft early-entrant. Deserializes from the `{year}_early_entrants.json`
+/// capture (v1 shape in `data/draft/2026_early_entrants.json`) AND maps from a
+/// `draft_entrants` row (the `player_name` column aliases to `name`).
+#[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
 pub struct DraftEntrant {
     pub name: String,
     pub current_team: String,
     pub status: String,
 }
 
-/// Load + parse `data/draft/{year}_early_entrants.json`. Caller is the
-/// route handler; the route holds `season` and constructs the path.
+/// Load + parse `data/draft/{year}_early_entrants.json`. The version-controlled
+/// capture; `cstat-ingest draft` loads it into `draft_entrants`, which is what
+/// the projection actually reads (see `fetch_draft_entrants`).
 pub fn load_draft_entrants(path: &Path) -> Result<Vec<DraftEntrant>, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
     let parsed: Vec<DraftEntrant> = serde_json::from_str(&content)
         .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
     Ok(parsed)
+}
+
+/// DB-backed sibling of `load_draft_entrants`: the early-entrant rows for one
+/// base season from `draft_entrants`. Preferred over the file read so the data
+/// syncs to prod with the rest of the schema (loose JSON files don't, which
+/// silently zeroed draft departures in historical/backtest projections).
+/// Empty vec when nothing's loaded for `year` — the projection then degrades
+/// to seniors + portal-only departures, same as a missing file used to.
+pub async fn fetch_draft_entrants(
+    pool: &PgPool,
+    year: i32,
+) -> Result<Vec<DraftEntrant>, sqlx::Error> {
+    sqlx::query_as::<_, DraftEntrant>(
+        "SELECT player_name AS name, current_team, status \
+         FROM draft_entrants WHERE year = $1",
+    )
+    .bind(year)
+    .fetch_all(pool)
+    .await
 }
 
 /// One pick from the Tankathon mock draft. The API surfaces this on
@@ -665,7 +686,14 @@ struct RecruitRow {
     full_name: String,
     composite_rank: Option<i32>,
     star_rating: Option<i16>,
+    #[allow(dead_code)] // forensics only; bucketing uses `base_team_id`
     committed_team_id: Option<Uuid>,
+    // `committed_team_id` resolves to the recruit's *playing*-season team UUID
+    // (`resolve_team_joins` caps at `year + 1`), but the projection buckets onto
+    // the *base*-season roster. `base_team_id` re-resolves via `natstat_id` to
+    // the base-season (`= r.year`) team UUID so recruits attach in every season,
+    // not just the live forecast where the playing season isn't ingested yet.
+    base_team_id: Option<Uuid>,
     #[allow(dead_code)] // kept for forensics; row-filter is in SQL
     commit_status: Option<String>,
     // Freshman-impact prior model inputs (Phase 6). Same join chain as
@@ -842,6 +870,7 @@ pub async fn compose_all_projections(
             r.composite_rank,
             r.star_rating,
             r.committed_team_id,
+            tm_prior.id                       AS base_team_id,
             r.commit_status,
             r.composite_rating,
             r.position_rank,
@@ -939,8 +968,10 @@ pub async fn compose_all_projections(
 
     let mut recruits_by_team: HashMap<Uuid, Vec<(PlayerRow, RecruitMeta)>> = HashMap::new();
     for (r, pred) in recruit_rows.into_iter().zip(predictions) {
-        let Some(team_id) = r.committed_team_id else {
-            continue; // SQL gate already filters; defensive guard.
+        // Bucket onto the base-season team UUID (re-resolved via natstat_id),
+        // not the raw `committed_team_id` (which points at the playing season).
+        let Some(team_id) = r.base_team_id else {
+            continue; // no base-season team row (new/defunct program) — skip.
         };
         let rank_tier = FreshmanTier::from_rank(r.composite_rank);
         // `synthesize_freshman_row` only needs the mean for tier

@@ -1111,6 +1111,9 @@ export interface CoachLeaderboardRow {
   cae_shrunk: number;
   cae_raw_mean: number;
   cae_adj_shrunk: number;
+  // Era-neutral comparison value (each season's mean residual removed). Use
+  // for cross-coach ranking only — NOT an absolute "how much" measure.
+  cae_centered_shrunk: number;
   reliability: number;
   ci_low: number;
   ci_high: number;
@@ -1151,6 +1154,7 @@ export interface CoachSeasonLeaderboardRow {
   projection: number;
   cae_raw: number;
   cae_debiased: number;
+  cae_centered: number;
   is_new_hc: boolean | null;
 }
 
@@ -1174,6 +1178,9 @@ export interface CoachRating {
   cae_raw_mean: number;
   cae_adj_shrunk: number;
   cae_adj_mean: number;
+  // Era-neutral comparison value — cross-coach ranking only, not absolute.
+  cae_centered_shrunk: number;
+  cae_centered_mean: number;
   reliability: number;
   ci_low: number;
   ci_high: number;
@@ -1190,6 +1197,7 @@ export interface CoachSeasonRow {
   projection: number;
   cae_raw: number;
   cae_debiased: number;
+  cae_centered: number;
   is_new_hc: boolean | null;
 }
 

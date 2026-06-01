@@ -153,12 +153,43 @@ def debias_by_projection_quartile(rows: list[dict]) -> list[dict]:
     return buckets
 
 
+def center_by_season(rows: list[dict]) -> list[dict]:
+    """Subtract each season's mean residual from every row's cae_raw.
+
+    Produces `cae_centered` — a COMPARISON-ONLY view. Centering removes the
+    season-level component of the residual, which mixes projection
+    miscalibration (artifact) with genuine era effects (real coaching signal)
+    inseparably. Era-neutral ranking is valid; "how much did this coach add"
+    is NOT (it would erase the real era component). Headline stays raw.
+
+    Mutates rows in place (adds `cae_centered`) and returns the per-season
+    bias table for the summary."""
+    by_season: dict[int, list[dict]] = defaultdict(list)
+    for x in rows:
+        by_season[x["season"]].append(x)
+    table = []
+    for s in sorted(by_season):
+        g = by_season[s]
+        bias = mean([x["cae_raw"] for x in g])
+        for x in g:
+            x["cae_centered"] = x["cae_raw"] - bias
+        table.append({"season": s, "n": len(g), "mean_resid": bias})
+    return table
+
+
 def posterior_ci(mean_resid: float, n: int, s2w: float, s2b: float):
     """EB shrink + 95% credibility interval under the normal random-effects
     model: prior a~N(0,σ²_b), likelihood mean~N(a, σ²_w/n).
         shrink   = n/(n+k),  k = σ²_w/σ²_b
         post_sd  = sqrt(σ²_b · k/(n+k))
     Returns (shrunk, reliability, ci_low, ci_high)."""
+    # No between-coach variance (variance_components clamps σ²_b at 0) → no
+    # signal to shrink toward, so the posterior collapses to the prior mean 0.
+    # Guards the season-centered path especially: centering pushes MS_between
+    # toward MS_within, so the clamp can fire on some cohorts. (vc_of guards
+    # k the same way; posterior_ci hadn't.)
+    if s2b <= 0:
+        return 0.0, 0.0, 0.0, 0.0
     k = s2w / s2b
     rel = n / (n + k)
     shrunk = rel * mean_resid
@@ -196,6 +227,12 @@ def main() -> None:
         print(f"  Q{b['q']} n={b['n']:4d}  phase_b∈[{b['phase_b_lo']:+.0f},"
               f"{b['phase_b_hi']:+.0f}]  mean_resid={b['mean_resid']:+.2f}")
 
+    season_bias = center_by_season(rows)
+    print("\nseason-centering (subtracted from cae_raw → cae_centered, "
+          "comparison-only):")
+    for b in season_bias:
+        print(f"  {b['season']} n={b['n']:4d}  mean_resid={b['mean_resid']:+.2f}")
+
     # Variance components — headline on RAW, reported alongside the de-biased.
     def vc_of(key):
         v = variance_components([{"coach": x["coach_id"], "resid": x[key]}
@@ -209,6 +246,7 @@ def main() -> None:
 
     vraw = vc_of("cae_raw")
     vdeb = vc_of("cae_debiased")
+    vcen = vc_of("cae_centered")
     s2w, s2b, icc = vraw["s2w"], vraw["s2b"], vraw["icc"]
     print(f"\nvariance components (coaches ≥2: C={vraw['C']}, N={vraw['N']}):")
     print(f"  RAW (headline)   σ²_w={vraw['s2w']:.2f} σ²_b={vraw['s2b']:.2f} "
@@ -225,13 +263,15 @@ def main() -> None:
     for cid, xs in by_coach.items():
         m = mean([x["cae_raw"] for x in xs])
         m_adj = mean([x["cae_debiased"] for x in xs])
+        m_cen = mean([x["cae_centered"] for x in xs])
         shrunk, rel, lo, hi = posterior_ci(m, len(xs), s2w, s2b)
         adj_shrunk, _, _, _ = posterior_ci(m_adj, len(xs), vdeb["s2w"], vdeb["s2b"])
+        cen_shrunk, _, _, _ = posterior_ci(m_cen, len(xs), vcen["s2w"], vcen["s2b"])
         seasons = [x["season"] for x in xs]
         ratings.append({
             "coach_id": cid, "coach": xs[0]["coach"], "n": len(xs),
-            "raw_mean": m, "adj_mean": m_adj, "shrunk": shrunk,
-            "adj_shrunk": adj_shrunk, "reliability": rel,
+            "raw_mean": m, "adj_mean": m_adj, "cen_mean": m_cen, "shrunk": shrunk,
+            "adj_shrunk": adj_shrunk, "cen_shrunk": cen_shrunk, "reliability": rel,
             "ci_low": lo, "ci_high": hi,
             "first_season": min(seasons), "last_season": max(seasons),
             "phase_b_mean": mean([x["phase_b"] for x in xs]),
@@ -308,31 +348,34 @@ def write_db(engine, rows: list[dict], ratings: list[dict]) -> None:
                 """
                 INSERT INTO coach_season_cae
                   (coach_id, season, team_natstat_id, actual_adjem, projection,
-                   cae_raw, cae_debiased)
+                   cae_raw, cae_debiased, cae_centered)
                 VALUES
-                  (:coach_id, :season, :tn, :actual, :phase_b, :cae_raw, :cae_deb)
+                  (:coach_id, :season, :tn, :actual, :phase_b, :cae_raw, :cae_deb,
+                   :cae_cen)
                 """
             ),
             [{"coach_id": x["coach_id"], "season": x["season"],
               "tn": x["team_natstat_id"], "actual": x["actual"],
               "phase_b": x["phase_b"], "cae_raw": x["cae_raw"],
-              "cae_deb": x["cae_debiased"]} for x in rows],
+              "cae_deb": x["cae_debiased"], "cae_cen": x["cae_centered"]}
+             for x in rows],
         )
         conn.execute(
             text(
                 """
                 INSERT INTO coach_ratings
                   (coach_id, n_seasons, cae_raw_mean, cae_shrunk, cae_adj_mean,
-                   cae_adj_shrunk, reliability, ci_low, ci_high,
-                   first_season, last_season)
+                   cae_adj_shrunk, cae_centered_mean, cae_centered_shrunk,
+                   reliability, ci_low, ci_high, first_season, last_season)
                 VALUES
-                  (:coach_id, :n, :raw, :shrunk, :adj_m, :adj_s, :rel, :lo, :hi,
-                   :fs, :ls)
+                  (:coach_id, :n, :raw, :shrunk, :adj_m, :adj_s, :cen_m, :cen_s,
+                   :rel, :lo, :hi, :fs, :ls)
                 """
             ),
             [{"coach_id": r["coach_id"], "n": r["n"], "raw": r["raw_mean"],
               "shrunk": r["shrunk"], "adj_m": r["adj_mean"],
-              "adj_s": r["adj_shrunk"], "rel": r["reliability"], "lo": r["ci_low"],
+              "adj_s": r["adj_shrunk"], "cen_m": r["cen_mean"],
+              "cen_s": r["cen_shrunk"], "rel": r["reliability"], "lo": r["ci_low"],
               "hi": r["ci_high"], "fs": r["first_season"], "ls": r["last_season"]}
              for r in ratings],
         )

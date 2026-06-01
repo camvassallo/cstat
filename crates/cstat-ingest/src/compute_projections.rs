@@ -21,11 +21,10 @@
 use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_projection::{
-    compose_all_projections, load_draft_entrants, project_returner_cam_v3, score_projection_adj_em,
+    compose_all_projections, fetch_draft_entrants, project_returner_cam_v3, score_projection_adj_em,
 };
 use sqlx::PgPool;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Midpoint return-probability for an in-season projection. By the time a
@@ -84,12 +83,9 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
     for &year in years {
         let base_season = year - 1;
 
-        // Draft-uncertain cohort: best-effort, usually absent for an
-        // in-season/historical target (→ empty uncertain bucket, floor ==
-        // ceiling). The live offseason year would carry a real file.
-        let entrants_path =
-            PathBuf::from("data/draft").join(format!("{base_season}_early_entrants.json"));
-        let entrants = load_draft_entrants(&entrants_path).unwrap_or_default();
+        // Firm draft departures from the `draft_entrants` table — removes
+        // drafted players from the returning roster (else over-projected).
+        let entrants = fetch_draft_entrants(pool, base_season).await?;
 
         let projections = compose_all_projections(pool, base_season, &entrants, predictor).await?;
         let baseline_map = fetch_baseline_adj_em(pool, base_season).await?;

@@ -5,7 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
-use cstat_core::roster_projection::{load_draft_entrants, normalize_player_name as normalize};
+use cstat_core::roster_projection::{fetch_draft_entrants, normalize_player_name as normalize};
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -161,8 +161,10 @@ async fn draft_board(
     // early-entrant list is only Fr/So/Jr by construction — seniors never
     // appear. Missing file degrades to "nobody declared" rather than
     // failing the request.
-    let entrant_path = PathBuf::from("data/draft").join(format!("{year}_early_entrants.json"));
-    let entrants: HashMap<String, String> = load_draft_entrants(&entrant_path)
+    // From the `draft_entrants` table (keyed by draft year). A DB error
+    // degrades to "nobody declared" rather than failing the board request.
+    let entrants: HashMap<String, String> = fetch_draft_entrants(&state.db.pool, year)
+        .await
         .unwrap_or_default()
         .into_iter()
         .map(|e| (normalize(&e.name), e.status))

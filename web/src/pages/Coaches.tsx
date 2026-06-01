@@ -58,6 +58,7 @@ type CareerSortKey =
   | 'name'
   | 'cae_shrunk'
   | 'cae_adj_shrunk'
+  | 'cae_centered_shrunk'
   | 'reliability'
   | 'n_seasons'
   | 'last_team_name';
@@ -92,6 +93,8 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
             <StickyHeader align="right">95% CI</StickyHeader>
             <SortHeader label="Adj" sortKey="cae_adj_shrunk" current={sort} onSort={onSort} align="right"
               title="Prestige-adjusted CAE (projection-quartile-de-biased) — a conservative lower bound that strips the program component." />
+            <SortHeader label="Era±" sortKey="cae_centered_shrunk" current={sort} onSort={onSort} align="right"
+              title="Season-centered CAE — each season's mean residual removed for era-neutral COMPARISON between coaches. Use to rank coaches on equal footing across eras; it deliberately discards season-level signal, so it is not a 'how much' measure like the headline CAE." />
             <SortHeader label="Rel." sortKey="reliability" current={sort} onSort={onSort} align="right"
               title="Reliability = n / (n + k). Shrinkage weight; low = thin tenure, treat the rating as soft." />
             <SortHeader label="Yrs" sortKey="n_seasons" current={sort} onSort={onSort} align="right"
@@ -118,6 +121,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
                 {fmtCae(c.ci_low)} … {fmtCae(c.ci_high)}
               </td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_adj_shrunk)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_centered_shrunk)}</td>
               <td className="py-1.5 px-2"><ReliabilityBar value={c.reliability} /></td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-300">{c.n_seasons}</td>
             </tr>

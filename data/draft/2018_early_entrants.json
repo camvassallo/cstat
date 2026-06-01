@@ -1,0 +1,257 @@
+[
+  {
+    "name": "DeAndre Ayton",
+    "current_team": "Arizona",
+    "status": "gone"
+  },
+  {
+    "name": "Marvin Bagley",
+    "current_team": "Duke",
+    "status": "gone"
+  },
+  {
+    "name": "Jaren Jackson Jr.",
+    "current_team": "Michigan State",
+    "status": "gone"
+  },
+  {
+    "name": "Trae Young",
+    "current_team": "Oklahoma",
+    "status": "gone"
+  },
+  {
+    "name": "Mohamed Bamba",
+    "current_team": "Texas",
+    "status": "gone"
+  },
+  {
+    "name": "Wendell Carter",
+    "current_team": "Duke",
+    "status": "gone"
+  },
+  {
+    "name": "Collin Sexton",
+    "current_team": "Alabama",
+    "status": "gone"
+  },
+  {
+    "name": "Kevin Knox",
+    "current_team": "Kentucky",
+    "status": "gone"
+  },
+  {
+    "name": "Mikal Bridges",
+    "current_team": "Villanova",
+    "status": "gone"
+  },
+  {
+    "name": "Shai Gilgeous-Alexander",
+    "current_team": "Kentucky",
+    "status": "gone"
+  },
+  {
+    "name": "Miles Bridges",
+    "current_team": "Michigan State",
+    "status": "gone"
+  },
+  {
+    "name": "Jerome Robinson",
+    "current_team": "Boston College",
+    "status": "gone"
+  },
+  {
+    "name": "Michael Porter",
+    "current_team": "Missouri",
+    "status": "gone"
+  },
+  {
+    "name": "Troy Brown",
+    "current_team": "Oregon",
+    "status": "gone"
+  },
+  {
+    "name": "Zhaire Smith",
+    "current_team": "Texas Tech",
+    "status": "gone"
+  },
+  {
+    "name": "Donte DiVincenzo",
+    "current_team": "Villanova",
+    "status": "gone"
+  },
+  {
+    "name": "Lonnie Walker",
+    "current_team": "Miami",
+    "status": "gone"
+  },
+  {
+    "name": "Kevin Huerter",
+    "current_team": "Maryland",
+    "status": "gone"
+  },
+  {
+    "name": "Josh Okogie",
+    "current_team": "Georgia Tech",
+    "status": "gone"
+  },
+  {
+    "name": "Grayson Allen",
+    "current_team": "Duke",
+    "status": "gone"
+  },
+  {
+    "name": "Chandler Hutchison",
+    "current_team": "Boise State",
+    "status": "gone"
+  },
+  {
+    "name": "Aaron Holiday",
+    "current_team": "UCLA",
+    "status": "gone"
+  },
+  {
+    "name": "Moritz Wagner",
+    "current_team": "Michigan",
+    "status": "gone"
+  },
+  {
+    "name": "Landry Shamet",
+    "current_team": "Wichita State",
+    "status": "gone"
+  },
+  {
+    "name": "Robert Williams",
+    "current_team": "Texas A&M",
+    "status": "gone"
+  },
+  {
+    "name": "Jacob Evans",
+    "current_team": "Cincinnati",
+    "status": "gone"
+  },
+  {
+    "name": "Omari Spellman",
+    "current_team": "Villanova",
+    "status": "gone"
+  },
+  {
+    "name": "Jevon Carter",
+    "current_team": "West Virginia",
+    "status": "gone"
+  },
+  {
+    "name": "Jalen Brunson",
+    "current_team": "Villanova",
+    "status": "gone"
+  },
+  {
+    "name": "Devonte' Graham",
+    "current_team": "Kansas",
+    "status": "gone"
+  },
+  {
+    "name": "Melvin Frazier",
+    "current_team": "Tulane",
+    "status": "gone"
+  },
+  {
+    "name": "Gary Trent Jr.",
+    "current_team": "Duke",
+    "status": "gone"
+  },
+  {
+    "name": "Khyri Thomas",
+    "current_team": "Creighton",
+    "status": "gone"
+  },
+  {
+    "name": "Jarred Vanderbilt",
+    "current_team": "Kentucky",
+    "status": "gone"
+  },
+  {
+    "name": "Bruce Brown",
+    "current_team": "Miami",
+    "status": "gone"
+  },
+  {
+    "name": "Justin Jackson",
+    "current_team": "Maryland",
+    "status": "gone"
+  },
+  {
+    "name": "Hamidou Diallo",
+    "current_team": "Kentucky",
+    "status": "gone"
+  },
+  {
+    "name": "De'Anthony Melton",
+    "current_team": "USC",
+    "status": "gone"
+  },
+  {
+    "name": "Sviatoslav Mykhailiuk",
+    "current_team": "Kansas",
+    "status": "gone"
+  },
+  {
+    "name": "Keita Bates-Diop",
+    "current_team": "Ohio State",
+    "status": "gone"
+  },
+  {
+    "name": "Chimezie Metu",
+    "current_team": "USC",
+    "status": "gone"
+  },
+  {
+    "name": "Alize Johnson",
+    "current_team": "Missouri State",
+    "status": "gone"
+  },
+  {
+    "name": "Tony Carr",
+    "current_team": "Penn State",
+    "status": "gone"
+  },
+  {
+    "name": "Vince Edwards",
+    "current_team": "Purdue",
+    "status": "gone"
+  },
+  {
+    "name": "Devon Hall",
+    "current_team": "Virginia",
+    "status": "gone"
+  },
+  {
+    "name": "Shake Milton",
+    "current_team": "SMU",
+    "status": "gone"
+  },
+  {
+    "name": "Ray Spalding",
+    "current_team": "Louisville",
+    "status": "gone"
+  },
+  {
+    "name": "Kevin Hervey",
+    "current_team": "UT Arlington",
+    "status": "gone"
+  },
+  {
+    "name": "Thomas Welsh",
+    "current_team": "UCLA",
+    "status": "gone"
+  },
+  {
+    "name": "George King",
+    "current_team": "Colorado",
+    "status": "gone"
+  },
+  {
+    "name": "Kostas Antetokounmpo",
+    "current_team": "Dayton",
+    "status": "gone"
+  }
+]
