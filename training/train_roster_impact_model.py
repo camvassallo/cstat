@@ -78,7 +78,14 @@ SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 202
 # backtest now spans 5 seasons (~1.8k team-seasons), 3.6× the prior
 # 2-season sample. Extend backward (2021 needs transfers(2020)=371, still
 # usable) or forward as new seasons finish with transfers ingested.
-LOSO_EXPORT_SEASONS = (2022, 2023, 2024, 2025, 2026)
+#
+# Extended back to 2016 (the earliest target `compose_all_projections` can
+# reconstruct: needs base-season 2015 player data + trajectory_oof, which
+# starts at target_season 2016). Pre-2022 transfer data is sparse, so those
+# seasons' outbound/inbound flow features fall back to 0 — a faithful
+# representation of the pre-portal era, not a gap. Powers the 2016→2026 CAE
+# backfill on the Coaches page.
+LOSO_EXPORT_SEASONS = (2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
 ARCHETYPES = (
     "Wizard", "Sorcerer", "Warlock", "Bard", "Ranger", "Barbarian",
     "Paladin", "Monk", "Cleric", "Druid", "Rogue", "Fighter",

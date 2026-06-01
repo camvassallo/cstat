@@ -10,14 +10,19 @@ import { useIsMobile } from '../components/useIsMobile';
 
 // The upcoming (not-yet-played) season — the default projection target.
 // Projections compose from `year - 1`, so the upcoming year is
-// newest-played + 1; the backend route floors at 2025.
+// newest-played + 1; the backend route floors at 2016.
 const UPCOMING_YEAR = AVAILABLE_SEASONS_FALLBACK[0] + 1;
+
+// Earliest target we can project: the backend composes from `year - 1` and
+// needs that base season's trajectory_oof_predictions, which start at
+// target_season 2016 (a 2015 target would need un-ingested 2014 base data).
+const EARLIEST_PROJECTABLE_YEAR = 2016;
 
 // Every projectable year, newest first: the upcoming forecast plus the
 // played seasons we can show a projected-vs-actual backtest for.
 const PROJECTABLE_YEARS: number[] = (() => {
   const ys: number[] = [];
-  for (let y = UPCOMING_YEAR; y >= 2025; y--) ys.push(y);
+  for (let y = UPCOMING_YEAR; y >= EARLIEST_PROJECTABLE_YEAR; y--) ys.push(y);
   return ys;
 })();
 

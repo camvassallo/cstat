@@ -56,8 +56,14 @@
     "no_cam_v3": 1735,
     "oof_pct": 57.9
   },
-  "final_n_estimators": 211,
+  "final_n_estimators": 261,
   "loso_export_seasons": [
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
     2022,
     2023,
     2024,
@@ -65,6 +71,12 @@
     2026
   ],
   "loso_train_rows": {
+    "2016": 3904,
+    "2017": 3904,
+    "2018": 3904,
+    "2019": 3902,
+    "2020": 3902,
+    "2021": 3914,
     "2022": 3903,
     "2023": 3893,
     "2024": 3893,
@@ -89,207 +101,207 @@
   "backtest_loso": {
     "per_season": {
       "2015": {
-        "mae": 2.5731033193243817,
-        "rmse": 3.5107552208355197,
-        "r2": 0.9463675683385689,
+        "mae": 2.5742105677215723,
+        "rmse": 3.5087275954381205,
+        "r2": 0.9464295009260792,
         "n": 351
       },
       "2016": {
-        "mae": 3.5676850694470397,
-        "rmse": 4.500796814822235,
-        "r2": 0.9100158805098081,
+        "mae": 3.5446906334155663,
+        "rmse": 4.475585632389142,
+        "r2": 0.9110211479568924,
         "n": 351
       },
       "2017": {
-        "mae": 3.765144768035467,
-        "rmse": 4.747789016836447,
-        "r2": 0.9034565313427074,
+        "mae": 3.7844344626265,
+        "rmse": 4.771295756492076,
+        "r2": 0.9024981735749195,
         "n": 351
       },
       "2018": {
-        "mae": 3.6565269628968524,
-        "rmse": 4.638575470082071,
-        "r2": 0.9017515857943353,
+        "mae": 3.647562517817011,
+        "rmse": 4.632159778221103,
+        "r2": 0.9020231759169246,
         "n": 351
       },
       "2019": {
-        "mae": 3.7043220618612644,
-        "rmse": 4.663676483413934,
-        "r2": 0.9000801938894627,
+        "mae": 3.697875154322821,
+        "rmse": 4.660004552899066,
+        "r2": 0.9002374750165724,
         "n": 353
       },
       "2020": {
-        "mae": 3.446185713925044,
-        "rmse": 4.592824031046804,
-        "r2": 0.8990617051385146,
+        "mae": 3.433633466929548,
+        "rmse": 4.558200630187878,
+        "r2": 0.9005778329037516,
         "n": 353
       },
       "2021": {
-        "mae": 4.338643775268481,
-        "rmse": 5.677190597493643,
-        "r2": 0.8596081473054666,
+        "mae": 4.3562263107879815,
+        "rmse": 5.696358555389563,
+        "r2": 0.8586585339559774,
         "n": 341
       },
       "2022": {
-        "mae": 4.030580691758721,
-        "rmse": 5.126001729853463,
-        "r2": 0.8751380632234824,
+        "mae": 4.033150601088165,
+        "rmse": 5.120846525511992,
+        "r2": 0.8753890834745583,
         "n": 352
       },
       "2023": {
-        "mae": 3.761226539964502,
-        "rmse": 4.744281871660483,
-        "r2": 0.8886962918260072,
+        "mae": 3.7479271407952868,
+        "rmse": 4.736661635882467,
+        "r2": 0.8890535553137773,
         "n": 362
       },
       "2024": {
-        "mae": 3.6511857682730704,
-        "rmse": 4.679530942442214,
-        "r2": 0.9033185513135444,
+        "mae": 3.6573071167247573,
+        "rmse": 4.691406866954221,
+        "r2": 0.9028272035464545,
         "n": 362
       },
       "2025": {
-        "mae": 3.6946292689767777,
-        "rmse": 4.703666834051751,
-        "r2": 0.9148885608099105,
+        "mae": 3.6939448850718426,
+        "rmse": 4.704283624694001,
+        "r2": 0.9148662380634309,
         "n": 364
       },
       "2026": {
-        "mae": 3.874529029451539,
-        "rmse": 4.899955858085898,
-        "r2": 0.9139371652160191,
+        "mae": 3.845275427222672,
+        "rmse": 4.878999220125236,
+        "r2": 0.9146717558276178,
         "n": 364
       }
     },
     "pooled": {
-      "mae": 3.6712718105626583,
-      "rmse": 4.728399071954151,
-      "r2": 0.9022510691759398
+      "mae": 3.667191770504368,
+      "rmse": 4.7245877917687675,
+      "r2": 0.9024085848225458
     },
     "best_iterations": [
       85,
-      158,
-      285,
-      143,
+      150,
+      279,
+      141,
       245,
-      129,
-      239,
-      173,
-      170,
-      265,
+      182,
+      290,
+      210,
+      174,
+      470,
       275,
-      360
+      636
     ]
   },
   "cv_5fold": {
-    "mae": 3.6756325505530305,
-    "rmse": 4.718098789313628,
-    "r2": 0.902475230424382
+    "mae": 3.67270945877164,
+    "rmse": 4.714912005124019,
+    "r2": 0.9026032095352392
   },
   "feature_importance": [
     {
       "name": "cam_sum",
-      "importance": 387
+      "importance": 421
     },
     {
       "name": "cam_wmean",
-      "importance": 251
+      "importance": 280
     },
     {
       "name": "arch_bard",
-      "importance": 233
+      "importance": 272
     },
     {
       "name": "arch_sorcerer",
-      "importance": 218
+      "importance": 258
     },
     {
       "name": "arch_ranger",
-      "importance": 179
+      "importance": 216
     },
     {
       "name": "arch_cleric",
-      "importance": 155
+      "importance": 177
     },
     {
       "name": "outbound_cam_v3_sum",
-      "importance": 135
-    },
-    {
-      "name": "arch_rogue",
-      "importance": 126
-    },
-    {
-      "name": "arch_wizard",
-      "importance": 121
-    },
-    {
-      "name": "arch_druid",
-      "importance": 120
-    },
-    {
-      "name": "arch_paladin",
-      "importance": 115
-    },
-    {
-      "name": "arch_fighter",
-      "importance": 113
+      "importance": 163
     },
     {
       "name": "arch_monk",
-      "importance": 108
+      "importance": 158
     },
     {
-      "name": "roster_size",
-      "importance": 101
+      "name": "arch_druid",
+      "importance": 150
     },
     {
-      "name": "cam_top7_mean",
-      "importance": 99
+      "name": "arch_rogue",
+      "importance": 150
     },
     {
-      "name": "inbound_cam_v3_sum",
-      "importance": 97
+      "name": "arch_paladin",
+      "importance": 145
     },
     {
-      "name": "exp_sr_share",
-      "importance": 90
+      "name": "arch_wizard",
+      "importance": 144
     },
     {
       "name": "exp_fr_share",
-      "importance": 88
+      "importance": 138
+    },
+    {
+      "name": "cam_top7_mean",
+      "importance": 135
+    },
+    {
+      "name": "arch_fighter",
+      "importance": 132
+    },
+    {
+      "name": "exp_sr_share",
+      "importance": 125
     },
     {
       "name": "exp_so_share",
-      "importance": 78
+      "importance": 122
     },
     {
-      "name": "exp_jr_share",
-      "importance": 77
+      "name": "inbound_cam_v3_sum",
+      "importance": 121
     },
     {
-      "name": "arch_barbarian",
-      "importance": 70
+      "name": "roster_size",
+      "importance": 112
     },
     {
       "name": "cam_top3_mean",
-      "importance": 68
+      "importance": 110
+    },
+    {
+      "name": "exp_jr_share",
+      "importance": 107
     },
     {
       "name": "cam_top1",
-      "importance": 63
+      "importance": 85
+    },
+    {
+      "name": "arch_barbarian",
+      "importance": 81
     },
     {
       "name": "arch_warlock",
-      "importance": 49
+      "importance": 75
     },
     {
       "name": "cam_count_gt5",
-      "importance": 20
+      "importance": 32
     },
     {
       "name": "cam_count_gt10",
-      "importance": 4
+      "importance": 6
     },
     {
       "name": "cam_count_gt15",

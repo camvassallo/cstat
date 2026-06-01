@@ -225,11 +225,15 @@ async fn projection_list(
     State(state): State<Arc<AppState>>,
     Path(year): Path<i32>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !(2025..=2030).contains(&year) {
+    // Floor at 2016, the earliest target we can compose: projections need a
+    // played base season (`year - 1`) plus that base season's
+    // trajectory_oof_predictions, which start at target_season 2016 (a 2015
+    // target would need 2014 base data we don't ingest).
+    if !(2016..=2030).contains(&year) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "year out of range — projections supported for 2025–2030",
+                "error": "year out of range — projections supported for 2016–2030",
             })),
         ));
     }
@@ -508,11 +512,11 @@ async fn projection_team_detail(
     State(state): State<Arc<AppState>>,
     Path((year, team_id)): Path<(i32, Uuid)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !(2025..=2030).contains(&year) {
+    if !(2016..=2030).contains(&year) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "year out of range — projections supported for 2025–2030",
+                "error": "year out of range — projections supported for 2016–2030",
             })),
         ));
     }

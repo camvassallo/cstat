@@ -665,7 +665,14 @@ struct RecruitRow {
     full_name: String,
     composite_rank: Option<i32>,
     star_rating: Option<i16>,
+    #[allow(dead_code)] // forensics only; bucketing uses `base_team_id`
     committed_team_id: Option<Uuid>,
+    // `committed_team_id` resolves to the recruit's *playing*-season team UUID
+    // (`resolve_team_joins` caps at `year + 1`), but the projection buckets onto
+    // the *base*-season roster. `base_team_id` re-resolves via `natstat_id` to
+    // the base-season (`= r.year`) team UUID so recruits attach in every season,
+    // not just the live forecast where the playing season isn't ingested yet.
+    base_team_id: Option<Uuid>,
     #[allow(dead_code)] // kept for forensics; row-filter is in SQL
     commit_status: Option<String>,
     // Freshman-impact prior model inputs (Phase 6). Same join chain as
@@ -842,6 +849,7 @@ pub async fn compose_all_projections(
             r.composite_rank,
             r.star_rating,
             r.committed_team_id,
+            tm_prior.id                       AS base_team_id,
             r.commit_status,
             r.composite_rating,
             r.position_rank,
@@ -939,8 +947,10 @@ pub async fn compose_all_projections(
 
     let mut recruits_by_team: HashMap<Uuid, Vec<(PlayerRow, RecruitMeta)>> = HashMap::new();
     for (r, pred) in recruit_rows.into_iter().zip(predictions) {
-        let Some(team_id) = r.committed_team_id else {
-            continue; // SQL gate already filters; defensive guard.
+        // Bucket onto the base-season team UUID (re-resolved via natstat_id),
+        // not the raw `committed_team_id` (which points at the playing season).
+        let Some(team_id) = r.base_team_id else {
+            continue; // no base-season team row (new/defunct program) — skip.
         };
         let rank_tier = FreshmanTier::from_rank(r.composite_rank);
         // `synthesize_freshman_row` only needs the mean for tier
