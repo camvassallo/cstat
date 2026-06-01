@@ -88,7 +88,13 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
     setSort((s) =>
       s.key === key
         ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-        : { key, dir: key === 'name' || key === 'last_team_name' ? 'asc' : 'desc' },
+        : // Text columns and AdjD (lower = better defense) open ascending; every
+          // other metric opens descending (more = better).
+          {
+            key,
+            dir:
+              key === 'name' || key === 'last_team_name' || key === 'career_adj_d' ? 'asc' : 'desc',
+          },
     );
   const sorted = useMemo(
     () => [...rows].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir)),
@@ -186,7 +192,12 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
     setSort((s) =>
       s.key === key
         ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-        : { key, dir: key === 'name' || key === 'team_name' ? 'asc' : 'desc' },
+        : // Text columns and AdjD (lower = better defense) open ascending; every
+          // other metric opens descending (more = better).
+          {
+            key,
+            dir: key === 'name' || key === 'team_name' || key === 'adj_defense' ? 'asc' : 'desc',
+          },
     );
   const sorted = useMemo(
     () => [...rows].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir)),
