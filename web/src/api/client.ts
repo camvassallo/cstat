@@ -1120,6 +1120,15 @@ export interface CoachLeaderboardRow {
   n_seasons: number;
   first_season: number;
   last_season: number;
+  // Display-only team-strength means over scored seasons (AdjEM is opponent-
+  // adjusted, so SOS is baked in). NEVER a projection input. null when no
+  // scored season resolved to a team-stats row.
+  career_adj_em: number | null;
+  career_adj_o: number | null;
+  career_adj_d: number | null;
+  // Evaluative "results + overperformance" composite: z(CAE) + z(career AdjEM)
+  // over the qualified board. A lens, not a truth; null on degenerate pages.
+  blend: number | null;
   last_team_id: string | null;
   last_team_name: string | null;
   last_team_season: number | null;
@@ -1155,6 +1164,12 @@ export interface CoachSeasonLeaderboardRow {
   cae_raw: number;
   cae_debiased: number;
   cae_centered: number;
+  // That season's team AdjO/AdjD (display-only). actual_adjem is the AdjEM.
+  adj_offense: number | null;
+  adj_defense: number | null;
+  // Single-season "results + overperformance" lens: z(cae_raw) + z(AdjEM) over
+  // this season's board. A lens, not a truth; null on degenerate boards.
+  blend: number | null;
   is_new_hc: boolean | null;
 }
 
@@ -1187,6 +1202,10 @@ export interface CoachRating {
   n_seasons: number;
   first_season: number;
   last_season: number;
+  // Career-mean team strength (display-only; never a projection input).
+  career_adj_em: number | null;
+  career_adj_o: number | null;
+  career_adj_d: number | null;
 }
 
 export interface CoachSeasonRow {
@@ -1198,6 +1217,9 @@ export interface CoachSeasonRow {
   cae_raw: number;
   cae_debiased: number;
   cae_centered: number;
+  // That season's team AdjO/AdjD (display-only). actual_adjem is the AdjEM.
+  adj_offense: number | null;
+  adj_defense: number | null;
   is_new_hc: boolean | null;
 }
 
