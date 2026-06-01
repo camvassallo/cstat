@@ -514,7 +514,7 @@ function CoachCard({ coach }: { coach: TeamCoachCard }) {
           <div className="text-[10px] text-gray-500 uppercase tracking-wide">vs roster exp.</div>
           {coach.ci_low != null && coach.ci_high != null && (
             <div className="text-[10px] text-gray-600 tabular-nums">
-              {fmtCae(coach.ci_low)} … {fmtCae(coach.ci_high)}
+              {fmtCae(coach.ci_low)} – {fmtCae(coach.ci_high)}
             </div>
           )}
         </div>

@@ -19,6 +19,12 @@ type Mode = 'career' | 'season';
 // min-seasons filter would be redundant.
 const SHOW_ALL_MIN_SEASONS = 1;
 
+// Request the whole season-scoped board, not the API's 200-row default — both
+// boards run ~260–290 coaches and the Blend sort + its z-score population must
+// see every qualified coach, not a top-200-by-CAE slice. 500 is the API cap and
+// comfortably exceeds the ~360 D-I coaches in any single season.
+const FULL_BOARD_LIMIT = 500;
+
 const NEW_BADGE = (
   <span
     className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40"
@@ -75,7 +81,7 @@ function fmtStrength(v: number | null, d = 1): string {
 
 function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
   const [sort, setSort] = useState<{ key: CareerSortKey; dir: SortDir }>({
-    key: 'cae_shrunk',
+    key: 'blend',
     dir: 'desc',
   });
   const onSort = (key: CareerSortKey) =>
@@ -136,7 +142,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
                 {fmtCae(c.cae_shrunk)}
               </td>
               <td className="py-1.5 px-2 text-right tabular-nums text-[11px] text-gray-500">
-                {fmtCae(c.ci_low)} … {fmtCae(c.ci_high)}
+                {fmtCae(c.ci_low)} – {fmtCae(c.ci_high)}
               </td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_adj_shrunk)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_centered_shrunk)}</td>
@@ -161,11 +167,19 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
 
 // --- Season board: ranked by the selected year's single-season raw CAE ---
 
-type SeasonSortKey = 'name' | 'team_name' | 'actual_adjem' | 'projection' | 'cae_raw';
+type SeasonSortKey =
+  | 'name'
+  | 'team_name'
+  | 'actual_adjem'
+  | 'adj_offense'
+  | 'adj_defense'
+  | 'projection'
+  | 'cae_raw'
+  | 'blend';
 
 function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
   const [sort, setSort] = useState<{ key: SeasonSortKey; dir: SortDir }>({
-    key: 'cae_raw',
+    key: 'blend',
     dir: 'desc',
   });
   const onSort = (key: SeasonSortKey) =>
@@ -187,12 +201,18 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
             <StickyHeader align="right" className="w-10">#</StickyHeader>
             <SortHeader label="Coach" sortKey="name" current={sort} onSort={onSort} />
             <SortHeader label="Team" sortKey="team_name" current={sort} onSort={onSort} />
-            <SortHeader label="Actual" sortKey="actual_adjem" current={sort} onSort={onSort} align="right"
+            <SortHeader label="AdjEM" sortKey="actual_adjem" current={sort} onSort={onSort} align="right"
               title="The team's actual AdjEM that season." />
+            <SortHeader label="AdjO" sortKey="adj_offense" current={sort} onSort={onSort} align="right"
+              title="Team adjusted offensive efficiency that season (points per 100 possessions, opponent-adjusted)." />
+            <SortHeader label="AdjD" sortKey="adj_defense" current={sort} onSort={onSort} align="right"
+              title="Team adjusted defensive efficiency that season (points allowed per 100 possessions; lower is better)." />
             <SortHeader label="Proj" sortKey="projection" current={sort} onSort={onSort} align="right"
               title="Roster-only projected AdjEM (what the talent on hand was worth)." />
             <SortHeader label="CAE" sortKey="cae_raw" current={sort} onSort={onSort} align="right"
               title="Single-season Coach-Above-Expectation = actual − projection. Noisy; the career view shrinks this." />
+            <SortHeader label="Blend" sortKey="blend" current={sort} onSort={onSort} align="right"
+              title="Evaluative composite: z(CAE) + z(AdjEM) over this season's board — strong team AND beat the roster. A lens for human comparison, not a rigorous metric, and never fed back into forecasts." />
           </tr>
         </thead>
         <tbody>
@@ -209,9 +229,14 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
                 {c.is_new_hc && NEW_BADGE}
               </td>
               <td className="py-1.5 px-2 text-right tabular-nums">{c.actual_adjem.toFixed(1)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_offense)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_defense)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{c.projection.toFixed(1)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums font-semibold" style={{ color: caeColor(c.cae_raw) }}>
                 {fmtCae(c.cae_raw)}
+              </td>
+              <td className="py-1.5 px-2 text-right tabular-nums font-medium" style={{ color: caeColor(c.blend) }}>
+                {c.blend == null ? '—' : fmtCae(c.blend, 2)}
               </td>
             </tr>
           ))}
@@ -254,13 +279,13 @@ export function Coaches() {
     };
     const req =
       mode === 'season'
-        ? fetchCoachSeasonBoard(season).then((res) => {
+        ? fetchCoachSeasonBoard(season, FULL_BOARD_LIMIT).then((res) => {
             if (cancelled) return;
             setBoard({ mode: 'season', rows: res.coaches });
             setError(null);
             applyMeta(res.available_seasons);
           })
-        : fetchCoaches({ minSeasons: SHOW_ALL_MIN_SEASONS, season }).then((res) => {
+        : fetchCoaches({ minSeasons: SHOW_ALL_MIN_SEASONS, season, limit: FULL_BOARD_LIMIT }).then((res) => {
             if (cancelled) return;
             setBoard({ mode: 'career', rows: res.coaches });
             setError(null);
@@ -290,19 +315,23 @@ export function Coaches() {
           </p>
           {mode === 'career' ? (
             <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-              Coaches active in <span className="text-gray-300 font-semibold">{season}</span>, ranked
-              by their <span className="text-gray-300">career</span> CAE (shrunk over tenure, so thin
-              tenures pull toward 0 — see the Rel. column for confidence). Changing the season swaps
-              which coaches show and their team; the ranking is career-wide. Coverage 2016–2026. The{' '}
+              Coaches active in <span className="text-gray-300 font-semibold">{season}</span>, sorted
+              by <span className="text-gray-300">Blend</span> (a "results + overperformance" lens:
+              strong, tough-schedule teams that also beat their roster). Sort any column — career{' '}
+              <span className="text-gray-300">CAE</span> is the headline overperformance metric
+              (shrunk over tenure, so thin tenures pull toward 0; see Rel. for confidence). The{' '}
               <span className="text-gray-300">AdjEM/AdjO/AdjD</span> columns show how strong the
-              coach's teams actually were (descriptive context, not a projection input); sort by{' '}
-              <span className="text-gray-300">Blend</span> for a "results + overperformance" view.
+              coach's teams actually were — descriptive context, never a projection input. Changing
+              the season swaps which coaches show and their team; CAE is career-wide. Coverage
+              2016–2026.
             </p>
           ) : (
             <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-              Each coach's <span className="text-gray-300 font-semibold">{season}</span> single-season
-              CAE — who beat their roster the most that year. Single seasons are noisy (the career
-              view shrinks them); treat this as a snapshot, not a rating.
+              Each coach's <span className="text-gray-300 font-semibold">{season}</span> single
+              season, sorted by <span className="text-gray-300">Blend</span> (that year's strong
+              teams that also beat their roster). Sort <span className="text-gray-300">CAE</span> for
+              who out-performed their roster the most. Single seasons are noisy (the career view
+              shrinks them); treat this as a snapshot, not a rating.
             </p>
           )}
         </div>

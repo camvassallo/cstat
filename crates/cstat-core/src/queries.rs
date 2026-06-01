@@ -2138,28 +2138,60 @@ pub struct CoachLeaderboardRow {
 /// qualified) population. This is an *evaluative* composite — "results +
 /// overperformance" — NOT a rigorous metric, and it must NEVER reach a
 /// projection: it contains raw AdjEM, the forecast's own target.
-///
-/// Coaches missing a `career_adj_em` (no matched team rows) contribute only the
-/// CAE z-term (the AdjEM term is treated as 0 — population-average). A
-/// degenerate population (n < 2 or zero variance in a term) leaves that term at
-/// 0; if both terms are undefined every `blend` stays `None`.
 pub fn apply_career_blend(rows: &mut [CoachLeaderboardRow]) {
+    apply_blend(
+        rows,
+        |r| r.cae_shrunk,
+        |r| r.career_adj_em,
+        |r, b| {
+            r.blend = b;
+        },
+    );
+}
+
+/// The single-season analog of [`apply_career_blend`]: `z(cae_raw) +
+/// z(actual_adjem)` over that season's board. Same "results + overperformance"
+/// lens, same display-only / never-a-projection-input wall — just unshrunk
+/// (single seasons carry no tenure to shrink over).
+pub fn apply_season_blend(rows: &mut [CoachSeasonLeaderboardRow]) {
+    apply_blend(
+        rows,
+        |r| r.cae_raw,
+        |r| Some(r.actual_adjem),
+        |r, b| r.blend = b,
+    );
+}
+
+/// Z-score the supplied population on two axes — a CAE term and an AdjEM term —
+/// and write their sum back via `set_blend`. Generic over the row type so the
+/// career and single-season boards share one definition.
+///
+/// Rows whose AdjEM term is `None` (no matched team row) contribute only the CAE
+/// z-term (AdjEM treated as the population average). A degenerate population
+/// (n < 2 or zero variance in a term) zeroes that term; if both terms are
+/// undefined every `blend` is left untouched at its `None` default.
+fn apply_blend<T>(
+    rows: &mut [T],
+    cae_of: impl Fn(&T) -> f64,
+    adjem_of: impl Fn(&T) -> Option<f64>,
+    set_blend: impl Fn(&mut T, Option<f64>),
+) {
     if rows.len() < 2 {
         return;
     }
-    let (mu_cae, sd_cae) = population_mean_std(rows.iter().map(|r| r.cae_shrunk));
-    let (mu_em, sd_em) = population_mean_std(rows.iter().filter_map(|r| r.career_adj_em));
+    let (mu_cae, sd_cae) = population_mean_std(rows.iter().map(&cae_of));
+    let (mu_em, sd_em) = population_mean_std(rows.iter().filter_map(&adjem_of));
     // Nothing to score on — leave every `blend` at its `None` default.
     if sd_cae.is_none() && sd_em.is_none() {
         return;
     }
     for r in rows.iter_mut() {
-        let z_cae = sd_cae.map_or(0.0, |sd| (r.cae_shrunk - mu_cae) / sd);
-        let z_em = match (r.career_adj_em, sd_em) {
+        let z_cae = sd_cae.map_or(0.0, |sd| (cae_of(r) - mu_cae) / sd);
+        let z_em = match (adjem_of(r), sd_em) {
             (Some(em), Some(sd)) => (em - mu_em) / sd,
             _ => 0.0,
         };
-        r.blend = Some(z_cae + z_em);
+        set_blend(r, Some(z_cae + z_em));
     }
 }
 
@@ -2281,6 +2313,17 @@ pub struct CoachSeasonLeaderboardRow {
     pub cae_debiased: f64,
     /// Season-centered residual — comparison-only (this season's mean removed).
     pub cae_centered: f64,
+    /// That season's team AdjO / AdjD — DISPLAY-ONLY strength context next to the
+    /// stored `actual_adjem` (the season's AdjEM). NULL when the team row didn't
+    /// resolve. Same no-leakage wall as the career columns.
+    pub adj_offense: Option<f64>,
+    pub adj_defense: Option<f64>,
+    /// Single-season "results + overperformance" lens — `z(cae_raw) +
+    /// z(actual_adjem)` over this season's board. Computed in Rust post-fetch via
+    /// [`apply_season_blend`], so it carries `#[sqlx(default)]` (no backing
+    /// column) and stays `None` on degenerate boards. Display-only.
+    #[sqlx(default)]
+    pub blend: Option<f64>,
     pub is_new_hc: Option<bool>,
 }
 
@@ -2303,6 +2346,8 @@ pub async fn get_coach_season_leaderboard(
             csc.cae_raw,
             csc.cae_debiased,
             csc.cae_centered,
+            ts.adj_offense,
+            ts.adj_defense,
             tm.is_new_hc
         FROM coach_season_cae csc
         JOIN coaches c ON c.id = csc.coach_id
@@ -2320,6 +2365,10 @@ pub async fn get_coach_season_leaderboard(
             ORDER BY (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
             LIMIT 1
         ) tm ON TRUE
+        -- That season's AdjO/AdjD via the cross-season natstat key (display-only
+        -- strength context; AdjEM is already stored as actual_adjem).
+        LEFT JOIN teams t2 ON t2.natstat_id = csc.team_natstat_id AND t2.season = csc.season
+        LEFT JOIN team_season_stats ts ON ts.team_id = t2.id AND ts.season = csc.season
         WHERE csc.season = $1
         ORDER BY csc.cae_raw DESC, c.canonical_name
         LIMIT $2
@@ -2592,6 +2641,35 @@ mod tests {
         let sd_cae = (32.0_f64 / 3.0).sqrt();
         let expected = 4.0 / sd_cae; // AdjEM term is 0 — no career_adj_em.
         assert!((rows[0].blend.unwrap() - expected).abs() < 1e-9);
+    }
+
+    fn season_row(cae_raw: f64, actual_adjem: f64) -> CoachSeasonLeaderboardRow {
+        CoachSeasonLeaderboardRow {
+            coach_id: Uuid::nil(),
+            name: String::new(),
+            season: 2026,
+            team_id: None,
+            team_name: None,
+            actual_adjem,
+            projection: 0.0,
+            cae_raw,
+            cae_debiased: 0.0,
+            cae_centered: 0.0,
+            adj_offense: None,
+            adj_defense: None,
+            blend: None,
+            is_new_hc: None,
+        }
+    }
+
+    #[test]
+    fn season_blend_sums_cae_and_adjem_zscores() {
+        // actual_adjem is always present on the season board, so both terms
+        // contribute for every row. Two symmetric points → blend ±2.
+        let mut rows = vec![season_row(8.0, 30.0), season_row(-8.0, -30.0)];
+        apply_season_blend(&mut rows);
+        assert!((rows[0].blend.unwrap() - 2.0).abs() < 1e-9);
+        assert!((rows[1].blend.unwrap() + 2.0).abs() < 1e-9);
     }
 
     #[test]

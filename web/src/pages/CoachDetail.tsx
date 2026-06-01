@@ -130,7 +130,7 @@ export function CoachDetail() {
           />
           <Stat
             label="95% CI"
-            value={`${fmtCae(rating.ci_low)} … ${fmtCae(rating.ci_high)}`}
+            value={`${fmtCae(rating.ci_low)} – ${fmtCae(rating.ci_high)}`}
             title="Credibility interval on the shrunk rating."
           />
           <Stat

@@ -53,11 +53,15 @@ async fn coach_leaderboard(
 
     if params.mode.as_deref() == Some("season") {
         let season = params.season.unwrap_or_else(crate::default_season);
-        let (coaches, available_seasons) = tokio::try_join!(
+        let (mut coaches, available_seasons) = tokio::try_join!(
             queries::get_coach_season_leaderboard(pool, season, limit),
             queries::get_coach_cae_seasons(pool),
         )
         .map_err(internal_error)?;
+
+        // Display-only single-season "results + overperformance" lens — z(CAE) +
+        // z(AdjEM) over this season's board. Never an input to forecasts.
+        queries::apply_season_blend(&mut coaches);
 
         return Ok(Json(json!({
             "mode": "season",

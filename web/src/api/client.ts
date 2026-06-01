@@ -1164,6 +1164,12 @@ export interface CoachSeasonLeaderboardRow {
   cae_raw: number;
   cae_debiased: number;
   cae_centered: number;
+  // That season's team AdjO/AdjD (display-only). actual_adjem is the AdjEM.
+  adj_offense: number | null;
+  adj_defense: number | null;
+  // Single-season "results + overperformance" lens: z(cae_raw) + z(AdjEM) over
+  // this season's board. A lens, not a truth; null on degenerate boards.
+  blend: number | null;
   is_new_hc: boolean | null;
 }
 
