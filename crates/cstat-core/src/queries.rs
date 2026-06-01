@@ -2070,3 +2070,345 @@ pub async fn get_player_game_boxes(
     .fetch_all(pool)
     .await
 }
+
+// ---------------------------------------------------------------------------
+// Coaches — Coach-Above-Expectation (CAE) leaderboard + detail (PR3 surfacing)
+//
+// Pure read-path over the precomputed tables from migrations 024/025
+// (`coaches`, `coach_seasons`, `coach_ratings`, `coach_season_cae`). No live
+// inference: the per-season residuals already store `actual_adjem` and
+// `projection`, so even the sparkline runs zero predictions. The HEADLINE
+// rating is `cae_shrunk` (raw EB-shrunk), never `cae_raw_mean` — see the
+// migration 025 comments and ROADMAP Phase 6 display contract.
+// ---------------------------------------------------------------------------
+
+/// One row of the `/coaches` leaderboard: a coach's career-level shrunk CAE
+/// plus the most-recent team they coached (for context / a clickable link).
+#[derive(Debug, Serialize, FromRow)]
+pub struct CoachLeaderboardRow {
+    pub coach_id: Uuid,
+    pub name: String,
+    /// Headline rating — raw EB-shrunk CAE. Default leaderboard sort key.
+    pub cae_shrunk: f64,
+    /// Unshrunk mean (transparency only; never the headline).
+    pub cae_raw_mean: f64,
+    /// Prestige-adjusted (projection-quartile-de-biased) shrunk value — a
+    /// conservative lower bound, surfaced as a secondary column/toggle.
+    pub cae_adj_shrunk: f64,
+    /// n / (n + k) ∈ [0,1] — the shrinkage weight, shown so thin tenures read
+    /// as low-confidence.
+    pub reliability: f64,
+    pub ci_low: f64,
+    pub ci_high: f64,
+    pub n_seasons: i32,
+    pub first_season: i32,
+    pub last_season: i32,
+    /// The team shown in the leaderboard's "Team" column. When the query is
+    /// season-scoped this is the team the coach held *that* season; otherwise
+    /// their most recent scored team. NULL if no matched team row.
+    pub last_team_id: Option<Uuid>,
+    pub last_team_name: Option<String>,
+    /// The season of `last_team_*`, so the team link deep-links to the right
+    /// season-scoped page. NULL when there's no matched team.
+    pub last_team_season: Option<i32>,
+}
+
+/// Career leaderboard ranked by `cae_shrunk` DESC. The CAE rating is always
+/// career-aggregated; `season`, when set, scopes the *list* to coaches who
+/// actually coached that season (and shows that season's team), so the navbar
+/// season picker is meaningful without changing the rating semantics. `None`
+/// season = all-time. `min_seasons` defaults to 3 at the API layer (thin
+/// tenures shrink toward 0 and would otherwise top the board on noise); `limit`
+/// caps the page size.
+pub async fn get_coach_leaderboard(
+    pool: &PgPool,
+    min_seasons: i32,
+    limit: i64,
+    season: Option<i32>,
+) -> Result<Vec<CoachLeaderboardRow>, sqlx::Error> {
+    sqlx::query_as::<_, CoachLeaderboardRow>(
+        r#"
+        SELECT
+            c.id            AS coach_id,
+            c.canonical_name AS name,
+            cr.cae_shrunk,
+            cr.cae_raw_mean,
+            cr.cae_adj_shrunk,
+            cr.reliability,
+            cr.ci_low,
+            cr.ci_high,
+            cr.n_seasons,
+            cr.first_season,
+            cr.last_season,
+            lt.team_id      AS last_team_id,
+            lt.team_name    AS last_team_name,
+            lt.team_season  AS last_team_season
+        FROM coach_ratings cr
+        JOIN coaches c ON c.id = cr.coach_id
+        LEFT JOIN LATERAL (
+            SELECT cs.team_id, cs.season AS team_season,
+                   COALESCE(t.short_name, t.name) AS team_name
+            FROM coach_seasons cs
+            LEFT JOIN teams t ON t.id = cs.team_id
+            WHERE cs.coach_id = c.id AND cs.team_id IS NOT NULL
+            -- Prefer the selected season's team when scoped; else most recent.
+            ORDER BY (CASE WHEN $3::int IS NOT NULL AND cs.season = $3 THEN 0 ELSE 1 END),
+                     cs.season DESC
+            LIMIT 1
+        ) lt ON TRUE
+        WHERE cr.n_seasons >= $1
+          AND (
+            $3::int IS NULL
+            OR EXISTS (
+              SELECT 1 FROM coach_seasons cs2
+              WHERE cs2.coach_id = c.id AND cs2.season = $3
+            )
+          )
+        -- canonical_name breaks exact-tie CAE so paging/order is stable.
+        ORDER BY cr.cae_shrunk DESC, c.canonical_name
+        LIMIT $2
+        "#,
+    )
+    .bind(min_seasons)
+    .bind(limit)
+    .bind(season)
+    .fetch_all(pool)
+    .await
+}
+
+/// One row of the *season* leaderboard (the "This season" toggle): a coach's
+/// single-season CAE for the selected year, ranked by `cae_raw` DESC. This view
+/// is noisier than the career board on purpose — single-season residuals are
+/// mostly noise (which is why the career view shrinks them) — so it reads as a
+/// "who overachieved this year" board, not a trustworthy rating.
+#[derive(Debug, Serialize, FromRow)]
+pub struct CoachSeasonLeaderboardRow {
+    pub coach_id: Uuid,
+    pub name: String,
+    pub season: i32,
+    pub team_id: Option<Uuid>,
+    pub team_name: Option<String>,
+    pub actual_adjem: f64,
+    pub projection: f64,
+    pub cae_raw: f64,
+    pub cae_debiased: f64,
+    pub is_new_hc: Option<bool>,
+}
+
+/// Single-season CAE leaderboard for `season`, ranked by raw residual DESC.
+pub async fn get_coach_season_leaderboard(
+    pool: &PgPool,
+    season: i32,
+    limit: i64,
+) -> Result<Vec<CoachSeasonLeaderboardRow>, sqlx::Error> {
+    sqlx::query_as::<_, CoachSeasonLeaderboardRow>(
+        r#"
+        SELECT
+            c.id            AS coach_id,
+            c.canonical_name AS name,
+            csc.season,
+            tm.team_id,
+            tm.team_name,
+            csc.actual_adjem,
+            csc.projection,
+            csc.cae_raw,
+            csc.cae_debiased,
+            tm.is_new_hc
+        FROM coach_season_cae csc
+        JOIN coaches c ON c.id = csc.coach_id
+        -- Dedup the coach_seasons join to ONE team row: coachdict carries
+        -- redundant name variants for some teams (e.g. "Tennessee Martin" +
+        -- "UT Martin", "Saint Joseph's" + "St. Joseph's"), which would otherwise
+        -- fan a coach out to two leaderboard rows — one with the matched team,
+        -- one with an unmatched (NULL) team. Prefer the matched variant.
+        LEFT JOIN LATERAL (
+            SELECT cs.team_id, cs.is_new_hc,
+                   COALESCE(t.short_name, t.name) AS team_name
+            FROM coach_seasons cs
+            LEFT JOIN teams t ON t.id = cs.team_id
+            WHERE cs.coach_id = csc.coach_id AND cs.season = csc.season
+            ORDER BY (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
+            LIMIT 1
+        ) tm ON TRUE
+        WHERE csc.season = $1
+        ORDER BY csc.cae_raw DESC, c.canonical_name
+        LIMIT $2
+        "#,
+    )
+    .bind(season)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Seasons that have scored CAE rows — used to constrain the navbar season
+/// picker on the /coaches page to the metric's coverage (2022–2026 today),
+/// newest first. The leaderboard is bounded by roster-projection coverage, not
+/// coachdict coverage.
+pub async fn get_coach_cae_seasons(pool: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT season FROM coach_season_cae ORDER BY season DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(s,)| s).collect())
+}
+
+/// Career-level rating row for the coach detail page header.
+#[derive(Debug, Serialize, FromRow)]
+pub struct CoachRating {
+    pub coach_id: Uuid,
+    pub name: String,
+    pub cae_shrunk: f64,
+    pub cae_raw_mean: f64,
+    pub cae_adj_shrunk: f64,
+    pub cae_adj_mean: f64,
+    pub reliability: f64,
+    pub ci_low: f64,
+    pub ci_high: f64,
+    pub n_seasons: i32,
+    pub first_season: i32,
+    pub last_season: i32,
+}
+
+/// One scored (coach, team, season) — the detail-page sparkline + season table.
+/// `actual_adjem`/`projection`/`cae_raw` are stored columns (no inference).
+#[derive(Debug, Serialize, FromRow)]
+pub struct CoachSeasonRow {
+    pub season: i32,
+    pub team_id: Option<Uuid>,
+    pub team_name: Option<String>,
+    pub actual_adjem: f64,
+    pub projection: f64,
+    pub cae_raw: f64,
+    pub cae_debiased: f64,
+    /// Whether this was the coach's first season at the team (PR E flag).
+    pub is_new_hc: Option<bool>,
+}
+
+/// The career rating for one coach. `None` when the coach exists in `coaches`
+/// but never landed in the scored backtest (no `coach_ratings` row).
+pub async fn get_coach_rating(
+    pool: &PgPool,
+    coach_id: Uuid,
+) -> Result<Option<CoachRating>, sqlx::Error> {
+    sqlx::query_as::<_, CoachRating>(
+        r#"
+        SELECT
+            c.id            AS coach_id,
+            c.canonical_name AS name,
+            cr.cae_shrunk,
+            cr.cae_raw_mean,
+            cr.cae_adj_shrunk,
+            cr.cae_adj_mean,
+            cr.reliability,
+            cr.ci_low,
+            cr.ci_high,
+            cr.n_seasons,
+            cr.first_season,
+            cr.last_season
+        FROM coach_ratings cr
+        JOIN coaches c ON c.id = cr.coach_id
+        WHERE cr.coach_id = $1
+        "#,
+    )
+    .bind(coach_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Per-season CAE rows for one coach, oldest → newest (the sparkline order).
+pub async fn get_coach_seasons(
+    pool: &PgPool,
+    coach_id: Uuid,
+) -> Result<Vec<CoachSeasonRow>, sqlx::Error> {
+    sqlx::query_as::<_, CoachSeasonRow>(
+        r#"
+        SELECT
+            csc.season,
+            tm.team_id,
+            tm.team_name,
+            csc.actual_adjem,
+            csc.projection,
+            csc.cae_raw,
+            csc.cae_debiased,
+            tm.is_new_hc
+        FROM coach_season_cae csc
+        -- One team row per season — coachdict name-variant dedup, prefer the
+        -- matched team (see get_coach_season_leaderboard for the full rationale).
+        -- Without this, the detail sparkline doubles a season for affected
+        -- coaches (Shulman, Donahue, Gallagher, …).
+        LEFT JOIN LATERAL (
+            SELECT cs.team_id, cs.is_new_hc,
+                   COALESCE(t.short_name, t.name) AS team_name
+            FROM coach_seasons cs
+            LEFT JOIN teams t ON t.id = cs.team_id
+            WHERE cs.coach_id = csc.coach_id AND cs.season = csc.season
+            ORDER BY (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
+            LIMIT 1
+        ) tm ON TRUE
+        WHERE csc.coach_id = $1
+        ORDER BY csc.season
+        "#,
+    )
+    .bind(coach_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// The coach of a given (season-scoped) team, plus their career rating if one
+/// exists. Powers the dedicated `GET /api/teams/{id}/coach` card route — kept
+/// OFF the slow `team_detail` projection-loop path on purpose. Rating fields
+/// are `Option` because a coach can lack a `coach_ratings` row.
+#[derive(Debug, Serialize, FromRow)]
+pub struct TeamCoachCard {
+    pub coach_id: Uuid,
+    pub name: String,
+    /// First season at this team (the PR E new-head-coach flag). NULL when the
+    /// prior season's coach is unknown.
+    pub is_new_hc: Option<bool>,
+    pub cae_shrunk: Option<f64>,
+    pub reliability: Option<f64>,
+    pub ci_low: Option<f64>,
+    pub ci_high: Option<f64>,
+    pub n_seasons: Option<i32>,
+    pub first_season: Option<i32>,
+    pub last_season: Option<i32>,
+}
+
+/// Look up the coach for one season-scoped team UUID. `None` when coachdict
+/// has no entry for that (team, season) — e.g. an unmatched team-season.
+pub async fn get_team_coach(
+    pool: &PgPool,
+    team_id: Uuid,
+) -> Result<Option<TeamCoachCard>, sqlx::Error> {
+    sqlx::query_as::<_, TeamCoachCard>(
+        r#"
+        SELECT
+            c.id            AS coach_id,
+            c.canonical_name AS name,
+            cs.is_new_hc,
+            cr.cae_shrunk,
+            cr.reliability,
+            cr.ci_low,
+            cr.ci_high,
+            cr.n_seasons,
+            cr.first_season,
+            cr.last_season
+        FROM coach_seasons cs
+        JOIN coaches c ON c.id = cs.coach_id
+        LEFT JOIN coach_ratings cr ON cr.coach_id = c.id
+        WHERE cs.team_id = $1
+        -- A team can have two coach_seasons rows (coachdict name variants) that
+        -- resolve to the same coach but may differ on is_new_hc; pick
+        -- deterministically, preferring a row with a known flag.
+        ORDER BY (cs.is_new_hc IS NOT NULL) DESC, cs.coachdict_team_name
+        LIMIT 1
+        "#,
+    )
+    .bind(team_id)
+    .fetch_optional(pool)
+    .await
+}

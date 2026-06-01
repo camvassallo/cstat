@@ -10,6 +10,8 @@ import Predict from './pages/Predict';
 import Archetypes from './pages/Archetypes';
 import Projected, { ProjectedYearRedirect } from './pages/Projected';
 import Draft from './pages/Draft';
+import Coaches from './pages/Coaches';
+import CoachDetail from './pages/CoachDetail';
 
 export default function App() {
   return (
@@ -29,6 +31,8 @@ export default function App() {
               the navbar season picker took over via ?season=. */}
           <Route path="/projected/:year" element={<ProjectedYearRedirect />} />
           <Route path="/draft" element={<Draft />} />
+          <Route path="/coaches" element={<Coaches />} />
+          <Route path="/coaches/:id" element={<CoachDetail />} />
         </Route>
       </Routes>
     </BrowserRouter>

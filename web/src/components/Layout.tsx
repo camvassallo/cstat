@@ -82,6 +82,9 @@ export default function Layout() {
       <NavLink to="/draft" className={({ isActive }) => navLinkClass(isActive)}>
         Draft
       </NavLink>
+      <NavLink to="/coaches" className={({ isActive }) => navLinkClass(isActive)}>
+        Coaches
+      </NavLink>
     </>
   );
 
@@ -153,6 +156,9 @@ export default function Layout() {
           </NavLink>
           <NavLink to="/draft" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Draft
+          </NavLink>
+          <NavLink to="/coaches" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
+            Coaches
           </NavLink>
         </div>
       )}

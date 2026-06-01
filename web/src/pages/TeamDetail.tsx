@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   fetchTeamDetail,
   fetchProjectedTeam,
+  fetchTeamCoach,
   type TeamProfile,
   type ScheduleEntry,
   type RosterEntry,
@@ -13,7 +14,9 @@ import {
   type ProjectedDeparture,
   type ProjectedUncertain,
   type ProjectedTeam,
+  type TeamCoachCard,
 } from '../api/client';
+import { caeColor, fmtCae, tenureSpan } from '../components/cae';
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
@@ -148,6 +151,7 @@ function HistoricalTeamDetail() {
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [archetypeDist, setArchetypeDist] = useState<ArchetypeShare[]>([]);
   const [totalTeams, setTotalTeams] = useState<number | null>(null);
+  const [coach, setCoach] = useState<TeamCoachCard | null>(null);
   const [loading, setLoading] = useState(true);
   // Tab title tracks the loaded team and reflects the season selector so a
   // shared `/teams/<id>?season=2025` link reads "Duke 2025 — CamPom".
@@ -197,6 +201,26 @@ function HistoricalTeamDetail() {
       cancelled = true;
     };
   }, [id, season, navigate]);
+
+  // Coach card — fetched in its OWN request, deliberately decoupled from the
+  // main team payload. `fetchTeamDetail` is latency-bound by its server-side
+  // ~30-game projection loop; the coach lookup is two indexed reads, so a
+  // separate call lets the card paint without waiting on that loop. Keyed on
+  // the URL id (canonical after any cross-season redirect); null when coachdict
+  // has no entry for the (team, season).
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    // `.then` sets the new value (null included) — no synchronous reset, so a
+    // brief stale card during navigation is the same trade-off the main team
+    // fetch makes (project convention; avoids the set-state-in-effect lint).
+    fetchTeamCoach(id)
+      .then((r) => !cancelled && setCoach(r.coach))
+      .catch(() => !cancelled && setCoach(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   // Release the season-selector override on unmount so the dropdown returns
   // to the global list when the user navigates away.
@@ -267,6 +291,10 @@ function HistoricalTeamDetail() {
         <FourFactors team={team} label="Offense" totalTeams={totalTeams} />
         <FourFactors team={team} label="Defense" totalTeams={totalTeams} />
       </div>
+
+      {/* Coach card — fetched separately (see the coach useEffect); only
+          rendered once it arrives so it never blocks the rest of the page. */}
+      {coach && <CoachCard coach={coach} />}
 
       {/* Roster identity row — two complementary "what kind of team
           is this" panels. Waffle answers "who plays" (role
@@ -442,6 +470,61 @@ type RosterView = 'raw' | 'rate';
 // Returns an rgb() string suitable for a `style.color` value.
 function ValueWithPctile({ value, pctile }: { value: string; pctile: number | null | undefined }) {
   return <span style={{ color: pctileTextColor(pctile) }}>{value}</span>;
+}
+
+/** Compact coach card for the team header. Shows the head coach + their career
+ *  Coach-Above-Expectation grade (descriptive: AdjEM above roster projection,
+ *  shrunk over tenure). Rating fields are null when the coach has no scored
+ *  career rating — we still show the name and a "New HC" badge. */
+function CoachCard({ coach }: { coach: TeamCoachCard }) {
+  const hasRating = coach.cae_shrunk != null;
+  return (
+    <div className="bg-gray-800 rounded-lg p-4 flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Head Coach</div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link to={`/coaches/${coach.coach_id}`} className="text-lg font-bold hover:underline">
+            {coach.name}
+          </Link>
+          {coach.is_new_hc && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40"
+              title="First season at this team."
+            >
+              New HC
+            </span>
+          )}
+        </div>
+        {hasRating && coach.first_season != null && coach.last_season != null && (
+          <div className="text-xs text-gray-500 mt-0.5">
+            {tenureSpan(coach.first_season, coach.last_season)} · {coach.n_seasons}{' '}
+            scored {coach.n_seasons === 1 ? 'season' : 'seasons'}
+          </div>
+        )}
+      </div>
+      {hasRating ? (
+        <div className="text-right">
+          <div
+            className="text-2xl font-bold tabular-nums"
+            style={{ color: caeColor(coach.cae_shrunk) }}
+            title="Coach-Above-Expectation: AdjEM above the roster-only projection, shrunk over the coach's tenure. Descriptive, not predictive."
+          >
+            {fmtCae(coach.cae_shrunk)}
+          </div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wide">vs roster exp.</div>
+          {coach.ci_low != null && coach.ci_high != null && (
+            <div className="text-[10px] text-gray-600 tabular-nums">
+              {fmtCae(coach.ci_low)} … {fmtCae(coach.ci_high)}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="text-xs text-gray-500 text-right max-w-[12rem]">
+          Not enough scored seasons for a rating yet.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function RosterTable({ roster }: { roster: RosterEntry[] }) {

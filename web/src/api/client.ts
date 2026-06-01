@@ -1100,3 +1100,118 @@ export function fetchTicker(params: { season?: number; past?: number; future?: n
     future: params.future?.toString(),
   });
 }
+
+// Coaches — Coach-Above-Expectation (CAE). Descriptive grade: how much a team
+// out/under-performs the talent on its roster, attributed to the coach,
+// aggregated across their career with empirical-Bayes shrinkage. Headline =
+// `cae_shrunk`; always show the credibility band — it is NOT a predictor.
+export interface CoachLeaderboardRow {
+  coach_id: string;
+  name: string;
+  cae_shrunk: number;
+  cae_raw_mean: number;
+  cae_adj_shrunk: number;
+  reliability: number;
+  ci_low: number;
+  ci_high: number;
+  n_seasons: number;
+  first_season: number;
+  last_season: number;
+  last_team_id: string | null;
+  last_team_name: string | null;
+  last_team_season: number | null;
+}
+
+export function fetchCoaches(
+  params: { minSeasons?: number; limit?: number; season?: number } = {},
+) {
+  return fetchJson<{
+    mode: 'career';
+    min_seasons: number;
+    season: number | null;
+    available_seasons: number[];
+    coaches: CoachLeaderboardRow[];
+  }>('/coaches', {
+    min_seasons: params.minSeasons?.toString(),
+    limit: params.limit?.toString(),
+    season: params.season?.toString(),
+  });
+}
+
+// Season-mode leaderboard: that year's single-season CAE, ranked by raw
+// residual. Noisier than the career board (single seasons are mostly noise) —
+// framed as a "who overachieved this year" view, not a trustworthy rating.
+export interface CoachSeasonLeaderboardRow {
+  coach_id: string;
+  name: string;
+  season: number;
+  team_id: string | null;
+  team_name: string | null;
+  actual_adjem: number;
+  projection: number;
+  cae_raw: number;
+  cae_debiased: number;
+  is_new_hc: boolean | null;
+}
+
+export function fetchCoachSeasonBoard(season: number, limit?: number) {
+  return fetchJson<{
+    mode: 'season';
+    season: number;
+    available_seasons: number[];
+    coaches: CoachSeasonLeaderboardRow[];
+  }>('/coaches', {
+    mode: 'season',
+    season: season.toString(),
+    limit: limit?.toString(),
+  });
+}
+
+export interface CoachRating {
+  coach_id: string;
+  name: string;
+  cae_shrunk: number;
+  cae_raw_mean: number;
+  cae_adj_shrunk: number;
+  cae_adj_mean: number;
+  reliability: number;
+  ci_low: number;
+  ci_high: number;
+  n_seasons: number;
+  first_season: number;
+  last_season: number;
+}
+
+export interface CoachSeasonRow {
+  season: number;
+  team_id: string | null;
+  team_name: string | null;
+  actual_adjem: number;
+  projection: number;
+  cae_raw: number;
+  cae_debiased: number;
+  is_new_hc: boolean | null;
+}
+
+export function fetchCoachDetail(id: string) {
+  return fetchJson<{ rating: CoachRating | null; seasons: CoachSeasonRow[] }>(`/coaches/${id}`);
+}
+
+// The TeamDetail coach card. Rating fields are null when the coach never
+// landed in the scored backtest (coachdict match but no CAE rating).
+export interface TeamCoachCard {
+  coach_id: string;
+  name: string;
+  is_new_hc: boolean | null;
+  cae_shrunk: number | null;
+  reliability: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+  n_seasons: number | null;
+  first_season: number | null;
+  last_season: number | null;
+}
+
+export function fetchTeamCoach(teamId: string) {
+  return fetchJson<{ coach: TeamCoachCard | null }>(`/teams/${teamId}/coach`);
+}
