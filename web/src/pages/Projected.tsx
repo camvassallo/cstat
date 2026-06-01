@@ -122,10 +122,15 @@ function camSumRenderer(
 
 // `showActual` adds the Actual + projection-error columns — populated
 // only for past seasons (the live forecast year has no actual yet).
+// `projRank`/`actRank` are team_id → 1-based rank (by projected and actual
+// AdjEM respectively), precomputed over the whole field so the rank-error
+// column can read them per row.
 function buildColumns(
   isMobile: boolean,
   year: number,
   showActual: boolean,
+  projRank: Map<string, number>,
+  actRank: Map<string, number>,
 ): ColDef<ProjectedTeam>[] {
   const flexCol = (flex: number, min: number) =>
     isMobile ? { width: min } : { flex, minWidth: min };
@@ -166,6 +171,39 @@ function buildColumns(
             return (
               <span className={`text-xs font-mono font-semibold ${tone}`} title={title}>
                 {v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1)}
+              </span>
+            );
+          },
+        },
+        {
+          headerName: 'Proj − Act Rk',
+          colId: 'rank_error',
+          ...flexCol(1, 100),
+          headerTooltip:
+            'Projected rank minus actual rank (both by AdjEM across the field this season). Positive = the team finished higher than projected (climbed the ranking); negative = fell short. Color tracks the magnitude of the miss, not its direction — green is an accurate ranking, red a large one.',
+          valueGetter: (p) => {
+            const t = p.data;
+            if (!t) return null;
+            const pr = projRank.get(t.team_id);
+            const ar = actRank.get(t.team_id);
+            if (pr == null || ar == null) return null;
+            return pr - ar;
+          },
+          comparator: nullsLast,
+          cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
+            if (p.value == null) return <span className="text-slate-600 text-xs">—</span>;
+            const v = p.value;
+            const mag = Math.abs(v);
+            const tone =
+              mag <= 10 ? 'text-emerald-300' : mag <= 25 ? 'text-amber-300' : 'text-rose-300';
+            const t = p.data;
+            const pr = t ? projRank.get(t.team_id) : undefined;
+            const ar = t ? actRank.get(t.team_id) : undefined;
+            const title =
+              pr != null && ar != null ? `Projected #${pr} vs actual #${ar}` : undefined;
+            return (
+              <span className={`text-xs font-mono font-semibold ${tone}`} title={title}>
+                {v >= 0 ? `+${v}` : v}
               </span>
             );
           },
@@ -411,9 +449,28 @@ function ProjectionView({ year }: { year: number }) {
     [teams],
   );
 
+  // Field-wide ranks for the Proj − Act rank column: by projected AdjEM
+  // (excluding too-thin rosters, whose projection is unreliable) and by
+  // actual AdjEM. team_id → 1-based rank, newest computed on each fetch.
+  const { projRank, actRank } = useMemo(() => {
+    const projRank = new Map<string, number>();
+    const actRank = new Map<string, number>();
+    if (teams) {
+      [...teams]
+        .filter((t) => !t.too_thin && t.midpoint_adj_em != null)
+        .sort((a, b) => (b.midpoint_adj_em as number) - (a.midpoint_adj_em as number))
+        .forEach((t, i) => projRank.set(t.team_id, i + 1));
+      [...teams]
+        .filter((t) => t.actual_adj_em != null)
+        .sort((a, b) => (b.actual_adj_em as number) - (a.actual_adj_em as number))
+        .forEach((t, i) => actRank.set(t.team_id, i + 1));
+    }
+    return { projRank, actRank };
+  }, [teams]);
+
   const columns = useMemo(
-    () => buildColumns(isMobile, year, hasActuals),
-    [isMobile, year, hasActuals],
+    () => buildColumns(isMobile, year, hasActuals, projRank, actRank),
+    [isMobile, year, hasActuals, projRank, actRank],
   );
 
   const filtered = useMemo(() => {
