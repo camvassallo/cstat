@@ -490,22 +490,43 @@ impl ProjectedRoster {
     }
 }
 
-/// One row of the draft early-entrants JSON. Fields match the v1 shape
-/// described in `data/draft/2026_early_entrants.json`.
-#[derive(Debug, Clone, Deserialize)]
+/// One draft early-entrant. Deserializes from the `{year}_early_entrants.json`
+/// capture (v1 shape in `data/draft/2026_early_entrants.json`) AND maps from a
+/// `draft_entrants` row (the `player_name` column aliases to `name`).
+#[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
 pub struct DraftEntrant {
     pub name: String,
     pub current_team: String,
     pub status: String,
 }
 
-/// Load + parse `data/draft/{year}_early_entrants.json`. Caller is the
-/// route handler; the route holds `season` and constructs the path.
+/// Load + parse `data/draft/{year}_early_entrants.json`. The version-controlled
+/// capture; `cstat-ingest draft` loads it into `draft_entrants`, which is what
+/// the projection actually reads (see `fetch_draft_entrants`).
 pub fn load_draft_entrants(path: &Path) -> Result<Vec<DraftEntrant>, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
     let parsed: Vec<DraftEntrant> = serde_json::from_str(&content)
         .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
     Ok(parsed)
+}
+
+/// DB-backed sibling of `load_draft_entrants`: the early-entrant rows for one
+/// base season from `draft_entrants`. Preferred over the file read so the data
+/// syncs to prod with the rest of the schema (loose JSON files don't, which
+/// silently zeroed draft departures in historical/backtest projections).
+/// Empty vec when nothing's loaded for `year` — the projection then degrades
+/// to seniors + portal-only departures, same as a missing file used to.
+pub async fn fetch_draft_entrants(
+    pool: &PgPool,
+    year: i32,
+) -> Result<Vec<DraftEntrant>, sqlx::Error> {
+    sqlx::query_as::<_, DraftEntrant>(
+        "SELECT player_name AS name, current_team, status \
+         FROM draft_entrants WHERE year = $1",
+    )
+    .bind(year)
+    .fetch_all(pool)
+    .await
 }
 
 /// One pick from the Tankathon mock draft. The API surfaces this on

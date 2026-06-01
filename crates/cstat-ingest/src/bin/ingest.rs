@@ -243,6 +243,21 @@ enum Commands {
         no_resolve_players: bool,
     },
 
+    /// Load NBA draft early-entrants into the `draft_entrants` table from the
+    /// `data/draft/{year}_early_entrants.json` captures. These are the firm
+    /// departures the roster projection removes (a drafted player doesn't
+    /// return). Idempotent upsert; run once after capturing a new draft year
+    /// (see scripts/build_historical_draft_entrants.py for the historical set).
+    Draft {
+        /// Directory of `{year}_early_entrants.json` files.
+        #[arg(long, default_value = "data/draft")]
+        dir: std::path::PathBuf,
+
+        /// Provenance stamp written to each row's `source` column.
+        #[arg(long, default_value = "tankathon")]
+        source: String,
+    },
+
     /// Ingest 247Sports composite recruit rankings for a class year. `year` is
     /// the recruiting class year (= spring of HS graduation, = 247's URL
     /// `{year}-basketball` slug). Class-of-2026 recruits first appear in
@@ -611,6 +626,20 @@ async fn main() -> Result<()> {
                     println!("transfers {year}: cstat_player_id resolved on {n} row(s)");
                 }
             }
+        }
+
+        Commands::Draft { dir, source } => {
+            let reports =
+                cstat_ingest::ingest::draft::bootstrap_from_dir(&db.pool, &dir, &source).await?;
+            let total: usize = reports.iter().map(|r| r.rows).sum();
+            for r in &reports {
+                println!("draft {}: {} entrants", r.year, r.rows);
+            }
+            println!(
+                "draft: {} entrants across {} year(s) loaded into draft_entrants",
+                total,
+                reports.len()
+            );
         }
 
         Commands::Recruits {

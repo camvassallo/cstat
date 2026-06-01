@@ -1,5 +1,6 @@
 pub mod bootstrap_csv;
 pub mod coaches;
+pub mod draft;
 pub mod elo;
 pub mod games;
 pub mod players;

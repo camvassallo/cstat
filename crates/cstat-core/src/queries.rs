@@ -2095,6 +2095,10 @@ pub struct CoachLeaderboardRow {
     /// Prestige-adjusted (projection-quartile-de-biased) shrunk value — a
     /// conservative lower bound, surfaced as a secondary column/toggle.
     pub cae_adj_shrunk: f64,
+    /// Season-centered shrunk value — COMPARISON-ONLY (each season's mean
+    /// residual removed for era-neutral cross-coach ranking; not an absolute
+    /// "how much" measure). Surfaced as a secondary column, never the sort key.
+    pub cae_centered_shrunk: f64,
     /// n / (n + k) ∈ [0,1] — the shrinkage weight, shown so thin tenures read
     /// as low-confidence.
     pub reliability: f64,
@@ -2134,6 +2138,7 @@ pub async fn get_coach_leaderboard(
             cr.cae_shrunk,
             cr.cae_raw_mean,
             cr.cae_adj_shrunk,
+            cr.cae_centered_shrunk,
             cr.reliability,
             cr.ci_low,
             cr.ci_high,
@@ -2192,6 +2197,8 @@ pub struct CoachSeasonLeaderboardRow {
     pub projection: f64,
     pub cae_raw: f64,
     pub cae_debiased: f64,
+    /// Season-centered residual — comparison-only (this season's mean removed).
+    pub cae_centered: f64,
     pub is_new_hc: Option<bool>,
 }
 
@@ -2213,6 +2220,7 @@ pub async fn get_coach_season_leaderboard(
             csc.projection,
             csc.cae_raw,
             csc.cae_debiased,
+            csc.cae_centered,
             tm.is_new_hc
         FROM coach_season_cae csc
         JOIN coaches c ON c.id = csc.coach_id
@@ -2265,6 +2273,9 @@ pub struct CoachRating {
     pub cae_raw_mean: f64,
     pub cae_adj_shrunk: f64,
     pub cae_adj_mean: f64,
+    /// Season-centered career value — comparison-only (era-neutral ranking).
+    pub cae_centered_shrunk: f64,
+    pub cae_centered_mean: f64,
     pub reliability: f64,
     pub ci_low: f64,
     pub ci_high: f64,
@@ -2284,6 +2295,8 @@ pub struct CoachSeasonRow {
     pub projection: f64,
     pub cae_raw: f64,
     pub cae_debiased: f64,
+    /// Season-centered residual — comparison-only (this season's mean removed).
+    pub cae_centered: f64,
     /// Whether this was the coach's first season at the team (PR E flag).
     pub is_new_hc: Option<bool>,
 }
@@ -2303,6 +2316,8 @@ pub async fn get_coach_rating(
             cr.cae_raw_mean,
             cr.cae_adj_shrunk,
             cr.cae_adj_mean,
+            cr.cae_centered_shrunk,
+            cr.cae_centered_mean,
             cr.reliability,
             cr.ci_low,
             cr.ci_high,
@@ -2334,6 +2349,7 @@ pub async fn get_coach_seasons(
             csc.projection,
             csc.cae_raw,
             csc.cae_debiased,
+            csc.cae_centered,
             tm.is_new_hc
         FROM coach_season_cae csc
         -- One team row per season — coachdict name-variant dedup, prefer the

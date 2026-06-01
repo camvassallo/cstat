@@ -44,14 +44,14 @@
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use uuid::Uuid;
 
 use cstat_core::inference::{Predictor, RosterImpactModel};
 use cstat_core::roster_features::{build_roster_features, project_rotation};
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, compose_all_projections, load_draft_entrants, project_returner_cam_v3,
+    DraftScenario, compose_all_projections, fetch_draft_entrants, project_returner_cam_v3,
 };
 
 /// Minimum (returning + arrivals + recruits) to score a team — mirrors
@@ -183,11 +183,10 @@ async fn backtest_year(
 ) -> Result<Vec<TeamResult>> {
     let base_season = year - 1;
 
-    // Declared-draft cohort — absent for historical base seasons, so the
-    // floor/ceiling collapse to a single scenario.
-    let entrants_path =
-        PathBuf::from("data/draft").join(format!("{base_season}_early_entrants.json"));
-    let entrants = load_draft_entrants(&entrants_path).unwrap_or_default();
+    // Firm draft departures from the `draft_entrants` table (historical lists
+    // built from Tankathon past-drafts). Without these, drafted players are
+    // miscounted as returning and draft-factory teams are over-projected.
+    let entrants = fetch_draft_entrants(pool, base_season).await?;
     if !entrants.is_empty() {
         println!(
             "  note: {} draft entrants loaded for base {base_season} — \
