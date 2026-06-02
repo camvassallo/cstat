@@ -2141,9 +2141,9 @@ pub struct CoachLeaderboardRow {
 ///
 /// INVARIANT: `rows` must be the **complete** qualified board, not a truncated
 /// page — the z-scores are only meaningful over the full population. The
-/// frontend satisfies this by season-scoping every call (≤ ~360 coaches, well
-/// under the 500 row cap); the unbounded all-time path does not, so the caller
-/// must not blend a truncated board (see `coach_leaderboard`).
+/// frontend satisfies this by requesting the full board (limit 1000 vs ~690
+/// all-time coaches); the caller must not blend a page cut short by `limit` (see
+/// the guard in `coach_leaderboard`).
 pub fn apply_career_blend(rows: &mut [CoachLeaderboardRow]) {
     apply_blend(
         rows,

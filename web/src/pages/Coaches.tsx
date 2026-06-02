@@ -19,11 +19,12 @@ type Mode = 'career' | 'season';
 // min-seasons filter would be redundant.
 const SHOW_ALL_MIN_SEASONS = 1;
 
-// Request the whole season-scoped board, not the API's 200-row default — both
-// boards run ~260–290 coaches and the Blend sort + its z-score population must
-// see every qualified coach, not a top-200-by-CAE slice. 500 is the API cap and
-// comfortably exceeds the ~360 D-I coaches in any single season.
-const FULL_BOARD_LIMIT = 500;
+// Request the whole board, not the API's 200-row default — the Blend sort and
+// its z-score population must see every qualified coach, not a top-N-by-CAE
+// slice. The season-agnostic career board is the largest (~690 coaches all-time
+// across 2016–2026); season boards run ~360. 1000 is the API cap, with headroom
+// for the career board to grow as new coaches enter.
+const FULL_BOARD_LIMIT = 1000;
 
 const NEW_BADGE = (
   <span
@@ -109,7 +110,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
             <StickyHeader align="right" className="w-10">#</StickyHeader>
             <SortHeader label="Coach" sortKey="name" current={sort} onSort={onSort} />
             <SortHeader label="Team" sortKey="last_team_name" current={sort} onSort={onSort}
-              title="Team coached in the selected season." />
+              title="The coach's most recently coached team." />
             <SortHeader label="CAE" sortKey="cae_shrunk" current={sort} onSort={onSort} align="right"
               title="Shrunk Coach-Above-Expectation (AdjEM points above roster projection). The headline rating." />
             <StickyHeader align="right">95% CI</StickyHeader>
@@ -273,34 +274,32 @@ export function Coaches() {
   const [error, setError] = useState<string | null>(null);
 
   // No synchronous `setLoading(true)` — initial `loading` covers first paint;
-  // a mode/filter/season change keeps the prior board visible until the new one
-  // lands (project convention; see Rankings.tsx). Career mode ranks by the
-  // season-independent shrunk rating (season filters the list); season mode
-  // re-ranks by the selected year's single-season residual.
+  // a mode/season change keeps the prior board visible until the new one lands
+  // (project convention; see Rankings.tsx). Career mode is season-AGNOSTIC — it
+  // ranks every rated coach over their whole career, so it ignores the navbar
+  // season and hides the picker; season mode re-ranks by the selected year.
   useEffect(() => {
     let cancelled = false;
-    const applyMeta = (available: number[]) => {
-      // Constrain the navbar picker to CAE coverage (2022–2026). Snap an
-      // out-of-coverage season (e.g. a stale ?season= from another page) to the
-      // newest covered year so the picker and board stay consistent.
-      setPageSeasons(available);
-      if (available.length > 0 && !available.includes(season)) {
-        setSeason(available[0] as Season);
-      }
-    };
     const req =
       mode === 'season'
         ? fetchCoachSeasonBoard(season, FULL_BOARD_LIMIT).then((res) => {
             if (cancelled) return;
             setBoard({ mode: 'season', rows: res.coaches });
             setError(null);
-            applyMeta(res.available_seasons);
+            // Constrain the navbar picker to CAE coverage and snap an
+            // out-of-coverage season to the newest covered year.
+            setPageSeasons(res.available_seasons);
+            if (res.available_seasons.length > 0 && !res.available_seasons.includes(season)) {
+              setSeason(res.available_seasons[0] as Season);
+            }
           })
-        : fetchCoaches({ minSeasons: SHOW_ALL_MIN_SEASONS, season, limit: FULL_BOARD_LIMIT }).then((res) => {
+        : fetchCoaches({ minSeasons: SHOW_ALL_MIN_SEASONS, limit: FULL_BOARD_LIMIT }).then((res) => {
             if (cancelled) return;
             setBoard({ mode: 'career', rows: res.coaches });
             setError(null);
-            applyMeta(res.available_seasons);
+            // Career is all-time — hide the navbar season picker (empty list is
+            // the agreed "hide" signal; see Layout's SeasonSelector).
+            setPageSeasons([]);
           });
     req
       .catch((e) => !cancelled && setError(e.message))
@@ -326,15 +325,15 @@ export function Coaches() {
           </p>
           {mode === 'career' ? (
             <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-              Coaches active in <span className="text-gray-300 font-semibold">{season}</span>, sorted
-              by <span className="text-gray-300">Blend</span> (a "results + overperformance" lens:
+              <span className="text-gray-300 font-semibold">All</span> rated coaches, ranked over
+              their <span className="text-gray-300">whole career</span> (season-agnostic), sorted by{' '}
+              <span className="text-gray-300">Blend</span> (a "results + overperformance" lens:
               strong, tough-schedule teams that also beat their roster). Sort any column — career{' '}
               <span className="text-gray-300">CAE</span> is the headline overperformance metric
               (shrunk over tenure, so thin tenures pull toward 0; see Rel. for confidence). The{' '}
               <span className="text-gray-300">AdjEM/AdjO/AdjD</span> columns show how strong the
-              coach's teams actually were — descriptive context, never a projection input. Changing
-              the season swaps which coaches show and their team; CAE is career-wide. Coverage
-              2016–2026.
+              coach's teams actually were — descriptive context, never a projection input. The Team
+              column shows each coach's most recent team. Coverage 2016–2026.
             </p>
           ) : (
             <p className="text-xs text-gray-500 mt-1 max-w-2xl">
