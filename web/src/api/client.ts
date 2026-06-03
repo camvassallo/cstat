@@ -555,6 +555,23 @@ export interface ProjectedTeam {
   /// live/upcoming forecast year (not played yet). Drives the historical
   /// view's "Projected vs Actual" accuracy column.
   actual_adj_em: number | null;
+
+  // --- Display-only coach grade. NOT part of any AdjEM above. ---
+  // A PIT backtest (training/pit_cae_backtest.py) showed an additive coach term
+  // beats the projection's noise floor but FAILS a program-persistence null, so
+  // the lift is program-level bias, not coaching — the served projection stays
+  // roster-only and CAE is shown here purely descriptively.
+  /// The coach leading this program into the projected season. Null if
+  /// unmatched.
+  coach_id: string | null;
+  coach_name: string | null;
+  /// Career EB-shrunk Coach-Above-Expectation (coach_ratings.cae_shrunk), in
+  /// AdjEM points. + = the program has historically beaten its roster
+  /// projection under this coach. Null when the coach has no career rating.
+  coach_cae_shrunk: number | null;
+  /// n/(n+k) credibility weight ∈ [0,1]; low = thin tenure, soft grade.
+  coach_cae_reliability: number | null;
+  coach_n_seasons: number | null;
 }
 
 /// One projected team detail row, returned by

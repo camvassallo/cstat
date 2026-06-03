@@ -1,0 +1,165 @@
+{
+  "generated_at": "2026-06-03T02:56:10.417455Z",
+  "start_year": 2019,
+  "target_years": [
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025,
+    2026
+  ],
+  "overall": {
+    "n_scored": 2430,
+    "mae_base": 6.039767316533364,
+    "mae_coach": 5.908874616099518,
+    "mae_lift": 0.13089270043384627,
+    "rmse_base": 7.637572904003813,
+    "rmse_coach": 7.466712961446672,
+    "rmse_lift": 0.17085994255714088,
+    "paired_mean_delta": 0.13089270043385548,
+    "paired_se": 0.02389829437048514,
+    "paired_z": 5.477072899207005,
+    "n_improved": 1158,
+    "n_worsened": 993,
+    "applied_subset": {
+      "n": 880,
+      "mae_base": 6.213807434654282,
+      "mae_coach": 5.874242113635468,
+      "mean_delta": 0.33956532101881926,
+      "se": 0.061691743104255875
+    },
+    "elite_roster_q4": {
+      "n": 608,
+      "mae_base": 5.155430222812452,
+      "mae_coach": 4.998436082944406,
+      "mean_term": 0.9051143492543723
+    },
+    "term_threshold": 1.0
+  },
+  "per_year": {
+    "2019": {
+      "n": 313,
+      "n_with_prior": 278,
+      "n_applied": 91,
+      "k": 8.467537891165751,
+      "s2b": 5.614831440853094,
+      "mae_base": 5.884521460452212,
+      "mae_coach": 5.8027608504959,
+      "mae_applied_base": 5.282292775826137,
+      "mae_applied_coach": 5.071283879470591
+    },
+    "2020": {
+      "n": 315,
+      "n_with_prior": 273,
+      "n_applied": 105,
+      "k": 7.832011266980261,
+      "s2b": 6.026028616534553,
+      "mae_base": 5.640072638684561,
+      "mae_coach": 5.684706647190795,
+      "mae_applied_base": 5.464670216863354,
+      "mae_applied_coach": 5.616784228195168
+    },
+    "2021": {
+      "n": 314,
+      "n_with_prior": 291,
+      "n_applied": 104,
+      "k": 8.69909112265178,
+      "s2b": 5.437842428302981,
+      "mae_base": 6.0094810845935385,
+      "mae_coach": 5.927886047295494,
+      "mae_applied_base": 6.029780423985077,
+      "mae_applied_coach": 5.735002128795803
+    },
+    "2022": {
+      "n": 314,
+      "n_with_prior": 279,
+      "n_applied": 107,
+      "k": 8.331090234906693,
+      "s2b": 5.663439022832982,
+      "mae_base": 5.892078881961099,
+      "mae_coach": 5.845964955721863,
+      "mae_applied_base": 6.266714881736541,
+      "mae_applied_coach": 6.0276883697764445
+    },
+    "2023": {
+      "n": 291,
+      "n_with_prior": 258,
+      "n_applied": 102,
+      "k": 7.862768416416249,
+      "s2b": 6.070223195705246,
+      "mae_base": 6.0609204794840315,
+      "mae_coach": 5.945645159413769,
+      "mae_applied_base": 6.015185685806414,
+      "mae_applied_coach": 5.694029592440268
+    },
+    "2024": {
+      "n": 313,
+      "n_with_prior": 270,
+      "n_applied": 125,
+      "k": 7.296461880034189,
+      "s2b": 6.46569358928855,
+      "mae_base": 6.166645012976834,
+      "mae_coach": 5.975201450407409,
+      "mae_applied_base": 6.525843286311624,
+      "mae_applied_coach": 6.062339077687987
+    },
+    "2025": {
+      "n": 285,
+      "n_with_prior": 254,
+      "n_applied": 124,
+      "k": 6.4866962417730605,
+      "s2b": 7.33876396833349,
+      "mae_base": 6.045928325479226,
+      "mae_coach": 5.880039086067572,
+      "mae_applied_base": 6.220166220059314,
+      "mae_applied_coach": 5.877294974168152
+    },
+    "2026": {
+      "n": 285,
+      "n_with_prior": 248,
+      "n_applied": 122,
+      "k": 6.46324203069677,
+      "s2b": 7.407066351348461,
+      "mae_base": 6.681015193044094,
+      "mae_coach": 6.239990972659176,
+      "mae_applied_base": 7.503736956197706,
+      "mae_applied_coach": 6.63371332876471
+    }
+  },
+  "program_null_overall": {
+    "n_scored": 2430,
+    "mae_base": 6.039767316533364,
+    "mae_coach": 5.856769401626906,
+    "mae_lift": 0.18299791490645845,
+    "rmse_base": 7.637572904003813,
+    "rmse_coach": 7.394326914207567,
+    "rmse_lift": 0.2432459897962458,
+    "paired_mean_delta": 0.1829979149064651,
+    "paired_se": 0.024875884110335752,
+    "paired_z": 7.356438633287843,
+    "n_improved": 1292,
+    "n_worsened": 1123,
+    "applied_subset": {
+      "n": 848,
+      "mae_base": 6.328148251439368,
+      "mae_coach": 5.81507478346418,
+      "mean_delta": 0.5130734679751914,
+      "se": 0.06572313241251349
+    },
+    "elite_roster_q4": {
+      "n": 608,
+      "mae_base": 5.155430222812452,
+      "mae_coach": 5.040991777342294,
+      "mean_term": 0.5174585765760372
+    },
+    "term_threshold": 1.0
+  },
+  "coach_minus_team_lift": -0.05210521447261218,
+  "bar": 0.01,
+  "clears_floor": true,
+  "beats_program_null": false,
+  "verdict": "persistence prior helps but it is PROGRAM-level, not coaching (team null wins) \u2192 coach +/- display-only; add a program-keyed projection calibration as a separate item"
+}
