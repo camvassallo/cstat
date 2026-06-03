@@ -2435,12 +2435,20 @@ pub struct CoachSeasonRow {
     pub season: i32,
     pub team_id: Option<Uuid>,
     pub team_name: Option<String>,
-    pub actual_adjem: f64,
-    pub projection: f64,
-    pub cae_raw: f64,
-    pub cae_debiased: f64,
+    /// That season's actual team AdjEM. `None` only when the team row didn't
+    /// resolve to `team_season_stats` (D-I-transition years, ghost rows).
+    /// Present even for *ungraded* seasons — the actual is always known; it's
+    /// the projection/CAE that's missing.
+    pub actual_adjem: Option<f64>,
+    /// Roster-only projection. `None` for **ungraded** seasons — teams the
+    /// roster projection dropped (too-thin / heavy-portal-rebuild rosters below
+    /// `MIN_QUALIFYING_FOR_PROJECTION`), so no CAE could be computed.
+    pub projection: Option<f64>,
+    /// Raw CAE (actual − projection). `None` ⇔ ungraded season (no projection).
+    pub cae_raw: Option<f64>,
+    pub cae_debiased: Option<f64>,
     /// Season-centered residual — comparison-only (this season's mean removed).
-    pub cae_centered: f64,
+    pub cae_centered: Option<f64>,
     /// That season's team AdjO / AdjD — DISPLAY-ONLY strength context next to the
     /// stored `actual_adjem` (which is the season's AdjEM). NULL when the team
     /// row didn't resolve. Same no-leakage wall as the career columns.
@@ -2505,38 +2513,40 @@ pub async fn get_coach_seasons(
 ) -> Result<Vec<CoachSeasonRow>, sqlx::Error> {
     sqlx::query_as::<_, CoachSeasonRow>(
         r#"
-        SELECT
-            csc.season,
-            tm.team_id,
-            tm.team_name,
-            csc.actual_adjem,
+        -- Drive off `coach_seasons` (the authoritative roster of every season a
+        -- coach worked) rather than `coach_season_cae` (graded seasons only), so
+        -- seasons the roster projection couldn't score — heavy-portal rebuilds
+        -- below MIN_QUALIFYING_FOR_PROJECTION, e.g. Olen's New Mexico 2026,
+        -- McCollum's Drake 2025 — still surface as team entries with the grade
+        -- columns left NULL. CAE is descriptive coverage, not a gap in their
+        -- career; the detail page renders these rows as "not scored".
+        --
+        -- DISTINCT ON (season) collapses the coachdict name-variant duplicates
+        -- (Shulman, Donahue, Gallagher, …), preferring the row whose team_id
+        -- resolved — same dedup the old LATERAL did.
+        SELECT DISTINCT ON (cs.season)
+            cs.season,
+            cs.team_id,
+            COALESCE(t.short_name, t.name) AS team_name,
+            -- Prefer the actual the grade was computed against; fall back to the
+            -- team's own AdjEM so ungraded seasons still show a strength number.
+            COALESCE(csc.actual_adjem, ts.adj_efficiency_margin) AS actual_adjem,
             csc.projection,
             csc.cae_raw,
             csc.cae_debiased,
             csc.cae_centered,
             ts.adj_offense,
             ts.adj_defense,
-            tm.is_new_hc
-        FROM coach_season_cae csc
-        -- One team row per season — coachdict name-variant dedup, prefer the
-        -- matched team (see get_coach_season_leaderboard for the full rationale).
-        -- Without this, the detail sparkline doubles a season for affected
-        -- coaches (Shulman, Donahue, Gallagher, …).
-        LEFT JOIN LATERAL (
-            SELECT cs.team_id, cs.is_new_hc,
-                   COALESCE(t.short_name, t.name) AS team_name
-            FROM coach_seasons cs
-            LEFT JOIN teams t ON t.id = cs.team_id
-            WHERE cs.coach_id = csc.coach_id AND cs.season = csc.season
-            ORDER BY (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
-            LIMIT 1
-        ) tm ON TRUE
-        -- That season's AdjO/AdjD via the cross-season natstat key (display-only
-        -- strength context; AdjEM is already stored as actual_adjem).
-        LEFT JOIN teams t2 ON t2.natstat_id = csc.team_natstat_id AND t2.season = csc.season
-        LEFT JOIN team_season_stats ts ON ts.team_id = t2.id AND ts.season = csc.season
-        WHERE csc.coach_id = $1
-        ORDER BY csc.season
+            cs.is_new_hc
+        FROM coach_seasons cs
+        LEFT JOIN teams t ON t.id = cs.team_id
+        -- That season's actual AdjEM / AdjO / AdjD (display-only strength
+        -- context); the season-scoped team_id keys straight into the stats.
+        LEFT JOIN team_season_stats ts ON ts.team_id = cs.team_id AND ts.season = cs.season
+        LEFT JOIN coach_season_cae csc
+            ON csc.coach_id = cs.coach_id AND csc.season = cs.season
+        WHERE cs.coach_id = $1
+        ORDER BY cs.season, (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
         "#,
     )
     .bind(coach_id)

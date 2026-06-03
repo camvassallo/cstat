@@ -17,7 +17,11 @@ function Sparkline({ seasons }: { seasons: CoachSeasonRow[] }) {
   const PAD = 24;
 
   const { xy, zeroY } = useMemo(() => {
-    const pts = seasons.map((s) => ({ season: s.season, v: s.cae_raw }));
+    // Graded seasons only — ungraded (no projection → null cae_raw) teams have
+    // no residual to plot.
+    const pts = seasons
+      .filter((s): s is CoachSeasonRow & { cae_raw: number } => s.cae_raw != null)
+      .map((s) => ({ season: s.season, v: s.cae_raw }));
     if (pts.length === 0) return { xy: [], zeroY: H / 2 };
     const vs = pts.map((p) => p.v);
     const lo = Math.min(0, ...vs);
@@ -105,6 +109,15 @@ export function CoachDetail() {
   // Derive a display name from the season rows if the coach has no rating.
   const name = rating?.name ?? '(coach)';
 
+  // Tenure + coverage from the full season list (includes ungraded seasons the
+  // roster projection dropped), so the span reflects actual coaching, not just
+  // the scored backtest. `seasons` arrives season-ascending from the API.
+  const scoredCount = seasons.filter((s) => s.cae_raw != null).length;
+  const tenure =
+    seasons.length > 0
+      ? tenureSpan(seasons[0].season, seasons[seasons.length - 1].season)
+      : null;
+
   return (
     <div className="space-y-6">
       <div>
@@ -112,10 +125,10 @@ export function CoachDetail() {
           ← Coaches
         </Link>
         <h1 className="text-3xl font-bold mt-1">{name}</h1>
-        {rating && (
+        {tenure && (
           <div className="text-gray-400">
-            {tenureSpan(rating.first_season, rating.last_season)} · {rating.n_seasons}{' '}
-            scored {rating.n_seasons === 1 ? 'season' : 'seasons'}
+            {tenure} · {scoredCount} of {seasons.length}{' '}
+            {seasons.length === 1 ? 'season' : 'seasons'} scored
           </div>
         )}
       </div>
@@ -213,49 +226,69 @@ export function CoachDetail() {
                 </tr>
               </thead>
               <tbody>
-                {seasons.map((s) => (
-                  <tr key={s.season} className="border-b border-gray-800">
-                    <td className="py-1.5 px-2 tabular-nums">
-                      {s.season}
-                      {s.is_new_hc && (
-                        <span
-                          className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                          title="First season at this team."
-                        >
-                          new
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-1.5 px-2 text-gray-300">
-                      {s.team_id && s.team_name ? (
-                        <Link
-                          to={`/teams/${s.team_id}?season=${s.season}`}
-                          className="hover:underline"
-                        >
-                          {s.team_name}
-                        </Link>
+                {seasons.map((s) => {
+                  // Ungraded ⇔ no projection (roster too thin to score). The
+                  // team + actual strength still show; projection/CAE read
+                  // "not scored" so the gap is legible as coverage, not error.
+                  const graded = s.cae_raw != null;
+                  return (
+                    <tr key={s.season} className="border-b border-gray-800">
+                      <td className="py-1.5 px-2 tabular-nums">
+                        {s.season}
+                        {s.is_new_hc && (
+                          <span
+                            className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                            title="First season at this team."
+                          >
+                            new
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-2 text-gray-300">
+                        {s.team_id && s.team_name ? (
+                          <Link
+                            to={`/teams/${s.team_id}?season=${s.season}`}
+                            className="hover:underline"
+                          >
+                            {s.team_name}
+                          </Link>
+                        ) : (
+                          s.team_name ?? '—'
+                        )}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums">
+                        {s.actual_adjem != null ? s.actual_adjem.toFixed(1) : '—'}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                        {s.adj_offense != null ? s.adj_offense.toFixed(1) : '—'}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                        {s.adj_defense != null ? s.adj_defense.toFixed(1) : '—'}
+                      </td>
+                      {graded ? (
+                        <>
+                          <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                            {s.projection!.toFixed(1)}
+                          </td>
+                          <td
+                            className="py-1.5 px-2 text-right tabular-nums font-semibold"
+                            style={{ color: caeColor(s.cae_raw) }}
+                          >
+                            {fmtCae(s.cae_raw)}
+                          </td>
+                        </>
                       ) : (
-                        s.team_name ?? '—'
+                        <td
+                          className="py-1.5 px-2 text-right text-gray-500"
+                          colSpan={2}
+                          title="The roster projection dropped this team-season (too few prior-D-I players — a heavy portal/JUCO rebuild), so there's no expectation to grade against."
+                        >
+                          not scored
+                        </td>
                       )}
-                    </td>
-                    <td className="py-1.5 px-2 text-right tabular-nums">{s.actual_adjem.toFixed(1)}</td>
-                    <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
-                      {s.adj_offense != null ? s.adj_offense.toFixed(1) : '—'}
-                    </td>
-                    <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
-                      {s.adj_defense != null ? s.adj_defense.toFixed(1) : '—'}
-                    </td>
-                    <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
-                      {s.projection.toFixed(1)}
-                    </td>
-                    <td
-                      className="py-1.5 px-2 text-right tabular-nums font-semibold"
-                      style={{ color: caeColor(s.cae_raw) }}
-                    >
-                      {fmtCae(s.cae_raw)}
-                    </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
