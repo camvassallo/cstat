@@ -77,12 +77,13 @@ function Stat({ label, value, color, title }: { label: string; value: string; co
 
 export function CoachDetail() {
   const { id } = useParams<{ id: string }>();
+  const [name, setName] = useState<string | null>(null);
   const [rating, setRating] = useState<CoachRating | null>(null);
   const [seasons, setSeasons] = useState<CoachSeasonRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  usePageTitle(rating?.name ?? 'Coach');
+  usePageTitle(name ?? 'Coach');
 
   // No synchronous `setLoading(true)` — initial `loading` covers first paint
   // (project convention; see Rankings.tsx / PlayerDetail.tsx).
@@ -92,6 +93,7 @@ export function CoachDetail() {
     fetchCoachDetail(id)
       .then((res) => {
         if (cancelled) return;
+        setName(res.name);
         setRating(res.rating);
         setSeasons(res.seasons);
         setError(null);
@@ -105,9 +107,6 @@ export function CoachDetail() {
 
   if (loading) return <div className="text-gray-400">Loading…</div>;
   if (error) return <div className="text-red-400">{error}</div>;
-
-  // Derive a display name from the season rows if the coach has no rating.
-  const name = rating?.name ?? '(coach)';
 
   // Tenure + coverage from the full season list (includes ungraded seasons the
   // roster projection dropped), so the span reflects actual coaching, not just
@@ -124,7 +123,7 @@ export function CoachDetail() {
         <Link to="/coaches" className="text-sm text-blue-300 hover:underline">
           ← Coaches
         </Link>
-        <h1 className="text-3xl font-bold mt-1">{name}</h1>
+        <h1 className="text-3xl font-bold mt-1">{name ?? '(coach)'}</h1>
         {tenure && (
           <div className="text-gray-400">
             {tenure} · {scoredCount} of {seasons.length}{' '}

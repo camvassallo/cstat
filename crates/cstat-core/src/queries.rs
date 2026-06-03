@@ -2458,6 +2458,17 @@ pub struct CoachSeasonRow {
     pub is_new_hc: Option<bool>,
 }
 
+/// One coach's canonical display name. `None` when the id isn't in `coaches`.
+/// Sourced independently of `coach_ratings` so the detail page can title a coach
+/// who has *only* ungraded seasons (no career rating) — those pages became
+/// reachable when `get_coach_seasons` started listing ungraded seasons.
+pub async fn get_coach_name(pool: &PgPool, coach_id: Uuid) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT canonical_name FROM coaches WHERE id = $1")
+        .bind(coach_id)
+        .fetch_optional(pool)
+        .await
+}
+
 /// The career rating for one coach. `None` when the coach exists in `coaches`
 /// but never landed in the scored backtest (no `coach_ratings` row).
 pub async fn get_coach_rating(

@@ -1227,7 +1227,11 @@ export interface CoachSeasonRow {
 }
 
 export function fetchCoachDetail(id: string) {
-  return fetchJson<{ rating: CoachRating | null; seasons: CoachSeasonRow[] }>(`/coaches/${id}`);
+  // `name` is sourced from `coaches` directly, so it's present even for a coach
+  // with no career rating (only ungraded seasons); `rating?.name` may be null.
+  return fetchJson<{ name: string; rating: CoachRating | null; seasons: CoachSeasonRow[] }>(
+    `/coaches/${id}`,
+  );
 }
 
 // The TeamDetail coach card. Rating fields are null when the coach never

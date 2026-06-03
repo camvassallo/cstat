@@ -112,14 +112,16 @@ async fn coach_detail(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let pool = &state.db.pool;
-    let (rating, seasons) = tokio::try_join!(
+    let (name, rating, seasons) = tokio::try_join!(
+        queries::get_coach_name(pool, id),
         queries::get_coach_rating(pool, id),
         queries::get_coach_seasons(pool, id),
     )
     .map_err(internal_error)?;
 
-    // A coach with no rating AND no scored seasons is effectively unknown.
-    if rating.is_none() && seasons.is_empty() {
+    // Unknown id ⇔ not in `coaches`. (A real coach can legitimately have no
+    // rating and only ungraded seasons — that page still renders.)
+    if name.is_none() {
         return Err((
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "coach not found" })),
@@ -127,6 +129,7 @@ async fn coach_detail(
     }
 
     Ok(Json(json!({
+        "name": name,
         "rating": rating,
         "seasons": seasons,
     })))
