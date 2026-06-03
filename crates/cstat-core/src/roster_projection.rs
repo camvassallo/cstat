@@ -1289,18 +1289,93 @@ pub const PROJECTION_OFFSET: f32 = 0.0;
 /// projection isn't honest.
 pub const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 
-/// Blend the raw model output toward the baseline AdjEM and apply the
-/// calibration offset. With no baseline (brand-new D-I program) the blend
-/// collapses to the offset-corrected raw value.
-pub fn shrink_adj_em(raw: f32, baseline: Option<f32>) -> f32 {
+/// Baseline weight for a roster-OVERHAUL team — lower than the stable
+/// [`PROJECTION_SHRINK_WEIGHT`], so the blend leans toward the roster
+/// projection. `baseline` (last season's AdjEM) is a *stale anchor* when a
+/// roster turns over wholesale, so trusting it less cuts both the error and
+/// the systematic over-projection of overhaul teams.
+///
+/// Validated on the LOSO backtest (`training/transition_blend_diagnostic.py`,
+/// targets 2019–2026): a turnover-conditional weight beats the flat 0.50 by
+/// ~+0.04 MAE pooled — concentrated on overhaul teams — and corrects their
+/// ≈+0.7 AdjEM over-projection bias. Deliberately keyed on roster turnover
+/// ALONE, not `is_new_hc`: turnover is the stronger signal (it directly
+/// measures baseline staleness, and subsumes 61% of new-HC teams), it has no
+/// false positives from same-roster coaching changes, and it lives on
+/// [`ProjectedRoster`] — so both serving surfaces (`/api/projections` and
+/// `compute-projections`) stay in lockstep with NO extra DB fetch.
+pub const PROJECTION_SHRINK_WEIGHT_OVERHAUL: f32 = 0.25;
+
+/// Retained-talent fraction at/below which the overhaul weight applies in full.
+const OVERHAUL_RETAINED_FULL: f32 = 0.20;
+/// Retained-talent fraction at/above which the stable weight applies in full;
+/// the blend weight ramps linearly between the two bounds. `[0.20, 0.40]` keeps
+/// every team that returns ≥40% of last season's cam-weighted talent at the
+/// unchanged 0.50 (the continuity cohort's own backtest optimum), so only
+/// genuine overhauls deviate.
+const STABLE_RETAINED_FULL: f32 = 0.40;
+
+/// Fraction of last season's roster TALENT retained into the projected season:
+/// `Σ base-season cam_v3 of returners / (returners + all departures)`. Both
+/// sums are base-season cam_v3, so this reads as "how much of last year's
+/// production is coming back". `None` when the team has no measurable prior
+/// talent on the books (e.g. a brand-new D-I program) — caller treats that as
+/// stable (the stale-baseline problem doesn't apply without a baseline roster).
+pub fn retained_talent_fraction(p: &ProjectedRoster) -> Option<f32> {
+    let returning: f32 = p
+        .returning
+        .iter()
+        .map(|r| r.cam_v3.unwrap_or(0.0) as f32)
+        .sum();
+    let total = returning + p.departures_cam_v3_sum;
+    // `returning < 0` (all-negative returners) or a non-positive `total` →
+    // unknown. A non-positive total means departures out-weigh the returners
+    // in net *negative* cam (the team shed a pile of bench/negative-value
+    // players) — that's a continuity team, not an overhaul, so fall through to
+    // the stable weight rather than letting a negative ratio clamp to 0.0 and
+    // mislabel it. A zero-returner team with positive departures keeps a valid
+    // `total > 0` and correctly reads as a full overhaul (retained 0.0).
+    if returning < 0.0 || total <= 1e-3 {
+        return None;
+    }
+    Some((returning / total).clamp(0.0, 1.0))
+}
+
+/// Baseline blend weight for this roster: the stable [`PROJECTION_SHRINK_WEIGHT`]
+/// for continuity teams, ramping down toward [`PROJECTION_SHRINK_WEIGHT_OVERHAUL`]
+/// as retained talent falls from [`STABLE_RETAINED_FULL`] to
+/// [`OVERHAUL_RETAINED_FULL`] (see [`retained_talent_fraction`]). Teams with no
+/// measurable turnover get the stable weight unchanged.
+pub fn transition_shrink_weight(p: &ProjectedRoster) -> f32 {
+    let Some(retained) = retained_talent_fraction(p) else {
+        return PROJECTION_SHRINK_WEIGHT;
+    };
+    if retained >= STABLE_RETAINED_FULL {
+        PROJECTION_SHRINK_WEIGHT
+    } else if retained <= OVERHAUL_RETAINED_FULL {
+        PROJECTION_SHRINK_WEIGHT_OVERHAUL
+    } else {
+        let t =
+            (retained - OVERHAUL_RETAINED_FULL) / (STABLE_RETAINED_FULL - OVERHAUL_RETAINED_FULL);
+        PROJECTION_SHRINK_WEIGHT_OVERHAUL
+            + t * (PROJECTION_SHRINK_WEIGHT - PROJECTION_SHRINK_WEIGHT_OVERHAUL)
+    }
+}
+
+/// Blend the raw model output toward the baseline AdjEM at an explicit baseline
+/// `weight`, applying the calibration offset. With no baseline (brand-new D-I
+/// program) the blend collapses to the offset-corrected raw value.
+pub fn shrink_adj_em_weighted(raw: f32, baseline: Option<f32>, weight: f32) -> f32 {
     match baseline {
-        Some(b) => {
-            PROJECTION_SHRINK_WEIGHT * b
-                + (1.0 - PROJECTION_SHRINK_WEIGHT) * raw
-                + PROJECTION_OFFSET
-        }
+        Some(b) => weight * b + (1.0 - weight) * raw + PROJECTION_OFFSET,
         None => raw + PROJECTION_OFFSET,
     }
+}
+
+/// Blend at the default stable [`PROJECTION_SHRINK_WEIGHT`]. Convenience wrapper
+/// for callers that aren't roster-turnover aware.
+pub fn shrink_adj_em(raw: f32, baseline: Option<f32>) -> f32 {
+    shrink_adj_em_weighted(raw, baseline, PROJECTION_SHRINK_WEIGHT)
 }
 
 /// Score one composed roster's (floor, ceiling, midpoint) projected AdjEM —
@@ -1338,8 +1413,12 @@ pub fn score_projection_adj_em(
     };
     let floor_raw = score(DraftScenario::Floor).ok()?;
     let ceiling_raw = score(DraftScenario::Ceiling).ok()?;
-    let floor = shrink_adj_em(floor_raw, baseline);
-    let ceiling = shrink_adj_em(ceiling_raw, baseline);
+    // Lean off the (potentially stale) baseline for roster-overhaul teams.
+    // Computed from `p` so the route's `predict_team` and this shared scorer
+    // stay in lockstep without either passing extra state.
+    let weight = transition_shrink_weight(p);
+    let floor = shrink_adj_em_weighted(floor_raw, baseline, weight);
+    let ceiling = shrink_adj_em_weighted(ceiling_raw, baseline, weight);
     let midpoint = p_return * ceiling + (1.0 - p_return) * floor;
     Some((floor, ceiling, midpoint))
 }
@@ -1403,6 +1482,73 @@ mod tests {
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
+    }
+
+    fn roster_with(returning_cam: &[f64], departures_cam_v3_sum: f32) -> ProjectedRoster {
+        ProjectedRoster {
+            team_id: Uuid::new_v4(),
+            team_name: "T".into(),
+            team_full_name: "T".into(),
+            returning: returning_cam.iter().map(|&c| pr(20.0, Some(c))).collect(),
+            arrivals: vec![],
+            recruits: vec![],
+            uncertain: vec![],
+            departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum,
+        }
+    }
+
+    #[test]
+    fn retained_fraction_and_weight_ramp() {
+        // Continuity: returns 24 of 30 cam (0.80 ≥ 0.40) → unchanged stable 0.50.
+        let stable = roster_with(&[12.0, 12.0], 6.0);
+        assert!((retained_talent_fraction(&stable).unwrap() - 0.80).abs() < 1e-5);
+        assert!((transition_shrink_weight(&stable) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
+
+        // Overhaul: returns 4 of 24 cam (0.167 ≤ 0.20) → full overhaul weight.
+        let overhaul = roster_with(&[4.0], 20.0);
+        assert!(retained_talent_fraction(&overhaul).unwrap() < 0.20);
+        assert!(
+            (transition_shrink_weight(&overhaul) - PROJECTION_SHRINK_WEIGHT_OVERHAUL).abs() < 1e-6
+        );
+
+        // Mid-ramp at retained 0.30 (midpoint of [0.20,0.40]) → weight is the
+        // midpoint of [0.25,0.50] = 0.375. ret 9, dep 21, total 30 → 0.30.
+        let mid = roster_with(&[9.0], 21.0);
+        assert!((retained_talent_fraction(&mid).unwrap() - 0.30).abs() < 1e-5);
+        assert!((transition_shrink_weight(&mid) - 0.375).abs() < 1e-5);
+
+        // No measurable prior talent (new D-I program) → stable default, no panic.
+        let empty = roster_with(&[], 0.0);
+        assert!(retained_talent_fraction(&empty).is_none());
+        assert!((transition_shrink_weight(&empty) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
+
+        // Departures net-negative enough to drive total < 0 (kept +5, shed −10
+        // of bench scrubs): a CONTINUITY team, must NOT clamp to 0.0 and get
+        // mislabeled a full overhaul. → None → stable.
+        let neg_total = roster_with(&[5.0], -10.0);
+        assert!(retained_talent_fraction(&neg_total).is_none());
+        assert!((transition_shrink_weight(&neg_total) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
+
+        // Zero returners but real (positive) departures = a GENUINE full
+        // overhaul (everyone left, all-new roster) → retained 0.0 → 0.25.
+        let all_new = roster_with(&[], 15.0);
+        assert!(retained_talent_fraction(&all_new).unwrap() < 1e-6);
+        assert!(
+            (transition_shrink_weight(&all_new) - PROJECTION_SHRINK_WEIGHT_OVERHAUL).abs() < 1e-6
+        );
+    }
+
+    #[test]
+    fn shrink_weighted_matches_default_at_stable_weight() {
+        assert!(
+            (shrink_adj_em_weighted(10.0, Some(20.0), PROJECTION_SHRINK_WEIGHT)
+                - shrink_adj_em(10.0, Some(20.0)))
+            .abs()
+                < 1e-6
+        );
     }
 
     #[test]
