@@ -100,6 +100,9 @@ __pycache__/
 # for review locally, never meant to ship.
 pr.diff
 
+# Hand-written PR description draft — local scratch, never meant to ship.
+pr.md
+
 # Local scratch / investigation notes — text dumps, copy-pasted API
 # responses, anything ending in _temp.txt. Never meant to ship.
 *_temp.txt

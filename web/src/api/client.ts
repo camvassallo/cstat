@@ -1212,11 +1212,14 @@ export interface CoachSeasonRow {
   season: number;
   team_id: string | null;
   team_name: string | null;
-  actual_adjem: number;
-  projection: number;
-  cae_raw: number;
-  cae_debiased: number;
-  cae_centered: number;
+  // null for unresolved team rows (D-I-transition / ghost seasons).
+  actual_adjem: number | null;
+  // null for UNGRADED seasons — teams the roster projection dropped (too thin /
+  // heavy-portal rebuild), so no CAE could be computed. Render as "not scored".
+  projection: number | null;
+  cae_raw: number | null;
+  cae_debiased: number | null;
+  cae_centered: number | null;
   // That season's team AdjO/AdjD (display-only). actual_adjem is the AdjEM.
   adj_offense: number | null;
   adj_defense: number | null;
@@ -1224,7 +1227,11 @@ export interface CoachSeasonRow {
 }
 
 export function fetchCoachDetail(id: string) {
-  return fetchJson<{ rating: CoachRating | null; seasons: CoachSeasonRow[] }>(`/coaches/${id}`);
+  // `name` is sourced from `coaches` directly, so it's present even for a coach
+  // with no career rating (only ungraded seasons); `rating?.name` may be null.
+  return fetchJson<{ name: string; rating: CoachRating | null; seasons: CoachSeasonRow[] }>(
+    `/coaches/${id}`,
+  );
 }
 
 // The TeamDetail coach card. Rating fields are null when the coach never
