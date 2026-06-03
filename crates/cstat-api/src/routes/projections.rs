@@ -123,6 +123,39 @@ struct ProjectedTeam {
     /// the historical projection view render a "Projected vs Actual"
     /// accuracy column — a user-facing backtest of a past forecast.
     actual_adj_em: Option<f32>,
+
+    // --- Display-only coach grade. NEVER folded into any AdjEM field above. ---
+    // A point-in-time backtest (`training/pit_cae_backtest.py`, 2026-06-03)
+    // showed an additive coach term DOES beat the projection's noise floor
+    // (+0.13 MAE) but FAILS a program-persistence null — a team-keyed term does
+    // better (+0.18), so the lift is program-level projection bias, not
+    // coaching. The served projection therefore stays roster-only; CAE is
+    // surfaced here purely descriptively. See ROADMAP §6 / the
+    // project_pit_cae_program_null finding. The projection math (`shrink`,
+    // `predict_team`) must never read these fields.
+    /// The coach leading this program into the target season (resolved via
+    /// `coach_seasons`, preferring the target season, else the base season for
+    /// the live forecast). `None` when unmatched.
+    coach_id: Option<Uuid>,
+    coach_name: Option<String>,
+    /// Career EB-shrunk Coach-Above-Expectation (`coach_ratings.cae_shrunk`),
+    /// positive when the program has historically beaten its roster projection
+    /// under this coach. `None` when the coach has no career rating yet (a thin
+    /// or entirely-unscored tenure).
+    coach_cae_shrunk: Option<f64>,
+    /// `n/(n+k)` credibility weight ∈ [0,1]; low = thin tenure, soft grade.
+    coach_cae_reliability: Option<f64>,
+    coach_n_seasons: Option<i32>,
+}
+
+/// Display-only coach CAE attached to a projected team (see `ProjectedTeam`'s
+/// coach fields). Decorative — must not influence the projection.
+struct CoachCae {
+    coach_id: Uuid,
+    coach_name: String,
+    cae_shrunk: Option<f64>,
+    reliability: Option<f64>,
+    n_seasons: Option<i32>,
 }
 
 /// Weight on the base-season AdjEM when blending it with the Phase B
@@ -323,12 +356,22 @@ async fn projection_list(
         std::collections::HashMap::new()
     });
 
+    // Display-only coach grade per team (descriptive; never feeds the
+    // projection — see the coach fields on `ProjectedTeam`). A failure here is
+    // cosmetic, so degrade to an empty map rather than 500 the whole page.
+    let coach_map = fetch_coach_cae(&state.db.pool, base_season, year)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "coach CAE fetch failed; projections render without it");
+            std::collections::HashMap::new()
+        });
+
     let mut rows: Vec<ProjectedTeam> = Vec::with_capacity(projections.len());
     for p in &projections {
         let baseline = baseline_map.get(&p.team_id).copied();
         let actual = actual_map.get(&p.team_id).copied();
         let p_return = mean_return_probability(p, &mock_by_name);
-        let Some(row) = predict_team(
+        let Some(mut row) = predict_team(
             p,
             &state.predictor,
             baseline,
@@ -338,6 +381,13 @@ async fn projection_list(
         ) else {
             continue;
         };
+        if let Some(cc) = coach_map.get(&p.team_id) {
+            row.coach_id = Some(cc.coach_id);
+            row.coach_name = Some(cc.coach_name.clone());
+            row.coach_cae_shrunk = cc.cae_shrunk;
+            row.coach_cae_reliability = cc.reliability;
+            row.coach_n_seasons = cc.n_seasons;
+        }
         rows.push(row);
     }
 
@@ -442,6 +492,13 @@ fn predict_team(
         too_thin,
         baseline_adj_em: baseline,
         actual_adj_em: actual,
+        // Coach fields are decorative and filled by the handler after this
+        // returns (predict_team has no DB access); default to absent here.
+        coach_id: None,
+        coach_name: None,
+        coach_cae_shrunk: None,
+        coach_cae_reliability: None,
+        coach_n_seasons: None,
     };
 
     if qualifying < MIN_QUALIFYING_FOR_PROJECTION {
@@ -1118,6 +1175,75 @@ async fn fetch_actual_adj_em(
     Ok(rows
         .into_iter()
         .map(|r| (r.base_team_id, r.adj_efficiency_margin as f32))
+        .collect())
+}
+
+/// Display-only coach CAE per projected team, keyed by **base-season**
+/// team_id (the key `ProjectedTeam` carries). For each base-season program it
+/// resolves the coach leading them into the target season — preferring a
+/// `coach_seasons` row at the target season, falling back to the base season
+/// (the live forecast's target year isn't ingested yet, and most programs keep
+/// their coach across the offseason) — then joins the career `coach_ratings`.
+///
+/// **Descriptive only.** The PIT backtest (`training/pit_cae_backtest.py`)
+/// found the coach term's projection lift is program-level bias, not coaching
+/// (a program-keyed null beats it), so this must not feed the served forecast;
+/// it only decorates the response. The `LATERAL … LIMIT 1` collapses the
+/// known `coach_seasons` team-name-variant fan-out (migration 024) to one row.
+async fn fetch_coach_cae(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+    target_season: i32,
+) -> Result<std::collections::HashMap<Uuid, CoachCae>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        base_team_id: Uuid,
+        coach_id: Uuid,
+        coach_name: String,
+        cae_shrunk: Option<f64>,
+        reliability: Option<f64>,
+        n_seasons: Option<i32>,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT t_base.id           AS base_team_id,
+               co.id               AS coach_id,
+               co.canonical_name   AS coach_name,
+               cr.cae_shrunk,
+               cr.reliability,
+               cr.n_seasons
+        FROM teams t_base
+        JOIN LATERAL (
+            SELECT cs.coach_id
+            FROM coach_seasons cs
+            WHERE cs.team_natstat_id = t_base.natstat_id
+              AND cs.season IN ($1, $2)
+            ORDER BY (cs.season = $2) DESC
+            LIMIT 1
+        ) pick ON TRUE
+        JOIN coaches co ON co.id = pick.coach_id
+        LEFT JOIN coach_ratings cr ON cr.coach_id = co.id
+        WHERE t_base.season = $1
+        "#,
+    )
+    .bind(base_season)
+    .bind(target_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.base_team_id,
+                CoachCae {
+                    coach_id: r.coach_id,
+                    coach_name: r.coach_name,
+                    cae_shrunk: r.cae_shrunk,
+                    reliability: r.reliability,
+                    n_seasons: r.n_seasons,
+                },
+            )
+        })
         .collect())
 }
 

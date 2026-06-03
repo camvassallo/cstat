@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Leave all git operations to the user.** Do not run `git commit`, `git branch`, `git checkout`/`switch`, `git merge`, `git rebase`, `git push`, `git pull`, `git stash`, or `git reset` — the user manages version control themselves. Read-only inspection (`git status`, `git log`, `git diff`, `git show`) is fine. Perform a git mutation **only** when the user explicitly asks for it in that same message; a general "work on this PR" is not such a request. When work is ready to commit, finish the code changes and let the user handle staging, committing, and pushing.
 
+### PR drafts (`pr.md`)
+
+`pr.md` is a gitignored local scratch file for drafting PR descriptions. **The input is a plaintext bullet list of changes** — the user (or you, from the diff) drops a flat list of what changed into it, and you expand that into a full PR description in place. Expanded form: a `# Title`, then `## Summary`, `## Changes` (the bullets, fleshed out), and `## Verification` if applicable. Keep it Markdown; never stage or commit it.
+
 ## Build & Development Commands
 
 ```bash

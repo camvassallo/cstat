@@ -7,6 +7,7 @@ import { gridTheme } from '../theme';
 import { SeasonLink } from '../components/SeasonLink';
 import { AVAILABLE_SEASONS_FALLBACK, setPageSeasons, useSeason } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
+import { caeColor, fmtCae } from '../components/cae';
 
 // The upcoming (not-yet-played) season — the default projection target.
 // Projections compose from `year - 1`, so the upcoming year is
@@ -301,6 +302,57 @@ function buildColumns(
           >
             {text}
           </span>
+        );
+      },
+    },
+    {
+      // Display-only. The coach grade is NOT in the projected AdjEM — a PIT
+      // backtest found its forecast lift is program-level bias, not coaching
+      // (see ROADMAP §6 / pit_cae_backtest.py), so the projection stays
+      // roster-only and this column is purely contextual.
+      headerName: 'Coach +/-',
+      colId: 'coach_cae',
+      ...flexCol(1, 100),
+      headerTooltip:
+        "Descriptive only — NOT included in the projected AdjEM. The head coach's career Coach-Above-Expectation: how much this program has historically beaten (or missed) its roster-only projection under them, EB-shrunk toward 0 for short tenures. A point-in-time backtest showed this signal is program-level, not coaching, so it never moves the forecast — it's shown for context.",
+      valueGetter: (p) => (p.data as ProjectedTeam | undefined)?.coach_cae_shrunk ?? null,
+      comparator: nullsLast,
+      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t || t.coach_name == null) return <span className="text-slate-600 text-xs">—</span>;
+        const v = t.coach_cae_shrunk;
+        const rel = t.coach_cae_reliability;
+        const n = t.coach_n_seasons;
+        const tip =
+          v == null
+            ? `${t.coach_name} — no career CAE rating yet (thin/unscored tenure)`
+            : `${t.coach_name}: career CAE ${fmtCae(v)} AdjEM over ${n ?? '?'} scored season${n === 1 ? '' : 's'}` +
+              `${rel != null ? ` (reliability ${(rel * 100).toFixed(0)}%)` : ''}. Descriptive — not in the projection.`;
+        const label = fmtCae(v);
+        const body =
+          v == null ? (
+            <span className="text-slate-500 text-xs font-mono" title={tip}>
+              —
+            </span>
+          ) : (
+            <span
+              className="text-xs font-mono font-semibold px-1.5 py-0.5 rounded"
+              style={{ color: caeColor(v), opacity: rel != null ? 0.4 + 0.6 * rel : 1 }}
+              title={tip}
+            >
+              {label}
+            </span>
+          );
+        return t.coach_id ? (
+          <SeasonLink
+            to={`/coaches/${t.coach_id}`}
+            onClick={(e) => e.stopPropagation()}
+            className="hover:underline"
+          >
+            {body}
+          </SeasonLink>
+        ) : (
+          body
         );
       },
     },
