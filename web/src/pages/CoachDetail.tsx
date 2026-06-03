@@ -195,13 +195,29 @@ export function CoachDetail() {
 
       {seasons.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-5">
-          <h2 className="text-lg font-bold mb-1">Above expectation by season</h2>
-          <p className="text-xs text-gray-500 mb-3">
-            Actual team AdjEM minus the roster-only projection. Positive bars = the team beat the
-            talent on hand. Single seasons are noisy; the headline rating shrinks the average toward
-            zero.
-          </p>
-          <Sparkline seasons={seasons} />
+          {/* Lead with the CAE framing only when there's something to grade. A
+              coach whose teams were all unprojectable (heavy-rebuild rosters)
+              has no above-expectation signal — show their team strength plainly
+              instead of a misleading empty sparkline. */}
+          <h2 className="text-lg font-bold mb-1">
+            {scoredCount > 0 ? 'Above expectation by season' : 'Seasons'}
+          </h2>
+          {scoredCount > 0 ? (
+            <>
+              <p className="text-xs text-gray-500 mb-3">
+                Actual team AdjEM minus the roster-only projection. Positive bars = the team beat
+                the talent on hand. Single seasons are noisy; the headline rating shrinks the
+                average toward zero.
+              </p>
+              <Sparkline seasons={seasons} />
+            </>
+          ) : (
+            <p className="text-xs text-gray-500 mb-3">
+              None of this coach's teams could be projected (heavy-rebuild rosters below the
+              roster-projection threshold), so there's no above-expectation grade — the actual team
+              strength is shown below.
+            </p>
+          )}
 
           <div className="overflow-x-auto mt-4">
             <table className="min-w-full text-sm whitespace-nowrap">
