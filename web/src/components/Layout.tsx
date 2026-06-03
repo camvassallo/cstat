@@ -22,6 +22,11 @@ function SeasonSelector() {
   const { season, setSeason } = useSeason();
   const { seasons: globalSeasons } = useAvailableSeasons();
   const pageSeasons = usePageSeasons();
+  // A page can hide the selector entirely by publishing an EMPTY list — used by
+  // the season-agnostic career coaches board, where a year picker is
+  // meaningless. (Detail pages publish a non-empty list to constrain the
+  // dropdown; null releases the override back to the global list.)
+  if (pageSeasons != null && pageSeasons.length === 0) return null;
   // Detail pages publish their entity's eligible seasons via `setPageSeasons`;
   // when present, constrain the dropdown so the user can't pick a year the
   // entity has no data in. Global list otherwise.

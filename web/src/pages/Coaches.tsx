@@ -10,7 +10,7 @@ import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { usePageTitle } from '../components/usePageTitle';
 import { useSeason, setPageSeasons, type Season } from '../components/season';
-import { caeColor, fmtCae } from '../components/cae';
+import { caeColor, fmtCae, tenureSpan } from '../components/cae';
 
 type Mode = 'career' | 'season';
 
@@ -19,11 +19,12 @@ type Mode = 'career' | 'season';
 // min-seasons filter would be redundant.
 const SHOW_ALL_MIN_SEASONS = 1;
 
-// Request the whole season-scoped board, not the API's 200-row default — both
-// boards run ~260–290 coaches and the Blend sort + its z-score population must
-// see every qualified coach, not a top-200-by-CAE slice. 500 is the API cap and
-// comfortably exceeds the ~360 D-I coaches in any single season.
-const FULL_BOARD_LIMIT = 500;
+// Request the whole board, not the API's 200-row default — the Blend sort and
+// its z-score population must see every qualified coach, not a top-N-by-CAE
+// slice. The season-agnostic career board is the largest (~690 coaches all-time
+// across 2016–2026); season boards run ~360. 1000 is the API cap, with headroom
+// for the career board to grow as new coaches enter.
+const FULL_BOARD_LIMIT = 1000;
 
 const NEW_BADGE = (
   <span
@@ -33,6 +34,41 @@ const NEW_BADGE = (
     new
   </span>
 );
+
+/** Career span: "2016–2021" / "2024" for a finished tenure, or "2016–active"
+ *  (with the "active" tag highlighted green) when the coach is still coaching in
+ *  the current season. `last`/`current` are the coach's most recent *actual*
+ *  season and the board's newest season — both from `coach_seasons`, NOT the
+ *  scored rating, so a coach whose latest season is unscored (e.g. just moved
+ *  schools, new roster not yet projectable) still reads as active. */
+function TenureCell({
+  first,
+  last,
+  current,
+  nSeasons,
+}: {
+  first: number;
+  last: number;
+  current: number;
+  nSeasons: number;
+}) {
+  const active = last >= current;
+  const title = `${nSeasons} scored season${nSeasons === 1 ? '' : 's'} (2016–2026 coverage; the tenure span may have gaps).`;
+  return (
+    <span className="tabular-nums" title={title}>
+      {active ? (
+        <>
+          {first}–
+          <span className="rounded bg-green-500/20 px-1 py-0.5 text-[11px] font-medium text-green-300">
+            active
+          </span>
+        </>
+      ) : (
+        tenureSpan(first, last)
+      )}
+    </span>
+  );
+}
 
 /** Reliability shown as a thin bar + value, so a thin-tenure rating reads as
  *  low-confidence at a glance. reliability = n / (n + k) ∈ [0,1]. */
@@ -70,7 +106,7 @@ type CareerSortKey =
   | 'career_adj_d'
   | 'blend'
   | 'reliability'
-  | 'n_seasons'
+  | 'last_team_season'
   | 'last_team_name';
 
 /** Plain fixed-decimal for the display-only team-strength columns; `—` for the
@@ -80,6 +116,14 @@ function fmtStrength(v: number | null, d = 1): string {
 }
 
 function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
+  // The newest *actual* coaching season anywhere on the board (from
+  // coach_seasons, not the scored rating) — a coach whose latest season equals
+  // it is still active, even if that season isn't scored yet. Derived from the
+  // rows so it tracks coverage without threading season state into this table.
+  const currentSeason = useMemo(
+    () => (rows.length ? Math.max(...rows.map((r) => r.last_team_season ?? r.last_season)) : 0),
+    [rows],
+  );
   const [sort, setSort] = useState<{ key: CareerSortKey; dir: SortDir }>({
     key: 'blend',
     dir: 'desc',
@@ -109,7 +153,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
             <StickyHeader align="right" className="w-10">#</StickyHeader>
             <SortHeader label="Coach" sortKey="name" current={sort} onSort={onSort} />
             <SortHeader label="Team" sortKey="last_team_name" current={sort} onSort={onSort}
-              title="Team coached in the selected season." />
+              title="The coach's most recently coached team." />
             <SortHeader label="CAE" sortKey="cae_shrunk" current={sort} onSort={onSort} align="right"
               title="Shrunk Coach-Above-Expectation (AdjEM points above roster projection). The headline rating." />
             <StickyHeader align="right">95% CI</StickyHeader>
@@ -127,8 +171,8 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
               title="Evaluative composite: z(CAE) + z(career AdjEM) over this board — rewards coaches who field strong, tough-schedule teams AND squeeze extra out of the roster. A lens for human comparison, not a rigorous metric, and never fed back into forecasts." />
             <SortHeader label="Rel." sortKey="reliability" current={sort} onSort={onSort} align="right"
               title="Reliability = n / (n + k). Shrinkage weight; low = thin tenure, treat the rating as soft." />
-            <SortHeader label="Yrs" sortKey="n_seasons" current={sort} onSort={onSort} align="right"
-              title="Scored seasons (bounded by roster-projection coverage, not career length)." />
+            <SortHeader label="Tenure" sortKey="last_team_season" current={sort} onSort={onSort} align="right"
+              title="Coaching tenure — first scored season to most recent. 'active' = still coaching this season (from the coachdict mapping, so it's right even when the latest season isn't scored yet). Sorts by recency; hover a cell for the scored-season count." />
           </tr>
         </thead>
         <tbody>
@@ -159,7 +203,10 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
                 {c.blend == null ? '—' : fmtCae(c.blend, 2)}
               </td>
               <td className="py-1.5 px-2"><ReliabilityBar value={c.reliability} /></td>
-              <td className="py-1.5 px-2 text-right tabular-nums text-gray-300">{c.n_seasons}</td>
+              <td className="py-1.5 px-2 text-right text-gray-300">
+                <TenureCell first={c.first_season} last={c.last_team_season ?? c.last_season}
+                  current={currentSeason} nSeasons={c.n_seasons} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -273,34 +320,32 @@ export function Coaches() {
   const [error, setError] = useState<string | null>(null);
 
   // No synchronous `setLoading(true)` — initial `loading` covers first paint;
-  // a mode/filter/season change keeps the prior board visible until the new one
-  // lands (project convention; see Rankings.tsx). Career mode ranks by the
-  // season-independent shrunk rating (season filters the list); season mode
-  // re-ranks by the selected year's single-season residual.
+  // a mode/season change keeps the prior board visible until the new one lands
+  // (project convention; see Rankings.tsx). Career mode is season-AGNOSTIC — it
+  // ranks every rated coach over their whole career, so it ignores the navbar
+  // season and hides the picker; season mode re-ranks by the selected year.
   useEffect(() => {
     let cancelled = false;
-    const applyMeta = (available: number[]) => {
-      // Constrain the navbar picker to CAE coverage (2022–2026). Snap an
-      // out-of-coverage season (e.g. a stale ?season= from another page) to the
-      // newest covered year so the picker and board stay consistent.
-      setPageSeasons(available);
-      if (available.length > 0 && !available.includes(season)) {
-        setSeason(available[0] as Season);
-      }
-    };
     const req =
       mode === 'season'
         ? fetchCoachSeasonBoard(season, FULL_BOARD_LIMIT).then((res) => {
             if (cancelled) return;
             setBoard({ mode: 'season', rows: res.coaches });
             setError(null);
-            applyMeta(res.available_seasons);
+            // Constrain the navbar picker to CAE coverage and snap an
+            // out-of-coverage season to the newest covered year.
+            setPageSeasons(res.available_seasons);
+            if (res.available_seasons.length > 0 && !res.available_seasons.includes(season)) {
+              setSeason(res.available_seasons[0] as Season);
+            }
           })
-        : fetchCoaches({ minSeasons: SHOW_ALL_MIN_SEASONS, season, limit: FULL_BOARD_LIMIT }).then((res) => {
+        : fetchCoaches({ minSeasons: SHOW_ALL_MIN_SEASONS, limit: FULL_BOARD_LIMIT }).then((res) => {
             if (cancelled) return;
             setBoard({ mode: 'career', rows: res.coaches });
             setError(null);
-            applyMeta(res.available_seasons);
+            // Career is all-time — hide the navbar season picker (empty list is
+            // the agreed "hide" signal; see Layout's SeasonSelector).
+            setPageSeasons([]);
           });
     req
       .catch((e) => !cancelled && setError(e.message))
@@ -326,15 +371,15 @@ export function Coaches() {
           </p>
           {mode === 'career' ? (
             <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-              Coaches active in <span className="text-gray-300 font-semibold">{season}</span>, sorted
-              by <span className="text-gray-300">Blend</span> (a "results + overperformance" lens:
+              <span className="text-gray-300 font-semibold">All</span> rated coaches, ranked over
+              their <span className="text-gray-300">whole career</span> (season-agnostic), sorted by{' '}
+              <span className="text-gray-300">Blend</span> (a "results + overperformance" lens:
               strong, tough-schedule teams that also beat their roster). Sort any column — career{' '}
               <span className="text-gray-300">CAE</span> is the headline overperformance metric
               (shrunk over tenure, so thin tenures pull toward 0; see Rel. for confidence). The{' '}
               <span className="text-gray-300">AdjEM/AdjO/AdjD</span> columns show how strong the
-              coach's teams actually were — descriptive context, never a projection input. Changing
-              the season swaps which coaches show and their team; CAE is career-wide. Coverage
-              2016–2026.
+              coach's teams actually were — descriptive context, never a projection input. The Team
+              column shows each coach's most recent team. Coverage 2016–2026.
             </p>
           ) : (
             <p className="text-xs text-gray-500 mt-1 max-w-2xl">

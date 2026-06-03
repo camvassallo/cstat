@@ -27,7 +27,9 @@ struct LeaderboardParams {
     /// Minimum scored seasons to qualify (career mode only). Default 3 — thin
     /// tenures shrink toward 0 and would otherwise top the board on noise.
     min_seasons: Option<i32>,
-    /// Page size. Default 200, clamped to [1, 500].
+    /// Page size. Default 200, clamped to [1, 1000]. The frontend requests the
+    /// full board (career is season-agnostic, ~690 coaches all-time) so the
+    /// Blend z-score population and sort cover every qualified coach.
     limit: Option<i64>,
     /// Career mode: scope the list to coaches who coached this season (rating
     /// stays career-aggregated); omit for all-time. Season mode: which year's
@@ -48,7 +50,7 @@ async fn coach_leaderboard(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LeaderboardParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let limit = params.limit.unwrap_or(200).clamp(1, 500);
+    let limit = params.limit.unwrap_or(200).clamp(1, 1000);
     let pool = &state.db.pool;
 
     if params.mode.as_deref() == Some("season") {
@@ -86,9 +88,9 @@ async fn coach_leaderboard(
     // Display-only "results + overperformance" lens — z(CAE) + z(career AdjEM)
     // over this qualified population. Computed here, never an input to forecasts.
     // Skip on a truncated page: blend z-scores are only meaningful over the
-    // COMPLETE board, and a full page may have been cut by `limit` (the unbounded
-    // all-time path has ~690 coaches > the 500 cap). The frontend always
-    // season-scopes (≤ ~360 < cap), so it always gets blended.
+    // COMPLETE board, and a full page may have been cut by `limit`. The frontend
+    // requests the whole board (limit 1000 vs ~690 all-time coaches), so it
+    // always blends.
     if (coaches.len() as i64) < limit {
         queries::apply_career_blend(&mut coaches);
     }
