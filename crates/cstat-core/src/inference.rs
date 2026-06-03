@@ -408,7 +408,7 @@ pub enum LoadError {
     /// a feature-list / quantile-alpha value the Rust path can't honor.
     /// Same load-fail-loudly contract as trajectory meta.
     FreshmanMetaMismatch(String),
-    /// `roster_impact_model_meta.json` (Phase B) is missing, unparseable,
+    /// `roster_impact_model_meta.json` (roster-impact) is missing, unparseable,
     /// or carries a `player_filter` / feature-list value the Rust path
     /// can't honor. Same load-fail-loudly contract as the roster meta.
     RosterImpactMetaMismatch(String),
@@ -519,17 +519,23 @@ impl Predictor {
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("total_model.onnx"))?;
 
+        // Legacy box-score roster model. NOTE: no API route uses this
+        // (`predict_adj_em` is serving-dead — see its doc); only the
+        // `cstat-ingest projections-backtest` comparison baseline does. It is
+        // nonetheless loaded + meta-validated at every boot, so the API pays
+        // for it and even fails to boot if it drifts — a wart tracked in
+        // ROADMAP "box-score roster model: deprecated from serving" (make the
+        // load lazy / move it out of the API's required set).
         let roster_session = Session::builder()?
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("roster_model.onnx"))?;
 
         validate_roster_meta(&model_dir.join("roster_model_meta.json"))?;
 
-        // Phase B impact-aggregation model: a separate ONNX from the
-        // box-score `roster_model` above. Consumes the 25-feature
-        // cam_v3-aggregation vector and powers the 2027 projection route;
-        // the box-score model stays for swap-Δ. Validated with the same
-        // fail-loudly contract.
+        // roster-impact model: a separate ONNX from the box-score
+        // `roster_model` above. Consumes the 25-feature cam_v3-aggregation
+        // vector and powers the 2027 projection route — this is the live
+        // projection model. Validated with the same fail-loudly contract.
         let roster_impact_session = Session::builder()?
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("roster_impact_model.onnx"))?;
@@ -740,15 +746,26 @@ impl Predictor {
         Ok(data[0])
     }
 
-    /// Run the roster-only AdjEM model on a 36-feature vector built by
-    /// `roster_features::build_roster_features`.
+    /// Run the legacy box-score roster AdjEM model (`roster_model.onnx`) on a
+    /// vector built by `roster_features::build_roster_features`.
     ///
-    /// Returns the predicted `adj_efficiency_margin` for the roster. The
-    /// transfer-portal Δ engine calls this twice — once on the destination's
-    /// existing roster, once on the swap variant produced by
-    /// `roster_features::swap_player` — and reports the difference. Absolute
-    /// AdjEM is soft-calibrated (~7.4 MAE per the LOSO backtest in
-    /// `roster_model_meta.json`); only the Δ is meant to be load-bearing.
+    /// **NOT USED IN PRODUCTION SERVING (as of 2026-06-03).** No API route calls
+    /// this. The live projection uses [`Predictor::predict_roster_impact`]
+    /// (the cam_v3 roster-impact model), and the transfer-swap tool moved to
+    /// archetype-based `roster_fit` — so the old "transfer-portal Δ engine"
+    /// caller this doc used to describe no longer exists. The sole remaining
+    /// caller is `cstat-ingest projections-backtest`, which scores it as the
+    /// frozen **`boxscore_proj`** comparison baseline (the honest "does the
+    /// roster-impact model earn its complexity?" check). Retained for that
+    /// baseline + latent reuse (a box-score swap-Δ engine or ensemble member);
+    /// it is a genuinely different model — box-score/rate-stat composition with
+    /// cam_v3 deliberately excluded. See ROADMAP "box-score roster model:
+    /// deprecated from serving".
+    ///
+    /// Returns the predicted `adj_efficiency_margin`. Absolute AdjEM is
+    /// soft-calibrated (~7.4 MAE per the LOSO backtest in
+    /// `roster_model_meta.json`); only a Δ between two rosters was ever
+    /// meant to be load-bearing.
     pub fn predict_adj_em(&self, features: &[f32; ROSTER_NUM_FEATURES]) -> Result<f32, ort::Error> {
         use ort::value::TensorRef;
         let shape = [1_usize, ROSTER_NUM_FEATURES];
@@ -759,15 +776,17 @@ impl Predictor {
         Ok(data[0])
     }
 
-    /// Score a projected roster's AdjEM with the Phase B impact-aggregation
+    /// Score a projected roster's AdjEM with the roster-impact
     /// model (`roster_impact_model.onnx`). Input is the 25-feature vector
     /// from `roster_impact::build_roster_impact_features`, built over a
     /// roster whose `cam_v3` fields carry *projected* next-season values
     /// (trajectory model for returners / arrivals, freshman model for
     /// recruits).
     ///
-    /// Distinct from `predict_adj_em`, which scores the box-score
-    /// `roster_model.onnx` for the swap-Δ tool. This is the consumer for
+    /// Distinct from `predict_adj_em`, which scores the legacy box-score
+    /// `roster_model.onnx` — now retained only as the projections backtest's
+    /// frozen comparison baseline (the swap-Δ tool moved to archetype-based
+    /// `roster_fit`). This is the consumer for
     /// the trajectory / freshman per-player cam_v3 projections; all
     /// projection error lives in those upstream models, making the
     /// composed pipeline honest and decomposable.
@@ -1147,7 +1166,7 @@ fn roster_impact_infer(
     Ok(data[0])
 }
 
-/// A single Phase B impact-aggregation model loaded on its own, outside the
+/// A single roster-impact model loaded on its own, outside the
 /// main `Predictor` bundle.
 ///
 /// The projection backtest (`cstat-ingest::projections_backtest`) loads one
@@ -1297,7 +1316,7 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
     Ok(())
 }
 
-/// Read `roster_impact_model_meta.json` (Phase B) and verify feature
+/// Read `roster_impact_model_meta.json` (roster-impact) and verify feature
 /// order, count, and the player qualification gate match the compiled
 /// Rust contract. Same fail-loudly-at-boot policy as the box-score
 /// roster validator; this model carries no `include_impact_features`

@@ -172,7 +172,7 @@ enum Commands {
         year: Option<i32>,
     },
 
-    /// End-to-end backtest for the Phase B impact-aggregation projection
+    /// End-to-end backtest for the roster-impact projection
     /// pipeline. Composes projected rosters for each target season, scores
     /// them with roster_impact_model.onnx, and compares to actual AdjEM.
     ProjectionsBacktest {
@@ -190,7 +190,7 @@ enum Commands {
     },
 
     /// Materialize the preseason roster-impact projection per (season, team)
-    /// into `team_preseason_projection`. Runs the same season-wide Phase B
+    /// into `team_preseason_projection`. Runs the same season-wide roster-impact
     /// composition `/api/projections` does, once per target year, and writes
     /// each team's projected AdjEM so the predict route can read it cheaply
     /// for the preseason × pit early-season blend (ROADMAP §6).

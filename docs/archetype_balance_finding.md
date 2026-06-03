@@ -140,7 +140,7 @@ Worth naming as a methodological point: archetypes are k-means clusters
 over the same player rate stats that feed CamPom and the trajectory
 model. Routing rosters through a categorical bottleneck and then
 scoring is *strictly worse* than scoring over the continuous features
-directly. The Phase B impact model confirmed this — including
+directly. The roster-impact model confirmed this — including
 archetype-share features on top of `Σ(cam_v3 × share)` contributes
 marginal lift but no foundational signal.
 

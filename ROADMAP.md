@@ -929,14 +929,40 @@ consumer reads either key on any dump (verified: the 4 active scripts produce
 byte-identical numbers on the old-key dump). The glob-latest historical one-offs
 (`audit_preseason`, `decompose_projection_error`, `diagnose_trajectory_attrition`)
 got a one-line forward-compat column alias; the pinned-dump archival scripts
-(`derisk_*`, which read a frozen 5-season dump) were left untouched. **Left as-is
-on purpose:** the *architectural* "Phase A / Phase B" prose in module docs
-(`roster_impact.rs`, `inference.rs`, etc.) — that's the documented two-pipeline
-concept (box-score vs impact-aggregation), and mechanical prose substitution reads
-worse; a follow-up could reword it to "box-score / roster-impact projection" if
-desired. **Also untouched:** ROADMAP's own historical shipped-item descriptions
-still say `phase_b` (a timestamped log; consistent with the retained dump
-artifacts that still carry the old key).
+(`derisk_*`, which read a frozen 5-season dump) were left untouched. **Architectural
+prose reworded too:** every "Phase A" / "Phase B" mention across the module docs
+(`roster_impact.rs`, `inference.rs`, `roster_projection.rs`, `roster_features.rs`,
+`projections.rs`, `compute_projections.rs`, `projections_backtest.rs`, `ingest.rs`)
++ `docs/projections_methodology.md` + `docs/archetype_balance_finding.md` now reads
+"box-score projection" / "roster-impact projection". Two stale claims fixed in the
+process: the box-score `roster_model.onnx` / `predict_adj_em` is **no longer used in
+production** (zero non-test callers — the swap-Δ tool moved to archetype-based
+`roster_fit`), so the docs that said it "serves the swap-Δ tool" were corrected to
+"retained only as the projections backtest's frozen comparison baseline." **Untouched:**
+ROADMAP's own historical shipped-item descriptions still say `phase_b` (a timestamped
+log; consistent with the retained dump artifacts that still carry the old key).
+
+### Box-score roster model (`roster_model.onnx`): deprecated from serving — stop loading it at API boot
+*(captured 2026-06-03)* The box-score roster model (`roster_model.onnx` /
+`Predictor::predict_adj_em` / `roster_features::build_roster_features` /
+`project_rotation`) — formerly the `phase_a` / `boxscore_proj` projection pipeline —
+**is no longer used in any production serving path.** It learns team AdjEM from a
+roster's box-score/rate-stat *composition* with cam_v3 deliberately excluded; the live
+projection moved to the cam_v3 roster-impact model, and the transfer-swap tool moved to
+archetype-based `roster_fit`. **Its only live caller is `cstat-ingest
+projections-backtest`**, which scores it as the frozen `boxscore_proj` comparison
+baseline. **Tagged not-used-in-prod 2026-06-03** (doc markers on `predict_adj_em` + the
+boot-load site; stale "serves swap-Δ" comments corrected). **Do NOT remove it** — it's
+the backtest's honest "does the roster-impact model earn its complexity?" check, and a
+genuinely different model worth keeping for latent reuse (a box-score swap-Δ engine, an
+ensemble member, or a cam_v3-sparse-roster fallback). **The actual wart to fix:**
+`Predictor::load()` loads `roster_model.onnx` *and meta-validates it* unconditionally at
+every API boot — so the API pays the load and even **fails to boot if it drifts**, for a
+model no route serves. Make the load **lazy** (`OnceCell`, materialized on first
+`predict_adj_em` — only the ingest backtest triggers it) or move the box-score model out
+of the API `Predictor`'s required set entirely, dropping it + its `validate_roster_meta`
+gate from the boot path. Small, isolated `cstat-core` change; the only behavioral effect
+is the API no longer requires the file at boot.
 
 ### API latency — team-detail schedule projections (and other inline-inference routes)
 *(captured 2026-05-31 during PR3 coach-surface scoping)* `team_detail`

@@ -1,4 +1,4 @@
-//! End-to-end backtest for the Phase B impact-aggregation projection
+//! End-to-end backtest for the roster-impact projection
 //! pipeline (ROADMAP §5b).
 //!
 //! For each target season, composes the projected rosters exactly as the
@@ -10,16 +10,16 @@
 //! `team_season_stats.adj_efficiency_margin` the season finished with.
 //!
 //! Three predictions per team, all measured against the same actual:
-//!  - **Phase B** — the leave-one-season-out roster-impact model scored on
+//!  - **roster-impact** — the leave-one-season-out roster-impact model scored on
 //!    the projected-cam_v3 roster.
-//!  - **Phase A** — the *former* box-score pipeline (what the route
-//!    shipped before Phase B): `project_rotation` → `build_roster_features`
+//!  - **box-score** — the *former* box-score pipeline (what the route
+//!    shipped before roster-impact): `project_rotation` → `build_roster_features`
 //!    → `predict_adj_em`, blended `0.80·baseline + 0.20·raw + 2.0`. Kept
 //!    here as a frozen comparison baseline; the live route has since
-//!    moved to Phase B.
+//!    moved to roster-impact.
 //!  - **baseline-persistence** — target AdjEM ≈ base-season AdjEM.
 //!
-//! Acceptance (ROADMAP §5b): Phase B should beat or match Phase A while
+//! Acceptance (ROADMAP §5b): roster-impact should beat or match box-score while
 //! being more principled. The blend sweep informs the live route's
 //! recalibration — after the v2 OOF retrain it blends
 //! `0.50·baseline + 0.50·raw` with no offset.
@@ -32,9 +32,9 @@
 //!    ROADMAP §5b v2 tightening; the live `/api/projections` route still
 //!    uses the all-seasons model, correct there because the live target
 //!    year is genuinely unseen.
-//!  - The Phase A box-score model (`roster_model.onnx`) stays the frozen
-//!    all-seasons model — Phase A is only a fixed comparison reference, so
-//!    its slight in-sample edge can only understate Phase B's win.
+//!  - The box-score model (`roster_model.onnx`) stays the frozen
+//!    all-seasons model — box-score is only a fixed comparison reference, so
+//!    its slight in-sample edge can only understate the roster-impact model's win.
 //!  - Recruit cam_v3 comes from `compose_all_projections`, which runs
 //!    live freshman inference — mildly in-sample for the freshman model
 //!    on historical targets.
@@ -58,11 +58,11 @@ use cstat_core::roster_projection::{
 /// `MIN_QUALIFYING_FOR_PROJECTION` in `routes/projections.rs`.
 const MIN_QUALIFYING: usize = 7;
 
-/// Phase A blend constants — the *frozen* old box-score pipeline
+/// box-score blend constants — the *frozen* old box-score pipeline
 /// (0.80 baseline weight + 2.0 offset), held as a fixed comparison
-/// baseline. The live route moved to the Phase B blend (0.50 / 0.0 after
+/// baseline. The live route moved to the roster-impact blend (0.50 / 0.0 after
 /// the v2 OOF retrain); these deliberately do NOT track
-/// `routes/projections.rs` — they pin what "Phase A" meant so the
+/// `routes/projections.rs` — they pin what "box-score" meant so the
 /// backtest keeps a stable reference.
 const BOXSCORE_PROJ_SHRINK_WEIGHT: f32 = 0.80;
 const BOXSCORE_PROJ_OFFSET: f32 = 2.0;
@@ -216,7 +216,7 @@ async fn backtest_year(
             skipped_no_actual += 1;
             continue;
         };
-        // Require a base-season AdjEM: baseline-persistence and Phase A's
+        // Require a base-season AdjEM: baseline-persistence and the box-score model's
         // blend are both undefined without it. Skipping keeps all three
         // predictors measured on an identical team set (the no-baseline
         // cohort is a handful of D-I-transition teams).
@@ -225,7 +225,7 @@ async fn backtest_year(
             continue;
         };
 
-        // --- Phase B: projected cam_v3 → LOSO impact-aggregation model. -
+        // --- roster-impact: projected cam_v3 → LOSO impact-aggregation model. -
         let mut traj_ids: Vec<Uuid> = Vec::new();
         traj_ids.extend(p.returning.iter().map(|r| r.player_id));
         traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
@@ -243,7 +243,7 @@ async fn backtest_year(
             ))
             .map_err(|e| anyhow::anyhow!("LOSO roster-impact predict ({}): {e}", p.team_name))?;
 
-        // --- Phase A: box-score pipeline with the shipped blend. --------
+        // --- box-score: box-score pipeline with the shipped blend. --------
         let roster_a = project_rotation(p.for_scenario(DraftScenario::Ceiling));
         let raw_a = predictor
             .predict_adj_em(&build_roster_features(&roster_a))
@@ -293,19 +293,19 @@ fn report(label: &str, results: &[TeamResult]) {
         &actuals,
     );
     println!("\n  {label}");
-    print_block("roster_proj (impact, was Phase B)", &roster_proj);
-    print_block("boxscore_proj (legacy, was Phase A)", &boxscore_proj);
+    print_block("roster_proj (impact, was roster-impact)", &roster_proj);
+    print_block("boxscore_proj (legacy, was box-score)", &boxscore_proj);
     print_block("baseline-persistence", &baseline);
 }
 
-/// Sweep the baseline blend weight on Phase B's raw output and report the
+/// Sweep the baseline blend weight on the roster-impact model's raw output and report the
 /// MAE curve. `pred = w·baseline + (1−w)·phaseB_raw`. This is the PR 2
-/// recalibration in miniature — Phase B raw is a far better raw signal
+/// recalibration in miniature — roster-impact raw is a far better raw signal
 /// than the box-score model (which needs heavy baseline anchoring), so
 /// the optimum sits at a much lower `w`. Returns `(best_w, best_mae)`.
 fn blend_sweep(results: &[TeamResult]) -> (f64, f64) {
     let actuals: Vec<f64> = results.iter().map(|r| r.actual).collect();
-    println!("\n  Phase B blended  (pred = w·baseline + (1−w)·phaseB_raw):");
+    println!("\n  roster-impact blended  (pred = w·baseline + (1−w)·phaseB_raw):");
     let mut best = (0.0_f64, f64::MAX);
     for i in 0..=20 {
         let w = i as f64 * 0.05;
@@ -329,7 +329,7 @@ fn blend_sweep(results: &[TeamResult]) -> (f64, f64) {
 }
 
 /// Run the backtest across `years` and print the report. Returns Ok even
-/// when Phase B underperforms — this is a diagnostic, not a CI gate; the
+/// when roster-impact underperforms — this is a diagnostic, not a CI gate; the
 /// printed verdict carries the conclusion.
 ///
 /// When `output_path` is `Some`, also dumps per-team predictions to a
@@ -345,7 +345,7 @@ pub async fn run(
     output_path: Option<&Path>,
 ) -> Result<()> {
     println!("{}", "=".repeat(72));
-    println!("Phase B projection backtest — target seasons: {years:?}");
+    println!("roster-impact projection backtest — target seasons: {years:?}");
     println!("{}", "=".repeat(72));
 
     // Per-target-season leave-one-season-out roster-impact models — each
@@ -381,8 +381,8 @@ pub async fn run(
         report("POOLED", &pooled);
     }
 
-    // Verdict against the pooled numbers. Phase A's 6.23 is its *blended*
-    // pipeline output, so the fair comparison is best-blended Phase B —
+    // Verdict against the pooled numbers. The box-score model's 6.23 is its *blended*
+    // pipeline output, so the fair comparison is best-blended roster-impact —
     // the blend sweep below is the PR 2 recalibration in miniature.
     let actuals: Vec<f64> = pooled.iter().map(|r| r.actual).collect();
     let b = compute_stats(
@@ -397,28 +397,28 @@ pub async fn run(
 
     println!("\n{}", "-".repeat(72));
     println!(
-        "  Phase B raw pooled MAE {:.2} (bias {:+.2}) — vs Phase A {:.2} (live, blended) / \
+        "  roster-impact raw pooled MAE {:.2} (bias {:+.2}) — vs box-score {:.2} (live, blended) / \
          {REF_BOXSCORE_PROJ_MAE:.2} (documented); baseline-persistence {REF_BASELINE_MAE:.2}.",
         b.mae, b.bias, a.mae,
     );
     println!(
-        "  Phase B *blended* best MAE {best_mae:.2} at w={best_w:.2} \
-         (Phase A blends at w=0.80 because its raw is far weaker).",
+        "  roster-impact *blended* best MAE {best_mae:.2} at w={best_w:.2} \
+         (box-score blends at w=0.80 because its raw is far weaker).",
     );
     if best_mae <= a.mae {
         println!(
-            "  ✓ Best-blended Phase B ({best_mae:.2}) beats or matches the Phase A pipeline ({:.2}).",
+            "  ✓ Best-blended roster-impact ({best_mae:.2}) beats or matches the box-score pipeline ({:.2}).",
             a.mae,
         );
     } else {
         println!(
-            "  ✗ Best-blended Phase B ({best_mae:.2}) is {:.2} MAE short of Phase A ({:.2}).",
+            "  ✗ Best-blended roster-impact ({best_mae:.2}) is {:.2} MAE short of box-score ({:.2}).",
             best_mae - a.mae,
             a.mae,
         );
     }
     println!(
-        "  Phase B raw bias {:+.2} — near-zero, so PR 2's blend needs little/no offset.",
+        "  roster-impact raw bias {:+.2} — near-zero, so PR 2's blend needs little/no offset.",
         b.bias,
     );
     println!("{}", "-".repeat(72));

@@ -1,7 +1,7 @@
 //! Persist the preseason roster-impact projection per (season, team) into
 //! `team_preseason_projection` (migration 023).
 //!
-//! `/api/projections` computes the season-wide Phase B projection live on
+//! `/api/projections` computes the season-wide roster-impact projection live on
 //! every call (`compose_all_projections` → `score_projection_adj_em`). The
 //! preseason × pit predict blend (ROADMAP §6) needs each team's projected
 //! AdjEM cheaply, per predict request — so this step materializes the same
