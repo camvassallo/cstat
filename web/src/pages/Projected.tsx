@@ -252,17 +252,23 @@ function buildColumns(
       ...flexCol(1, 100),
       sort: 'desc',
       headerTooltip:
-        "The projected AdjEM for this roster: the Phase B impact model's projected-roster output blended 55/45 with last season's actual AdjEM (55% last year, 45% the model).",
+        "The projected AdjEM for this roster: the roster-impact model's projected-roster output blended with last season's actual AdjEM. The blend is ~50/50 for continuity rosters, but leans toward the roster model for heavy-turnover teams (last year's result is a stale anchor when the roster overhauls).",
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         const chip = adjEmChip(p.value);
         const baseline = p.data?.baseline_adj_em;
         if (p.value == null || baseline == null) return chip;
+        const w = p.data?.baseline_weight ?? 0.5;
+        const bw = Math.round(w * 100);
+        const leansRoster = w < 0.45; // materially below the stable 0.50
+        const title =
+          `${bw}% last year's actual AdjEM (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}) ` +
+          `+ ${100 - bw}% the roster model's projection` +
+          (leansRoster ? ' — leaning on the new roster (heavy turnover)' : '');
         return (
-          <span
-            title={`55% last year's actual AdjEM (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}) + 45% the Phase B model's projected-roster output`}
-          >
+          <span title={title} className="inline-flex items-center gap-1">
             {chip}
+            {leansRoster && <span className="text-amber-400/80 text-[10px]" aria-hidden>⟳</span>}
           </span>
         );
       },

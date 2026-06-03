@@ -124,6 +124,15 @@ struct ProjectedTeam {
     /// accuracy column — a user-facing backtest of a past forecast.
     actual_adj_em: Option<f32>,
 
+    /// The baseline weight used in the served blend for this team:
+    /// `midpoint ≈ baseline_weight·(last-yr AdjEM) + (1−baseline_weight)·roster`.
+    /// The stable 0.50 for continuity rosters, ramping down toward 0.25 for
+    /// roster-overhaul teams (low talent retained) — last season's result is a
+    /// stale anchor when the roster turns over, so the blend leans on the roster
+    /// projection. See `roster_projection::transition_shrink_weight`. Lets the UI
+    /// flag "leaning on the new roster" and keeps the blend auditable.
+    baseline_weight: f32,
+
     // --- Display-only coach grade. NEVER folded into any AdjEM field above. ---
     // A point-in-time backtest (`training/pit_cae_backtest.py`, 2026-06-03)
     // showed an additive coach term DOES beat the projection's noise floor
@@ -158,24 +167,10 @@ struct CoachCae {
     n_seasons: Option<i32>,
 }
 
-/// Weight on the base-season AdjEM when blending it with the Phase B
-/// impact-aggregation model's raw projection. Tuned on the end-to-end
-/// `cstat-ingest projections-backtest` against actual 2025 + 2026 AdjEM
-/// (496 pooled team-years; see `docs/projections_methodology.md`).
-///
-/// Phase B's raw output is a far stronger projector than the old
-/// box-score model — raw MAE 6.39 vs the box-score model's 9.97 — so
-/// the blend leans much less on baseline persistence than Phase A did
-/// (`0.50` vs the old `0.80`). The MAE curve is flat across 0.40–0.60;
-/// `0.50` is the backtest optimum (blended MAE 5.86, beating both
-/// baseline-persistence 6.53 and the old Phase A pipeline 6.23).
-///
-/// v2 retune (ROADMAP §5b): the impact model now trains on held-out OOF
-/// cam_v3 ("train on what you serve"), and the backtest scores it with
-/// leave-one-season-out models — so 5.86 is leak-free, where the v1
-/// `0.55`/5.88 figure carried a small in-sample leak. The better-
-/// calibrated raw projector earns marginally more trust (0.55 → 0.50).
-const SHRINK_WEIGHT: f32 = cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT;
+// The stable baseline weight + tuning history live on
+// `cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT`; `predict_team`
+// derives the per-team weight from `transition_shrink_weight` (lower for
+// roster-overhaul teams), so there's no fixed local weight to alias here.
 
 /// Additive calibration offset applied to the blended projection.
 ///
@@ -189,12 +184,17 @@ const SHRINK_WEIGHT: f32 = cstat_core::roster_projection::PROJECTION_SHRINK_WEIG
 /// offset) stays valid.
 const PROJECTION_OFFSET: f32 = cstat_core::roster_projection::PROJECTION_OFFSET;
 
-/// Blend the raw model output with the baseline AdjEM and apply the
-/// calibration offset. With no baseline (e.g. a brand-new D-I program)
-/// the blend collapses to the offset-corrected raw value.
-fn shrink(raw: f32, baseline: Option<f32>) -> f32 {
+/// Blend the raw model output with the baseline AdjEM at an explicit baseline
+/// `weight` and apply the calibration offset. With no baseline (e.g. a
+/// brand-new D-I program) the blend collapses to the offset-corrected raw
+/// value. `weight` is the stable [`SHRINK_WEIGHT`] for continuity rosters and
+/// lower for overhaul rosters (see
+/// [`cstat_core::roster_projection::transition_shrink_weight`]) — the shared
+/// `score_projection_adj_em` derives the same weight from the same roster, so
+/// this route and `compute-projections` never diverge.
+fn shrink(raw: f32, baseline: Option<f32>, weight: f32) -> f32 {
     match baseline {
-        Some(b) => SHRINK_WEIGHT * b + (1.0 - SHRINK_WEIGHT) * raw + PROJECTION_OFFSET,
+        Some(b) => weight * b + (1.0 - weight) * raw + PROJECTION_OFFSET,
         None => raw + PROJECTION_OFFSET,
     }
 }
@@ -467,6 +467,11 @@ fn predict_team(
         })
         .collect();
 
+    // Turnover-aware baseline weight: stable 0.50, lower for overhaul rosters.
+    // Derived from `p` by the shared helper, identical to what the offline
+    // `score_projection_adj_em` computes, so the two serving paths never diverge.
+    let baseline_weight = cstat_core::roster_projection::transition_shrink_weight(p);
+
     // Every team produces a row — too-thin rosters get null predictions
     // and a `too_thin = true` flag instead of being silently dropped.
     // This keeps "what happened to X?" auditable from the response.
@@ -492,6 +497,7 @@ fn predict_team(
         too_thin,
         baseline_adj_em: baseline,
         actual_adj_em: actual,
+        baseline_weight,
         // Coach fields are decorative and filled by the handler after this
         // returns (predict_team has no DB access); default to absent here.
         coach_id: None,
@@ -539,13 +545,13 @@ fn predict_team(
         }
     };
 
-    // Baseline-shrink both bounds. The band shrinks in width by
-    // `(1 - SHRINK_WEIGHT)` but stays internally consistent (ceiling ≥
-    // floor preserved for non-anomaly teams; negative-spread anomalies
-    // stay negative-spread).
+    // Baseline-shrink both bounds at the turnover-aware weight. The band
+    // shrinks in width by `(1 - baseline_weight)` but stays internally
+    // consistent (ceiling ≥ floor preserved for non-anomaly teams;
+    // negative-spread anomalies stay negative-spread).
     Some(base(
-        Some(shrink(floor_raw, baseline)),
-        Some(shrink(ceiling_raw, baseline)),
+        Some(shrink(floor_raw, baseline, baseline_weight)),
+        Some(shrink(ceiling_raw, baseline, baseline_weight)),
         false,
     ))
 }
@@ -1250,27 +1256,45 @@ async fn fetch_coach_cae(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT as SHRINK_WEIGHT;
 
     #[test]
     fn shrink_blends_raw_with_baseline_and_offset() {
         let raw = 30.0_f32;
         let baseline = 25.0_f32;
         let expected = SHRINK_WEIGHT * baseline + (1.0 - SHRINK_WEIGHT) * raw + PROJECTION_OFFSET;
-        assert!((shrink(raw, Some(baseline)) - expected).abs() < 1e-5);
+        assert!((shrink(raw, Some(baseline), SHRINK_WEIGHT) - expected).abs() < 1e-5);
     }
 
     #[test]
     fn shrink_offsets_raw_when_baseline_missing() {
         // No baseline (new D-I program) → offset-corrected raw, no anchor.
         let raw = 12.3_f32;
-        assert!((shrink(raw, None) - (raw + PROJECTION_OFFSET)).abs() < 1e-5);
+        assert!((shrink(raw, None, SHRINK_WEIGHT) - (raw + PROJECTION_OFFSET)).abs() < 1e-5);
     }
 
     #[test]
     fn shrink_is_monotonic_in_raw() {
         // The blend preserves ordering: a higher raw projection always
         // yields a higher shrunk output (so floor ≤ ceiling survives).
-        assert!(shrink(50.0, Some(25.0)) > shrink(20.0, Some(25.0)));
+        assert!(shrink(50.0, Some(25.0), SHRINK_WEIGHT) > shrink(20.0, Some(25.0), SHRINK_WEIGHT));
+    }
+
+    #[test]
+    fn overhaul_weight_leans_off_a_stale_baseline() {
+        // At a lower (overhaul) weight the blend sits closer to the roster
+        // projection than to a stale baseline. raw=10, baseline=25:
+        // w=0.50 → 17.5; w=0.25 → 13.75 (nearer raw).
+        let raw = 10.0_f32;
+        let baseline = 25.0_f32;
+        let stable = shrink(raw, Some(baseline), SHRINK_WEIGHT);
+        let overhaul = shrink(
+            raw,
+            Some(baseline),
+            cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT_OVERHAUL,
+        );
+        assert!(overhaul < stable, "lower weight should pull toward raw");
+        assert!((overhaul - 13.75).abs() < 1e-5);
     }
 
     #[test]

@@ -556,6 +556,14 @@ export interface ProjectedTeam {
   /// view's "Projected vs Actual" accuracy column.
   actual_adj_em: number | null;
 
+  /// Baseline weight used in the served blend:
+  /// `midpoint ≈ baseline_weight·(last-yr AdjEM) + (1−baseline_weight)·roster`.
+  /// The stable 0.50 for continuity rosters, ramping down toward 0.25 for
+  /// roster-overhaul teams (low talent retained) — last year's result is a
+  /// stale anchor when the roster turns over, so the projection leans on the
+  /// roster model. < 0.50 = "leaning on the new roster".
+  baseline_weight: number;
+
   // --- Display-only coach grade. NOT part of any AdjEM above. ---
   // A PIT backtest (training/pit_cae_backtest.py) showed an additive coach term
   // beats the projection's noise floor but FAILS a program-persistence null, so
