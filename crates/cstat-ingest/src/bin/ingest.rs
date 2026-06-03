@@ -184,7 +184,7 @@ enum Commands {
 
         /// Optional JSON dump of per-team predictions for downstream
         /// residual analysis. One record per scored team:
-        /// `{team_id, team_name, season, phase_b, phase_a, baseline, actual}`.
+        /// `{team_id, team_name, season, roster_proj, boxscore_proj, baseline, actual}`.
         #[arg(long)]
         output: Option<std::path::PathBuf>,
     },

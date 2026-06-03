@@ -64,11 +64,11 @@ const MIN_QUALIFYING: usize = 7;
 /// the v2 OOF retrain); these deliberately do NOT track
 /// `routes/projections.rs` — they pin what "Phase A" meant so the
 /// backtest keeps a stable reference.
-const PHASE_A_SHRINK_WEIGHT: f32 = 0.80;
-const PHASE_A_OFFSET: f32 = 2.0;
+const BOXSCORE_PROJ_SHRINK_WEIGHT: f32 = 0.80;
+const BOXSCORE_PROJ_OFFSET: f32 = 2.0;
 
 /// Documented reference points (`docs/projections_methodology.md`).
-const REF_PHASE_A_MAE: f64 = 6.23;
+const REF_BOXSCORE_PROJ_MAE: f64 = 6.23;
 const REF_BASELINE_MAE: f64 = 6.53;
 
 struct Stats {
@@ -125,8 +125,8 @@ struct TeamResult {
     team_id: Uuid,
     team_name: String,
     season: i32,
-    phase_b: f64,
-    phase_a: f64,
+    roster_proj: f64,
+    boxscore_proj: f64,
     baseline: f64,
     actual: f64,
 }
@@ -235,7 +235,7 @@ async fn backtest_year(
 
         let mut roster_b = p.for_scenario(DraftScenario::Ceiling);
         apply_projected_cam_v3(&mut roster_b, &projected_cam);
-        let phase_b = loso_model
+        let roster_proj = loso_model
             .predict(&build_roster_impact_features(
                 &roster_b,
                 p.outbound_cam_v3_sum,
@@ -248,16 +248,16 @@ async fn backtest_year(
         let raw_a = predictor
             .predict_adj_em(&build_roster_features(&roster_a))
             .map_err(|e| anyhow::anyhow!("predict_adj_em ({}): {e}", p.team_name))?;
-        let phase_a = PHASE_A_SHRINK_WEIGHT * (baseline as f32)
-            + (1.0 - PHASE_A_SHRINK_WEIGHT) * raw_a
-            + PHASE_A_OFFSET;
+        let boxscore_proj = BOXSCORE_PROJ_SHRINK_WEIGHT * (baseline as f32)
+            + (1.0 - BOXSCORE_PROJ_SHRINK_WEIGHT) * raw_a
+            + BOXSCORE_PROJ_OFFSET;
 
         results.push(TeamResult {
             team_id: p.team_id,
             team_name: p.team_name.clone(),
             season: year,
-            phase_b: phase_b as f64,
-            phase_a: phase_a as f64,
+            roster_proj: roster_proj as f64,
+            boxscore_proj: boxscore_proj as f64,
             baseline,
             actual,
         });
@@ -280,12 +280,12 @@ fn print_block(label: &str, s: &Stats) {
 
 fn report(label: &str, results: &[TeamResult]) {
     let actuals: Vec<f64> = results.iter().map(|r| r.actual).collect();
-    let phase_b = compute_stats(
-        &results.iter().map(|r| r.phase_b).collect::<Vec<_>>(),
+    let roster_proj = compute_stats(
+        &results.iter().map(|r| r.roster_proj).collect::<Vec<_>>(),
         &actuals,
     );
-    let phase_a = compute_stats(
-        &results.iter().map(|r| r.phase_a).collect::<Vec<_>>(),
+    let boxscore_proj = compute_stats(
+        &results.iter().map(|r| r.boxscore_proj).collect::<Vec<_>>(),
         &actuals,
     );
     let baseline = compute_stats(
@@ -293,8 +293,8 @@ fn report(label: &str, results: &[TeamResult]) {
         &actuals,
     );
     println!("\n  {label}");
-    print_block("Phase B (impact)", &phase_b);
-    print_block("Phase A (box-score)", &phase_a);
+    print_block("roster_proj (impact, was Phase B)", &roster_proj);
+    print_block("boxscore_proj (legacy, was Phase A)", &boxscore_proj);
     print_block("baseline-persistence", &baseline);
 }
 
@@ -311,7 +311,7 @@ fn blend_sweep(results: &[TeamResult]) -> (f64, f64) {
         let w = i as f64 * 0.05;
         let preds: Vec<f64> = results
             .iter()
-            .map(|r| w * r.baseline + (1.0 - w) * r.phase_b)
+            .map(|r| w * r.baseline + (1.0 - w) * r.roster_proj)
             .collect();
         let s = compute_stats(&preds, &actuals);
         if s.mae < best.1 {
@@ -386,11 +386,11 @@ pub async fn run(
     // the blend sweep below is the PR 2 recalibration in miniature.
     let actuals: Vec<f64> = pooled.iter().map(|r| r.actual).collect();
     let b = compute_stats(
-        &pooled.iter().map(|r| r.phase_b).collect::<Vec<_>>(),
+        &pooled.iter().map(|r| r.roster_proj).collect::<Vec<_>>(),
         &actuals,
     );
     let a = compute_stats(
-        &pooled.iter().map(|r| r.phase_a).collect::<Vec<_>>(),
+        &pooled.iter().map(|r| r.boxscore_proj).collect::<Vec<_>>(),
         &actuals,
     );
     let (best_w, best_mae) = blend_sweep(&pooled);
@@ -398,7 +398,7 @@ pub async fn run(
     println!("\n{}", "-".repeat(72));
     println!(
         "  Phase B raw pooled MAE {:.2} (bias {:+.2}) — vs Phase A {:.2} (live, blended) / \
-         {REF_PHASE_A_MAE:.2} (documented); baseline-persistence {REF_BASELINE_MAE:.2}.",
+         {REF_BOXSCORE_PROJ_MAE:.2} (documented); baseline-persistence {REF_BASELINE_MAE:.2}.",
         b.mae, b.bias, a.mae,
     );
     println!(
@@ -436,8 +436,8 @@ pub async fn run(
 }
 
 /// Dump per-team predictions to JSON for downstream residual analysis.
-/// Schema: a flat array of `{team_id, team_name, season, phase_b,
-/// phase_a, baseline, actual}` records — one per scored team. Floats
+/// Schema: a flat array of `{team_id, team_name, season, roster_proj,
+/// boxscore_proj, baseline, actual}` records — one per scored team. Floats
 /// kept at their native f64 precision; downstream audit code handles
 /// rounding.
 fn dump_per_team_json(path: &Path, results: &[TeamResult]) -> Result<()> {
@@ -449,8 +449,8 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult]) -> Result<()> {
                 "team_id": r.team_id,
                 "team_name": r.team_name,
                 "season": r.season,
-                "phase_b": r.phase_b,
-                "phase_a": r.phase_a,
+                "roster_proj": r.roster_proj,
+                "boxscore_proj": r.boxscore_proj,
                 "baseline": r.baseline,
                 "actual": r.actual,
             })

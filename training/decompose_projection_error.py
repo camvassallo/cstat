@@ -82,7 +82,12 @@ def load_per_team() -> pd.DataFrame:
         )
     dump_path = dumps[-1]
     print(f"loading per-team dump: {dump_path.name}")
-    return pd.read_json(dump_path)
+    df = pd.read_json(dump_path)
+    # Back-compat for the phase_b→roster_proj dump-key rename (this script keeps
+    # the legacy column name internally).
+    if "roster_proj" in df.columns and "phase_b" not in df.columns:
+        df["phase_b"] = df["roster_proj"]
+    return df
 
 
 def load_loso_models() -> dict[int, ort.InferenceSession]:

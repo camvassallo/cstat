@@ -262,6 +262,9 @@ def team_level_cut() -> dict | None:
         print("\n(no projections backtest dump — skipping team-level cut)")
         return None
     bt = pd.read_json(dumps[-1])
+    # Back-compat for the phase_b→roster_proj dump-key rename (legacy column name kept).
+    if "roster_proj" in bt.columns and "phase_b" not in bt.columns:
+        bt["phase_b"] = bt["roster_proj"]
     ta = pd.read_sql(text(TEAM_ATTR_QUERY), get_engine())
     ta = ta[ta["total_pos"] > 0].copy()
     ta["attrition"] = (1.0 - ta["retained_pos"] / ta["total_pos"]).clip(0, 1)

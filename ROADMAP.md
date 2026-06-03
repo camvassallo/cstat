@@ -912,27 +912,31 @@ Captured during the 2026-05-03 ingestion-pipeline checkup. These are
 deferred-but-considered items — not blocking, but worth picking up the next
 time someone is in the relevant area.
 
-### Rename the opaque `phase_a` / `phase_b` projection labels
-*(captured 2026-06-03)* `phase_b` (the roster-talent-only projection — the
-roster-impact model's raw output) and `phase_a` (the legacy box-score pipeline
-blend, superseded) are historical, meaningless names that recur constantly.
-**Proposed:** `phase_b` → **`roster_proj`** (matches the existing
-`roster_projection.rs` / `score_projection_adj_em` vocabulary); `phase_a` →
-**`boxscore_proj`**, documented as legacy. Leave `baseline` (clear) and the
-`cam_gbpm_v3*` version suffixes (intentional, established) alone. **Blast radius:**
-~25 Rust + ~88 Python + ~19 doc occurrences, **and `"phase_b"` is a JSON key in
-the `eval_history/projections_backtest_per_team_*` dump files** that every offline
-script reads (`compute_cae.py`, `pit_cae_backtest.py`, `pit_program_calibration.py`,
-`transition_blend_diagnostic.py`, `decompose_*`, `audit_*`, …). **Decided approach
-(2026-06-03): keep the existing dumps as-is and add a read-compat shim** —
-normalize keys in the shared `load_backtest()` (`row.get("roster_proj",
-row["phase_b"])`) so old and new dumps both load — rather than regenerating the
-dump (which needs a full DB-backed `cstat-ingest projections-backtest` re-run for
-a cosmetic change). Then rename the Rust struct field (its serde wire name flips
-to `roster_proj` for *future* dumps), the Python identifiers, and the docs in one
-focused pass. **Do it as a dedicated diff** — it's a 130+-occurrence cross-language
-mechanical sweep over a serialization contract; bundling it with feature work
-makes both unreviewable.
+### ~~Rename the opaque `phase_a` / `phase_b` projection labels~~ — DONE 2026-06-03
+`phase_b` (the roster-talent-only projection — the roster-impact model's raw
+output) and `phase_a` (the legacy box-score pipeline blend) were historical,
+meaningless names. **Renamed:** `phase_b` → **`roster_proj`** (matches the
+`roster_projection.rs` / `score_projection_adj_em` vocabulary), `phase_a` →
+**`boxscore_proj`** (+ the `PHASE_A_*` constants → `BOXSCORE_PROJ_*`). `baseline`
+and the `cam_gbpm_v3*` suffixes left intentional. **What landed:** the Rust
+`TeamResult` struct fields, locals, console labels, and the **`json!` dump keys**
+(so future dumps emit `roster_proj`/`boxscore_proj`); the Python identifiers in the
+active scripts (`compute_cae`, `pit_cae_backtest`, `pit_program_calibration`,
+`transition_blend_diagnostic`, `cae_feasibility`); and `docs/coach_above_expectation_design.md`.
+**Existing dumps kept** (not regenerated): `compute_cae.load_backtest()` gained a
+symmetric `_normalize_proj_keys` shim that aliases both directions, so every
+consumer reads either key on any dump (verified: the 4 active scripts produce
+byte-identical numbers on the old-key dump). The glob-latest historical one-offs
+(`audit_preseason`, `decompose_projection_error`, `diagnose_trajectory_attrition`)
+got a one-line forward-compat column alias; the pinned-dump archival scripts
+(`derisk_*`, which read a frozen 5-season dump) were left untouched. **Left as-is
+on purpose:** the *architectural* "Phase A / Phase B" prose in module docs
+(`roster_impact.rs`, `inference.rs`, etc.) — that's the documented two-pipeline
+concept (box-score vs impact-aggregation), and mechanical prose substitution reads
+worse; a follow-up could reword it to "box-score / roster-impact projection" if
+desired. **Also untouched:** ROADMAP's own historical shipped-item descriptions
+still say `phase_b` (a timestamped log; consistent with the retained dump
+artifacts that still carry the old key).
 
 ### API latency — team-detail schedule projections (and other inline-inference routes)
 *(captured 2026-05-31 during PR3 coach-surface scoping)* `team_detail`

@@ -1,4 +1,4 @@
-"""Transition-conditional blend diagnostic — is the flat 0.5·baseline + 0.5·phase_b
+"""Transition-conditional blend diagnostic — is the flat 0.5·baseline + 0.5·roster_proj
 served weight mis-tuned for new-coach / roster-overhaul teams?
 
 Follows the program-persistence refutation ([[project_pit_cae_program_null]]):
@@ -13,7 +13,7 @@ Two transition signals, joined to the 11-season backtest dump:
   - is_new_hc  : coach_seasons flag (new head coach this offseason).
   - returning  : fraction of last season's roster TALENT (Σ cam_v3) retained,
                  matched across seasons by torvik_pid (the stable key). Low =
-                 portal overhaul. phase_b sees the new roster; baseline doesn't.
+                 portal overhaul. roster_proj sees the new roster; baseline doesn't.
 
 For each cohort we report standalone baseline/talent MAE, the served(0.5) MAE +
 signed bias, and the IN-SAMPLE optimal weight on baseline. Then an honest
@@ -83,7 +83,7 @@ def load_rows(conn) -> list[dict]:
         rows.append({
             "ns": ns, "team": r["team_name"], "season": r["season"],
             "actual": float(r["actual"]), "baseline": float(r["baseline"]),
-            "phase_b": float(r["phase_b"]),
+            "roster_proj": float(r["roster_proj"]),
             "is_new_hc": new_hc.get((ns, r["season"])),
             "returning": returning_frac(ns, r["season"]),
         })
@@ -91,8 +91,8 @@ def load_rows(conn) -> list[dict]:
 
 
 def mae(rows, w):
-    """MAE of the blend w·baseline + (1-w)·phase_b."""
-    return sum(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["phase_b"]))
+    """MAE of the blend w·baseline + (1-w)·roster_proj."""
+    return sum(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["roster_proj"]))
                for r in rows) / len(rows)
 
 
@@ -105,7 +105,7 @@ def best_weight(rows):
 
 def bias(rows, w):
     """Mean SIGNED error of the blend (pred − actual): + = over-projected."""
-    return sum((w * r["baseline"] + (1 - w) * r["phase_b"]) - r["actual"]
+    return sum((w * r["baseline"] + (1 - w) * r["roster_proj"]) - r["actual"]
                for r in rows) / len(rows)
 
 
@@ -135,8 +135,8 @@ def loso_conditional(rows, cohort_fn, cohorts):
             w_by[c] = best_weight(grp)[0] if len(grp) >= 30 else 0.5
         for r in test:
             w = w_by.get(cohort_fn(r), 0.5)
-            cond_ae.append(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["phase_b"])))
-            flat_ae.append(abs(r["actual"] - (0.5 * r["baseline"] + 0.5 * r["phase_b"])))
+            cond_ae.append(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["roster_proj"])))
+            flat_ae.append(abs(r["actual"] - (0.5 * r["baseline"] + 0.5 * r["roster_proj"])))
     return sum(flat_ae) / len(flat_ae), sum(cond_ae) / len(cond_ae), w_by
 
 

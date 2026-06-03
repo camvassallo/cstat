@@ -11,25 +11,25 @@ accuracy against the roster-only projection.
 What it does
 ------------
 For each target season Y:
-  1. Take every coach's prior team-season residuals  cae_raw = actual − phase_b
+  1. Take every coach's prior team-season residuals  cae_raw = actual − roster_proj
      for seasons strictly < Y.
   2. Re-estimate one-way random-effects variance components (σ²_w, σ²_b) on the
      ENTIRE <Y cohort → k = σ²_w/σ²_b season-equivalents.
   3. Per coach: pit_term = (n/(n+k)) · mean(prior cae_raw).  Heavy EB shrinkage
      means a 1-2 season coach contributes ≈0; a coach with no prior season → 0
      (unknown, correctly no bonus). If σ²_b ≤ 0 on the <Y cohort, every term is 0.
-  4. Score the team-season with  pred = phase_b + pit_term  and compare against
-     pred = phase_b alone (the served roster-only number).
+  4. Score the team-season with  pred = roster_proj + pit_term  and compare against
+     pred = roster_proj alone (the served roster-only number).
 
 Then aggregate MAE/RMSE across all target years and report the lift, plus a
 paired delta with a standard error (is the improvement bigger than noise?).
 Gate reference: the coaching-change indicator died at ~0.002 MAE lift; treat
 anything under ~0.01 MAE as "does not clear the bar → ship display-only."
 
-Why the comparison is fair even though phase_b is itself a LOSO prediction:
-phase_b is IDENTICAL in both arms (with-term vs without-term), so the measured
+Why the comparison is fair even though roster_proj is itself a LOSO prediction:
+roster_proj is IDENTICAL in both arms (with-term vs without-term), so the measured
 lift is attributable purely to the coach term — and the coach term is strictly
-causal (seasons < Y only). phase_b being roster-only + coach-blind is exactly
+causal (seasons < Y only). roster_proj being roster-only + coach-blind is exactly
 why the residual isolates the coach; its own LOSO fit using other seasons does
 not leak THIS coach's future residual into the term.
 
@@ -90,8 +90,8 @@ def pit_terms(rows_before: list[dict], key: str) -> tuple[dict, float, float]:
 def evaluate(rows: list[dict], start_year: int, term_threshold: float,
              key: str = "coach_id") -> dict:
     """Walk-forward PIT evaluation. For each target year ≥ start_year, build the
-    entity term (keyed by `key`) from prior seasons and score phase_b vs
-    phase_b+term. `key='coach_id'` is the coach term; `key='team_natstat_id'`
+    entity term (keyed by `key`) from prior seasons and score roster_proj vs
+    roster_proj+term. `key='coach_id'` is the coach term; `key='team_natstat_id'`
     is the program-persistence null."""
     years = sorted({r["season"] for r in rows})
     target_years = [y for y in years if y >= start_year]
@@ -120,14 +120,14 @@ def evaluate(rows: list[dict], start_year: int, term_threshold: float,
             term = terms.get(r[key], 0.0)
             pt = prior_teams.get(r["coach_id"], set())
             moved = bool(pt) and r["team_natstat_id"] not in pt
-            err_base = r["actual"] - r["phase_b"]
-            err_coach = r["actual"] - (r["phase_b"] + term)
+            err_base = r["actual"] - r["roster_proj"]
+            err_coach = r["actual"] - (r["roster_proj"] + term)
             rec = {
                 "season": y,
                 "coach_id": r["coach_id"],
                 "coach": r["coach"],
                 "team": r["team"],
-                "phase_b": r["phase_b"],
+                "roster_proj": r["roster_proj"],
                 "actual": r["actual"],
                 "term": term,
                 "err_base": err_base,
@@ -188,9 +188,9 @@ def summarize(ev: dict, term_threshold: float) -> dict:
         "se": std_err([x["ae_base"] - x["ae_coach"] for x in applied]) if applied else 0.0,
     }
 
-    # Elite-roster cohort (top-quartile phase_b): the structural worry is the
+    # Elite-roster cohort (top-quartile roster_proj): the structural worry is the
     # term re-crediting blue bloods for talent the projection already counts.
-    srt = sorted(scored, key=lambda x: x["phase_b"])
+    srt = sorted(scored, key=lambda x: x["roster_proj"])
     q4 = srt[3 * len(srt) // 4:]
     elite = {
         "n": len(q4),
@@ -265,7 +265,7 @@ def main() -> None:
               f"z {(sub['mean_delta']/sub['se']) if sub['se'] else 0:+.2f}")
 
     el = s["elite_roster_q4"]
-    print(f"\nelite-roster cohort (top-quartile phase_b, n={el['n']}):")
+    print(f"\nelite-roster cohort (top-quartile roster_proj, n={el['n']}):")
     print(f"  MAE base {el['mae_base']:.4f}  coach {el['mae_coach']:.4f}  "
           f"mean term {el['mean_term']:+.3f}")
 
@@ -295,8 +295,8 @@ def main() -> None:
     print(f"\nlargest coach terms in {last} (roster + coach → forecast vs actual):")
     for x in last_rows[:12]:
         print(f"  {x['coach']:22s} {x['team']:24s} "
-              f"{x['phase_b']:+6.1f} {x['term']:+5.1f} → "
-              f"{x['phase_b'] + x['term']:+6.1f}  (actual {x['actual']:+6.1f})")
+              f"{x['roster_proj']:+6.1f} {x['term']:+5.1f} → "
+              f"{x['roster_proj'] + x['term']:+6.1f}  (actual {x['actual']:+6.1f})")
 
     # Two-part gate. (1) absolute: does the persistence prior beat the noise
     # floor? (2) attribution: does the COACH key beat the TEAM (program) null?

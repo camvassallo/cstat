@@ -6,8 +6,8 @@ If between-coach variance ~0 / autocorrelation ~0, every shrunk rating collapses
 and the metric is not worth building.
 
 CAE expectation denominator choices (both reported):
-  - phase_b : roster-talent-only projection (cleanest coach attribution, noisier)
-  - served  : 0.5*baseline + 0.5*phase_b (better-calibrated, but baseline leaks prior coaching)
+  - roster_proj : roster-talent-only projection (cleanest coach attribution, noisier)
+  - served  : 0.5*baseline + 0.5*roster_proj (better-calibrated, but baseline leaks prior coaching)
 Residual = actual - expectation. Positive = team beat its talent projection.
 """
 
@@ -58,7 +58,9 @@ def load(denom):
         coach = cd.get(str(y), {}).get(name)
         if coach is None:
             continue
-        exp = r["phase_b"] if denom == "phase_b" else 0.5 * r["baseline"] + 0.5 * r["phase_b"]
+        # Back-compat: old dumps key this `phase_b`, new dumps `roster_proj`.
+        rp = r.get("roster_proj", r.get("phase_b"))
+        exp = rp if denom == "roster_proj" else 0.5 * r["baseline"] + 0.5 * rp
         rows.append({"team": r["team_name"], "season": y, "coach": coach,
                      "resid": r["actual"] - exp})
     return rows
@@ -88,7 +90,7 @@ def variance_components(rows):
 
 
 def main():
-    for denom in ["phase_b", "served"]:
+    for denom in ["roster_proj", "served"]:
         rows = load(denom)
         print(f"\n{'='*68}\n  DENOMINATOR = {denom}   (residual = actual - {denom})\n{'='*68}")
         print(f"  team-seasons: {len(rows)}   total resid σ: {std([x['resid'] for x in rows]):.2f}")
