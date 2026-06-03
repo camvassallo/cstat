@@ -1328,7 +1328,14 @@ pub fn retained_talent_fraction(p: &ProjectedRoster) -> Option<f32> {
         .map(|r| r.cam_v3.unwrap_or(0.0) as f32)
         .sum();
     let total = returning + p.departures_cam_v3_sum;
-    if returning < 0.0 || total.abs() < 1e-3 {
+    // `returning < 0` (all-negative returners) or a non-positive `total` →
+    // unknown. A non-positive total means departures out-weigh the returners
+    // in net *negative* cam (the team shed a pile of bench/negative-value
+    // players) — that's a continuity team, not an overhaul, so fall through to
+    // the stable weight rather than letting a negative ratio clamp to 0.0 and
+    // mislabel it. A zero-returner team with positive departures keeps a valid
+    // `total > 0` and correctly reads as a full overhaul (retained 0.0).
+    if returning < 0.0 || total <= 1e-3 {
         return None;
     }
     Some((returning / total).clamp(0.0, 1.0))
@@ -1517,6 +1524,21 @@ mod tests {
         let empty = roster_with(&[], 0.0);
         assert!(retained_talent_fraction(&empty).is_none());
         assert!((transition_shrink_weight(&empty) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
+
+        // Departures net-negative enough to drive total < 0 (kept +5, shed −10
+        // of bench scrubs): a CONTINUITY team, must NOT clamp to 0.0 and get
+        // mislabeled a full overhaul. → None → stable.
+        let neg_total = roster_with(&[5.0], -10.0);
+        assert!(retained_talent_fraction(&neg_total).is_none());
+        assert!((transition_shrink_weight(&neg_total) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
+
+        // Zero returners but real (positive) departures = a GENUINE full
+        // overhaul (everyone left, all-new roster) → retained 0.0 → 0.25.
+        let all_new = roster_with(&[], 15.0);
+        assert!(retained_talent_fraction(&all_new).unwrap() < 1e-6);
+        assert!(
+            (transition_shrink_weight(&all_new) - PROJECTION_SHRINK_WEIGHT_OVERHAUL).abs() < 1e-6
+        );
     }
 
     #[test]

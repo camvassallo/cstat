@@ -912,6 +912,28 @@ Captured during the 2026-05-03 ingestion-pipeline checkup. These are
 deferred-but-considered items — not blocking, but worth picking up the next
 time someone is in the relevant area.
 
+### Rename the opaque `phase_a` / `phase_b` projection labels
+*(captured 2026-06-03)* `phase_b` (the roster-talent-only projection — the
+roster-impact model's raw output) and `phase_a` (the legacy box-score pipeline
+blend, superseded) are historical, meaningless names that recur constantly.
+**Proposed:** `phase_b` → **`roster_proj`** (matches the existing
+`roster_projection.rs` / `score_projection_adj_em` vocabulary); `phase_a` →
+**`boxscore_proj`**, documented as legacy. Leave `baseline` (clear) and the
+`cam_gbpm_v3*` version suffixes (intentional, established) alone. **Blast radius:**
+~25 Rust + ~88 Python + ~19 doc occurrences, **and `"phase_b"` is a JSON key in
+the `eval_history/projections_backtest_per_team_*` dump files** that every offline
+script reads (`compute_cae.py`, `pit_cae_backtest.py`, `pit_program_calibration.py`,
+`transition_blend_diagnostic.py`, `decompose_*`, `audit_*`, …). **Decided approach
+(2026-06-03): keep the existing dumps as-is and add a read-compat shim** —
+normalize keys in the shared `load_backtest()` (`row.get("roster_proj",
+row["phase_b"])`) so old and new dumps both load — rather than regenerating the
+dump (which needs a full DB-backed `cstat-ingest projections-backtest` re-run for
+a cosmetic change). Then rename the Rust struct field (its serde wire name flips
+to `roster_proj` for *future* dumps), the Python identifiers, and the docs in one
+focused pass. **Do it as a dedicated diff** — it's a 130+-occurrence cross-language
+mechanical sweep over a serialization contract; bundling it with feature work
+makes both unreviewable.
+
 ### API latency — team-detail schedule projections (and other inline-inference routes)
 *(captured 2026-05-31 during PR3 coach-surface scoping)* `team_detail`
 (`crates/cstat-api/src/routes/teams.rs:132`) is the slowest read surface on the
