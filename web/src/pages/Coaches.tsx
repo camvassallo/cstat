@@ -10,7 +10,7 @@ import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { usePageTitle } from '../components/usePageTitle';
 import { useSeason, setPageSeasons, type Season } from '../components/season';
-import { caeColor, fmtCae } from '../components/cae';
+import { caeColor, fmtCae, tenureSpan } from '../components/cae';
 
 type Mode = 'career' | 'season';
 
@@ -34,6 +34,41 @@ const NEW_BADGE = (
     new
   </span>
 );
+
+/** Career span: "2016–2021" / "2024" for a finished tenure, or "2016–active"
+ *  (with the "active" tag highlighted green) when the coach is still coaching in
+ *  the current season. `last`/`current` are the coach's most recent *actual*
+ *  season and the board's newest season — both from `coach_seasons`, NOT the
+ *  scored rating, so a coach whose latest season is unscored (e.g. just moved
+ *  schools, new roster not yet projectable) still reads as active. */
+function TenureCell({
+  first,
+  last,
+  current,
+  nSeasons,
+}: {
+  first: number;
+  last: number;
+  current: number;
+  nSeasons: number;
+}) {
+  const active = last >= current;
+  const title = `${nSeasons} scored season${nSeasons === 1 ? '' : 's'} (2016–2026 coverage; the tenure span may have gaps).`;
+  return (
+    <span className="tabular-nums" title={title}>
+      {active ? (
+        <>
+          {first}–
+          <span className="rounded bg-green-500/20 px-1 py-0.5 text-[11px] font-medium text-green-300">
+            active
+          </span>
+        </>
+      ) : (
+        tenureSpan(first, last)
+      )}
+    </span>
+  );
+}
 
 /** Reliability shown as a thin bar + value, so a thin-tenure rating reads as
  *  low-confidence at a glance. reliability = n / (n + k) ∈ [0,1]. */
@@ -71,7 +106,7 @@ type CareerSortKey =
   | 'career_adj_d'
   | 'blend'
   | 'reliability'
-  | 'n_seasons'
+  | 'last_team_season'
   | 'last_team_name';
 
 /** Plain fixed-decimal for the display-only team-strength columns; `—` for the
@@ -81,6 +116,14 @@ function fmtStrength(v: number | null, d = 1): string {
 }
 
 function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
+  // The newest *actual* coaching season anywhere on the board (from
+  // coach_seasons, not the scored rating) — a coach whose latest season equals
+  // it is still active, even if that season isn't scored yet. Derived from the
+  // rows so it tracks coverage without threading season state into this table.
+  const currentSeason = useMemo(
+    () => (rows.length ? Math.max(...rows.map((r) => r.last_team_season ?? r.last_season)) : 0),
+    [rows],
+  );
   const [sort, setSort] = useState<{ key: CareerSortKey; dir: SortDir }>({
     key: 'blend',
     dir: 'desc',
@@ -128,8 +171,8 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
               title="Evaluative composite: z(CAE) + z(career AdjEM) over this board — rewards coaches who field strong, tough-schedule teams AND squeeze extra out of the roster. A lens for human comparison, not a rigorous metric, and never fed back into forecasts." />
             <SortHeader label="Rel." sortKey="reliability" current={sort} onSort={onSort} align="right"
               title="Reliability = n / (n + k). Shrinkage weight; low = thin tenure, treat the rating as soft." />
-            <SortHeader label="Yrs" sortKey="n_seasons" current={sort} onSort={onSort} align="right"
-              title="Scored seasons (bounded by roster-projection coverage, not career length)." />
+            <SortHeader label="Tenure" sortKey="last_team_season" current={sort} onSort={onSort} align="right"
+              title="Coaching tenure — first scored season to most recent. 'active' = still coaching this season (from the coachdict mapping, so it's right even when the latest season isn't scored yet). Sorts by recency; hover a cell for the scored-season count." />
           </tr>
         </thead>
         <tbody>
@@ -160,7 +203,10 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
                 {c.blend == null ? '—' : fmtCae(c.blend, 2)}
               </td>
               <td className="py-1.5 px-2"><ReliabilityBar value={c.reliability} /></td>
-              <td className="py-1.5 px-2 text-right tabular-nums text-gray-300">{c.n_seasons}</td>
+              <td className="py-1.5 px-2 text-right text-gray-300">
+                <TenureCell first={c.first_season} last={c.last_team_season ?? c.last_season}
+                  current={currentSeason} nSeasons={c.n_seasons} />
+              </td>
             </tr>
           ))}
         </tbody>
