@@ -77,8 +77,9 @@ async fn resolve_base_to_target(
 }
 
 /// Compute and persist the preseason projection for each target `year`.
-/// UPSERTs into `team_preseason_projection` so a re-run overwrites the
-/// season's rows with the latest models.
+/// **Replaces** each season's rows in one transaction (delete-then-insert), so a
+/// re-run is authoritative: rows for teams the current logic no longer produces
+/// (newly too-thin / unresolvable) are pruned, not left stale.
 pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<()> {
     for &year in years {
         let base_season = year - 1;
@@ -108,6 +109,18 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
                 );
                 HashMap::new()
             });
+
+        // Authoritative per-season replace, in one transaction: clear the
+        // season, then re-insert what the current logic produces. A plain
+        // per-team UPSERT would leave stale stragglers for teams that became
+        // too-thin / unresolvable since the last run — those rows would keep
+        // serving an old preseason anchor to `/predict`. The transaction keeps a
+        // mid-run failure from leaving the season half-written.
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM team_preseason_projection WHERE season = $1")
+            .bind(year)
+            .execute(&mut *tx)
+            .await?;
 
         let (mut written, mut skipped_thin, mut skipped_unresolved) = (0usize, 0usize, 0usize);
         for p in &projections {
@@ -139,13 +152,15 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
             .bind(midpoint)
             .bind(floor)
             .bind(ceiling)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
             written += 1;
         }
+        tx.commit().await?;
         println!(
             "compute-projections {year}: wrote {written} rows \
-             (skipped {skipped_thin} too-thin, {skipped_unresolved} unresolved-target)"
+             (skipped {skipped_thin} too-thin, {skipped_unresolved} unresolved-target; \
+             season replaced)"
         );
     }
     Ok(())
