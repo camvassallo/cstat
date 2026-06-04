@@ -912,27 +912,68 @@ Captured during the 2026-05-03 ingestion-pipeline checkup. These are
 deferred-but-considered items — not blocking, but worth picking up the next
 time someone is in the relevant area.
 
-### Rename the opaque `phase_a` / `phase_b` projection labels
-*(captured 2026-06-03)* `phase_b` (the roster-talent-only projection — the
-roster-impact model's raw output) and `phase_a` (the legacy box-score pipeline
-blend, superseded) are historical, meaningless names that recur constantly.
-**Proposed:** `phase_b` → **`roster_proj`** (matches the existing
-`roster_projection.rs` / `score_projection_adj_em` vocabulary); `phase_a` →
-**`boxscore_proj`**, documented as legacy. Leave `baseline` (clear) and the
-`cam_gbpm_v3*` version suffixes (intentional, established) alone. **Blast radius:**
-~25 Rust + ~88 Python + ~19 doc occurrences, **and `"phase_b"` is a JSON key in
-the `eval_history/projections_backtest_per_team_*` dump files** that every offline
-script reads (`compute_cae.py`, `pit_cae_backtest.py`, `pit_program_calibration.py`,
-`transition_blend_diagnostic.py`, `decompose_*`, `audit_*`, …). **Decided approach
-(2026-06-03): keep the existing dumps as-is and add a read-compat shim** —
-normalize keys in the shared `load_backtest()` (`row.get("roster_proj",
-row["phase_b"])`) so old and new dumps both load — rather than regenerating the
-dump (which needs a full DB-backed `cstat-ingest projections-backtest` re-run for
-a cosmetic change). Then rename the Rust struct field (its serde wire name flips
-to `roster_proj` for *future* dumps), the Python identifiers, and the docs in one
-focused pass. **Do it as a dedicated diff** — it's a 130+-occurrence cross-language
-mechanical sweep over a serialization contract; bundling it with feature work
-makes both unreviewable.
+### ~~Rename the opaque `phase_a` / `phase_b` projection labels~~ — DONE 2026-06-03
+`phase_b` (the roster-talent-only projection — the roster-impact model's raw
+output) and `phase_a` (the legacy box-score pipeline blend) were historical,
+meaningless names. **Renamed:** `phase_b` → **`roster_proj`** (matches the
+`roster_projection.rs` / `score_projection_adj_em` vocabulary), `phase_a` →
+**`boxscore_proj`** (+ the `PHASE_A_*` constants → `BOXSCORE_PROJ_*`). `baseline`
+and the `cam_gbpm_v3*` suffixes left intentional. **What landed:** the Rust
+`TeamResult` struct fields, locals, console labels, and the **`json!` dump keys**
+(so future dumps emit `roster_proj`/`boxscore_proj`); the Python identifiers in the
+active scripts (`compute_cae`, `pit_cae_backtest`, `pit_program_calibration`,
+`transition_blend_diagnostic`, `cae_feasibility`); and `docs/coach_above_expectation_design.md`.
+**Existing dumps kept** (not regenerated): `compute_cae.load_backtest()` gained a
+symmetric `_normalize_proj_keys` shim that aliases both directions, so every
+consumer reads either key on any dump (verified: the 4 active scripts produce
+byte-identical numbers on the old-key dump). The glob-latest historical one-offs
+(`audit_preseason`, `decompose_projection_error`, `diagnose_trajectory_attrition`)
+got a one-line forward-compat column alias; the pinned-dump archival scripts
+(`derisk_*`, which read a frozen 5-season dump) were left untouched. **Architectural
+prose reworded too:** every "Phase A" / "Phase B" mention across the module docs
+(`roster_impact.rs`, `inference.rs`, `roster_projection.rs`, `roster_features.rs`,
+`projections.rs`, `compute_projections.rs`, `projections_backtest.rs`, `ingest.rs`)
++ `docs/projections_methodology.md` + `docs/archetype_balance_finding.md` now reads
+"box-score projection" / "roster-impact projection". Two stale claims fixed in the
+process: the box-score `roster_model.onnx` / `predict_adj_em` is **no longer used in
+production** (zero non-test callers — the swap-Δ tool moved to archetype-based
+`roster_fit`), so the docs that said it "serves the swap-Δ tool" were corrected to
+"retained only as the projections backtest's frozen comparison baseline." **Untouched:**
+ROADMAP's own historical shipped-item descriptions still say `phase_b` (a timestamped
+log; consistent with the retained dump artifacts that still carry the old key).
+
+### ~~Box-score roster model (`roster_model.onnx`): deprecated from serving — stop loading it at API boot~~ — DONE 2026-06-03
+**Lazy-load SHIPPED 2026-06-03.** `Predictor` now holds `roster_session:
+Mutex<Option<Session>>` + a stored `model_dir`; `load()` no longer reads or
+meta-validates `roster_model.onnx` at boot. `predict_adj_em` materializes the
+session on first call (only the `projections-backtest` command reaches it), and
+that command meta-validates the model up-front via the new
+`Predictor::validate_box_score_model_meta()` (the contract check moved out of the
+boot path, not dropped). **Verified:** the API boots HTTP 200 and serves
+`/api/projections/2027` (364 teams) with `roster_model.onnx` *removed* from the
+model dir — previously a hard boot failure. Workspace tests/clippy/fmt green; the
+`predict_adj_em` unit test exercises the lazy path. Original scoping below.
+
+*(captured 2026-06-03)* The box-score roster model (`roster_model.onnx` /
+`Predictor::predict_adj_em` / `roster_features::build_roster_features` /
+`project_rotation`) — formerly the `phase_a` / `boxscore_proj` projection pipeline —
+**is no longer used in any production serving path.** It learns team AdjEM from a
+roster's box-score/rate-stat *composition* with cam_v3 deliberately excluded; the live
+projection moved to the cam_v3 roster-impact model, and the transfer-swap tool moved to
+archetype-based `roster_fit`. **Its only live caller is `cstat-ingest
+projections-backtest`**, which scores it as the frozen `boxscore_proj` comparison
+baseline. **Tagged not-used-in-prod 2026-06-03** (doc markers on `predict_adj_em` + the
+boot-load site; stale "serves swap-Δ" comments corrected). **Do NOT remove it** — it's
+the backtest's honest "does the roster-impact model earn its complexity?" check, and a
+genuinely different model worth keeping for latent reuse (a box-score swap-Δ engine, an
+ensemble member, or a cam_v3-sparse-roster fallback). **The actual wart to fix:**
+`Predictor::load()` loads `roster_model.onnx` *and meta-validates it* unconditionally at
+every API boot — so the API pays the load and even **fails to boot if it drifts**, for a
+model no route serves. Make the load **lazy** (`OnceCell`, materialized on first
+`predict_adj_em` — only the ingest backtest triggers it) or move the box-score model out
+of the API `Predictor`'s required set entirely, dropping it + its `validate_roster_meta`
+gate from the boot path. Small, isolated `cstat-core` change; the only behavioral effect
+is the API no longer requires the file at boot.
 
 ### API latency — team-detail schedule projections (and other inline-inference routes)
 *(captured 2026-05-31 during PR3 coach-surface scoping)* `team_detail`

@@ -174,9 +174,9 @@ struct CoachCae {
 
 /// Additive calibration offset applied to the blended projection.
 ///
-/// **Zero under Phase B.** Phase A needed `+2.0` because the box-score
+/// **Zero under roster-impact.** box-score needed `+2.0` because the box-score
 /// roster model ran a structural −4.8 low (it never saw freshman upside
-/// or returner growth). The Phase B v2 model consumes *projected* cam_v3
+/// or returner growth). The roster-impact v2 model consumes *projected* cam_v3
 /// directly, so its raw output is near-unbiased (+0.62) and the blended
 /// pipeline's residual bias at `SHRINK_WEIGHT` is ≈−0.10 — within
 /// backtest noise. The offset is kept as a named `0.0` knob so the
@@ -330,7 +330,7 @@ async fn projection_list(
     let mock_by_name = load_mock_by_name(base_season);
 
     // Forward-project each returner / arrival's cam_v3 in one batched
-    // pass across every team — the Phase B model scores rosters of
+    // pass across every team — the roster-impact model scores rosters of
     // *projected* cam_v3 (recruits already carry the freshman model's
     // value). One trajectory fetch + inference for the whole slate; a
     // failure logs and degrades to current-season cam_v3.
@@ -427,7 +427,7 @@ fn predict_team(
 ) -> Option<ProjectedTeam> {
     // Recruits count toward the qualifying-size gate: a returners-thin
     // team with a strong freshman class (e.g. Duke with 4 incoming
-    // 5-stars) is no longer "too thin to project". The Phase B model
+    // 5-stars) is no longer "too thin to project". The roster-impact model
     // sees them via build_roster_impact_features just like returners.
     let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
 
@@ -515,7 +515,7 @@ fn predict_team(
         return Some(base(None, None, true));
     }
 
-    // Score each scenario with the Phase B impact-aggregation model.
+    // Score each scenario with the roster-impact model.
     // Overwrite each returner / arrival's `cam_v3` with the trajectory
     // model's projection (recruits already carry the freshman model's
     // value from `synthesize_freshman_row`); `build_roster_impact_features`
@@ -856,7 +856,7 @@ async fn projection_team_detail(
         acc
     };
 
-    // Phase B scoring input: trajectory means for returners / arrivals
+    // roster-impact scoring input: trajectory means for returners / arrivals
     // (recruits already carry the freshman model's value on their
     // synthesized PlayerRow). Reuses the OOF-first `traj_predictions`
     // computed just above rather than re-fetching — the detail route

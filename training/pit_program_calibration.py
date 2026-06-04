@@ -3,11 +3,11 @@ prior improve the SERVED projection, or does the baseline blend already absorb i
 
 ROADMAP §6 "Program-persistence projection calibration" (the `← NEXT UP` item),
 spun out of `pit_cae_backtest.py` ([[project_pit_cae_program_null]]): that backtest
-found a team-keyed prior beats the raw roster projection `phase_b` by +0.18 MAE —
+found a team-keyed prior beats the raw roster projection `roster_proj` by +0.18 MAE —
 *bigger* than the coach-keyed term, so the lift is program-level, not coaching.
 
-But the SERVED forecast is NOT raw phase_b. `/api/projections` ships
-    served = PROJECTION_SHRINK_WEIGHT·baseline + (1−w)·phase_b + OFFSET   (w=0.50)
+But the SERVED forecast is NOT raw roster_proj. `/api/projections` ships
+    served = PROJECTION_SHRINK_WEIGHT·baseline + (1−w)·roster_proj + OFFSET   (w=0.50)
 i.e. it already leans 50% on last season's actual AdjEM — and *baseline is itself
 a per-program persistence term*. The feasibility study warned this exact blend
 "absorbs the persistent coach signal, driving σ²_between to 0" for the CAE null.
@@ -15,7 +15,7 @@ So before wiring a program prior into serving, the load-bearing question is:
 **does the prior still add lift ON TOP OF the baseline-blended served projection,
 or has baseline already eaten it?**
 
-This script measures that. For a chosen base projector (`served` or `phase_b`):
+This script measures that. For a chosen base projector (`served` or `roster_proj`):
   1. residual_{program, season} = actual − base.
   2. Walk forward: for each target Y, EB-shrink each program's mean of its prior
      (season < Y) residuals — variance components re-estimated on the <Y cohort,
@@ -30,7 +30,7 @@ different base-season UUID but the same natstat_id.
 Run
 ---
   python3 pit_program_calibration.py                 # base = served (the decision)
-  python3 pit_program_calibration.py --base phase_b  # reproduce the +0.18 reference
+  python3 pit_program_calibration.py --base roster_proj  # reproduce the +0.18 reference
 """
 
 import argparse
@@ -65,14 +65,14 @@ def attach_program_key(bt: list[dict], conn) -> list[dict]:
             dropped += 1
             continue
         baseline = float(r["baseline"])
-        phase_b = float(r["phase_b"])
-        served = SHRINK_WEIGHT * baseline + (1.0 - SHRINK_WEIGHT) * phase_b + OFFSET
+        roster_proj = float(r["roster_proj"])
+        served = SHRINK_WEIGHT * baseline + (1.0 - SHRINK_WEIGHT) * roster_proj + OFFSET
         rows.append({
             "team_natstat_id": ns,
             "team": r["team_name"],
             "season": r["season"],
             "actual": float(r["actual"]),
-            "phase_b": phase_b,
+            "roster_proj": roster_proj,
             "baseline": baseline,
             "served": served,
         })
@@ -174,7 +174,7 @@ def summarize(scored: list[dict]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", choices=["served", "phase_b"], default="served",
+    ap.add_argument("--base", choices=["served", "roster_proj"], default="served",
                     help="projector to calibrate (default: served — the production number)")
     ap.add_argument("--start-year", type=int, default=2019)
     args = ap.parse_args()
@@ -186,9 +186,9 @@ def main() -> None:
 
     ev = evaluate(rows, args.base, args.start_year)
     s = summarize(ev["scored"])
-    # Reference: always also measure against raw phase_b so the served result is
+    # Reference: always also measure against raw roster_proj so the served result is
     # read next to the +0.18 the original backtest reported.
-    ref = summarize(evaluate(rows, "phase_b", args.start_year)["scored"])
+    ref = summarize(evaluate(rows, "roster_proj", args.start_year)["scored"])
 
     print(f"\nprogram-persistence calibration — base = {args.base.upper()}  "
           f"(targets {ev['targets'][0]}–{ev['targets'][-1]})")
@@ -206,7 +206,7 @@ def main() -> None:
     lq = s["low_q1"]
     print(f"  low-end Q1 (n={lq['n']}): MAE {lq['mae_base']:.4f} → {lq['mae_cal']:.4f}  "
           f"mean prior {lq['mean_prior']:+.3f}")
-    print(f"\n  reference — base=phase_b lift {ref['mae_lift']:+.4f} (z {ref['paired_z']:+.2f})")
+    print(f"\n  reference — base=roster_proj lift {ref['mae_lift']:+.4f} (z {ref['paired_z']:+.2f})")
 
     floor = 0.01
     helps = s["mae_lift"] >= floor and s["paired_z"] >= 2.0
@@ -215,14 +215,14 @@ def main() -> None:
                    "baseline blend already absorbs program persistence → do NOT change "
                    "the served forecast (ship a display-only decomposition at most)")
     else:
-        verdict = f"reference only (raw phase_b lift {s['mae_lift']:+.4f})"
+        verdict = f"reference only (raw roster_proj lift {s['mae_lift']:+.4f})"
     print(f"\nverdict ({args.base}): lift {s['mae_lift']:+.4f}, z {s['paired_z']:+.2f} → {verdict}")
 
     summary = {
         "generated_at": dt.datetime.utcnow().isoformat() + "Z",
         "base": args.base, "shrink_weight": SHRINK_WEIGHT, "offset": OFFSET,
         "start_year": args.start_year, "targets": ev["targets"],
-        "overall_served_or_chosen": s, "reference_phase_b": ref,
+        "overall_served_or_chosen": s, "reference_roster_proj": ref,
         "per_year": ev["per_year"], "floor": floor, "helps": helps, "verdict": verdict,
     }
     date_str = dt.datetime.utcnow().strftime("%Y%m%d")

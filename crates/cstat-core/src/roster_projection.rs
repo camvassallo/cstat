@@ -443,7 +443,7 @@ pub struct ProjectedRoster {
     pub departures: Vec<DepartureReason>,
     /// Σ base-season cam_v3 of players who left this team in the spring
     /// portal cycle moving them into the target season (positive = lost
-    /// talent). Fed to the Phase B roster-impact model so the calibrator
+    /// talent). Fed to the roster-impact model so the calibrator
     /// can learn "more outbound → reduce projection" — without this slot
     /// the audit (`audit_preseason_projections.py`) found the top
     /// quartile of teams was systematically over-projected by ≈−4 AdjEM
@@ -1206,7 +1206,7 @@ pub async fn compose_all_projections(
 }
 
 /// Forward-project next-season cam_v3 for a set of returning / arriving
-/// players (the Phase B impact-aggregation pipeline's per-player input).
+/// players (the roster-impact pipeline's per-player input).
 ///
 /// OOF-first: for a historical `target_season` the trajectory model
 /// trained on, `trajectory_oof_predictions` holds leave-one-pair-out
@@ -1280,9 +1280,9 @@ pub async fn project_returner_cam_v3(
 /// one place and both surfaces stay in lockstep. Tuned on the LOSO backtest
 /// (ROADMAP §5b v2): w=0.50 / offset=0.0 minimize pooled MAE.
 pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.50;
-/// Additive bias correction applied after the baseline shrink. Phase B's
+/// Additive bias correction applied after the baseline shrink. The roster-impact model's
 /// raw residual at `PROJECTION_SHRINK_WEIGHT` is ≈−0.10 — within noise, so
-/// the offset stays 0.0 (Phase A's +2.0 box-score-model hack is retired).
+/// the offset stays 0.0 (the box-score model's old +2.0 hack is retired).
 pub const PROJECTION_OFFSET: f32 = 0.0;
 /// Minimum (returning + arrivals + recruits) roster size to score a team.
 /// Below this the rate-stat aggregates over-weight the few starters and the

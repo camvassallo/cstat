@@ -4,7 +4,7 @@ use crate::roster_impact::{ROSTER_IMPACT_FEATURE_NAMES, ROSTER_IMPACT_NUM_FEATUR
 use crate::trajectory::{TRAJECTORY_FEATURE_NAMES, TRAJECTORY_NUM_FEATURES, TrajectoryPrediction};
 use crate::treeshap::{LgbModel, tree_shap};
 use ort::session::Session;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Number of input features expected by the margin/win ONNX models.
@@ -408,7 +408,7 @@ pub enum LoadError {
     /// a feature-list / quantile-alpha value the Rust path can't honor.
     /// Same load-fail-loudly contract as trajectory meta.
     FreshmanMetaMismatch(String),
-    /// `roster_impact_model_meta.json` (Phase B) is missing, unparseable,
+    /// `roster_impact_model_meta.json` (roster-impact) is missing, unparseable,
     /// or carries a `player_filter` / feature-list value the Rust path
     /// can't honor. Same load-fail-loudly contract as the roster meta.
     RosterImpactMetaMismatch(String),
@@ -470,7 +470,13 @@ pub struct Predictor {
     margin_session: Mutex<Session>,
     win_session: Mutex<Session>,
     total_session: Mutex<Session>,
-    roster_session: Mutex<Session>,
+    /// Legacy box-score roster model — **lazily** loaded on first
+    /// `predict_adj_em`, NOT at boot, because no API route serves it (only the
+    /// `projections-backtest` comparison baseline does). `None` until first use.
+    roster_session: Mutex<Option<Session>>,
+    /// Where the model files live — kept so the lazy `roster_session` and
+    /// `validate_box_score_model_meta` can find `roster_model*.json/onnx`.
+    model_dir: PathBuf,
     roster_impact_session: Mutex<Session>,
     trajectory_mean_session: Mutex<Session>,
     trajectory_q10_session: Mutex<Session>,
@@ -496,16 +502,17 @@ pub struct Predictor {
 impl Predictor {
     /// Load models from the given directory.
     ///
-    /// Expects `margin_model.onnx`, `win_model.onnx`, `total_model.onnx`,
-    /// `roster_model.onnx`, `roster_model_meta.json`, and `margin_model.lgb`
-    /// in `model_dir`. The `.lgb` is the LightGBM text dump that backs
-    /// TreeSHAP attribution.
+    /// Eagerly loads everything an API route actually serves:
+    /// `margin_model.onnx`, `win_model.onnx`, `total_model.onnx`,
+    /// `roster_impact_model.onnx` (+ its meta), the trajectory / freshman
+    /// quantile models, and `margin_model.lgb` (the LightGBM dump backing
+    /// TreeSHAP attribution), plus the point-in-time bundle.
     ///
-    /// `roster_model_meta.json` is read at load time and validated against
-    /// the Rust-side cohort gate (`roster_features::QUAL_FILTER_STRING`) and
-    /// the `include_impact_features=false` contract — drift returns
-    /// `LoadError::RosterMetaMismatch` so the API exits at boot rather than
-    /// serving Δ-rating numbers whose features the model wasn't trained on.
+    /// **Not** loaded here: the legacy box-score `roster_model.onnx`. No route
+    /// serves it, so it's materialized lazily on first `predict_adj_em` (only
+    /// the `projections-backtest` command), and its `roster_model_meta.json`
+    /// contract is checked there via `validate_box_score_model_meta` instead of
+    /// at boot — the file's absence/drift no longer blocks the API from starting.
     pub fn load(model_dir: &Path) -> Result<Self, LoadError> {
         let margin_session = Session::builder()?
             .with_intra_threads(1)?
@@ -519,17 +526,21 @@ impl Predictor {
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("total_model.onnx"))?;
 
-        let roster_session = Session::builder()?
-            .with_intra_threads(1)?
-            .commit_from_file(model_dir.join("roster_model.onnx"))?;
+        // Legacy box-score roster model. NOTE: no API route uses this
+        // (`predict_adj_em` is serving-dead — see its doc); only the
+        // `cstat-ingest projections-backtest` comparison baseline does. It is
+        // nonetheless loaded + meta-validated at every boot, so the API pays
+        // Legacy box-score roster model (`roster_model.onnx`) is NOT loaded or
+        // meta-validated here — no API route serves `predict_adj_em`, so the API
+        // shouldn't pay its load or fail to boot on its drift. It is lazily
+        // materialized on first `predict_adj_em` (only the `projections-backtest`
+        // command triggers it), and that command meta-validates it explicitly via
+        // `validate_box_score_model_meta`.
 
-        validate_roster_meta(&model_dir.join("roster_model_meta.json"))?;
-
-        // Phase B impact-aggregation model: a separate ONNX from the
-        // box-score `roster_model` above. Consumes the 25-feature
-        // cam_v3-aggregation vector and powers the 2027 projection route;
-        // the box-score model stays for swap-Δ. Validated with the same
-        // fail-loudly contract.
+        // roster-impact model: a separate ONNX from the box-score
+        // `roster_model` above. Consumes the 25-feature cam_v3-aggregation
+        // vector and powers the 2027 projection route — this is the live
+        // projection model. Validated with the same fail-loudly contract.
         let roster_impact_session = Session::builder()?
             .with_intra_threads(1)?
             .commit_from_file(model_dir.join("roster_impact_model.onnx"))?;
@@ -603,7 +614,8 @@ impl Predictor {
             margin_session: Mutex::new(margin_session),
             win_session: Mutex::new(win_session),
             total_session: Mutex::new(total_session),
-            roster_session: Mutex::new(roster_session),
+            roster_session: Mutex::new(None),
+            model_dir: model_dir.to_path_buf(),
             roster_impact_session: Mutex::new(roster_impact_session),
             trajectory_mean_session: Mutex::new(trajectory_mean_session),
             trajectory_q10_session: Mutex::new(trajectory_q10_session),
@@ -740,34 +752,69 @@ impl Predictor {
         Ok(data[0])
     }
 
-    /// Run the roster-only AdjEM model on a 36-feature vector built by
-    /// `roster_features::build_roster_features`.
+    /// Run the legacy box-score roster AdjEM model (`roster_model.onnx`) on a
+    /// vector built by `roster_features::build_roster_features`.
     ///
-    /// Returns the predicted `adj_efficiency_margin` for the roster. The
-    /// transfer-portal Δ engine calls this twice — once on the destination's
-    /// existing roster, once on the swap variant produced by
-    /// `roster_features::swap_player` — and reports the difference. Absolute
-    /// AdjEM is soft-calibrated (~7.4 MAE per the LOSO backtest in
-    /// `roster_model_meta.json`); only the Δ is meant to be load-bearing.
+    /// **NOT USED IN PRODUCTION SERVING (as of 2026-06-03).** No API route calls
+    /// this. The live projection uses [`Predictor::predict_roster_impact`]
+    /// (the cam_v3 roster-impact model), and the transfer-swap tool moved to
+    /// archetype-based `roster_fit` — so the old "transfer-portal Δ engine"
+    /// caller this doc used to describe no longer exists. The sole remaining
+    /// caller is `cstat-ingest projections-backtest`, which scores it as the
+    /// frozen **`boxscore_proj`** comparison baseline (the honest "does the
+    /// roster-impact model earn its complexity?" check). Retained for that
+    /// baseline + latent reuse (a box-score swap-Δ engine or ensemble member);
+    /// it is a genuinely different model — box-score/rate-stat composition with
+    /// cam_v3 deliberately excluded. See ROADMAP "box-score roster model:
+    /// deprecated from serving".
+    ///
+    /// Returns the predicted `adj_efficiency_margin`. Absolute AdjEM is
+    /// soft-calibrated (~7.4 MAE per the LOSO backtest in
+    /// `roster_model_meta.json`); only a Δ between two rosters was ever
+    /// meant to be load-bearing.
     pub fn predict_adj_em(&self, features: &[f32; ROSTER_NUM_FEATURES]) -> Result<f32, ort::Error> {
         use ort::value::TensorRef;
         let shape = [1_usize, ROSTER_NUM_FEATURES];
         let input = TensorRef::from_array_view((shape, features.as_slice()))?;
-        let mut session = self.roster_session.lock().unwrap();
+        let mut guard = self.roster_session.lock().unwrap();
+        // Lazily materialize the box-score session on first use (only the
+        // backtest reaches here; the API never does, so it never pays this).
+        if guard.is_none() {
+            *guard = Some(
+                Session::builder()?
+                    .with_intra_threads(1)?
+                    .commit_from_file(self.model_dir.join("roster_model.onnx"))?,
+            );
+        }
+        let session = guard.as_mut().expect("roster_session just initialized");
         let outputs = session.run(ort::inputs![input])?;
         let (_, data) = outputs[0].try_extract_tensor::<f32>()?;
         Ok(data[0])
     }
 
-    /// Score a projected roster's AdjEM with the Phase B impact-aggregation
+    /// Validate the legacy box-score model's `roster_model_meta.json` against
+    /// the Rust-side cohort gate + `include_impact_features=false` contract.
+    ///
+    /// This check used to run at boot for everyone; now that the box-score model
+    /// is serving-dead it's an explicit opt-in for its sole consumer, the
+    /// `projections-backtest` command, which calls it once at startup so a
+    /// retrained-but-feature-drifted box-score model can't silently corrupt the
+    /// `boxscore_proj` comparison baseline. The API never calls this.
+    pub fn validate_box_score_model_meta(&self) -> Result<(), LoadError> {
+        validate_roster_meta(&self.model_dir.join("roster_model_meta.json"))
+    }
+
+    /// Score a projected roster's AdjEM with the roster-impact
     /// model (`roster_impact_model.onnx`). Input is the 25-feature vector
     /// from `roster_impact::build_roster_impact_features`, built over a
     /// roster whose `cam_v3` fields carry *projected* next-season values
     /// (trajectory model for returners / arrivals, freshman model for
     /// recruits).
     ///
-    /// Distinct from `predict_adj_em`, which scores the box-score
-    /// `roster_model.onnx` for the swap-Δ tool. This is the consumer for
+    /// Distinct from `predict_adj_em`, which scores the legacy box-score
+    /// `roster_model.onnx` — now retained only as the projections backtest's
+    /// frozen comparison baseline (the swap-Δ tool moved to archetype-based
+    /// `roster_fit`). This is the consumer for
     /// the trajectory / freshman per-player cam_v3 projections; all
     /// projection error lives in those upstream models, making the
     /// composed pipeline honest and decomposable.
@@ -1147,7 +1194,7 @@ fn roster_impact_infer(
     Ok(data[0])
 }
 
-/// A single Phase B impact-aggregation model loaded on its own, outside the
+/// A single roster-impact model loaded on its own, outside the
 /// main `Predictor` bundle.
 ///
 /// The projection backtest (`cstat-ingest::projections_backtest`) loads one
@@ -1297,7 +1344,7 @@ fn validate_roster_meta(path: &Path) -> Result<(), LoadError> {
     Ok(())
 }
 
-/// Read `roster_impact_model_meta.json` (Phase B) and verify feature
+/// Read `roster_impact_model_meta.json` (roster-impact) and verify feature
 /// order, count, and the player qualification gate match the compiled
 /// Rust contract. Same fail-loudly-at-boot policy as the box-score
 /// roster validator; this model carries no `include_impact_features`

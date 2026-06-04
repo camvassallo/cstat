@@ -10,7 +10,7 @@ verdict: `docs/coach_above_expectation_design.md`. It is NOT a predictor
 Pipeline
 --------
 1. Per team-season residual against the roster-only projection:
-       cae_raw = actual_AdjEM − phase_b      (phase_b = the backtest's
+       cae_raw = actual_AdjEM − roster_proj      (roster_proj = the backtest's
        roster-talent-only projection; the design's non-negotiable denominator —
        `served` leaks prior coaching via the baseline term and kills the signal).
 2. Headline rating = the RAW residual (cae_raw). The design frames CAE as
@@ -22,7 +22,7 @@ Pipeline
 3. We ALSO compute a projection-quartile-de-biased residual (cae_debiased) and
    store it per-season as the prestige-adjusted view. De-bias subtracts the
    PROJECTION-quartile mean residual (the projection is miscalibrated ~−1.7 only
-   at its low end; cutting quartiles on phase_b, NOT on the actual outcome, keeps
+   at its low end; cutting quartiles on roster_proj, NOT on the actual outcome, keeps
    this artifact-free — de-biasing by ACTUAL quartile would bake in outcome-
    conditioned regression, see project_projection_q1_bias_refuted). Empirically
    the de-bias strips the same-team persistence (+0.047→−0.009) while preserving
@@ -47,7 +47,7 @@ Run
   python3 compute_cae.py            # offline: compute + print guards + write JSON summary
   python3 compute_cae.py --write    # also upsert coach_season_cae + coach_ratings
 
-Source of phase_b/actual is the latest per-team backtest dump in eval_history
+Source of roster_proj/actual is the latest per-team backtest dump in eval_history
 (produced by `cstat-ingest projections-backtest --output`); coach identity is
 the `coaches`/`coach_seasons` mapping from migration 024, joined to the backtest
 via teams.natstat_id (the dump records the base-season team UUID).
@@ -81,7 +81,23 @@ def load_backtest() -> list[dict]:
         raise SystemExit(f"no backtest dump matching {BT_GLOB} in {EVAL_DIR}")
     path = dumps[-1]
     print(f"backtest dump: {path.name}")
-    return json.loads(path.read_text())
+    return _normalize_proj_keys(json.loads(path.read_text()))
+
+
+def _normalize_proj_keys(rows: list[dict]) -> list[dict]:
+    """Back-compat shim for the `phase_b → roster_proj` / `phase_a → boxscore_proj`
+    rename (ROADMAP Refactor Backlog). Dumps written by the old backtest carry
+    `phase_b`/`phase_a`; new dumps carry `roster_proj`/`boxscore_proj`. Alias both
+    directions in place so consumers read either name on any dump — this is why
+    the existing dumps did not need regenerating."""
+    for row in rows:
+        rp = row.get("roster_proj", row.get("phase_b"))
+        bp = row.get("boxscore_proj", row.get("phase_a"))
+        if rp is not None:
+            row["roster_proj"] = row["phase_b"] = rp
+        if bp is not None:
+            row["boxscore_proj"] = row["phase_a"] = bp
+    return rows
 
 
 def join_coaches(bt: list[dict], conn) -> list[dict]:
@@ -122,9 +138,9 @@ def join_coaches(bt: list[dict], conn) -> list[dict]:
                 "team_natstat_id": ns,
                 "team": r["team_name"],
                 "season": r["season"],
-                "phase_b": float(r["phase_b"]),
+                "roster_proj": float(r["roster_proj"]),
                 "actual": float(r["actual"]),
-                "cae_raw": float(r["actual"]) - float(r["phase_b"]),
+                "cae_raw": float(r["actual"]) - float(r["roster_proj"]),
             }
         )
     print(f"joined {len(rows)}/{len(bt)} team-seasons to a coach "
@@ -135,21 +151,21 @@ def join_coaches(bt: list[dict], conn) -> list[dict]:
 def debias_by_projection_quartile(rows: list[dict]) -> list[dict]:
     """Subtract the projection-quartile mean residual from each row's cae_raw.
 
-    Quartiles are cut on phase_b (the projection), NOT on the actual outcome.
+    Quartiles are cut on roster_proj (the projection), NOT on the actual outcome.
     Mutates rows in place (adds `cae_debiased`) and returns the per-bucket bias
     table for the summary."""
-    srt = sorted(rows, key=lambda x: x["phase_b"])
+    srt = sorted(rows, key=lambda x: x["roster_proj"])
     n = len(srt)
     bounds = [n * i // N_QUARTILES for i in range(N_QUARTILES + 1)]
     buckets = []
     for i in range(N_QUARTILES):
         g = srt[bounds[i]:bounds[i + 1]]
         bias = mean([x["cae_raw"] for x in g])
-        lo, hi = g[0]["phase_b"], g[-1]["phase_b"]
+        lo, hi = g[0]["roster_proj"], g[-1]["roster_proj"]
         for x in g:
             x["cae_debiased"] = x["cae_raw"] - bias
-        buckets.append({"q": i + 1, "n": len(g), "phase_b_lo": lo,
-                        "phase_b_hi": hi, "mean_resid": bias})
+        buckets.append({"q": i + 1, "n": len(g), "roster_proj_lo": lo,
+                        "roster_proj_hi": hi, "mean_resid": bias})
     return buckets
 
 
@@ -224,8 +240,8 @@ def main() -> None:
     buckets = debias_by_projection_quartile(rows)
     print("\nprojection-quartile de-bias (subtracted from cae_raw):")
     for b in buckets:
-        print(f"  Q{b['q']} n={b['n']:4d}  phase_b∈[{b['phase_b_lo']:+.0f},"
-              f"{b['phase_b_hi']:+.0f}]  mean_resid={b['mean_resid']:+.2f}")
+        print(f"  Q{b['q']} n={b['n']:4d}  roster_proj∈[{b['roster_proj_lo']:+.0f},"
+              f"{b['roster_proj_hi']:+.0f}]  mean_resid={b['mean_resid']:+.2f}")
 
     season_bias = center_by_season(rows)
     print("\nseason-centering (subtracted from cae_raw → cae_centered, "
@@ -274,7 +290,7 @@ def main() -> None:
             "adj_shrunk": adj_shrunk, "cen_shrunk": cen_shrunk, "reliability": rel,
             "ci_low": lo, "ci_high": hi,
             "first_season": min(seasons), "last_season": max(seasons),
-            "phase_b_mean": mean([x["phase_b"] for x in xs]),
+            "roster_proj_mean": mean([x["roster_proj"] for x in xs]),
         })
     ratings.sort(key=lambda r: -r["shrunk"])
 
@@ -283,7 +299,7 @@ def main() -> None:
     sh_deb, _ = split_half(rows, "cae_debiased")
     eligible = [r for r in ratings if r["n"] >= MIN_SEASONS_FACE]
     prestige_corr = corr([r["raw_mean"] for r in eligible],
-                         [r["phase_b_mean"] for r in eligible])
+                         [r["roster_proj_mean"] for r in eligible])
     print("\nguards (headline = RAW):")
     print(f"  ICC                         {icc:.3f}  (min {MIN_ICC})  "
           f"{'OK' if icc > MIN_ICC else 'FAIL'}")
@@ -307,7 +323,7 @@ def main() -> None:
     # --- Summary artifact ---
     summary = {
         "generated_at": dt.datetime.utcnow().isoformat() + "Z",
-        "denominator": "phase_b",
+        "denominator": "roster_proj",
         "headline": "raw (coach×program over-expectation)",
         "n_team_seasons": len(rows),
         "n_coaches": len(ratings),
@@ -350,13 +366,13 @@ def write_db(engine, rows: list[dict], ratings: list[dict]) -> None:
                   (coach_id, season, team_natstat_id, actual_adjem, projection,
                    cae_raw, cae_debiased, cae_centered)
                 VALUES
-                  (:coach_id, :season, :tn, :actual, :phase_b, :cae_raw, :cae_deb,
+                  (:coach_id, :season, :tn, :actual, :roster_proj, :cae_raw, :cae_deb,
                    :cae_cen)
                 """
             ),
             [{"coach_id": x["coach_id"], "season": x["season"],
               "tn": x["team_natstat_id"], "actual": x["actual"],
-              "phase_b": x["phase_b"], "cae_raw": x["cae_raw"],
+              "roster_proj": x["roster_proj"], "cae_raw": x["cae_raw"],
               "cae_deb": x["cae_debiased"], "cae_cen": x["cae_centered"]}
              for x in rows],
         )

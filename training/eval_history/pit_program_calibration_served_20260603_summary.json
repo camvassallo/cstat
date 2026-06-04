@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-03T03:44:40.348371Z",
+  "generated_at": "2026-06-03T05:21:37.153281Z",
   "base": "served",
   "shrink_weight": 0.5,
   "offset": 0.0,
@@ -33,7 +33,7 @@
       "mean_prior": 0.0
     }
   },
-  "reference_phase_b": {
+  "reference_roster_proj": {
     "n": 2431,
     "mae_base": 6.042791325422877,
     "mae_cal": 5.860205199275208,

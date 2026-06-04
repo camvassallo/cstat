@@ -27,20 +27,20 @@ hinges entirely on the expectation denominator:
 
 | Denominator | σ²_between (coach skill) | ICC (1-yr) | YoY persistence (same-team / moved / split-half) | verdict |
 |---|---|---|---|---|
-| **`phase_b`** (roster-talent-only projection) | 8.25 (σ≈**2.87**) | **0.135** | +0.047 / +0.112 / +0.114 | **viable** |
-| `served` (`0.5·baseline + 0.5·phase_b`) | **0.00** | 0.000 | −0.176 / −0.054 / −0.130 | dead |
+| **`roster_proj`** (roster-talent-only projection) | 8.25 (σ≈**2.87**) | **0.135** | +0.047 / +0.112 / +0.114 | **viable** |
+| `served` (`0.5·baseline + 0.5·roster_proj`) | **0.00** | 0.000 | −0.176 / −0.054 / −0.130 | dead |
 
 **Why `served` is self-defeating for a coach metric:** `baseline` = prior-year actual AdjEM.
 A persistently-good coach raises last year's AdjEM, which raises the expectation, which
 absorbs exactly the persistent coach signal we want to measure (and injects mean-reversion,
 hence the negative autocorrelation). **The de-risk's null (rounds 1–2) was a denominator
-artifact** — it used `served`. Against the talent-only `phase_b`, the signal is real.
+artifact** — it used `served`. Against the talent-only `roster_proj`, the signal is real.
 
-**Face validity (top raw CAE vs `phase_b`, coaches ≥3 seasons):** Josh Schertz, Darian
+**Face validity (top raw CAE vs `roster_proj`, coaches ≥3 seasons):** Josh Schertz, Darian
 DeVries, Richard Pitino, Randy Bennett (St. Mary's), Herb Sendek (Santa Clara), Kevin
 Willard, Rick Pitino, Brian Wardle (Bradley), Jerrod Calhoun, Amir Abdur-Rahim. Mid-major
 overachievers + elite developers — *not* dominated by blue-bloods, which is reassuring that
-CAE-vs-`phase_b` measures coaching-above-talent rather than the projection's Q4 under-bias.
+CAE-vs-`roster_proj` measures coaching-above-talent rather than the projection's Q4 under-bias.
 
 **Caveats that bound the design:**
 - **Low reliability at 5-season depth.** Shrinkage constant k ≈ **6.4 season-equivalents**;
@@ -69,16 +69,16 @@ bands (new-coach teams are 1.12× noisier — the PR E salvage), not a point fea
 
 ## 4. Methodology (the load-bearing decisions)
 
-1. **Denominator = roster-talent-only projection (`phase_b`), never `served`.** Non-negotiable;
+1. **Denominator = roster-talent-only projection (`roster_proj`), never `served`.** Non-negotiable;
    it's the whole ballgame (§2). Use the persisted projection where possible — migration
    `023_team_preseason_projection.sql` already materializes the served projection, but CAE needs
-   the **pre-blend roster-only** number, so either persist `phase_b` alongside it or recompute via
+   the **pre-blend roster-only** number, so either persist `roster_proj` alongside it or recompute via
    `cstat_core::roster_projection`.
 2. **De-bias by the PROJECTION quartile, not the actual quartile — and ship RAW as the headline
    (decided at build, PR2).** The original plan was to de-bias by *actual* quartile, but that bakes
    in outcome-conditioned regression-to-the-mean ([[project_projection_q1_bias_refuted]]). Cutting
-   quartiles on `phase_b` instead is artifact-free: it found the projection is miscalibrated **only
-   at its low end** (phase_b-Q1/Q2 ≈ −1.7, Q3/Q4 ≈ 0) — there is **no phase_b-Q4 under-projection**,
+   quartiles on `roster_proj` instead is artifact-free: it found the projection is miscalibrated **only
+   at its low end** (roster_proj-Q1/Q2 ≈ −1.7, Q3/Q4 ≈ 0) — there is **no roster_proj-Q4 under-projection**,
    so the feared "free CAE credit at blue-bloods" never materializes (the raw top list is already
    mid-major overachievers). Empirically the de-bias *strips the program component*: it removes
    same-team persistence (+0.047 → −0.009) while preserving the moved-teams transferable signal

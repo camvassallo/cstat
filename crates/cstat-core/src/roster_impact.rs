@@ -1,11 +1,12 @@
-//! Phase B — impact-aggregation projection features.
+//! Roster-impact projection features (the impact-aggregation pipeline).
 //!
 //! The box-score `roster_features::build_roster_features` deliberately
-//! *excludes* cam_v3: for the swap-Δ tool, feeding the model a player-impact
+//! *excludes* cam_v3: for a roster-*swap* model, feeding it a player-impact
 //! metric collapses it to the identity `Σ(cam_v3 × minute_share) ≈ AdjEM`
 //! and kills the composition signal.
 //!
-//! Phase B is the opposite use case. A *roster projection* is exactly that
+//! The roster-impact projection is the opposite use case. A *roster projection*
+//! is exactly that
 //! identity — `AdjEM_projected = f(Σ projected cam_v3)`. This module builds
 //! the feature vector for `roster_impact_model.onnx`, a clean calibrator
 //! from a roster's projected-cam_v3 distribution (plus archetype and
@@ -18,7 +19,7 @@
 //! Train/serve parity: this builder and `train_roster_impact_model.py`
 //! apply the identical rotation normalization — rank by cam_v3, take the
 //! top 13, weight every aggregate by `CANONICAL_ROTATION_MPG` by rank.
-//! No out-of-distribution minutes (the Phase A failure mode).
+//! No out-of-distribution minutes (the box-score failure mode).
 
 use crate::roster_features::{ARCHETYPES, CANONICAL_ROTATION_MPG, PlayerRow};
 use std::collections::HashMap;
@@ -99,7 +100,7 @@ pub fn apply_projected_cam_v3(roster: &mut [PlayerRow], projected: &HashMap<Uuid
     }
 }
 
-/// Build the 27-feature Phase B vector for one projected roster.
+/// Build the 27-feature roster-impact vector for one projected roster.
 ///
 /// Expects each `PlayerRow.cam_v3` to already carry the *projected*
 /// next-season value (call `apply_projected_cam_v3` first). The roster is

@@ -76,6 +76,10 @@ def load_per_team() -> pd.DataFrame:
     dump_path = dumps[-1]
     print(f"loading per-team dump: {dump_path.name}")
     df = pd.read_json(dump_path)
+    # Back-compat for the phase_b→roster_proj dump-key rename (this script keeps
+    # the legacy column name internally).
+    if "roster_proj" in df.columns and "phase_b" not in df.columns:
+        df["phase_b"] = df["roster_proj"]
     df["blended"] = BLEND_W * df["baseline"] + (1 - BLEND_W) * df["phase_b"] + BLEND_OFFSET
     df["err_blended"] = df["blended"] - df["actual"]
     df["err_phase_b"] = df["phase_b"] - df["actual"]

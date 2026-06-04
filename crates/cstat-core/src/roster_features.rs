@@ -149,7 +149,7 @@ pub struct PlayerRow {
     /// and arrivals are aged up one year from their base season by
     /// `roster_projection::age_up_class_year`; synthesized recruits are
     /// `Fr`. Consumed by `roster_impact::build_roster_impact_features`
-    /// (the Phase B experience-mix features); the box-score
+    /// (the roster-impact experience-mix features); the box-score
     /// `build_roster_features` ignores it. Nullable — Torvik bio coverage
     /// is incomplete; missing values contribute to no experience bucket.
     pub class_year: Option<String>,
