@@ -942,7 +942,18 @@ production** (zero non-test callers — the swap-Δ tool moved to archetype-base
 ROADMAP's own historical shipped-item descriptions still say `phase_b` (a timestamped
 log; consistent with the retained dump artifacts that still carry the old key).
 
-### Box-score roster model (`roster_model.onnx`): deprecated from serving — stop loading it at API boot
+### ~~Box-score roster model (`roster_model.onnx`): deprecated from serving — stop loading it at API boot~~ — DONE 2026-06-03
+**Lazy-load SHIPPED 2026-06-03.** `Predictor` now holds `roster_session:
+Mutex<Option<Session>>` + a stored `model_dir`; `load()` no longer reads or
+meta-validates `roster_model.onnx` at boot. `predict_adj_em` materializes the
+session on first call (only the `projections-backtest` command reaches it), and
+that command meta-validates the model up-front via the new
+`Predictor::validate_box_score_model_meta()` (the contract check moved out of the
+boot path, not dropped). **Verified:** the API boots HTTP 200 and serves
+`/api/projections/2027` (364 teams) with `roster_model.onnx` *removed* from the
+model dir — previously a hard boot failure. Workspace tests/clippy/fmt green; the
+`predict_adj_em` unit test exercises the lazy path. Original scoping below.
+
 *(captured 2026-06-03)* The box-score roster model (`roster_model.onnx` /
 `Predictor::predict_adj_em` / `roster_features::build_roster_features` /
 `project_rotation`) — formerly the `phase_a` / `boxscore_proj` projection pipeline —

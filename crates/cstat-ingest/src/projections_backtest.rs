@@ -348,6 +348,14 @@ pub async fn run(
     println!("roster-impact projection backtest — target seasons: {years:?}");
     println!("{}", "=".repeat(72));
 
+    // This command is the sole consumer of the box-score model
+    // (`boxscore_proj`); the API no longer loads or validates it at boot, so we
+    // check its feature contract here before scoring — a feature-drifted
+    // box-score model would silently corrupt the comparison baseline otherwise.
+    predictor
+        .validate_box_score_model_meta()
+        .context("box-score roster_model_meta.json failed validation")?;
+
     // Per-target-season leave-one-season-out roster-impact models — each
     // trained on every season except the one it scores, so the backtest
     // carries no in-sample leak from the roster model (ROADMAP §5b v2).
