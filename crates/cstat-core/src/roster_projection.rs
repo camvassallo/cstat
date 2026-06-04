@@ -149,8 +149,8 @@ pub struct RecruitMeta {
 /// `docs/projections_methodology.md` for the calibration query and the
 /// per-tier sample sizes (T1 n=52, T2 n=114, T3 n=201, T4 n=185).
 ///
-/// The CamPom monotonicity is clean across tiers (T1 +8.97, T2 +2.41,
-/// T3 +0.70, T4 −0.57) so the tiering is real signal, not noise.
+/// The CamPom monotonicity is clean across tiers (T1 +6.51, T2 +2.60,
+/// T3 +1.02, T4 −0.76) so the tiering is real signal, not noise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FreshmanTier {
@@ -188,9 +188,10 @@ impl FreshmanTier {
 /// model*, not a richer tier table — so investing in JSON config
 /// scaffolding would be churn.
 ///
-/// Calibration query lives in `docs/projections_methodology.md` so the
-/// numbers can be re-derived against fresh data. Re-run when adding a
-/// new class year.
+/// Re-derive with `training/derive_freshman_profiles.py` (cohort + gate
+/// mirror `train_freshman_model.py`); the calibration query is also in
+/// `docs/projections_methodology.md`. Re-run when adding a new class year.
+/// Current values: full class-of-2014→2025 cohort (n=3253, PR #77 retrain).
 struct FreshmanProfile {
     mpg: f64,
     gp: f64,
@@ -214,88 +215,88 @@ struct FreshmanProfile {
 }
 
 const T1_PROFILE: FreshmanProfile = FreshmanProfile {
-    mpg: 24.0,
-    gp: 31.1,
-    ppg: 11.80,
-    rpg: 4.39,
-    apg: 1.82,
-    spg: 0.80,
-    bpg: 0.53,
-    topg: 1.41,
-    ts: 0.573,
-    efg: 0.534,
-    usg: 0.232,
-    ast_pct: 0.133,
-    tov_pct: 0.124,
-    orb_pct: 6.308,
-    drb_pct: 15.392,
-    stl_pct: 1.792,
-    blk_pct: 2.400,
-    ft_rate: 0.361,
-    cam_v3: 8.97,
+    mpg: 23.8,
+    gp: 29.8,
+    ppg: 10.58,
+    rpg: 4.54,
+    apg: 1.78,
+    spg: 0.79,
+    bpg: 0.64,
+    topg: 1.62,
+    ts: 0.556,
+    efg: 0.519,
+    usg: 0.224,
+    ast_pct: 0.130,
+    tov_pct: 0.149,
+    orb_pct: 7.010,
+    drb_pct: 16.403,
+    stl_pct: 1.825,
+    blk_pct: 3.126,
+    ft_rate: 0.391,
+    cam_v3: 6.51,
 };
 const T2_PROFILE: FreshmanProfile = FreshmanProfile {
-    mpg: 14.4,
-    gp: 23.3,
-    ppg: 5.48,
-    rpg: 2.37,
-    apg: 1.03,
-    spg: 0.52,
-    bpg: 0.32,
-    topg: 0.80,
-    ts: 0.537,
-    efg: 0.509,
-    usg: 0.194,
-    ast_pct: 0.107,
-    tov_pct: 0.158,
-    orb_pct: 6.630,
-    drb_pct: 14.246,
-    stl_pct: 1.947,
-    blk_pct: 2.512,
-    ft_rate: 0.363,
-    cam_v3: 2.41,
+    mpg: 17.9,
+    gp: 27.5,
+    ppg: 6.33,
+    rpg: 2.84,
+    apg: 1.21,
+    spg: 0.59,
+    bpg: 0.38,
+    topg: 1.12,
+    ts: 0.527,
+    efg: 0.496,
+    usg: 0.193,
+    ast_pct: 0.114,
+    tov_pct: 0.163,
+    orb_pct: 6.088,
+    drb_pct: 14.156,
+    stl_pct: 1.858,
+    blk_pct: 2.534,
+    ft_rate: 0.354,
+    cam_v3: 2.60,
 };
 const T3_PROFILE: FreshmanProfile = FreshmanProfile {
-    mpg: 12.7,
-    gp: 21.9,
-    ppg: 4.24,
-    rpg: 2.15,
-    apg: 0.84,
-    spg: 0.44,
-    bpg: 0.24,
-    topg: 0.68,
-    ts: 0.524,
-    efg: 0.494,
-    usg: 0.175,
-    ast_pct: 0.108,
-    tov_pct: 0.154,
-    orb_pct: 8.095,
-    drb_pct: 13.988,
-    stl_pct: 2.005,
-    blk_pct: 2.396,
-    ft_rate: 0.416,
-    cam_v3: 0.70,
+    mpg: 15.4,
+    gp: 25.6,
+    ppg: 4.88,
+    rpg: 2.42,
+    apg: 0.98,
+    spg: 0.50,
+    bpg: 0.28,
+    topg: 0.93,
+    ts: 0.511,
+    efg: 0.477,
+    usg: 0.178,
+    ast_pct: 0.109,
+    tov_pct: 0.173,
+    orb_pct: 6.112,
+    drb_pct: 13.928,
+    stl_pct: 1.821,
+    blk_pct: 2.286,
+    ft_rate: 0.367,
+    cam_v3: 1.02,
 };
 const T4_PROFILE: FreshmanProfile = FreshmanProfile {
-    mpg: 14.1,
-    gp: 22.4,
-    ppg: 4.91,
-    rpg: 2.21,
-    apg: 0.95,
+    mpg: 15.6,
+    gp: 25.1,
+    ppg: 4.93,
+    rpg: 2.33,
+    apg: 0.96,
     spg: 0.48,
-    bpg: 0.21,
-    topg: 0.78,
-    ts: 0.514,
-    efg: 0.484,
-    usg: 0.184,
-    ast_pct: 0.110,
-    tov_pct: 0.151,
-    orb_pct: 6.459,
-    drb_pct: 13.465,
-    stl_pct: 2.108,
-    blk_pct: 2.111,
-    ft_rate: 0.381,
-    cam_v3: -0.57,
+    bpg: 0.24,
+    topg: 0.96,
+    ts: 0.507,
+    efg: 0.477,
+    usg: 0.178,
+    ast_pct: 0.106,
+    tov_pct: 0.177,
+    orb_pct: 5.768,
+    drb_pct: 13.732,
+    stl_pct: 1.758,
+    blk_pct: 1.984,
+    ft_rate: 0.363,
+    cam_v3: -0.76,
 };
 
 fn profile_for(tier: FreshmanTier) -> &'static FreshmanProfile {
@@ -316,7 +317,7 @@ fn profile_for(tier: FreshmanTier) -> &'static FreshmanProfile {
 /// model's prediction drive which shape we pull.
 ///
 /// Closest-tier (min absolute distance) instead of linear scaling because
-/// the four tier centroids span both signs (T1 +8.97 down to T4 −0.57)
+/// the four tier centroids span both signs (T1 +6.51 down to T4 −0.76)
 /// and naive ratio scaling sign-flips when predicted and tier mean
 /// disagree. The 4-bucket discretisation loses some resolution at the
 /// extremes — predicted +12 and +6 both land in T1 — but the
@@ -1628,12 +1629,12 @@ mod tests {
     #[test]
     fn synthesize_freshman_row_uses_tier_profile() {
         // Pre-Phase-6 fallback path: no predicted CamPom → use the
-        // rank-tier profile. T1 elite carries cam_v3 +8.97 by construction.
+        // rank-tier profile. T1 elite carries cam_v3 +6.51 by construction.
         let (row, chosen) = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T1, None);
         assert_eq!(chosen, FreshmanTier::T1);
-        assert_eq!(row.cam_v3, Some(8.97));
-        assert_eq!(row.mpg, 24.0);
-        assert!((row.total_min - 24.0 * 31.1).abs() < 1e-6);
+        assert_eq!(row.cam_v3, Some(6.51));
+        assert_eq!(row.mpg, 23.8);
+        assert!((row.total_min - 23.8 * 29.8).abs() < 1e-6);
         // T4 (unranked) is far below T1 on cam_v3.
         let (unranked, _) = synthesize_freshman_row(Uuid::new_v4(), FreshmanTier::T4, None);
         assert!(unranked.cam_v3.unwrap() < row.cam_v3.unwrap());
@@ -1664,9 +1665,9 @@ mod tests {
 
     #[test]
     fn tier_from_predicted_campom_picks_closest_centroid() {
-        // Tier means: T1 +8.97, T2 +2.41, T3 +0.70, T4 -0.57. Midpoint
-        // boundaries are (8.97+2.41)/2 = 5.69, (2.41+0.70)/2 = 1.555,
-        // (0.70-0.57)/2 = 0.065. Pick test values clearly inside each
+        // Tier means: T1 +6.51, T2 +2.60, T3 +1.02, T4 -0.76. Midpoint
+        // boundaries are (6.51+2.60)/2 = 4.555, (2.60+1.02)/2 = 1.81,
+        // (1.02-0.76)/2 = 0.13. Pick test values clearly inside each
         // bucket so the boundary semantics aren't load-bearing.
         assert_eq!(tier_from_predicted_campom(20.0), FreshmanTier::T1);
         assert_eq!(tier_from_predicted_campom(8.97), FreshmanTier::T1);
