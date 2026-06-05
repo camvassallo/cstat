@@ -66,59 +66,40 @@ function nullsLast(
   return a - b;
 }
 
-type CamSumField =
-  | 'returning_cam_v3_sum'
-  | 'arrivals_cam_v3_sum'
-  | 'recruits_cam_v3_sum'
-  | 'departures_cam_v3_sum';
-type CamCountField =
-  | 'returning_count'
-  | 'arrivals_count'
-  | 'recruits_count'
-  | 'departures_count';
+const dashCell = <span className="text-slate-600 text-xs">—</span>;
+const fmtSigned = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
 
-// Render a Σ-CamPom roster-flow column as a signed number. `polarity`
-// sets the framing:
-//   gain — incoming talent (green +); a negative Σ flips to a red loss.
-//   loss — departing talent (red −); the stored Σ is positive (talent
-//          leaving), so we negate it for display.
-//   base — the standing cohort (returning / recruits). Neutral slate;
-//          it's "what you have", not a flow, so no gain/loss coloring.
-// The player count and raw Σ live in the tooltip. `campomBasis` labels
-// whether the Σ is prior-season production or a forward projection.
-function camSumRenderer(
-  sumField: CamSumField,
-  countField: CamCountField,
-  polarity: 'gain' | 'loss' | 'base',
-  noun: string,
-  campomBasis: string,
+// Last season's roster value (CamPom) — the shared denominator that makes
+// the roster-flow columns mesh: `returning + departures + uncertain`, all
+// on the prior-season frame (every player who was on last year's team).
+// Returns null when the base is too small to normalize against (very weak
+// or thin rosters, where cam sums can be near zero / negative).
+function lastSeasonBase(t: ProjectedTeam): number | null {
+  const base = t.returning_cam_v3_sum + t.departures_cam_v3_sum + t.uncertain_cam_v3_sum;
+  return base > 0.5 ? base : null;
+}
+const pctOfBase = (t: ProjectedTeam, numerator: number): number | null => {
+  const base = lastSeasonBase(t);
+  return base == null ? null : numerator / base;
+};
+
+// One roster-flow cell: a CamPom value (forward-projected for staying /
+// incoming cohorts, prior for departures) with its share of last season's
+// roster value beneath it. The shared base is the mesh — kept% + lost%
+// partition the old roster; transfers / recruits are additions on the same
+// scale, so the columns finally add up instead of floating independently.
+function flowCellView(
+  valueText: string,
+  pctText: string | null,
+  tone: string,
+  tooltip: string,
 ) {
-  return (p: { data?: ProjectedTeam }) => {
-    const t = p.data;
-    // ΣCamPom is a fact about the roster (not a gated prediction), so it
-    // renders even for thin-roster teams — for a gutted roster the
-    // departures total is exactly the signal that explains the thinness.
-    if (!t || t[countField] === 0) {
-      return <span className="text-slate-600 text-xs">—</span>;
-    }
-    const sum = t[sumField];
-    const effect = polarity === 'loss' ? -sum : sum;
-    const tone =
-      polarity === 'base'
-        ? 'text-slate-300'
-        : effect >= 0
-          ? 'text-emerald-400'
-          : 'text-rose-400';
-    const text = effect >= 0 ? `+${effect.toFixed(1)}` : effect.toFixed(1);
-    return (
-      <span
-        className={`text-xs font-mono font-semibold ${tone}`}
-        title={`${t[countField]} ${noun} · Σ ${campomBasis} CamPom ${sum >= 0 ? '+' : ''}${sum.toFixed(1)}`}
-      >
-        {text}
-      </span>
-    );
-  };
+  return (
+    <span title={tooltip} className="inline-flex items-baseline gap-1 whitespace-nowrap">
+      <span className={`text-xs font-mono font-semibold ${tone}`}>{valueText}</span>
+      {pctText && <span className="text-[10px] text-slate-500 font-mono">{pctText}</span>}
+    </span>
+  );
 }
 
 // `showActual` adds the Actual + projection-error columns — populated
@@ -233,12 +214,13 @@ function buildColumns(
       ...flexCol(3, 200),
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: ProjectedTeam }) => (
-        // For the upcoming forecast year, `?season={year}` lands on
-        // TeamDetail's projection-mode branch (the season hasn't been
-        // played). For a past season it lands on the actual played
-        // team page — "here's how that roster really did".
+        // `&view=projected` lands on TeamDetail's projection branch even
+        // for a played season — clicking a team *from the projections
+        // context* shows its forecast + the held-out report card (a normal
+        // team link elsewhere stays on Actual). For the upcoming year the
+        // page is projection-only regardless, so the param is harmless.
         <SeasonLink
-          to={`/teams/${p.data?.team_id}?season=${year}`}
+          to={`/teams/${p.data?.team_id}?season=${year}&view=projected`}
           onClick={(e) => e.stopPropagation()}
           className="text-blue-400 hover:underline"
         >
@@ -367,59 +349,69 @@ function buildColumns(
       colId: 'returning',
       ...flexCol(1, 120),
       headerTooltip:
-        'Returning players — total CamPom retained, summing each returner\'s prior-season production (excludes graduating seniors, outbound portal, and firm draft departures). Hover for the headcount.',
+        "Returning players, shown as their *projected* next-season CamPom (trajectory forecast) with the share of last season's roster value retained beneath — i.e. roster continuity. 51% kept = a stable veteran core; 20% = a near-total rebuild. Excludes graduating seniors, outbound portal, and firm draft departures.",
       comparator: (_a, _b, na, nb) =>
-        ((na.data as ProjectedTeam | undefined)?.returning_cam_v3_sum ?? 0) -
-        ((nb.data as ProjectedTeam | undefined)?.returning_cam_v3_sum ?? 0),
-      cellRenderer: camSumRenderer(
-        'returning_cam_v3_sum',
-        'returning_count',
-        'base',
-        'returning',
-        'prior-season',
-      ),
+        ((na.data as ProjectedTeam | undefined)?.returning_projected_cam_v3_sum ?? 0) -
+        ((nb.data as ProjectedTeam | undefined)?.returning_projected_cam_v3_sum ?? 0),
+      cellRenderer: (p: { data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t || t.returning_count === 0) return dashCell;
+        const val = t.returning_projected_cam_v3_sum;
+        const pct = pctOfBase(t, t.returning_cam_v3_sum);
+        const pctText = pct != null ? `${Math.round(pct * 100)}% kept` : null;
+        const tip =
+          `${t.returning_count} returning · prior Σ ${fmtSigned(t.returning_cam_v3_sum)} → projected ${fmtSigned(val)}` +
+          (pct != null
+            ? `\n${Math.round(pct * 100)}% of last season's roster value retained (continuity)`
+            : '');
+        return flowCellView(fmtSigned(val), pctText, 'text-slate-200', tip);
+      },
     },
     {
       headerName: 'Incoming transfers',
       colId: 'incoming',
       ...flexCol(1, 130),
       headerTooltip:
-        'Incoming portal arrivals — total CamPom gained, summing each arrival\'s prior-school production. Hover for the headcount.',
+        "Incoming portal arrivals — their *projected* next-season CamPom, with how much they add relative to last season's roster value beneath. Hover for the prior-school total + headcount.",
       comparator: (_a, _b, na, nb) =>
-        ((na.data as ProjectedTeam | undefined)?.arrivals_cam_v3_sum ?? 0) -
-        ((nb.data as ProjectedTeam | undefined)?.arrivals_cam_v3_sum ?? 0),
-      cellRenderer: camSumRenderer(
-        'arrivals_cam_v3_sum',
-        'arrivals_count',
-        'gain',
-        'transfers in',
-        'prior-season',
-      ),
+        ((na.data as ProjectedTeam | undefined)?.arrivals_projected_cam_v3_sum ?? 0) -
+        ((nb.data as ProjectedTeam | undefined)?.arrivals_projected_cam_v3_sum ?? 0),
+      cellRenderer: (p: { data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t || t.arrivals_count === 0) return dashCell;
+        const val = t.arrivals_projected_cam_v3_sum;
+        const pct = pctOfBase(t, t.arrivals_cam_v3_sum);
+        const tone = val >= 0 ? 'text-emerald-400' : 'text-rose-400';
+        const pctText = pct != null ? `+${Math.round(pct * 100)}%` : null;
+        const tip =
+          `${t.arrivals_count} transfers in · prior-school Σ ${fmtSigned(t.arrivals_cam_v3_sum)} → projected ${fmtSigned(val)}` +
+          (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '');
+        return flowCellView(fmtSigned(val), pctText, tone, tip);
+      },
     },
     {
       headerName: 'Recruits',
       colId: 'recruits',
       ...flexCol(1, 130),
       headerTooltip:
-        "Incoming HS recruits — total projected freshman-season CamPom from cstat's freshman-impact model (recruits have no prior season, so this is a forward projection). Hover for the top commits by composite rank.",
+        "Incoming HS recruits — projected freshman-season CamPom from cstat's freshman-impact model (no prior season, so this is a forward projection), with how much they add relative to last season's roster value beneath. Hover for the top commits.",
       comparator: (_a, _b, na, nb) =>
         ((na.data as ProjectedTeam | undefined)?.recruits_cam_v3_sum ?? 0) -
         ((nb.data as ProjectedTeam | undefined)?.recruits_cam_v3_sum ?? 0),
       cellRenderer: (p: { data?: ProjectedTeam }) => {
         const t = p.data;
-        if (!t || t.recruits_count === 0) {
-          return <span className="text-slate-600 text-xs">—</span>;
-        }
-        const sum = t.recruits_cam_v3_sum;
+        if (!t || t.recruits_count === 0) return dashCell;
+        const val = t.recruits_cam_v3_sum;
+        const pct = pctOfBase(t, t.recruits_cam_v3_sum);
+        const pctText = pct != null ? `+${Math.round(pct * 100)}%` : null;
         const names = t.top_recruits
           .map((r) => `${r.composite_rank ? `#${r.composite_rank} ` : ''}${r.name} (${r.star_rating ?? '?'}★)`)
           .join('\n');
-        const tooltip = `${t.recruits_count} recruits · Σ projected CamPom ${sum >= 0 ? '+' : ''}${sum.toFixed(1)}${names ? `\n${names}` : ''}`;
-        return (
-          <span className="text-xs font-mono font-semibold text-slate-300" title={tooltip}>
-            {sum >= 0 ? `+${sum.toFixed(1)}` : sum.toFixed(1)}
-          </span>
-        );
+        const tip =
+          `${t.recruits_count} recruits · Σ projected CamPom ${fmtSigned(val)}` +
+          (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '') +
+          (names ? `\n${names}` : '');
+        return flowCellView(fmtSigned(val), pctText, 'text-slate-300', tip);
       },
     },
     {
@@ -427,17 +419,22 @@ function buildColumns(
       colId: 'departures',
       ...flexCol(1, 130),
       headerTooltip:
-        'Graduating seniors + outbound portal + firm draft departures — total CamPom leaving the program, summing each departure\'s prior-season production. Hover for the headcount.',
+        "Graduating seniors + outbound portal + firm draft departures — the CamPom leaving the program (prior-season production), with the share of last season's roster value lost beneath. Mirror of Returning: kept% + lost% ≈ 100%.",
       comparator: (_a, _b, na, nb) =>
         ((na.data as ProjectedTeam | undefined)?.departures_cam_v3_sum ?? 0) -
         ((nb.data as ProjectedTeam | undefined)?.departures_cam_v3_sum ?? 0),
-      cellRenderer: camSumRenderer(
-        'departures_cam_v3_sum',
-        'departures_count',
-        'loss',
-        'departures',
-        'prior-season',
-      ),
+      cellRenderer: (p: { data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t || t.departures_count === 0) return dashCell;
+        // Stored positive (talent leaving); show as a negative loss.
+        const display = -t.departures_cam_v3_sum;
+        const pct = pctOfBase(t, t.departures_cam_v3_sum);
+        const pctText = pct != null ? `−${Math.round(pct * 100)}%` : null;
+        const tip =
+          `${t.departures_count} departures (Sr + portal-out + draft) · Σ prior CamPom ${fmtSigned(t.departures_cam_v3_sum)} leaving` +
+          (pct != null ? `\n${Math.round(pct * 100)}% of last season's roster value lost` : '');
+        return flowCellView(fmtSigned(display), pctText, 'text-rose-400', tip);
+      },
     },
   ];
 }

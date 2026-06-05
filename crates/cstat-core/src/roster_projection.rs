@@ -34,7 +34,9 @@
 //! "frozen-stats" framing for returning players. Phase 6 freshman-impact
 //! prior is the upgrade path for recruits.
 
-use crate::freshman_model::{FreshmanFeatureRow, FreshmanPrediction, build_freshman_features};
+use crate::freshman_model::{
+    FreshmanFeatureRow, FreshmanPrediction, build_freshman_features, fetch_freshman_oof,
+};
 use crate::inference::Predictor;
 use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use crate::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
@@ -469,6 +471,10 @@ struct RecruitRow {
     full_name: String,
     composite_rank: Option<i32>,
     star_rating: Option<i16>,
+    // Resolved cstat player (set once the recruit's freshman season ingests).
+    // Keys the freshman OOF lookup so a backtest projection serves the
+    // held-out prediction instead of an in-sample one.
+    cstat_player_id: Option<Uuid>,
     #[allow(dead_code)] // forensics only; bucketing uses `base_team_id`
     committed_team_id: Option<Uuid>,
     // `committed_team_id` resolves to the recruit's *playing*-season team UUID
@@ -652,6 +658,7 @@ pub async fn compose_all_projections(
             r.full_name,
             r.composite_rank,
             r.star_rating,
+            r.cstat_player_id,
             r.committed_team_id,
             tm_prior.id                       AS base_team_id,
             r.commit_status,
@@ -713,39 +720,99 @@ pub async fn compose_all_projections(
     // per-recruit projected CamPom. Predictions are batched: one [N, 13]
     // tensor per model for the whole class (3 ONNX runs total). On batch
     // error, fall back to `FRESHMAN_FALLBACK_CAM_V3` with no band.
-    let feature_vectors: Vec<[f32; crate::freshman_model::FRESHMAN_NUM_FEATURES]> = recruit_rows
+    // OOF-first, mirroring the recruits route + the returner path
+    // (`project_returner_cam_v3`): a recruit who already played their
+    // freshman season — one the freshman model trained on — is served the
+    // HELD-OUT prediction from `freshman_oof_predictions`, so a historical
+    // (backtest) projection never serves an in-sample (leaky) number. For
+    // the upcoming forecast year the OOF table is empty and every recruit
+    // falls through to live inference. Live is batched (one [N, 13] tensor
+    // per model); on batch error those rows get `None` and `freshman_row`
+    // falls back to `FRESHMAN_FALLBACK_CAM_V3`.
+    let target_season = base_season + 1;
+    let recruit_cstat_ids: Vec<Uuid> = recruit_rows
         .iter()
-        .map(|r| {
-            let feature_row = FreshmanFeatureRow {
-                composite_rank: r.composite_rank,
-                composite_rating: r.composite_rating,
-                star_rating: r.star_rating,
-                position_rank: r.position_rank,
-                previous_rank: r.previous_rank,
-                height: r.height.clone(),
-                weight: r.weight,
-                position: r.position.clone(),
-                year: r.recruit_year,
-                committed_team_prior_adjem: r.committed_team_prior_adjem,
-                peer_class_strength: r.peer_class_strength,
-            };
-            build_freshman_features(&feature_row)
-        })
+        .filter_map(|r| r.cstat_player_id)
         .collect();
-    let predictions: Vec<Option<FreshmanPrediction>> =
-        match predictor.predict_freshman_batch(&feature_vectors) {
+    let freshman_oof = if recruit_cstat_ids.is_empty() {
+        HashMap::new()
+    } else {
+        fetch_freshman_oof(pool, &recruit_cstat_ids, target_season)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = ?e,
+                    target_season,
+                    "freshman OOF lookup failed in compose_all_projections; live inference",
+                );
+                HashMap::new()
+            })
+    };
+    // Live feature vectors only for recruits without an OOF hit; track the
+    // original index so we can splice predictions back in order.
+    let mut live_indices: Vec<usize> = Vec::new();
+    let mut live_vectors: Vec<[f32; crate::freshman_model::FRESHMAN_NUM_FEATURES]> = Vec::new();
+    for (i, r) in recruit_rows.iter().enumerate() {
+        if let Some(pid) = r.cstat_player_id
+            && freshman_oof.contains_key(&pid)
+        {
+            continue;
+        }
+        let feature_row = FreshmanFeatureRow {
+            composite_rank: r.composite_rank,
+            composite_rating: r.composite_rating,
+            star_rating: r.star_rating,
+            position_rank: r.position_rank,
+            previous_rank: r.previous_rank,
+            height: r.height.clone(),
+            weight: r.weight,
+            position: r.position.clone(),
+            year: r.recruit_year,
+            committed_team_prior_adjem: r.committed_team_prior_adjem,
+            peer_class_strength: r.peer_class_strength,
+        };
+        live_indices.push(i);
+        live_vectors.push(build_freshman_features(&feature_row));
+    }
+    let live_preds: Vec<Option<FreshmanPrediction>> = if live_vectors.is_empty() {
+        Vec::new()
+    } else {
+        match predictor.predict_freshman_batch(&live_vectors) {
             Ok(preds) => preds.into_iter().map(Some).collect(),
             Err(e) => {
                 tracing::warn!(
                     error = ?e,
                     year = base_season,
-                    n = recruit_rows.len(),
+                    n = live_vectors.len(),
                     "freshman batch predict failed in compose_all_projections; \
                      falling back to the replacement-level FRESHMAN_FALLBACK_CAM_V3",
                 );
-                vec![None; recruit_rows.len()]
+                vec![None; live_vectors.len()]
             }
-        };
+        }
+    };
+    // Splice: OOF hits from the map, live hits by `live_indices` order.
+    let mut live_iter = live_indices.iter().zip(live_preds);
+    let mut next_live = live_iter.next();
+    let predictions: Vec<Option<FreshmanPrediction>> = recruit_rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            if let Some(pid) = r.cstat_player_id
+                && let Some(pred) = freshman_oof.get(&pid)
+            {
+                return Some(pred.clone());
+            }
+            match next_live.as_ref() {
+                Some((idx, _)) if **idx == i => {
+                    let (_, pred) = next_live.take().unwrap();
+                    next_live = live_iter.next();
+                    pred
+                }
+                _ => None,
+            }
+        })
+        .collect();
 
     let mut recruits_by_team: HashMap<Uuid, Vec<(PlayerRow, RecruitMeta)>> = HashMap::new();
     for (r, pred) in recruit_rows.into_iter().zip(predictions) {
@@ -1421,5 +1488,89 @@ mod tests {
             "christian anderson",
         );
         assert_eq!(normalize_player_name("Cooper Flagg"), "cooper flagg");
+    }
+
+    /// Regression guard for the freshman-OOF leak (2026-06-05): for a class the
+    /// freshman model trained on, `compose_all_projections` must serve the
+    /// HELD-OUT prediction from `freshman_oof_predictions`, NOT a live in-sample
+    /// one. The leak showed as Cameron Boozer projecting +17.7 in the projection
+    /// vs +14.2 (held-out) on the recruits page — identical feature vectors,
+    /// different model (full-data vs leave-one-class-out fold).
+    ///
+    /// Integration test: requires a populated DB + the committed ONNX models.
+    /// Skips cleanly (passes) when `DATABASE_URL` is unset, the DB can't be
+    /// reached, the canonical class-2025 fixture isn't ingested (fresh CI DB),
+    /// models can't load, or compose fails for unrelated reasons — so it never
+    /// breaks a schema-only CI run, but acts as a real guard on a dev DB.
+    #[tokio::test]
+    async fn freshman_projection_serves_oof_not_live_for_historical_class() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let Ok(pool) = sqlx::PgPool::connect(&url).await else {
+            return;
+        };
+
+        // base_season 2025 → freshman season 2026 (a season the model trained
+        // on, so it has OOF rows). Pick the highest-OOF class-2025 recruit that
+        // resolved to a player *and* attaches to a base-season team — the elite
+        // tail is exactly where held-out and in-sample diverge most.
+        const BASE_SEASON: i32 = 2025;
+        let fixture: Option<(Uuid, f32)> = sqlx::query_as::<_, (Uuid, f32)>(
+            r#"
+            SELECT r.id, f.mean
+            FROM recruits r
+            JOIN freshman_oof_predictions f
+              ON f.cstat_player_id = r.cstat_player_id
+             AND f.target_season = r.year + 1
+            JOIN teams t  ON t.id = r.committed_team_id
+            JOIN teams tm ON tm.natstat_id = t.natstat_id AND tm.season = r.year
+            WHERE r.year = $1
+              AND r.committed_team_id IS NOT NULL
+              AND COALESCE(r.commit_status, '') <> 'Uncommitted'
+            ORDER BY f.mean DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(BASE_SEASON)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+        let Some((recruit_id, oof_mean)) = fixture else {
+            return; // fresh / un-ingested DB — nothing to assert against.
+        };
+
+        let model_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../training/models");
+        let Ok(predictor) = Predictor::load(&model_dir) else {
+            return; // models not present in this environment.
+        };
+
+        let Ok(projections) = compose_all_projections(&pool, BASE_SEASON, &[], &predictor).await
+        else {
+            return; // a compose failure is a different concern, not this guard's.
+        };
+
+        // Find the fixture recruit in any team's recruit cohort.
+        let cam = projections
+            .iter()
+            .flat_map(|p| p.recruits.iter())
+            .find(|(_, meta)| meta.recruit_id == recruit_id)
+            .and_then(|(row, _)| row.cam_v3);
+        let Some(cam) = cam else {
+            return; // recruit didn't land in a composed roster (e.g. too-thin gate).
+        };
+
+        // The served value must equal the held-out OOF mean. If this regresses,
+        // `compose_all_projections` is serving live in-sample freshman
+        // predictions for a historical class again (the leak). fp tolerance
+        // covers the f32 → f64 → f32 round-trip.
+        assert!(
+            (cam as f32 - oof_mean).abs() < 0.05,
+            "freshman OOF leak regressed: composed recruit cam {cam:.3} != held-out OOF \
+             mean {oof_mean:.3} (recruit {recruit_id}) — compose_all_projections must use \
+             fetch_freshman_oof, not live predict_freshman_batch, for trained-on classes",
+        );
     }
 }

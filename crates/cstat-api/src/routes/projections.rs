@@ -76,12 +76,24 @@ struct ProjectedTeam {
     /// measured by their prior-season production). The Future grid's
     /// "Returning" column surfaces this instead of the raw count.
     returning_cam_v3_sum: f32,
+    /// Σ *projected* next-season cam_v3 of the returning players (the
+    /// trajectory model's forecast, falling back to prior cam_v3 where
+    /// the player didn't pass the trajectory gate). This is the forward
+    /// frame the roster-flow ledger displays; `returning_cam_v3_sum`
+    /// (prior) stays the denominator for the continuity % and the
+    /// "prior → projected" tooltip.
+    returning_projected_cam_v3_sum: f32,
     /// Count of incoming portal arrivals committed to this team.
     arrivals_count: usize,
     /// Σ base-season cam_v3 of the incoming portal arrivals (talent
     /// gained, measured by their prior-school production). The Future
     /// grid's "Incoming" column surfaces this instead of the raw count.
     arrivals_cam_v3_sum: f32,
+    /// Σ *projected* next-season cam_v3 of the incoming arrivals (forward
+    /// frame, same trajectory forecast as returners). Paired with the
+    /// prior `arrivals_cam_v3_sum` so the ledger shows projected value
+    /// while the % stays on the prior base.
+    arrivals_projected_cam_v3_sum: f32,
     /// Count of incoming HS recruits committed to this team. Each
     /// recruit carries the freshman-impact model's per-recruit projected
     /// cam_v3 (see `freshman_row` in `roster_projection.rs`).
@@ -99,6 +111,11 @@ struct ProjectedTeam {
     /// Count of players in the uncertain bucket — the spread
     /// (ceiling - floor) is roughly proportional to this.
     uncertain_count: usize,
+    /// Σ base-season cam_v3 of the uncertain (declared-draft) cohort.
+    /// They were on last season's roster, so this completes the
+    /// "last season's roster value" base the ledger normalizes against:
+    /// `base = returning + departures + uncertain` (all prior-season).
+    uncertain_cam_v3_sum: f32,
     /// Count of recorded departures (Sr + outbound + firm draft-gone).
     departures_count: usize,
     /// Σ base-season cam_v3 across all departures (graduating seniors +
@@ -446,6 +463,35 @@ fn predict_team(
         .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
 
+    // Forward-frame sums for the roster-flow ledger: each returner /
+    // arrival's *projected* next-season cam_v3 (the trajectory forecast
+    // in `projected_cam`), falling back to their prior cam_v3 when the
+    // player has no projection (didn't pass the trajectory gate). The
+    // displayed value is forward; the prior sums above stay the % base.
+    let proj_or_prior = |pid: Uuid, prior: Option<f64>| -> f64 {
+        projected_cam
+            .get(&pid)
+            .copied()
+            .unwrap_or_else(|| prior.unwrap_or(0.0))
+    };
+    let returning_projected_cam_v3_sum: f32 = p
+        .returning
+        .iter()
+        .map(|r| proj_or_prior(r.player_id, r.cam_v3))
+        .sum::<f64>() as f32;
+    let arrivals_projected_cam_v3_sum: f32 = p
+        .arrivals
+        .iter()
+        .map(|a| proj_or_prior(a.player_id, a.cam_v3))
+        .sum::<f64>() as f32;
+    // Prior-season value of the uncertain cohort — completes the
+    // last-season roster base (returning + departures + uncertain).
+    let uncertain_cam_v3_sum: f32 = p
+        .uncertain
+        .iter()
+        .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
+        .sum::<f64>() as f32;
+
     // Top 5 recruits by composite_rank (NULL ranks last). Cloned so the
     // closure capture is move-friendly.
     let mut sorted_recruits: Vec<_> = p.recruits.iter().map(|(_, m)| m.clone()).collect();
@@ -486,12 +532,15 @@ fn predict_team(
             .map(|(f, c)| p_return * c + (1.0 - p_return) * f),
         returning_count: p.returning.len(),
         returning_cam_v3_sum,
+        returning_projected_cam_v3_sum,
         arrivals_count: p.arrivals.len(),
         arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
+        arrivals_projected_cam_v3_sum,
         recruits_count: p.recruits.len(),
         recruits_cam_v3_sum,
         top_recruits: top_recruits.clone(),
         uncertain_count: p.uncertain.len(),
+        uncertain_cam_v3_sum,
         departures_count: p.departures.len(),
         departures_cam_v3_sum: p.departures_cam_v3_sum,
         too_thin,
