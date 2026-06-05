@@ -180,7 +180,7 @@ A LOCO-aligned ablation (`training/spike_247_baseline.py`) trains the same Light
 
 ## 4. Roster model (team AdjEM from roster) — LEGACY / DEPRECATED
 
-> **⚠️ This section documents the box-score roster model (`roster_model.onnx`), which is DEAD — deprecated and no longer loaded at API boot (#108/#109 deleted its last consumer).** The served preseason projection uses the **27-feature roster-impact model** instead; see `docs/projections_methodology.md` for it and for the *end-to-end* projection accuracy (blended MAE 5.86). The box-score numbers below are retained as a historical record of the 12-season retrain (#79); they are no longer a live model family.
+> **This section documents the box-score roster model (`roster_model.onnx`), which is DEAD — deprecated and no longer loaded at API boot (#108/#109 deleted its last consumer).** The served preseason projection uses the **27-feature roster-impact model** instead; see `docs/projections_methodology.md` for it and for the *end-to-end* projection accuracy (blended MAE 5.86). The box-score numbers below are retained as a historical record of the 12-season retrain (#79); they are no longer a live model family.
 
 Single LightGBM regressor on 36 features: roster shape (size, total minutes, top-1/top-5 min share, minutes stddev), minutes-weighted player rate stats, star indicators, and one-hot archetype counts.
 
