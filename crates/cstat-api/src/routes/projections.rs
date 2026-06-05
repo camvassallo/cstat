@@ -172,6 +172,14 @@ struct ProjectedTeam {
     /// `n/(n+k)` credibility weight ∈ [0,1]; low = thin tenure, soft grade.
     coach_cae_reliability: Option<f64>,
     coach_n_seasons: Option<i32>,
+    /// Did this coach differ from the program's prior-season coach? (coachdict
+    /// `is_new_hc`). Drives the "New HC" badge on the Future tab. `None` = can't
+    /// tell (no prior-season coachdict entry).
+    coach_is_new_hc: Option<bool>,
+    /// For a new hire, the coach's prior-season program (coachdict name) — e.g.
+    /// "South Florida" for Bryan Hodgson → Providence. `None` for a first-time /
+    /// promoted D-I coach with no prior coachdict row. Display-only.
+    coach_prev_team: Option<String>,
 }
 
 /// Display-only coach CAE attached to a projected team (see `ProjectedTeam`'s
@@ -182,6 +190,8 @@ struct CoachCae {
     cae_shrunk: Option<f64>,
     reliability: Option<f64>,
     n_seasons: Option<i32>,
+    is_new_hc: Option<bool>,
+    prev_team: Option<String>,
 }
 
 // The stable baseline weight + tuning history live on
@@ -404,6 +414,8 @@ async fn projection_list(
             row.coach_cae_shrunk = cc.cae_shrunk;
             row.coach_cae_reliability = cc.reliability;
             row.coach_n_seasons = cc.n_seasons;
+            row.coach_is_new_hc = cc.is_new_hc;
+            row.coach_prev_team = cc.prev_team.clone();
         }
         rows.push(row);
     }
@@ -554,6 +566,8 @@ fn predict_team(
         coach_cae_shrunk: None,
         coach_cae_reliability: None,
         coach_n_seasons: None,
+        coach_is_new_hc: None,
+        coach_prev_team: None,
     };
 
     if qualifying < MIN_QUALIFYING_FOR_PROJECTION {
@@ -921,7 +935,7 @@ async fn projection_team_detail(
     // route skips None rows (`continue`); a single-team detail page
     // can't skip, so surface it as 500 rather than handing the
     // frontend a `projection: null` it isn't typed for.
-    let Some(row) = predict_team(
+    let Some(mut row) = predict_team(
         &projection,
         &state.predictor,
         baseline,
@@ -936,6 +950,26 @@ async fn projection_team_detail(
             })),
         ));
     };
+
+    // Display-only coach for the projection season — the incoming HC (resolved
+    // target-season-first, so a 2027 hire like Hodgson → Providence surfaces),
+    // with the new-HC flag + prior program for the "← from X" note. Same source
+    // and no-leakage contract as the grid route; a failure is cosmetic.
+    let coach_map = fetch_coach_cae(pool, base_season, year)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "coach CAE fetch failed for team detail; rendering without it");
+            std::collections::HashMap::new()
+        });
+    if let Some(cc) = coach_map.get(&resolved_id) {
+        row.coach_id = Some(cc.coach_id);
+        row.coach_name = Some(cc.coach_name.clone());
+        row.coach_cae_shrunk = cc.cae_shrunk;
+        row.coach_cae_reliability = cc.reliability;
+        row.coach_n_seasons = cc.n_seasons;
+        row.coach_is_new_hc = cc.is_new_hc;
+        row.coach_prev_team = cc.prev_team.clone();
+    }
 
     // Serialize each cohort with names + per-player projections. `cam_v3`
     // is the source-season (current) CamPom; `projected_campom_*` is
@@ -1257,6 +1291,8 @@ async fn fetch_coach_cae(
         cae_shrunk: Option<f64>,
         reliability: Option<f64>,
         n_seasons: Option<i32>,
+        is_new_hc: Option<bool>,
+        prev_team: Option<String>,
     }
     let rows: Vec<Row> = sqlx::query_as::<_, Row>(
         r#"
@@ -1265,10 +1301,12 @@ async fn fetch_coach_cae(
                co.canonical_name   AS coach_name,
                cr.cae_shrunk,
                cr.reliability,
-               cr.n_seasons
+               cr.n_seasons,
+               pick.is_new_hc,
+               prev.coachdict_team_name AS prev_team
         FROM teams t_base
         JOIN LATERAL (
-            SELECT cs.coach_id
+            SELECT cs.coach_id, cs.is_new_hc
             FROM coach_seasons cs
             WHERE cs.team_natstat_id = t_base.natstat_id
               AND cs.season IN ($1, $2)
@@ -1277,6 +1315,20 @@ async fn fetch_coach_cae(
         ) pick ON TRUE
         JOIN coaches co ON co.id = pick.coach_id
         LEFT JOIN coach_ratings cr ON cr.coach_id = co.id
+        -- The picked coach's prior-season (base) program, for the "← from X"
+        -- note on a new hire. Excludes the current program (a continuing coach
+        -- must never read "from {same team}") and orders deterministically so a
+        -- coach with multiple base-season name-variant rows resolves stably.
+        -- NULL for a first-time / promoted D-I coach (no prior different program).
+        LEFT JOIN LATERAL (
+            SELECT cs2.coachdict_team_name
+            FROM coach_seasons cs2
+            WHERE cs2.coach_id = pick.coach_id
+              AND cs2.season = $1
+              AND cs2.team_natstat_id IS DISTINCT FROM t_base.natstat_id
+            ORDER BY (cs2.team_natstat_id IS NOT NULL) DESC, cs2.coachdict_team_name
+            LIMIT 1
+        ) prev ON TRUE
         WHERE t_base.season = $1
         "#,
     )
@@ -1295,6 +1347,8 @@ async fn fetch_coach_cae(
                     cae_shrunk: r.cae_shrunk,
                     reliability: r.reliability,
                     n_seasons: r.n_seasons,
+                    is_new_hc: r.is_new_hc,
+                    prev_team: r.prev_team,
                 },
             )
         })

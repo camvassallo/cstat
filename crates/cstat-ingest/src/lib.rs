@@ -3,6 +3,7 @@ pub mod campom_parity;
 pub mod client;
 pub mod compute_projections;
 pub mod ingest;
+pub mod measure_blend_accuracy;
 pub mod projections_backtest;
 pub mod rate_limiter;
 pub mod tfs;

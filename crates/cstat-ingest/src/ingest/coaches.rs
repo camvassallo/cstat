@@ -64,6 +64,31 @@ pub async fn ingest_coaches(
     .await?;
     seasons.retain(|s| coachdict.contains_key(s));
 
+    // The upcoming *projection* season (max-played + 1) has no `teams` rows yet
+    // (no games), so it never appears above — but coachdict carries it (offseason
+    // hires land before tip-off). Ingest it for the Future tab: resolve its
+    // coachdict team names against the BASE (max-played) season's teams so
+    // `team_natstat_id` is populated (team_id stays NULL — there's no target-season
+    // team to reference). `fetch_coach_cae` joins on natstat_id and prefers the
+    // target season, so the projection ledger then shows the incoming coach.
+    //
+    // Self-heal note: once that season is actually played and its `teams` rows
+    // land, it appears in the query above as a normal (non-upcoming) season; the
+    // next `coaches` run then upserts a real `team_id` via the ON CONFLICT below.
+    // Until that re-run the row carries `team_id = NULL` (only `team_natstat_id`),
+    // so any consumer must join on `team_natstat_id`, not the partial `team_id`
+    // index — which is exactly what `fetch_coach_cae` does.
+    let max_played: Option<i32> = sqlx::query_scalar("SELECT MAX(season) FROM teams")
+        .fetch_one(pool)
+        .await?;
+    if let Some(mp) = max_played {
+        let upcoming = mp + 1;
+        let wanted = year_filter.is_none() || year_filter == Some(upcoming);
+        if wanted && coachdict.contains_key(&upcoming) && !seasons.contains(&upcoming) {
+            seasons.push(upcoming);
+        }
+    }
+
     if seasons.is_empty() {
         warn!(
             ?year_filter,
@@ -79,11 +104,21 @@ pub async fn ingest_coaches(
         let teams_this_season = &coachdict[season];
         let prev = coachdict.get(&(season - 1));
 
+        // The upcoming projection season has no teams of its own, so match its
+        // coach names against the base (max-played) season's teams and store
+        // `team_natstat_id` only — `team_id` would wrongly point at a base-season
+        // UUID for a target-season row.
+        let is_upcoming = max_played.is_some_and(|mp| *season > mp);
+        let cand_season = if is_upcoming {
+            max_played.expect("is_upcoming implies max_played is Some")
+        } else {
+            *season
+        };
         let candidates: Vec<CandidateTeam> = sqlx::query_as(
             r#"SELECT id AS team_id, natstat_id, short_name, name AS full_name
                FROM teams WHERE season = $1"#,
         )
-        .bind(season)
+        .bind(cand_season)
         .fetch_all(pool)
         .await?;
 
@@ -135,7 +170,13 @@ pub async fn ingest_coaches(
             .bind(coach_id)
             .bind(season)
             .bind(team_name)
-            .bind(matched.map(|c| c.team_id))
+            // Upcoming-season rows carry only the cross-season natstat_id; the
+            // base-season team_id must not leak into a target-season row.
+            .bind(if is_upcoming {
+                None
+            } else {
+                matched.map(|c| c.team_id)
+            })
             .bind(matched.map(|c| c.natstat_id.clone()))
             .bind(is_new_hc)
             .execute(pool)

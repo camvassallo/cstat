@@ -26,9 +26,12 @@ import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
+import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
 import { SeasonLink } from '../components/SeasonLink';
 import {
   AVAILABLE_SEASONS_FALLBACK,
+  EARLIEST_PROJECTABLE_YEAR,
+  projectableSeasons,
   seasonHref,
   setPageSeasons,
   useSeason,
@@ -125,10 +128,6 @@ function FourFactors({
   );
 }
 
-/// Earliest target we can project — the backend route floors here
-/// (needs base-season `year-1` + that season's trajectory_oof). Mirrors
-/// `Projected.tsx::EARLIEST_PROJECTABLE_YEAR`.
-const EARLIEST_PROJECTABLE_YEAR = 2016;
 
 /// Segmented Actual ⇄ Projected control. Only rendered for played,
 /// projectable seasons (both modes exist). Flips the `?view=` param while
@@ -1190,6 +1189,18 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
     };
   }, [id, year]);
 
+  // Publish the projectable years to the navbar season picker so a team's
+  // projection ledger can toggle across the forecast year (e.g. 2027) and the
+  // backtest years (newest-played ↓ EARLIEST_PROJECTABLE_YEAR) — mirrors the
+  // /projected grid. Without this the picker falls back to the games-based
+  // `available_seasons` list (which tops out at the last *played* season, so
+  // the upcoming forecast year disappears). Cleanup releases the override so
+  // the actual-mode view restores the team's own season history.
+  useEffect(() => {
+    setPageSeasons(projectableSeasons());
+    return () => setPageSeasons(null);
+  }, []);
+
   if (loading) return <div className="p-4 text-gray-400">Loading projection...</div>;
   if (error) {
     // A played season that's projectable but has no composable roster (too
@@ -1306,6 +1317,48 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             </SeasonLink>{' '}
             minus departures + portal arrivals + HS commits.
           </div>
+          {p.coach_name && (
+            <div className="mt-2 flex items-center gap-2 flex-wrap text-sm">
+              <span className="text-gray-400">Head coach:</span>
+              {p.coach_id ? (
+                <SeasonLink
+                  to={`/coaches/${p.coach_id}`}
+                  className="text-blue-400 hover:underline font-medium"
+                >
+                  {p.coach_name}
+                </SeasonLink>
+              ) : (
+                <span className="font-medium text-gray-200">{p.coach_name}</span>
+              )}
+              {p.coach_is_new_hc && (
+                <span
+                  className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-amber-700/60 bg-amber-950/40 text-amber-300"
+                  title={
+                    p.coach_prev_team
+                      ? `New head coach — arrived from ${p.coach_prev_team}`
+                      : 'New head coach (first season at this program)'
+                  }
+                >
+                  New HC{p.coach_prev_team ? ` ← ${p.coach_prev_team}` : ''}
+                </span>
+              )}
+              {p.coach_cae_shrunk != null && (
+                <span
+                  className="text-xs font-mono"
+                  style={{ color: caeColor(p.coach_cae_shrunk) }}
+                  title={`Career Coach-Above-Expectation ${fmtCae(
+                    p.coach_cae_shrunk,
+                  )} AdjEM${
+                    p.coach_n_seasons != null
+                      ? ` over ${p.coach_n_seasons} scored season${p.coach_n_seasons === 1 ? '' : 's'}`
+                      : ''
+                  } — descriptive, not in the projection.`}
+                >
+                  CAE {fmtCae(p.coach_cae_shrunk)}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className={`grid gap-3 ${hasActual ? 'grid-cols-3 min-w-[360px]' : 'grid-cols-2 min-w-[280px]'}`}>
           <div className="bg-gray-800 rounded-lg p-3 text-center">
@@ -1345,36 +1398,6 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Honesty band — backtest framing for a played season, forward-looking
-          framing for the upcoming one. */}
-      <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 leading-relaxed">
-        {isPlayedSeason ? (
-          <>
-            <strong className="text-amber-300">Backtest:</strong>{' '}
-            What cstat would have projected <em>before</em> the {seasonLabel} season, using only
-            data available beforehand — returner forecasts are <strong>held-out</strong> (the model
-            never trained on this season), so the Proj-vs-Actual miss above is an honest grade, not a
-            hindsight fit. Roster = returners + portal commits + HS recruits as known going in.
-          </>
-        ) : (
-          <>
-            <strong className="text-amber-300">Projection mode:</strong>{' '}
-            This page is the {seasonLabel} forward-looking view, not a played season. Roster =
-            returners (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal
-            commits + HS-recruit class commits. Recruits carry the Phase 6 freshman-impact model's
-            per-recruit projected CamPom.
-          </>
-        )}{' '}
-        See the{' '}
-        <SeasonLink
-          to={`/projected?season=${year}`}
-          className="text-amber-200 underline hover:text-amber-100"
-        >
-          Projected {seasonLabel} grid
-        </SeasonLink>{' '}
-        for full methodology + cross-team rankings.
       </div>
 
       {/* Roster-construction ledger — the CamPom waterfall behind the projection. */}
@@ -1668,6 +1691,48 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           )}
         </RosterCard>
       </div>
+
+      <DisclaimerFooter>
+        <Disclaimer label={isPlayedSeason ? 'Backtest:' : 'Projection mode:'}>
+          {isPlayedSeason ? (
+            <>
+              What cstat would have projected <em>before</em> the {seasonLabel}{' '}
+              season, using only data available beforehand — returner forecasts
+              are <strong>held-out</strong> (the model never trained on this
+              season), so the Proj-vs-Actual miss above is an honest grade, not
+              a hindsight fit. Roster = returners + portal commits + HS recruits
+              as known going in.
+            </>
+          ) : (
+            <>
+              This page is the {seasonLabel} forward-looking view, not a played
+              season. Roster = returners (minus seniors, outbound portal, firm
+              NBA-draft departures) + incoming portal commits + HS-recruit class
+              commits. Recruits carry the Phase 6 freshman-impact model's
+              per-recruit projected CamPom.
+            </>
+          )}{' '}
+          See the{' '}
+          <SeasonLink
+            to={`/projected?season=${year}`}
+            className="text-amber-200 underline hover:text-amber-100"
+          >
+            Projected {seasonLabel} grid
+          </SeasonLink>{' '}
+          for full methodology + cross-team rankings.
+        </Disclaimer>
+        <Disclaimer label="Regression to the mean:">
+          this is a <strong>preseason</strong> projection, so it's compressed
+          toward average — weak rosters trend <em>up</em> and elite rosters
+          trend <em>down</em> relative to last season. Roughly{' '}
+          <strong>23% of team-AdjEM variance is preseason-invisible</strong>, an
+          irreducible floor, so read the number as <em>directional</em>. Elite
+          returners regress hardest (the trajectory model under-projects the
+          +15-and-up CamPom tail by design — read the q90 ceiling for the
+          optimistic case). Heavy-turnover / new-coach rosters lean off last
+          year's stale record and carry the widest bands.
+        </Disclaimer>
+      </DisclaimerFooter>
     </div>
   );
 }

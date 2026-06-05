@@ -201,6 +201,19 @@ enum Commands {
         years: Vec<i32>,
     },
 
+    /// Per-week crossover calibration for the preseason × pit early-season
+    /// blend (ROADMAP §6). Replays a played season's games week by week and
+    /// reports preseason-only / pit-only / best-blend MAE on the shared subset,
+    /// the currently-scheduled blend's MAE, the crossover week, and an HCA
+    /// sweep. Needs `compute-projections --years YEAR` to have run first.
+    MeasureBlendAccuracy {
+        /// Seasons to pool for the calibration (comma-separated). Each must be a
+        /// played season with preseason projections materialized — 2024–2026
+        /// today. Pooling all three gives the schedule grid-search more signal.
+        #[arg(long, value_delimiter = ',', default_values_t = [2024, 2025, 2026])]
+        years: Vec<i32>,
+    },
+
     /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
     /// Pass condition: max abs diff < 0.01 across every CamPom intermediate and final.
     CampomParity {
@@ -589,6 +602,15 @@ async fn main() -> Result<()> {
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
             cstat_ingest::compute_projections::run(&db.pool, &predictor, &years).await?;
+        }
+
+        Commands::MeasureBlendAccuracy { years } => {
+            let model_dir =
+                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let predictor =
+                cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
+                    .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
+            cstat_ingest::measure_blend_accuracy::run(&db.pool, &predictor, &years).await?;
         }
 
         Commands::Transfers {
