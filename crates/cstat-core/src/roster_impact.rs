@@ -12,7 +12,7 @@
 //! from a roster's projected-cam_v3 distribution (plus archetype and
 //! experience structure) to team AdjEM. At serve time the projections
 //! route supplies *projected* cam_v3 (trajectory model for returners /
-//! arrivals, freshman model for recruits via `synthesize_freshman_row`);
+//! arrivals, freshman model for recruits via `freshman_row`);
 //! all projection error then lives in those upstream models — honest and
 //! decomposable.
 //!
@@ -88,7 +88,7 @@ fn class_bucket(cy: Option<&str>) -> Option<usize> {
 /// `projected` maps `player_id → projected next-season cam_v3` (the
 /// trajectory model's output for returners / arrivals). Rows absent from
 /// the map keep their existing `cam_v3` — for synthesized recruits that's
-/// the freshman model's prediction (set by `synthesize_freshman_row`); for
+/// the freshman model's prediction (set by `freshman_row`); for
 /// a returner whose trajectory inference failed it's their current-season
 /// cam_v3, a "no growth projected" fallback that's better than dropping
 /// them out of the rotation.

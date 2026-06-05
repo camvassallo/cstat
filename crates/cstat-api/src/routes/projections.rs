@@ -83,8 +83,8 @@ struct ProjectedTeam {
     /// grid's "Incoming" column surfaces this instead of the raw count.
     arrivals_cam_v3_sum: f32,
     /// Count of incoming HS recruits committed to this team. Each
-    /// recruit is synthesized from a tier-mean freshman profile (see
-    /// `FreshmanTier` in `roster_projection.rs`).
+    /// recruit carries the freshman-impact model's per-recruit projected
+    /// cam_v3 (see `freshman_row` in `roster_projection.rs`).
     recruits_count: usize,
     /// Σ *projected* freshman-season cam_v3 across the recruit class —
     /// the freshman-impact model's per-recruit point estimate (recruits
@@ -518,7 +518,7 @@ fn predict_team(
     // Score each scenario with the roster-impact model.
     // Overwrite each returner / arrival's `cam_v3` with the trajectory
     // model's projection (recruits already carry the freshman model's
-    // value from `synthesize_freshman_row`); `build_roster_impact_features`
+    // value from `freshman_row`); `build_roster_impact_features`
     // then does its own cam_v3-ranked canonical-MPG rotation
     // normalization — no separate `project_rotation` pass needed.
     let score = |scenario| {
@@ -948,7 +948,6 @@ async fn projection_team_detail(
                 "name": meta.name,
                 "composite_rank": meta.composite_rank,
                 "star_rating": meta.star_rating,
-                "tier": meta.tier,
                 "position": meta.position,
                 "projected_cam_v3": row.cam_v3,
                 "projected_campom_lower": meta.projected_campom_lower,

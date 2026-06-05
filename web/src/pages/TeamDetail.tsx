@@ -1100,7 +1100,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         <strong className="text-amber-300">Projection mode:</strong>{' '}
         This page is the {seasonLabel} forward-looking view, not a played season. Roster = returners
         (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal commits +
-        HS-recruit class commits. Recruits use a tier-mean profile keyed on 247 composite rank — see
+        HS-recruit class commits. Recruits carry the Phase 6 freshman-impact model's per-recruit projected CamPom — see
         the{' '}
         <SeasonLink to="/projected?season=2027" className="text-amber-200 underline hover:text-amber-100">
           Projected {seasonLabel} grid
@@ -1531,12 +1531,12 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
             className={`px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`}
             title={
               r.projected_campom_lower != null && r.projected_campom_upper != null
-                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}). Tier ${r.tier.slice(1).toUpperCase()} cohort.${
-                    r.tier === 't1' || r.tier === 't2'
-                      ? ' Wide bands on T1/T2 reflect elite-tail uncertainty.'
+                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}).${
+                    r.projected_cam_v3 >= 10
+                      ? ' Wide bands on elite recruits reflect top-tail uncertainty.'
                       : ''
                   }`
-                : `Tier ${r.tier.slice(1).toUpperCase()} mean projected CamPom v3 (batch inference fell back to tier-mean synthesis — no per-player band available).`
+                : `Projected freshman CamPom v3: ${r.projected_cam_v3.toFixed(1)} (model unavailable for this class — replacement-level fallback, no per-player band).`
             }
           >
             {r.projected_cam_v3.toFixed(1)}

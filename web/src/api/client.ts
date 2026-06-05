@@ -615,12 +615,11 @@ export interface ProjectedRecruitDetail {
   name: string;
   composite_rank: number | null;
   star_rating: number | null;
-  tier: 't1' | 't2' | 't3' | 't4';
   /// 247's listed position (e.g. "PG", "SF", "C"). Null when unset on 247.
   position: string | null;
   // Mean predicted freshman-season CamPom from the freshman-impact
-  // model. Same number as the chip on the Recruits tab; null when the
-  // freshman batch fell back to tier-mean synthesis.
+  // model. Same number as the chip on the Recruits tab; null only when
+  // whole-batch inference failed (replacement-level fallback, no band).
   projected_cam_v3: number | null;
   // q10/q90 band from the freshman model. Both null on the same
   // fallback path that nulls `projected_cam_v3`.
