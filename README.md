@@ -1,6 +1,6 @@
 # cstat
 
-College basketball analytics platform. Ingests data from the NatStat API and Barttorvik, computes advanced metrics (KenPom-style adjusted efficiency, player percentiles, rolling averages, CamPom composite valuation), clusters players into D&D-class archetypes, and serves everything through a REST API and React frontend. Includes ML-based game predictions using LightGBM models exported to ONNX. Multi-season browsing via a `?season=` query param; back-test the predict model against historical games by switching seasons in the nav.
+College basketball analytics platform. Ingests data from the NatStat API and Barttorvik, computes advanced metrics (KenPom-style adjusted efficiency, player percentiles, rolling averages, CamPom composite valuation), clusters players into D&D-class archetypes, and serves everything through a REST API and React frontend. Includes ML-based game predictions (with honest point-in-time + preseason-blended in-season forecasts), preseason team projections off transfer-portal / recruit / returning-player rosters, and descriptive coach-above-expectation ratings — all from LightGBM models exported to ONNX. Multi-season browsing via a `?season=` query param; back-test the predict model against historical games by switching seasons in the nav.
 
 ## Quick Start
 
@@ -90,6 +90,13 @@ Other ingest subcommands:
 | `forecasts [--year YYYY]` | Ingest per-game forecasts (pre/post-game ELO, win exp) from `/forecasts` |
 | `campom-parity [--year YYYY]` | Validate CamPom intermediates against an external reference CSV |
 | `explore ENDPOINT [--range PARAMS]` | Dump raw API JSON for exploration |
+| `bootstrap-csv [--year YYYY] …` | Bootstrap a historical season from NatStat dashboard CSV exports (no live API) |
+| `transfers --year YYYY [--bootstrap-from PATH]` | Ingest the 247Sports transfer portal class (needs `TFS_247_JWT`) |
+| `recruits --year YYYY [--bootstrap-from PATH]` | Ingest the 247Sports HS recruit class (needs `TFS_247_JWT` / `TFS_247_COOKIE`) |
+| `coaches [--year YYYY]` | Ingest the Barttorvik coachdict head-coach mapping |
+| `compute-projections [--year YYYY]` | Materialize each team's served preseason AdjEM band into `team_preseason_projection` |
+| `projections-backtest [--years …] [--output PATH]` | Leave-one-season-out projection accuracy backtest (per-team JSON dump) |
+| `measure-blend-accuracy --years … ` | Grid-search the preseason×point-in-time blend schedule against historical MAE |
 
 ### Adding a New Season
 
@@ -137,7 +144,13 @@ migrations/       SQLx Postgres migrations
 | `GET /api/players` | Player index with search, sort, pagination |
 | `GET /api/players/{id}` | Player profile, season stats, percentiles, game log |
 | `GET /api/games` | Game results with filtering |
-| `GET /api/predict` | ML game predictions (margin + win probability) |
+| `GET /api/predict` | ML game predictions (margin + win prob); `?as_of_date=` for point-in-time/blended |
+| `GET /api/projections/{year}` | Preseason team AdjEM projections ("Future" tab); `/teams/{team_id}` for the per-player roster breakdown |
+| `GET /api/transfers/{year}` | Transfer-portal class with projected CamPom + Δ ranking |
+| `GET /api/recruits/{year}` | HS recruit class with projected freshman CamPom |
+| `GET /api/coaches` | Coach-above-expectation leaderboard; `/coaches/{id}` for detail |
+| `GET /api/teams/{id}/coach` | Coach card for a team (decoupled from the projection loop) |
+| `GET /api/seasons` | Distinct seasons (powers the season selector) |
 | `GET /api/health` | Health check |
 | `GET /api/status` | API status |
 
@@ -162,12 +175,12 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 
 Four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
-- **Game prediction** (margin / win / total) — 49 point-in-time diff-features for margin/win; 58 features for total (the 49 diffs plus 9 `sum_*` level-sensitive companions). Trained on 20,674 games from cstat-seasons 2022-2026 (after feature-completeness filter).
-- **Trajectory** — 48 features, 9,239 N→N+1 player-pairs across the 2022-2026 cohort. Projects returning-player CamPom v3 for next season.
-- **Freshman** — 13 features, 1,154 freshmen across recruit classes 2021-2025. Projects freshman-season CamPom v3 from 247 composite + school context.
-- **Roster** — 36 features, 1,799 team-seasons. Projects team AdjEM from roster aggregates.
+- **Game prediction** (margin / win / total) — 49 point-in-time diff-features for margin/win; 58 features for total (the 49 diffs plus 9 `sum_*` level-sensitive companions). Trained on 47,502 games from cstat-seasons 2015-2026 (after feature-completeness filter). A leak-free **point-in-time** twin (`pit_*`, 44,338 games) substitutes a point-in-time CamPom channel for honest in-season prediction — `/api/predict?as_of_date=…` serves it, blended with the preseason projection early in the season.
+- **Trajectory** — 48 features, 24,168 N→N+1 player-pairs across the 2015-2026 cohort. Projects returning-player CamPom v3 (mean + q10/q90) for next season.
+- **Freshman** — 13 features, 3,253 freshmen across recruit classes 2014-2025. Projects freshman-season CamPom v3 (mean + q10/q90) from 247 composite + school context.
+- **Roster impact** — 27 features, 4,255 team-seasons (2015-2026). Projects team AdjEM from minutes-weighted roster aggregates; the preseason projection calibrator behind `/api/projections`. (Replaces the deprecated box-score `roster_model`, now dead and unloaded.)
 
-Per-model stats: `docs/model_performance.md`.
+Per-model stats: `docs/model_performance.md`. Preseason projection methodology: `docs/projections_methodology.md`.
 
 ```
 GET /api/predict?home=Duke+Blue+Devils&away=North+Carolina+Tar+Heels&neutral=false

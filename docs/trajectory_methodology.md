@@ -12,13 +12,22 @@ Surfaced today as the "Proj YYYY-YY" badge on PlayerDetail next to the current-s
 
 ## Training data
 
+Trained on all 11 adjacent-season pairs from the 12-season ingest (2015–2026):
+
 | Source pair | rows after gate |
 |---|---|
+| 2015 → 2016 | 2,023 |
+| 2016 → 2017 | 2,042 |
+| 2017 → 2018 | 2,061 |
+| 2018 → 2019 | 2,027 |
+| 2019 → 2020 | 2,048 |
+| 2020 → 2021 | 2,146 |
+| 2021 → 2022 | 2,582 |
 | 2022 → 2023 | 2,377 |
 | 2023 → 2024 | 2,438 |
 | 2024 → 2025 | 2,311 |
 | 2025 → 2026 | 2,113 |
-| **total** | **9,239** |
+| **total** | **24,168** |
 
 Cross-season same-player join is via `torvik_player_stats.torvik_pid` — the stable cross-season key (96% coverage, zero collisions). `players.natstat_id` breaks on transfers (different code per team) so we don't use it for the join.
 
@@ -26,7 +35,7 @@ Cross-season same-player join is via `torvik_player_stats.torvik_pid` — the st
 - `games_played >= 5`
 - `minutes_per_game >= 5`
 
-Same string as `roster_model_meta.json::player_filter` so the Rust path can reuse `cstat_core::roster_features::QUAL_FILTER_STRING`. Boot-time validator (`inference.rs::validate_trajectory_meta`) hard-fails on drift.
+Same string as `roster_impact_model_meta.json::player_filter` so the Rust path can reuse `cstat_core::roster_features::QUAL_FILTER_STRING`. Boot-time validator (`inference.rs::validate_trajectory_meta`) hard-fails on drift.
 
 ## Features (48, order locked)
 
@@ -54,29 +63,36 @@ Missing rate-stat values are filled with `0.0` at the Rust feature builder (matc
 ## Backtest
 
 **Naive baseline** (year N+1 ≈ year N CamPom):
-- pooled MAE 2.392, RMSE 3.116, R² 0.518
+- pooled MAE 2.339, RMSE 3.049, R² 0.530
 
-**Model (mean) — leave-one-pair-out (5-season cohort, 2022-2026):**
-- pair 2022→2023: MAE 2.152, RMSE 2.810, R² 0.562, n=2,377
-- pair 2023→2024: MAE 2.157, RMSE 2.817, R² 0.604, n=2,438
-- pair 2024→2025: MAE 2.210, RMSE 2.897, R² 0.600, n=2,311
-- pair 2025→2026: MAE 2.312, RMSE 3.012, R² 0.583, n=2,113
-- **pooled: MAE 2.204, RMSE 2.881, R² 0.588**
+**Model (mean) — leave-one-pair-out (11-pair cohort, 2015-2026):**
+- pair 2015→2016: MAE 2.053, RMSE 2.672, R² 0.658, n=2,023
+- pair 2016→2017: MAE 2.116, RMSE 2.787, R² 0.627, n=2,042
+- pair 2017→2018: MAE 2.102, RMSE 2.766, R² 0.615, n=2,061
+- pair 2018→2019: MAE 2.147, RMSE 2.824, R² 0.615, n=2,027
+- pair 2019→2020: MAE 2.047, RMSE 2.646, R² 0.624, n=2,048
+- pair 2020→2021: MAE 2.104, RMSE 2.748, R² 0.594, n=2,146
+- pair 2021→2022: MAE 2.164, RMSE 2.834, R² 0.545, n=2,582
+- pair 2022→2023: MAE 2.134, RMSE 2.770, R² 0.574, n=2,377
+- pair 2023→2024: MAE 2.123, RMSE 2.780, R² 0.614, n=2,438
+- pair 2024→2025: MAE 2.168, RMSE 2.858, R² 0.611, n=2,311
+- pair 2025→2026: MAE 2.294, RMSE 2.989, R² 0.589, n=2,113
+- **pooled: MAE 2.133, RMSE 2.792, R² 0.606**
 
-Beats naive by **−0.19 MAE pooled**.
+Beats naive by **−0.21 MAE pooled**.
 
-**5-fold random CV:** MAE 2.198, RMSE 2.876, R² 0.589.
+**5-fold random CV:** MAE 2.130, RMSE 2.788, R² 0.607.
 
 **Per–prior-class-year MAE** (model vs naive):
 
 | class_year_code | n | model MAE | naive MAE | Δ |
 |---|---|---|---|---|
-| 0 (Fr→So) | 2,057 | 1.690 | 2.318 | +0.627 |
-| 1 (So→Jr) | 2,710 | 1.833 | 2.382 | +0.548 |
-| 2 (Jr→Sr) | 2,980 | 1.832 | 2.413 | +0.581 |
-| 3 (Sr→Gr) | 1,490 | 1.819 | 2.470 | +0.651 |
+| 0 (Fr→So) | 6,543 | 1.827 | 2.302 | +0.48 |
+| 1 (So→Jr) | 7,098 | 1.967 | 2.328 | +0.36 |
+| 2 (Jr→Sr) | 8,354 | 1.991 | 2.346 | +0.36 |
+| 3 (Sr→Gr) | 2,171 | 2.062 | 2.459 | +0.40 |
 
-Model beats naive in every bucket by **0.55–0.65 MAE**. Per-bucket MAE on training data (~1.8) is materially better than the LOPO MAE (~2.2) — the gap is the honest generalization cost across the four pair-folds.
+Model beats naive in every bucket by **0.36–0.48 MAE**. Per-bucket MAE on the full-data fit (~1.8–2.1) is better than the LOPO MAE (~2.13) — the gap is the honest generalization cost across the pair-folds.
 
 Top features (mean model, by split count):
 1. `prior_campom` (739)
@@ -135,6 +151,6 @@ When adding a new pair-fold (new season ingested):
 
 ## Open questions
 
-- **Walk-forward CV** vs the current LOPO. With 4 pairs (2022→2023, 2023→2024, 2024→2025, 2025→2026) we now have enough folds to do walk-forward CV: train on `≤ N`, predict `N+1`, advance. Currently the LOPO holds 1 pair out anywhere in the timeline, including pairs that come *after* training rows — walk-forward would tighten the honesty story by predicting only with prior-season data. Implementation lift is small; the existing `leave_one_pair_out` loop just needs an order constraint.
+- **Walk-forward CV** vs the current LOPO. With 11 pairs (2015→2016 … 2025→2026) we have ample folds to do walk-forward CV: train on `≤ N`, predict `N+1`, advance. Currently the LOPO holds 1 pair out anywhere in the timeline, including pairs that come *after* training rows — walk-forward would tighten the honesty story by predicting only with prior-season data. Implementation lift is small; the existing `leave_one_pair_out` loop just needs an order constraint.
 - **Destination-aware projection** for transferring players. Easy feature add: `dest_team_adj_em` (target team AdjEM at season N, since season N+1 doesn't exist yet at projection time). Requires the projection caller to also supply the destination team — fine for the 2027 projection page consumer, but `/api/players/:id` doesn't know the destination, so this would either need a separate endpoint or a "no projection available for transfers" gate.
 - **Calibration over time**: once we have OOF predictions from this model on a real future season, plot predicted vs actual binned by predicted-CamPom — the model should be well-calibrated near the mean and progressively over-/under-confident at the tails.

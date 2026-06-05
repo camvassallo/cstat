@@ -11,8 +11,10 @@ cstat ships four LightGBM model families, all exported to ONNX and loaded at API
 |-------|------|---------------|------------------|
 | **Game (margin / win / total)** | Per-game margin, win prob, total points | 47,502 games (12 seasons 2015-2026) | `POST /api/predict`, score ticker, schedule projected scores |
 | **Trajectory** | Project next-season CamPom v3 for returners | 24,168 N→N+1 player-pairs (11 paired classes 2015→2016 through 2025→2026) | Transfer page (ΔCP), 2027 projection page, PlayerDetail "Proj YYYY-YY" chip |
-| **Freshman** | Project freshman-season CamPom v3 for new recruits | 3,252 freshmen (12 recruit classes 2014-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
-| **Roster** | Project team AdjEM from roster aggregates | 4,248 team-seasons (12 seasons 2015-2026) | 2027 projection page team rows, transfer-portal "what-if" |
+| **Freshman** | Project freshman-season CamPom v3 for new recruits | 3,253 freshmen (12 recruit classes 2014-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
+| **Roster-impact** (served projection calibrator) | Project team AdjEM from minutes-weighted CamPom-v3 roster aggregates | 4,255 team-seasons (12 seasons 2015-2026), 27 features | 2027 projection page team rows, the served `/api/projections` AdjEM band |
+
+> **Note on the roster family.** The served preseason projection runs the **27-feature roster-impact model** (cam_v3-distribution calibrator) — methodology and *end-to-end* projection accuracy (blended MAE **5.86**, r≈0.88) live in `docs/projections_methodology.md`. The roster-impact model's own standalone LOSO (~3.67 CV MAE) is a *calibrator-fit* metric, not projection accuracy — most of the upstream error lives in the projected cam_v3 inputs, by design. §4 below documents the **legacy 36-feature box-score roster model**, now **deprecated and unloaded** (its last consumer, the freshman statline, was deleted in #108/#109); its numbers are kept for the record. The archetype-based transfer "what-if" (`roster_fit`) replaced the box-score swap-Δ tool.
 
 All four models follow the same rhythm: 5-fold random CV for headline metrics, an out-of-sample backtest (chronological 80/20 for the game model; leave-one-pair-out / leave-one-class-out / leave-one-season-out for trajectory / freshman / roster), and a final fit on all data for the shipped artifacts.
 
@@ -176,7 +178,9 @@ A LOCO-aligned ablation (`training/spike_247_baseline.py`) trains the same Light
 
 ---
 
-## 4. Roster model (team AdjEM from roster)
+## 4. Roster model (team AdjEM from roster) — LEGACY / DEPRECATED
+
+> **This section documents the box-score roster model (`roster_model.onnx`), which is DEAD — deprecated and no longer loaded at API boot (#108/#109 deleted its last consumer).** The served preseason projection uses the **27-feature roster-impact model** instead; see `docs/projections_methodology.md` for it and for the *end-to-end* projection accuracy (blended MAE 5.86). The box-score numbers below are retained as a historical record of the 12-season retrain (#79); they are no longer a live model family.
 
 Single LightGBM regressor on 36 features: roster shape (size, total minutes, top-1/top-5 min share, minutes stddev), minutes-weighted player rate stats, star indicators, and one-hot archetype counts.
 

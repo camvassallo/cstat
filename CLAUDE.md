@@ -53,7 +53,7 @@ Optional: `BIND_ADDR` (default `0.0.0.0:8080`), `RUST_LOG` (tracing filter)
 Three-crate Rust workspace:
 
 - **cstat-core** — Shared types, DB models (`models/`), query layer (`db.rs`), and compute pipeline (`compute.rs`). The `Database` struct wraps `PgPool` and handles migrations via SQLx.
-- **cstat-ingest** — NatStat API client (`client.rs`), response cache (`cache.rs`), token-bucket rate limiter (`rate_limiter.rs`), and ingestion pipeline (`ingest/`). CLI binary at `src/bin/ingest.rs` with subcommands: `season`, `teams`, `players`, `team`, `games`, `perfs`, `update`, `elo`, `forecasts`, `compute`, `status`, `clean-cache`, `torvik`, `campom-parity`, `explore`. **`season` is the bootstrap command** — it runs the seven NatStat steps, then Torvik, then `compute_all`, in one call. `update` likewise runs compute at the end by default. Both accept `--no-torvik` / `--no-compute` opt-outs. **`--year` defaults to `current_natstat_season()`** (date-derived in `crates/cstat-ingest/src/lib.rs`), so the binary stays correct as the calendar rolls. Single team-id resolver lives at `cstat_ingest::team_id_by_code_and_season`; don't inline the `(natstat_id, season)` lookup. The `Team` subcommand delegates to `SeasonIngester::ingest_team(code)` — keep new per-team orchestration there, not in the bin.
+- **cstat-ingest** — NatStat API client (`client.rs`), response cache (`cache.rs`), token-bucket rate limiter (`rate_limiter.rs`), and ingestion pipeline (`ingest/`). CLI binary at `src/bin/ingest.rs` with subcommands: `season`, `teams`, `players`, `team`, `games`, `perfs`, `update`, `elo`, `forecasts`, `compute`, `status`, `clean-cache`, `torvik`, `campom-parity`, `explore`, `bootstrap-csv` (historical CSV bootstrap), `transfers` / `recruits` / `coaches` (247-portal / 247-recruit / coachdict ingest), and the projection/eval tooling `projections-backtest`, `compute-projections`, `measure-blend-accuracy`. **`season` is the bootstrap command** — it runs the seven NatStat steps, then Torvik, then `compute_all`, in one call. `update` likewise runs compute at the end by default. Both accept `--no-torvik` / `--no-compute` opt-outs. **`--year` defaults to `current_natstat_season()`** (date-derived in `crates/cstat-ingest/src/lib.rs`), so the binary stays correct as the calendar rolls. Single team-id resolver lives at `cstat_ingest::team_id_by_code_and_season`; don't inline the `(natstat_id, season)` lookup. The `Team` subcommand delegates to `SeasonIngester::ingest_team(code)` — keep new per-team orchestration there, not in the bin.
 - **cstat-api** — Axum HTTP server. `AppState` holds `Database` + `NatStatClient` + `Predictor`. Routes under `/api/`.
 
 Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) → cstat-api → frontend/ML**
@@ -77,7 +77,7 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 ## Database
 
-Postgres with SQLx. Migrations in `/migrations/` (19 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `player_archetypes`, `archetype_models`, `api_cache`.
+Postgres with SQLx. Migrations in `/migrations/` (28 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `torvik_player_game_stats` (point-in-time CamPom source), `player_archetypes`, `archetype_models`, `api_cache`, `transfers`, `recruits`, `draft_entrants`, `trajectory_oof_predictions` / `freshman_oof_predictions` (held-out projection inputs), `team_preseason_projection` (materialized served AdjEM band), `coaches` / `coach_seasons` (coachdict entity model), `coach_season_cae` / `coach_ratings` (coach-above-expectation grades).
 
 All season-scoped tables carry a `season` column; the API and frontend support arbitrary multi-year browsing via a site-wide `?season=` query param plumbed through `web/src/components/season.ts::useSeason()`. **The frontend reads the season list from `GET /api/seasons`** (DISTINCT season FROM games, newest first) — no source edit needed for the dropdown when adding a year. Adding a new season is two commands: `cargo run --bin cstat-ingest -- season --year YYYY` (NatStat + Torvik + compute, end-to-end) and a `cd training && python -m archetypes --seasons …` retraining pass on the new combined cohort. Optional: ingest the 247Sports transfer portal for that class year via `cargo run --bin cstat-ingest -- transfers --year YYYY` (live API, needs `TFS_247_JWT`) or `--bootstrap-from data/transfers/YYYY_raw.json` to load a captured snapshot. Rows land in the `transfers` table; the `/api/transfers/{year}` route reads from there.
 
@@ -90,17 +90,19 @@ All season-scoped tables carry a `season` column; the API and frontend support a
 ## ML Inference
 
 ONNX models are loaded at API startup via the `ort` crate (ONNX Runtime):
-- `Predictor` in `cstat-core/src/inference.rs` — loads `margin_model.onnx` + `win_model.onnx`, runs inference
-- `features.rs` — builds 49-feature diff vector from DB (team stats, roster aggregates, rolling form)
-- `GET /api/predict?home=Duke+Blue+Devils&away=North+Carolina+Tar+Heels&neutral=false` — returns predicted margin and win probability
+- `Predictor` in `cstat-core/src/inference.rs` loads the full suite and hard-fails on meta drift at boot: game models `margin_model` / `win_model` / `total_model`; their point-in-time twins `pit_margin` / `pit_win` / `pit_total` (fed point-in-time CamPom for honest in-season prediction); the per-player projection models `trajectory_{mean,q10,q90}` and `freshman_{mean,q10,q90}`; and the team `roster_impact_model` (preseason projection calibrator). The legacy box-score `roster_model.onnx` is **dead — deliberately not loaded** (its only consumer, the freshman statline, was deprecated; full removal tracked in ROADMAP Refactor Backlog).
+- `features.rs` — builds the 49-feature diff vector from DB (team stats, roster aggregates, rolling form); `build_all_features_pit` swaps the leaky season-aggregate CamPom channel for a point-in-time map when `as_of_date` is set.
+- `GET /api/predict?home=Duke+Blue+Devils&away=North+Carolina+Tar+Heels&neutral=false` — returns predicted margin + win probability; `&as_of_date=YYYY-MM-DD` serves point-in-time + preseason×pit-blended predictions, and `prediction_basis` (`preseason`|`blended`|`pit`|`leaky`) labels the active regime.
 - Models live in `training/models/`; set `MODEL_DIR` env var to override path
 
 ## ML Training
 
 Python pipeline in `/training/`:
-- LightGBM models for margin prediction (regression) and win probability (classification)
-- 49 point-in-time diff-features from team/roster/form/context (`features.py`)
-- Exports to ONNX format in `training/models/` (target_opset=15); `export_onnx.py` removes ZipMap for ort compatibility
+- LightGBM models for margin (regression), win probability (classification), and total points (regression), each with a leak-free point-in-time variant (`pit_*`)
+- 49 point-in-time diff-features from team/roster/form/context (`features.py`); `GBPM_VARIANT=pit_cam_v3` asof-merges a point-in-time CamPom grid for the honest in-season backtest
+- Projection models: `train_trajectory_model.py` (returner year-over-year CamPom, mean + q10/q90), `train_freshman_model.py` (recruit first-season CamPom), and `train_roster_impact_model.py` (roster aggregate → team AdjEM, the preseason projection calibrator) — all leave-one-season/class-out backtested; OOF predictions persist to the `*_oof_predictions` tables
+- `compute_cae.py` computes coach-above-expectation grades from the roster-projection residual (descriptive, display-only)
+- Exports to ONNX format in `training/models/` (target_opset=15); `export_onnx.py` removes ZipMap for ort compatibility and honors a `MODEL_DIR` override
 
 ## NatStat API
 
