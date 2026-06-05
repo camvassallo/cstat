@@ -173,7 +173,7 @@ The compute pipeline in `cstat-core` derives all advanced metrics from raw box s
 
 ### ML Predictions
 
-Several LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
+Four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
 - **Game prediction** (margin / win / total) — 49 point-in-time diff-features for margin/win; 58 features for total (the 49 diffs plus 9 `sum_*` level-sensitive companions). Trained on 47,502 games from cstat-seasons 2015-2026 (after feature-completeness filter). A leak-free **point-in-time** twin (`pit_*`, 44,338 games) substitutes a point-in-time CamPom channel for honest in-season prediction — `/api/predict?as_of_date=…` serves it, blended with the preseason projection early in the season.
 - **Trajectory** — 48 features, 24,168 N→N+1 player-pairs across the 2015-2026 cohort. Projects returning-player CamPom v3 (mean + q10/q90) for next season.
