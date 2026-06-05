@@ -192,9 +192,9 @@ pub fn build_freshman_features(row: &FreshmanFeatureRow) -> [f32; FRESHMAN_NUM_F
 
 /// Freshman inference result. `mean` is the model's central projection;
 /// `lower` / `upper` are the q=0.1 / q=0.9 quantile model outputs. Band
-/// width is what the UI surfaces — wide for thin-sample tiers (T1 elite
-/// where draft-bound prospects skew the corpus), tighter for T3/T4 where
-/// the training set is dense.
+/// width is what the UI surfaces — wide for elite, thin-sample recruits
+/// (top prospects skew the corpus because the best leave for the draft),
+/// tighter in the dense mid/low-rank range where the training set is deep.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FreshmanPrediction {
     pub mean: f32,

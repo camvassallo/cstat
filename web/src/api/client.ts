@@ -532,8 +532,8 @@ export interface ProjectedTeam {
   /// Σ base-season CamPom of the incoming portal arrivals (talent gained).
   arrivals_cam_v3_sum: number;
   /// Number of HS recruits committed to this team (class-of-`base_season`).
-  /// Each contributes a synthesized PlayerRow drawn from a tier-mean
-  /// freshman profile.
+  /// Each contributes a synthesized PlayerRow carrying the freshman-impact
+  /// model's per-recruit projected CamPom.
   recruits_count: number;
   /// Σ *projected* freshman-season CamPom of the recruit class (forward
   /// projection from the freshman-impact model, not prior production).
@@ -615,12 +615,11 @@ export interface ProjectedRecruitDetail {
   name: string;
   composite_rank: number | null;
   star_rating: number | null;
-  tier: 't1' | 't2' | 't3' | 't4';
   /// 247's listed position (e.g. "PG", "SF", "C"). Null when unset on 247.
   position: string | null;
   // Mean predicted freshman-season CamPom from the freshman-impact
-  // model. Same number as the chip on the Recruits tab; null when the
-  // freshman batch fell back to tier-mean synthesis.
+  // model. Same number as the chip on the Recruits tab; null only when
+  // whole-batch inference failed (replacement-level fallback, no band).
   projected_cam_v3: number | null;
   // q10/q90 band from the freshman model. Both null on the same
   // fallback path that nulls `projected_cam_v3`.

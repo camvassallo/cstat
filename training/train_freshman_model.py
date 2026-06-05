@@ -1,10 +1,12 @@
 """
 Phase 6 / 5b plug-in: per-recruit freshman-impact projection.
 
-Upgrades the 4-tier mean heuristic in `crates/cstat-core/src/roster_projection.rs`
-to a LightGBM regression. Same modeling shape as the trajectory model
-(mean + q=0.1 + q=0.9 quantile bands), same export/meta contract, same
-Rust drift validator.
+Per-recruit LightGBM regression — the sole freshman signal in
+`crates/cstat-core/src/roster_projection.rs::freshman_row`. (Historically
+this replaced a 4-tier mean heuristic; those tiers were since deprecated
+and deleted, see the *baseline* note below.) Same modeling shape as the
+trajectory model (mean + q=0.1 + q=0.9 quantile bands), same export/meta
+contract, same Rust drift validator.
 
 Target: `torvik_player_stats.cam_gbpm_v3_psos` for the recruit's first
 college season (`season = recruit.year + 1`).
@@ -28,11 +30,21 @@ Features (13 total):
       team's full class for that year, INCLUDING the focal recruit.
       Captures whether they're the only signing or part of a wave.
 
-Baseline to beat: 4-tier mean heuristic. Pooled MAE ~2.56 on qualified
-freshmen across **class-of-2022 through class-of-2025** (4 paired
-classes, n ≈ 963 — exact figure recomputed every run and recorded in
-the meta JSON). T1 (top-30 ranked, ~110 players) is the loose bucket
-with MAE 4.32 in the baseline — the biggest room to improve.
+Trained on the full **class-of-2014 through class-of-2025** paired
+history (n ≈ 3253 qualified freshmen — exact figure recomputed every run
+and recorded in the meta JSON). LOCO pooled MAE ≈ 2.25, beating the
+rank-bucket mean baseline (≈2.42) by ~6.6%. The rank-bucket-mean baseline
+is kept only as a dumb-yardstick comparison in the training output; the
+4-tier scaffold it mirrored was deprecated in serving once the roster-
+impact model proved it keys only on `cam_v3` / class / archetype (see
+`roster_projection.rs::freshman_row`).
+
+The mean (regression) model carries a sentinel-safe `monotone_constraints`
+(non-decreasing in `recruit_composite_rating` + `recruit_star_rating`) so
+that — holding the other inputs fixed — a better-rated recruit never
+projects lower (a narrow guarantee; `composite_rank` stays unconstrained).
+The q10/q90 band models stay unconstrained (LightGBM forbids monotone +
+quantile).
 
 Honest framing constants (mirror trajectory model):
   - Selection bias on top recruits is even sharper here: the elite
@@ -61,9 +73,11 @@ from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
 
-# Tier-mean baseline thresholds. Mirrors the 4-tier bucketing in
-# `crates/cstat-core/src/roster_projection.rs`. Used only for diagnostic
-# MAE comparison; the LightGBM model itself doesn't see these bands.
+# Rank-bucket baseline thresholds. A standalone "dumb yardstick" for the
+# diagnostic MAE comparison only — the LightGBM model never sees these
+# bands. (These once mirrored a 4-tier serving heuristic in
+# `roster_projection.rs`; that heuristic was deprecated and deleted, so
+# the buckets now live here purely as the baseline to beat.)
 TIER_THRESHOLDS = [30, 100, 250]
 
 
@@ -87,6 +101,23 @@ FRESHMAN_EXTRA_FEATURES = [
 ]
 FEATURE_COLS = list(RECRUIT_FEATURE_NAMES) + FRESHMAN_EXTRA_FEATURES
 # 11 + 2 = 13 features.
+
+# Sentinel-safe monotonicity: force the prediction non-decreasing in
+# `composite_rating` and `star_rating` so that — holding the other inputs
+# fixed — a better-rated recruit never projects lower. A narrow legibility
+# guarantee on the quality scores, not a global one: `composite_rank` (the
+# stronger feature) stays unconstrained, so this does NOT make the
+# rank-based Δ-vs-247 column monotone.
+# Only features whose missing-sentinel is the FLOOR are safe:
+#   - recruit_composite_rating: missing → 0.0 (= worst) ✓
+#   - recruit_star_rating:      unranked → 0   (= worst) ✓
+# Deliberately NOT recruit_composite_rank: its unranked sentinel is -1,
+# numerically below rank 1, so a (negative) monotone there would force
+# unranked recruits to project highest. Left unconstrained.
+MONOTONE_INCREASING = {"recruit_composite_rating", "recruit_star_rating"}
+MONOTONE_CONSTRAINTS = [
+    1 if name in MONOTONE_INCREASING else 0 for name in FEATURE_COLS
+]
 
 
 # All recruit fields joined against the freshman cstat-season target.
@@ -167,7 +198,7 @@ def build_dataset() -> pd.DataFrame:
 
 
 def tier_mean_baseline(df: pd.DataFrame) -> dict:
-    """Per-tier mean prediction. Same bucketing as roster_projection.rs."""
+    """Per-rank-bucket mean prediction — the dumb yardstick the model beats."""
     means = df.groupby("tier")["target_campom"].mean().to_dict()
     pred = df["tier"].map(means)
     return {
@@ -211,7 +242,16 @@ def lgb_params(objective: str = "regression", alpha: Optional[float] = None) -> 
         deterministic=True,
     )
     if alpha is not None:
+        # Quantile objective. LightGBM forbids monotone_constraints here
+        # ("Cannot use monotone_constraints in quantile objective"), so the
+        # q10/q90 band models stay unconstrained. That's fine — the bands
+        # are display-only; the load-bearing mean model (below) carries the
+        # monotonicity that the served `cam_v3` needs.
         p["alpha"] = alpha
+    else:
+        # Mean (regression) model — the one whose output becomes the served
+        # per-recruit cam_v3. Force it non-decreasing in recruit quality.
+        p["monotone_constraints"] = MONOTONE_CONSTRAINTS
     return p
 
 

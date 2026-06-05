@@ -6,7 +6,7 @@
 
 1. **Returning players** — last season's qualifying roster minus seniors, outbound portal commits, firm NBA-draft departures, and (in the floor scenario) declared-but-undecided draft entrants.
 2. **Incoming portal transfers** — players committed to this team in the matching portal cycle, with their *source-team* stats carried as their PlayerRow.
-3. **Incoming HS recruits** — class-of-`base_season` commits to this team. Each is given a per-recruit projected cam_v3 from the freshman-impact model; the tier-mean profile below supplies the box-stat scaffold and rank bucketing.
+3. **Incoming HS recruits** — class-of-`base_season` commits to this team. Each is given a per-recruit projected cam_v3 from the freshman-impact model (see *Recruit synthesis* below).
 
 Each scenario's roster is scored from its *projected* cam_v3 distribution (see *Feature extraction* and *Projected cam_v3* below); the raw model output is then blended with the team's actual baseline AdjEM (see *Scoring & calibration* below).
 
@@ -39,59 +39,13 @@ Per-team buckets then partition each row into `returning` / `arrivals` / `recrui
 
 ## Recruit synthesis
 
-Each recruit becomes a synthetic `PlayerRow` keyed on `composite_rank`. Four tiers:
+Each recruit becomes a minimal synthetic `PlayerRow` via `roster_projection.rs::freshman_row`, carrying exactly three load-bearing fields: the **freshman-impact model's per-recruit projected `cam_v3`**, `class_year = "Fr"`, and `primary_class = None`. Nothing else (mpg, box-score, rate stats) is synthesized — the served roster-impact model ranks the roster by `cam_v3` and weights every feature by canonical-rotation MPG, so it reads only those three fields off a recruit row. A 5★ projected to bust and a 5★ projected to star therefore get genuinely different rows.
 
-| tier | composite_rank | label | T1+T2 commits in 2026 class |
-|---|---|---|---|
-| T1 | 1–30 | elite (5★ tier) | 24 Signed + 6 Committed |
-| T2 | 31–100 | top-100 (mostly 4★) | 54 Signed + 12 Committed |
-| T3 | 101–250 | lower 4★ / mid 3★ | 82 Signed + 47 Committed |
-| T4 | 251+ or NULL | walk-on equivalent / late-blooming / international | 33 Signed + 47 Committed |
+**Tiers were deprecated** (mid-2026). The projection used to bucket `composite_rank` into four tiers (T1 ≤30 / T2 ≤100 / T3 ≤250 / T4 rest) and synthesize a tier-mean box-score statline. That statline reached no served model (verified: deleting it left `/api/projections` byte-identical), so the 4-tier scaffold, the `{T1..T4}_PROFILE` constants, and the `composite_rank → tier` bucketing were removed. The per-recruit model — which was always rank/stars-*granular*, never bucketed — is the sole freshman signal.
 
-Per-tier profile (mean per-game stats) was calibrated from the empirical join of class-of-2024 and class-of-2025 recruits onto their actual freshman cstat-seasons (2025 and 2026, respectively):
+**Freshman-impact model** (`training/train_freshman_model.py`, ONNX in `training/models/freshman_*_model.onnx`): a LightGBM regression on 13 continuous features (the shared 11-element recruit block — `composite_rank`, `composite_rating`, `star_rating`, `position_rank`, `rank_movement`, physicals — plus `committed_team_prior_adjem` and `peer_class_strength`) targeting the recruit's first-college-season `cam_gbpm_v3_psos`. Trained on the full class-of-2014→2025 paired history (**n ≈ 3253**, gate ≥5 GP / ≥5 MPG). LOCO pooled MAE ≈ **2.25**, beating a rank-bucket-mean yardstick (≈2.42) by ~6.6%. The mean model carries a sentinel-safe `monotone_constraints` (non-decreasing in `composite_rating` + `star_rating`) so that, holding the other inputs fixed, a better-rated recruit never projects lower — a narrow legibility guarantee, since `composite_rank` (the stronger feature) stays unconstrained. q10/q90 band models are unconstrained (LightGBM forbids monotone + quantile). Re-run the script when a new class year's freshmen finish a season.
 
-```sql
-WITH paired AS (
-  SELECT r.composite_rank, r.star_rating,
-         pss.minutes_per_game, pss.games_played,
-         pss.ppg, pss.rpg, pss.apg, pss.spg, pss.bpg, pss.topg,
-         pss.true_shooting_pct, pss.effective_fg_pct, pss.usage_rate,
-         pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
-         pss.stl_pct, pss.blk_pct, pss.ft_rate,
-         tps.cam_gbpm_v3_psos AS cam_v3
-  FROM recruits r
-  JOIN players p ON p.id = r.cstat_player_id
-  JOIN player_season_stats pss ON pss.player_id = p.id AND pss.season = r.year + 1
-  LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = r.year + 1
-  WHERE r.year IN (2024, 2025) AND r.cstat_player_id IS NOT NULL
-)
-SELECT
-  CASE
-    WHEN composite_rank <= 30 THEN 'T1'
-    WHEN composite_rank <= 100 THEN 'T2'
-    WHEN composite_rank <= 250 THEN 'T3'
-    ELSE 'T4'
-  END AS tier,
-  COUNT(*), AVG(minutes_per_game), AVG(ppg), AVG(usage_rate), AVG(cam_v3), …
-FROM paired GROUP BY 1 ORDER BY 1;
-```
-
-Sample sizes: T1 n=52, T2 n=114, T3 n=201, T4 n=185. **558 paired recruits total.**
-
-Constants table is hard-coded in `roster_projection.rs::{T1,T2,T3,T4}_PROFILE`. When a new class year ingests (e.g. class-of-2026 starts playing in cstat-season 2027), re-run the calibration query and update the constants.
-
-Headline tier signal (CamPom v3):
-
-| tier | n | mpg | ppg | usg | cam_v3 |
-|---|---|---|---|---|---|
-| T1 | 52 | 24.0 | 11.8 | 0.232 | **+8.97** |
-| T2 | 114 | 14.4 | 5.5 | 0.194 | +2.41 |
-| T3 | 201 | 12.7 | 4.2 | 0.175 | +0.70 |
-| T4 | 185 | 14.1 | 4.9 | 0.184 | −0.57 |
-
-T3 vs T4 are nearly identical — composite rank stops being a strong signal past ~100. Don't claim more precision than the cohort supports.
-
-**What the projection actually scores**: `synthesize_freshman_row` sets each recruit's `cam_v3` to the **freshman-impact model's per-recruit prediction**, not the tier mean — so a 5★ projected to bust and a 5★ projected to star get different rows. The tier profile above supplies only the box-stat scaffold (unused by the roster-impact model, which reads `cam_v3`) and the `composite_rank` → tier bucketing; the tier-mean `cam_v3` column is the population baseline the per-player model is calibrated against, and the last-resort fallback when the freshman model can't score a recruit.
+**Fallback**: when whole-batch inference fails (degraded, warn-logged), `freshman_row` falls back to `FRESHMAN_FALLBACK_CAM_V3` = **+1.20**, the unconditional mean of the training target — the least-biased point estimate when the model is unavailable. The normal path gives every recruit a model prediction, so this is rarely hit.
 
 ## Scenarios
 
@@ -116,7 +70,7 @@ Before feature extraction, every returner / arrival has its `cam_v3` overwritten
 
 It emits 25 features: the cam_v3 distribution (Σ, minutes-weighted mean, top-1/3/7, counts over +5/+10/+15), a minute-weighted experience mix (Fr/So/Jr/Sr share — returners aged up one season), and a minute-weighted archetype balance (12 D&D-class shares). Every aggregate uses the canonical-MPG weighting, *identical* in training (`train_roster_impact_model.py`) and at serve — so no out-of-distribution minutes, which was the box-score failure mode. the roster-impact model reads no per-game counting stats, so unlike the box-score model there is no stat rescaling.
 
-Why this is the right consumer for cam_v3: `train_roster_model.py` (the box-score model) deliberately *excludes* cam_v3 because `Σ(cam_v3 × minute_share) ≈ AdjEM` collapses it to the player-impact identity — fatal for a roster-*swap* model. For a *projection* that identity is exactly the goal, so the roster-impact model is a clean calibrator and all projection error lives in the upstream cam_v3 predictions — honest and decomposable. The box-score `roster_model.onnx` is untouched, now retained only as the projections backtest's frozen comparison baseline (the swap-Δ tool moved to archetype-based `roster_fit`).
+Why this is the right consumer for cam_v3: `train_roster_model.py` (the box-score model) deliberately *excludes* cam_v3 because `Σ(cam_v3 × minute_share) ≈ AdjEM` collapses it to the player-impact identity — fatal for a roster-*swap* model. For a *projection* that identity is exactly the goal, so the roster-impact model is a clean calibrator and all projection error lives in the upstream cam_v3 predictions — honest and decomposable. The box-score `roster_model.onnx` is now fully dead — the swap-Δ tool moved to archetype-based `roster_fit`, and the projections backtest's box-score comparison was dropped when tiers were deprecated (the box-score model reads a freshman statline that no longer exists). The model artifacts remain in `training/models/` pending a separate removal.
 
 ## Model training (v2 — "train on what you serve")
 
@@ -134,7 +88,7 @@ The end-to-end `cstat-ingest projections-backtest` scores each target season wit
 Each returner / arrival gets a forward-looking `cam_v3`:
 - **OOF-first**: for a historical target season the trajectory model trained on, `trajectory_oof_predictions` holds leave-one-pair-out (honest, not in-sample) predictions.
 - **Live trajectory inference** for everyone else — the forward year, and transitions the model didn't train on.
-- Recruits get the freshman-impact model's per-recruit prediction, baked into the synthesized PlayerRow by `synthesize_freshman_row`.
+- Recruits get the freshman-impact model's per-recruit prediction, baked into the synthesized PlayerRow by `freshman_row`.
 
 This is what makes returner growth and freshman upside count: a junior projected to break out, or an elite freshman, moves the team projection through their `cam_v3`.
 
@@ -152,12 +106,12 @@ w         = 0.50 for continuity rosters, ramping to 0.25 for roster overhauls
 - **Turnover-conditional weight (overhaul teams)** — `baseline` (last season's AdjEM) is a *stale anchor* when a roster turns over wholesale, so the weight `w` ramps from 0.50 down to **0.25** as the team's *retained talent fraction* (`Σ base-season cam_v3 of returners / (returners + departures)`) falls from 0.40 to 0.20. Validated on the 2019–2026 LOSO backtest (`training/transition_blend_diagnostic.py`): a turnover-conditional weight beats the flat 0.50 by **~+0.04 MAE pooled** (concentrated on the ~25% of teams with heavy turnover, and ~+0.20 on new-coach teams) and corrects the **≈+0.7 AdjEM over-projection** of overhaul teams. Keyed on roster turnover alone, **not** `is_new_hc` — turnover is the stronger signal (it directly measures baseline staleness, and subsumes 61% of new-HC teams), has no false positives from same-roster coaching changes, and lives on `ProjectedRoster` so the route and `compute-projections` stay in lockstep with no DB fetch. Constants + the ramp live in `roster_projection::{PROJECTION_SHRINK_WEIGHT_OVERHAUL, transition_shrink_weight, retained_talent_fraction}`; the per-team weight is surfaced on `ProjectedTeam.baseline_weight`.
 - **p̄** is the mean probability the team's uncertain (declared-draft) cohort returns, from the Tankathon mock board: pick ≤30 → 0.05, 31–60 → 0.50, off-board → 0.85. It replaces a flat 50/50 floor/ceiling average, which over-penalized draft-talent-heavy (i.e. top) teams.
 
-**Re-tuning playbook**: run `cargo run --bin cstat-ingest -- projections-backtest` — it composes the full pipeline for 2025 / 2026 with held-out OOF cam_v3, prints the roster-impact model raw vs box-score vs baseline-persistence, and sweeps the blend weight. Set `PROJECTION_SHRINK_WEIGHT` / `PROJECTION_OFFSET` in `roster_projection.rs` from the sweep's optimum (the route's `predict_team` and the shared `score_projection_adj_em` both read those constants). The turnover ramp is re-validated separately via `training/transition_blend_diagnostic.py`. The backtest needs the per-season LOSO models in `models/roster_impact_loso/`; rerun `train_roster_impact_model.py` first if they are absent (it fails with a clear message if so).
+**Re-tuning playbook**: run `cargo run --bin cstat-ingest -- projections-backtest` — it composes the full pipeline for 2025 / 2026 with held-out OOF cam_v3, prints the roster-impact model raw vs baseline-persistence, and sweeps the blend weight. Set `PROJECTION_SHRINK_WEIGHT` / `PROJECTION_OFFSET` in `roster_projection.rs` from the sweep's optimum (the route's `predict_team` and the shared `score_projection_adj_em` both read those constants). The turnover ramp is re-validated separately via `training/transition_blend_diagnostic.py`. The backtest needs the per-season LOSO models in `models/roster_impact_loso/`; rerun `train_roster_impact_model.py` first if they are absent (it fails with a clear message if so).
 
 ## Limitations and upgrade paths
 
-- **Recruit cam_v3 is per-player, but pre-college signal is weak.** `synthesize_freshman_row` scores each recruit through the freshman-impact model — a 5★ projected to bust and one projected to star get different rows. But composite rank stops separating past ~100, so within-tier spread is modest and elite-recruit bands (q10–q90) are wide; the per-recruit point estimate is honest only as a directional read.
-- **T4 includes everyone the 247 composite ranking doesn't reach.** True walk-ons (high school stars who walked on at a high-major) are projected with the same profile as low-major freshmen with light recruiting. Their team-level contribution is capped naturally: a low projected `cam_v3` ranks them into a low-minute canonical slot, so they barely move the team number.
+- **Recruit cam_v3 is per-player, but pre-college signal is weak.** `freshman_row` scores each recruit through the freshman-impact model — a 5★ projected to bust and one projected to star get different rows. But composite rank stops separating past ~100, so spread among lower-ranked recruits is modest and elite-recruit bands (q10–q90) are wide; the per-recruit point estimate is honest only as a directional read.
+- **Low/unranked recruits all sit near replacement.** True walk-ons (high school stars who walked on at a high-major) project similarly to lightly-recruited low-major freshmen. Their team-level contribution is capped naturally: a low projected `cam_v3` ranks them into a low-minute canonical slot, so they barely move the team number.
 - **Returner growth and freshman upside now count** (the roster-impact model, shipped). The projection scores *projected* `cam_v3` — the trajectory model for returners / arrivals, the freshman model for recruits — so a junior breaking out as a senior, or an elite freshman, moves the number. Residual caveat: the trajectory model's documented elite-tail regression (≈−3.4 bias on +15–20 prior CamPom, pure extrapolation above +20) flows into the cam_v3 inputs. The v2 OOF retrain ("train on what you serve") lets the roster-impact calibrator absorb the *systematic* component of that bias — it now trains on the same regression-biased inputs it serves — but the *per-team* variance still flows through, and a freshman / portal class the trajectory model misjudges still moves the wrong way. More training seasons (Phase 6) is the real remedy. See ROADMAP §5b "Projection bias fix".
 - **Recruit-to-team commit resolution is name + alias-based.** 305/305 of class-of-2026 committed recruits resolved; 303/307 of class-of-2024; 465/472 of class-of-2025. Residue is non-D1 schools (Le Moyne, NCAA-D2 / NAIA destinations).
 - **Walk-on freshmen not on 247's composite rankings are invisible.** Their teams get a slightly pessimistic projection, but the impact is small.
@@ -167,13 +121,14 @@ w         = 0.50 for continuity rosters, ramping to 0.25 for roster overhauls
 Run when:
 1. A new HS recruiting class is ingested AND its freshman cstat-season has finished.
 2. CamPom v3 formula changes (target shifts).
-3. The 4-tier breakdown stops fitting (e.g. 247 changes their rank cutoffs).
 
-```sql
--- See calibration query above. Update T*_PROFILE constants from the output.
+Retrain the freshman-impact model on the expanded paired history:
+
+```bash
+cd training && python train_freshman_model.py
 ```
 
-Then rebuild + retest:
+It re-validates via LOCO CV, re-emits the 3 ONNX models + `freshman_oof_predictions`, and rewrites `freshman_model_meta.json`. The Rust boot validator hard-fails on feature/alpha drift. Then rebuild + retest:
 ```bash
 cargo test -p cstat-core roster_projection
 curl -s http://localhost:8080/api/projections/2027 | jq '.teams[0]'

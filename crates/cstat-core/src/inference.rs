@@ -988,12 +988,12 @@ impl Predictor {
     /// head — 11 shared recruit features + 2 school-context features
     /// (committed-team prior AdjEM, peer-class strength).
     ///
-    /// Honest framing: 5-fold CV MAE is 2.49 CamPom points (vs tier-mean
-    /// baseline 2.56). T1 (top-30 ranked) wins the biggest — MAE 3.84 vs
-    /// baseline 4.32 — but the cohort itself is selection-biased (elite
-    /// freshmen leave for the draft), so headline accuracy on draft-bound
-    /// prospects is looser than the corpus MAE implies. The q10/q90 band
-    /// is the honest framing.
+    /// Honest framing: 5-fold CV MAE is 2.25 CamPom points (vs rank-bucket
+    /// baseline 2.41); LOCO MAE is also 2.25. T1 (top-30 ranked) wins the
+    /// biggest — MAE 3.75 vs baseline 4.09 — but the cohort itself is
+    /// selection-biased (elite freshmen leave for the draft), so headline
+    /// accuracy on draft-bound prospects is looser than the corpus MAE
+    /// implies. The q10/q90 band is the honest framing.
     pub fn predict_freshman(
         &self,
         features: &[f32; FRESHMAN_NUM_FEATURES],
