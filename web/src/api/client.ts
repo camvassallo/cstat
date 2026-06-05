@@ -532,8 +532,8 @@ export interface ProjectedTeam {
   /// Σ base-season CamPom of the incoming portal arrivals (talent gained).
   arrivals_cam_v3_sum: number;
   /// Number of HS recruits committed to this team (class-of-`base_season`).
-  /// Each contributes a synthesized PlayerRow drawn from a tier-mean
-  /// freshman profile.
+  /// Each contributes a synthesized PlayerRow carrying the freshman-impact
+  /// model's per-recruit projected CamPom.
   recruits_count: number;
   /// Σ *projected* freshman-season CamPom of the recruit class (forward
   /// projection from the freshman-impact model, not prior production).

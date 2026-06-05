@@ -1,10 +1,12 @@
 """
 Phase 6 / 5b plug-in: per-recruit freshman-impact projection.
 
-Upgrades the 4-tier mean heuristic in `crates/cstat-core/src/roster_projection.rs`
-to a LightGBM regression. Same modeling shape as the trajectory model
-(mean + q=0.1 + q=0.9 quantile bands), same export/meta contract, same
-Rust drift validator.
+Per-recruit LightGBM regression — the sole freshman signal in
+`crates/cstat-core/src/roster_projection.rs::freshman_row`. (Historically
+this replaced a 4-tier mean heuristic; those tiers were since deprecated
+and deleted, see the *baseline* note below.) Same modeling shape as the
+trajectory model (mean + q=0.1 + q=0.9 quantile bands), same export/meta
+contract, same Rust drift validator.
 
 Target: `torvik_player_stats.cam_gbpm_v3_psos` for the recruit's first
 college season (`season = recruit.year + 1`).
@@ -71,9 +73,11 @@ from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
 
-# Tier-mean baseline thresholds. Mirrors the 4-tier bucketing in
-# `crates/cstat-core/src/roster_projection.rs`. Used only for diagnostic
-# MAE comparison; the LightGBM model itself doesn't see these bands.
+# Rank-bucket baseline thresholds. A standalone "dumb yardstick" for the
+# diagnostic MAE comparison only — the LightGBM model never sees these
+# bands. (These once mirrored a 4-tier serving heuristic in
+# `roster_projection.rs`; that heuristic was deprecated and deleted, so
+# the buckets now live here purely as the baseline to beat.)
 TIER_THRESHOLDS = [30, 100, 250]
 
 
@@ -194,7 +198,7 @@ def build_dataset() -> pd.DataFrame:
 
 
 def tier_mean_baseline(df: pd.DataFrame) -> dict:
-    """Per-tier mean prediction. Same bucketing as roster_projection.rs."""
+    """Per-rank-bucket mean prediction — the dumb yardstick the model beats."""
     means = df.groupby("tier")["target_campom"].mean().to_dict()
     pred = df["tier"].map(means)
     return {

@@ -90,33 +90,37 @@ See `docs/trajectory_methodology.md` for the full methodology.
 
 Three LightGBM regressors (mean + q10 + q90) on 13 features: 11 from the shared recruit-feature extractor (`recruit_is_ranked`, `recruit_composite_rank`, `recruit_composite_rating`, `recruit_star_rating`, `recruit_position_rank`, `recruit_rank_movement`, `recruit_height_in`, `recruit_weight_lb`, `recruit_bmi_proxy`, `recruit_position_code`, `years_since_recruit` — degenerate at 0 for all freshmen but kept for shape parity with the trajectory model) + 2 freshman-specific (`committed_team_prior_adjem`, `peer_class_strength`).
 
-**Corpus:** 3,252 qualified freshmen (≥ 5 GP / ≥ 5 MPG) across recruit classes 2014–2025 (freshman cstat-seasons 2015–2026). Pre-2021 classes added 2026-05-18 via 247 historical backfill — confirmed 247's HTML pages serve clean composite rankings back to at least 2014 (probed; pre-2014 untested).
+The mean regressor carries a sentinel-safe `monotone_constraints` (non-decreasing in `composite_rating` + `star_rating`, holding other inputs fixed) — added with the freshman-tier deprecation. It moves headline accuracy within noise (LOCO 2.258 → 2.255) but materially suppresses `composite_rating`'s feature importance (382 → 220, now well below `rank_movement`/`position_rank`), since the constraint forbids the non-monotone splits the model previously found there.
+
+**Corpus:** 3,253 qualified freshmen (≥ 5 GP / ≥ 5 MPG) across recruit classes 2014–2025 (freshman cstat-seasons 2015–2026). Pre-2021 classes added 2026-05-18 via 247 historical backfill — confirmed 247's HTML pages serve clean composite rankings back to at least 2014 (probed; pre-2014 untested).
 
 **Leave-one-class-out CV** (every class held out, retrain on rest, score held-out vs tier-mean baseline):
 
 | Held-out class | n | Model MAE | Baseline MAE | Δ vs baseline |
 |----------------|---|-----------|--------------|---------------|
-| 2014 → 2015 | 297 | 2.167 | 2.264 | +0.097 |
-| 2015 → 2016 | 310 | 2.174 | 2.314 | +0.140 |
-| 2016 → 2017 | 281 | 2.322 | 2.413 | +0.092 |
-| 2017 → 2018 | 309 | 2.323 | 2.506 | +0.183 |
-| 2018 → 2019 | 281 | 2.248 | 2.431 | +0.183 |
-| 2019 → 2020 | 326 | 2.164 | 2.249 | +0.085 |
-| 2020 → 2021 | 294 | 2.084 | 2.205 | +0.121 |
-| 2021 → 2022 | 191 | 2.274 | 2.518 | +0.244 |
-| 2022 → 2023 | 219 | 2.276 | 2.449 | +0.173 |
-| 2023 → 2024 | 250 | 2.336 | 2.557 | +0.220 |
-| 2024 → 2025 | 186 | 2.314 | 2.613 | +0.299 |
-| 2025 → 2026 | 308 | 2.457 | 2.706 | +0.250 |
-| **Pooled (weighted)** | 3,252 | **2.258** | **2.416** | **+0.158 (6.5%)** |
+| 2014 → 2015 | 297 | 2.173 | 2.264 | +0.092 |
+| 2015 → 2016 | 309 | 2.162 | 2.309 | +0.147 |
+| 2016 → 2017 | 281 | 2.345 | 2.413 | +0.069 |
+| 2017 → 2018 | 309 | 2.311 | 2.506 | +0.195 |
+| 2018 → 2019 | 281 | 2.245 | 2.431 | +0.185 |
+| 2019 → 2020 | 324 | 2.169 | 2.258 | +0.089 |
+| 2020 → 2021 | 294 | 2.075 | 2.205 | +0.130 |
+| 2021 → 2022 | 191 | 2.253 | 2.520 | +0.267 |
+| 2022 → 2023 | 219 | 2.264 | 2.451 | +0.187 |
+| 2023 → 2024 | 250 | 2.343 | 2.557 | +0.214 |
+| 2024 → 2025 | 190 | 2.275 | 2.578 | +0.304 |
+| 2025 → 2026 | 308 | 2.470 | 2.706 | +0.236 |
+| **Pooled (weighted)** | 3,253 | **2.255** | **2.423** | **+0.168 (6.9%)** |
 
-Pooled baseline above is the n-weighted average of each fold's held-out tier-mean baseline (apples-to-apples with the model's LOCO MAE). Wins on every single held-out class — per-class deltas range from +0.085 (2019, weakest fold) to +0.299 (2024, strongest fold). The 2021 fold quirk from the prior 5-class model (NULL `committed_team_prior_adjem` because cstat-season 2021 wasn't ingested) is gone — 2021 now has full feature parity.
+Pooled baseline above is the n-weighted average of each fold's held-out rank-bucket baseline (apples-to-apples with the model's LOCO MAE). Wins on every single held-out class — per-class deltas range from +0.069 (2016, weakest fold) to +0.304 (2024, strongest fold). The 2021 fold quirk from the prior 5-class model (NULL `committed_team_prior_adjem` because cstat-season 2021 wasn't ingested) is gone — 2021 now has full feature parity.
 
-5-fold random CV: MAE 2.255, R² 0.367. Gap vs LOCO: +0.003 — clean, no fold-overlap leakage.
+5-fold random CV: MAE 2.254, R² 0.391. Gap vs LOCO: −0.000 — clean, no fold-overlap leakage.
 
-**Top features:** `peer_class_strength` (importance 554), `committed_team_prior_adjem` (536), `recruit_bmi_proxy` (474), `recruit_composite_rank` (392), `recruit_composite_rating` (382), `recruit_rank_movement` (371), `recruit_position_rank` (296). Note `composite_rank` is now above `composite_rating` — the opposite order from the 5-class model. With the wider corpus the model is leaning on the discrete rank ladder more than the continuous rating.
+**Top features:** `peer_class_strength` (importance 611), `committed_team_prior_adjem` (562), `recruit_bmi_proxy` (477), `recruit_composite_rank` (450), `recruit_rank_movement` (406), `recruit_position_rank` (323), `recruit_weight_lb` (225), `recruit_composite_rating` (220). `composite_rank` sits well above `composite_rating` — the model leans on the discrete rank ladder, and the monotone constraint (above) further suppressed `composite_rating` by forbidding its non-monotone splits.
 
 ### 3.1 Ablation: how much of the 6.5% lift is "our model" vs "just 247"?
+
+> **Caveat:** this ablation was run by `spike_247_baseline.py` on the *pre-monotone* fit and against the full-corpus rank-bucket baseline (2.416), so its 6.5% framing differs slightly from §3's per-fold-weighted 6.9%. The monotone constraint doesn't change the decomposition's shape; re-run the spike if you need the exact monotone-consistent figures.
 
 A LOCO-aligned ablation (`training/spike_247_baseline.py`) trains the same LightGBM on progressively smaller feature subsets to isolate the marginal value of each block:
 
@@ -146,7 +150,7 @@ A LOCO-aligned ablation (`training/spike_247_baseline.py`) trains the same Light
 **Known limitations:**
 - Selection bias is *sharper* than for the trajectory model — elite freshmen leave for the draft, so the calibrated cohort skews toward returners.
 - Sample size below ~30th rank drops fast; bands widen accordingly. Surface with the q10–q90 band, not just the mean.
-- The legacy tier-mean heuristic (4-bucket discretisation on composite rank) lives in parallel and is used as the per-tier centroid for `synthesize_freshman_row` reassignment — see `docs/projections_methodology.md` for that path.
+- The per-recruit prediction is the sole freshman signal: `roster_projection.rs::freshman_row` carries the model's projected `cam_v3` straight onto the synthesized PlayerRow. The former 4-tier-mean scaffold was deprecated and deleted — see `docs/projections_methodology.md` for that path.
 - ~30–70 marquee Duke/UNC freshmen across 2018–2020 missing from corpus because of the `players.team_id` Champions Classic stamping bug (see ROADMAP Known Bugs). Fixing this upstream would add ~1–2% more training data; ablation MAE unlikely to move materially.
 
 ---

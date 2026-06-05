@@ -709,12 +709,10 @@ pub async fn compose_all_projections(
     }
 
     // Recruits: bucket by destination team_id. Each recruit synthesises
-    // a PlayerRow from the closest-impact tier profile per the freshman
-    // model's CamPom projection (was tier-mean by 247 rank before
-    // Phase 6). Predictions are batched: one [N, 13] tensor per model
-    // for the whole class (3 ONNX runs total). On batch error, fall
-    // back to rank-tier synthesis with no predicted CamPom — same
-    // behaviour as before this PR.
+    // a minimal PlayerRow (`freshman_row`) carrying the freshman model's
+    // per-recruit projected CamPom. Predictions are batched: one [N, 13]
+    // tensor per model for the whole class (3 ONNX runs total). On batch
+    // error, fall back to `FRESHMAN_FALLBACK_CAM_V3` with no band.
     let feature_vectors: Vec<[f32; crate::freshman_model::FRESHMAN_NUM_FEATURES]> = recruit_rows
         .iter()
         .map(|r| {
