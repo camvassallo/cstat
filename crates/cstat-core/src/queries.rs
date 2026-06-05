@@ -2557,6 +2557,12 @@ pub async fn get_coach_seasons(
         LEFT JOIN coach_season_cae csc
             ON csc.coach_id = cs.coach_id AND csc.season = cs.season
         WHERE cs.coach_id = $1
+          -- Only seasons that have actually been played. The coach ingest also
+          -- writes the *upcoming* projection season (max-played + 1, team_id
+          -- NULL) so the Future tab can show the incoming HC, but those rows
+          -- would render here as a "—" team / "not scored" phantom — exclude
+          -- them until the season is played (then they carry a real team_id).
+          AND cs.season <= (SELECT MAX(season) FROM games WHERE season IS NOT NULL)
         ORDER BY cs.season, (cs.team_id IS NOT NULL) DESC, cs.coachdict_team_name
         "#,
     )
