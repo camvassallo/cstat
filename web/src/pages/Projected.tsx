@@ -8,6 +8,7 @@ import { SeasonLink } from '../components/SeasonLink';
 import { AVAILABLE_SEASONS_FALLBACK, setPageSeasons, useSeason } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
+import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
 
 // The upcoming (not-yet-played) season — the default projection target.
 // Projections compose from `year - 1`, so the upcoming year is
@@ -311,12 +312,27 @@ function buildColumns(
         const v = t.coach_cae_shrunk;
         const rel = t.coach_cae_reliability;
         const n = t.coach_n_seasons;
+        const isNew = t.coach_is_new_hc === true;
+        const from = t.coach_prev_team;
+        const newNote = isNew
+          ? `\nNew head coach${from ? ` — arrived from ${from}` : ' (first season)'}`
+          : '';
         const tip =
-          v == null
+          (v == null
             ? `${t.coach_name} — no career CAE rating yet (thin/unscored tenure)`
             : `${t.coach_name}: career CAE ${fmtCae(v)} AdjEM over ${n ?? '?'} scored season${n === 1 ? '' : 's'}` +
-              `${rel != null ? ` (reliability ${(rel * 100).toFixed(0)}%)` : ''}. Descriptive — not in the projection.`;
+              `${rel != null ? ` (reliability ${(rel * 100).toFixed(0)}%)` : ''}. Descriptive — not in the projection.`) +
+          newNote;
         const label = fmtCae(v);
+        // Amber "new" tag flags an incoming HC (display-only — coachdict is_new_hc).
+        const newBadge = isNew ? (
+          <span
+            className="text-amber-400 text-[10px] font-semibold uppercase tracking-wide mr-1"
+            title={from ? `New HC — from ${from}` : 'New head coach'}
+          >
+            new
+          </span>
+        ) : null;
         const body =
           v == null ? (
             <span className="text-slate-500 text-xs font-mono" title={tip}>
@@ -331,16 +347,22 @@ function buildColumns(
               {label}
             </span>
           );
+        const inner = (
+          <span className="inline-flex items-center">
+            {newBadge}
+            {body}
+          </span>
+        );
         return t.coach_id ? (
           <SeasonLink
             to={`/coaches/${t.coach_id}`}
             onClick={(e) => e.stopPropagation()}
             className="hover:underline"
           >
-            {body}
+            {inner}
           </SeasonLink>
         ) : (
-          body
+          inner
         );
       },
     },
@@ -568,43 +590,6 @@ function ProjectionView({ year }: { year: number }) {
             (see the `setPageSeasons` effect above) — no page-local picker. */}
         <h1 className="text-2xl font-bold">Projected {seasonLabel(year)}</h1>
       </div>
-      <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 mb-3 leading-relaxed">
-        <strong className="text-amber-300">v3 honesty caveats:</strong>{' '}
-        Holistic projection: returners (minus seniors, outbound portal,
-        and firm draft departures) + incoming portal commits +{' '}
-        <strong>incoming HS recruits</strong>. Every
-        player is scored on a <strong>projected</strong> next-season
-        CamPom v3 — the trajectory model for returners and arrivals, the
-        freshman-impact model for recruits — so returner growth and
-        freshman upside both count (a junior breaking out as a senior, or
-        an elite recruit, moves the number). The roster's
-        projected-CamPom distribution is scored by the Phase B
-        impact-aggregation model, then blended <strong>55/45 with last
-        season's actual AdjEM</strong> (no calibration offset — the model
-        is near-unbiased). The pipeline backtests at <strong>5.7 AdjEM
-        MAE</strong> against actual next-season results across the{' '}
-        <strong>2016–2026</strong> seasons — treat the ordering as{' '}
-        <em>directional</em>, not point-estimates.
-        Elite returners regress hard: the trajectory model under-projects
-        the +15-and-up CamPom tail <em>by design</em> (it's calibrated on
-        returners who stayed, and +20 is past its training range), so a
-        reigning star projects below his current number. Rosters with
-        &lt;7 qualifying players (returning + arrivals + recruits) are
-        flagged "thin roster" and not scored.
-      </div>
-      {accuracy && (
-        <div className="rounded border border-emerald-800/40 bg-emerald-950/20 text-emerald-200 text-xs p-3 mb-4 leading-relaxed">
-          <strong className="text-emerald-300">Backtest receipt:</strong>{' '}
-          this is the forecast we'd have made going into {seasonLabel(year)},
-          graded against what actually happened. Across {accuracy.n} teams,
-          mean absolute error <strong>{accuracy.mae.toFixed(1)} AdjEM</strong>,
-          mean bias {accuracy.bias >= 0 ? '+' : ''}
-          {accuracy.bias.toFixed(1)} (
-          {accuracy.bias >= 0 ? 'over-projected on average' : 'under-projected on average'}
-          ). See the <strong>Actual</strong> and <strong>Proj − Act</strong>{' '}
-          columns per team.
-        </div>
-      )}
       <div className="flex items-center gap-3 mb-3">
         <input
           type="text"
@@ -621,7 +606,7 @@ function ProjectionView({ year }: { year: number }) {
       </div>
       <div
         style={{
-          height: 'calc(100dvh - 280px)',
+          height: 'calc(100dvh - 200px)',
           minHeight: '400px',
           width: '100%',
         }}
@@ -637,6 +622,56 @@ function ProjectionView({ year }: { year: number }) {
           }}
         />
       </div>
+      <DisclaimerFooter>
+        {accuracy && (
+          <Disclaimer tone="emerald" label="Backtest receipt:">
+            this is the forecast we'd have made going into {seasonLabel(year)},
+            graded against what actually happened. Across {accuracy.n} teams,
+            mean absolute error{' '}
+            <strong>{accuracy.mae.toFixed(1)} AdjEM</strong>, mean bias{' '}
+            {accuracy.bias >= 0 ? '+' : ''}
+            {accuracy.bias.toFixed(1)} (
+            {accuracy.bias >= 0
+              ? 'over-projected on average'
+              : 'under-projected on average'}
+            ). See the <strong>Actual</strong> and <strong>Proj − Act</strong>{' '}
+            columns per team.
+          </Disclaimer>
+        )}
+        <Disclaimer label="v3 honesty caveats:">
+          Holistic projection: returners (minus seniors, outbound portal, and
+          firm draft departures) + incoming portal commits +{' '}
+          <strong>incoming HS recruits</strong>. Every player is scored on a{' '}
+          <strong>projected</strong> next-season CamPom v3 — the trajectory
+          model for returners and arrivals, the freshman-impact model for
+          recruits — so returner growth and freshman upside both count (a
+          junior breaking out as a senior, or an elite recruit, moves the
+          number). The roster's projected-CamPom distribution is scored by the
+          Phase B impact-aggregation model, then blended{' '}
+          <strong>55/45 with last season's actual AdjEM</strong> (no
+          calibration offset — the model is near-unbiased). The pipeline
+          backtests at <strong>5.7 AdjEM MAE</strong> against actual next-season
+          results across the <strong>2016–2026</strong> seasons. Rosters with
+          &lt;7 qualifying players (returning + arrivals + recruits) are flagged
+          "thin roster" and not scored.
+        </Disclaimer>
+        <Disclaimer label="Regression to the mean:">
+          these are <strong>preseason</strong> projections, so the ordering is
+          compressed toward average — the bottom of the table trends{' '}
+          <em>up</em> and the top trends <em>down</em> relative to last season.
+          That's not a bug: roughly <strong>23% of team-AdjEM variance is
+          preseason-invisible</strong> (no roster signal can see it), an
+          irreducible floor, so read ranks as <em>directional</em>, not
+          point-estimates. Elite returners regress hardest — the trajectory
+          model under-projects the +15-and-up CamPom tail by design, so a
+          reigning star projects below his current number. Heavy-turnover /
+          new-coach rosters (marked{' '}
+          <span className="text-amber-400/80" aria-hidden>
+            ⟳
+          </span>
+          ) lean off last year's stale record and carry the widest error bands.
+        </Disclaimer>
+      </DisclaimerFooter>
     </div>
   );
 }

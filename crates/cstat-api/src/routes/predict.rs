@@ -160,8 +160,8 @@ async fn predict(
 
     // Early-season preseason × pit blend (ROADMAP §6). Only on the honest
     // pit path (`as_of_date` set); the leaky full-state path is untouched.
-    // While the in-season pit cohort is thin (Nov–Dec), anchor on the
-    // preseason projection (r=0.88), decaying to pit by mid-January. Output
+    // While the in-season pit cohort is thin (early Nov), anchor partly on the
+    // preseason projection (r=0.88), decaying to pure pit by mid-December. Output
     // blend: scalar mix of the already-venue-resolved margins, so neutral
     // symmetry and away-flip are preserved (both legs are antisymmetric
     // under team swap). Totals stay pit — the preseason model has no totals
@@ -185,7 +185,13 @@ async fn predict(
     };
     if let Some(pre_margin) = pre_margin {
         blended_margin = w * pre_margin + (1.0 - w) * pit_margin;
-        prediction_basis = if w >= 0.999 { "preseason" } else { "blended" };
+        // Peak weight is now 0.70 (never pure preseason), so "preseason" labels
+        // the preseason-dominant opening window, "blended" the decay tail.
+        prediction_basis = if w >= PRESEASON_PEAK_WEIGHT - 1e-4 {
+            "preseason"
+        } else {
+            "blended"
+        };
     }
     let blended_win_prob = if (blended_margin - pit_margin).abs() < f32::EPSILON {
         explained.prediction.home_win_probability
@@ -810,27 +816,37 @@ fn margin_to_win_prob(margin: f32, is_pit: bool) -> f64 {
 /// (`measure-blend-accuracy`) can retune it.
 const PRESEASON_HOME_COURT_ADVANTAGE: f32 = 3.5;
 
-/// Weight on the PRESEASON projection in the early-season blend: 1.0 before
-/// Nov 1, linear decay to 0.0 by Jan 15, then 0.0 (pure pit). cstat-season
-/// `S` runs Nov (S−1) → Apr S, so the anchors are `(S−1)-11-01` and
-/// `S-01-15`. Piecewise-linear v1 (ROADMAP §6); `measure-blend-accuracy`
-/// calibrates the crossover dates against per-week rolling MAE.
+/// Peak weight on the PRESEASON leg, at the season open (Nov 1). Calibrated by
+/// `measure-blend-accuracy` pooled over 2024–2026: a 0.70/0.30 preseason/pit
+/// mix at tip-off beats pure preseason — the two imperfect, partly-uncorrelated
+/// legs ensemble (opening-week blended MAE 9.84 vs preseason-only 10.91).
+const PRESEASON_PEAK_WEIGHT: f32 = 0.70;
+
+/// Days after Nov 1 over which the preseason weight decays linearly to 0.
+/// Calibrated to 42 (≈ mid-December): pit overtakes preseason ~2 weeks into the
+/// season, so the old Jan-15 (75-day) endpoint kept weight on a stale prior for
+/// a month too long. The 0.70/42-day schedule lands pooled blended MAE 8.80 vs
+/// 9.01 for the old 1.0/75-day curve — within 0.03 of the per-week oracle.
+const PRESEASON_DECAY_DAYS: i64 = 42;
+
+/// Weight on the PRESEASON projection in the early-season blend: `PEAK` at the
+/// Nov 1 open, linear decay to 0.0 over `DECAY_DAYS`, then 0.0 (pure pit).
+/// cstat-season `S` runs Nov (S−1) → Apr S, so the open is `(S−1)-11-01`.
+/// Calibrated v2 (ROADMAP §6) — see the two consts above; re-tune with
+/// `cstat-ingest measure-blend-accuracy --years 2024,2025,2026`.
 fn preseason_blend_weight(as_of: NaiveDate, season: i32) -> f32 {
-    let (Some(full), Some(pit_only)) = (
-        NaiveDate::from_ymd_opt(season - 1, 11, 1),
-        NaiveDate::from_ymd_opt(season, 1, 15),
-    ) else {
+    let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
         return 0.0;
     };
-    if as_of < full {
-        return 1.0;
+    let d = (as_of - open).num_days();
+    if d <= 0 {
+        return PRESEASON_PEAK_WEIGHT;
     }
-    if as_of >= pit_only {
+    if d >= PRESEASON_DECAY_DAYS {
         return 0.0;
     }
-    let span = (pit_only - full).num_days() as f32;
-    let elapsed = (as_of - full).num_days() as f32;
-    (1.0 - elapsed / span).clamp(0.0, 1.0)
+    (PRESEASON_PEAK_WEIGHT * (1.0 - d as f32 / PRESEASON_DECAY_DAYS as f32))
+        .clamp(0.0, PRESEASON_PEAK_WEIGHT)
 }
 
 /// Preseason game margin (home-team perspective) from the two teams'
@@ -1116,38 +1132,46 @@ mod tests {
 
     #[test]
     fn preseason_blend_weight_schedule() {
-        // cstat-season 2026 runs Nov 2025 → Apr 2026, so the schedule
-        // anchors are 2025-11-01 (w=1) and 2026-01-15 (w=0).
+        // Calibrated v2: peak 0.70 at the Nov 1 open, linear decay to 0 over 42
+        // days (≈ Dec 13). cstat-season 2026 opens 2025-11-01.
         let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
 
-        // Before / at the Nov 1 anchor → full preseason weight.
-        assert_eq!(preseason_blend_weight(d(2025, 9, 15), 2026), 1.0);
-        assert_eq!(preseason_blend_weight(d(2025, 11, 1), 2026), 1.0);
+        // Before / at the Nov 1 open → peak preseason weight (0.70).
+        assert_eq!(
+            preseason_blend_weight(d(2025, 9, 15), 2026),
+            PRESEASON_PEAK_WEIGHT
+        );
+        assert_eq!(
+            preseason_blend_weight(d(2025, 11, 1), 2026),
+            PRESEASON_PEAK_WEIGHT
+        );
 
-        // At / after the Jan 15 anchor → pure pit.
+        // At / after open + 42 days (2025-12-13) → pure pit.
+        assert_eq!(preseason_blend_weight(d(2025, 12, 13), 2026), 0.0);
         assert_eq!(preseason_blend_weight(d(2026, 1, 15), 2026), 0.0);
-        assert_eq!(preseason_blend_weight(d(2026, 2, 1), 2026), 0.0);
         assert_eq!(preseason_blend_weight(d(2026, 4, 1), 2026), 0.0);
 
-        // Monotonically decreasing strictly inside the window.
+        // Monotonically decreasing strictly inside the window, bounded by peak.
+        let early_nov = preseason_blend_weight(d(2025, 11, 8), 2026);
         let mid_nov = preseason_blend_weight(d(2025, 11, 20), 2026);
-        let mid_dec = preseason_blend_weight(d(2025, 12, 15), 2026);
-        let early_jan = preseason_blend_weight(d(2026, 1, 5), 2026);
-        assert!(mid_nov > mid_dec && mid_dec > early_jan);
-        assert!((0.0..=1.0).contains(&mid_nov));
-        assert!((0.0..=1.0).contains(&early_jan));
+        let early_dec = preseason_blend_weight(d(2025, 12, 5), 2026);
+        assert!(early_nov > mid_nov && mid_nov > early_dec);
+        assert!((0.0..=PRESEASON_PEAK_WEIGHT).contains(&mid_nov));
 
-        // Roughly halfway: the Nov 1 → Jan 15 span is 75 days, so its
-        // midpoint (day ≈37.5) lands around Dec 8.
-        let halfway = preseason_blend_weight(d(2025, 12, 8), 2026);
+        // Halfway through the 42-day decay (day 21 ≈ Nov 22) → peak/2 = 0.35.
+        let halfway = preseason_blend_weight(d(2025, 11, 22), 2026);
         assert!(
-            (halfway - 0.5).abs() < 0.05,
-            "midpoint weight {halfway} should be ≈0.5",
+            (halfway - PRESEASON_PEAK_WEIGHT / 2.0).abs() < 0.03,
+            "midpoint weight {halfway} should be ≈{}",
+            PRESEASON_PEAK_WEIGHT / 2.0,
         );
 
         // Season-relative: the same calendar offset in 2025's season
-        // (Nov 2024 → Jan 2025) decays identically.
-        assert_eq!(preseason_blend_weight(d(2024, 11, 1), 2025), 1.0);
-        assert_eq!(preseason_blend_weight(d(2025, 1, 15), 2025), 0.0);
+        // (opens 2024-11-01) decays identically.
+        assert_eq!(
+            preseason_blend_weight(d(2024, 11, 1), 2025),
+            PRESEASON_PEAK_WEIGHT
+        );
+        assert_eq!(preseason_blend_weight(d(2024, 12, 13), 2025), 0.0);
     }
 }

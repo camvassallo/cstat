@@ -590,6 +590,12 @@ export interface ProjectedTeam {
   /// n/(n+k) credibility weight ∈ [0,1]; low = thin tenure, soft grade.
   coach_cae_reliability: number | null;
   coach_n_seasons: number | null;
+  /// Did this coach differ from the program's prior-season HC? (coachdict
+  /// `is_new_hc`) — drives the "New HC" badge. Null = can't tell.
+  coach_is_new_hc: boolean | null;
+  /// For a new hire, the coach's prior-season program (e.g. "South Florida"
+  /// for Hodgson → Providence). Null for a first-time/promoted D-I coach.
+  coach_prev_team: string | null;
 }
 
 /// One projected team detail row, returned by

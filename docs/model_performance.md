@@ -1,7 +1,9 @@
 # Model Performance Report
 
-Last updated: 2026-05-18
+Last updated: 2026-06-05
 Training data: cstat NatStat seasons 2015-2026 ingested as of 2026-05-17 (12 seasons total; 2015-2020 added via the `bootstrap-csv` path). All four model families now train on the full 12-season cohort. Game model retrained 2026-05-18 (20,674 → 47,502 games); freshman corpus 1,154 → 3,252 rows after pre-2021 recruit-class ingest (2014-2020); roster corpus 1,799 → 4,248 team-seasons retrained 2026-05-18.
+
+> **2026-06-05 — honest-AUC correction.** The game model's headline accuracy is now reported from the **point-in-time `pit_cam_v3`** retrain, the model the in-season production path actually serves (`/api/predict?as_of_date=…`). The previously-published **5-fold-CV AUC 0.816 / chronological-backtest 0.818** were inflated by **intra-season lookahead** — `torvik_player_stats.cam_gbpm_v3` is a *full-season* aggregate, so a December game's features encode March form for the same teams. The honest figure is **AUC 0.785 / margin MAE 8.69**, triangulated four ways (see §1). cstat still beats NatStat ELO honestly (0.785 vs 0.722). The leaky numbers are struck as headlines below.
 
 cstat ships four LightGBM model families, all exported to ONNX and loaded at API startup via the `ort` crate:
 
@@ -22,15 +24,34 @@ Authoritative per-run details (top features, per-fold breakdowns, known limitati
 
 Three regressors share the same 49-feature point-in-time diff matrix (home minus away). The total model also reads 9 `sum_*` companion features (58 total features) because diffs throw away absolute level.
 
-**Backtest:** chronological 80/20 split — train on 38,001 games (2014-11-25 to 2024-02-26), test on 9,501 games (2024-02-26 to 2026-04-06).
+### Headline (honest, point-in-time)
 
-| Target | Test MAE / Acc | Test R² / AUC | 5-fold CV |
-|--------|----------------|---------------|-----------|
-| Margin (regression) | MAE **8.25 pts** | R² **0.459** · win-acc **74.8%** | Margin MAE 8.13 ± 0.04 |
-| Win prob (classification) | Acc **74.6%** · log-loss **0.498** | AUC **0.818** | Win AUC 0.815 ± 0.004 |
-| Total (regression) | MAE **13.56 pts** | R² **0.179** | Total MAE 13.48 ± 0.11 |
+These are the numbers cstat serves in production for in-season and historical predictions (`/api/predict?as_of_date=…`), where every team's CamPom is recomputed from box scores **up to the game date only** — no end-of-season lookahead. Source: the `pit_cam_v3` retrain on all 12 seasons (n=44,338 games), `training/models_experiments/pit_cam_v3/model_meta.json`.
 
-**Head-to-head 12 vs 5 seasons** (`training/compare_train_windows.py`, shared chronological-last-20%-of-2026 holdout, n_test=920): 12-season wins every metric — margin MAE 8.237 → **8.161** (−0.9%), win accuracy 71.3% → **72.9%** (+1.6pp), win AUC 0.793 → **0.797**, total MAE 13.41 → **13.33**. No distribution-shift damage from the 2015–2017 era; best_iter roughly doubled across all heads (model uses the extra data, not memorizing).
+| Target | MAE / Acc | R² / AUC |
+|--------|-----------|----------|
+| Margin (regression) | MAE **8.69 pts** | R² **0.382** · win-acc **72.1%** |
+| Win prob (classification) | Acc **72.2%** · log-loss **0.531** | AUC **0.785** |
+| Total (regression) | MAE **13.49 pts** | R² **0.184** |
+
+**ATS vs Vegas closing lines** (honest, n=11,102 games with both moneylines): **67.7%** against the spread (7,418–3,541, 143 pushes) / **+29.2% ROI** at -110 vig. Internal measurement only — never surfaced on the site.
+
+**Four independent methods triangulate the honest win AUC at ≈0.785** (full detail in `training/eval_history/honest_audit_findings_20260529.md`):
+
+| Method | Honest AUC | Source |
+|--------|-----------:|--------|
+| **pit_cam_v3 retrain (ground truth)** | **0.785** | full point-in-time refit |
+| Linear leak subtraction (`pred − β·leak_diff`) | 0.786 | `honest_predict_via_subtraction.py` |
+| March-tournament games (no leak left) | 0.794 | season-progression validation |
+| No-leak bucket (\|leak\|<0.3 CamPom) | 0.760 | bucketed segmentation |
+
+### Why the older 0.816 / 0.818 are struck
+
+The previously-published **5-fold-CV AUC 0.816** and **chronological-backtest 0.818** were inflated by **~0.031 AUC of intra-season lookahead**. `torvik_player_stats.cam_gbpm_v3` is a *full-season* aggregate; when a random-fold or chronological split puts a December game in test, the model has already trained on the same teams' March form. The leakage decomposition (`pred_margin ~ pit_diff + leak_diff`) is the smoking gun: the leaky model weights lookahead (`leak_diff` coef 3.46) as heavily as legitimate pre-game info (`pit_diff` coef 3.34); the honest pit retrain cuts the leak coefficient to 1.88 — and most of that residual is `diff_adj_efficiency_margin` legitimately tracking team improvement, not lookahead. The cross-season leak channel is ≈0 (a LOSO retrain came in at 0.815, essentially identical to the leaky 5-fold), so the entire budget was intra-season. **Do not cite 0.816 / 0.818 as headline accuracy.**
+
+> The CamPom constants themselves are **not** overfit — all five `CAMPOM_*` knobs are stable under ±20% perturbation (Pearson r ≥ 0.997 vs baseline). The inflation was a feature-leakage artifact, not tuning overfit. See the audit doc's constants-sensitivity sweep.
+
+**Head-to-head 12 vs 5 seasons** (`training/compare_train_windows.py`, shared chronological-last-20%-of-2026 holdout, n_test=920): the 12-season cohort wins every metric over the 5-season model — margin MAE 8.237 → **8.161** (−0.9%), win accuracy 71.3% → **72.9%** (+1.6pp), win AUC 0.793 → **0.797**, total MAE 13.41 → **13.33**. (These are leaky-feature comparisons; they remain valid as a *relative* corpus-size A/B even though the absolute AUC is inflated.) No distribution-shift damage from the 2015–2017 era; best_iter roughly doubled across all heads (model uses the extra data, not memorizing).
 
 **Top features (margin):** `diff_w_gbpm` dominates (~2.2× the next feature, importance 767), then `diff_w_dgbpm` (341), `diff_w_ogbpm` (264), `diff_opp_effective_fg_pct` (222), `diff_adj_efficiency_margin` (206), `diff_roster_size` (177), `diff_w_player_sos` (171). Roster-aggregate Barttorvik GBPM is doing more work than any single team-stat.
 
@@ -199,7 +220,7 @@ Single LightGBM regressor on 36 features: roster shape (size, total minutes, top
 
 ## Benchmark vs NatStat ELO
 
-Previous benchmark (47-feature model, 2-season training): cstat +2.1pp accuracy, +0.014 AUC, 3× better calibration. A re-benchmark on the current 12-season model is pending; expect cstat's lead to widen given the cumulative AUC jump (0.795 → 0.811 → 0.818).
+On the honest point-in-time footing, cstat's win AUC is **0.785** vs NatStat ELO's **0.722** on the same game window — a **+6.3 AUC-point** edge (`game_forecasts`, audit doc). This is smaller than the leaky comparison suggested (which put cstat ~9 points ahead) but it is the real, lookahead-free margin. Don't lead with "cstat beats NatStat by 0.04 AUC" off the old leaky numbers — lead with **0.785 vs 0.722 honest**.
 
 ---
 
@@ -211,12 +232,12 @@ For reference, public CBB game-prediction models typically achieve:
 |-------|--------------|-------|
 | Home team always wins | ~58% | Naive baseline |
 | AP / Coaches poll | ~65% | Higher-ranked team wins |
-| Basic ELO | ~67% | Where NatStat sits |
+| Basic ELO | ~67% | Where NatStat sits (0.722 AUC on cstat's window) |
 | KenPom / Barttorvik | ~70-72% | Full-season adjusted efficiency |
-| **cstat (current)** | **74.6%** | 12 seasons, 49 features (incl. Barttorvik GBPM), point-in-time |
+| **cstat (honest, point-in-time)** | **72.2%** | 12 seasons, 49 features (incl. Barttorvik GBPM), no lookahead — AUC 0.785 |
 | Vegas closing lines | ~73-74% | Incorporates injury reports + betting market |
 
-cstat is now level with public-tier baselines. Remaining gaps to Vegas are dominated by lineup / injury signal, not feature engineering — see ROADMAP §6 Phase 6 "Full historical data" and §4b "Predict follow-up — point-in-time historical predictions" for the next levers.
+On the honest point-in-time footing cstat sits right at the KenPom/Barttorvik public tier and a touch below Vegas. Remaining gaps to Vegas are dominated by lineup / injury signal, not feature engineering — see ROADMAP §6 Phase 6 "PBP-derived features" (lineup/stint data) for the next lever. (The earlier "74.6%" figure was the leaky full-season-aggregate number — struck; see §1.)
 
 ---
 
