@@ -38,9 +38,11 @@ impact model proved it keys only on `cam_v3` / class / archetype (see
 `roster_projection.rs::freshman_row`).
 
 The mean (regression) model carries a sentinel-safe `monotone_constraints`
-(non-decreasing in `recruit_composite_rating` + `recruit_star_rating`) so a
-higher-quality recruit never projects lower; the q10/q90 band models stay
-unconstrained (LightGBM forbids monotone + quantile).
+(non-decreasing in `recruit_composite_rating` + `recruit_star_rating`) so
+that — holding the other inputs fixed — a better-rated recruit never
+projects lower (a narrow guarantee; `composite_rank` stays unconstrained).
+The q10/q90 band models stay unconstrained (LightGBM forbids monotone +
+quantile).
 
 Honest framing constants (mirror trajectory model):
   - Selection bias on top recruits is even sharper here: the elite
@@ -97,9 +99,12 @@ FEATURE_COLS = list(RECRUIT_FEATURE_NAMES) + FRESHMAN_EXTRA_FEATURES
 # 11 + 2 = 13 features.
 
 # Sentinel-safe monotonicity: force the prediction non-decreasing in
-# recruit *quality* so a higher-rated recruit never projects lower
-# (legibility + mild elite-tail discipline; keeps the Δ-vs-247 column
-# coherent). Only features whose missing-sentinel is the FLOOR are safe:
+# `composite_rating` and `star_rating` so that — holding the other inputs
+# fixed — a better-rated recruit never projects lower. A narrow legibility
+# guarantee on the quality scores, not a global one: `composite_rank` (the
+# stronger feature) stays unconstrained, so this does NOT make the
+# rank-based Δ-vs-247 column monotone.
+# Only features whose missing-sentinel is the FLOOR are safe:
 #   - recruit_composite_rating: missing → 0.0 (= worst) ✓
 #   - recruit_star_rating:      unranked → 0   (= worst) ✓
 # Deliberately NOT recruit_composite_rank: its unranked sentinel is -1,

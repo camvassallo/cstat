@@ -9,20 +9,21 @@
 //! each team with `roster_impact_model.onnx`, and compares to the actual
 //! `team_season_stats.adj_efficiency_margin` the season finished with.
 //!
-//! Three predictions per team, all measured against the same actual:
+//! Two predictions per team, both measured against the same actual:
 //!  - **roster-impact** — the leave-one-season-out roster-impact model scored on
 //!    the projected-cam_v3 roster.
-//!  - **box-score** — the *former* box-score pipeline (what the route
-//!    shipped before roster-impact): `project_rotation` → `build_roster_features`
-//!    → `predict_adj_em`, blended `0.80·baseline + 0.20·raw + 2.0`. Kept
-//!    here as a frozen comparison baseline; the live route has since
-//!    moved to roster-impact.
 //!  - **baseline-persistence** — target AdjEM ≈ base-season AdjEM.
 //!
-//! Acceptance (ROADMAP §5b): roster-impact should beat or match box-score while
-//! being more principled. The blend sweep informs the live route's
-//! recalibration — after the v2 OOF retrain it blends
-//! `0.50·baseline + 0.50·raw` with no offset.
+//! (The original §5b acceptance comparison also scored the *former*
+//! box-score pipeline — `project_rotation` → `build_roster_features` →
+//! `predict_adj_em` — to confirm roster-impact beat the model it replaced.
+//! That comparison was dropped once tiers were deprecated: the box-score
+//! model reads a freshman box-score statline that no longer exists, so it
+//! can't be fed projected rosters. Its acceptance verdict was long since
+//! settled when roster-impact shipped.)
+//!
+//! The blend sweep informs the live route's recalibration — after the v2
+//! OOF retrain it blends `0.50·baseline + 0.50·raw` with no offset.
 //!
 //! Honesty caveats (printed with the report):
 //!  - The roster-impact model is the **leave-one-season-out** model for
@@ -32,9 +33,6 @@
 //!    ROADMAP §5b v2 tightening; the live `/api/projections` route still
 //!    uses the all-seasons model, correct there because the live target
 //!    year is genuinely unseen.
-//!  - The box-score model (`roster_model.onnx`) stays the frozen
-//!    all-seasons model — box-score is only a fixed comparison reference, so
-//!    its slight in-sample edge can only understate the roster-impact model's win.
 //!  - Recruit cam_v3 comes from `compose_all_projections`, which runs
 //!    live freshman inference — mildly in-sample for the freshman model
 //!    on historical targets.
@@ -48,7 +46,6 @@ use std::path::Path;
 use uuid::Uuid;
 
 use cstat_core::inference::{Predictor, RosterImpactModel};
-use cstat_core::roster_features::{build_roster_features, project_rotation};
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
     DraftScenario, compose_all_projections, fetch_draft_entrants, project_returner_cam_v3,
@@ -58,17 +55,7 @@ use cstat_core::roster_projection::{
 /// `MIN_QUALIFYING_FOR_PROJECTION` in `routes/projections.rs`.
 const MIN_QUALIFYING: usize = 7;
 
-/// box-score blend constants — the *frozen* old box-score pipeline
-/// (0.80 baseline weight + 2.0 offset), held as a fixed comparison
-/// baseline. The live route moved to the roster-impact blend (0.50 / 0.0 after
-/// the v2 OOF retrain); these deliberately do NOT track
-/// `routes/projections.rs` — they pin what "box-score" meant so the
-/// backtest keeps a stable reference.
-const BOXSCORE_PROJ_SHRINK_WEIGHT: f32 = 0.80;
-const BOXSCORE_PROJ_OFFSET: f32 = 2.0;
-
-/// Documented reference points (`docs/projections_methodology.md`).
-const REF_BOXSCORE_PROJ_MAE: f64 = 6.23;
+/// Documented reference point (`docs/projections_methodology.md`).
 const REF_BASELINE_MAE: f64 = 6.53;
 
 struct Stats {
@@ -120,13 +107,12 @@ fn compute_stats(preds: &[f64], actuals: &[f64]) -> Stats {
     }
 }
 
-/// One team's three predictions plus its actual AdjEM.
+/// One team's two predictions plus its actual AdjEM.
 struct TeamResult {
     team_id: Uuid,
     team_name: String,
     season: i32,
     roster_proj: f64,
-    boxscore_proj: f64,
     baseline: f64,
     actual: f64,
 }
@@ -243,21 +229,11 @@ async fn backtest_year(
             ))
             .map_err(|e| anyhow::anyhow!("LOSO roster-impact predict ({}): {e}", p.team_name))?;
 
-        // --- box-score: box-score pipeline with the shipped blend. --------
-        let roster_a = project_rotation(p.for_scenario(DraftScenario::Ceiling));
-        let raw_a = predictor
-            .predict_adj_em(&build_roster_features(&roster_a))
-            .map_err(|e| anyhow::anyhow!("predict_adj_em ({}): {e}", p.team_name))?;
-        let boxscore_proj = BOXSCORE_PROJ_SHRINK_WEIGHT * (baseline as f32)
-            + (1.0 - BOXSCORE_PROJ_SHRINK_WEIGHT) * raw_a
-            + BOXSCORE_PROJ_OFFSET;
-
         results.push(TeamResult {
             team_id: p.team_id,
             team_name: p.team_name.clone(),
             season: year,
             roster_proj: roster_proj as f64,
-            boxscore_proj: boxscore_proj as f64,
             baseline,
             actual,
         });
@@ -284,25 +260,19 @@ fn report(label: &str, results: &[TeamResult]) {
         &results.iter().map(|r| r.roster_proj).collect::<Vec<_>>(),
         &actuals,
     );
-    let boxscore_proj = compute_stats(
-        &results.iter().map(|r| r.boxscore_proj).collect::<Vec<_>>(),
-        &actuals,
-    );
     let baseline = compute_stats(
         &results.iter().map(|r| r.baseline).collect::<Vec<_>>(),
         &actuals,
     );
     println!("\n  {label}");
     print_block("roster_proj (impact, was roster-impact)", &roster_proj);
-    print_block("boxscore_proj (legacy, was box-score)", &boxscore_proj);
     print_block("baseline-persistence", &baseline);
 }
 
 /// Sweep the baseline blend weight on the roster-impact model's raw output and report the
 /// MAE curve. `pred = w·baseline + (1−w)·phaseB_raw`. This is the PR 2
-/// recalibration in miniature — roster-impact raw is a far better raw signal
-/// than the box-score model (which needs heavy baseline anchoring), so
-/// the optimum sits at a much lower `w`. Returns `(best_w, best_mae)`.
+/// recalibration in miniature — roster-impact raw is a strong raw signal,
+/// so the optimum sits at a low `w`. Returns `(best_w, best_mae)`.
 fn blend_sweep(results: &[TeamResult]) -> (f64, f64) {
     let actuals: Vec<f64> = results.iter().map(|r| r.actual).collect();
     println!("\n  roster-impact blended  (pred = w·baseline + (1−w)·phaseB_raw):");
@@ -348,14 +318,6 @@ pub async fn run(
     println!("roster-impact projection backtest — target seasons: {years:?}");
     println!("{}", "=".repeat(72));
 
-    // This command is the sole consumer of the box-score model
-    // (`boxscore_proj`); the API no longer loads or validates it at boot, so we
-    // check its feature contract here before scoring — a feature-drifted
-    // box-score model would silently corrupt the comparison baseline otherwise.
-    predictor
-        .validate_box_score_model_meta()
-        .context("box-score roster_model_meta.json failed validation")?;
-
     // Per-target-season leave-one-season-out roster-impact models — each
     // trained on every season except the one it scores, so the backtest
     // carries no in-sample leak from the roster model (ROADMAP §5b v2).
@@ -389,40 +351,37 @@ pub async fn run(
         report("POOLED", &pooled);
     }
 
-    // Verdict against the pooled numbers. The box-score model's 6.23 is its *blended*
-    // pipeline output, so the fair comparison is best-blended roster-impact —
-    // the blend sweep below is the PR 2 recalibration in miniature.
+    // Verdict against the pooled numbers: roster-impact raw, the best
+    // blended roster-impact (the blend sweep is the PR 2 recalibration in
+    // miniature), and baseline-persistence.
     let actuals: Vec<f64> = pooled.iter().map(|r| r.actual).collect();
     let b = compute_stats(
         &pooled.iter().map(|r| r.roster_proj).collect::<Vec<_>>(),
         &actuals,
     );
-    let a = compute_stats(
-        &pooled.iter().map(|r| r.boxscore_proj).collect::<Vec<_>>(),
+    let baseline = compute_stats(
+        &pooled.iter().map(|r| r.baseline).collect::<Vec<_>>(),
         &actuals,
     );
     let (best_w, best_mae) = blend_sweep(&pooled);
 
     println!("\n{}", "-".repeat(72));
     println!(
-        "  roster-impact raw pooled MAE {:.2} (bias {:+.2}) — vs box-score {:.2} (live, blended) / \
-         {REF_BOXSCORE_PROJ_MAE:.2} (documented); baseline-persistence {REF_BASELINE_MAE:.2}.",
-        b.mae, b.bias, a.mae,
+        "  roster-impact raw pooled MAE {:.2} (bias {:+.2}); baseline-persistence \
+         {:.2} (live) / {REF_BASELINE_MAE:.2} (documented).",
+        b.mae, b.bias, baseline.mae,
     );
-    println!(
-        "  roster-impact *blended* best MAE {best_mae:.2} at w={best_w:.2} \
-         (box-score blends at w=0.80 because its raw is far weaker).",
-    );
-    if best_mae <= a.mae {
+    println!("  roster-impact *blended* best MAE {best_mae:.2} at w={best_w:.2}.");
+    if best_mae <= baseline.mae {
         println!(
-            "  ✓ Best-blended roster-impact ({best_mae:.2}) beats or matches the box-score pipeline ({:.2}).",
-            a.mae,
+            "  ✓ Best-blended roster-impact ({best_mae:.2}) beats baseline-persistence ({:.2}).",
+            baseline.mae,
         );
     } else {
         println!(
-            "  ✗ Best-blended roster-impact ({best_mae:.2}) is {:.2} MAE short of box-score ({:.2}).",
-            best_mae - a.mae,
-            a.mae,
+            "  ✗ Best-blended roster-impact ({best_mae:.2}) is {:.2} MAE short of baseline-persistence ({:.2}).",
+            best_mae - baseline.mae,
+            baseline.mae,
         );
     }
     println!(
@@ -445,9 +404,8 @@ pub async fn run(
 
 /// Dump per-team predictions to JSON for downstream residual analysis.
 /// Schema: a flat array of `{team_id, team_name, season, roster_proj,
-/// boxscore_proj, baseline, actual}` records — one per scored team. Floats
-/// kept at their native f64 precision; downstream audit code handles
-/// rounding.
+/// baseline, actual}` records — one per scored team. Floats kept at their
+/// native f64 precision; downstream audit code handles rounding.
 fn dump_per_team_json(path: &Path, results: &[TeamResult]) -> Result<()> {
     use serde_json::{Value, json};
     let arr: Vec<Value> = results
@@ -458,7 +416,6 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult]) -> Result<()> {
                 "team_name": r.team_name,
                 "season": r.season,
                 "roster_proj": r.roster_proj,
-                "boxscore_proj": r.boxscore_proj,
                 "baseline": r.baseline,
                 "actual": r.actual,
             })
