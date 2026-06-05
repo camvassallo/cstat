@@ -1489,4 +1489,88 @@ mod tests {
         );
         assert_eq!(normalize_player_name("Cooper Flagg"), "cooper flagg");
     }
+
+    /// Regression guard for the freshman-OOF leak (2026-06-05): for a class the
+    /// freshman model trained on, `compose_all_projections` must serve the
+    /// HELD-OUT prediction from `freshman_oof_predictions`, NOT a live in-sample
+    /// one. The leak showed as Cameron Boozer projecting +17.7 in the projection
+    /// vs +14.2 (held-out) on the recruits page — identical feature vectors,
+    /// different model (full-data vs leave-one-class-out fold).
+    ///
+    /// Integration test: requires a populated DB + the committed ONNX models.
+    /// Skips cleanly (passes) when `DATABASE_URL` is unset, the DB can't be
+    /// reached, the canonical class-2025 fixture isn't ingested (fresh CI DB),
+    /// models can't load, or compose fails for unrelated reasons — so it never
+    /// breaks a schema-only CI run, but acts as a real guard on a dev DB.
+    #[tokio::test]
+    async fn freshman_projection_serves_oof_not_live_for_historical_class() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let Ok(pool) = sqlx::PgPool::connect(&url).await else {
+            return;
+        };
+
+        // base_season 2025 → freshman season 2026 (a season the model trained
+        // on, so it has OOF rows). Pick the highest-OOF class-2025 recruit that
+        // resolved to a player *and* attaches to a base-season team — the elite
+        // tail is exactly where held-out and in-sample diverge most.
+        const BASE_SEASON: i32 = 2025;
+        let fixture: Option<(Uuid, f32)> = sqlx::query_as::<_, (Uuid, f32)>(
+            r#"
+            SELECT r.id, f.mean
+            FROM recruits r
+            JOIN freshman_oof_predictions f
+              ON f.cstat_player_id = r.cstat_player_id
+             AND f.target_season = r.year + 1
+            JOIN teams t  ON t.id = r.committed_team_id
+            JOIN teams tm ON tm.natstat_id = t.natstat_id AND tm.season = r.year
+            WHERE r.year = $1
+              AND r.committed_team_id IS NOT NULL
+              AND COALESCE(r.commit_status, '') <> 'Uncommitted'
+            ORDER BY f.mean DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(BASE_SEASON)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+        let Some((recruit_id, oof_mean)) = fixture else {
+            return; // fresh / un-ingested DB — nothing to assert against.
+        };
+
+        let model_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../training/models");
+        let Ok(predictor) = Predictor::load(&model_dir) else {
+            return; // models not present in this environment.
+        };
+
+        let Ok(projections) = compose_all_projections(&pool, BASE_SEASON, &[], &predictor).await
+        else {
+            return; // a compose failure is a different concern, not this guard's.
+        };
+
+        // Find the fixture recruit in any team's recruit cohort.
+        let cam = projections
+            .iter()
+            .flat_map(|p| p.recruits.iter())
+            .find(|(_, meta)| meta.recruit_id == recruit_id)
+            .and_then(|(row, _)| row.cam_v3);
+        let Some(cam) = cam else {
+            return; // recruit didn't land in a composed roster (e.g. too-thin gate).
+        };
+
+        // The served value must equal the held-out OOF mean. If this regresses,
+        // `compose_all_projections` is serving live in-sample freshman
+        // predictions for a historical class again (the leak). fp tolerance
+        // covers the f32 → f64 → f32 round-trip.
+        assert!(
+            (cam as f32 - oof_mean).abs() < 0.05,
+            "freshman OOF leak regressed: composed recruit cam {cam:.3} != held-out OOF \
+             mean {oof_mean:.3} (recruit {recruit_id}) — compose_all_projections must use \
+             fetch_freshman_oof, not live predict_freshman_batch, for trained-on classes",
+        );
+    }
 }
