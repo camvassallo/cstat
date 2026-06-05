@@ -526,11 +526,17 @@ export interface ProjectedTeam {
   /// (ceiling + floor) / 2, or null when the prediction is gated out.
   midpoint_adj_em: number | null;
   returning_count: number;
-  /// Σ base-season CamPom of the returning players (talent retained).
+  /// Σ base-season (prior) CamPom of the returning players — the
+  /// continuity denominator + "prior → projected" tooltip base.
   returning_cam_v3_sum: number;
+  /// Σ *projected* next-season CamPom of the returners (trajectory
+  /// forecast; the forward value the roster-flow ledger displays).
+  returning_projected_cam_v3_sum: number;
   arrivals_count: number;
-  /// Σ base-season CamPom of the incoming portal arrivals (talent gained).
+  /// Σ base-season (prior-school) CamPom of the incoming portal arrivals.
   arrivals_cam_v3_sum: number;
+  /// Σ *projected* next-season CamPom of the arrivals (forward frame).
+  arrivals_projected_cam_v3_sum: number;
   /// Number of HS recruits committed to this team (class-of-`base_season`).
   /// Each contributes a synthesized PlayerRow carrying the freshman-impact
   /// model's per-recruit projected CamPom.
@@ -541,6 +547,10 @@ export interface ProjectedTeam {
   /// Up to 5 highest-ranked recruits for UI display.
   top_recruits: ProjectedRecruit[];
   uncertain_count: number;
+  /// Σ base-season CamPom of the uncertain (declared-draft) cohort —
+  /// completes the last-season roster base for the % normalization
+  /// (`base = returning + departures + uncertain`).
+  uncertain_cam_v3_sum: number;
   departures_count: number;
   /// Σ base-season CamPom across all departures (Sr + portal-out + draft).
   departures_cam_v3_sum: number;

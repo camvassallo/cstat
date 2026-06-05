@@ -954,6 +954,123 @@ function ScheduleRow({
 // the projection is built from. Future iteration: projected schedule
 // from the predict model.
 
+// Roster-construction ledger: a CamPom-value waterfall that decomposes the
+// projection. Last season's roster value, minus departures, the returning
+// core + trajectory growth, plus transfers + recruits → projected roster
+// value, which the calibrator maps to the headline AdjEM. Every cohort is a
+// term on the same last-season-value base, so this reconciles with the
+// Future grid's roster-flow columns. cam_v3 is already minutes/GP-weighted
+// (the value, not raw box score), so these are minutes-weighted sums.
+function RosterLedger({ p }: { p: ProjectedTeam }) {
+  const base = p.returning_cam_v3_sum + p.departures_cam_v3_sum + p.uncertain_cam_v3_sum;
+  const hasBase = base > 0.5; // cam sums can be ~0/negative for weak rosters
+  const pctOf = (n: number) => (hasBase ? Math.round((n / base) * 100) : null);
+  const fmt = (v: number) => (v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1));
+  const growth = p.returning_projected_cam_v3_sum - p.returning_cam_v3_sum;
+  const projectedRoster =
+    p.returning_projected_cam_v3_sum + p.arrivals_projected_cam_v3_sum + p.recruits_cam_v3_sum;
+  const lastCount = p.returning_count + p.departures_count + p.uncertain_count;
+
+  const Row = ({
+    label,
+    detail,
+    value,
+    valueTone,
+    annot,
+    annotTone,
+    indent,
+    strong,
+  }: {
+    label: string;
+    detail?: string;
+    value: string;
+    valueTone?: string;
+    annot?: string | null;
+    annotTone?: string;
+    indent?: boolean;
+    strong?: boolean;
+  }) => (
+    <div className={`flex items-baseline justify-between gap-3 ${indent ? 'pl-4' : ''}`}>
+      <div className="min-w-0 truncate">
+        <span className={`text-sm ${strong ? 'font-semibold text-slate-200' : 'text-slate-300'}`}>
+          {label}
+        </span>
+        {detail && <span className="ml-2 text-xs text-slate-500">{detail}</span>}
+      </div>
+      <div className="flex shrink-0 items-baseline gap-2">
+        <span className={`font-mono text-sm ${valueTone ?? 'text-slate-300'}`}>{value}</span>
+        {annot && (
+          <span className={`w-28 text-right font-mono text-[11px] ${annotTone ?? 'text-slate-500'}`}>
+            {annot}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-1.5 rounded border border-slate-700 bg-slate-900/40 p-4">
+      <div className="mb-1 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-200">Roster construction</h3>
+        <span className="text-xs text-slate-500">CamPom value · % of last season</span>
+      </div>
+      <Row label="Last season's value" detail={`${lastCount} players`} value={base.toFixed(1)} />
+      <Row
+        indent
+        label="− Departing"
+        detail={`${p.departures_count} left`}
+        value={fmt(-p.departures_cam_v3_sum)}
+        valueTone="text-rose-400"
+        annot={pctOf(p.departures_cam_v3_sum) != null ? `−${pctOf(p.departures_cam_v3_sum)}% of last yr` : null}
+        annotTone="text-rose-400/70"
+      />
+      <div className="my-1 border-t border-slate-800" />
+      <Row
+        indent
+        label="= Returning core"
+        detail={`${p.returning_count} stay`}
+        value={p.returning_cam_v3_sum.toFixed(1)}
+        annot={pctOf(p.returning_cam_v3_sum) != null ? `${pctOf(p.returning_cam_v3_sum)}% retained ↩` : null}
+        annotTone="text-slate-400"
+      />
+      <Row
+        indent
+        label="+ Returning growth"
+        detail="trajectory dev"
+        value={fmt(growth)}
+        valueTone={growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}
+      />
+      <Row
+        indent
+        label="+ Transfers in"
+        detail={`${p.arrivals_count}`}
+        value={fmt(p.arrivals_projected_cam_v3_sum)}
+        valueTone="text-emerald-400"
+        annot={pctOf(p.arrivals_cam_v3_sum) != null ? `+${pctOf(p.arrivals_cam_v3_sum)}%` : null}
+        annotTone="text-emerald-400/70"
+      />
+      <Row
+        indent
+        label="+ Recruits"
+        detail={`${p.recruits_count} · projected`}
+        value={fmt(p.recruits_cam_v3_sum)}
+        valueTone="text-slate-300"
+        annot={pctOf(p.recruits_cam_v3_sum) != null ? `+${pctOf(p.recruits_cam_v3_sum)}%` : null}
+        annotTone="text-slate-400"
+      />
+      <div className="my-1 border-t border-slate-700" />
+      <Row
+        strong
+        label="= Projected roster value"
+        value={projectedRoster.toFixed(1)}
+        valueTone="text-slate-100"
+        annot={p.midpoint_adj_em != null ? `→ ${fmt(p.midpoint_adj_em)} AdjEM` : null}
+        annotTone="text-amber-300/80"
+      />
+    </div>
+  );
+}
+
 interface ProjectedTeamViewProps {
   id: string;
   year: number;
@@ -1107,6 +1224,9 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         </SeasonLink>{' '}
         for full methodology + cross-team rankings.
       </div>
+
+      {/* Roster-construction ledger — the CamPom waterfall behind the projection. */}
+      <RosterLedger p={p} />
 
       {/* Roster cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
