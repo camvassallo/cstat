@@ -1191,7 +1191,26 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   }, [id, year]);
 
   if (loading) return <div className="p-4 text-gray-400">Loading projection...</div>;
-  if (error) return <div className="p-4 text-rose-300">Failed to load projection: {error}</div>;
+  if (error) {
+    // A played season that's projectable but has no composable roster (too
+    // thin / first-year program) 404s here — point the user at the Actual
+    // toggle (rendered above by the wrapper) rather than a bare error. The
+    // raw message stays for genuine network/5xx failures. Upcoming-year
+    // projections have no Actual view, so skip the hint there.
+    const hasActualView = year <= AVAILABLE_SEASONS_FALLBACK[0];
+    return (
+      <div className="p-4 text-amber-300/90 text-sm">
+        No projection available for this team{hasActualView ? '' : ' yet'} — likely a too-thin or
+        first-year roster.{' '}
+        {hasActualView && (
+          <>
+            Switch to <strong>Actual</strong> above for the played season.{' '}
+          </>
+        )}
+        <span className="text-slate-600 text-xs">({error})</span>
+      </div>
+    );
+  }
   if (!data) return <div className="p-4 text-gray-400">No projection data.</div>;
 
   const { team, projection: p, returning, arrivals, recruits, departures, uncertain, base_season } =
