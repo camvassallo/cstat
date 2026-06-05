@@ -71,6 +71,13 @@ pub async fn ingest_coaches(
     // `team_natstat_id` is populated (team_id stays NULL — there's no target-season
     // team to reference). `fetch_coach_cae` joins on natstat_id and prefers the
     // target season, so the projection ledger then shows the incoming coach.
+    //
+    // Self-heal note: once that season is actually played and its `teams` rows
+    // land, it appears in the query above as a normal (non-upcoming) season; the
+    // next `coaches` run then upserts a real `team_id` via the ON CONFLICT below.
+    // Until that re-run the row carries `team_id = NULL` (only `team_natstat_id`),
+    // so any consumer must join on `team_natstat_id`, not the partial `team_id`
+    // index — which is exactly what `fetch_coach_cae` does.
     let max_played: Option<i32> = sqlx::query_scalar("SELECT MAX(season) FROM teams")
         .fetch_one(pool)
         .await?;

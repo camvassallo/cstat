@@ -30,6 +30,8 @@ import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
 import { SeasonLink } from '../components/SeasonLink';
 import {
   AVAILABLE_SEASONS_FALLBACK,
+  EARLIEST_PROJECTABLE_YEAR,
+  projectableSeasons,
   seasonHref,
   setPageSeasons,
   useSeason,
@@ -126,10 +128,6 @@ function FourFactors({
   );
 }
 
-/// Earliest target we can project — the backend route floors here
-/// (needs base-season `year-1` + that season's trajectory_oof). Mirrors
-/// `Projected.tsx::EARLIEST_PROJECTABLE_YEAR`.
-const EARLIEST_PROJECTABLE_YEAR = 2016;
 
 /// Segmented Actual ⇄ Projected control. Only rendered for played,
 /// projectable seasons (both modes exist). Flips the `?view=` param while
@@ -1199,10 +1197,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   // the upcoming forecast year disappears). Cleanup releases the override so
   // the actual-mode view restores the team's own season history.
   useEffect(() => {
-    const upcoming = AVAILABLE_SEASONS_FALLBACK[0] + 1;
-    const years: number[] = [];
-    for (let y = upcoming; y >= EARLIEST_PROJECTABLE_YEAR; y--) years.push(y);
-    setPageSeasons(years);
+    setPageSeasons(projectableSeasons());
     return () => setPageSeasons(null);
   }, []);
 

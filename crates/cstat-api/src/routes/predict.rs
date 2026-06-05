@@ -185,13 +185,10 @@ async fn predict(
     };
     if let Some(pre_margin) = pre_margin {
         blended_margin = w * pre_margin + (1.0 - w) * pit_margin;
-        // Peak weight is now 0.70 (never pure preseason), so "preseason" labels
-        // the preseason-dominant opening window, "blended" the decay tail.
-        prediction_basis = if w >= PRESEASON_PEAK_WEIGHT - 1e-4 {
-            "preseason"
-        } else {
-            "blended"
-        };
+        // Peak weight is now 0.70 (never pure preseason), so the chip labels the
+        // *dominant* leg: "preseason" while the preseason weight is the majority
+        // (the first ~12 days), "blended" through the decay tail to pure pit.
+        prediction_basis = if w >= 0.5 { "preseason" } else { "blended" };
     }
     let blended_win_prob = if (blended_margin - pit_margin).abs() < f32::EPSILON {
         explained.prediction.home_win_probability

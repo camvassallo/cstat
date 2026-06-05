@@ -1316,11 +1316,17 @@ async fn fetch_coach_cae(
         JOIN coaches co ON co.id = pick.coach_id
         LEFT JOIN coach_ratings cr ON cr.coach_id = co.id
         -- The picked coach's prior-season (base) program, for the "← from X"
-        -- note on a new hire. NULL for a first-time / promoted D-I coach.
+        -- note on a new hire. Excludes the current program (a continuing coach
+        -- must never read "from {same team}") and orders deterministically so a
+        -- coach with multiple base-season name-variant rows resolves stably.
+        -- NULL for a first-time / promoted D-I coach (no prior different program).
         LEFT JOIN LATERAL (
             SELECT cs2.coachdict_team_name
             FROM coach_seasons cs2
-            WHERE cs2.coach_id = pick.coach_id AND cs2.season = $1
+            WHERE cs2.coach_id = pick.coach_id
+              AND cs2.season = $1
+              AND cs2.team_natstat_id IS DISTINCT FROM t_base.natstat_id
+            ORDER BY (cs2.team_natstat_id IS NOT NULL) DESC, cs2.coachdict_team_name
             LIMIT 1
         ) prev ON TRUE
         WHERE t_base.season = $1

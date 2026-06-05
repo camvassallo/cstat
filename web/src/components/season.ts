@@ -14,6 +14,36 @@ export const AVAILABLE_SEASONS_FALLBACK: readonly number[] = [2026, 2025, 2024];
 
 export type Season = number;
 
+// ---------------------------------------------------------------------------
+// Projectable seasons (the "Future" tab + team projection ledger)
+// ---------------------------------------------------------------------------
+// Shared by the `/projected` grid and the team projection ledger so both
+// publish the SAME season list to the navbar picker — including the upcoming
+// forecast year, which `/api/seasons` (games-only) can never carry.
+
+/** Earliest cstat-season the projection pipeline can target. The backend
+ *  composes from `year − 1` and needs that base season's
+ *  `trajectory_oof_predictions`, which start at target-season 2016. */
+export const EARLIEST_PROJECTABLE_YEAR = 2016;
+
+/** The upcoming (not-yet-played) projection target = newest-played + 1
+ *  (e.g. 2027 in 2026). Uses the static fallback's newest year so every surface
+ *  agrees without waiting on a `/api/seasons` fetch. */
+export function upcomingProjectionSeason(): Season {
+  return AVAILABLE_SEASONS_FALLBACK[0] + 1;
+}
+
+/** Every projectable cstat-season, newest first: the upcoming forecast down to
+ *  {@link EARLIEST_PROJECTABLE_YEAR}. The list the projection surfaces hand to
+ *  the navbar season picker. */
+export function projectableSeasons(): Season[] {
+  const ys: Season[] = [];
+  for (let y = upcomingProjectionSeason(); y >= EARLIEST_PROJECTABLE_YEAR; y--) {
+    ys.push(y);
+  }
+  return ys;
+}
+
 export const DEFAULT_SEASON: Season = AVAILABLE_SEASONS_FALLBACK[0];
 
 /** Module-level cache so a season selector and a SeasonLink in the same render
