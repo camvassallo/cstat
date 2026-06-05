@@ -214,12 +214,13 @@ function buildColumns(
       ...flexCol(3, 200),
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: ProjectedTeam }) => (
-        // For the upcoming forecast year, `?season={year}` lands on
-        // TeamDetail's projection-mode branch (the season hasn't been
-        // played). For a past season it lands on the actual played
-        // team page — "here's how that roster really did".
+        // `&view=projected` lands on TeamDetail's projection branch even
+        // for a played season — clicking a team *from the projections
+        // context* shows its forecast + the held-out report card (a normal
+        // team link elsewhere stays on Actual). For the upcoming year the
+        // page is projection-only regardless, so the param is harmless.
         <SeasonLink
-          to={`/teams/${p.data?.team_id}?season=${year}`}
+          to={`/teams/${p.data?.team_id}?season=${year}&view=projected`}
           onClick={(e) => e.stopPropagation()}
           className="text-blue-400 hover:underline"
         >

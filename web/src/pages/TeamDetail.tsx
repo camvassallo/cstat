@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   fetchTeamDetail,
   fetchProjectedTeam,
@@ -125,21 +125,94 @@ function FourFactors({
   );
 }
 
+/// Earliest target we can project — the backend route floors here
+/// (needs base-season `year-1` + that season's trajectory_oof). Mirrors
+/// `Projected.tsx::EARLIEST_PROJECTABLE_YEAR`.
+const EARLIEST_PROJECTABLE_YEAR = 2016;
+
+/// Segmented Actual ⇄ Projected control. Only rendered for played,
+/// projectable seasons (both modes exist). Flips the `?view=` param while
+/// preserving everything else (season, etc.).
+function TeamViewToggle({
+  mode,
+  onChange,
+}: {
+  mode: 'actual' | 'projected';
+  onChange: (m: 'actual' | 'projected') => void;
+}) {
+  const btn = (m: 'actual' | 'projected', label: string) => (
+    <button
+      type="button"
+      onClick={() => onChange(m)}
+      className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+        mode === m
+          ? 'bg-slate-700 text-slate-100'
+          : 'text-slate-400 hover:text-slate-200'
+      }`}
+      aria-pressed={mode === m}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded border border-slate-700 bg-slate-900/60 p-0.5">
+      {btn('actual', 'Actual')}
+      {btn('projected', 'Projected')}
+    </div>
+  );
+}
+
 /// Routing shim: the page handles two distinct modes (played-season
-/// historical detail vs upcoming-season projection) backed by
-/// different APIs. We branch by `season > AVAILABLE_SEASONS_FALLBACK[0]`
-/// at the wrapper layer so each mode's hooks live in their own
-/// component (Rules of Hooks). Triggered today by `?season=2027`
-/// links from the transfer-portal "next team" and recruit "committed
-/// to" cells, plus the Projected page's team links.
+/// historical detail vs forward-looking projection) backed by different
+/// APIs. We branch at the wrapper layer so each mode's hooks live in its
+/// own component (Rules of Hooks).
+///
+/// Mode selection:
+///   - season > maxPlayed (upcoming) → Projected only (no actual yet).
+///   - 2016 ≤ season ≤ maxPlayed (played + projectable) → defaults to
+///     Actual; `?view=projected` shows the held-out projection + a
+///     report-card comparison. Toggle switches between them.
+///   - season < 2016 → Actual only (no projection composable).
+/// The Projected grid deep-links team names with `&view=projected`, so a
+/// click *from the projections context* lands on the forecast even for a
+/// played year, while a normal team click stays on Actual.
 export default function TeamDetail() {
   const { id } = useParams<{ id: string }>();
   const { season } = useSeason();
+  const [searchParams, setSearchParams] = useSearchParams();
   const maxPlayed = AVAILABLE_SEASONS_FALLBACK[0];
-  if (id && season > maxPlayed) {
-    return <ProjectedTeamView id={id} year={season} />;
-  }
-  return <HistoricalTeamDetail />;
+
+  const isUpcoming = season > maxPlayed;
+  const projectablePlayed =
+    season >= EARLIEST_PROJECTABLE_YEAR && season <= maxPlayed;
+  const wantsProjected = searchParams.get('view') === 'projected';
+
+  const mode: 'actual' | 'projected' =
+    isUpcoming || (projectablePlayed && wantsProjected) ? 'projected' : 'actual';
+
+  const setMode = (m: 'actual' | 'projected') => {
+    const next = new URLSearchParams(searchParams);
+    if (m === 'projected') next.set('view', 'projected');
+    else next.delete('view');
+    setSearchParams(next);
+  };
+
+  if (!id) return <HistoricalTeamDetail />;
+
+  return (
+    <div className="space-y-4">
+      {projectablePlayed && (
+        <div className="flex justify-end">
+          <TeamViewToggle mode={mode} onChange={setMode} />
+        </div>
+      )}
+      {mode === 'projected' ? (
+        <ProjectedTeamView id={id} year={season} />
+      ) : (
+        <HistoricalTeamDetail />
+      )}
+    </div>
+  );
 }
 
 function HistoricalTeamDetail() {
@@ -954,42 +1027,28 @@ function ScheduleRow({
 // the projection is built from. Future iteration: projected schedule
 // from the predict model.
 
-// Roster-construction ledger: a CamPom-value waterfall that decomposes the
-// projection. Last season's roster value, minus departures, the returning
-// core + trajectory growth, plus transfers + recruits → projected roster
-// value, which the calibrator maps to the headline AdjEM. Every cohort is a
-// term on the same last-season-value base, so this reconciles with the
-// Future grid's roster-flow columns. cam_v3 is already minutes/GP-weighted
-// (the value, not raw box score), so these are minutes-weighted sums.
-function RosterLedger({ p }: { p: ProjectedTeam }) {
-  const base = p.returning_cam_v3_sum + p.departures_cam_v3_sum + p.uncertain_cam_v3_sum;
-  const hasBase = base > 0.5; // cam sums can be ~0/negative for weak rosters
-  const pctOf = (n: number) => (hasBase ? Math.round((n / base) * 100) : null);
-  const fmt = (v: number) => (v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1));
-  const growth = p.returning_projected_cam_v3_sum - p.returning_cam_v3_sum;
-  const projectedRoster =
-    p.returning_projected_cam_v3_sum + p.arrivals_projected_cam_v3_sum + p.recruits_cam_v3_sum;
-  const lastCount = p.returning_count + p.departures_count + p.uncertain_count;
-
-  const Row = ({
-    label,
-    detail,
-    value,
-    valueTone,
-    annot,
-    annotTone,
-    indent,
-    strong,
-  }: {
-    label: string;
-    detail?: string;
-    value: string;
-    valueTone?: string;
-    annot?: string | null;
-    annotTone?: string;
-    indent?: boolean;
-    strong?: boolean;
-  }) => (
+// One line of the roster-construction ledger: label (+ optional detail) on
+// the left, a mono value + optional right-aligned % annotation on the right.
+function LedgerRow({
+  label,
+  detail,
+  value,
+  valueTone,
+  annot,
+  annotTone,
+  indent,
+  strong,
+}: {
+  label: string;
+  detail?: string;
+  value: string;
+  valueTone?: string;
+  annot?: string | null;
+  annotTone?: string;
+  indent?: boolean;
+  strong?: boolean;
+}) {
+  return (
     <div className={`flex items-baseline justify-between gap-3 ${indent ? 'pl-4' : ''}`}>
       <div className="min-w-0 truncate">
         <span className={`text-sm ${strong ? 'font-semibold text-slate-200' : 'text-slate-300'}`}>
@@ -1007,6 +1066,24 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
       </div>
     </div>
   );
+}
+
+// Roster-construction ledger: a CamPom-value waterfall that decomposes the
+// projection. Last season's roster value, minus departures, the returning
+// core + trajectory growth, plus transfers + recruits → projected roster
+// value, which the calibrator maps to the headline AdjEM. Every cohort is a
+// term on the same last-season-value base, so this reconciles with the
+// Future grid's roster-flow columns. cam_v3 is already minutes/GP-weighted
+// (the value, not raw box score), so these are minutes-weighted sums.
+function RosterLedger({ p }: { p: ProjectedTeam }) {
+  const base = p.returning_cam_v3_sum + p.departures_cam_v3_sum + p.uncertain_cam_v3_sum;
+  const hasBase = base > 0.5; // cam sums can be ~0/negative for weak rosters
+  const pctOf = (n: number) => (hasBase ? Math.round((n / base) * 100) : null);
+  const fmt = (v: number) => (v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1));
+  const growth = p.returning_projected_cam_v3_sum - p.returning_cam_v3_sum;
+  const projectedRoster =
+    p.returning_projected_cam_v3_sum + p.arrivals_projected_cam_v3_sum + p.recruits_cam_v3_sum;
+  const lastCount = p.returning_count + p.departures_count + p.uncertain_count;
 
   return (
     <div className="space-y-1.5 rounded border border-slate-700 bg-slate-900/40 p-4">
@@ -1014,8 +1091,8 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
         <h3 className="text-sm font-semibold text-slate-200">Roster construction</h3>
         <span className="text-xs text-slate-500">CamPom value · % of last season</span>
       </div>
-      <Row label="Last season's value" detail={`${lastCount} players`} value={base.toFixed(1)} />
-      <Row
+      <LedgerRow label="Last season's value" detail={`${lastCount} players`} value={base.toFixed(1)} />
+      <LedgerRow
         indent
         label="− Departing"
         detail={`${p.departures_count} left`}
@@ -1025,7 +1102,7 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
         annotTone="text-rose-400/70"
       />
       <div className="my-1 border-t border-slate-800" />
-      <Row
+      <LedgerRow
         indent
         label="= Returning core"
         detail={`${p.returning_count} stay`}
@@ -1033,14 +1110,14 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
         annot={pctOf(p.returning_cam_v3_sum) != null ? `${pctOf(p.returning_cam_v3_sum)}% retained ↩` : null}
         annotTone="text-slate-400"
       />
-      <Row
+      <LedgerRow
         indent
         label="+ Returning growth"
         detail="trajectory dev"
         value={fmt(growth)}
         valueTone={growth >= 0 ? 'text-emerald-400' : 'text-rose-400'}
       />
-      <Row
+      <LedgerRow
         indent
         label="+ Transfers in"
         detail={`${p.arrivals_count}`}
@@ -1049,7 +1126,7 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
         annot={pctOf(p.arrivals_cam_v3_sum) != null ? `+${pctOf(p.arrivals_cam_v3_sum)}%` : null}
         annotTone="text-emerald-400/70"
       />
-      <Row
+      <LedgerRow
         indent
         label="+ Recruits"
         detail={`${p.recruits_count} · projected`}
@@ -1059,7 +1136,7 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
         annotTone="text-slate-400"
       />
       <div className="my-1 border-t border-slate-700" />
-      <Row
+      <LedgerRow
         strong
         label="= Projected roster value"
         value={projectedRoster.toFixed(1)}
@@ -1170,6 +1247,25 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   const signed = (v: number | null) =>
     v == null ? '—' : v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1);
 
+  // Report-card mode: a played season we're viewing the held-out
+  // projection for (the route serves OOF predictions + the actual
+  // result). `hasActual` drives the Actual / Miss stat boxes + the
+  // backtest honesty copy.
+  const isPlayedSeason = year <= AVAILABLE_SEASONS_FALLBACK[0];
+  const hasActual = p.actual_adj_em != null;
+  const miss =
+    hasActual && p.midpoint_adj_em != null
+      ? p.midpoint_adj_em - (p.actual_adj_em as number)
+      : null;
+  const missTone =
+    miss == null
+      ? 'text-gray-500'
+      : Math.abs(miss) <= 3
+        ? 'text-emerald-300'
+        : Math.abs(miss) <= 7
+          ? 'text-amber-300'
+          : 'text-rose-300';
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -1178,7 +1274,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           <h1 className="text-3xl font-bold flex items-center gap-3 flex-wrap">
             {displayName}
             <span className="text-xs uppercase tracking-wide px-2 py-0.5 rounded border border-amber-700/60 bg-amber-950/40 text-amber-300">
-              {seasonLabel} projection
+              {seasonLabel} {isPlayedSeason ? 'projection (backtest)' : 'projection'}
             </span>
           </h1>
           <div className="text-gray-400 mt-1 text-sm">
@@ -1192,34 +1288,71 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             minus departures + portal arrivals + HS commits.
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 min-w-[280px]">
+        <div className={`grid gap-3 ${hasActual ? 'grid-cols-3 min-w-[360px]' : 'grid-cols-2 min-w-[280px]'}`}>
           <div className="bg-gray-800 rounded-lg p-3 text-center">
             <div className="text-[10px] text-gray-400 uppercase tracking-wide">Proj AdjEM</div>
             <div className={`mt-1 inline-block px-2 py-0.5 rounded border ${tone(p.midpoint_adj_em)}`}>
               <span className="text-xl font-bold">{signed(p.midpoint_adj_em)}</span>
             </div>
           </div>
-          <div className="bg-gray-800 rounded-lg p-3 text-center">
-            <div className="text-[10px] text-gray-400 uppercase tracking-wide">
-              Δ vs {base_season - 1}-{(base_season % 100).toString().padStart(2, '0')}
+          {hasActual ? (
+            <>
+              <div className="bg-gray-800 rounded-lg p-3 text-center">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide">Actual</div>
+                <div className={`mt-1 inline-block px-2 py-0.5 rounded border ${tone(p.actual_adj_em)}`}>
+                  <span className="text-xl font-bold">{signed(p.actual_adj_em)}</span>
+                </div>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-3 text-center">
+                <div className="text-[10px] text-gray-400 uppercase tracking-wide">Miss</div>
+                <div
+                  className={`mt-1 text-lg font-mono font-semibold ${missTone}`}
+                  title="Projected minus actual AdjEM — how far the held-out forecast was off. Near zero is a good call."
+                >
+                  {signed(miss)}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="bg-gray-800 rounded-lg p-3 text-center">
+              <div className="text-[10px] text-gray-400 uppercase tracking-wide">
+                Δ vs {base_season - 1}-{(base_season % 100).toString().padStart(2, '0')}
+              </div>
+              <div className="mt-1 text-sm font-mono text-gray-300">
+                {p.midpoint_adj_em != null && p.baseline_adj_em != null
+                  ? signed(p.midpoint_adj_em - p.baseline_adj_em)
+                  : '—'}
+              </div>
             </div>
-            <div className="mt-1 text-sm font-mono text-gray-300">
-              {p.midpoint_adj_em != null && p.baseline_adj_em != null
-                ? signed(p.midpoint_adj_em - p.baseline_adj_em)
-                : '—'}
-            </div>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Honesty band — minimal version of the Projected banner. */}
+      {/* Honesty band — backtest framing for a played season, forward-looking
+          framing for the upcoming one. */}
       <div className="rounded border border-amber-800/40 bg-amber-950/20 text-amber-200 text-xs p-3 leading-relaxed">
-        <strong className="text-amber-300">Projection mode:</strong>{' '}
-        This page is the {seasonLabel} forward-looking view, not a played season. Roster = returners
-        (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal commits +
-        HS-recruit class commits. Recruits carry the Phase 6 freshman-impact model's per-recruit projected CamPom — see
-        the{' '}
-        <SeasonLink to="/projected?season=2027" className="text-amber-200 underline hover:text-amber-100">
+        {isPlayedSeason ? (
+          <>
+            <strong className="text-amber-300">Backtest:</strong>{' '}
+            What cstat would have projected <em>before</em> the {seasonLabel} season, using only
+            data available beforehand — returner forecasts are <strong>held-out</strong> (the model
+            never trained on this season), so the Proj-vs-Actual miss above is an honest grade, not a
+            hindsight fit. Roster = returners + portal commits + HS recruits as known going in.
+          </>
+        ) : (
+          <>
+            <strong className="text-amber-300">Projection mode:</strong>{' '}
+            This page is the {seasonLabel} forward-looking view, not a played season. Roster =
+            returners (minus seniors, outbound portal, firm NBA-draft departures) + incoming portal
+            commits + HS-recruit class commits. Recruits carry the Phase 6 freshman-impact model's
+            per-recruit projected CamPom.
+          </>
+        )}{' '}
+        See the{' '}
+        <SeasonLink
+          to={`/projected?season=${year}`}
+          className="text-amber-200 underline hover:text-amber-100"
+        >
           Projected {seasonLabel} grid
         </SeasonLink>{' '}
         for full methodology + cross-team rankings.
