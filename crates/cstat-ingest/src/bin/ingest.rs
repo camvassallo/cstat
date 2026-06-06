@@ -554,16 +554,14 @@ async fn main() -> Result<()> {
             with_pbp,
             pbp_only,
         } => {
+            use cstat_ingest::ingest::bootstrap_csv;
             if pbp_only {
-                let count =
-                    cstat_ingest::ingest::bootstrap_csv::load_pbp_only(&db.pool, year, &dir).await?;
+                let count = bootstrap_csv::load_pbp_only(&db.pool, year, &dir).await?;
                 println!("Loaded {count} play_by_play rows for {year} (PBP-only)");
                 return Ok(());
             }
-            let report = cstat_ingest::ingest::bootstrap_csv::bootstrap_from_csv_dir(
-                &db.pool, year, &dir, with_pbp,
-            )
-            .await?;
+            let report =
+                bootstrap_csv::bootstrap_from_csv_dir(&db.pool, year, &dir, with_pbp).await?;
             println!("{report}");
             if !no_elo {
                 info!(year, "fetching /elo for CSV-bootstrapped season");

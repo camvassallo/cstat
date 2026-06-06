@@ -270,10 +270,18 @@ async fn ingest_pbp_scoped(
             }
         }
 
-        // A page with no in-scope plays means either the real end (date filter
-        // honored) or we've fallen through into the global stream (gamecode).
-        // Either way we're done — stop before paging the rest of the season.
-        if in_scope == 0 {
+        // Termination. A page with no in-scope plays is NOT a sufficient stop
+        // signal on its own: a date can include non-D1 games we don't ingest,
+        // and if a full page lands entirely on those (out of scope) *between*
+        // two of our games, an eager break would silently drop the later games.
+        // So we keep paging while any scope game is still unseen — the
+        // date/daterange filter composes, so the real end arrives as an empty /
+        // NO_DATA page. Once every scope game has been seen, the first
+        // out-of-scope page is the tail and we stop. For a `gamecode` query
+        // (scope size 1, filter does NOT compose past page 1) this trips the
+        // moment that game's plays end, bounding the global-stream runaway.
+        let all_seen = by_game.len() == scope.len();
+        if in_scope == 0 && all_seen {
             break;
         }
         if page >= MAX_PAGES {
@@ -330,13 +338,17 @@ fn parse_api_play(
     let sort_order = nested_str(play, &["game", "sequence"]);
     let clock = nonempty_str(game.and_then(|g| g.get("time")));
     let description = nonempty_str(play.get("explanation"));
-    let scoring_play = nested_str(play, &["scoringplay"]).as_deref() == Some("Y");
     let tags = play
         .get("tags")
         .and_then(Value::as_str)
         .map(parse_tags)
         .unwrap_or_default();
     let points = points_from_tags(&tags);
+    // Derive scoring_play from points rather than the source flag so the field
+    // means the same thing on both loaders. The CSV `ScoringPlay` column omits
+    // made free throws (and the API `scoringplay` field can disagree); points>0
+    // is the consistent, source-agnostic definition.
+    let scoring_play = points > 0;
     let score_home = nested_str(play, &["game", "score-home"]).and_then(|s| s.parse().ok());
     let score_vis = nested_str(play, &["game", "score-vis"]).and_then(|s| s.parse().ok());
     let score_diff = nested_str(play, &["thediff"]).and_then(|s| parse_score_diff(&s));

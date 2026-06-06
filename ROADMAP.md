@@ -1239,10 +1239,10 @@ NatStat exposes PBP via the `/playbyplay` API endpoint (alias `/pbp`, **500 resu
 - Backfill of 5 historical seasons via API would take ~67 hrs at standard, ~13 hrs at Skybox's 2,500/hr, or under a day with API+ (100k/day, ~$/yr add-on). All of these lose to **CSV bulk-load (<1 min/season)** if the dashboard CSV is available.
 - The only API+ use case is removing the 6-IP block — relevant only if Railway rotates outbound IPs and trips the abuse policy. Test before paying.
 
-**If we do it, the build** (full phasing in `docs/pbp_methodology.md`):
-1. New migration: `play_by_play` table — (game_id, season, `seq` [dense ingest order; `Sort` is **not** row-unique], sort_order, period, clock, team_id, player_id, description, scoring_play, points, tags `TEXT[]`, score_home, score_vis, score_diff). **No `distance` column** — it's always 0 in the source (verified 2026-06-05). PK `(game_id, seq)`; idempotency unit is the game (delete-then-bulk-insert). 3.3M rows/season is fine for Postgres.
-2. CSV bulk-loader (backfill) **and** API loader (intra-season, yesterday's-games-only) normalizing into the same rows. CSV from `data/natstat_csv/YYYY/NatStat-MBB{YYYY}-Play-by-Play-*.csv` (692 MB for 2026 → `COPY` in <1 min). CSVs on disk for 2015–2020 + 2026 only; 2021–2025 need dashboard export or API.
-3. New compute step that derives:
+**Build status — P1 (raw ingest) SHIPPED & verified 2026-06-06** (full phasing in `docs/pbp_methodology.md`):
+1. [x] **Migration `029_play_by_play`** — (game_id, season, `seq` [dense ingest order; `Sort` is **not** row-unique], sort_order, period, clock, team_id, player_id, description, scoring_play, points, tags `TEXT[]`, score_home, score_vis, score_diff). **No `distance` column** — always 0 in the source. PK `(game_id, seq)`; idempotency unit is the game (delete-then-bulk-insert).
+2. [x] **CSV bulk-loader** (`bootstrap-csv --with-pbp` / `--pbp-only`, backfill) **and scope-aware API loader** (`play-by-play --date`, intra-season) normalizing into the same `PbpRow`. `--pbp-only` loads PBP without re-touching box scores. **Verified**: full 2026 load = 3,258,166 rows, 100% game coverage (6,108/6,108), 99.8% running-score-exact, dense seq, box scores untouched. Two NatStat quirks found & handled: the `/playbyplay` range filter is **only honored on page 1** (a `gamecode` query runs away into the global season stream past offset 0 → fixed with scope-aware pagination, see [[reference_natstat_pbp_pagination]]); and the feed emits **occasional duplicate play records** (faithfully stored; P2 dedups). CSVs on disk for 2015–2020 + 2026 only; 2021–2025 need dashboard export or API.
+3. [ ] New compute step (**P2**) that derives:
    - `player_game_stats.plus_minus` (overwrite the sparse API value)
    - New columns on `player_game_stats`: `paint_pts`, `transition_pts`, `second_chance_pts`, `fouls_drawn`
    - New tables: `lineup_stints` (per-stint 5-man combo + duration + +/-) and `lineup_aggregates` (season rollup)

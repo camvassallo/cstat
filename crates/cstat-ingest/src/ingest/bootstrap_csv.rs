@@ -852,7 +852,7 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
             s
         };
 
-        let scoring = cell(&row, 19);
+        let points = parse_i32(cell(&row, 20)).unwrap_or(0);
         buf.push(PbpRow {
             game_id,
             season: year,
@@ -863,8 +863,10 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
             team_id: teams.get(cell(&row, 13)).copied(),
             player_id: players.get(cell(&row, 17)).copied(),
             description: maybe(cell(&row, 18)).map(str::to_string),
-            scoring_play: !scoring.is_empty() && scoring != "N",
-            points: parse_i32(cell(&row, 20)).unwrap_or(0),
+            // Derive from points (not the CSV `ScoringPlay` column, which omits
+            // made free throws) so it matches the API loader. See playbyplay.rs.
+            scoring_play: points > 0,
+            points,
             tags: parse_tags(cell(&row, 22)),
             score_home: parse_i32(cell(&row, 10)),
             score_vis: parse_i32(cell(&row, 7)),
