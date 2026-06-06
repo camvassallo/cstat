@@ -591,6 +591,10 @@ pub async fn resolve_team_id_for_season(
 pub struct TeamLineup {
     pub lineup: Vec<Uuid>,
     pub player_names: Vec<String>,
+    /// Each player's archetype primary class, aligned by index with `lineup` /
+    /// `player_names` (NULL for a player with no computed archetype). Drives the
+    /// per-player square colors in the lineup waffle.
+    pub player_classes: Vec<Option<String>>,
     pub stint_count: i32,
     pub points_for: i32,
     pub points_against: i32,
@@ -598,10 +602,14 @@ pub struct TeamLineup {
     pub source: String,
 }
 
-/// Top 5-man lineups for a team-season, most-used (by stint count) first. The
-/// `lineup` UUIDs are resolved to player names via a LEFT JOIN, so an array
-/// member with no `players` row degrades to "Unknown" instead of dropping the
-/// lineup (array elements carry no FK — see `docs/pbp_methodology.md`).
+/// Top 5-man lineups for a team-season, most-used (by stint count) first.
+///
+/// The `lineup`, `player_names`, and `player_classes` arrays are all built from
+/// a single ordered unnest so they stay index-aligned, and are sorted **by
+/// player height ascending** (shortest first, NULLs last) — so a lineup reads
+/// like a position card (point guard → center) and the same grid column means
+/// the same size tier across every lineup. Names resolve via LEFT JOIN
+/// ("Unknown" for a missing `players` row, since array elements carry no FK).
 pub async fn get_team_lineups(
     pool: &PgPool,
     team_id: Uuid,
@@ -611,19 +619,27 @@ pub async fn get_team_lineups(
     sqlx::query_as::<_, TeamLineup>(
         r#"
         SELECT
-            la.lineup,
-            COALESCE(
-                (SELECT array_agg(COALESCE(p.name, 'Unknown') ORDER BY u.ord)
-                 FROM unnest(la.lineup) WITH ORDINALITY AS u(pid, ord)
-                 LEFT JOIN players p ON p.id = u.pid AND p.season = la.season),
-                ARRAY[]::text[]
-            ) AS player_names,
+            lp.lineup,
+            lp.player_names,
+            lp.player_classes,
             la.stint_count,
             la.points_for,
             la.points_against,
             la.plus_minus,
             la.source
         FROM lineup_aggregates la
+        CROSS JOIN LATERAL (
+            SELECT
+                array_agg(u.pid ORDER BY p.height_inches ASC NULLS LAST, u.ord)
+                    AS lineup,
+                array_agg(COALESCE(p.name, 'Unknown') ORDER BY p.height_inches ASC NULLS LAST, u.ord)
+                    AS player_names,
+                array_agg(pa.primary_class ORDER BY p.height_inches ASC NULLS LAST, u.ord)
+                    AS player_classes
+            FROM unnest(la.lineup) WITH ORDINALITY AS u(pid, ord)
+            LEFT JOIN players p ON p.id = u.pid AND p.season = la.season
+            LEFT JOIN player_archetypes pa ON pa.player_id = u.pid AND pa.season = la.season
+        ) lp
         WHERE la.team_id = $1 AND la.season = $2
         ORDER BY la.stint_count DESC, la.plus_minus DESC
         LIMIT $3
