@@ -583,6 +583,108 @@ pub async fn resolve_team_id_for_season(
     Ok(row.map(|(id,)| id))
 }
 
+/// A team's 5-man on-floor lineup with its season totals, from the PBP-derived
+/// `lineup_aggregates` rollup. `source` is `'onfloor'` (exact, from the API
+/// on-floor five) or `'replay'` (~86%-accurate SUB-replay off the CSV) — exposed
+/// so the UI can flag approximate lineups.
+#[derive(Debug, Serialize, FromRow)]
+pub struct TeamLineup {
+    pub lineup: Vec<Uuid>,
+    pub player_names: Vec<String>,
+    pub stint_count: i32,
+    pub points_for: i32,
+    pub points_against: i32,
+    pub plus_minus: i32,
+    pub source: String,
+}
+
+/// Top 5-man lineups for a team-season, most-used (by stint count) first. The
+/// `lineup` UUIDs are resolved to player names via a LEFT JOIN, so an array
+/// member with no `players` row degrades to "Unknown" instead of dropping the
+/// lineup (array elements carry no FK — see `docs/pbp_methodology.md`).
+pub async fn get_team_lineups(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+    limit: i64,
+) -> Result<Vec<TeamLineup>, sqlx::Error> {
+    sqlx::query_as::<_, TeamLineup>(
+        r#"
+        SELECT
+            la.lineup,
+            COALESCE(
+                (SELECT array_agg(COALESCE(p.name, 'Unknown') ORDER BY u.ord)
+                 FROM unnest(la.lineup) WITH ORDINALITY AS u(pid, ord)
+                 LEFT JOIN players p ON p.id = u.pid AND p.season = la.season),
+                ARRAY[]::text[]
+            ) AS player_names,
+            la.stint_count,
+            la.points_for,
+            la.points_against,
+            la.plus_minus,
+            la.source
+        FROM lineup_aggregates la
+        WHERE la.team_id = $1 AND la.season = $2
+        ORDER BY la.stint_count DESC, la.plus_minus DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(team_id)
+    .bind(season)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Season rollup of a player's PBP-derived per-game columns (shot location,
+/// scoring context, fouls drawn, on-floor plus/minus). All sums are over the
+/// games that have play-by-play; `games` is that count.
+#[derive(Debug, Serialize, FromRow)]
+pub struct PlayerPbpProfile {
+    pub games: i64,
+    pub paint_fga: i64,
+    pub paint_fgm: i64,
+    pub perimeter_fga: i64,
+    pub perimeter_fgm: i64,
+    pub transition_pts: i64,
+    pub second_chance_pts: i64,
+    pub points_off_turnovers: i64,
+    pub fouls_drawn: i64,
+    pub plus_minus_pbp: i64,
+}
+
+/// Aggregate a player's PBP-derived `player_game_stats` columns to a season
+/// profile. Returns `None` when the player has no play-by-play for the season
+/// (pre-2012 / not loaded), so the UI can hide the panel.
+pub async fn get_player_pbp_profile(
+    pool: &PgPool,
+    player_id: Uuid,
+    season: i32,
+) -> Result<Option<PlayerPbpProfile>, sqlx::Error> {
+    let row: PlayerPbpProfile = sqlx::query_as(
+        r#"
+        SELECT
+            count(*) FILTER (WHERE paint_fga IS NOT NULL) AS games,
+            COALESCE(sum(paint_fga), 0)            AS paint_fga,
+            COALESCE(sum(paint_fgm), 0)            AS paint_fgm,
+            COALESCE(sum(perimeter_fga), 0)        AS perimeter_fga,
+            COALESCE(sum(perimeter_fgm), 0)        AS perimeter_fgm,
+            COALESCE(sum(transition_pts), 0)       AS transition_pts,
+            COALESCE(sum(second_chance_pts), 0)    AS second_chance_pts,
+            COALESCE(sum(points_off_turnovers), 0) AS points_off_turnovers,
+            COALESCE(sum(fouls_drawn), 0)          AS fouls_drawn,
+            COALESCE(sum(plus_minus_pbp), 0)       AS plus_minus_pbp
+        FROM player_game_stats
+        WHERE player_id = $1 AND season = $2
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    Ok(if row.games > 0 { Some(row) } else { None })
+}
+
 /// Map a season-scoped player UUID to the equivalent UUID for `season`.
 /// Tries the cross-season `natstat_id` first (the common case) and falls
 /// back to `torvik_pid` to handle transfers — NatStat issues a fresh

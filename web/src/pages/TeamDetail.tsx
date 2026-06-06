@@ -4,9 +4,11 @@ import {
   fetchTeamDetail,
   fetchProjectedTeam,
   fetchTeamCoach,
+  fetchTeamLineups,
   type TeamProfile,
   type ScheduleEntry,
   type RosterEntry,
+  type TeamLineup,
   type ArchetypeShare,
   type ProjectedReturning,
   type ProjectedArrival,
@@ -224,6 +226,7 @@ function HistoricalTeamDetail() {
   const [archetypeDist, setArchetypeDist] = useState<ArchetypeShare[]>([]);
   const [totalTeams, setTotalTeams] = useState<number | null>(null);
   const [coach, setCoach] = useState<TeamCoachCard | null>(null);
+  const [lineups, setLineups] = useState<TeamLineup[]>([]);
   const [loading, setLoading] = useState(true);
   // Tab title tracks the loaded team and reflects the season selector so a
   // shared `/teams/<id>?season=2025` link reads "Duke 2025 — CamPom".
@@ -293,6 +296,21 @@ function HistoricalTeamDetail() {
       cancelled = true;
     };
   }, [id]);
+
+  // PBP-derived top lineups — own request, like the coach card, so it doesn't
+  // wait on the main payload's projection loop. Keyed on (id, season); the
+  // endpoint resolves the cross-season UUID itself, and returns [] when the
+  // season has no PBP-derived lineups.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    fetchTeamLineups(id, season)
+      .then((r) => !cancelled && setLineups(r.lineups))
+      .catch(() => !cancelled && setLineups([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [id, season]);
 
   // Release the season-selector override on unmount so the dropdown returns
   // to the global list when the user navigates away.
@@ -509,8 +527,99 @@ function HistoricalTeamDetail() {
       {/* Roster */}
       <RosterTable roster={roster} />
 
+      {/* Top 5-man lineups (PBP-derived) */}
+      {lineups.length > 0 && <LineupsTable lineups={lineups} />}
+
       {/* Schedule */}
       <ScheduleTable schedule={schedule} teamName={team.name} season={season} />
+    </div>
+  );
+}
+
+type LineupSortKey = 'stint_count' | 'plus_minus' | 'points_for' | 'points_against';
+
+/// Top 5-man on-floor lineups, from PBP. `stint_count` is a usage proxy (we
+/// don't have minute durations); +/- is the headline. Replay-sourced lineups
+/// are flagged approximate.
+function LineupsTable({ lineups }: { lineups: TeamLineup[] }) {
+  const [sort, setSort] = useState<{ key: LineupSortKey; dir: SortDir }>({
+    key: 'stint_count',
+    dir: 'desc',
+  });
+  const onSort = (key: LineupSortKey) =>
+    setSort((s) =>
+      s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' },
+    );
+  const sorted = useMemo(
+    () => [...lineups].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir)),
+    [lineups, sort],
+  );
+  const approximate = lineups.some((l) => l.source === 'replay');
+
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 className="text-xl font-bold">Top Lineups</h2>
+        {approximate && (
+          <span
+            className="text-xs px-1.5 py-0.5 rounded bg-gray-900 text-gray-400 uppercase tracking-wide"
+            title="Lineups reconstructed from play-by-play substitutions (~86% accurate). Exact when sourced from the live API on-floor feed."
+          >
+            Approximate · replay
+          </span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm whitespace-nowrap">
+          <thead>
+            <tr className="text-gray-400 border-b border-gray-700">
+              <th className="py-2 px-2 text-left font-medium">Lineup</th>
+              <SortHeader label="Stints" sortKey="stint_count" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="PF" sortKey="points_for" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="PA" sortKey="points_against" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="+/-" sortKey="plus_minus" current={sort} onSort={onSort} align="right" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((l, i) => (
+              <tr key={i} className="border-b border-gray-800 hover:bg-gray-800">
+                <td className="py-2 px-2">
+                  {l.player_names.map((n, j) => (
+                    <span key={j}>
+                      {j > 0 && <span className="text-gray-600">, </span>}
+                      <SeasonLink
+                        to={`/players/${l.lineup[j]}`}
+                        className="text-blue-400 hover:underline"
+                      >
+                        {n}
+                      </SeasonLink>
+                    </span>
+                  ))}
+                </td>
+                <td className="py-2 px-2 text-right tabular-nums">{l.stint_count}</td>
+                <td className="py-2 px-2 text-right tabular-nums">{l.points_for}</td>
+                <td className="py-2 px-2 text-right tabular-nums">{l.points_against}</td>
+                <td
+                  className={`py-2 px-2 text-right tabular-nums font-semibold ${
+                    l.plus_minus > 0
+                      ? 'text-green-400'
+                      : l.plus_minus < 0
+                        ? 'text-red-400'
+                        : 'text-gray-400'
+                  }`}
+                >
+                  {l.plus_minus > 0 ? '+' : ''}
+                  {l.plus_minus}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-gray-500 mt-2">
+        Five-man on-floor combinations, most-used first. Stints = distinct on-floor windows (a
+        usage proxy); +/- is points scored minus allowed while that five played.
+      </p>
     </div>
   );
 }
