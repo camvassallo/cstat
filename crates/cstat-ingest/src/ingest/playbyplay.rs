@@ -40,6 +40,11 @@ pub struct PbpRow {
     pub score_home: Option<i32>,
     pub score_vis: Option<i32>,
     pub score_diff: Option<i32>,
+    /// Raw NatStat on-floor player-code strings (`game.onfloorhome` /
+    /// `onfloorvis`), API-only. `None` for CSV rows (the export omits them);
+    /// the lineup derivation falls back to SUB-replay when these are absent.
+    pub onfloor_home: Option<String>,
+    pub onfloor_vis: Option<String>,
 }
 
 /// Counts from a PBP ingest run, surfaced to the CLI for a sanity check
@@ -113,7 +118,7 @@ pub async fn replace_game_pbp(
 }
 
 /// Chunked multi-row INSERT into `play_by_play`. Postgres caps bind params at
-/// 65535; at 15 columns/row we chunk well under that (1000 rows/statement).
+/// 65535; at 17 columns/row we chunk well under that (1000 rows/statement).
 /// Does NOT delete first — callers manage idempotency (per-game
 /// [`replace_game_pbp`], or a season-wide delete in the CSV path).
 pub async fn insert_pbp_rows(
@@ -125,7 +130,7 @@ pub async fn insert_pbp_rows(
         let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
             "INSERT INTO play_by_play (game_id, season, seq, sort_order, period, clock, \
              team_id, player_id, description, scoring_play, points, tags, \
-             score_home, score_vis, score_diff) ",
+             score_home, score_vis, score_diff, onfloor_home, onfloor_vis) ",
         );
         qb.push_values(chunk, |mut b, r| {
             b.push_bind(r.game_id)
@@ -142,7 +147,9 @@ pub async fn insert_pbp_rows(
                 .push_bind(r.tags.clone())
                 .push_bind(r.score_home)
                 .push_bind(r.score_vis)
-                .push_bind(r.score_diff);
+                .push_bind(r.score_diff)
+                .push_bind(r.onfloor_home.clone())
+                .push_bind(r.onfloor_vis.clone());
         });
         qb.build().execute(&mut **tx).await?;
         total += chunk.len() as u64;
@@ -369,6 +376,11 @@ fn parse_api_play(
     let player_id = nested_str(play, &["players", "primary", "code"])
         .and_then(|code| players.get(&code).copied());
 
+    // On-floor fives, stored verbatim as the API's comma-separated code strings
+    // (resolved to UUIDs at derivation time). The exact lineup source.
+    let onfloor_home = nested_str(play, &["game", "onfloorhome"]);
+    let onfloor_vis = nested_str(play, &["game", "onfloorvis"]);
+
     PbpRow {
         game_id,
         season,
@@ -385,6 +397,8 @@ fn parse_api_play(
         score_home,
         score_vis,
         score_diff,
+        onfloor_home,
+        onfloor_vis,
     }
 }
 

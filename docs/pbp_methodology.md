@@ -150,32 +150,43 @@ We never re-pull a season. The nightly job fetches **only the prior day's finish
 - Volume: 50–200 games/day × ~530 rows/game ≈ 27k–106k rows ≈ **55–215 API calls/day** at 500/page — a small fraction of the 500/hr standard budget.
 - **Crafty-fetch headroom (TBD, not in v1):** because the unit of idempotency is the game, the fetch can be narrowed further — e.g. only games whose `games` row was updated yesterday, by-gamecode fetches for a known schedule, or skipping games already present in `play_by_play`. v1 ships the simple by-date pull; the lighter variants are an optimization once the pipeline is proven.
 
-## Derivation: `compute_pbp_aggregates`
+## Derivation: `compute_pbp_aggregates` (P2a) + `compute_pbp_lineups` (P2b)
 
-A new compute step (runs after `backfill_game_stats`, before `compute_player_season_stats`), source-agnostic, operating on whichever games are in `play_by_play`. For the nightly path it runs **only over the touched `game_id`s**, not the season.
+Two compute steps run after `compute_player_season_stats` and before the team/CamPom steps (steps 5 and 6 of 15), source-agnostic, operating on whichever games are in `play_by_play`. Both no-op for seasons with no PBP loaded.
 
-### SUB-replay → lineups
+### Lineups & stints — P2b, SHIPPED 2026-06-06 (hybrid sourcing)
 
-For each game, walk rows in `seq` order maintaining the current 5-man on-floor set per team:
-- Seed each team's starters from the first appearances before the first sub (or from `player_game_stats.starter`).
-- On `SUB` rows, apply "sub in" / "sub out" to the acting team's set.
-- At each period boundary, validate the set size is 5; log and self-heal anomalies (missing sub at halftime, etc.).
+`compute.rs::compute_pbp_lineups` (compute step 6/15) produces, per game, a set of **stints** (contiguous windows where both teams' on-floor fives were constant) and from them `lineup_stints`, `lineup_aggregates`, and per-player `plus_minus_pbp`. The engine lives in `crates/cstat-core/src/pbp_replay.rs` (pure + unit-tested).
+
+**Hybrid sourcing** (the accuracy/cost tradeoff resolved with the user, 2026-06-06):
+- **Exact (`onfloor`)** — when a game's `play_by_play` rows carry the stored API `onfloorhome`/`onfloorvis` (nightly-forward + eventual backfill), the stint is built directly from them. Exact.
+- **Replay (`replay`)** — otherwise (all CSV-loaded seasons today), SUB-replay reconstructs the fives: seed from `player_game_stats.starter`, mutate a live 5-man set on each `SUB` row (recovering the ~4% null-`player_id` subs by matching the description name to the game roster), and attribute each non-sub play to the current lineup.
+- Per-game the loader picks `onfloor` if any row has it, else `replay`. `lineup_aggregates.source` records which (so the UI can flag approximate data).
+
+**Measured replay accuracy: ~85.6%** exact 5-on-5 lineup match vs the API `onfloorhome` oracle (the gated integration test `tests/pbp_replay_oracle.rs`). The ceiling is feed sub-pairing quality, not seeding/resolution — naive self-heal (add any acting player) *hurts* (balloons the set past 5), so it's deliberately omitted. Off-5 drift stints are kept in the local `lineup_stints` but **excluded from `lineup_aggregates`** (5-man only); the served aggregates capture ~97% of team points and reconcile exactly to actual scoring on the contiguous stint sum.
+
+**Score deltas** chain off the authoritative running score (`score_home`/`score_vis`), carried forward with `max` — some event rows ("media timeout", "End of period") report score `0`, which must not reset the running total (that bug produced 137%-over-counted points before the fix).
 
 Outputs:
-- **`lineup_stints (game_id, period, start_clock, end_clock, team_id, lineup INT[5], opp_lineup INT[5], score_delta, possessions)`** — one row per contiguous on-floor combination.
-- **`lineup_aggregates (season, team_id, lineup INT[5], minutes, plus_minus, ortg, drtg, possessions)`** — season rollup; this is what the site reads.
+- **`lineup_stints`** (local-only) — one row per team per stint: `(game_id, season, period, start_seq, end_seq, team_id, lineup UUID[], opp_lineup UUID[], points_for, points_against, source)`.
+- **`lineup_aggregates`** (ships to prod) — season rollup per `(season, team_id, 5-man lineup)`: `stint_count, points_for, points_against, plus_minus, source`.
+- **`player_game_stats.plus_minus_pbp`** (ships to prod) — each player's summed **5-man** on-floor stint differential. Gated to 5-man stints (like the aggregates) so it reconciles with `lineup_aggregates` and isn't poisoned by off-5 replay-drift windows, where the on-floor membership is wrong.
 
-**Validation oracle:** when the API JSON is the source (and carries `onfloorhome`/`onfloorvis`), assert the replayed lineup matches the embedded one on a sample of games. This catches replay bugs without making the derivation depend on a column the CSV lacks.
+**Serving note:** `lineup_aggregates.lineup` is a `UUID[]`; Postgres can't FK array elements, so a player UUID in a lineup has no referential guarantee. Serving queries must `LEFT JOIN unnest(lineup)` to `players` (not `INNER JOIN`), or a lineup with one unresolved member would silently vanish.
+
+**Performance:** the derivation bulk-loads all per-game metadata (teams, starters, name maps, code→UUID) in 4 queries up front, leaving only a per-game PK-indexed plays query, then replays in memory — ~40 s for a full 6,108-game season.
+
+**Validation oracle:** when the source is `onfloor` (API JSON carries `onfloorhome`/`onfloorvis`), the replayed lineup can be asserted against the embedded one — this is exactly the 85.6% measurement above, and it never makes the derivation *depend* on a column the CSV lacks.
 
 ### Tag-based per-`(player_id, game_id)` columns (no replay) — P2a, SHIPPED 2026-06-06
 
-Added to `player_game_stats` (migration `030`, additive, ships to prod) by `compute.rs::compute_pbp_aggregates` (compute step 5/14). All counts are over **source-deduplicated** plays (`DISTINCT ON (game_id, sort_order, description, player_id)`):
+Added to `player_game_stats` (migration `030`, additive, ships to prod) by `compute.rs::compute_pbp_aggregates` (compute step 5/15). All counts are over **source-deduplicated** plays (`DISTINCT ON (game_id, sort_order, description, player_id)`):
 - `paint_fga`/`paint_fgm`, `perimeter_fga`/`perimeter_fgm` — `paint` tag presence on FGA/3FA (attempts) and FGM/3FM (makes); perimeter = total − paint.
 - `transition_pts` (`brk`), `second_chance_pts` (`2ch`), `points_off_turnovers` (`offto`) — summed `points` on the player's tagged scoring plays.
 - `fouls_drawn` — `FOULED` event count for the player (who DREW the foul, distinct from who shot the FTs).
 - Semantics: NULL = no PBP for that player-game; 0 = had PBP, none of this event. Verified on 2026: 111,196 player-games populated; spot-checks textbook (a 7-ft center 97% paint / 242 fouls drawn; a perimeter wing 5% paint).
 
-Still in P2b (needs SUB-replay): `plus_minus_pbp` (from stint deltas, overwrites the sparse box-score `plus_minus`). Optional later: `assist_edges (season, passer_id, scorer_id, count)` linking `AST` → the `FGM` it set up.
+`plus_minus_pbp` ships in P2b (above, from stint deltas). Optional later: `assist_edges (season, passer_id, scorer_id, count)` linking `AST` → the `FGM` it set up.
 
 ## Data-quality notes (from P1 verification)
 
@@ -211,7 +222,7 @@ The job **cannot run as a pure-prod cron** because raw PBP lives only in the loc
 |----|-------|------|
 | **P1** ✅ SHIPPED & VERIFIED (2026-06-06) | Migration `029`; CSV loader (`--with-pbp` / `--pbp-only`) + scope-aware API loader + `play-by-play` subcommand; `sync_to_prod.sh` `EXCLUDED` patched. Verified: full 2026 load = 3,258,166 rows / 100% game coverage / 99.8% running-score-exact / dense seq / box scores untouched. Surfaced & fixed the gamecode-pagination runaway; documented the source-duplicate-play quirk for P2. | Low — mirrored existing ingest patterns. |
 | **P2a** ✅ SHIPPED (2026-06-06) | `compute_pbp_aggregates` (compute step 5/14) + migration `030`: tag-based `player_game_stats` columns (paint/perimeter FGA·FGM, transition/2nd-chance/off-TO pts, fouls drawn), over source-deduplicated plays. Verified on 2026 (111,196 player-games). | Low — pure SQL, no replay. |
-| **P2b** | SUB-replay → `lineup_stints` (local-only) / `lineup_aggregates` (prod) + `plus_minus_pbp`. Validate replay vs the API `onfloorhome` oracle. | **Highest** — SUB-replay edge cases (OT, halftime, missing subs, null-player sub rows) need test coverage. |
+| **P2b** ✅ SHIPPED (2026-06-06) | Migration `031` + `compute_pbp_lineups` (step 6/15) + `pbp_replay.rs`: hybrid `lineup_stints` (local) / `lineup_aggregates` (prod) / `plus_minus_pbp` from exact API on-floor or ~85.6%-accurate SUB-replay. Oracle-validated; integrity reconciles exactly. Bulk-loaded (~40 s/season). | Highest — landed, with the edge cases (OT, score-0 rows, null-player subs, self-heal) handled & tested. |
 | **P3** | Wire API loader + incremental recompute + derived-only sync into the nightly flow. This is the command the cron calls. | Low–medium. |
 | **P4+** | Utilization (ROADMAP Phase 6, unchanged & parallelizable): ML features (`lineup_quality`, `transition_rate`, `paint_rate`; PBP-era vs pre-PBP model variants since coverage starts 2012); API endpoints (`/players/:id/on-off`, `/teams/:id/lineups`, `/games/:id/playbyplay`); UI (player on/off, team lineups tab, game-detail page). | Per-surface. |
 
