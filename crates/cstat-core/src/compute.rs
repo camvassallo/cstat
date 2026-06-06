@@ -1568,13 +1568,13 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
         );
     }
 
-    info!("step 1/13: deduplicating players");
+    info!("step 1/14: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
-    info!("step 2/13: backfilling derived game stats");
+    info!("step 2/14: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 3/13: estimating missing team defensive rebounds");
+    info!("step 3/14: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
     info!("step 4/14: computing player season stats (with rate stats)");
