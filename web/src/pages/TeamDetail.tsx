@@ -551,8 +551,9 @@ function textOn(hex: string): string {
 }
 
 /// Top-5 lineups as a per-row "waffle": five archetype-colored name pills (one
-/// per player) so a lineup's identity reads at a glance from the colors, with
-/// the headline stats (stints, +/-) alongside. Full-width panel above the table.
+/// per player, ordered shortest→tallest so grid columns align by size) so a
+/// lineup's identity reads at a glance from the colors, with the headline stats
+/// (stints, +/-) alongside. A full-width panel — the single lineups surface.
 function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
   const top = lineups.slice(0, 5);
   const approximate = top.some((l) => l.source === 'replay');

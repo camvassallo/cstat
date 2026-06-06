@@ -705,7 +705,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
       - [ ] On/off split chart, top lineup partners table — blocked on the `lineup_stints`-on-prod gap above.
       - [ ] Clutch splits stat box (needs PBP clock/score filtering, a separate derived surface).
     - **Team detail page** (`TeamDetail.tsx`):
-      - [x] **Top Lineups table SHIPPED 2026-06-06** — five player names (linked), stints, points for/against, +/-, sortable, with an "approximate · replay" flag (off `GET /api/teams/:id/lineups`). Stints stand in for minutes (no clock durations stored).
+      - [x] **Top-5 Lineups waffle SHIPPED 2026-06-06** — a per-lineup row of five archetype-colored name pills (one per player), laid out as an aligned 5-col grid **sorted shortest→tallest** so the columns read like positions (PG→C) and align across rows, with stints + color-coded +/- alongside (off `GET /api/teams/:id/lineups`, which now also returns each player's `primary_class`). Replaces the earlier sortable table; PF/PA and per-lineup sort were dropped in favor of the visual. `lineup_aggregates`/`player_archetypes` both ship to prod, so colors render there. Stints stand in for minutes (no clock durations stored). **Follow-up for "representativeness": a `plays` column on `lineup_aggregates`** (sum of `end_seq − start_seq` per stint, a possession proxy from `lineup_stints`) would unlock a real per-100 efficiency instead of raw totals.
       - [ ] Top-N by +/- per 100 poss, substitution heatmap — need possessions/clock data not currently derived.
     - **Game detail page** — *new page entirely* (no existing surface for individual games). Routes: `/games/:id`. Components:
       - Header: matchup, final score, venue, attendance, conference
