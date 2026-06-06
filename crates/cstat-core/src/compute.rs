@@ -1491,6 +1491,66 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
 }
 
 /// Run all compute steps in order.
+/// P2a: derive per-`(player, game)` play-by-play aggregates onto
+/// `player_game_stats` from the local-only `play_by_play` table. Shot-location
+/// split from the `paint` tag, context points from `brk` / `2ch` / `offto`, and
+/// fouls drawn from `FOULED` (which marks who DREW the foul, not who shot the
+/// FTs). These columns ship to prod; raw `play_by_play` does not.
+///
+/// Source-duplicate plays — NatStat occasionally emits one play twice (distinct
+/// ids, identical content; see `docs/pbp_methodology.md`) — are collapsed by
+/// `(game_id, sort_order, description, player_id)` before counting, so the
+/// counts aren't inflated.
+///
+/// Idempotent and season-scoped: recomputes/overwrites every player-game that
+/// has PBP. A player-game with no `play_by_play` rows keeps NULL columns
+/// (NULL = no PBP data; 0 = had PBP but none of this event), so seasons without
+/// PBP loaded are simply untouched.
+pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE player_game_stats pgs
+         SET paint_fga            = d.paint_fga,
+             paint_fgm            = d.paint_fgm,
+             perimeter_fga        = d.tot_fga - d.paint_fga,
+             perimeter_fgm        = d.tot_fgm - d.paint_fgm,
+             transition_pts       = d.transition_pts,
+             second_chance_pts    = d.second_chance_pts,
+             points_off_turnovers = d.points_off_turnovers,
+             fouls_drawn          = d.fouls_drawn
+         FROM (
+             WITH dedup AS (
+                 SELECT DISTINCT ON (game_id, sort_order, description, player_id)
+                        game_id, player_id, tags, points
+                 FROM play_by_play
+                 WHERE season = $1 AND player_id IS NOT NULL
+                 ORDER BY game_id, sort_order, description, player_id, seq
+             )
+             SELECT
+                 player_id,
+                 game_id,
+                 count(*) FILTER (WHERE 'paint' = ANY(tags) AND ('FGA' = ANY(tags) OR '3FA' = ANY(tags)))::int AS paint_fga,
+                 count(*) FILTER (WHERE 'paint' = ANY(tags) AND ('FGM' = ANY(tags) OR '3FM' = ANY(tags)))::int AS paint_fgm,
+                 count(*) FILTER (WHERE 'FGA' = ANY(tags) OR '3FA' = ANY(tags))::int AS tot_fga,
+                 count(*) FILTER (WHERE 'FGM' = ANY(tags) OR '3FM' = ANY(tags))::int AS tot_fgm,
+                 COALESCE(sum(points) FILTER (WHERE 'brk' = ANY(tags)), 0)::int   AS transition_pts,
+                 COALESCE(sum(points) FILTER (WHERE '2ch' = ANY(tags)), 0)::int   AS second_chance_pts,
+                 COALESCE(sum(points) FILTER (WHERE 'offto' = ANY(tags)), 0)::int AS points_off_turnovers,
+                 count(*) FILTER (WHERE 'FOULED' = ANY(tags))::int AS fouls_drawn
+             FROM dedup
+             GROUP BY player_id, game_id
+         ) d
+         WHERE pgs.player_id = d.player_id
+           AND pgs.game_id = d.game_id
+           AND pgs.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+    let n = res.rows_affected();
+    info!(season, updated = n, "computed PBP per-player aggregates");
+    Ok(n)
+}
+
 pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {
     let mut report = ComputeReport::default();
 
@@ -1517,34 +1577,39 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
     info!("step 3/13: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 4/13: computing player season stats (with rate stats)");
+    info!("step 4/14: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
-    info!("step 5/13: computing team four factors");
+    // PBP aggregates run after season stats and before team/CamPom steps. No-op
+    // for seasons with no play_by_play rows loaded (pre-2012 / not ingested).
+    info!("step 5/14: computing play-by-play per-player aggregates");
+    report.pbp_aggregates = compute_pbp_aggregates(pool, season).await?;
+
+    info!("step 6/14: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 6/13: computing adjusted efficiency (KenPom-style)");
+    info!("step 7/14: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 7/13: computing individual ORTG/DRTG (Torvik passthrough)");
+    info!("step 8/14: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 8/13: computing player SOS");
+    info!("step 9/14: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 9/13: computing CamPom composites");
+    info!("step 10/14: computing CamPom composites");
     report.campom = compute_campom(pool, season).await?;
 
-    info!("step 10/13: computing rolling averages");
+    info!("step 11/14: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 11/13: computing derived game fields");
+    info!("step 12/14: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 12/13: computing schedules");
+    info!("step 13/14: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 13/13: computing player percentiles");
+    info!("step 14/14: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -1557,6 +1622,7 @@ pub struct ComputeReport {
     pub backfilled: u64,
     pub estimated_rebounds: u64,
     pub player_season_stats: u64,
+    pub pbp_aggregates: u64,
     pub team_four_factors: u64,
     pub adjusted_efficiency: u64,
     pub individual_ratings: u64,
@@ -1572,11 +1638,12 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.deduplicated_players,
             self.backfilled,
             self.estimated_rebounds,
             self.player_season_stats,
+            self.pbp_aggregates,
             self.team_four_factors,
             self.adjusted_efficiency,
             self.individual_ratings,
@@ -1599,6 +1666,7 @@ mod tests {
         let report = ComputeReport::default();
         let s = format!("{report}");
         assert!(s.contains("0 deduped"));
+        assert!(s.contains("0 pbp aggregates"));
         assert!(s.contains("0 percentiles"));
     }
 }

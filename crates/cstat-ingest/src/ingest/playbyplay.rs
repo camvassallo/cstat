@@ -277,11 +277,20 @@ async fn ingest_pbp_scoped(
         // So we keep paging while any scope game is still unseen — the
         // date/daterange filter composes, so the real end arrives as an empty /
         // NO_DATA page. Once every scope game has been seen, the first
-        // out-of-scope page is the tail and we stop. For a `gamecode` query
-        // (scope size 1, filter does NOT compose past page 1) this trips the
-        // moment that game's plays end, bounding the global-stream runaway.
+        // out-of-scope page is the tail and we stop.
         let all_seen = by_game.len() == scope.len();
         if in_scope == 0 && all_seen {
+            break;
+        }
+        // Single-target queries (`gamecode`, or a one-game date) do NOT compose
+        // past page 1 for a gamecode, so `all_seen` can never trip if that game
+        // simply has no PBP (postponed / feed gap / bad code) — without this the
+        // loop would walk the global season stream to the MAX_PAGES backstop.
+        // Page 1 (offset 0) is always filter-honored, so if a sole target hasn't
+        // shown up by the time its first page yields nothing in scope, it has no
+        // plays: stop. Guarded to size 1 so multi-game dates (which may legitimately
+        // open with an out-of-scope non-D1 game) keep paging.
+        if scope.len() == 1 && in_scope == 0 && by_game.is_empty() {
             break;
         }
         if page >= MAX_PAGES {
