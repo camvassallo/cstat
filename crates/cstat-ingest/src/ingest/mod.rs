@@ -3,6 +3,7 @@ pub mod coaches;
 pub mod draft;
 pub mod elo;
 pub mod games;
+pub mod playbyplay;
 pub mod players;
 pub mod recruits;
 pub mod season;

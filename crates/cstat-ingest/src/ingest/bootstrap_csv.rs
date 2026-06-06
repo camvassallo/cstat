@@ -7,10 +7,15 @@
 //!
 //! Expected layout: `data/natstat_csv/YYYY/NatStat-MBB{YYYY}-{Kind}-*.csv`
 //! for kinds `Teams`, `Games`, `Team_Statlines`, `Player_Statlines`.
-//! `Players.csv` and `Play-by-Play.csv` are intentionally skipped —
-//! Players uses a different ID space (registration IDs ≠ player ids in
-//! box scores) so the box-score path is authoritative as in the API
-//! ingest. PBP lives in its own future loader.
+//! `Players.csv` is intentionally skipped — Players uses a different ID space
+//! (registration IDs ≠ player ids in box scores) so the box-score path is
+//! authoritative as in the API ingest.
+//!
+//! `Play-by-Play.csv` is loaded only when the caller opts in (`with_pbp`); it's
+//! the backfill half of the PBP pipeline (the API loader in `playbyplay.rs` is
+//! the intra-season half). Both normalize into the same local-only
+//! `play_by_play` table — see `playbyplay::PbpRow` and `docs/pbp_methodology.md`.
+//! PBP is opt-in because it's ~3.35M rows/season and most backfills don't want it.
 //!
 //! ID mapping caveat: most CSVs use NatStat's numeric `TeamID`
 //! (e.g. `2031759`) but our DB stores `teams.natstat_id` as the short
@@ -30,6 +35,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::playbyplay::{PbpRow, insert_pbp_rows, parse_score_diff, parse_tags};
 use super::team_aliases;
 
 /// Per-table row counts from a bootstrap run. Surfaced to the CLI so the
@@ -41,14 +47,20 @@ pub struct BootstrapCsvReport {
     pub players: u64,
     pub team_game_stats: u64,
     pub player_game_stats: u64,
+    pub play_by_play: u64,
 }
 
 impl std::fmt::Display for BootstrapCsvReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "bootstrap_csv: teams={} games={} players={} team_game_stats={} player_game_stats={}",
-            self.teams, self.games, self.players, self.team_game_stats, self.player_game_stats
+            "bootstrap_csv: teams={} games={} players={} team_game_stats={} player_game_stats={} play_by_play={}",
+            self.teams,
+            self.games,
+            self.players,
+            self.team_game_stats,
+            self.player_game_stats,
+            self.play_by_play
         )
     }
 }
@@ -60,8 +72,9 @@ pub async fn bootstrap_from_csv_dir(
     pool: &PgPool,
     year: i32,
     dir: &Path,
+    with_pbp: bool,
 ) -> Result<BootstrapCsvReport> {
-    info!(year, dir = %dir.display(), "starting CSV bootstrap");
+    info!(year, dir = %dir.display(), with_pbp, "starting CSV bootstrap");
 
     let teams_csv = find_csv(dir, year, "Teams")?;
     let games_csv = find_csv(dir, year, "Games")?;
@@ -90,6 +103,14 @@ pub async fn bootstrap_from_csv_dir(
         player_game_stats = report.player_game_stats,
         "loaded player_game_stats"
     );
+
+    // PBP last — it depends on games + players already being loaded (it
+    // resolves against them) and is opt-in due to its volume.
+    if with_pbp {
+        let pbp_csv = find_csv(dir, year, "Play-by-Play")?;
+        report.play_by_play = load_play_by_play(pool, year, &pbp_csv).await?;
+        info!(count = report.play_by_play, "loaded play_by_play");
+    }
 
     info!(?report, "CSV bootstrap complete");
     Ok(report)
@@ -760,6 +781,113 @@ async fn load_player_statlines(
 // ---------------------------------------------------------------------------
 // Helpers: in-memory ID maps to avoid per-row lookups during insert loops.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Optional step: Play-by-Play.csv → play_by_play (local-only, --with-pbp)
+// ---------------------------------------------------------------------------
+
+/// Columns (0-based): GameDay 0, GameID 1, Sort 2, Period 3, Time 4,
+/// Visitor 5, VisitorID 6, ScoreVis 7, Home 8, HomeID 9, ScoreHome 10,
+/// Team 11, TeamID 12, TeamAbbrev 13, OppID 14, Opp 15, Diff 16, PlayerID 17,
+/// Description 18, ScoringPlay 19, Points 20, Distance 21, Tags 22,
+/// FieldHome 23, FieldVis 24.
+///
+/// Unlike the box-score CSVs, PBP carries `TeamAbbrev` directly (= our
+/// `teams.natstat_id`), so no numeric→abbrev bridge is needed, and `PlayerID`
+/// matches `players.natstat_id` as elsewhere. `Distance` is ignored (always 0).
+/// `FieldHome`/`FieldVis` are ignored (always empty — lineups come from
+/// SUB-replay in the P2 derivation, not from these columns).
+///
+/// Idempotency: the file is one whole season, so we replace the season
+/// (`DELETE WHERE season`) up front, then assign a dense `seq` per game in file
+/// order (rows for a game are contiguous; a per-game counter is robust anyway).
+async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64> {
+    const BATCH: usize = 5000;
+
+    let games = game_uuid_map(pool, year).await?; // natstat_id -> (uuid, date)
+    let teams = pbp_team_abbrev_map(pool, year).await?; // abbrev -> uuid
+    let players = player_uuid_map(pool, year).await?; // natstat_id -> uuid
+
+    // Full-season replace: re-running the CSV load swaps the season cleanly.
+    sqlx::query("DELETE FROM play_by_play WHERE season = $1")
+        .bind(year)
+        .execute(pool)
+        .await?;
+
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(File::open(path).with_context(|| format!("open {}", path.display()))?);
+
+    let mut seqs: HashMap<Uuid, i32> = HashMap::new();
+    let mut buf: Vec<PbpRow> = Vec::with_capacity(BATCH);
+    let mut total = 0u64;
+    let mut skipped = 0u64;
+    let mut tx: Transaction<'_, Postgres> = pool.begin().await?;
+
+    for result in rdr.records() {
+        let row = result?;
+        let Some((game_id, _date)) = games.get(cell(&row, 1)).copied() else {
+            // Game not ingested (non-D1 / missing) — can't store without the FK.
+            skipped += 1;
+            continue;
+        };
+        let seq = {
+            let e = seqs.entry(game_id).or_insert(0);
+            let s = *e;
+            *e += 1;
+            s
+        };
+
+        let scoring = cell(&row, 19);
+        buf.push(PbpRow {
+            game_id,
+            season: year,
+            seq,
+            sort_order: maybe(cell(&row, 2)).map(str::to_string),
+            period: parse_i32(cell(&row, 3)).unwrap_or(0),
+            clock: maybe(cell(&row, 4)).map(str::to_string),
+            team_id: teams.get(cell(&row, 13)).copied(),
+            player_id: players.get(cell(&row, 17)).copied(),
+            description: maybe(cell(&row, 18)).map(str::to_string),
+            scoring_play: !scoring.is_empty() && scoring != "N",
+            points: parse_i32(cell(&row, 20)).unwrap_or(0),
+            tags: parse_tags(cell(&row, 22)),
+            score_home: parse_i32(cell(&row, 10)),
+            score_vis: parse_i32(cell(&row, 7)),
+            score_diff: parse_score_diff(cell(&row, 16)),
+        });
+
+        if buf.len() >= BATCH {
+            total += insert_pbp_rows(&mut tx, &buf).await?;
+            buf.clear();
+            tx.commit().await?;
+            tx = pool.begin().await?;
+        }
+    }
+    if !buf.is_empty() {
+        total += insert_pbp_rows(&mut tx, &buf).await?;
+    }
+    tx.commit().await?;
+
+    if skipped > 0 {
+        warn!(
+            skipped,
+            "pbp rows skipped: game not ingested for this season"
+        );
+    }
+    Ok(total)
+}
+
+/// Build `teams.natstat_id (abbrev) -> teams.id` for the season. PBP CSV's
+/// `TeamAbbrev` column maps to this directly (no numeric bridge).
+async fn pbp_team_abbrev_map(pool: &PgPool, year: i32) -> Result<HashMap<String, Uuid>> {
+    let rows: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, natstat_id FROM teams WHERE season = $1")
+            .bind(year)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|(id, code)| (code, id)).collect())
+}
 
 /// Build `Abbrev -> teams.id` map for the season. Called after load_teams
 /// has populated the rows.
