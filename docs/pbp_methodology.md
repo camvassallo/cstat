@@ -108,7 +108,13 @@ Both resolve identifiers exactly as the box-score path does: `GameID → games.n
 
 **NatStat only honors the `range` filter on page 1.** Past offset 0, a `gamecode` query silently returns the **global season play-by-play stream** — verified: offset 23000 of gamecode 1511104 came back as a *different* game (1510339). A naive "paginate until the response is empty" loop (`get_all_pages`) therefore never terminates on a gamecode query and runs away through all ~6,700 pages of the season. (One test run reached offset 24,000 / 49 requests before being killed. Budget note: NatStat did *not* decrement `ratelimit-remaining` for these — it stayed pinned at 500 — so the runaway cost work, not quota, but it must not ship.)
 
-The loader therefore does **not** use `get_all_pages`. It paginates scope-aware (`ingest_pbp_scoped`): it computes the in-scope game-code set up front (for a date: the games on that date from our own `games` table; for a gamecode: just that code), keeps only in-scope plays, and **stops as soon as a page yields zero in-scope plays**. This bounds any query to ~1 page past its real end regardless of the filter quirk, and guarantees we never write a game we didn't ask for.
+The loader therefore does **not** use `get_all_pages`. It paginates scope-aware (`ingest_pbp_scoped`): it computes the in-scope game-code set up front (for a date: the games on that date from our own `games` table; for a gamecode: just that code) and keeps only in-scope plays. Termination is the subtle part — a page with zero in-scope plays is *not* on its own a stop signal (a date legitimately includes non-D1 games we don't ingest, which can fill a whole page *between* two of our games). The rules:
+- **empty / `NO_DATA` page** → real end (the `date`/`daterange` filter composes, so this is the normal terminator);
+- **every in-scope game seen AND current page has none** → we have everything, the rest is out-of-scope tail (this is what trips a multi-page `gamecode` once its game ends, bounding the runaway);
+- **single-target query (`gamecode` / one-game date) whose target never appeared by its first in-scope-empty page** → it has no PBP (postponed / feed gap / bad code); stop rather than walk the season;
+- **`MAX_PAGES` backstop** as a last resort.
+
+This bounds any query to ~1 page past its real end regardless of the filter quirk, never drops an interleaved game, and never writes a game we didn't ask for.
 
 - **The `date`/`daterange` filters *do* compose with offset** (like `playerperfs`), so for the nightly path the scope check is mostly a safety belt; for `gamecode` it's load-bearing. Verified live: `--date 2025-12-27` (3 games) collected all 3, 1,690 rows, in **4 API calls**, 0 skipped — i.e. ~1 call / 500 plays, which extrapolates to ~250 calls for a 200-game day. The nightly slate is comfortably inside the 500/hr budget.
 - **Single games >500 plays cannot be fetched by `gamecode` alone** (page 2 falls into the global stream); the scope filter still recovers the right game (it spans pages 1–2 before the filter breaks), but `--gamecode` is really a debugging affordance — the nightly job uses `--date`.
@@ -126,11 +132,12 @@ The API response is **deeply nested** and shaped differently from the flat CSV �
 | `team_id` (acting) | `TeamID` | `team.code` | |
 | `player_id` (acting) | `PlayerID` | `players.primary.code` | object absent on team events → null |
 | `description` | `Description` | `explanation` | **empty `{}`** on some rows → null |
-| `scoring_play` | `ScoringPlay` | `scoringplay` (`"Y"`/`"N"`) | |
-| `points` | `Points` | **no field** — derive from tags (`FTM`=1, `FGM`&!`3FM`=2, `3FM`=3) or score delta | API↔CSV difference |
+| `points` | `Points` | **no field** — derive from tags (`FTM`=1, `FGM`&!`3FM`=2, `3FM`=3) | API↔CSV difference |
+| `scoring_play` | (`ScoringPlay`) | (`scoringplay`) | **derived as `points > 0` in both loaders**, not read from the source flag — the CSV `ScoringPlay` column omits made free throws, so the source flags disagree |
 | `tags` | `Tags` | `tags` (same `\|` vocabulary) | |
 | `score_home`/`score_vis` | `ScoreHome`/`ScoreVis` | `game.score-home`/`game.score-vis` | |
 | `score_diff` | `Diff` | `thediff` (e.g. `"+5"`) | acting-team POV |
+| (`seq` sort key) | (file order) | `id` (top-level, numeric) | API plays arrive in arbitrary map order; sorted by `id` ascending to assign chronological `seq`. Verified present + numeric on 100% of plays. |
 | on-floor lineup | (absent) | `game.onfloorhome`/`game.onfloorvis` | **present & per-play in the API** (26 distinct lineups / 500 plays) — the SUB-replay oracle |
 
 Two loader wrinkles the spot-check pinned down: (1) the API carries **no explicit `points`** — derive it; (2) `time`/`explanation` deserialize as empty objects on non-action rows — coerce to null. Both normalize cleanly into the schema above. The raw table stays source-identical (we do **not** add an `onfloor` column) — the API lineup is consumed only as the test-time replay oracle, keeping a single derivation path.
@@ -160,14 +167,15 @@ Outputs:
 
 **Validation oracle:** when the API JSON is the source (and carries `onfloorhome`/`onfloorvis`), assert the replayed lineup matches the embedded one on a sample of games. This catches replay bugs without making the derivation depend on a column the CSV lacks.
 
-### Tag-based per-`(player_id, game_id)` columns (no replay)
+### Tag-based per-`(player_id, game_id)` columns (no replay) — P2a, SHIPPED 2026-06-06
 
-Added to `player_game_stats` (additive, small, ships to prod):
-- `plus_minus_pbp` — from stint deltas (overwrites the sparse box-score `plus_minus`)
-- `paint_fga`/`paint_fgm`, `perimeter_fga`/`perimeter_fgm` — `paint` tag presence on FGA/FGM
-- `transition_pts` (`brk`), `second_chance_pts` (`2ch`), `points_off_turnovers` (`offto`)
-- `fouls_drawn` — `FOULED` event count for the player
-- Optional later: `assist_edges (season, passer_id, scorer_id, count)` linking `AST` → the `FGM` it set up.
+Added to `player_game_stats` (migration `030`, additive, ships to prod) by `compute.rs::compute_pbp_aggregates` (compute step 5/14). All counts are over **source-deduplicated** plays (`DISTINCT ON (game_id, sort_order, description, player_id)`):
+- `paint_fga`/`paint_fgm`, `perimeter_fga`/`perimeter_fgm` — `paint` tag presence on FGA/3FA (attempts) and FGM/3FM (makes); perimeter = total − paint.
+- `transition_pts` (`brk`), `second_chance_pts` (`2ch`), `points_off_turnovers` (`offto`) — summed `points` on the player's tagged scoring plays.
+- `fouls_drawn` — `FOULED` event count for the player (who DREW the foul, distinct from who shot the FTs).
+- Semantics: NULL = no PBP for that player-game; 0 = had PBP, none of this event. Verified on 2026: 111,196 player-games populated; spot-checks textbook (a 7-ft center 97% paint / 242 fouls drawn; a perimeter wing 5% paint).
+
+Still in P2b (needs SUB-replay): `plus_minus_pbp` (from stint deltas, overwrites the sparse box-score `plus_minus`). Optional later: `assist_edges (season, passer_id, scorer_id, count)` linking `AST` → the `FGM` it set up.
 
 ## Data-quality notes (from P1 verification)
 
@@ -202,7 +210,8 @@ The job **cannot run as a pure-prod cron** because raw PBP lives only in the loc
 | PR | Scope | Risk |
 |----|-------|------|
 | **P1** ✅ SHIPPED & VERIFIED (2026-06-06) | Migration `029`; CSV loader (`--with-pbp` / `--pbp-only`) + scope-aware API loader + `play-by-play` subcommand; `sync_to_prod.sh` `EXCLUDED` patched. Verified: full 2026 load = 3,258,166 rows / 100% game coverage / 99.8% running-score-exact / dense seq / box scores untouched. Surfaced & fixed the gamecode-pagination runaway; documented the source-duplicate-play quirk for P2. | Low — mirrored existing ingest patterns. |
-| **P2** | `compute_pbp_aggregates`: SUB-replay → `lineup_stints`/`lineup_aggregates` + tag-based `player_game_stats` columns. Validate replay vs API oracle. | **Highest** — SUB-replay edge cases (OT, halftime, missing subs) need test coverage. |
+| **P2a** ✅ SHIPPED (2026-06-06) | `compute_pbp_aggregates` (compute step 5/14) + migration `030`: tag-based `player_game_stats` columns (paint/perimeter FGA·FGM, transition/2nd-chance/off-TO pts, fouls drawn), over source-deduplicated plays. Verified on 2026 (111,196 player-games). | Low — pure SQL, no replay. |
+| **P2b** | SUB-replay → `lineup_stints` (local-only) / `lineup_aggregates` (prod) + `plus_minus_pbp`. Validate replay vs the API `onfloorhome` oracle. | **Highest** — SUB-replay edge cases (OT, halftime, missing subs, null-player sub rows) need test coverage. |
 | **P3** | Wire API loader + incremental recompute + derived-only sync into the nightly flow. This is the command the cron calls. | Low–medium. |
 | **P4+** | Utilization (ROADMAP Phase 6, unchanged & parallelizable): ML features (`lineup_quality`, `transition_rate`, `paint_rate`; PBP-era vs pre-PBP model variants since coverage starts 2012); API endpoints (`/players/:id/on-off`, `/teams/:id/lineups`, `/games/:id/playbyplay`); UI (player on/off, team lineups tab, game-detail page). | Per-surface. |
 

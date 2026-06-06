@@ -822,12 +822,8 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
     let teams = pbp_team_abbrev_map(pool, year).await?; // abbrev -> uuid
     let players = player_uuid_map(pool, year).await?; // natstat_id -> uuid
 
-    // Full-season replace: re-running the CSV load swaps the season cleanly.
-    sqlx::query("DELETE FROM play_by_play WHERE season = $1")
-        .bind(year)
-        .execute(pool)
-        .await?;
-
+    // Open the file before touching the DB so a missing/unreadable CSV fails
+    // before we start the replace.
     let mut rdr = ReaderBuilder::new()
         .has_headers(true)
         .from_reader(File::open(path).with_context(|| format!("open {}", path.display()))?);
@@ -836,7 +832,18 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
     let mut buf: Vec<PbpRow> = Vec::with_capacity(BATCH);
     let mut total = 0u64;
     let mut skipped = 0u64;
+
+    // One transaction for the whole-season replace: the DELETE and every insert
+    // commit together, so a mid-load failure (bad CSV row, crash) rolls back to
+    // the prior season's PBP rather than leaving it half-loaded. Batches flush
+    // into the open transaction — `buf.clear()` bounds Rust-side memory — but
+    // nothing is committed until the end. PBP is local-only, so the long
+    // transaction's table lock is single-user and harmless.
     let mut tx: Transaction<'_, Postgres> = pool.begin().await?;
+    sqlx::query("DELETE FROM play_by_play WHERE season = $1")
+        .bind(year)
+        .execute(&mut *tx)
+        .await?;
 
     for result in rdr.records() {
         let row = result?;
@@ -876,8 +883,6 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
         if buf.len() >= BATCH {
             total += insert_pbp_rows(&mut tx, &buf).await?;
             buf.clear();
-            tx.commit().await?;
-            tx = pool.begin().await?;
         }
     }
     if !buf.is_empty() {
