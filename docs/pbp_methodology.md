@@ -190,7 +190,7 @@ PBP adds **one** new daily pipeline, with a hard placement constraint that shape
 
 ```
 nightly (local/ingest env, NOT Railway):
-  cstat-ingest playbyplay --from {yesterday} --to {yesterday}   # API, ~55–215 calls
+  cstat-ingest play-by-play --date {yesterday}   # API, scope-aware, ~1 call/500 plays
     → compute_pbp_aggregates over touched games
     → scripts/sync_to_prod.sh   (derived only; raw excluded)
 ```
@@ -201,7 +201,7 @@ The job **cannot run as a pure-prod cron** because raw PBP lives only in the loc
 
 | PR | Scope | Risk |
 |----|-------|------|
-| **P1** | Migration `029`; CSV loader (`--with-pbp`) + API loader + `playbyplay` subcommand; patch `sync_to_prod.sh` `EXCLUDED`. Step zero: `explore` spot-check of live API shape. | Low — mirrors existing ingest patterns. |
+| **P1** ✅ SHIPPED & VERIFIED (2026-06-06) | Migration `029`; CSV loader (`--with-pbp` / `--pbp-only`) + scope-aware API loader + `play-by-play` subcommand; `sync_to_prod.sh` `EXCLUDED` patched. Verified: full 2026 load = 3,258,166 rows / 100% game coverage / 99.8% running-score-exact / dense seq / box scores untouched. Surfaced & fixed the gamecode-pagination runaway; documented the source-duplicate-play quirk for P2. | Low — mirrored existing ingest patterns. |
 | **P2** | `compute_pbp_aggregates`: SUB-replay → `lineup_stints`/`lineup_aggregates` + tag-based `player_game_stats` columns. Validate replay vs API oracle. | **Highest** — SUB-replay edge cases (OT, halftime, missing subs) need test coverage. |
 | **P3** | Wire API loader + incremental recompute + derived-only sync into the nightly flow. This is the command the cron calls. | Low–medium. |
 | **P4+** | Utilization (ROADMAP Phase 6, unchanged & parallelizable): ML features (`lineup_quality`, `transition_rate`, `paint_rate`; PBP-era vs pre-PBP model variants since coverage starts 2012); API endpoints (`/players/:id/on-off`, `/teams/:id/lineups`, `/games/:id/playbyplay`); UI (player on/off, team lineups tab, game-detail page). | Per-surface. |
@@ -213,4 +213,4 @@ P1–P3 are the pipeline that must exist before the cron work; P4+ is value on t
 - **Pre-PBP era handling for ML** — coverage starts 2012. Train two model variants (PBP-era vs pre-PBP) or impute missing PBP features with season averages. Decide in P4, document in `docs/features_methodology.md`.
 - **Crafty intra-season fetch** — v1 is the simple by-date pull; narrowing to changed/missing games only is a post-proof optimization (above).
 - **2021–2025 CSV gap** — obtain dashboard exports or accept API backfill (~13 h/season at standard rate) for those years.
-- **Source-duplicate plays: dedup at ingest or at derivation?** P1 stores them faithfully; the lean is to dedup in P2's `compute_pbp_aggregates` (full context, keeps the raw table a true mirror). Revisit if a raw-row consumer other than the derivation appears.
+- **Source-duplicate plays: dedup at ingest or at derivation?** RESOLVED (2026-06-06): **dedup at derivation.** P1 stores source rows faithfully; `compute_pbp_aggregates` (P2) dedups by `(game_id, sort_order, description, player_id)` before counting and prefers running-score deltas over `sum(points)`. Keeps the raw table a true mirror of the feed.

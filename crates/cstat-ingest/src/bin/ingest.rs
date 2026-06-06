@@ -346,9 +346,10 @@ enum Commands {
     /// to the rate-limited `season` API path for backfilling historical
     /// years. Expects `data/natstat_csv/{year}/NatStat-MBB{year}-{Kind}-*.csv`
     /// for kinds Teams, Games, Team_Statlines, Player_Statlines.
-    /// Skips Players.csv (different ID space — see module docs) and PBP
-    /// (separate future loader). Runs in seconds; pair with `compute --year`
-    /// to derive season stats afterward, or pass `--also-compute`.
+    /// Skips Players.csv (different ID space — see module docs). Play-by-Play
+    /// is opt-in via `--with-pbp` (full bootstrap) or `--pbp-only` (PBP alone).
+    /// Runs in seconds; pair with `compute --year` to derive season stats
+    /// afterward, or pass `--also-compute`.
     BootstrapCsv {
         #[arg(short, long, default_value_t = default_season())]
         year: i32,
@@ -376,6 +377,13 @@ enum Commands {
         /// (this same run loads them first).
         #[arg(long)]
         with_pbp: bool,
+
+        /// Load ONLY `Play-by-Play.csv`, against already-loaded games/players —
+        /// skips the box-score re-bootstrap entirely. Use this to add PBP to a
+        /// season ingested via the live API without reverting box scores to the
+        /// CSV snapshot. Ignores --with-pbp / --no-elo / --also-compute.
+        #[arg(long, conflicts_with = "with_pbp")]
+        pbp_only: bool,
     },
 
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
@@ -544,7 +552,14 @@ async fn main() -> Result<()> {
             also_compute,
             no_elo,
             with_pbp,
+            pbp_only,
         } => {
+            if pbp_only {
+                let count =
+                    cstat_ingest::ingest::bootstrap_csv::load_pbp_only(&db.pool, year, &dir).await?;
+                println!("Loaded {count} play_by_play rows for {year} (PBP-only)");
+                return Ok(());
+            }
             let report = cstat_ingest::ingest::bootstrap_csv::bootstrap_from_csv_dir(
                 &db.pool, year, &dir, with_pbp,
             )

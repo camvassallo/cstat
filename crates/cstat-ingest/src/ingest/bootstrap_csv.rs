@@ -116,6 +116,20 @@ pub async fn bootstrap_from_csv_dir(
     Ok(report)
 }
 
+/// Load ONLY the season's Play-by-Play CSV, against already-loaded games and
+/// players — no box-score re-bootstrap. Use this to (re)load PBP without
+/// disturbing the box-score tables: e.g. adding PBP to a season already
+/// ingested via the live API (where re-running the full CSV bootstrap would
+/// revert box scores to the CSV snapshot), or re-deriving after a PBP
+/// methodology change. Returns the play_by_play row count.
+pub async fn load_pbp_only(pool: &PgPool, year: i32, dir: &Path) -> Result<u64> {
+    info!(year, dir = %dir.display(), "loading PBP only (no box-score re-bootstrap)");
+    let pbp_csv = find_csv(dir, year, "Play-by-Play")?;
+    let count = load_play_by_play(pool, year, &pbp_csv).await?;
+    info!(count, year, "PBP-only load complete");
+    Ok(count)
+}
+
 // ---------------------------------------------------------------------------
 // File discovery
 // ---------------------------------------------------------------------------
