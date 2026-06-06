@@ -19,7 +19,7 @@ import {
   type TeamCoachCard,
 } from '../api/client';
 import { caeColor, fmtCae, tenureSpan } from '../components/cae';
-import { classColor } from '../components/archetypeColors';
+import { classColor, classTagline } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
@@ -531,8 +531,8 @@ function HistoricalTeamDetail() {
       {/* Roster */}
       <RosterTable roster={roster} />
 
-      {/* Top 5-man lineups (PBP-derived) */}
-      {lineups.length > 0 && <LineupsTable lineups={lineups} />}
+      {/* Top 5-man lineups (PBP-derived): archetype waffle */}
+      {lineups.length > 0 && <LineupWaffle lineups={lineups} />}
 
       {/* Schedule */}
       <ScheduleTable schedule={schedule} teamName={team.name} season={season} />
@@ -540,30 +540,36 @@ function HistoricalTeamDetail() {
   );
 }
 
-type LineupSortKey = 'stint_count' | 'plus_minus' | 'points_for' | 'points_against';
+// Readable text color (dark or light) over an archetype pill's fill.
+function textOn(hex: string): string {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16);
+  const g = parseInt(c.slice(2, 4), 16);
+  const b = parseInt(c.slice(4, 6), 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? '#111827' : '#f9fafb';
+}
 
-/// Top 5-man on-floor lineups, from PBP. `stint_count` is a usage proxy (we
-/// don't have minute durations); +/- is the headline. Replay-sourced lineups
-/// are flagged approximate.
-function LineupsTable({ lineups }: { lineups: TeamLineup[] }) {
-  const [sort, setSort] = useState<{ key: LineupSortKey; dir: SortDir }>({
-    key: 'stint_count',
-    dir: 'desc',
-  });
-  const onSort = (key: LineupSortKey) =>
-    setSort((s) =>
-      s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' },
-    );
-  const sorted = useMemo(
-    () => [...lineups].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir)),
-    [lineups, sort],
+/// Top-5 lineups as a per-row "waffle": five archetype-colored name pills (one
+/// per player, ordered shortest→tallest so grid columns align by size) so a
+/// lineup's identity reads at a glance from the colors, with the headline stats
+/// (stints, +/-) alongside. A full-width panel — the single lineups surface.
+function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
+  const top = lineups.slice(0, 5);
+  const approximate = top.some((l) => l.source === 'replay');
+  // Distinct archetypes present, for the color legend.
+  const classesPresent = useMemo(
+    () =>
+      Array.from(
+        new Set(top.flatMap((l) => l.player_classes.filter((c): c is string => !!c))),
+      ),
+    [top],
   );
-  const approximate = lineups.some((l) => l.source === 'replay');
 
   return (
-    <div className="mt-8">
-      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <h2 className="text-xl font-bold">Top Lineups</h2>
+    <div className="bg-gray-800 rounded-lg p-5 mt-8">
+      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
+        <h2 className="text-xl font-bold">Top 5 Lineups</h2>
         {approximate && (
           <span
             className="text-xs px-1.5 py-0.5 rounded bg-gray-900 text-gray-400 uppercase tracking-wide"
@@ -573,38 +579,50 @@ function LineupsTable({ lineups }: { lineups: TeamLineup[] }) {
           </span>
         )}
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm whitespace-nowrap">
-          <thead>
-            <tr className="text-gray-400 border-b border-gray-700">
-              <th className="py-2 px-2 text-left font-medium">Lineup</th>
-              <SortHeader label="Stints" sortKey="stint_count" current={sort} onSort={onSort} align="right" />
-              <SortHeader label="PF" sortKey="points_for" current={sort} onSort={onSort} align="right" />
-              <SortHeader label="PA" sortKey="points_against" current={sort} onSort={onSort} align="right" />
-              <SortHeader label="+/-" sortKey="plus_minus" current={sort} onSort={onSort} align="right" />
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((l, i) => (
-              <tr key={i} className="border-b border-gray-800 hover:bg-gray-800">
-                <td className="py-2 px-2">
-                  {l.player_names.map((n, j) => (
-                    <span key={j}>
-                      {j > 0 && <span className="text-gray-600">, </span>}
-                      <SeasonLink
-                        to={`/players/${l.lineup[j]}`}
-                        className="text-blue-400 hover:underline"
-                      >
-                        {n}
-                      </SeasonLink>
-                    </span>
-                  ))}
-                </td>
-                <td className="py-2 px-2 text-right tabular-nums">{l.stint_count}</td>
-                <td className="py-2 px-2 text-right tabular-nums">{l.points_for}</td>
-                <td className="py-2 px-2 text-right tabular-nums">{l.points_against}</td>
-                <td
-                  className={`py-2 px-2 text-right tabular-nums font-semibold ${
+      <p className="text-xs text-gray-500 mb-4">
+        Colored by archetype, most-used first · +/- is net points while on the floor together.
+      </p>
+
+      <div>
+        {top.map((l, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 py-2.5 border-t border-gray-700/60"
+          >
+            <div className="w-4 text-right text-gray-500 text-sm tabular-nums shrink-0">
+              {i + 1}
+            </div>
+
+            {/* Archetype-colored full-name pills, one per grid column (sorted
+                shortest -> tallest, so columns align by size across rows). */}
+            <div className="flex-1 min-w-0 grid grid-cols-5 gap-2.5">
+              {l.lineup.map((pid, j) => {
+                const cls = l.player_classes[j];
+                const name = l.player_names[j] ?? 'Unknown';
+                const color = classColor(cls);
+                return (
+                  <SeasonLink
+                    key={j}
+                    to={`/players/${pid}`}
+                    className="block w-full truncate text-center px-3 py-2.5 rounded-md text-xs font-medium hover:opacity-90 transition-opacity"
+                    style={{ background: color, color: textOn(color) }}
+                    title={`${name}${cls ? ` · ${cls} — ${classTagline(cls)}` : ''}`}
+                  >
+                    {name}
+                  </SeasonLink>
+                );
+              })}
+            </div>
+
+            {/* Headline stats */}
+            <div className="flex items-center gap-5 shrink-0 text-right">
+              <div>
+                <div className="text-sm font-semibold tabular-nums">{l.stint_count}</div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-wide">stints</div>
+              </div>
+              <div className="w-12">
+                <div
+                  className={`text-base font-bold tabular-nums ${
                     l.plus_minus > 0
                       ? 'text-green-400'
                       : l.plus_minus < 0
@@ -614,16 +632,28 @@ function LineupsTable({ lineups }: { lineups: TeamLineup[] }) {
                 >
                   {l.plus_minus > 0 ? '+' : ''}
                   {l.plus_minus}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-wide">+/-</div>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
-      <p className="text-xs text-gray-500 mt-2">
-        Five-man on-floor combinations, most-used first. Stints = distinct on-floor windows (a
-        usage proxy); +/- is points scored minus allowed while that five played.
-      </p>
+
+      {/* Archetype legend */}
+      {classesPresent.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 pt-3 border-t border-gray-700/60 text-[11px] text-gray-400">
+          {classesPresent.map((c) => (
+            <span key={c} className="inline-flex items-center gap-1">
+              <span
+                className="w-2.5 h-2.5 rounded-sm"
+                style={{ background: classColor(c) }}
+              />
+              {c}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -1324,6 +1324,9 @@ export function fetchTeamCoach(teamId: string) {
 export interface TeamLineup {
   lineup: string[];
   player_names: string[];
+  /// Each player's archetype primary class, aligned by index with lineup /
+  /// player_names (null = no archetype). Colors the lineup-waffle squares.
+  player_classes: (string | null)[];
   stint_count: number;
   points_for: number;
   points_against: number;
