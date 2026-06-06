@@ -100,6 +100,32 @@ enum Commands {
         to: Option<String>,
     },
 
+    /// Ingest play-by-play via the live API (intra-season path). Requires a
+    /// date, date range, or gamecode — there is intentionally NO full-season
+    /// default, since that's ~6,700 calls / ~13 hrs at the 500/hr cap. For
+    /// backfill use `bootstrap-csv --with-pbp` (CSV `COPY`, seconds/season).
+    /// Raw PBP is stored locally only and never synced to prod.
+    PlayByPlay {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Single date (YYYY-MM-DD), e.g. yesterday's games for the nightly job.
+        #[arg(long)]
+        date: Option<String>,
+
+        /// Start date (YYYY-MM-DD), paired with --to for a range.
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date (YYYY-MM-DD), paired with --from for a range.
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Single NatStat gamecode (e.g. 1511104).
+        #[arg(long)]
+        gamecode: Option<String>,
+    },
+
     /// Incremental update: fetch recent games and performances, then run
     /// compute so derived stats stay fresh. Use `--no-compute` to skip the
     /// post-step (e.g. when batching several updates).
@@ -320,9 +346,10 @@ enum Commands {
     /// to the rate-limited `season` API path for backfilling historical
     /// years. Expects `data/natstat_csv/{year}/NatStat-MBB{year}-{Kind}-*.csv`
     /// for kinds Teams, Games, Team_Statlines, Player_Statlines.
-    /// Skips Players.csv (different ID space — see module docs) and PBP
-    /// (separate future loader). Runs in seconds; pair with `compute --year`
-    /// to derive season stats afterward, or pass `--also-compute`.
+    /// Skips Players.csv (different ID space — see module docs). Play-by-Play
+    /// is opt-in via `--with-pbp` (full bootstrap) or `--pbp-only` (PBP alone).
+    /// Runs in seconds; pair with `compute --year` to derive season stats
+    /// afterward, or pass `--also-compute`.
     BootstrapCsv {
         #[arg(short, long, default_value_t = default_season())]
         year: i32,
@@ -343,6 +370,20 @@ enum Commands {
         /// with the same ELO coverage as the live `season` path.
         #[arg(long)]
         no_elo: bool,
+
+        /// Also load `Play-by-Play.csv` into the local-only `play_by_play`
+        /// table. Off by default (~3.35M rows/season); raw PBP never syncs to
+        /// prod. Requires the season's games + player rows already loaded
+        /// (this same run loads them first).
+        #[arg(long)]
+        with_pbp: bool,
+
+        /// Load ONLY `Play-by-Play.csv`, against already-loaded games/players —
+        /// skips the box-score re-bootstrap entirely. Use this to add PBP to a
+        /// season ingested via the live API without reverting box scores to the
+        /// CSV snapshot. Ignores --with-pbp / --no-elo / --also-compute.
+        #[arg(long, conflicts_with = "with_pbp")]
+        pbp_only: bool,
     },
 
     /// Fetch a raw API endpoint and dump the JSON (for exploration).
@@ -459,6 +500,35 @@ async fn main() -> Result<()> {
             println!("Ingested {count} player performances for {year}");
         }
 
+        Commands::PlayByPlay {
+            year,
+            date,
+            from,
+            to,
+            gamecode,
+        } => {
+            use cstat_ingest::ingest::playbyplay;
+            let report = match (date, from, to, gamecode) {
+                (Some(d), _, _, _) => {
+                    playbyplay::ingest_play_by_play_by_date(&client, &db.pool, year, &d).await?
+                }
+                (_, Some(f), Some(t), _) => {
+                    playbyplay::ingest_play_by_play_by_date_range(&client, &db.pool, year, &f, &t)
+                        .await?
+                }
+                (_, _, _, Some(g)) => {
+                    playbyplay::ingest_play_by_play_by_gamecode(&client, &db.pool, year, &g).await?
+                }
+                _ => {
+                    anyhow::bail!(
+                        "play-by-play needs --date, --from/--to, or --gamecode (no full-season \
+                         default — use `bootstrap-csv --with-pbp` for backfill)"
+                    );
+                }
+            };
+            println!("{report}");
+        }
+
         Commands::Elo { year } => {
             let count =
                 cstat_ingest::ingest::elo::ingest_elo_ratings(&client, &db.pool, year).await?;
@@ -481,10 +551,17 @@ async fn main() -> Result<()> {
             dir,
             also_compute,
             no_elo,
+            with_pbp,
+            pbp_only,
         } => {
+            use cstat_ingest::ingest::bootstrap_csv;
+            if pbp_only {
+                let count = bootstrap_csv::load_pbp_only(&db.pool, year, &dir).await?;
+                println!("Loaded {count} play_by_play rows for {year} (PBP-only)");
+                return Ok(());
+            }
             let report =
-                cstat_ingest::ingest::bootstrap_csv::bootstrap_from_csv_dir(&db.pool, year, &dir)
-                    .await?;
+                bootstrap_csv::bootstrap_from_csv_dir(&db.pool, year, &dir, with_pbp).await?;
             println!("{report}");
             if !no_elo {
                 info!(year, "fetching /elo for CSV-bootstrapped season");

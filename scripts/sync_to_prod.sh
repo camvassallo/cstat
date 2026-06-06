@@ -21,6 +21,11 @@
 # Excluded tables (intentional):
 #   - api_cache: NatStat response cache, only useful during ingestion
 #   - _sqlx_migrations: managed by sqlx, never overwrite from a dump
+#   - play_by_play: raw PBP is local-only (~7.5 GB across all seasons); the
+#       live site reads only derived aggregates. Pushing it would blow
+#       Railway's DB cap — see docs/pbp_methodology.md "Storage & prod sync".
+#   - lineup_stints: per-stint PBP derivation, also local-only (P2). Listed
+#       now so it's excluded the moment that table lands.
 #
 # Usage:
 #   ./scripts/sync_to_prod.sh              # full run
@@ -53,8 +58,10 @@ for arg in "$@"; do
   esac
 done
 
-# Tables to skip on both dump and truncate sides.
-EXCLUDED=("api_cache" "_sqlx_migrations")
+# Tables to skip on both dump and truncate sides. See the header comment for
+# the rationale on each (api_cache / _sqlx_migrations: managed elsewhere;
+# play_by_play / lineup_stints: local-only raw PBP, never shipped to prod).
+EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and
@@ -98,9 +105,10 @@ fi
 
 mask_url() { sed -E 's|://[^@]+@|://***@|' <<<"$1"; }
 
-echo "→ Local:  $(mask_url "$LOCAL_URL")"
-echo "→ Prod:   $(mask_url "$PROD_URL")"
-echo "→ Tables: ${TABLE_LIST//,/, }"
+echo "→ Local:    $(mask_url "$LOCAL_URL")"
+echo "→ Prod:     $(mask_url "$PROD_URL")"
+echo "→ Tables:   ${TABLE_LIST//,/, }"
+echo "→ Excluded: ${EXCLUDED[*]} (stay local — never pushed to prod)"
 echo
 
 # Fail fast on a bad PROD_DATABASE_URL so we don't waste time dumping.
