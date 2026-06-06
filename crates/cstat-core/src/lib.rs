@@ -4,6 +4,7 @@ pub mod features;
 pub mod freshman_model;
 pub mod inference;
 pub mod models;
+pub mod pbp_replay;
 pub mod pit_campom;
 pub mod queries;
 pub mod recruit_features;

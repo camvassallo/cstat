@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use sqlx::Row;
 use std::collections::HashMap;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -1551,6 +1552,274 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
     Ok(n)
 }
 
+/// One per-team stint row staged for bulk insert into `lineup_stints`.
+struct StintRow {
+    game_id: Uuid,
+    period: i32,
+    start_seq: i32,
+    end_seq: i32,
+    team_id: Uuid,
+    lineup: Vec<Uuid>,
+    opp_lineup: Vec<Uuid>,
+    points_for: i32,
+    points_against: i32,
+}
+
+/// P2b: derive lineup stints, season lineup aggregates, and per-player PBP
+/// plus/minus from `play_by_play`. Hybrid sourcing per game — exact API
+/// on-floor lineups when stored, SUB-replay (~86%) off the CSV otherwise (see
+/// `pbp_replay` and `docs/pbp_methodology.md`).
+///
+/// `lineup_stints` is local-only (per-stint detail); `lineup_aggregates` and the
+/// `plus_minus_pbp` column ship to prod. Season-scoped clean recompute.
+pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Clean recompute for the season.
+    sqlx::query("DELETE FROM lineup_stints WHERE season = $1")
+        .bind(season)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM lineup_aggregates WHERE season = $1")
+        .bind(season)
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE player_game_stats SET plus_minus_pbp = NULL WHERE season = $1")
+        .bind(season)
+        .execute(pool)
+        .await?;
+
+    // Games in this season that have play-by-play.
+    let games: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT g.id, g.home_team_id, g.away_team_id
+         FROM games g
+         WHERE g.season = $1 AND EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id)",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    if games.is_empty() {
+        return Ok(0); // no PBP loaded for this season — nothing to do
+    }
+
+    // Bulk-load all per-game metadata once, rather than ~4 queries per game. The
+    // only per-game query left is the plays themselves (PK-indexed by game_id).
+    let starter_rows: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT game_id, team_id, player_id FROM player_game_stats \
+         WHERE season = $1 AND starter IS TRUE",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    let mut starters: HashMap<Uuid, Vec<(Uuid, Uuid)>> = HashMap::new();
+    for (g, t, p) in starter_rows {
+        starters.entry(g).or_default().push((t, p));
+    }
+
+    // game_id -> ((team_id, lowercased name) -> player_id) for the null-player
+    // sub name fallback.
+    let roster_rows: Vec<(Uuid, Uuid, String, Uuid)> = sqlx::query_as(
+        "SELECT pgs.game_id, pgs.team_id, lower(pl.name), pgs.player_id \
+         FROM player_game_stats pgs JOIN players pl ON pl.id = pgs.player_id \
+         WHERE pgs.season = $1",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    let mut name_maps: HashMap<Uuid, HashMap<(Uuid, String), Uuid>> = HashMap::new();
+    for (g, t, n, p) in roster_rows {
+        name_maps.entry(g).or_default().entry((t, n)).or_insert(p);
+    }
+
+    // natstat player code -> our UUID for the season (on-floor resolution).
+    let code_to_uuid: HashMap<String, Uuid> =
+        sqlx::query_as("SELECT natstat_id, id FROM players WHERE season = $1")
+            .bind(season)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect();
+
+    let empty_names: HashMap<(Uuid, String), Uuid> = HashMap::new();
+    let mut rows: Vec<(StintRow, &'static str)> = Vec::new();
+    let mut onfloor_games = 0u64;
+    let mut replay_games = 0u64;
+
+    for (game_id, home_team, away_team) in &games {
+        // nil for an unresolved (NULL) team — it never matches a sub's team and
+        // emits no stint rows (guarded by the Option below).
+        let ht = home_team.unwrap_or_else(Uuid::nil);
+        let vt = away_team.unwrap_or_else(Uuid::nil);
+        let gs = starters.get(game_id);
+        let pick = |team: Uuid| -> Vec<Uuid> {
+            gs.map(|v| {
+                v.iter()
+                    .filter(|(t, _)| *t == team)
+                    .map(|(_, p)| *p)
+                    .collect()
+            })
+            .unwrap_or_default()
+        };
+        let home_starters = pick(ht);
+        let vis_starters = pick(vt);
+        let name_map = name_maps.get(game_id).unwrap_or(&empty_names);
+
+        let raw = load_raw_plays(pool, *game_id).await?;
+        let (stints, source) = crate::pbp_replay::game_stints(
+            ht,
+            vt,
+            &home_starters,
+            &vis_starters,
+            name_map,
+            &code_to_uuid,
+            &raw,
+        );
+        match source {
+            crate::pbp_replay::StintSource::OnFloor => onfloor_games += 1,
+            crate::pbp_replay::StintSource::Replay => replay_games += 1,
+        }
+        let src = source.as_str();
+        for st in stints {
+            // One row per team's perspective (skip a side with no resolved team
+            // or an empty lineup — e.g. an unresolved non-D1 opponent).
+            if home_team.is_some() && !st.home_lineup.is_empty() {
+                rows.push((
+                    StintRow {
+                        game_id: *game_id,
+                        period: st.period,
+                        start_seq: st.start_seq,
+                        end_seq: st.end_seq,
+                        team_id: ht,
+                        lineup: st.home_lineup.clone(),
+                        opp_lineup: st.vis_lineup.clone(),
+                        points_for: st.home_score_delta,
+                        points_against: st.vis_score_delta,
+                    },
+                    src,
+                ));
+            }
+            if away_team.is_some() && !st.vis_lineup.is_empty() {
+                rows.push((
+                    StintRow {
+                        game_id: *game_id,
+                        period: st.period,
+                        start_seq: st.start_seq,
+                        end_seq: st.end_seq,
+                        team_id: vt,
+                        lineup: st.vis_lineup,
+                        opp_lineup: st.home_lineup,
+                        points_for: st.vis_score_delta,
+                        points_against: st.home_score_delta,
+                    },
+                    src,
+                ));
+            }
+        }
+    }
+
+    insert_lineup_stints(pool, season, &rows).await?;
+
+    // Season rollup — only true 5-man lineups (off-5 replay drift is left in the
+    // local stints table but excluded from the served aggregates).
+    sqlx::query(
+        "INSERT INTO lineup_aggregates
+             (season, team_id, lineup, stint_count, points_for, points_against, plus_minus, source)
+         SELECT season, team_id, lineup, count(*),
+                sum(points_for), sum(points_against), sum(points_for - points_against),
+                CASE WHEN bool_or(source = 'onfloor') THEN 'onfloor' ELSE 'replay' END
+         FROM lineup_stints
+         WHERE season = $1 AND array_length(lineup, 1) = 5
+         GROUP BY season, team_id, lineup",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    // Per-(player, game) plus/minus: sum each player's on-floor stint diffs.
+    sqlx::query(
+        "UPDATE player_game_stats pgs
+         SET plus_minus_pbp = d.pm
+         FROM (
+             SELECT ls.game_id, p AS player_id,
+                    sum(ls.points_for - ls.points_against)::int AS pm
+             FROM lineup_stints ls, unnest(ls.lineup) AS p
+             WHERE ls.season = $1
+             GROUP BY ls.game_id, p
+         ) d
+         WHERE pgs.game_id = d.game_id AND pgs.player_id = d.player_id AND pgs.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    info!(
+        season,
+        games = games.len(),
+        onfloor_games,
+        replay_games,
+        stint_rows = rows.len(),
+        "computed PBP lineups"
+    );
+    Ok(rows.len() as u64)
+}
+
+/// Load one game's raw plays for replay/on-floor stint building.
+async fn load_raw_plays(
+    pool: &PgPool,
+    game_id: Uuid,
+) -> Result<Vec<crate::pbp_replay::RawPlay>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT seq, period, team_id, player_id, description, tags, \
+         score_home, score_vis, onfloor_home, onfloor_vis \
+         FROM play_by_play WHERE game_id = $1 ORDER BY seq",
+    )
+    .bind(game_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| crate::pbp_replay::RawPlay {
+            seq: r.get("seq"),
+            period: r.get("period"),
+            team_id: r.get("team_id"),
+            player_id: r.get("player_id"),
+            description: r.get("description"),
+            tags: r.get("tags"),
+            score_home: r.get("score_home"),
+            score_vis: r.get("score_vis"),
+            onfloor_home: r.get("onfloor_home"),
+            onfloor_vis: r.get("onfloor_vis"),
+        })
+        .collect())
+}
+
+/// Chunked bulk insert into `lineup_stints`.
+async fn insert_lineup_stints(
+    pool: &PgPool,
+    season: i32,
+    rows: &[(StintRow, &'static str)],
+) -> Result<(), sqlx::Error> {
+    for chunk in rows.chunks(1000) {
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO lineup_stints (game_id, season, period, start_seq, end_seq, \
+             team_id, lineup, opp_lineup, points_for, points_against, source) ",
+        );
+        qb.push_values(chunk, |mut b, (r, src)| {
+            b.push_bind(r.game_id)
+                .push_bind(season)
+                .push_bind(r.period)
+                .push_bind(r.start_seq)
+                .push_bind(r.end_seq)
+                .push_bind(r.team_id)
+                .push_bind(r.lineup.clone())
+                .push_bind(r.opp_lineup.clone())
+                .push_bind(r.points_for)
+                .push_bind(r.points_against)
+                .push_bind(*src);
+        });
+        qb.build().execute(pool).await?;
+    }
+    Ok(())
+}
+
 pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {
     let mut report = ComputeReport::default();
 
@@ -1568,48 +1837,51 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
         );
     }
 
-    info!("step 1/14: deduplicating players");
+    info!("step 1/15: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
-    info!("step 2/14: backfilling derived game stats");
+    info!("step 2/15: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 3/14: estimating missing team defensive rebounds");
+    info!("step 3/15: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 4/14: computing player season stats (with rate stats)");
+    info!("step 4/15: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
-    // PBP aggregates run after season stats and before team/CamPom steps. No-op
+    // PBP steps run after season stats and before team/CamPom steps. Both no-op
     // for seasons with no play_by_play rows loaded (pre-2012 / not ingested).
-    info!("step 5/14: computing play-by-play per-player aggregates");
+    info!("step 5/15: computing play-by-play per-player aggregates");
     report.pbp_aggregates = compute_pbp_aggregates(pool, season).await?;
 
-    info!("step 6/14: computing team four factors");
+    info!("step 6/15: computing play-by-play lineups & stints");
+    report.pbp_lineups = compute_pbp_lineups(pool, season).await?;
+
+    info!("step 7/15: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 7/14: computing adjusted efficiency (KenPom-style)");
+    info!("step 8/15: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 8/14: computing individual ORTG/DRTG (Torvik passthrough)");
+    info!("step 9/15: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 9/14: computing player SOS");
+    info!("step 10/15: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 10/14: computing CamPom composites");
+    info!("step 11/15: computing CamPom composites");
     report.campom = compute_campom(pool, season).await?;
 
-    info!("step 11/14: computing rolling averages");
+    info!("step 12/15: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 12/14: computing derived game fields");
+    info!("step 13/15: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 13/14: computing schedules");
+    info!("step 14/15: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 14/14: computing player percentiles");
+    info!("step 15/15: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -1623,6 +1895,7 @@ pub struct ComputeReport {
     pub estimated_rebounds: u64,
     pub player_season_stats: u64,
     pub pbp_aggregates: u64,
+    pub pbp_lineups: u64,
     pub team_four_factors: u64,
     pub adjusted_efficiency: u64,
     pub individual_ratings: u64,
@@ -1638,12 +1911,13 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.deduplicated_players,
             self.backfilled,
             self.estimated_rebounds,
             self.player_season_stats,
             self.pbp_aggregates,
+            self.pbp_lineups,
             self.team_four_factors,
             self.adjusted_efficiency,
             self.individual_ratings,
@@ -1667,6 +1941,7 @@ mod tests {
         let s = format!("{report}");
         assert!(s.contains("0 deduped"));
         assert!(s.contains("0 pbp aggregates"));
+        assert!(s.contains("0 pbp lineups"));
         assert!(s.contains("0 percentiles"));
     }
 }

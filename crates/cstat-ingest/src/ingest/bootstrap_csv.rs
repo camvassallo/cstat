@@ -878,6 +878,9 @@ async fn load_play_by_play(pool: &PgPool, year: i32, path: &Path) -> Result<u64>
             score_home: parse_i32(cell(&row, 10)),
             score_vis: parse_i32(cell(&row, 7)),
             score_diff: parse_score_diff(cell(&row, 16)),
+            // CSV export has no on-floor columns — lineups come from SUB-replay.
+            onfloor_home: None,
+            onfloor_vis: None,
         });
 
         if buf.len() >= BATCH {
