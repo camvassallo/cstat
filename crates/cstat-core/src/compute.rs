@@ -1573,19 +1573,9 @@ struct StintRow {
 /// `lineup_stints` is local-only (per-stint detail); `lineup_aggregates` and the
 /// `plus_minus_pbp` column ship to prod. Season-scoped clean recompute.
 pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
-    // Clean recompute for the season.
-    sqlx::query("DELETE FROM lineup_stints WHERE season = $1")
-        .bind(season)
-        .execute(pool)
-        .await?;
-    sqlx::query("DELETE FROM lineup_aggregates WHERE season = $1")
-        .bind(season)
-        .execute(pool)
-        .await?;
-    sqlx::query("UPDATE player_game_stats SET plus_minus_pbp = NULL WHERE season = $1")
-        .bind(season)
-        .execute(pool)
-        .await?;
+    // Build everything in memory first (read-only), then swap it in atomically
+    // at the end — see the transaction below. Lets a mid-run failure leave the
+    // prior season intact rather than a half-rebuilt, prod-shipped table.
 
     // Games in this season that have play-by-play.
     let games: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
@@ -1715,7 +1705,25 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         }
     }
 
-    insert_lineup_stints(pool, season, &rows).await?;
+    // Atomic swap: the delete + reinsert + rollup + plus/minus all commit
+    // together, so the prod-shipped `lineup_aggregates` / `plus_minus_pbp` never
+    // sit empty or half-rebuilt (and a concurrent sync can't catch a partial
+    // season) if the run fails midway.
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM lineup_stints WHERE season = $1")
+        .bind(season)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM lineup_aggregates WHERE season = $1")
+        .bind(season)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE player_game_stats SET plus_minus_pbp = NULL WHERE season = $1")
+        .bind(season)
+        .execute(&mut *tx)
+        .await?;
+
+    insert_lineup_stints(&mut tx, season, &rows).await?;
 
     // Season rollup — only true 5-man lineups (off-5 replay drift is left in the
     // local stints table but excluded from the served aggregates).
@@ -1730,10 +1738,14 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
          GROUP BY season, team_id, lineup",
     )
     .bind(season)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Per-(player, game) plus/minus: sum each player's on-floor stint diffs.
+    // Gated to 5-man stints, same as the aggregates above: off-5 replay-drift
+    // windows have the wrong on-floor membership, so charging their diffs to the
+    // tracked players would both poison the number and break reconciliation with
+    // `lineup_aggregates`.
     sqlx::query(
         "UPDATE player_game_stats pgs
          SET plus_minus_pbp = d.pm
@@ -1741,14 +1753,16 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
              SELECT ls.game_id, p AS player_id,
                     sum(ls.points_for - ls.points_against)::int AS pm
              FROM lineup_stints ls, unnest(ls.lineup) AS p
-             WHERE ls.season = $1
+             WHERE ls.season = $1 AND array_length(ls.lineup, 1) = 5
              GROUP BY ls.game_id, p
          ) d
          WHERE pgs.game_id = d.game_id AND pgs.player_id = d.player_id AND pgs.season = $1",
     )
     .bind(season)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     info!(
         season,
@@ -1791,9 +1805,10 @@ async fn load_raw_plays(
         .collect())
 }
 
-/// Chunked bulk insert into `lineup_stints`.
+/// Chunked bulk insert into `lineup_stints` (11 cols × 1000 rows = 11k binds,
+/// well under Postgres' 65535 cap). Runs inside the caller's transaction.
 async fn insert_lineup_stints(
-    pool: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     season: i32,
     rows: &[(StintRow, &'static str)],
 ) -> Result<(), sqlx::Error> {
@@ -1815,7 +1830,7 @@ async fn insert_lineup_stints(
                 .push_bind(r.points_against)
                 .push_bind(*src);
         });
-        qb.build().execute(pool).await?;
+        qb.build().execute(&mut **tx).await?;
     }
     Ok(())
 }

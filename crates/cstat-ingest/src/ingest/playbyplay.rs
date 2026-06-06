@@ -118,7 +118,7 @@ pub async fn replace_game_pbp(
 }
 
 /// Chunked multi-row INSERT into `play_by_play`. Postgres caps bind params at
-/// 65535; at 15 columns/row we chunk well under that (1000 rows/statement).
+/// 65535; at 17 columns/row we chunk well under that (1000 rows/statement).
 /// Does NOT delete first — callers manage idempotency (per-game
 /// [`replace_game_pbp`], or a season-wide delete in the CSV path).
 pub async fn insert_pbp_rows(

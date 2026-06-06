@@ -170,7 +170,9 @@ Two compute steps run after `compute_player_season_stats` and before the team/Ca
 Outputs:
 - **`lineup_stints`** (local-only) — one row per team per stint: `(game_id, season, period, start_seq, end_seq, team_id, lineup UUID[], opp_lineup UUID[], points_for, points_against, source)`.
 - **`lineup_aggregates`** (ships to prod) — season rollup per `(season, team_id, 5-man lineup)`: `stint_count, points_for, points_against, plus_minus, source`.
-- **`player_game_stats.plus_minus_pbp`** (ships to prod) — each player's summed on-floor stint differential.
+- **`player_game_stats.plus_minus_pbp`** (ships to prod) — each player's summed **5-man** on-floor stint differential. Gated to 5-man stints (like the aggregates) so it reconciles with `lineup_aggregates` and isn't poisoned by off-5 replay-drift windows, where the on-floor membership is wrong.
+
+**Serving note:** `lineup_aggregates.lineup` is a `UUID[]`; Postgres can't FK array elements, so a player UUID in a lineup has no referential guarantee. Serving queries must `LEFT JOIN unnest(lineup)` to `players` (not `INNER JOIN`), or a lineup with one unresolved member would silently vanish.
 
 **Performance:** the derivation bulk-loads all per-game metadata (teams, starters, name maps, code→UUID) in 4 queries up front, leaving only a per-game PK-indexed plays query, then replays in memory — ~40 s for a full 6,108-game season.
 
