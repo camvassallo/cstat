@@ -4,7 +4,9 @@ import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Responsi
 import {
   fetchPlayerDetail,
   fetchPlayerSimilar,
+  fetchPlayerPbp,
   type PlayerProfile,
+  type PlayerPbpProfile,
   type PlayerSeasonStats,
   type Percentiles,
   type GameLogEntry,
@@ -47,6 +49,73 @@ function PercentileBar({ label, value, pctile }: { label: string; value: string;
   );
 }
 
+/// Play-by-play season profile: paint/perimeter shot mix, scoring-context
+/// points, fouls drawn, and on-floor +/- — all derived from the PBP columns on
+/// player_game_stats.
+function PbpProfilePanel({ pbp }: { pbp: PlayerPbpProfile }) {
+  const totalFga = pbp.paint_fga + pbp.perimeter_fga;
+  const paintShare = totalFga > 0 ? pbp.paint_fga / totalFga : 0;
+  const paintFg = pbp.paint_fga > 0 ? pbp.paint_fgm / pbp.paint_fga : null;
+  const perimFg = pbp.perimeter_fga > 0 ? pbp.perimeter_fgm / pbp.perimeter_fga : null;
+
+  const tile = (label: string, value: string) => (
+    <div className="bg-gray-900 rounded p-3 text-center">
+      <div className="text-lg font-bold tabular-nums">{value}</div>
+      <div className="text-xs text-gray-400 mt-0.5">{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="bg-gray-800 rounded-lg p-5 mt-6">
+      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-3">
+        <h2 className="text-lg font-bold">Play-by-Play Profile</h2>
+        <span className="text-xs text-gray-500">{pbp.games} games with play-by-play</span>
+      </div>
+
+      {/* Shot mix: paint vs perimeter share of attempts */}
+      {totalFga > 0 && (
+        <div className="mb-4">
+          <div className="flex justify-between text-xs text-gray-400 mb-1">
+            <span>
+              Paint {Math.round(paintShare * 100)}%
+              {paintFg != null && (
+                <span className="text-gray-500"> · {pct(paintFg)} FG</span>
+              )}
+            </span>
+            <span>
+              {perimFg != null && (
+                <span className="text-gray-500">{pct(perimFg)} FG · </span>
+              )}
+              Perimeter {Math.round((1 - paintShare) * 100)}%
+            </span>
+          </div>
+          <div className="flex h-3 rounded-full overflow-hidden bg-gray-700">
+            <div className="bg-blue-500" style={{ width: `${paintShare * 100}%` }} />
+            <div className="bg-purple-500" style={{ width: `${(1 - paintShare) * 100}%` }} />
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            {pbp.paint_fga} paint / {pbp.perimeter_fga} perimeter field-goal attempts
+          </div>
+        </div>
+      )}
+
+      {/* Scoring context + on-floor impact */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+        {tile('Transition pts', String(pbp.transition_pts))}
+        {tile('2nd-chance pts', String(pbp.second_chance_pts))}
+        {tile('Pts off TO', String(pbp.points_off_turnovers))}
+        {tile('Fouls drawn', String(pbp.fouls_drawn))}
+        {tile(
+          'On-floor +/-',
+          pbp.plus_minus_pbp == null
+            ? '—'
+            : `${pbp.plus_minus_pbp > 0 ? '+' : ''}${pbp.plus_minus_pbp}`,
+        )}
+      </div>
+    </div>
+  );
+}
+
 function heightString(inches: number | null) {
   if (inches == null) return null;
   return `${Math.floor(inches / 12)}'${inches % 12}"`;
@@ -75,6 +144,7 @@ export default function PlayerDetail() {
   const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
   const [trajectory, setTrajectory] = useState<PlayerTrajectory | null>(null);
   const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
+  const [pbp, setPbp] = useState<PlayerPbpProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedAxis, setSelectedAxis] = useState<string | null>(null);
   const radarRef = useDismissOnOutside(selectedAxis !== null, () =>
@@ -146,6 +216,23 @@ export default function PlayerDetail() {
       cancelled = true;
     };
   }, [id, season, navigate]);
+
+  // PBP season profile — own request, fetched in parallel with the main
+  // payload. Keyed on (id, season); the endpoint resolves the cross-season
+  // UUID and returns null when the season has no play-by-play, so the panel
+  // simply doesn't render for pre-PBP seasons.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    // No synchronous reset (set-state-in-effect lint); `.then` overwrites and a
+    // one-paint stale panel during navigation matches the page convention.
+    fetchPlayerPbp(id, season)
+      .then((r) => !cancelled && setPbp(r.pbp))
+      .catch(() => !cancelled && setPbp(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [id, season]);
 
   // Release the season-selector override on unmount so the dropdown returns
   // to the global list when the user navigates away.
@@ -383,6 +470,9 @@ export default function PlayerDetail() {
           )}
         </div>
       )}
+
+      {/* Play-by-Play Profile (shot location, scoring context, on-floor +/-) */}
+      {pbp && <PbpProfilePanel pbp={pbp} />}
 
       {/* Similar Players */}
       {similar.length > 0 && (

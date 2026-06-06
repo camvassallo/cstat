@@ -827,6 +827,31 @@ export interface PlayerTrajectory {
   prior_campom: number | null;
 }
 
+/// A player's play-by-play season profile (from the `player_game_stats`
+/// PBP-derived columns): shot location, scoring context, fouls drawn, on-floor
+/// plus/minus. `games` is the number of games with play-by-play.
+export interface PlayerPbpProfile {
+  games: number;
+  paint_fga: number;
+  paint_fgm: number;
+  perimeter_fga: number;
+  perimeter_fgm: number;
+  transition_pts: number;
+  second_chance_pts: number;
+  points_off_turnovers: number;
+  fouls_drawn: number;
+  /// Null when the player never appeared in a tracked 5-man stint — render
+  /// "—" rather than a fabricated 0.
+  plus_minus_pbp: number | null;
+}
+
+export function fetchPlayerPbp(id: string, season?: number) {
+  return fetchJson<{ season: number; pbp: PlayerPbpProfile | null }>(
+    `/players/${id}/pbp`,
+    { season: season?.toString() },
+  );
+}
+
 export function fetchPlayerDetail(id: string, season?: number) {
   return fetchJson<{
     player: PlayerProfile;
@@ -1291,4 +1316,24 @@ export interface TeamCoachCard {
 
 export function fetchTeamCoach(teamId: string) {
   return fetchJson<{ coach: TeamCoachCard | null }>(`/teams/${teamId}/coach`);
+}
+
+/// A team's 5-man on-floor lineup with its season totals, from the
+/// PBP-derived `lineup_aggregates` rollup. `source` is `'onfloor'` (exact API
+/// on-floor five) or `'replay'` (~86%-accurate SUB-replay off the CSV).
+export interface TeamLineup {
+  lineup: string[];
+  player_names: string[];
+  stint_count: number;
+  points_for: number;
+  points_against: number;
+  plus_minus: number;
+  source: string;
+}
+
+export function fetchTeamLineups(teamId: string, season?: number) {
+  return fetchJson<{ season: number; lineups: TeamLineup[] }>(
+    `/teams/${teamId}/lineups`,
+    { season: season?.toString() },
+  );
 }

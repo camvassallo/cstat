@@ -21,6 +21,43 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/players/{id}/archetype", get(player_archetype))
         .route("/api/players/{id}/similar", get(player_similar))
         .route("/api/players/{id}/progression", get(player_progression))
+        .route("/api/players/{id}/pbp", get(player_pbp))
+}
+
+/// `GET /api/players/{id}/pbp` — the player's play-by-play season profile (shot
+/// location, scoring context, fouls drawn, on-floor +/-). A dedicated route the
+/// player page fetches in parallel; returns `{ "pbp": null }` (200) when the
+/// player has no PBP for the season rather than a 404.
+async fn player_pbp(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<PlayerDetailParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let season = params.season.unwrap_or_else(crate::default_season);
+    let pool = &state.db.pool;
+
+    let resolved = queries::resolve_player_id_for_season(pool, id, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("resolve failed: {e}") })),
+            )
+        })?;
+    let Some(rid) = resolved else {
+        return Ok(Json(json!({ "season": season, "pbp": null })));
+    };
+
+    let pbp = queries::get_player_pbp_profile(pool, rid, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+    Ok(Json(json!({ "season": season, "pbp": pbp })))
 }
 
 #[derive(Deserialize)]

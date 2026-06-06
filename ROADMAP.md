@@ -692,24 +692,21 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - **Trajectory + freshman models**:
     - Add `prior_lineup_plus_minus` as a quality-of-fit signal (does this player play in good lineups? predicts whether their counting stats are inflated or suppressed)
     - Add `prior_paint_rate` as a position-proxy refinement (paint% > 60% with low height = inside-out big who'll grow into 4)
-  - **API endpoints** (new):
-    - `GET /api/players/:id/on-off` — season on/off splits (team ortg/drtg with vs without this player)
-    - `GET /api/players/:id/lineups` — top lineup partners (most-shared minutes, joint +/-)
-    - `GET /api/players/:id/shot-mix` — paint vs perimeter FG splits per game / season
-    - `GET /api/teams/:id/lineups` — top 5-man lineups for the season (minutes, +/-, ortg/drtg)
-    - `GET /api/games/:id/playbyplay` — full PBP timeline for game detail page
-    - `GET /api/games/:id/lineup-stints` — stint-by-stint +/- breakdown
+  - **Data coverage caveat**: as of 2026-06-06 only **2026** PBP is loaded, so both surfaces only render for 2026; older seasons show nothing. The 2015–2020 PBP CSVs are on disk and load with `bootstrap-csv --year YYYY --pbp-only` + `compute --year YYYY` (no API budget); 2021–2025 need a dashboard CSV export or API backfill first. All currently-loaded lineups are `replay`-sourced (~86%); the exact `onfloor` path only populates for API-ingested games going forward.
+  - **API endpoints** — first serving surfaces **SHIPPED 2026-06-06** (the ones backed by prod-resident data):
+    - [x] `GET /api/teams/:id/lineups` — top 5-man lineups for the season (stint count, points for/against, +/-, source flag). From `lineup_aggregates`.
+    - [x] `GET /api/players/:id/pbp` — player PBP season profile: paint/perimeter shot mix + FG%, transition/2nd-chance/off-TO points, fouls drawn, on-floor +/-. From the `player_game_stats` PBP columns.
+    - [ ] `GET /api/players/:id/on-off` — season on/off splits (team ortg/drtg with vs without this player). **Blocked**: needs per-stint membership, which lives in `lineup_stints` (local-only, not in prod). Either ship a prod-resident on/off rollup table or accept local-only.
+    - [ ] `GET /api/players/:id/lineups` — top lineup partners (joint stints, joint +/-). Same `lineup_stints` blocker as on/off.
+    - [ ] `GET /api/games/:id/playbyplay` / `lineup-stints` — game-detail timeline. Needs raw PBP / stints on prod (local-only today).
   - **UI surfaces** (Phase 4-style frontend work):
-    - **Player detail page** (`web/src/pages/PlayerDetail.tsx`) — new sub-panels:
-      - On/off split chart (line graph: team ortg/drtg by 5-game window, with vs without player highlighted)
-      - Top lineup partners table (top 5 teammates by joint minutes, with joint +/- and possessions)
-      - Shot mix chart (paint vs perimeter pie + game-by-game trend)
-      - Fouls drawn vs committed line
-      - Clutch splits stat box (last 5 min, within 5 pts: PPG, FG%, +/-)
-    - **Team detail page** (`TeamDetail.tsx`) — new tab "Lineups":
-      - Top 5-man lineups table (lineup, MIN, +/-, ortg, drtg, possessions) — default sort by minutes
-      - Top 10 by +/- per 100 poss (with min-possessions filter)
-      - Substitution heatmap (rows = players, cols = game time, fill = on-court)
+    - **Player detail page** (`web/src/pages/PlayerDetail.tsx`):
+      - [x] **Play-by-Play Profile panel SHIPPED 2026-06-06** — paint/perimeter shot-mix bar + FG%, and stat tiles for transition / 2nd-chance / off-TO points, fouls drawn, on-floor +/- (off `GET /api/players/:id/pbp`).
+      - [ ] On/off split chart, top lineup partners table — blocked on the `lineup_stints`-on-prod gap above.
+      - [ ] Clutch splits stat box (needs PBP clock/score filtering, a separate derived surface).
+    - **Team detail page** (`TeamDetail.tsx`):
+      - [x] **Top Lineups table SHIPPED 2026-06-06** — five player names (linked), stints, points for/against, +/-, sortable, with an "approximate · replay" flag (off `GET /api/teams/:id/lineups`). Stints stand in for minutes (no clock durations stored).
+      - [ ] Top-N by +/- per 100 poss, substitution heatmap — need possessions/clock data not currently derived.
     - **Game detail page** — *new page entirely* (no existing surface for individual games). Routes: `/games/:id`. Components:
       - Header: matchup, final score, venue, attendance, conference
       - Score timeline chart (lead-change momentum)

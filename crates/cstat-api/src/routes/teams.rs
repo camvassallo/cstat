@@ -19,6 +19,44 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/teams/rankings", get(rankings))
         .route("/api/teams/{id}", get(team_detail))
         .route("/api/teams/{id}/coach", get(team_coach))
+        .route("/api/teams/{id}/lineups", get(team_lineups))
+}
+
+/// `GET /api/teams/{id}/lineups` — the team's top 5-man on-floor lineups
+/// (PBP-derived, from `lineup_aggregates`). A dedicated route — like `coach`,
+/// it must not wait on `team_detail`'s per-game projection loop, and it's a
+/// supplementary panel the frontend fetches in parallel. Returns an empty list
+/// (200) for a team-season with no PBP-derived lineups rather than a 404.
+async fn team_lineups(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<TeamDetailParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let season = params.season.unwrap_or_else(crate::default_season);
+    let pool = &state.db.pool;
+
+    let resolved_id = match queries::resolve_team_id_for_season(pool, id, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })? {
+        Some(rid) => rid,
+        None => return Ok(Json(json!({ "season": season, "lineups": [] }))),
+    };
+
+    let lineups = queries::get_team_lineups(pool, resolved_id, season, 15)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+    Ok(Json(json!({ "season": season, "lineups": lineups })))
 }
 
 /// `GET /api/teams/{id}/coach` — the coach card for a team-detail page.
