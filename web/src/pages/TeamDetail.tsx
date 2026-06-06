@@ -304,6 +304,10 @@ function HistoricalTeamDetail() {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
+    // No synchronous `setLineups([])` reset — the `react-hooks/set-state-in-
+    // effect` lint forbids it, and the project accepts a one-paint stale flash
+    // during navigation (same trade-off as the main fetch / coach card). The
+    // `.then` overwrites with the new team's lineups on arrival.
     fetchTeamLineups(id, season)
       .then((r) => !cancelled && setLineups(r.lineups))
       .catch(() => !cancelled && setLineups([]));

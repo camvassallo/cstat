@@ -840,7 +840,9 @@ export interface PlayerPbpProfile {
   second_chance_pts: number;
   points_off_turnovers: number;
   fouls_drawn: number;
-  plus_minus_pbp: number;
+  /// Null when the player never appeared in a tracked 5-man stint — render
+  /// "—" rather than a fabricated 0.
+  plus_minus_pbp: number | null;
 }
 
 export function fetchPlayerPbp(id: string, season?: number) {

@@ -650,7 +650,10 @@ pub struct PlayerPbpProfile {
     pub second_chance_pts: i64,
     pub points_off_turnovers: i64,
     pub fouls_drawn: i64,
-    pub plus_minus_pbp: i64,
+    /// Null when the player never appeared in a tracked 5-man stint (the
+    /// `plus_minus_pbp` column is gated to 5-man stints, a stricter condition
+    /// than having any PBP play) — so the UI shows "—", not a fabricated 0.
+    pub plus_minus_pbp: Option<i64>,
 }
 
 /// Aggregate a player's PBP-derived `player_game_stats` columns to a season
@@ -673,7 +676,9 @@ pub async fn get_player_pbp_profile(
             COALESCE(sum(second_chance_pts), 0)    AS second_chance_pts,
             COALESCE(sum(points_off_turnovers), 0) AS points_off_turnovers,
             COALESCE(sum(fouls_drawn), 0)          AS fouls_drawn,
-            COALESCE(sum(plus_minus_pbp), 0)       AS plus_minus_pbp
+            -- NOT coalesced: NULL (no 5-man stint data) must stay NULL so the
+            -- UI distinguishes "no on-floor +/- data" from a real even 0.
+            sum(plus_minus_pbp)                    AS plus_minus_pbp
         FROM player_game_stats
         WHERE player_id = $1 AND season = $2
         "#,

@@ -107,7 +107,9 @@ function PbpProfilePanel({ pbp }: { pbp: PlayerPbpProfile }) {
         {tile('Fouls drawn', String(pbp.fouls_drawn))}
         {tile(
           'On-floor +/-',
-          `${pbp.plus_minus_pbp > 0 ? '+' : ''}${pbp.plus_minus_pbp}`,
+          pbp.plus_minus_pbp == null
+            ? '—'
+            : `${pbp.plus_minus_pbp > 0 ? '+' : ''}${pbp.plus_minus_pbp}`,
         )}
       </div>
     </div>
@@ -222,6 +224,8 @@ export default function PlayerDetail() {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
+    // No synchronous reset (set-state-in-effect lint); `.then` overwrites and a
+    // one-paint stale panel during navigation matches the page convention.
     fetchPlayerPbp(id, season)
       .then((r) => !cancelled && setPbp(r.pbp))
       .catch(() => !cancelled && setPbp(null));
