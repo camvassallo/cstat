@@ -692,6 +692,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - **Trajectory + freshman models**:
     - Add `prior_lineup_plus_minus` as a quality-of-fit signal (does this player play in good lineups? predicts whether their counting stats are inflated or suppressed)
     - Add `prior_paint_rate` as a position-proxy refinement (paint% > 60% with low height = inside-out big who'll grow into 4)
+  - **Data coverage caveat**: as of 2026-06-06 only **2026** PBP is loaded, so both surfaces only render for 2026; older seasons show nothing. The 2015–2020 PBP CSVs are on disk and load with `bootstrap-csv --year YYYY --pbp-only` + `compute --year YYYY` (no API budget); 2021–2025 need a dashboard CSV export or API backfill first. All currently-loaded lineups are `replay`-sourced (~86%); the exact `onfloor` path only populates for API-ingested games going forward.
   - **API endpoints** — first serving surfaces **SHIPPED 2026-06-06** (the ones backed by prod-resident data):
     - [x] `GET /api/teams/:id/lineups` — top 5-man lineups for the season (stint count, points for/against, +/-, source flag). From `lineup_aggregates`.
     - [x] `GET /api/players/:id/pbp` — player PBP season profile: paint/perimeter shot mix + FG%, transition/2nd-chance/off-TO points, fouls drawn, on-floor +/-. From the `player_game_stats` PBP columns.
