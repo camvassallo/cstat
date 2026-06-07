@@ -1331,6 +1331,15 @@ export interface TeamLineup {
   points_for: number;
   points_against: number;
   plus_minus: number;
+  /// PBP-derived possessions (P3) and the tempo-free rates off them. ortg/drtg
+  /// are points per 100 possessions (same scale as team AdjO/AdjD); net_rtg =
+  /// ortg - drtg. null when the lineup logged no possessions of that side.
+  possessions_for: number;
+  possessions_against: number;
+  minutes: number;
+  ortg: number | null;
+  drtg: number | null;
+  net_rtg: number | null;
   source: string;
 }
 

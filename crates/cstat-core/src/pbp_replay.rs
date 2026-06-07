@@ -205,6 +205,9 @@ pub struct RawPlay {
     pub score_vis: Option<i32>,
     pub onfloor_home: Option<String>,
     pub onfloor_vis: Option<String>,
+    /// Game clock as the feed emits it, `MM:SS.ss`, counting down within a
+    /// period. `None` on the ~0.4% of rows that omit it. Used for stint duration.
+    pub clock: Option<String>,
 }
 
 /// Resolve a raw play into a [`ReplayPlay`], filling in the SUB direction and
@@ -317,6 +320,138 @@ fn stints_from_onfloor_rows(raw: &[RawPlay], code_to_uuid: &HashMap<String, Uuid
         stints.push(finish(b, &mut prev_home, &mut prev_vis));
     }
     stints
+}
+
+// ---------------------------------------------------------------------------
+// Possession & duration metrics (P3)
+// ---------------------------------------------------------------------------
+
+/// Per-stint possessions (per side) and on-floor duration. Aligned 1:1 with the
+/// `Stint` slice [`stint_metrics`] is called with.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StintMetrics {
+    pub home_possessions: f64,
+    pub vis_possessions: f64,
+    pub seconds: i32,
+}
+
+/// Possession-component tally for one side over a stint. Possessions use
+/// cstat's canonical estimate `(FGA + 3FA) - ORB + TOV + 0.44*FTA` — the exact
+/// convention from `compute_adjusted_efficiency` (the 0.44 FTA coefficient, not
+/// 0.475), so lineup ortg/drtg land on the same scale as team AdjO/AdjD.
+///
+/// Two tag-vocabulary quirks the counting must absorb (both verified against
+/// box-score parity across 2015-2026):
+///  - the `FGA` tag is **2-point attempts only** (mutually exclusive with
+///    `3FA`), so three-point attempts must be added back in to recover total
+///    FGA;
+///  - the turnover tag changed vintage — `TOV` in the 2015-2018 feeds, `TO`
+///    from ~2019 on — so both must count (omitting the old `TOV` undercounts
+///    those seasons' possessions by a full ~13 turnovers/team-game).
+#[derive(Default)]
+struct PossCount {
+    fga: f64,
+    orb: f64,
+    to: f64,
+    fta: f64,
+}
+
+impl PossCount {
+    fn add(&mut self, tags: &[String]) {
+        let has = |t: &str| tags.iter().any(|x| x == t);
+        if has("FGA") || has("3FA") {
+            self.fga += 1.0;
+        }
+        if has("ORB") {
+            self.orb += 1.0;
+        }
+        if has("TO") || has("TOV") {
+            self.to += 1.0;
+        }
+        if has("FTA") {
+            self.fta += 1.0;
+        }
+    }
+    fn possessions(&self) -> f64 {
+        self.fga - self.orb + self.to + 0.44 * self.fta
+    }
+}
+
+/// Parse a `MM:SS.ss` (or `MM:SS`) game clock into whole seconds remaining,
+/// dropping the hundredths. `None` for malformed/absent clocks.
+pub fn parse_clock(clock: &str) -> Option<i32> {
+    let (m, rest) = clock.split_once(':')?;
+    let s = rest.split('.').next()?; // drop the ".ss" hundredths
+    Some(m.trim().parse::<i32>().ok()? * 60 + s.trim().parse::<i32>().ok()?)
+}
+
+/// Per-stint possessions (each side) and on-floor seconds, in one merge-walk
+/// over the game's seq-ordered plays against the contiguous, non-overlapping
+/// stints. A play is attributed to the stint whose `[start_seq, end_seq]`
+/// contains its `seq`; plays that fall in the gaps between stints (the SUB
+/// boundaries) belong to neither. Duration is summed from positive clock
+/// decrements within a stint, so a clock reset across a period boundary inside
+/// one stint just drops that single break interval rather than going negative.
+pub fn stint_metrics(
+    raw: &[RawPlay],
+    stints: &[Stint],
+    home_team: Uuid,
+    vis_team: Uuid,
+) -> Vec<StintMetrics> {
+    let mut out = vec![StintMetrics::default(); stints.len()];
+    if stints.is_empty() {
+        return out;
+    }
+    let mut si = 0usize;
+    let mut home = PossCount::default();
+    let mut vis = PossCount::default();
+    let mut seconds = 0i32;
+    let mut last_clock: Option<i32> = None;
+
+    for r in raw {
+        // Leave every stint this play has passed, flushing its tally.
+        while si < stints.len() && r.seq > stints[si].end_seq {
+            out[si] = StintMetrics {
+                home_possessions: home.possessions(),
+                vis_possessions: vis.possessions(),
+                seconds,
+            };
+            home = PossCount::default();
+            vis = PossCount::default();
+            seconds = 0;
+            last_clock = None;
+            si += 1;
+        }
+        if si >= stints.len() {
+            break;
+        }
+        if r.seq < stints[si].start_seq {
+            continue; // a SUB boundary between stints — attributed to neither
+        }
+        if r.team_id == Some(home_team) {
+            home.add(&r.tags);
+        } else if r.team_id == Some(vis_team) {
+            vis.add(&r.tags);
+        }
+        if let Some(cur) = r.clock.as_deref().and_then(parse_clock) {
+            if let Some(prev) = last_clock {
+                let d = prev - cur;
+                if d > 0 {
+                    seconds += d;
+                }
+            }
+            last_clock = Some(cur);
+        }
+    }
+    // Flush the final still-open stint.
+    if si < stints.len() {
+        out[si] = StintMetrics {
+            home_possessions: home.possessions(),
+            vis_possessions: vis.possessions(),
+            seconds,
+        };
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +690,115 @@ mod tests {
             score_home: None,
             score_vis: None,
         }
+    }
+
+    #[test]
+    fn parse_clock_drops_hundredths() {
+        assert_eq!(parse_clock("15:54.54"), Some(15 * 60 + 54));
+        assert_eq!(parse_clock("0:03.03"), Some(3));
+        assert_eq!(parse_clock("11:40"), Some(11 * 60 + 40));
+        assert_eq!(parse_clock(""), None);
+        assert_eq!(parse_clock("garbage"), None);
+    }
+
+    // Minimal RawPlay for the metrics walk: only seq, team, tags, clock matter.
+    fn rp(seq: i32, team: Option<Uuid>, tags: &[&str], clock: &str) -> RawPlay {
+        RawPlay {
+            seq,
+            period: 1,
+            team_id: team,
+            player_id: None,
+            description: None,
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            score_home: None,
+            score_vis: None,
+            onfloor_home: None,
+            onfloor_vis: None,
+            clock: Some(clock.to_string()),
+        }
+    }
+
+    #[test]
+    fn stint_metrics_counts_possessions_and_duration_per_side() {
+        // One stint spanning seq 1..=6. Home (1000) takes a 2pt FGA, a 3pt
+        // attempt (3FA, no FGA tag), and a turnover; grabs one ORB. Vis (2000)
+        // takes two FTA. A NULL-team marker row contributes to neither.
+        let stints = vec![Stint {
+            period: 1,
+            start_seq: 1,
+            end_seq: 6,
+            home_lineup: (1..=5).map(id).collect(),
+            vis_lineup: (11..=15).map(id).collect(),
+            home_score_delta: 0,
+            vis_score_delta: 0,
+        }];
+        let raw = vec![
+            rp(1, Some(HOME), &["FGA", "paint"], "10:00"),
+            rp(2, Some(HOME), &["3FA"], "9:40"),
+            rp(3, Some(HOME), &["ORB"], "9:30"),
+            rp(4, Some(HOME), &["TO"], "9:00"),
+            rp(5, None, &["TIMEOUT"], "9:00"),
+            rp(6, Some(VIS), &["FTA", "FTA"], "8:30"),
+        ];
+        let m = stint_metrics(&raw, &stints, HOME, VIS);
+        assert_eq!(m.len(), 1);
+        // Home: fga(2pt)=1, 3fa=1 => fga total 2; orb=1; to=1; fta=0
+        //   => 2 - 1 + 1 + 0.44*0 = 2.0
+        assert!((m[0].home_possessions - 2.0).abs() < 1e-9);
+        // Vis: fga=0, orb=0, to=0, fta=2 => 0.44*2 = 0.88 (one FTA tag per row,
+        // and only one vis row, so fta=1) -> 0.44
+        assert!((m[0].vis_possessions - 0.44).abs() < 1e-9);
+        // Duration: 10:00 -> 8:30 = 90s of positive decrements.
+        assert_eq!(m[0].seconds, 90);
+    }
+
+    #[test]
+    fn stint_metrics_counts_legacy_tov_turnover_tag() {
+        // The turnover tag is `TOV` in the 2015-2018 feeds and `TO` from ~2019
+        // on; both must count as a possession-ending turnover, or the older
+        // seasons undercount possessions by a full ~13 turnovers/team-game.
+        let stints = vec![Stint {
+            period: 1,
+            start_seq: 1,
+            end_seq: 2,
+            home_lineup: (1..=5).map(id).collect(),
+            vis_lineup: (11..=15).map(id).collect(),
+            home_score_delta: 0,
+            vis_score_delta: 0,
+        }];
+        let raw = vec![
+            rp(1, Some(HOME), &["TOV"], "10:00"), // legacy tag
+            rp(2, Some(HOME), &["TO"], "9:40"),   // modern tag
+        ];
+        let m = stint_metrics(&raw, &stints, HOME, VIS);
+        // Two turnovers, no FGA/ORB/FTA => possessions = 0 - 0 + 2 + 0 = 2.0.
+        assert!((m[0].home_possessions - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stint_metrics_attributes_plays_to_the_containing_stint() {
+        // Two stints; a SUB-gap play at seq 3 (between them) is attributed to
+        // neither. Stint A = seq 1..=2, stint B = seq 4..=5.
+        let mk = |start, end| Stint {
+            period: 1,
+            start_seq: start,
+            end_seq: end,
+            home_lineup: (1..=5).map(id).collect(),
+            vis_lineup: (11..=15).map(id).collect(),
+            home_score_delta: 0,
+            vis_score_delta: 0,
+        };
+        let stints = vec![mk(1, 2), mk(4, 5)];
+        let raw = vec![
+            rp(1, Some(HOME), &["FGA"], "10:00"),
+            rp(2, Some(HOME), &["FGA"], "9:50"),
+            rp(3, Some(HOME), &["SUB"], "9:50"), // gap — belongs to neither stint
+            rp(4, Some(HOME), &["FGA"], "9:40"),
+            rp(5, Some(HOME), &["TO"], "9:20"),
+        ];
+        let m = stint_metrics(&raw, &stints, HOME, VIS);
+        assert!((m[0].home_possessions - 2.0).abs() < 1e-9); // two FGA
+        assert!((m[1].home_possessions - 2.0).abs() < 1e-9); // FGA + TO
     }
 
     #[test]

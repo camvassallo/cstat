@@ -1515,7 +1515,72 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
 /// has PBP. A player-game with no `play_by_play` rows keeps NULL columns
 /// (NULL = no PBP data; 0 = had PBP but none of this event), so seasons without
 /// PBP loaded are simply untouched.
+/// Minimum share of box-score field-goal attempts that the PBP tag stream must
+/// account for before we trust (and serve) a season's PBP-derived surfaces. A
+/// clean season's `FGA`/`3FA`-tagged plays map ~1:1 to box FGA (every observed
+/// season 2015-2026 except 2019 is >0.93); a corrupt source falls far below.
+/// 2019's NatStat PBP export mis-tags made field goals as free throws, landing
+/// at ~0.55 — caught here. See ROADMAP "2019 PBP tag corruption".
+const PBP_MIN_FGA_COVERAGE: f64 = 0.80;
+
+/// Fraction of box-score FGA that the season's PBP `FGA`+`3FA` tags account for.
+/// `None` when there's no box FGA to compare against (can't evaluate — don't
+/// gate). The signal is a cheap, source-agnostic corruption detector: it keys
+/// on tag *coverage*, so it fires for a corrupt export, a partial in-season
+/// load, or any future feed regression — not a hardcoded season list.
+async fn pbp_fga_coverage(pool: &PgPool, season: i32) -> Result<Option<f64>, sqlx::Error> {
+    let row: (Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT \
+            (SELECT count(*) FROM play_by_play \
+             WHERE season = $1 AND ('FGA' = ANY(tags) OR '3FA' = ANY(tags))), \
+            (SELECT sum(fga)::bigint FROM team_game_stats WHERE season = $1)",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    let pbp_fga = row.0.unwrap_or(0);
+    match row.1 {
+        Some(box_fga) if box_fga > 0 => Ok(Some(pbp_fga as f64 / box_fga as f64)),
+        _ => Ok(None),
+    }
+}
+
+/// True (with a warning) when the season's PBP tag stream is too sparse to trust
+/// — the caller should clear and skip that season's derived surfaces.
+async fn pbp_source_is_corrupt(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
+    match pbp_fga_coverage(pool, season).await? {
+        Some(cov) if cov < PBP_MIN_FGA_COVERAGE => {
+            warn!(
+                season,
+                coverage = format!("{cov:.2}"),
+                threshold = PBP_MIN_FGA_COVERAGE,
+                "PBP tag stream covers too few box FGA — treating source as corrupt, \
+                 clearing and skipping this season's PBP-derived surfaces"
+            );
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Corruption gate: a season whose PBP tags don't cover the box-score FGA
+    // (e.g. 2019's mis-tagged export) yields garbage aggregates, so clear any
+    // stale values and skip rather than serve them.
+    if pbp_source_is_corrupt(pool, season).await? {
+        sqlx::query(
+            "UPDATE player_game_stats \
+             SET paint_fga = NULL, paint_fgm = NULL, perimeter_fga = NULL, \
+                 perimeter_fgm = NULL, transition_pts = NULL, second_chance_pts = NULL, \
+                 points_off_turnovers = NULL, fouls_drawn = NULL \
+             WHERE season = $1",
+        )
+        .bind(season)
+        .execute(pool)
+        .await?;
+        return Ok(0);
+    }
+
     let res = sqlx::query(
         "UPDATE player_game_stats pgs
          SET paint_fga            = d.paint_fga,
@@ -1571,6 +1636,9 @@ struct StintRow {
     opp_lineup: Vec<Uuid>,
     points_for: i32,
     points_against: i32,
+    possessions_for: f64,
+    possessions_against: f64,
+    seconds: i32,
 }
 
 /// P2b: derive lineup stints, season lineup aggregates, and per-player PBP
@@ -1596,6 +1664,28 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     .await?;
     if games.is_empty() {
         return Ok(0); // no PBP loaded for this season — nothing to do
+    }
+
+    // Corruption gate: if the PBP tag stream doesn't cover the box-score FGA
+    // (2019's mis-tagged export), the derived stints/lineups/+/- are garbage.
+    // Clear any prior rows for the season and skip — better an absent surface
+    // than a wrong one (the UI hides it, same as a pre-PBP season).
+    if pbp_source_is_corrupt(pool, season).await? {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM lineup_stints WHERE season = $1")
+            .bind(season)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM lineup_aggregates WHERE season = $1")
+            .bind(season)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE player_game_stats SET plus_minus_pbp = NULL WHERE season = $1")
+            .bind(season)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok(0);
     }
 
     // Bulk-load all per-game metadata once, rather than ~4 queries per game. The
@@ -1675,7 +1765,9 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
             crate::pbp_replay::StintSource::Replay => replay_games += 1,
         }
         let src = source.as_str();
-        for st in stints {
+        // Possessions (each side) + on-floor seconds per stint, aligned 1:1.
+        let metrics = crate::pbp_replay::stint_metrics(&raw, &stints, ht, vt);
+        for (st, m) in stints.into_iter().zip(metrics) {
             // One row per team's perspective (skip a side with no resolved team
             // or an empty lineup — e.g. an unresolved non-D1 opponent).
             if home_team.is_some() && !st.home_lineup.is_empty() {
@@ -1690,6 +1782,9 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                         opp_lineup: st.vis_lineup.clone(),
                         points_for: st.home_score_delta,
                         points_against: st.vis_score_delta,
+                        possessions_for: m.home_possessions,
+                        possessions_against: m.vis_possessions,
+                        seconds: m.seconds,
                     },
                     src,
                 ));
@@ -1706,6 +1801,9 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                         opp_lineup: st.home_lineup,
                         points_for: st.vis_score_delta,
                         points_against: st.home_score_delta,
+                        possessions_for: m.vis_possessions,
+                        possessions_against: m.home_possessions,
+                        seconds: m.seconds,
                     },
                     src,
                 ));
@@ -1737,10 +1835,18 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     // local stints table but excluded from the served aggregates).
     sqlx::query(
         "INSERT INTO lineup_aggregates
-             (season, team_id, lineup, stint_count, points_for, points_against, plus_minus, source)
+             (season, team_id, lineup, stint_count, points_for, points_against, plus_minus, source,
+              possessions_for, possessions_against, minutes, ortg, drtg, net_rtg)
          SELECT season, team_id, lineup, count(*),
                 sum(points_for), sum(points_against), sum(points_for - points_against),
-                CASE WHEN bool_or(source = 'onfloor') THEN 'onfloor' ELSE 'replay' END
+                CASE WHEN bool_or(source = 'onfloor') THEN 'onfloor' ELSE 'replay' END,
+                sum(possessions_for), sum(possessions_against), sum(seconds) / 60.0,
+                -- ortg/drtg = points per 100 possessions (same scale as team AdjO/AdjD);
+                -- NULL rather than divide-by-zero for a lineup with no logged possessions.
+                100.0 * sum(points_for)     / nullif(sum(possessions_for), 0),
+                100.0 * sum(points_against) / nullif(sum(possessions_against), 0),
+                100.0 * sum(points_for)     / nullif(sum(possessions_for), 0)
+                  - 100.0 * sum(points_against) / nullif(sum(possessions_against), 0)
          FROM lineup_stints
          WHERE season = $1 AND array_length(lineup, 1) = 5
          GROUP BY season, team_id, lineup",
@@ -1790,7 +1896,7 @@ async fn load_raw_plays(
 ) -> Result<Vec<crate::pbp_replay::RawPlay>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT seq, period, team_id, player_id, description, tags, \
-         score_home, score_vis, onfloor_home, onfloor_vis \
+         score_home, score_vis, onfloor_home, onfloor_vis, clock \
          FROM play_by_play WHERE game_id = $1 ORDER BY seq",
     )
     .bind(game_id)
@@ -1809,11 +1915,12 @@ async fn load_raw_plays(
             score_vis: r.get("score_vis"),
             onfloor_home: r.get("onfloor_home"),
             onfloor_vis: r.get("onfloor_vis"),
+            clock: r.get("clock"),
         })
         .collect())
 }
 
-/// Chunked bulk insert into `lineup_stints` (11 cols × 1000 rows = 11k binds,
+/// Chunked bulk insert into `lineup_stints` (14 cols × 1000 rows = 14k binds,
 /// well under Postgres' 65535 cap). Runs inside the caller's transaction.
 async fn insert_lineup_stints(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -1823,7 +1930,8 @@ async fn insert_lineup_stints(
     for chunk in rows.chunks(1000) {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO lineup_stints (game_id, season, period, start_seq, end_seq, \
-             team_id, lineup, opp_lineup, points_for, points_against, source) ",
+             team_id, lineup, opp_lineup, points_for, points_against, source, \
+             possessions_for, possessions_against, seconds) ",
         );
         qb.push_values(chunk, |mut b, (r, src)| {
             b.push_bind(r.game_id)
@@ -1836,7 +1944,10 @@ async fn insert_lineup_stints(
                 .push_bind(r.opp_lineup.clone())
                 .push_bind(r.points_for)
                 .push_bind(r.points_against)
-                .push_bind(*src);
+                .push_bind(*src)
+                .push_bind(r.possessions_for)
+                .push_bind(r.possessions_against)
+                .push_bind(r.seconds);
         });
         qb.build().execute(&mut **tx).await?;
     }

@@ -553,7 +553,8 @@ function textOn(hex: string): string {
 /// Top-5 lineups as a per-row "waffle": five archetype-colored name pills (one
 /// per player, ordered shortest→tallest so grid columns align by size) so a
 /// lineup's identity reads at a glance from the colors, with the headline stats
-/// (stints, +/-) alongside. A full-width panel — the single lineups surface.
+/// (stints, minutes, net rating per 100 poss) alongside. A full-width panel —
+/// the single lineups surface.
 function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
   const top = lineups.slice(0, 5);
   const approximate = top.some((l) => l.source === 'replay');
@@ -614,26 +615,34 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
               })}
             </div>
 
-            {/* Headline stats */}
+            {/* Headline stats — possession-normalized (P3): minutes + net rating
+                per 100 poss, with raw +/- kept as the counting-stat anchor. */}
             <div className="flex items-center gap-5 shrink-0 text-right">
               <div>
                 <div className="text-sm font-semibold tabular-nums">{l.stint_count}</div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-wide">stints</div>
               </div>
-              <div className="w-12">
+              <div>
+                <div className="text-sm font-semibold tabular-nums">{Math.round(l.minutes)}</div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-wide">min</div>
+              </div>
+              <div className="w-14">
                 <div
                   className={`text-base font-bold tabular-nums ${
-                    l.plus_minus > 0
-                      ? 'text-green-400'
-                      : l.plus_minus < 0
-                        ? 'text-red-400'
-                        : 'text-gray-400'
+                    l.net_rtg == null
+                      ? 'text-gray-400'
+                      : l.net_rtg > 0
+                        ? 'text-green-400'
+                        : l.net_rtg < 0
+                          ? 'text-red-400'
+                          : 'text-gray-400'
                   }`}
                 >
-                  {l.plus_minus > 0 ? '+' : ''}
-                  {l.plus_minus}
+                  {l.net_rtg == null
+                    ? '—'
+                    : `${l.net_rtg > 0 ? '+' : ''}${l.net_rtg.toFixed(1)}`}
                 </div>
-                <div className="text-[10px] text-gray-500 uppercase tracking-wide">+/-</div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-wide">net/100</div>
               </div>
             </div>
           </div>
