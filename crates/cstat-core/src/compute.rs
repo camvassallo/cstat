@@ -146,6 +146,14 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 .bind(dup_id)
                 .execute(pool)
                 .await?;
+            // play_by_play has a RESTRICT FK to players(id); reassign the dup's
+            // PBP rows to the primary so the Step 4 delete doesn't violate it.
+            // (Local-only table; on prod it's empty, so this is a no-op there.)
+            sqlx::query("UPDATE play_by_play SET player_id = $1 WHERE player_id = $2")
+                .bind(primary_id)
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
 
             // Step 4: Delete the duplicate player record
             sqlx::query("DELETE FROM players WHERE id = $1")
