@@ -599,6 +599,16 @@ pub struct TeamLineup {
     pub points_for: i32,
     pub points_against: i32,
     pub plus_minus: i32,
+    /// PBP-derived possessions (P3) and the tempo-free rates built off them.
+    /// `ortg`/`drtg` are points per 100 possessions, on the same scale as team
+    /// AdjO/AdjD; `net_rtg = ortg - drtg`. NULL when the lineup logged no
+    /// possessions of a given side (so the UI shows "—", not a fake 0).
+    pub possessions_for: f64,
+    pub possessions_against: f64,
+    pub minutes: f64,
+    pub ortg: Option<f64>,
+    pub drtg: Option<f64>,
+    pub net_rtg: Option<f64>,
     pub source: String,
 }
 
@@ -626,6 +636,12 @@ pub async fn get_team_lineups(
             la.points_for,
             la.points_against,
             la.plus_minus,
+            la.possessions_for,
+            la.possessions_against,
+            la.minutes,
+            la.ortg,
+            la.drtg,
+            la.net_rtg,
             la.source
         FROM lineup_aggregates la
         CROSS JOIN LATERAL (
@@ -641,7 +657,10 @@ pub async fn get_team_lineups(
             LEFT JOIN player_archetypes pa ON pa.player_id = u.pid AND pa.season = la.season
         ) lp
         WHERE la.team_id = $1 AND la.season = $2
-        ORDER BY la.stint_count DESC, la.plus_minus DESC
+        -- Most-played lineups first. Minutes is the natural "most-used" measure
+        -- (a lineup can rack up many short stints or a few long ones); possessions
+        -- is a clock-independent tiebreak in case of a clock-parse gap.
+        ORDER BY la.minutes DESC, la.possessions_for DESC, la.stint_count DESC
         LIMIT $3
         "#,
     )
