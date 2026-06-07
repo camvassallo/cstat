@@ -615,18 +615,33 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
               })}
             </div>
 
-            {/* Headline stats — possession-normalized (P3): minutes + net rating
-                per 100 poss, with raw +/- kept as the counting-stat anchor. */}
+            {/* Headline stats — all possession-normalized (P3) so a heavily-used
+                lineup isn't penalized vs one that barely played: minutes (usage),
+                offensive/defensive rating (points per 100 poss), and net/100. */}
             <div className="flex items-center gap-5 shrink-0 text-right">
-              <div>
-                <div className="text-sm font-semibold tabular-nums">{l.stint_count}</div>
-                <div className="text-[10px] text-gray-500 uppercase tracking-wide">stints</div>
-              </div>
               <div>
                 <div className="text-sm font-semibold tabular-nums">{Math.round(l.minutes)}</div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-wide">min</div>
               </div>
-              <div className="w-14">
+              <div
+                className="w-20"
+                title="Offensive / defensive rating: points scored / allowed per 100 possessions (tempo-free, so it doesn't reward or punish a lineup for how many minutes it played)"
+              >
+                <div className="text-sm font-semibold tabular-nums">
+                  <span className="text-green-400">
+                    {l.ortg == null ? '—' : l.ortg.toFixed(0)}
+                  </span>
+                  <span className="text-gray-500"> / </span>
+                  <span className="text-red-400">
+                    {l.drtg == null ? '—' : l.drtg.toFixed(0)}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-wide">off/def 100</div>
+              </div>
+              <div
+                className="w-16"
+                title="Net rating: offensive minus defensive rating, points per 100 possessions"
+              >
                 <div
                   className={`text-base font-bold tabular-nums ${
                     l.net_rtg == null

@@ -377,12 +377,18 @@ impl PossCount {
     }
 }
 
-/// Parse a `MM:SS.ss` (or `MM:SS`) game clock into whole seconds remaining,
-/// dropping the hundredths. `None` for malformed/absent clocks.
+/// Parse a game clock into whole seconds remaining, dropping any hundredths.
+/// The NatStat feed's delimiter drifts by season vintage — `MM:SS` (2015-2018),
+/// `MM:SS:hh` (2019-2024, colon-delimited hundredths), and `MM:SS.hh`
+/// (2025-2026, dot-delimited) all appear — so we split on both `:` and `.` and
+/// take the first two fields as minutes and seconds. No college clock exceeds
+/// 20:00, so the first field is always minutes (never hours). `None` for
+/// malformed/absent clocks.
 pub fn parse_clock(clock: &str) -> Option<i32> {
-    let (m, rest) = clock.split_once(':')?;
-    let s = rest.split('.').next()?; // drop the ".ss" hundredths
-    Some(m.trim().parse::<i32>().ok()? * 60 + s.trim().parse::<i32>().ok()?)
+    let mut parts = clock.split([':', '.']);
+    let m: i32 = parts.next()?.trim().parse().ok()?;
+    let s: i32 = parts.next()?.trim().parse().ok()?;
+    Some(m * 60 + s)
 }
 
 /// Per-stint possessions (each side) and on-floor seconds, in one merge-walk
@@ -693,10 +699,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_clock_drops_hundredths() {
-        assert_eq!(parse_clock("15:54.54"), Some(15 * 60 + 54));
+    fn parse_clock_handles_all_vintage_formats() {
+        // The NatStat clock delimiter drifts by season; all three must parse to
+        // the same MM*60+SS, dropping hundredths.
+        assert_eq!(parse_clock("11:40"), Some(11 * 60 + 40)); // 2015-2018 MM:SS
+        assert_eq!(parse_clock("20:00:00"), Some(20 * 60)); // 2019-2024 MM:SS:hh
+        assert_eq!(parse_clock("18:06:00"), Some(18 * 60 + 6));
+        assert_eq!(parse_clock("19:10.10"), Some(19 * 60 + 10)); // 2025-2026 MM:SS.hh
         assert_eq!(parse_clock("0:03.03"), Some(3));
-        assert_eq!(parse_clock("11:40"), Some(11 * 60 + 40));
         assert_eq!(parse_clock(""), None);
         assert_eq!(parse_clock("garbage"), None);
     }

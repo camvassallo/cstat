@@ -657,7 +657,10 @@ pub async fn get_team_lineups(
             LEFT JOIN player_archetypes pa ON pa.player_id = u.pid AND pa.season = la.season
         ) lp
         WHERE la.team_id = $1 AND la.season = $2
-        ORDER BY la.stint_count DESC, la.net_rtg DESC NULLS LAST
+        -- Most-played lineups first. Minutes is the natural "most-used" measure
+        -- (a lineup can rack up many short stints or a few long ones); possessions
+        -- is a clock-independent tiebreak in case of a clock-parse gap.
+        ORDER BY la.minutes DESC, la.possessions_for DESC, la.stint_count DESC
         LIMIT $3
         "#,
     )
