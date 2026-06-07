@@ -1831,44 +1831,75 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
 
     insert_lineup_stints(&mut tx, season, &rows).await?;
 
-    // Season rollup — only true 5-man lineups (off-5 replay drift is left in the
-    // local stints table but excluded from the served aggregates).
+    // Per-(game, team, lineup) rollup of 5-man stints with a physical-validity
+    // flag, materialized once so both served surfaces below read the same set.
+    //
+    // **Box-minute clamp**: SUB-replay drift (a missed sub-out stretches a stint)
+    // can attribute more on-floor time to a 5-man unit than physically possible.
+    // A lineup can't have been on the floor longer than its least-playing member
+    // played all game, so any (game, lineup) whose summed minutes exceed
+    // `min(box minutes of its five) + 1.0` (a tolerance for box-minute integer
+    // rounding) is a replay artifact — flagged invalid and excluded from the
+    // served aggregates and plus/minus, so a phantom lineup can't out-rank real
+    // ones. The raw rows stay in `lineup_stints` (a serving filter, not a delete).
+    // COALESCE to a huge ceiling when box minutes are unknown — keep a row we
+    // can't prove impossible. See ROADMAP "SUB-replay lineup drift".
     sqlx::query(
-        "INSERT INTO lineup_aggregates
-             (season, team_id, lineup, stint_count, points_for, points_against, plus_minus, source,
-              possessions_for, possessions_against, minutes, ortg, drtg, net_rtg)
-         SELECT season, team_id, lineup, count(*),
-                sum(points_for), sum(points_against), sum(points_for - points_against),
-                CASE WHEN bool_or(source = 'onfloor') THEN 'onfloor' ELSE 'replay' END,
-                sum(possessions_for), sum(possessions_against), sum(seconds) / 60.0,
-                -- ortg/drtg = points per 100 possessions (same scale as team AdjO/AdjD);
-                -- NULL rather than divide-by-zero for a lineup with no logged possessions.
-                100.0 * sum(points_for)     / nullif(sum(possessions_for), 0),
-                100.0 * sum(points_against) / nullif(sum(possessions_against), 0),
-                100.0 * sum(points_for)     / nullif(sum(possessions_for), 0)
-                  - 100.0 * sum(points_against) / nullif(sum(possessions_against), 0)
-         FROM lineup_stints
-         WHERE season = $1 AND array_length(lineup, 1) = 5
-         GROUP BY season, team_id, lineup",
+        "CREATE TEMPORARY TABLE _game_lineups ON COMMIT DROP AS
+         SELECT ls.game_id, ls.team_id, ls.lineup,
+                count(*)                       AS stints,
+                sum(ls.points_for)             AS pf,
+                sum(ls.points_against)         AS pa,
+                sum(ls.possessions_for)        AS posf,
+                sum(ls.possessions_against)    AS posa,
+                sum(ls.seconds)                AS secs,
+                bool_or(ls.source = 'onfloor') AS has_onfloor,
+                (sum(ls.seconds) / 60.0) <= COALESCE((
+                    SELECT min(pgs.minutes) FROM player_game_stats pgs
+                    WHERE pgs.game_id = ls.game_id AND pgs.player_id = ANY(ls.lineup)
+                ), 1e9) + 1.0                  AS valid
+         FROM lineup_stints ls
+         WHERE ls.season = $1 AND array_length(ls.lineup, 1) = 5
+         GROUP BY ls.game_id, ls.team_id, ls.lineup",
     )
     .bind(season)
     .execute(&mut *tx)
     .await?;
 
-    // Per-(player, game) plus/minus: sum each player's on-floor stint diffs.
-    // Gated to 5-man stints, same as the aggregates above: off-5 replay-drift
-    // windows have the wrong on-floor membership, so charging their diffs to the
-    // tracked players would both poison the number and break reconciliation with
-    // `lineup_aggregates`.
+    // Season rollup — valid 5-man game-lineups only (off-5 drift never enters the
+    // temp table; the box-minute clamp drops physically-impossible game-lineups).
+    sqlx::query(
+        "INSERT INTO lineup_aggregates
+             (season, team_id, lineup, stint_count, points_for, points_against, plus_minus, source,
+              possessions_for, possessions_against, minutes, ortg, drtg, net_rtg)
+         SELECT $1, team_id, lineup, sum(stints),
+                sum(pf), sum(pa), sum(pf - pa),
+                CASE WHEN bool_or(has_onfloor) THEN 'onfloor' ELSE 'replay' END,
+                sum(posf), sum(posa), sum(secs) / 60.0,
+                -- ortg/drtg = points per 100 possessions (same scale as team AdjO/AdjD);
+                -- NULL rather than divide-by-zero for a lineup with no logged possessions.
+                100.0 * sum(pf) / nullif(sum(posf), 0),
+                100.0 * sum(pa) / nullif(sum(posa), 0),
+                100.0 * sum(pf) / nullif(sum(posf), 0)
+                  - 100.0 * sum(pa) / nullif(sum(posa), 0)
+         FROM _game_lineups
+         WHERE valid
+         GROUP BY team_id, lineup",
+    )
+    .bind(season)
+    .execute(&mut *tx)
+    .await?;
+
+    // Per-(player, game) plus/minus: sum each player's valid on-floor stint diffs.
+    // Same clamp as the aggregates above so the two surfaces reconcile.
     sqlx::query(
         "UPDATE player_game_stats pgs
          SET plus_minus_pbp = d.pm
          FROM (
-             SELECT ls.game_id, p AS player_id,
-                    sum(ls.points_for - ls.points_against)::int AS pm
-             FROM lineup_stints ls, unnest(ls.lineup) AS p
-             WHERE ls.season = $1 AND array_length(ls.lineup, 1) = 5
-             GROUP BY ls.game_id, p
+             SELECT gl.game_id, p AS player_id, sum(gl.pf - gl.pa)::int AS pm
+             FROM _game_lineups gl, unnest(gl.lineup) AS p
+             WHERE gl.valid
+             GROUP BY gl.game_id, p
          ) d
          WHERE pgs.game_id = d.game_id AND pgs.player_id = d.player_id AND pgs.season = $1",
     )
