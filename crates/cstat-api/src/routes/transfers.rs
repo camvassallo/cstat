@@ -86,6 +86,15 @@ struct EnrichedTransfer {
     projected_campom_mean: Option<f32>,
     projected_campom_lower: Option<f32>,
     projected_campom_upper: Option<f32>,
+    /// Source-season PBP on/off — team net per 100 poss with vs without the
+    /// player at their old school, the season before they transferred. NULL when
+    /// unmatched or the player has no PBP-derived on/off row. `on_off_source`
+    /// (onfloor/replay) carries the lineup-accuracy caveat.
+    net_on_off: Option<f64>,
+    on_net_rtg: Option<f64>,
+    off_net_rtg: Option<f64>,
+    on_off_source: Option<String>,
+    on_off_off_poss: Option<f64>,
 }
 
 /// One DB candidate row pulled by name match. We may have several per name
@@ -106,6 +115,12 @@ struct DbCandidate {
     campom_pct: Option<f64>,
     primary_class: Option<String>,
     secondary_class: Option<String>,
+    // Source-season PBP on/off (their last season before transferring).
+    net_on_off: Option<f64>,
+    on_net_rtg: Option<f64>,
+    off_net_rtg: Option<f64>,
+    on_off_source: Option<String>,
+    on_off_off_poss: Option<f64>,
 }
 
 /// Subset of a row from the `teams` table — just enough to map a 247 short
@@ -193,7 +208,12 @@ async fn transfer_list(
             tps.cam_gbpm_v3_psos     AS campom,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
             pa.primary_class         AS primary_class,
-            pa.secondary_class       AS secondary_class
+            pa.secondary_class       AS secondary_class,
+            oo.net_on_off            AS net_on_off,
+            oo.on_net_rtg            AS on_net_rtg,
+            oo.off_net_rtg           AS off_net_rtg,
+            oo.source                AS on_off_source,
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -201,6 +221,8 @@ async fn transfer_list(
             ON tps.player_id = p.id AND tps.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = p.id AND pa.season = pss.season
+        LEFT JOIN player_on_off oo
+            ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
         WHERE pss.season = $1
         "#,
     )
@@ -310,6 +332,11 @@ async fn transfer_list(
                 projected_campom_mean: None,
                 projected_campom_lower: None,
                 projected_campom_upper: None,
+                net_on_off: best.and_then(|c| c.net_on_off),
+                on_net_rtg: best.and_then(|c| c.on_net_rtg),
+                off_net_rtg: best.and_then(|c| c.off_net_rtg),
+                on_off_source: best.and_then(|c| c.on_off_source.clone()),
+                on_off_off_poss: best.and_then(|c| c.on_off_off_poss),
             }
         })
         .collect();

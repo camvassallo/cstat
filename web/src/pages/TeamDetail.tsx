@@ -24,6 +24,7 @@ import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
 import { campomTier, campomTierColor } from '../components/campom';
+import { onOffColor, signedRtg, onOffTitle } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
@@ -685,6 +686,7 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
 type RosterSortKey =
   | 'name'
   | 'campom'
+  | 'net_on_off'
   | 'games_played'
   | 'minutes_per_game'
   | 'usage_rate'
@@ -793,6 +795,10 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
     return [...roster].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir));
   }, [roster, sort]);
 
+  // Only show the On/Off column when the season has PBP-derived splits (hidden
+  // for pre-2012 / not-loaded seasons rather than rendering an all-"—" column).
+  const hasOnOff = useMemo(() => roster.some((p) => p.net_on_off != null), [roster]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -833,6 +839,17 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 title="Composite player valuation."
                 className="border-l border-gray-800"
               />
+              {hasOnOff && (
+                <SortHeader
+                  label="On/Off"
+                  sortKey="net_on_off"
+                  current={sort}
+                  onSort={onSort}
+                  align="right"
+                  title="Team net rating per 100 possessions with vs without the player (on − off). PBP-derived; hover a value for the on/off breakdown."
+                  className="border-l border-gray-800"
+                />
+              )}
               <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" />
               <SortHeader label="MPG" sortKey="minutes_per_game" current={sort} onSort={onSort} align="right" />
               <SortHeader label="USG%" sortKey="usage_rate" current={sort} onSort={onSort} align="right" />
@@ -921,6 +938,17 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="text-gray-600">—</span>
                   )}
                 </td>
+                {hasOnOff && (
+                  <td className="py-2 px-2 text-right border-l border-gray-800 tabular-nums">
+                    {p.net_on_off != null ? (
+                      <span style={{ color: onOffColor(p.net_on_off) }} title={onOffTitle(p)}>
+                        {signedRtg(p.net_on_off)}
+                      </span>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )}
+                  </td>
+                )}
                 <td className="py-2 px-2 text-right">{p.games_played}</td>
                 <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
                 <td className="py-2 px-2 text-right">

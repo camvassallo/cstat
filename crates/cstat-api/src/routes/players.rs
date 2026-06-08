@@ -22,6 +22,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/players/{id}/similar", get(player_similar))
         .route("/api/players/{id}/progression", get(player_progression))
         .route("/api/players/{id}/pbp", get(player_pbp))
+        .route("/api/players/{id}/on-off", get(player_on_off))
 }
 
 /// `GET /api/players/{id}/pbp` — the player's play-by-play season profile (shot
@@ -58,6 +59,42 @@ async fn player_pbp(
         })?;
 
     Ok(Json(json!({ "season": season, "pbp": pbp })))
+}
+
+/// `GET /api/players/{id}/on-off` — the player's season on/off splits (team
+/// off/def rating per 100 poss with vs without him on the floor). Fetched in
+/// parallel with the player page; returns `{ "on_off": null }` (200) when the
+/// player has no PBP-derived on/off row rather than a 404.
+async fn player_on_off(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<PlayerDetailParams>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let season = params.season.unwrap_or_else(crate::default_season);
+    let pool = &state.db.pool;
+
+    let resolved = queries::resolve_player_id_for_season(pool, id, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("resolve failed: {e}") })),
+            )
+        })?;
+    let Some(rid) = resolved else {
+        return Ok(Json(json!({ "season": season, "on_off": null })));
+    };
+
+    let on_off = queries::get_player_on_off(pool, rid, season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
+    Ok(Json(json!({ "season": season, "on_off": on_off })))
 }
 
 #[derive(Deserialize)]

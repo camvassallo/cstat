@@ -140,6 +140,16 @@ export interface RosterEntry {
   mid_made: number | null;
   tpm: number | null;
   ftm: number | null;
+  /// PBP on/off splits (from `player_on_off`): team net rating per 100 poss with
+  /// vs without the player, and the on−off swing. `null` for a player with no
+  /// PBP-derived on/off row. `on_off_source` (onfloor/replay) carries the
+  /// lineup-accuracy caveat; `on_off_off_poss` is the off-court possession
+  /// sample (thin for heavy-minute starters).
+  net_on_off: number | null;
+  on_net_rtg: number | null;
+  off_net_rtg: number | null;
+  on_off_source: string | null;
+  on_off_off_poss: number | null;
 }
 
 export interface ArchetypeShare {
@@ -270,6 +280,12 @@ export interface PlayerRow {
   blk_pct_pct: number | null;
   primary_class: string | null;
   secondary_class: string | null;
+  // PBP on/off (team net per 100 poss with vs without the player). See onoff.ts.
+  net_on_off: number | null;
+  on_net_rtg: number | null;
+  off_net_rtg: number | null;
+  on_off_source: string | null;
+  on_off_off_poss: number | null;
 }
 
 export interface PlayerProfile {
@@ -421,6 +437,12 @@ export interface TransferRow {
   projected_campom_mean: number | null;
   projected_campom_lower: number | null;
   projected_campom_upper: number | null;
+  // Source-season PBP on/off at the old school (see onoff.ts). NULL when unmatched.
+  net_on_off: number | null;
+  on_net_rtg: number | null;
+  off_net_rtg: number | null;
+  on_off_source: string | null;
+  on_off_off_poss: number | null;
 }
 
 export function fetchTransfers(year: number) {
@@ -848,6 +870,40 @@ export interface PlayerPbpProfile {
 export function fetchPlayerPbp(id: string, season?: number) {
   return fetchJson<{ season: number; pbp: PlayerPbpProfile | null }>(
     `/players/${id}/pbp`,
+    { season: season?.toString() },
+  );
+}
+
+/// A player's season on/off splits (from the PBP-derived `player_on_off`
+/// rollup): team offense/defense per 100 possessions with vs without him on the
+/// floor. `net_on_off` is the on−off swing. `ortg`/`drtg`/`net` are null when a
+/// side logged no possessions (a player who never sat has no off-court rate).
+/// `source` is `'onfloor'` (exact) or `'replay'` (~86%, carries the caveat).
+export interface PlayerOnOff {
+  games: number;
+  on_minutes: number;
+  on_possessions_for: number;
+  on_possessions_against: number;
+  on_points_for: number;
+  on_points_against: number;
+  on_ortg: number | null;
+  on_drtg: number | null;
+  on_net_rtg: number | null;
+  off_minutes: number;
+  off_possessions_for: number;
+  off_possessions_against: number;
+  off_points_for: number;
+  off_points_against: number;
+  off_ortg: number | null;
+  off_drtg: number | null;
+  off_net_rtg: number | null;
+  net_on_off: number | null;
+  source: string;
+}
+
+export function fetchPlayerOnOff(id: string, season?: number) {
+  return fetchJson<{ season: number; on_off: PlayerOnOff | null }>(
+    `/players/${id}/on-off`,
     { season: season?.toString() },
   );
 }

@@ -307,6 +307,17 @@ pub struct RosterEntry {
     pub mid_made: Option<f64>,
     pub tpm: Option<i32>,
     pub ftm: Option<i32>,
+    /// PBP on/off splits (from `player_on_off`): team net rating per 100 poss
+    /// with vs without the player, and the on−off swing. NULL for a player with
+    /// no PBP-derived on/off row (pre-2012 / not loaded / corrupt-gated season).
+    /// `on_off_source` (`onfloor`/`replay`) carries the lineup-accuracy caveat;
+    /// `on_off_off_poss` is the off-court possession sample (for a thin-sample
+    /// flag on heavy-minute starters).
+    pub net_on_off: Option<f64>,
+    pub on_net_rtg: Option<f64>,
+    pub off_net_rtg: Option<f64>,
+    pub on_off_source: Option<String>,
+    pub on_off_off_poss: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -366,6 +377,13 @@ pub struct PlayerRow {
     // Archetype — surfaced when the page filters by class.
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
+    // PBP on/off (from `player_on_off`): team net per 100 poss with vs without
+    // the player + the swing. NULL when the player has no PBP-derived row.
+    pub net_on_off: Option<f64>,
+    pub on_net_rtg: Option<f64>,
+    pub off_net_rtg: Option<f64>,
+    pub on_off_source: Option<String>,
+    pub on_off_off_poss: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -725,6 +743,66 @@ pub async fn get_player_pbp_profile(
     Ok(if row.games > 0 { Some(row) } else { None })
 }
 
+/// A player's season on/off splits from the PBP-derived `player_on_off` rollup:
+/// team offense/defense per 100 possessions WITH the player on the floor vs
+/// WITHOUT him (same games, bench time only). `net_on_off` is the on−off swing.
+/// `source` (`'onfloor'` exact / `'replay'` ~86%) carries the same accuracy
+/// caveat as the lineup waffle. Rates are `Option` — a player who never sat has
+/// no off-court possessions, so the off rates are NULL (UI shows "—").
+#[derive(Debug, Serialize, FromRow)]
+pub struct PlayerOnOff {
+    pub games: i32,
+    pub on_minutes: f64,
+    pub on_possessions_for: f64,
+    pub on_possessions_against: f64,
+    pub on_points_for: i32,
+    pub on_points_against: i32,
+    pub on_ortg: Option<f64>,
+    pub on_drtg: Option<f64>,
+    pub on_net_rtg: Option<f64>,
+    pub off_minutes: f64,
+    pub off_possessions_for: f64,
+    pub off_possessions_against: f64,
+    pub off_points_for: i32,
+    pub off_points_against: i32,
+    pub off_ortg: Option<f64>,
+    pub off_drtg: Option<f64>,
+    pub off_net_rtg: Option<f64>,
+    pub net_on_off: Option<f64>,
+    pub source: String,
+}
+
+/// Fetch a player's season on/off split. Returns `None` when the player has no
+/// PBP-derived on/off row (pre-2012 / not loaded / corrupt-season-gated), so the
+/// UI can hide the panel.
+pub async fn get_player_on_off(
+    pool: &PgPool,
+    player_id: Uuid,
+    season: i32,
+) -> Result<Option<PlayerOnOff>, sqlx::Error> {
+    sqlx::query_as::<_, PlayerOnOff>(
+        r#"
+        SELECT oo.games,
+               oo.on_minutes, oo.on_possessions_for, oo.on_possessions_against,
+               oo.on_points_for, oo.on_points_against, oo.on_ortg, oo.on_drtg, oo.on_net_rtg,
+               oo.off_minutes, oo.off_possessions_for, oo.off_possessions_against,
+               oo.off_points_for, oo.off_points_against, oo.off_ortg, oo.off_drtg, oo.off_net_rtg,
+               oo.net_on_off, oo.source
+        FROM player_on_off oo
+        -- Pin to the player's canonical team. The derivation now credits a player
+        -- only to his own team's lineups so (season, player_id) is unique, but
+        -- this guard keeps the route correct against any stale pre-fix rows
+        -- (e.g. prod before it's recomputed) — never serve a different team's split.
+        JOIN players p ON p.id = oo.player_id AND p.season = oo.season AND p.team_id = oo.team_id
+        WHERE oo.player_id = $1 AND oo.season = $2
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Map a season-scoped player UUID to the equivalent UUID for `season`.
 /// Tries the cross-season `natstat_id` first (the common case) and falls
 /// back to `torvik_pid` to handle transfers — NatStat issues a fresh
@@ -998,12 +1076,16 @@ pub async fn get_team_roster(
             pp.orb_pct_pct, pp.drb_pct_pct, pp.stl_pct_pct, pp.blk_pct_pct,
             pa.primary_class, pa.secondary_class,
             tps.rim_attempted, tps.mid_attempted, tps.tpa, tps.fta,
-            tps.rim_made, tps.mid_made, tps.tpm, tps.ftm
+            tps.rim_made, tps.mid_made, tps.tpm, tps.ftm,
+            oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
+            oo.source AS on_off_source,
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
         LEFT JOIN player_percentiles pp ON pp.player_id = p.id AND pp.season = p.season
         LEFT JOIN player_archetypes pa ON pa.player_id = p.id AND pa.season = p.season
+        LEFT JOIN player_on_off oo ON oo.player_id = p.id AND oo.season = p.season AND oo.team_id = p.team_id
         WHERE p.team_id = $1 AND p.season = $2
         ORDER BY tps.cam_gbpm_v3_psos DESC NULLS LAST, pss.minutes_per_game DESC NULLS LAST
         "#,
@@ -1093,7 +1175,10 @@ pub async fn search_players(
             pp.mpg_pct, pp.usage_rate_pct, pp.true_shooting_pct_pct,
             pp.ast_pct_pct, pp.tov_pct_pct, pp.orb_pct_pct, pp.drb_pct_pct,
             pp.stl_pct_pct, pp.blk_pct_pct,
-            pa.primary_class, pa.secondary_class
+            pa.primary_class, pa.secondary_class,
+            oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
+            oo.source AS on_off_source,
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -1101,6 +1186,8 @@ pub async fn search_players(
         LEFT JOIN player_percentiles pp ON pp.player_id = pss.player_id AND pp.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
+        LEFT JOIN player_on_off oo
+            ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
