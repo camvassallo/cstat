@@ -749,6 +749,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
       - [ ] Clutch splits stat box (needs PBP clock/score filtering, a separate derived surface).
     - **Team detail page** (`TeamDetail.tsx`):
       - [x] **Top-5 Lineups waffle SHIPPED 2026-06-06** — a per-lineup row of five archetype-colored name pills (one per player), laid out as an aligned 5-col grid **sorted shortest→tallest** so the columns read like positions (PG→C) and align across rows, with stints + color-coded +/- alongside (off `GET /api/teams/:id/lineups`, which now also returns each player's `primary_class`). Replaces the earlier sortable table; PF/PA and per-lineup sort were dropped in favor of the visual. `lineup_aggregates`/`player_archetypes` both ship to prod, so colors render there. Stints stand in for minutes (no clock durations stored). **Follow-up for "representativeness": a `plays` column on `lineup_aggregates`** (sum of `end_seq − start_seq` per stint, a possession proxy from `lineup_stints`) would unlock a real per-100 efficiency instead of raw totals.
+      - [x] **Roster On/Off column SHIPPED 2026-06-07** — a sortable `On/Off` column on the roster table (between CamPom and GP), rendering each player's `net_on_off` swing with a red→gray→green gradient and a hover tooltip giving the on vs off net breakdown + small-off-sample / replay-source caveats. Joined into `get_team_roster` off `player_on_off` (one LEFT JOIN, no extra round-trips); the column auto-hides for seasons with no PBP-derived on/off.
       - [ ] Top-N by +/- per 100 poss, substitution heatmap — need possessions/clock data not currently derived.
     - **Game detail page** — *new page entirely* (no existing surface for individual games). Routes: `/games/:id`. Components:
       - Header: matchup, final score, venue, attendance, conference
@@ -947,6 +948,15 @@ Surfaced 2026-05-18 during pre-2021 recruit resolution. Some marquee Duke 2018-1
 **Workaround**: The freshman model corpus loses ~30-70 marquee recruits across the 7-class historical backfill — roughly 1-2% of the 3,252-row corpus. Material enough to flag, small enough that the 8.3% MAE lift on this PR is still the headline.
 
 **Root-cause fix** (deferred): `players.team_id` should reflect the team where the player played the most box-score games in the season, not the first/last-stamped team. Fix lives in either box-score ingest or compute pipeline. Once fixed, re-run `cstat-ingest recruits --year YYYY --resolve-only` for affected classes to backfill the joins; freshman corpus likely grows another 30-70 rows.
+
+### Cross-team player attribution in PBP lineups (P2 — Open; on/off protected)
+Surfaced 2026-06-07 building the on/off rollup. The SUB-replay / onfloor player resolution occasionally maps **two same-named players on different teams to one UUID**, so a player's UUID leaks into another team's `lineup` arrays. Concrete 2015 cases: "Christen Cunningham" (real team Samford) appears in **7** teams' lineups; "D'Angelo Allen" (Missouri) absorbs 632 min of a same-named Wichita State player. Magnitude: ~71 `(season, player_id)` cross-team pairs across 2015–2026.
+
+**Impact**: contaminates `lineup_stints` / `lineup_aggregates` for the *receiving* team (a wrong UUID in its 5-man units) and *erases* the real player's lineup credit on his own team. The team top-5 lineup waffle can therefore show a wrong name on the affected teams.
+
+**on/off is protected**: `compute_pbp_lineups` credits a player's on/off only for stints whose `lineup_stints.team_id` matches his canonical `players.team_id`, so a leaked UUID never produces a wrong-team on/off row. Migration `035` adds a UNIQUE `(season, player_id)` index that would catch any regression at compute time, and `get_player_on_off` pins to the canonical team as defense-in-depth.
+
+**Root-cause fix** (deferred): the resolution should key on `(team_id, name)` (or a stable per-team player code) rather than letting a global name→UUID map collide across teams — same class of issue as the box-score `players.team_id` misattribution above. Fixing it cleans `lineup_aggregates` too; until then the lineup waffle inherits the ~86% replay accuracy plus this rare name-collision noise.
 
 **Resolver fallback** (alternative, weaker fix): Add a Tier 3 match in `resolve_player_joins`: for unresolved (name, committed_team, season) needs, query `player_game_stats` directly to find any player whose majority-games team in that season matches the recruit's committed team. Catches the multi-team-stamping cases without fixing the upstream `players.team_id` bug.
 

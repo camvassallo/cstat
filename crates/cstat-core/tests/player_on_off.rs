@@ -86,5 +86,24 @@ async fn on_off_splits_reconcile() {
         "{no_on} rows with a non-positive on-court possession side / games (shouldn't exist)"
     );
 
+    // (4) Every row is credited to the player's OWN team. The replay/onfloor
+    // resolution can leak a player's UUID into another team's lineup arrays
+    // (same-name collision); the derivation drops those by keying on the
+    // box-score-authoritative `players.team_id`, so no row may sit on a foreign
+    // team — and that keeps (season, player_id) unique (migration 035's index).
+    let wrong_team: i64 = sqlx::query(
+        "SELECT count(*) FROM player_on_off oo \
+         JOIN players p ON p.id = oo.player_id AND p.season = oo.season \
+         WHERE p.team_id IS DISTINCT FROM oo.team_id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .get(0);
+    assert_eq!(
+        wrong_team, 0,
+        "{wrong_team} rows credited to a team other than the player's canonical team"
+    );
+
     eprintln!("player_on_off: {total} rows, all invariants hold");
 }

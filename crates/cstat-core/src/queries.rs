@@ -775,14 +775,19 @@ pub async fn get_player_on_off(
 ) -> Result<Option<PlayerOnOff>, sqlx::Error> {
     sqlx::query_as::<_, PlayerOnOff>(
         r#"
-        SELECT games,
-               on_minutes, on_possessions_for, on_possessions_against,
-               on_points_for, on_points_against, on_ortg, on_drtg, on_net_rtg,
-               off_minutes, off_possessions_for, off_possessions_against,
-               off_points_for, off_points_against, off_ortg, off_drtg, off_net_rtg,
-               net_on_off, source
-        FROM player_on_off
-        WHERE player_id = $1 AND season = $2
+        SELECT oo.games,
+               oo.on_minutes, oo.on_possessions_for, oo.on_possessions_against,
+               oo.on_points_for, oo.on_points_against, oo.on_ortg, oo.on_drtg, oo.on_net_rtg,
+               oo.off_minutes, oo.off_possessions_for, oo.off_possessions_against,
+               oo.off_points_for, oo.off_points_against, oo.off_ortg, oo.off_drtg, oo.off_net_rtg,
+               oo.net_on_off, oo.source
+        FROM player_on_off oo
+        -- Pin to the player's canonical team. The derivation now credits a player
+        -- only to his own team's lineups so (season, player_id) is unique, but
+        -- this guard keeps the route correct against any stale pre-fix rows
+        -- (e.g. prod before it's recomputed) — never serve a different team's split.
+        JOIN players p ON p.id = oo.player_id AND p.season = oo.season AND p.team_id = oo.team_id
+        WHERE oo.player_id = $1 AND oo.season = $2
         "#,
     )
     .bind(player_id)

@@ -198,6 +198,11 @@ function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
           Lineups reconstructed from substitution play-by-play (~86% accurate); on/off is approximate.
         </p>
       )}
+      <p className="text-xs text-gray-600 mt-2">
+        On/off is a team-result measure — it reflects whoever else is on the floor, so a strong
+        player can read negative on a deep team (the bench may feast in garbage time). Read it
+        alongside CamPom, not instead of it.
+      </p>
     </div>
   );
 }

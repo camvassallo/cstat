@@ -1945,11 +1945,22 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
              -- phantom). Counting that lineup twice for A would push his ON
              -- total above the team total and drive OFF negative, so each
              -- lineup contributes to a player exactly once.
+             --
+             -- JOIN players … team_id = v.team_id: credit a player ONLY for his
+             -- own team's lineups. The replay/onfloor resolution occasionally
+             -- maps two same-named players on different teams to one UUID, so a
+             -- player's UUID can leak into another team's lineup arrays. Keying
+             -- on his canonical `players.team_id` (the box-score authority) drops
+             -- those cross-team phantoms, so (season, player_id) is unique and a
+             -- player's on/off is never a different team's. (The underlying
+             -- lineup_aggregates contamination is a separate, pre-existing
+             -- resolution bug — see ROADMAP.)
              SELECT v.game_id, v.team_id, pl.p AS player_id,
                     sum(v.pf) opf, sum(v.pa) opa, sum(v.posf) oposf,
                     sum(v.posa) oposa, sum(v.secs) osecs, bool_or(v.has_onfloor) hon
              FROM valid v
              CROSS JOIN LATERAL (SELECT DISTINCT p FROM unnest(v.lineup) AS p) pl
+             JOIN players pp ON pp.id = pl.p AND pp.season = $1 AND pp.team_id = v.team_id
              GROUP BY v.game_id, v.team_id, pl.p
          ),
          per_game AS (    -- off = team total − on, only for games he appeared in
