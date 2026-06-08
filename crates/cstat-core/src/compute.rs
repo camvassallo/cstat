@@ -1684,6 +1684,10 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
             .bind(season)
             .execute(&mut *tx)
             .await?;
+        sqlx::query("DELETE FROM player_on_off WHERE season = $1")
+            .bind(season)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         return Ok(0);
     }
@@ -1828,6 +1832,10 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         .bind(season)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM player_on_off WHERE season = $1")
+        .bind(season)
+        .execute(&mut *tx)
+        .await?;
 
     insert_lineup_stints(&mut tx, season, &rows).await?;
 
@@ -1902,6 +1910,91 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
              GROUP BY gl.game_id, p
          ) d
          WHERE pgs.game_id = d.game_id AND pgs.player_id = d.player_id AND pgs.season = $1",
+    )
+    .bind(season)
+    .execute(&mut *tx)
+    .await?;
+
+    // Player on/off splits (item "A"). Reuses the same validity-clamped
+    // `_game_lineups` set so on/off reconciles with the served aggregates and
+    // plus/minus. ON = the player's own valid stints; OFF = his team's remaining
+    // valid stints in the SAME games (team totals − ON), so a game he never
+    // played contributes nothing to either side (isolates rotation from
+    // availability). Rates are per-100-possession, NULL-guarded against a side
+    // with zero possessions (a player who literally never sat has no OFF rate).
+    sqlx::query(
+        "INSERT INTO player_on_off
+             (season, team_id, player_id, games,
+              on_minutes, on_possessions_for, on_possessions_against,
+              on_points_for, on_points_against, on_ortg, on_drtg, on_net_rtg,
+              off_minutes, off_possessions_for, off_possessions_against,
+              off_points_for, off_points_against, off_ortg, off_drtg, off_net_rtg,
+              net_on_off, source)
+         WITH valid AS (
+             SELECT game_id, team_id, lineup, pf, pa, posf, posa, secs, has_onfloor
+             FROM _game_lineups WHERE valid
+         ),
+         team_game AS (   -- team totals per game over valid lineups
+             SELECT game_id, team_id,
+                    sum(pf) tpf, sum(pa) tpa, sum(posf) tposf, sum(posa) tposa, sum(secs) tsecs
+             FROM valid GROUP BY game_id, team_id
+         ),
+         player_on AS (   -- a player's ON totals per game (he is one of the five)
+             -- DISTINCT inside the lineup: a SUB-replay artifact can emit a
+             -- 5-array with a duplicated player ({A,A,B,C,D} — really a 4-man
+             -- phantom). Counting that lineup twice for A would push his ON
+             -- total above the team total and drive OFF negative, so each
+             -- lineup contributes to a player exactly once.
+             SELECT v.game_id, v.team_id, pl.p AS player_id,
+                    sum(v.pf) opf, sum(v.pa) opa, sum(v.posf) oposf,
+                    sum(v.posa) oposa, sum(v.secs) osecs, bool_or(v.has_onfloor) hon
+             FROM valid v
+             CROSS JOIN LATERAL (SELECT DISTINCT p FROM unnest(v.lineup) AS p) pl
+             GROUP BY v.game_id, v.team_id, pl.p
+         ),
+         per_game AS (    -- off = team total − on, only for games he appeared in
+             -- GREATEST(0, …): a per-stint possession estimate can go slightly
+             -- negative in a short/garbled stint (e.g. an ORB with no FGA), so
+             -- when a player sits out only such a stint his ON total can edge a
+             -- hair above the team total. Clamp at 0 — a tiny/negative off
+             -- sample then yields a NULL rate (nullif below), the honest
+             -- no-meaningful-off-court-sample outcome.
+             SELECT o.team_id, o.player_id, o.hon,
+                    o.osecs, o.oposf, o.oposa, o.opf, o.opa,
+                    GREATEST(0, tg.tsecs - o.osecs)  AS off_secs,
+                    GREATEST(0, tg.tposf - o.oposf)  AS off_posf,
+                    GREATEST(0, tg.tposa - o.oposa)  AS off_posa,
+                    GREATEST(0, tg.tpf   - o.opf)    AS off_pf,
+                    GREATEST(0, tg.tpa   - o.opa)    AS off_pa
+             FROM player_on o
+             JOIN team_game tg ON tg.game_id = o.game_id AND tg.team_id = o.team_id
+         ),
+         roll AS (
+             SELECT team_id, player_id, count(*) games, bool_or(hon) hon,
+                    sum(osecs) on_secs, sum(oposf) on_posf, sum(oposa) on_posa,
+                    sum(opf) on_pf, sum(opa) on_pa,
+                    sum(off_secs) off_secs, sum(off_posf) off_posf, sum(off_posa) off_posa,
+                    sum(off_pf) off_pf, sum(off_pa) off_pa
+             FROM per_game GROUP BY team_id, player_id
+         )
+         SELECT $1, team_id, player_id, games,
+                on_secs / 60.0, on_posf, on_posa, on_pf::int, on_pa::int,
+                100.0 * on_pf / nullif(on_posf, 0),
+                100.0 * on_pa / nullif(on_posa, 0),
+                100.0 * on_pf / nullif(on_posf, 0) - 100.0 * on_pa / nullif(on_posa, 0),
+                off_secs / 60.0, off_posf, off_posa, off_pf::int, off_pa::int,
+                100.0 * off_pf / nullif(off_posf, 0),
+                100.0 * off_pa / nullif(off_posa, 0),
+                100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0),
+                (100.0 * on_pf / nullif(on_posf, 0) - 100.0 * on_pa / nullif(on_posa, 0))
+                  - (100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0)),
+                CASE WHEN hon THEN 'onfloor' ELSE 'replay' END
+         FROM roll
+         -- Drop degenerate rows with no measurable on-court possessions (a
+         -- player whose only valid stints had no clock + no possessions —
+         -- nothing to rate). The UI then hides the panel rather than rendering
+         -- all-NULL rates.
+         WHERE on_posf > 0 OR on_posa > 0",
     )
     .bind(season)
     .execute(&mut *tx)

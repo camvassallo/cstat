@@ -725,6 +725,61 @@ pub async fn get_player_pbp_profile(
     Ok(if row.games > 0 { Some(row) } else { None })
 }
 
+/// A player's season on/off splits from the PBP-derived `player_on_off` rollup:
+/// team offense/defense per 100 possessions WITH the player on the floor vs
+/// WITHOUT him (same games, bench time only). `net_on_off` is the on−off swing.
+/// `source` (`'onfloor'` exact / `'replay'` ~86%) carries the same accuracy
+/// caveat as the lineup waffle. Rates are `Option` — a player who never sat has
+/// no off-court possessions, so the off rates are NULL (UI shows "—").
+#[derive(Debug, Serialize, FromRow)]
+pub struct PlayerOnOff {
+    pub games: i32,
+    pub on_minutes: f64,
+    pub on_possessions_for: f64,
+    pub on_possessions_against: f64,
+    pub on_points_for: i32,
+    pub on_points_against: i32,
+    pub on_ortg: Option<f64>,
+    pub on_drtg: Option<f64>,
+    pub on_net_rtg: Option<f64>,
+    pub off_minutes: f64,
+    pub off_possessions_for: f64,
+    pub off_possessions_against: f64,
+    pub off_points_for: i32,
+    pub off_points_against: i32,
+    pub off_ortg: Option<f64>,
+    pub off_drtg: Option<f64>,
+    pub off_net_rtg: Option<f64>,
+    pub net_on_off: Option<f64>,
+    pub source: String,
+}
+
+/// Fetch a player's season on/off split. Returns `None` when the player has no
+/// PBP-derived on/off row (pre-2012 / not loaded / corrupt-season-gated), so the
+/// UI can hide the panel.
+pub async fn get_player_on_off(
+    pool: &PgPool,
+    player_id: Uuid,
+    season: i32,
+) -> Result<Option<PlayerOnOff>, sqlx::Error> {
+    sqlx::query_as::<_, PlayerOnOff>(
+        r#"
+        SELECT games,
+               on_minutes, on_possessions_for, on_possessions_against,
+               on_points_for, on_points_against, on_ortg, on_drtg, on_net_rtg,
+               off_minutes, off_possessions_for, off_possessions_against,
+               off_points_for, off_points_against, off_ortg, off_drtg, off_net_rtg,
+               net_on_off, source
+        FROM player_on_off
+        WHERE player_id = $1 AND season = $2
+        "#,
+    )
+    .bind(player_id)
+    .bind(season)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Map a season-scoped player UUID to the equivalent UUID for `season`.
 /// Tries the cross-season `natstat_id` first (the common case) and falls
 /// back to `torvik_pid` to handle transfers — NatStat issues a fresh

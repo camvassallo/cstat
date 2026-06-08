@@ -5,8 +5,10 @@ import {
   fetchPlayerDetail,
   fetchPlayerSimilar,
   fetchPlayerPbp,
+  fetchPlayerOnOff,
   type PlayerProfile,
   type PlayerPbpProfile,
+  type PlayerOnOff,
   type PlayerSeasonStats,
   type Percentiles,
   type GameLogEntry,
@@ -116,6 +118,90 @@ function PbpProfilePanel({ pbp }: { pbp: PlayerPbpProfile }) {
   );
 }
 
+/// On/off splits: team offense/defense per 100 possessions with vs without the
+/// player on the floor (PBP-derived). The headline is the on−off net swing — the
+/// classic player-value number. Off-court possessions can be thin for heavy-
+/// minute starters, so we surface the off sample and caveat replay-sourced data.
+function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
+  const signed = (v: number | null, d = 1) =>
+    v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}`;
+  const netColor = (v: number | null) =>
+    v == null
+      ? 'text-gray-400'
+      : v > 0
+        ? 'text-green-400'
+        : v < 0
+          ? 'text-red-400'
+          : 'text-gray-300';
+
+  // Off-court possessions can be thin for a player who rarely sits → flag it.
+  const offPoss = onOff.off_possessions_for + onOff.off_possessions_against;
+  const thinOff = offPoss < 100;
+
+  const row = (
+    label: string,
+    sub: string,
+    ortg: number | null,
+    drtg: number | null,
+    net: number | null,
+  ) => (
+    <div className="grid grid-cols-4 gap-2 items-center py-2">
+      <div>
+        <div className="text-sm font-semibold">{label}</div>
+        <div className="text-xs text-gray-500">{sub}</div>
+      </div>
+      <div className="text-right tabular-nums text-sm">{fmt(ortg)}</div>
+      <div className="text-right tabular-nums text-sm">{fmt(drtg)}</div>
+      <div className={`text-right tabular-nums text-sm font-medium ${netColor(net)}`}>
+        {signed(net)}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="bg-gray-800 rounded-lg p-5 mt-6">
+      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
+        <h2 className="text-lg font-bold">On / Off Splits</h2>
+        <span className="text-xs text-gray-500">{onOff.games} games</span>
+      </div>
+      <p className="text-xs text-gray-500 mb-3">
+        Team rating per 100 possessions with the player on the floor vs on the bench (same games).
+      </p>
+
+      {/* Headline: net on/off swing */}
+      <div className="flex items-baseline gap-2 mb-4">
+        <span className={`text-3xl font-bold tabular-nums ${netColor(onOff.net_on_off)}`}>
+          {signed(onOff.net_on_off)}
+        </span>
+        <span className="text-sm text-gray-400">net on/off (per 100 poss)</span>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2 text-xs text-gray-400 border-b border-gray-700 pb-1">
+        <div />
+        <div className="text-right">ORtg</div>
+        <div className="text-right">DRtg</div>
+        <div className="text-right">Net</div>
+      </div>
+      <div className="divide-y divide-gray-700/50">
+        {row('On floor', `${onOff.on_minutes.toFixed(0)} min`, onOff.on_ortg, onOff.on_drtg, onOff.on_net_rtg)}
+        {row('Off floor', `${onOff.off_minutes.toFixed(0)} min`, onOff.off_ortg, onOff.off_drtg, onOff.off_net_rtg)}
+      </div>
+
+      {thinOff && (
+        <p className="text-xs text-amber-500/80 mt-3">
+          Small off-court sample ({Math.round(offPoss)} poss) — the split is noisy for a player
+          who rarely leaves the floor.
+        </p>
+      )}
+      {onOff.source === 'replay' && (
+        <p className="text-xs text-gray-500 mt-2">
+          Lineups reconstructed from substitution play-by-play (~86% accurate); on/off is approximate.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function heightString(inches: number | null) {
   if (inches == null) return null;
   return `${Math.floor(inches / 12)}'${inches % 12}"`;
@@ -145,6 +231,7 @@ export default function PlayerDetail() {
   const [trajectory, setTrajectory] = useState<PlayerTrajectory | null>(null);
   const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
   const [pbp, setPbp] = useState<PlayerPbpProfile | null>(null);
+  const [onOff, setOnOff] = useState<PlayerOnOff | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedAxis, setSelectedAxis] = useState<string | null>(null);
   const radarRef = useDismissOnOutside(selectedAxis !== null, () =>
@@ -229,6 +316,9 @@ export default function PlayerDetail() {
     fetchPlayerPbp(id, season)
       .then((r) => !cancelled && setPbp(r.pbp))
       .catch(() => !cancelled && setPbp(null));
+    fetchPlayerOnOff(id, season)
+      .then((r) => !cancelled && setOnOff(r.on_off))
+      .catch(() => !cancelled && setOnOff(null));
     return () => {
       cancelled = true;
     };
@@ -473,6 +563,9 @@ export default function PlayerDetail() {
 
       {/* Play-by-Play Profile (shot location, scoring context, on-floor +/-) */}
       {pbp && <PbpProfilePanel pbp={pbp} />}
+
+      {/* On/off splits (team rating with vs without the player) */}
+      {onOff && <OnOffPanel onOff={onOff} />}
 
       {/* Similar Players */}
       {similar.length > 0 && (

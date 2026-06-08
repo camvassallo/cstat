@@ -852,6 +852,40 @@ export function fetchPlayerPbp(id: string, season?: number) {
   );
 }
 
+/// A player's season on/off splits (from the PBP-derived `player_on_off`
+/// rollup): team offense/defense per 100 possessions with vs without him on the
+/// floor. `net_on_off` is the on−off swing. `ortg`/`drtg`/`net` are null when a
+/// side logged no possessions (a player who never sat has no off-court rate).
+/// `source` is `'onfloor'` (exact) or `'replay'` (~86%, carries the caveat).
+export interface PlayerOnOff {
+  games: number;
+  on_minutes: number;
+  on_possessions_for: number;
+  on_possessions_against: number;
+  on_points_for: number;
+  on_points_against: number;
+  on_ortg: number | null;
+  on_drtg: number | null;
+  on_net_rtg: number | null;
+  off_minutes: number;
+  off_possessions_for: number;
+  off_possessions_against: number;
+  off_points_for: number;
+  off_points_against: number;
+  off_ortg: number | null;
+  off_drtg: number | null;
+  off_net_rtg: number | null;
+  net_on_off: number | null;
+  source: string;
+}
+
+export function fetchPlayerOnOff(id: string, season?: number) {
+  return fetchJson<{ season: number; on_off: PlayerOnOff | null }>(
+    `/players/${id}/on-off`,
+    { season: season?.toString() },
+  );
+}
+
 export function fetchPlayerDetail(id: string, season?: number) {
   return fetchJson<{
     player: PlayerProfile;
