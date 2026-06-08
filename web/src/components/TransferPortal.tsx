@@ -4,6 +4,7 @@ import type { ColDef } from 'ag-grid-community';
 import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
+import { onOffColor, signedRtg, onOffTitle } from './onoff';
 import { classColor } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
@@ -258,6 +259,27 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
           </span>
         );
       },
+    },
+    {
+      headerName: 'On/Off',
+      field: 'net_on_off',
+      ...flexCol(1, 85),
+      headerTooltip:
+        "Source-season on/off: team net rating per 100 poss with vs without the player at their old school (their last season before transferring). PBP-derived; contextual (reflects teammates/opponents). NULL when unmatched or no PBP.",
+      comparator: (a: number | null, b: number | null) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return a - b;
+      },
+      cellRenderer: (p: { value: number | null; data?: RankedTransfer }) =>
+        p.value != null ? (
+          <span style={{ color: onOffColor(p.value) }} title={p.data ? onOffTitle(p.data) : ''}>
+            {signedRtg(p.value)}
+          </span>
+        ) : (
+          <span className="text-gray-600 text-xs">—</span>
+        ),
     },
     {
       headerName: '247',

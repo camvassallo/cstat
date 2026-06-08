@@ -280,6 +280,12 @@ export interface PlayerRow {
   blk_pct_pct: number | null;
   primary_class: string | null;
   secondary_class: string | null;
+  // PBP on/off (team net per 100 poss with vs without the player). See onoff.ts.
+  net_on_off: number | null;
+  on_net_rtg: number | null;
+  off_net_rtg: number | null;
+  on_off_source: string | null;
+  on_off_off_poss: number | null;
 }
 
 export interface PlayerProfile {
@@ -431,6 +437,12 @@ export interface TransferRow {
   projected_campom_mean: number | null;
   projected_campom_lower: number | null;
   projected_campom_upper: number | null;
+  // Source-season PBP on/off at the old school (see onoff.ts). NULL when unmatched.
+  net_on_off: number | null;
+  on_net_rtg: number | null;
+  off_net_rtg: number | null;
+  on_off_source: string | null;
+  on_off_off_poss: number | null;
 }
 
 export function fetchTransfers(year: number) {

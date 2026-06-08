@@ -9,6 +9,7 @@ import {
 import { fetchPlayers, type PlayerRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from '../components/campom';
+import { onOffColor, signedRtg, onOffTitle } from '../components/onoff';
 import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
@@ -39,6 +40,16 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
         {p.value.toFixed(1)}
       </span>
       {pctStr != null && <span className="text-slate-400 text-xs">{pctStr}</span>}
+    </span>
+  );
+};
+
+// On/off net swing — colored value + on/off breakdown tooltip (shared helpers).
+const onOffCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
+  if (p.value == null) return <span className="text-slate-500">—</span>;
+  return (
+    <span style={{ color: onOffColor(p.value) }} title={p.data ? onOffTitle(p.data) : ''}>
+      {signedRtg(p.value)}
     </span>
   );
 };
@@ -169,6 +180,14 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
       cellRenderer: campomCellRenderer,
       headerStyle: CATEGORY_DIVIDER_STYLE,
       cellStyle: CATEGORY_DIVIDER_STYLE,
+    },
+    {
+      field: 'net_on_off',
+      headerName: 'On/Off',
+      headerTooltip:
+        'Team net rating per 100 poss with vs without the player (on − off). PBP-derived; contextual (reflects teammates/opponents).',
+      width: 90,
+      cellRenderer: onOffCellRenderer,
     },
     { field: 'games_played', headerName: 'GP', width: 60 },
     {

@@ -377,6 +377,13 @@ pub struct PlayerRow {
     // Archetype — surfaced when the page filters by class.
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
+    // PBP on/off (from `player_on_off`): team net per 100 poss with vs without
+    // the player + the swing. NULL when the player has no PBP-derived row.
+    pub net_on_off: Option<f64>,
+    pub on_net_rtg: Option<f64>,
+    pub off_net_rtg: Option<f64>,
+    pub on_off_source: Option<String>,
+    pub on_off_off_poss: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -1168,7 +1175,10 @@ pub async fn search_players(
             pp.mpg_pct, pp.usage_rate_pct, pp.true_shooting_pct_pct,
             pp.ast_pct_pct, pp.tov_pct_pct, pp.orb_pct_pct, pp.drb_pct_pct,
             pp.stl_pct_pct, pp.blk_pct_pct,
-            pa.primary_class, pa.secondary_class
+            pa.primary_class, pa.secondary_class,
+            oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
+            oo.source AS on_off_source,
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -1176,6 +1186,8 @@ pub async fn search_players(
         LEFT JOIN player_percentiles pp ON pp.player_id = pss.player_id AND pp.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
+        LEFT JOIN player_on_off oo
+            ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = pss.team_id
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
