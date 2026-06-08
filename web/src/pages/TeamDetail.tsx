@@ -685,6 +685,7 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
 type RosterSortKey =
   | 'name'
   | 'campom'
+  | 'net_on_off'
   | 'games_played'
   | 'minutes_per_game'
   | 'usage_rate'
@@ -709,6 +710,29 @@ type RosterView = 'raw' | 'rate';
 // Returns an rgb() string suitable for a `style.color` value.
 function ValueWithPctile({ value, pctile }: { value: string; pctile: number | null | undefined }) {
   return <span style={{ color: pctileTextColor(pctile) }}>{value}</span>;
+}
+
+// Net on/off swing → red (negative) / gray (≈0) / green (positive), saturating
+// around ±12 per-100 (a large rotation swing). Mirrors the ValueWithPctile
+// gray→green / gray→red gradient.
+function onOffColor(net: number | null | undefined): string {
+  if (net == null) return '#6b7280'; // gray-500
+  const t = Math.max(-1, Math.min(1, net / 12));
+  const gray = [229, 231, 235];
+  const target = t >= 0 ? [74, 222, 128] : [248, 113, 113];
+  const lerp = (a: number, b: number) => Math.round(a + (b - a) * Math.abs(t));
+  return `rgb(${lerp(gray[0], target[0])}, ${lerp(gray[1], target[1])}, ${lerp(gray[2], target[2])})`;
+}
+
+const signedRtg = (v: number | null | undefined) =>
+  v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}`;
+
+// Tooltip for the roster On/Off column: on vs off net rating + sample/source caveats.
+function onOffTitle(p: RosterEntry): string {
+  let s = `Team net rating per 100 poss: on ${signedRtg(p.on_net_rtg)} vs off ${signedRtg(p.off_net_rtg)}.`;
+  if (p.on_off_off_poss != null && p.on_off_off_poss < 100) s += ' Small off-court sample.';
+  if (p.on_off_source === 'replay') s += ' Lineups replay-estimated (~86%).';
+  return s;
 }
 
 /** Compact coach card for the team header. Shows the head coach + their career
@@ -793,6 +817,10 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
     return [...roster].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir));
   }, [roster, sort]);
 
+  // Only show the On/Off column when the season has PBP-derived splits (hidden
+  // for pre-2012 / not-loaded seasons rather than rendering an all-"—" column).
+  const hasOnOff = useMemo(() => roster.some((p) => p.net_on_off != null), [roster]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -833,6 +861,17 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 title="Composite player valuation."
                 className="border-l border-gray-800"
               />
+              {hasOnOff && (
+                <SortHeader
+                  label="On/Off"
+                  sortKey="net_on_off"
+                  current={sort}
+                  onSort={onSort}
+                  align="right"
+                  title="Team net rating per 100 possessions with vs without the player (on − off). PBP-derived; hover a value for the on/off breakdown."
+                  className="border-l border-gray-800"
+                />
+              )}
               <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" />
               <SortHeader label="MPG" sortKey="minutes_per_game" current={sort} onSort={onSort} align="right" />
               <SortHeader label="USG%" sortKey="usage_rate" current={sort} onSort={onSort} align="right" />
@@ -921,6 +960,17 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="text-gray-600">—</span>
                   )}
                 </td>
+                {hasOnOff && (
+                  <td className="py-2 px-2 text-right border-l border-gray-800 tabular-nums">
+                    {p.net_on_off != null ? (
+                      <span style={{ color: onOffColor(p.net_on_off) }} title={onOffTitle(p)}>
+                        {signedRtg(p.net_on_off)}
+                      </span>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )}
+                  </td>
+                )}
                 <td className="py-2 px-2 text-right">{p.games_played}</td>
                 <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
                 <td className="py-2 px-2 text-right">

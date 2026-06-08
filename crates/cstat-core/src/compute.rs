@@ -1990,11 +1990,15 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                   - (100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0)),
                 CASE WHEN hon THEN 'onfloor' ELSE 'replay' END
          FROM roll
-         -- Drop degenerate rows with no measurable on-court possessions (a
-         -- player whose only valid stints had no clock + no possessions —
-         -- nothing to rate). The UI then hides the panel rather than rendering
-         -- all-NULL rates.
-         WHERE on_posf > 0 OR on_posa > 0",
+         -- Keep only rows with a real on-court sample on BOTH ends. Anyone with
+         -- genuine floor time faces offense and defense, so on_posf>0 AND
+         -- on_posa>0 holds for every real rotation player; the rows it drops are
+         -- 1-game cameos whose handful of stints net a non-positive possession
+         -- estimate on one side (per-stint counts can go slightly negative). The
+         -- AND also guarantees positive rate denominators, so no garbage ortg/
+         -- drtg. The UI hides the panel for a dropped player rather than
+         -- rendering NULL/nonsense rates.
+         WHERE on_posf > 0 AND on_posa > 0",
     )
     .bind(season)
     .execute(&mut *tx)

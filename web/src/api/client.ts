@@ -140,6 +140,16 @@ export interface RosterEntry {
   mid_made: number | null;
   tpm: number | null;
   ftm: number | null;
+  /// PBP on/off splits (from `player_on_off`): team net rating per 100 poss with
+  /// vs without the player, and the on−off swing. `null` for a player with no
+  /// PBP-derived on/off row. `on_off_source` (onfloor/replay) carries the
+  /// lineup-accuracy caveat; `on_off_off_poss` is the off-court possession
+  /// sample (thin for heavy-minute starters).
+  net_on_off: number | null;
+  on_net_rtg: number | null;
+  off_net_rtg: number | null;
+  on_off_source: string | null;
+  on_off_off_poss: number | null;
 }
 
 export interface ArchetypeShare {

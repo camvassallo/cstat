@@ -66,13 +66,16 @@ async fn on_off_splits_reconcile() {
         "{bad_net} rows where net_on_off != on_net_rtg - off_net_rtg"
     );
 
-    // (3) Every row has a real on-court sample. Gated on possessions, NOT
-    // minutes — clock-parse gaps can zero `on_minutes` for a player who
-    // genuinely played (see the methodology's clock-vintage note), so minutes
-    // is not a valid existence signal; possessions is.
+    // (3) Every row has a real on-court sample on BOTH ends, so both rates have
+    // a positive denominator. Gated on possessions, NOT minutes — clock-parse
+    // gaps can zero `on_minutes` for a player who genuinely played (see the
+    // methodology's clock-vintage note), so minutes is not a valid existence
+    // signal; possessions is. Per-stint possession counts can go slightly
+    // negative, so a 1-game cameo could net <=0 on one side — the derivation's
+    // `on_posf>0 AND on_posa>0` filter drops exactly those.
     let no_on: i64 = sqlx::query(
         "SELECT count(*) FROM player_on_off \
-         WHERE (on_possessions_for + on_possessions_against) <= 0 OR games <= 0",
+         WHERE on_possessions_for <= 0 OR on_possessions_against <= 0 OR games <= 0",
     )
     .fetch_one(&pool)
     .await
@@ -80,7 +83,7 @@ async fn on_off_splits_reconcile() {
     .get(0);
     assert_eq!(
         no_on, 0,
-        "{no_on} rows with no on-court possessions / games (shouldn't exist)"
+        "{no_on} rows with a non-positive on-court possession side / games (shouldn't exist)"
     );
 
     eprintln!("player_on_off: {total} rows, all invariants hold");
