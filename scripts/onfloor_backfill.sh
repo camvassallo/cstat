@@ -53,10 +53,18 @@ log() { echo "[$(date '+%F %T')] $*"; }
 
 log "onfloor backfill starting — season $SEASON"
 
-# Distinct game dates for the season, chronological.
-mapfile -t DATES < <("${PSQL[@]}" -t -A -c \
+# Distinct game dates for the season, chronological. A read loop, NOT mapfile —
+# macOS ships bash 3.2, which has no mapfile/readarray.
+DATES=()
+while IFS= read -r d; do
+  [[ -n "$d" ]] && DATES+=("$d")
+done < <("${PSQL[@]}" -t -A -c \
   "SELECT DISTINCT game_date::text FROM games WHERE season=$SEASON AND game_date IS NOT NULL ORDER BY game_date;")
 
+if [[ ${#DATES[@]} -eq 0 ]]; then
+  echo "No game dates for season $SEASON — nothing to fetch." >&2
+  exit 1
+fi
 log "${#DATES[@]} game-dates to process"
 
 fetched=0; skipped=0
