@@ -78,7 +78,7 @@ function gradientCellStyle(
   };
 }
 
-function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
+function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] {
   // Pinned identity / context columns. Mirrors the roster table's first block
   // (Player | Class) plus team / conf which the roster doesn't need (already
   // scoped to one team).
@@ -181,14 +181,20 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
       headerStyle: CATEGORY_DIVIDER_STYLE,
       cellStyle: CATEGORY_DIVIDER_STYLE,
     },
-    {
-      field: 'net_on_off',
-      headerName: 'On/Off',
-      headerTooltip:
-        'Team net rating per 100 poss with vs without the player (on − off). PBP-derived; contextual (reflects teammates/opponents).',
-      width: 90,
-      cellRenderer: onOffCellRenderer,
-    },
+    // Hidden for seasons with no PBP-derived on/off (pre-2012 / corrupt-gated)
+    // rather than rendering an all-"—" column — same gate as the roster table.
+    ...(hasOnOff
+      ? [
+          {
+            field: 'net_on_off',
+            headerName: 'On/Off',
+            headerTooltip:
+              'Team net rating per 100 poss with vs without the player (on − off). PBP-derived; contextual (reflects teammates/opponents).',
+            width: 90,
+            cellRenderer: onOffCellRenderer,
+          } as ColDef<PlayerRow>,
+        ]
+      : []),
     { field: 'games_played', headerName: 'GP', width: 60 },
     {
       field: 'minutes_per_game', headerName: 'MPG', width: 70,
@@ -271,7 +277,8 @@ export default function Players() {
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const columns = useMemo(() => buildColumns(view), [view]);
+  const hasOnOff = useMemo(() => rows.some((r) => r.net_on_off != null), [rows]);
+  const columns = useMemo(() => buildColumns(view, hasOnOff), [view, hasOnOff]);
 
   // Single fetch loads the entire qualified pool; sort + search run client-
   // side via AG Grid's built-in sorting and `quickFilterText`. Pagination

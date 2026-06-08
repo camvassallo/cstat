@@ -1187,7 +1187,7 @@ pub async fn search_players(
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         LEFT JOIN player_on_off oo
-            ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = pss.team_id
+            ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
