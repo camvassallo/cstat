@@ -84,6 +84,6 @@ for d in "${DATES[@]}"; do
   fetched=$((fetched+1))
 done
 
-log "fetch phase done: $fetched fetched, $skipped skipped. Running compute --year $SEASON…"
+log "fetch phase done: $fetched fetched, $skipped skipped. Running compute --year ${SEASON}…"
 "$BIN" compute --year "$SEASON" 2>&1 | tail -5
 log "onfloor backfill COMPLETE — season $SEASON. Run ./scripts/sync_to_prod.sh to ship lineup_aggregates to prod."

@@ -1,9 +1,10 @@
 //! Reconciliation invariants for the `player_on_off` derivation (PBP item "A").
 //!
-//! On/off is `team-total − on` over the same validity-clamped game-lineups the
-//! served aggregates read, restricted to games the player appeared in. That
-//! gives a handful of invariants that must hold for every row, independent of
-//! the (replay-approximate) lineup quality:
+//! On/off is `team-total − on` over ALL reconstructed stints (any size, NOT the
+//! 5-man-clamped lineup set the top-lineup aggregates use), with each player's
+//! per-game ON capped at his box minutes, restricted to games he appeared in.
+//! That gives a handful of invariants that must hold for every row, independent
+//! of the (replay-approximate) lineup quality and the per-player scaling:
 //!   * OFF can never be negative — a player's ON slice can't exceed his team's
 //!     total, so `team − on >= 0` for points, possessions, and minutes.
 //!   * `net_on_off == on_net_rtg − off_net_rtg` (when both sides have rates).
@@ -70,9 +71,9 @@ async fn on_off_splits_reconcile() {
     // a positive denominator. Gated on possessions, NOT minutes — clock-parse
     // gaps can zero `on_minutes` for a player who genuinely played (see the
     // methodology's clock-vintage note), so minutes is not a valid existence
-    // signal; possessions is. Per-stint possession counts can go slightly
-    // negative, so a 1-game cameo could net <=0 on one side — the derivation's
-    // `on_posf>0 AND on_posa>0` filter drops exactly those.
+    // signal; possessions is. The derivation's `on_posf >= 100 AND on_posa >= 100`
+    // minimum-ON-sample gate keeps only real rotation players (on/off is noise
+    // below ~100 on-court possessions), so this `<= 0` check has wide margin.
     let no_on: i64 = sqlx::query(
         "SELECT count(*) FROM player_on_off \
          WHERE on_possessions_for <= 0 OR on_possessions_against <= 0 OR games <= 0",

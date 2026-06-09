@@ -1852,6 +1852,20 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     // ones. The raw rows stay in `lineup_stints` (a serving filter, not a delete).
     // COALESCE to a huge ceiling when box minutes are unknown — keep a row we
     // can't prove impossible. See ROADMAP "SUB-replay lineup drift".
+    //
+    // **0-minute box rows are treated as UNKNOWN, not as a 0-minute ceiling**
+    // (`pgs.minutes > 0`, 2026-06-08). NatStat occasionally records a player with
+    // 0 box minutes who nonetheless appears in the on-floor lineup data (~1.1k
+    // such player-games in 2026, sometimes even flagged `starter=t`) — a box-side
+    // artifact, not a real 0-minute member. Without this guard, one such member
+    // collapses `min(box) + 1.0` to 1.0 and nukes an otherwise-valid bench
+    // lineup, which on `onfloor` data was the single biggest source of the
+    // false-positive invalidations that gutted high-minute starters' OFF samples
+    // (~20% of all clamp-killed minutes). Excluding the 0/NULL member from the
+    // min still constrains the lineup by its *positive*-minute members, so a
+    // genuine over-merge (the union reconstruction's known limit) is unaffected —
+    // it over-runs those members too. If EVERY member is 0/unknown, the subquery
+    // is empty and COALESCE keeps the row (can't prove it impossible).
     sqlx::query(
         "CREATE TEMPORARY TABLE _game_lineups ON COMMIT DROP AS
          SELECT ls.game_id, ls.team_id, ls.lineup,
@@ -1865,6 +1879,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 (sum(ls.seconds) / 60.0) <= COALESCE((
                     SELECT min(pgs.minutes) FROM player_game_stats pgs
                     WHERE pgs.game_id = ls.game_id AND pgs.player_id = ANY(ls.lineup)
+                      AND pgs.minutes > 0
                 ), 1e9) + 1.0                  AS valid
          FROM lineup_stints ls
          WHERE ls.season = $1 AND array_length(ls.lineup, 1) = 5
@@ -1915,13 +1930,33 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     .execute(&mut *tx)
     .await?;
 
-    // Player on/off splits (item "A"). Reuses the same validity-clamped
-    // `_game_lineups` set so on/off reconciles with the served aggregates and
-    // plus/minus. ON = the player's own valid stints; OFF = his team's remaining
-    // valid stints in the SAME games (team totals − ON), so a game he never
-    // played contributes nothing to either side (isolates rotation from
-    // availability). Rates are per-100-possession, NULL-guarded against a side
-    // with zero possessions (a player who literally never sat has no OFF rate).
+    // Player on/off splits (item "A"). ON = team offense/defense per 100 poss
+    // with the player on the floor; OFF = with him on the bench; `net_on_off` is
+    // the swing. Restricted to games he appeared in (isolates rotation from
+    // availability — a DNP contributes to neither side). Rates are
+    // per-100-possession, NULL-guarded against a side with zero possessions.
+    //
+    // **Unlike the top-lineup aggregates, on/off reads ALL stints (any lineup
+    // size), NOT the 5-man-only, box-minute-clamped `_game_lineups` set.**
+    // on/off attributes by individual *presence*, so a 3/4-man stint is still
+    // valid evidence for a known player's split — we don't need a clean 5-man
+    // unit. This matters because ~19% of 2026 onfloor player codes don't resolve
+    // to a roster row (deep-bench / walk-on garbage-time players absent from
+    // NatStat's DB); when one is the unresolved 5th, the stint stays sub-5-man
+    // and the 5-man rollup drops it — which disproportionately erased the bench
+    // (OFF) windows of high-minute starters. Reading all stints recovers them.
+    //
+    // **Per-player box-minute clamp** (replaces the lineup clamp for this
+    // surface): the onfloor reconstruction over-credits a high-minute player's
+    // ON time, because his brief rests fall in sparse-onfloor windows where it
+    // never registers him leaving (an iron-man reads ~94% on-floor vs ~86% by
+    // box). We cap each player's per-game ON accumulators at his box minutes
+    // (scale DOWN only — `LEAST(1.0, box/on)`), moving the excess to OFF. This
+    // recovers an honest off-court sample for exactly the starters raw on/off
+    // failed (Acuff 2026: OFF 11 → ~270 poss). We never scale UP: when the
+    // reconstruction UNDER-credits, we can't tell which possessions were his, so
+    // we leave them (he stays slightly under — the conservative direction). A
+    // player with no positive box-minute row that game is left unscaled.
     sqlx::query(
         "INSERT INTO player_on_off
              (season, team_id, player_id, games,
@@ -1930,60 +1965,69 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
               off_minutes, off_possessions_for, off_possessions_against,
               off_points_for, off_points_against, off_ortg, off_drtg, off_net_rtg,
               net_on_off, source)
-         WITH valid AS (
-             SELECT game_id, team_id, lineup, pf, pa, posf, posa, secs, has_onfloor
-             FROM _game_lineups WHERE valid
+         WITH stints AS (   -- ALL reconstructed stints (any size), this season
+             SELECT game_id, team_id, lineup,
+                    points_for pf, points_against pa,
+                    possessions_for posf, possessions_against posa, seconds secs,
+                    (source = 'onfloor') AS has_onfloor
+             FROM lineup_stints WHERE season = $1
          ),
-         team_game AS (   -- team totals per game over valid lineups
+         team_game AS (   -- team totals per game over ALL stints
              SELECT game_id, team_id,
                     sum(pf) tpf, sum(pa) tpa, sum(posf) tposf, sum(posa) tposa, sum(secs) tsecs
-             FROM valid GROUP BY game_id, team_id
+             FROM stints GROUP BY game_id, team_id
          ),
-         player_on AS (   -- a player's ON totals per game (he is one of the five)
-             -- DISTINCT inside the lineup: a SUB-replay artifact can emit a
-             -- 5-array with a duplicated player ({A,A,B,C,D} — really a 4-man
-             -- phantom). Counting that lineup twice for A would push his ON
-             -- total above the team total and drive OFF negative, so each
-             -- lineup contributes to a player exactly once.
+         player_on AS (   -- a player's raw ON totals per game
+             -- DISTINCT inside the lineup: a reconstruction artifact can emit a
+             -- lineup array with a duplicated player; each stint contributes to
+             -- a player exactly once.
              --
-             -- JOIN players … team_id = v.team_id: credit a player ONLY for his
-             -- own team's lineups. The replay/onfloor resolution occasionally
+             -- JOIN players … team_id = s.team_id: credit a player ONLY for his
+             -- own team's stints. The replay/onfloor resolution occasionally
              -- maps two same-named players on different teams to one UUID, so a
              -- player's UUID can leak into another team's lineup arrays. Keying
              -- on his canonical `players.team_id` (the box-score authority) drops
              -- those cross-team phantoms, so (season, player_id) is unique and a
-             -- player's on/off is never a different team's. (The underlying
-             -- lineup_aggregates contamination is a separate, pre-existing
-             -- resolution bug — see ROADMAP.)
-             SELECT v.game_id, v.team_id, pl.p AS player_id,
-                    sum(v.pf) opf, sum(v.pa) opa, sum(v.posf) oposf,
-                    sum(v.posa) oposa, sum(v.secs) osecs, bool_or(v.has_onfloor) hon
-             FROM valid v
-             CROSS JOIN LATERAL (SELECT DISTINCT p FROM unnest(v.lineup) AS p) pl
-             JOIN players pp ON pp.id = pl.p AND pp.season = $1 AND pp.team_id = v.team_id
-             GROUP BY v.game_id, v.team_id, pl.p
+             -- player's on/off is never a different team's.
+             SELECT s.game_id, s.team_id, pl.p AS player_id,
+                    sum(s.pf) opf, sum(s.pa) opa, sum(s.posf) oposf,
+                    sum(s.posa) oposa, sum(s.secs) osecs, bool_or(s.has_onfloor) hon
+             FROM stints s
+             CROSS JOIN LATERAL (SELECT DISTINCT p FROM unnest(s.lineup) AS p) pl
+             JOIN players pp ON pp.id = pl.p AND pp.season = $1 AND pp.team_id = s.team_id
+             GROUP BY s.game_id, s.team_id, pl.p
          ),
-         per_game AS (    -- off = team total − on, only for games he appeared in
+         scaled AS (   -- cap each (player, game) ON at his box minutes (scale DOWN only)
+             SELECT o.game_id, o.team_id, o.player_id, o.hon,
+                    o.opf, o.opa, o.oposf, o.oposa, o.osecs,
+                    LEAST(1.0, COALESCE(b.box_secs, o.osecs) / nullif(o.osecs, 0)) AS sc
+             FROM player_on o
+             LEFT JOIN (
+                 SELECT game_id, player_id, minutes * 60.0 AS box_secs
+                 FROM player_game_stats WHERE season = $1 AND minutes > 0
+             ) b ON b.game_id = o.game_id AND b.player_id = o.player_id
+         ),
+         per_game AS (    -- off = team total − scaled on, for games he appeared in
              -- GREATEST(0, …): a per-stint possession estimate can go slightly
-             -- negative in a short/garbled stint (e.g. an ORB with no FGA), so
-             -- when a player sits out only such a stint his ON total can edge a
-             -- hair above the team total. Clamp at 0 — a tiny/negative off
+             -- negative in a short/garbled stint (e.g. an ORB with no FGA), so a
+             -- tiny off slice can edge below 0. Clamp at 0 — a tiny/negative off
              -- sample then yields a NULL rate (nullif below), the honest
              -- no-meaningful-off-court-sample outcome.
-             SELECT o.team_id, o.player_id, o.hon,
-                    o.osecs, o.oposf, o.oposa, o.opf, o.opa,
-                    GREATEST(0, tg.tsecs - o.osecs)  AS off_secs,
-                    GREATEST(0, tg.tposf - o.oposf)  AS off_posf,
-                    GREATEST(0, tg.tposa - o.oposa)  AS off_posa,
-                    GREATEST(0, tg.tpf   - o.opf)    AS off_pf,
-                    GREATEST(0, tg.tpa   - o.opa)    AS off_pa
-             FROM player_on o
-             JOIN team_game tg ON tg.game_id = o.game_id AND tg.team_id = o.team_id
+             SELECT s.team_id, s.player_id, s.hon,
+                    s.sc * s.osecs AS on_secs, s.sc * s.oposf AS on_posf,
+                    s.sc * s.oposa AS on_posa, s.sc * s.opf AS on_pf, s.sc * s.opa AS on_pa,
+                    GREATEST(0, tg.tsecs - s.sc * s.osecs) AS off_secs,
+                    GREATEST(0, tg.tposf - s.sc * s.oposf) AS off_posf,
+                    GREATEST(0, tg.tposa - s.sc * s.oposa) AS off_posa,
+                    GREATEST(0, tg.tpf   - s.sc * s.opf)   AS off_pf,
+                    GREATEST(0, tg.tpa   - s.sc * s.opa)   AS off_pa
+             FROM scaled s
+             JOIN team_game tg ON tg.game_id = s.game_id AND tg.team_id = s.team_id
          ),
          roll AS (
              SELECT team_id, player_id, count(*) games, bool_or(hon) hon,
-                    sum(osecs) on_secs, sum(oposf) on_posf, sum(oposa) on_posa,
-                    sum(opf) on_pf, sum(opa) on_pa,
+                    sum(on_secs) on_secs, sum(on_posf) on_posf, sum(on_posa) on_posa,
+                    sum(on_pf) on_pf, sum(on_pa) on_pa,
                     sum(off_secs) off_secs, sum(off_posf) off_posf, sum(off_posa) off_posa,
                     sum(off_pf) off_pf, sum(off_pa) off_pa
              FROM per_game GROUP BY team_id, player_id
@@ -2001,15 +2045,19 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                   - (100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0)),
                 CASE WHEN hon THEN 'onfloor' ELSE 'replay' END
          FROM roll
-         -- Keep only rows with a real on-court sample on BOTH ends. Anyone with
-         -- genuine floor time faces offense and defense, so on_posf>0 AND
-         -- on_posa>0 holds for every real rotation player; the rows it drops are
-         -- 1-game cameos whose handful of stints net a non-positive possession
-         -- estimate on one side (per-stint counts can go slightly negative). The
-         -- AND also guarantees positive rate denominators, so no garbage ortg/
-         -- drtg. The UI hides the panel for a dropped player rather than
-         -- rendering NULL/nonsense rates.
-         WHERE on_posf > 0 AND on_posa > 0",
+         -- Minimum ON sample on BOTH ends (>= 100 possessions). on/off is only
+         -- meaningful for a real rotation player: below ~100 on-court possessions
+         -- the ON rating is noise (a benchwarmer's handful of garbage-time
+         -- possessions can read ±600 per 100), and since reading ALL stints now
+         -- gives every player who logged a few minutes a tiny ON slice, the old
+         -- `> 0` gate let those through and they topped the swing rankings. 100
+         -- matches the panel's existing OFF small-sample threshold; it drops only
+         -- sub-~3-min/game players (a 9-min/game role player clears it easily),
+         -- and the GREATEST-clamped OFF side stays meaningful via team-total
+         -- subtraction. The UI hides the panel/column for a dropped player.
+         -- (per-stint counts can go slightly negative, so the >= also guards the
+         -- rate denominators against a non-positive cameo sample.)
+         WHERE on_posf >= 100 AND on_posa >= 100",
     )
     .bind(season)
     .execute(&mut *tx)
