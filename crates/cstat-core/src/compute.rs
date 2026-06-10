@@ -1603,7 +1603,7 @@ async fn pbp_source_is_corrupt(pool: &PgPool, season: i32) -> Result<bool, sqlx:
 /// zero contextual tags — so deriving from them yields misleading zeros
 /// (paint_fga=0 on every shot, perimeter_fga=all FGA, 0 transition points, 0
 /// fouls drawn). Observed paint share of tagged FGA: 2015-2018 ≈ 0.000, every
-/// contextual-era season (2020-2026) ≥ 0.45. The signal is effectively binary;
+/// contextual-era season (2020-2026) ≥ 0.41. The signal is effectively binary;
 /// 0.05 separates "vocabulary absent" from "present but season-sparse".
 const PBP_MIN_PAINT_TAG_COVERAGE: f64 = 0.05;
 

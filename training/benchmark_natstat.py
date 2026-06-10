@@ -15,7 +15,7 @@ from sklearn.metrics import accuracy_score, log_loss, mean_absolute_error, roc_a
 
 from db import get_engine
 from evaluate import evaluate_backtest, calibration_analysis
-from features import build_feature_matrix
+from features import build_feature_matrix, completeness_subset
 
 
 def load_natstat_forecasts(engine) -> pd.DataFrame:
@@ -163,8 +163,8 @@ def main():
     engine = get_engine()
 
     print("Building feature matrix...")
-    df, feature_cols = build_feature_matrix(engine)
-    df = df.dropna(subset=feature_cols)
+    df, feature_cols, _sum_cols = build_feature_matrix(engine)
+    df = df.dropna(subset=completeness_subset(feature_cols))
     print(f"Games with complete features: {len(df)}")
 
     print("Running backtest...")

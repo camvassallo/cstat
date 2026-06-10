@@ -352,7 +352,7 @@ def main():
     # Build features
     engine = get_engine()
     print("Building feature matrix (point-in-time)...")
-    df, feature_cols = build_feature_matrix(engine)
+    df, feature_cols, _sum_cols = build_feature_matrix(engine)
 
     before = len(df)
     df = df.dropna(subset=completeness_subset(feature_cols))

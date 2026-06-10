@@ -60,7 +60,7 @@ async fn stint_possessions_track_box_score() {
     );
 
     let mut evaluated = 0;
-    for season in seasons {
+    for &season in &seasons {
         let row = sqlx::query(
             "WITH pbp AS (
                  SELECT game_id, team_id, sum(possessions_for) poss
@@ -146,8 +146,10 @@ async fn stint_possessions_track_box_score() {
     // ...and the symmetric guard: the gate must NOT fire on a contextual-era
     // season. An over-eager gate (e.g. a threshold bump or a query bug) would
     // silently wipe every served PBP surface; absence is only correct where
-    // the source truly lacks the vocabulary.
-    for &season in &[2020, 2026] {
+    // the source truly lacks the vocabulary. Seasons come from the same
+    // dynamically-discovered set the parity loop used (so a partially-loaded
+    // DB doesn't false-fail), filtered to the contextual era.
+    for &season in seasons.iter().filter(|s| **s >= 2020) {
         let n: i64 = sqlx::query(
             "SELECT count(*) FROM player_game_stats \
              WHERE season = $1 AND paint_fga IS NOT NULL",

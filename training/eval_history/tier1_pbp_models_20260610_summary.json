@@ -1,0 +1,40 @@
+{
+  "experiment": "tier1_pbp_tag_features_into_models",
+  "date": "2026-06-10",
+  "verdicts": {
+    "game_models": "REJECTED",
+    "trajectory": "REJECTED",
+    "freshman": "SKIPPED_BY_DESIGN (recruits have no college PBP history)",
+    "archetypes": "REJECTED"
+  },
+  "coverage_finding": "Contextual tags (paint/brk/2ch/offto/FOULED) exist only 2020+; 2015-2018 feeds are box-event-only (paint share of tagged FGA 0.000 vs >=0.41 every 2020+ season). Gated via compute.rs::pbp_lacks_context_tags.",
+  "game_models": {
+    "script": "experiment_game_pbp.py",
+    "setup": "shared chronological last-20%-of-2026 holdout (n=925), 12-season train (n=46791), production hyperparams, matrix built once with PBP_FEATURES=1, baseline = column subset",
+    "features_added": 7,
+    "margin_mae": {"baseline": 8.0815, "pbp": 8.1568, "delta": 0.0752},
+    "margin_win_acc": {"baseline": 0.7405, "pbp": 0.7319},
+    "win_auc": {"baseline": 0.7961, "pbp": 0.7952},
+    "win_log_loss": {"baseline": 0.5198, "pbp": 0.5193},
+    "total_mae": {"baseline": 13.3939, "pbp": 13.3665},
+    "margin_best_iter": {"baseline": 625, "pbp": 246},
+    "note": "diff_pbp_perimeter_fg_pct ranked 10/56 by importance while margin accuracy degraded - importance is not value"
+  },
+  "trajectory": {
+    "script": "experiment_trajectory_pbp.py",
+    "setup": "LOPO over 11 pairs, identical corpus (n=24,592 rows incl. extended joins), -1 missing sentinel, raw-rate and within-season-percentile encodings",
+    "lopo_pooled_mae": {"baseline": 2.1367, "raw_rates": 2.1395, "percentiles": 2.1403},
+    "covered_subset_mae_sn_ge_2020": {"baseline": 2.1684, "raw_rates": 2.1708, "percentiles": 2.1712},
+    "per_pair_wins": {"raw_rates": "5/11", "percentiles": "4/11"}
+  },
+  "archetypes": {
+    "script": "experiment_archetypes_pbp.py",
+    "setup": "combined 12-season cohort (36,536 player-seasons), +5 style axes (transition/2ch/offTO/fouls per40, paint FG%), nan-mean imputation for pre-2020",
+    "signature_violations": {"baseline": 0, "pbp": 9},
+    "primary_stability_pooled": {"baseline": 0.498, "pbp": 0.498},
+    "primary_stability_post2020": {"baseline": 0.484, "pbp": 0.469},
+    "primary_stability_pre2020": {"baseline": 0.520, "pbp": 0.555},
+    "note": "pre-2020 inflation + post-2020 degradation = mean-imputation era artifact; coverage wall unfixable at source"
+  },
+  "disposition": "Tier-1 closes serving-only. PBP_FEATURES plumbing kept gated off in features.py; experiment scripts kept as re-test harness. Membership-derived features (on/off, lineup_quality, RAPM) remain the PBP model play, gated on Tier-2 source lock."
+}
