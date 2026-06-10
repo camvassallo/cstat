@@ -1683,9 +1683,23 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
          FROM (
              SELECT
                  player_id, team_id,
-                 sum(paint_fga)::double precision     / nullif(sum(fga), 0)           AS paint_rate,
-                 sum(paint_fgm)::double precision     / nullif(sum(paint_fga), 0)     AS paint_fg_pct,
-                 sum(perimeter_fgm)::double precision / nullif(sum(perimeter_fga), 0) AS perimeter_fg_pct,
+                 -- Share of TRACKED shots in the paint. Denominator is the PBP
+                 -- total (paint + perimeter), NOT box `fga` — the tag stream and
+                 -- the box FGA disagree per game (a low-box-FGA player can carry
+                 -- more PBP paint tags than box attempts), and dividing across the
+                 -- two sources let paint_rate run past 1. paint_fga is a subset of
+                 -- the PBP total by construction, so this is bounded to [0,1].
+                 CASE WHEN sum(paint_fga + perimeter_fga) > 0
+                      THEN sum(paint_fga)::double precision / sum(paint_fga + perimeter_fga)
+                 END AS paint_rate,
+                 -- FG% clamped to 1.0: makes/attempts are separate tags, so a rare
+                 -- play tags a make without its attempt and fgm can edge past fga.
+                 CASE WHEN sum(paint_fga) > 0
+                      THEN LEAST(1.0, sum(paint_fgm)::double precision / sum(paint_fga))
+                 END AS paint_fg_pct,
+                 CASE WHEN sum(perimeter_fga) > 0
+                      THEN LEAST(1.0, sum(perimeter_fgm)::double precision / sum(perimeter_fga))
+                 END AS perimeter_fg_pct,
                  sum(transition_pts)       * 40.0 / nullif(sum(minutes), 0) AS transition_pts_per40,
                  sum(second_chance_pts)    * 40.0 / nullif(sum(minutes), 0) AS second_chance_pts_per40,
                  sum(points_off_turnovers) * 40.0 / nullif(sum(minutes), 0) AS points_off_turnovers_per40,
