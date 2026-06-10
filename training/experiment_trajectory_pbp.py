@@ -117,7 +117,7 @@ def run_variant(name: str, df: pd.DataFrame, extra_cols: list[str]) -> dict:
     )
     lopo, lopo_preds = base.leave_one_pair_out(df)
 
-    mask = (df["s_n"] >= 2020) & (df["s_n"] != 2019) & lopo_preds.notna()
+    mask = (df["s_n"] >= 2020) & lopo_preds.notna()
     sub_mae = float(mean_absolute_error(
         df.loc[mask, "target_campom"], lopo_preds[mask]
     ))

@@ -40,7 +40,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import KFold
 
 from db import get_engine
-from features import GBPM_VARIANT, SEASONS, build_feature_matrix
+from features import GBPM_VARIANT, SEASONS, build_feature_matrix, completeness_subset
 
 # Override target dir per-experiment with MODEL_DIR=...; default is the
 # production location. Used together with GBPM_VARIANT (see features.py) to
@@ -346,9 +346,11 @@ def main():
 
     # Drop rows with missing features (use the union — totals model needs
     # both, and dropping a row from one model but not the other would
-    # split the OOF prediction frame).
+    # split the OOF prediction frame). PBP diff columns are excluded from
+    # the completeness check: NaN there is source coverage (no contextual
+    # tags pre-2020), not row incompleteness — see features.completeness_subset.
     before = len(df)
-    df = df.dropna(subset=total_feature_cols).reset_index(drop=True)
+    df = df.dropna(subset=completeness_subset(total_feature_cols)).reset_index(drop=True)
     print(f"Games: {before} total, {len(df)} with complete features")
     print(f"Features: {len(feature_cols)} diff (margin/win), +{len(sum_cols)} sum (total only)")
     print(f"Home win rate: {df['home_win'].mean():.3f}")

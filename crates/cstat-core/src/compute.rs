@@ -1612,12 +1612,13 @@ const PBP_MIN_PAINT_TAG_COVERAGE: f64 = 0.05;
 /// (the lineup/possession path is unaffected: it reads box-event tags + SUBs,
 /// which every vintage carries).
 async fn pbp_lacks_context_tags(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
+    // Single pass with FILTER — play_by_play has no season index, so two
+    // subselects would each full-scan the (32.8M-row local) table.
     let row: (Option<i64>, Option<i64>) = sqlx::query_as(
         "SELECT \
-            (SELECT count(*) FROM play_by_play \
-             WHERE season = $1 AND 'paint' = ANY(tags)), \
-            (SELECT count(*) FROM play_by_play \
-             WHERE season = $1 AND ('FGA' = ANY(tags) OR '3FA' = ANY(tags)))",
+            count(*) FILTER (WHERE 'paint' = ANY(tags)), \
+            count(*) FILTER (WHERE 'FGA' = ANY(tags) OR '3FA' = ANY(tags)) \
+         FROM play_by_play WHERE season = $1",
     )
     .bind(season)
     .fetch_one(pool)
