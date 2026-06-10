@@ -707,6 +707,27 @@ pub struct PlayerPbpProfile {
     /// `plus_minus_pbp` column is gated to 5-man stints, a stricter condition
     /// than having any PBP play) — so the UI shows "—", not a fabricated 0.
     pub plus_minus_pbp: Option<i64>,
+
+    // Season RATE forms (from player_season_stats, primary-team row) + their
+    // within-season percentiles (from player_percentiles, 0..1). These make the
+    // raw sums above comparable across players — the Tier-1 "comparability" fix.
+    // All Option: NULL for a no-percentile player (below the mpg/games gate) or a
+    // corruption-gated season. Rates are share (paint_rate, *_fg_pct) or per-40
+    // (the *_per40 context-scoring rates).
+    pub paint_rate: Option<f64>,
+    pub paint_fg_pct: Option<f64>,
+    pub perimeter_fg_pct: Option<f64>,
+    pub transition_pts_per40: Option<f64>,
+    pub second_chance_pts_per40: Option<f64>,
+    pub points_off_turnovers_per40: Option<f64>,
+    pub fouls_drawn_per40: Option<f64>,
+    pub paint_rate_pct: Option<f64>,
+    pub paint_fg_pct_pct: Option<f64>,
+    pub perimeter_fg_pct_pct: Option<f64>,
+    pub transition_pts_per40_pct: Option<f64>,
+    pub second_chance_pts_per40_pct: Option<f64>,
+    pub points_off_turnovers_per40_pct: Option<f64>,
+    pub fouls_drawn_per40_pct: Option<f64>,
 }
 
 /// Aggregate a player's PBP-derived `player_game_stats` columns to a season
@@ -719,21 +740,49 @@ pub async fn get_player_pbp_profile(
 ) -> Result<Option<PlayerPbpProfile>, sqlx::Error> {
     let row: PlayerPbpProfile = sqlx::query_as(
         r#"
-        SELECT
-            count(*) FILTER (WHERE paint_fga IS NOT NULL) AS games,
-            COALESCE(sum(paint_fga), 0)            AS paint_fga,
-            COALESCE(sum(paint_fgm), 0)            AS paint_fgm,
-            COALESCE(sum(perimeter_fga), 0)        AS perimeter_fga,
-            COALESCE(sum(perimeter_fgm), 0)        AS perimeter_fgm,
-            COALESCE(sum(transition_pts), 0)       AS transition_pts,
-            COALESCE(sum(second_chance_pts), 0)    AS second_chance_pts,
-            COALESCE(sum(points_off_turnovers), 0) AS points_off_turnovers,
-            COALESCE(sum(fouls_drawn), 0)          AS fouls_drawn,
-            -- NOT coalesced: NULL (no 5-man stint data) must stay NULL so the
-            -- UI distinguishes "no on-floor +/- data" from a real even 0.
-            sum(plus_minus_pbp)                    AS plus_minus_pbp
-        FROM player_game_stats
-        WHERE player_id = $1 AND season = $2
+        WITH agg AS (
+            SELECT
+                count(*) FILTER (WHERE paint_fga IS NOT NULL) AS games,
+                COALESCE(sum(paint_fga), 0)            AS paint_fga,
+                COALESCE(sum(paint_fgm), 0)            AS paint_fgm,
+                COALESCE(sum(perimeter_fga), 0)        AS perimeter_fga,
+                COALESCE(sum(perimeter_fgm), 0)        AS perimeter_fgm,
+                COALESCE(sum(transition_pts), 0)       AS transition_pts,
+                COALESCE(sum(second_chance_pts), 0)    AS second_chance_pts,
+                COALESCE(sum(points_off_turnovers), 0) AS points_off_turnovers,
+                COALESCE(sum(fouls_drawn), 0)          AS fouls_drawn,
+                -- NOT coalesced: NULL (no 5-man stint data) must stay NULL so the
+                -- UI distinguishes "no on-floor +/- data" from a real even 0.
+                sum(plus_minus_pbp)                    AS plus_minus_pbp
+            FROM player_game_stats
+            WHERE player_id = $1 AND season = $2
+        ),
+        -- Season rate values from the player's primary-team row (the same
+        -- DISTINCT-ON-games_played choice the percentile pass makes), so the rate
+        -- and its percentile agree for a mid-season transfer.
+        rates AS (
+            SELECT paint_rate, paint_fg_pct, perimeter_fg_pct, transition_pts_per40,
+                   second_chance_pts_per40, points_off_turnovers_per40, fouls_drawn_per40
+            FROM player_season_stats
+            WHERE player_id = $1 AND season = $2
+            ORDER BY games_played DESC NULLS LAST
+            LIMIT 1
+        ),
+        pct AS (
+            SELECT paint_rate_pct, paint_fg_pct_pct, perimeter_fg_pct_pct,
+                   transition_pts_per40_pct, second_chance_pts_per40_pct,
+                   points_off_turnovers_per40_pct, fouls_drawn_per40_pct
+            FROM player_percentiles
+            WHERE player_id = $1 AND season = $2
+        )
+        SELECT agg.*,
+               rates.paint_rate, rates.paint_fg_pct, rates.perimeter_fg_pct,
+               rates.transition_pts_per40, rates.second_chance_pts_per40,
+               rates.points_off_turnovers_per40, rates.fouls_drawn_per40,
+               pct.paint_rate_pct, pct.paint_fg_pct_pct, pct.perimeter_fg_pct_pct,
+               pct.transition_pts_per40_pct, pct.second_chance_pts_per40_pct,
+               pct.points_off_turnovers_per40_pct, pct.fouls_drawn_per40_pct
+        FROM agg LEFT JOIN rates ON true LEFT JOIN pct ON true
         "#,
     )
     .bind(player_id)

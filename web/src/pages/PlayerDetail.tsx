@@ -28,6 +28,7 @@ import { seasonHref, setPageSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
 import { resolveAxes } from '../components/radarAxes';
+import { pctileTextColor } from '../components/pctile';
 import { RadarAxisTooltip } from '../components/RadarAxisTooltip';
 import { RadarTick } from '../components/RadarTick';
 import { useDismissOnOutside } from '../components/useDismissOnOutside';
@@ -60,10 +61,45 @@ function PbpProfilePanel({ pbp }: { pbp: PlayerPbpProfile }) {
   const paintFg = pbp.paint_fga > 0 ? pbp.paint_fgm / pbp.paint_fga : null;
   const perimFg = pbp.perimeter_fga > 0 ? pbp.perimeter_fgm / pbp.perimeter_fga : null;
 
-  const tile = (label: string, value: string) => (
+  const ord = (p: number) => {
+    const n = Math.round(p * 100);
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  };
+  // A FG% colored by its within-season percentile (rim finishing / jumper
+  // efficiency are the non-redundant-with-shot-diet signal).
+  const fgWithPct = (fg: number | null, p: number | null) =>
+    fg == null ? null : (
+      <span style={{ color: pctileTextColor(p) }}>
+        {pct(fg)} FG{p != null && <span className="text-gray-500"> ({ord(p)})</span>}
+      </span>
+    );
+
+  // Rate tile: the per-40 rate as the headline (colored by its percentile so
+  // it's comparable across players), label, then "Nth pct · M total" so the raw
+  // count is still there. Falls back to the raw count when there's no rate
+  // (player below the percentile gate).
+  const rateTile = (
+    label: string,
+    rate: number | null,
+    p: number | null,
+    raw: number,
+  ) => (
     <div className="bg-gray-900 rounded p-3 text-center">
-      <div className="text-lg font-bold tabular-nums">{value}</div>
-      <div className="text-xs text-gray-400 mt-0.5">{label}</div>
+      <div
+        className="text-lg font-bold tabular-nums"
+        style={{ color: rate != null ? pctileTextColor(p) : undefined }}
+      >
+        {rate != null ? rate.toFixed(1) : raw}
+      </div>
+      <div className="text-xs text-gray-400 mt-0.5">
+        {label}
+        {rate != null && <span className="text-gray-600"> /40</span>}
+      </div>
+      <div className="text-[10px] text-gray-600 mt-0.5 tabular-nums">
+        {p != null ? `${ord(p)} · ${raw} tot` : `${raw} total`}
+      </div>
     </div>
   );
 
@@ -74,20 +110,18 @@ function PbpProfilePanel({ pbp }: { pbp: PlayerPbpProfile }) {
         <span className="text-xs text-gray-500">{pbp.games} games with play-by-play</span>
       </div>
 
-      {/* Shot mix: paint vs perimeter share of attempts */}
+      {/* Shot mix: paint vs perimeter share of attempts; FG% colored by percentile */}
       {totalFga > 0 && (
         <div className="mb-4">
           <div className="flex justify-between text-xs text-gray-400 mb-1">
             <span>
-              Paint {Math.round(paintShare * 100)}%
-              {paintFg != null && (
-                <span className="text-gray-500"> · {pct(paintFg)} FG</span>
-              )}
+              <span style={{ color: pctileTextColor(pbp.paint_rate_pct) }}>
+                Paint {Math.round(paintShare * 100)}%
+              </span>
+              {paintFg != null && <span> · {fgWithPct(paintFg, pbp.paint_fg_pct_pct)}</span>}
             </span>
             <span>
-              {perimFg != null && (
-                <span className="text-gray-500">{pct(perimFg)} FG · </span>
-              )}
+              {perimFg != null && <span>{fgWithPct(perimFg, pbp.perimeter_fg_pct_pct)} · </span>}
               Perimeter {Math.round((1 - paintShare) * 100)}%
             </span>
           </div>
@@ -97,23 +131,31 @@ function PbpProfilePanel({ pbp }: { pbp: PlayerPbpProfile }) {
           </div>
           <div className="text-xs text-gray-500 mt-1">
             {pbp.paint_fga} paint / {pbp.perimeter_fga} perimeter field-goal attempts
+            {pbp.paint_rate_pct != null && (
+              <span> · paint rate {ord(pbp.paint_rate_pct)} percentile</span>
+            )}
           </div>
         </div>
       )}
 
-      {/* Scoring context + on-floor impact */}
+      {/* Scoring context (per-40 rates, percentile-colored) + on-floor impact */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-        {tile('Transition pts', String(pbp.transition_pts))}
-        {tile('2nd-chance pts', String(pbp.second_chance_pts))}
-        {tile('Pts off TO', String(pbp.points_off_turnovers))}
-        {tile('Fouls drawn', String(pbp.fouls_drawn))}
-        {tile(
-          'On-floor +/-',
-          pbp.plus_minus_pbp == null
-            ? '—'
-            : `${pbp.plus_minus_pbp > 0 ? '+' : ''}${pbp.plus_minus_pbp}`,
-        )}
+        {rateTile('Transition', pbp.transition_pts_per40, pbp.transition_pts_per40_pct, pbp.transition_pts)}
+        {rateTile('2nd-chance', pbp.second_chance_pts_per40, pbp.second_chance_pts_per40_pct, pbp.second_chance_pts)}
+        {rateTile('Pts off TO', pbp.points_off_turnovers_per40, pbp.points_off_turnovers_per40_pct, pbp.points_off_turnovers)}
+        {rateTile('Fouls drawn', pbp.fouls_drawn_per40, pbp.fouls_drawn_per40_pct, pbp.fouls_drawn)}
+        <div className="bg-gray-900 rounded p-3 text-center">
+          <div className="text-lg font-bold tabular-nums">
+            {pbp.plus_minus_pbp == null
+              ? '—'
+              : `${pbp.plus_minus_pbp > 0 ? '+' : ''}${pbp.plus_minus_pbp}`}
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5">On-floor +/-</div>
+        </div>
       </div>
+      <p className="text-[10px] text-gray-600 mt-2">
+        Per-40-minute rates; color and percentile rank vs all qualified players this season.
+      </p>
     </div>
   );
 }

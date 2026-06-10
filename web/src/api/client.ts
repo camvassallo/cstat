@@ -865,6 +865,24 @@ export interface PlayerPbpProfile {
   /// Null when the player never appeared in a tracked 5-man stint — render
   /// "—" rather than a fabricated 0.
   plus_minus_pbp: number | null;
+
+  // Season RATE forms + their within-season percentiles (0..1). Make the raw
+  // sums above comparable across players. Null below the percentile gate
+  // (low-minute players) or for corruption-gated seasons.
+  paint_rate: number | null;
+  paint_fg_pct: number | null;
+  perimeter_fg_pct: number | null;
+  transition_pts_per40: number | null;
+  second_chance_pts_per40: number | null;
+  points_off_turnovers_per40: number | null;
+  fouls_drawn_per40: number | null;
+  paint_rate_pct: number | null;
+  paint_fg_pct_pct: number | null;
+  perimeter_fg_pct_pct: number | null;
+  transition_pts_per40_pct: number | null;
+  second_chance_pts_per40_pct: number | null;
+  points_off_turnovers_per40_pct: number | null;
+  fouls_drawn_per40_pct: number | null;
 }
 
 export function fetchPlayerPbp(id: string, season?: number) {

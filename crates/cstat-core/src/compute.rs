@@ -535,7 +535,10 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             player_sos_pct,
             ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
-            orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct
+            orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct,
+            paint_rate_pct, paint_fg_pct_pct, perimeter_fg_pct_pct,
+            transition_pts_per40_pct, second_chance_pts_per40_pct,
+            points_off_turnovers_per40_pct, fouls_drawn_per40_pct
         )
         WITH best AS (
             SELECT DISTINCT ON (player_id)
@@ -543,7 +546,10 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
                 fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
                 usage_rate, offensive_rating, defensive_rating,
                 player_sos, ast_pct, tov_pct, minutes_per_game, topg,
-                orb_pct, drb_pct, stl_pct, blk_pct, ft_rate
+                orb_pct, drb_pct, stl_pct, blk_pct, ft_rate,
+                paint_rate, paint_fg_pct, perimeter_fg_pct,
+                transition_pts_per40, second_chance_pts_per40,
+                points_off_turnovers_per40, fouls_drawn_per40
             FROM player_season_stats
             WHERE season = $1
               AND games_played >= 10
@@ -576,7 +582,19 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.drb_pct),
             PERCENT_RANK() OVER (ORDER BY b.stl_pct),
             PERCENT_RANK() OVER (ORDER BY b.blk_pct),
-            PERCENT_RANK() OVER (ORDER BY b.ft_rate)
+            PERCENT_RANK() OVER (ORDER BY b.ft_rate),
+            -- Tier-1 PBP rate percentiles. NULL-guarded: a player with no
+            -- PBP-covered games would otherwise sort to the top of an ascending
+            -- ORDER BY (SQL NULLS LAST) and read as 100th percentile. In a PBP
+            -- season ~every rotation player has data, so the denominator effect
+            -- is negligible; the CASE keeps no-data players badge-less.
+            CASE WHEN b.paint_rate IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.paint_rate) END,
+            CASE WHEN b.paint_fg_pct IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.paint_fg_pct) END,
+            CASE WHEN b.perimeter_fg_pct IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.perimeter_fg_pct) END,
+            CASE WHEN b.transition_pts_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.transition_pts_per40) END,
+            CASE WHEN b.second_chance_pts_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.second_chance_pts_per40) END,
+            CASE WHEN b.points_off_turnovers_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.points_off_turnovers_per40) END,
+            CASE WHEN b.fouls_drawn_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.fouls_drawn_per40) END
         FROM best b
         ON CONFLICT (player_id, season) DO UPDATE
         SET ppg_pct = EXCLUDED.ppg_pct,
@@ -601,7 +619,14 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             drb_pct_pct = EXCLUDED.drb_pct_pct,
             stl_pct_pct = EXCLUDED.stl_pct_pct,
             blk_pct_pct = EXCLUDED.blk_pct_pct,
-            ft_rate_pct = EXCLUDED.ft_rate_pct",
+            ft_rate_pct = EXCLUDED.ft_rate_pct,
+            paint_rate_pct = EXCLUDED.paint_rate_pct,
+            paint_fg_pct_pct = EXCLUDED.paint_fg_pct_pct,
+            perimeter_fg_pct_pct = EXCLUDED.perimeter_fg_pct_pct,
+            transition_pts_per40_pct = EXCLUDED.transition_pts_per40_pct,
+            second_chance_pts_per40_pct = EXCLUDED.second_chance_pts_per40_pct,
+            points_off_turnovers_per40_pct = EXCLUDED.points_off_turnovers_per40_pct,
+            fouls_drawn_per40_pct = EXCLUDED.fouls_drawn_per40_pct",
     )
     .bind(season)
     .execute(pool)
@@ -1578,6 +1603,18 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
         .bind(season)
         .execute(pool)
         .await?;
+        // Clear the season rate rollup too — its source columns above are now
+        // NULL, so a stale rollup would be inconsistent.
+        sqlx::query(
+            "UPDATE player_season_stats \
+             SET paint_rate = NULL, paint_fg_pct = NULL, perimeter_fg_pct = NULL, \
+                 transition_pts_per40 = NULL, second_chance_pts_per40 = NULL, \
+                 points_off_turnovers_per40 = NULL, fouls_drawn_per40 = NULL \
+             WHERE season = $1",
+        )
+        .bind(season)
+        .execute(pool)
+        .await?;
         return Ok(0);
     }
 
@@ -1621,6 +1658,46 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
     .execute(pool)
     .await?;
     let n = res.rows_affected();
+
+    // Season rate rollup: fold the per-game tag columns just written into the
+    // comparable RATE forms on player_season_stats (Tier-1 feature substrate —
+    // see migration 036 / docs/pbp_utilization_scope.md). Rates, not counts, so
+    // they're robust to NatStat's season-varying tag density; aggregated only
+    // over PBP-covered games (`paint_fga IS NOT NULL`) so each rate's numerator
+    // and denominator share the same game set. Grouped by (player_id, team_id)
+    // to match player_season_stats' grain (a mid-season transfer has one row per
+    // team). NULL when a player logged no PBP-covered games.
+    sqlx::query(
+        "UPDATE player_season_stats pss
+         SET paint_rate                 = r.paint_rate,
+             paint_fg_pct               = r.paint_fg_pct,
+             perimeter_fg_pct           = r.perimeter_fg_pct,
+             transition_pts_per40       = r.transition_pts_per40,
+             second_chance_pts_per40    = r.second_chance_pts_per40,
+             points_off_turnovers_per40 = r.points_off_turnovers_per40,
+             fouls_drawn_per40          = r.fouls_drawn_per40
+         FROM (
+             SELECT
+                 player_id, team_id,
+                 sum(paint_fga)::double precision     / nullif(sum(fga), 0)           AS paint_rate,
+                 sum(paint_fgm)::double precision     / nullif(sum(paint_fga), 0)     AS paint_fg_pct,
+                 sum(perimeter_fgm)::double precision / nullif(sum(perimeter_fga), 0) AS perimeter_fg_pct,
+                 sum(transition_pts)       * 40.0 / nullif(sum(minutes), 0) AS transition_pts_per40,
+                 sum(second_chance_pts)    * 40.0 / nullif(sum(minutes), 0) AS second_chance_pts_per40,
+                 sum(points_off_turnovers) * 40.0 / nullif(sum(minutes), 0) AS points_off_turnovers_per40,
+                 sum(fouls_drawn)          * 40.0 / nullif(sum(minutes), 0) AS fouls_drawn_per40
+             FROM player_game_stats
+             WHERE season = $1 AND paint_fga IS NOT NULL
+             GROUP BY player_id, team_id
+         ) r
+         WHERE pss.player_id = r.player_id
+           AND pss.team_id = r.team_id
+           AND pss.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
     info!(season, updated = n, "computed PBP per-player aggregates");
     Ok(n)
 }
