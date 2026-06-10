@@ -583,18 +583,22 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.stl_pct),
             PERCENT_RANK() OVER (ORDER BY b.blk_pct),
             PERCENT_RANK() OVER (ORDER BY b.ft_rate),
-            -- Tier-1 PBP rate percentiles. NULL-guarded: a player with no
-            -- PBP-covered games would otherwise sort to the top of an ascending
-            -- ORDER BY (SQL NULLS LAST) and read as 100th percentile. In a PBP
-            -- season ~every rotation player has data, so the denominator effect
-            -- is negligible; the CASE keeps no-data players badge-less.
-            CASE WHEN b.paint_rate IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.paint_rate) END,
-            CASE WHEN b.paint_fg_pct IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.paint_fg_pct) END,
-            CASE WHEN b.perimeter_fg_pct IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.perimeter_fg_pct) END,
-            CASE WHEN b.transition_pts_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.transition_pts_per40) END,
-            CASE WHEN b.second_chance_pts_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.second_chance_pts_per40) END,
-            CASE WHEN b.points_off_turnovers_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.points_off_turnovers_per40) END,
-            CASE WHEN b.fouls_drawn_per40 IS NULL THEN NULL ELSE PERCENT_RANK() OVER (ORDER BY b.fouls_drawn_per40) END
+            -- Tier-1 PBP rate percentiles, ranked over NON-NULL values only.
+            -- A plain PERCENT_RANK would count no-PBP players (NULL, sorted last)
+            -- in its denominator, compressing every real percentile. That's ~1%
+            -- with a full season loaded but balloons in-season (early-season the
+            -- partition is mostly sparse/NULL PBP), so we rank explicitly:
+            --   (rank among non-NULL − 1) / (count of non-NULL − 1)
+            -- which is PERCENT_RANK restricted to players who have the stat.
+            -- count(x) OVER () counts non-NULLs; rank() puts NULLs last so they
+            -- never shift a real row's rank; the CASE keeps no-data rows badge-less.
+            CASE WHEN b.paint_rate IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.paint_rate) - 1.0) / nullif(count(b.paint_rate) OVER () - 1, 0) END,
+            CASE WHEN b.paint_fg_pct IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.paint_fg_pct) - 1.0) / nullif(count(b.paint_fg_pct) OVER () - 1, 0) END,
+            CASE WHEN b.perimeter_fg_pct IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.perimeter_fg_pct) - 1.0) / nullif(count(b.perimeter_fg_pct) OVER () - 1, 0) END,
+            CASE WHEN b.transition_pts_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.transition_pts_per40) - 1.0) / nullif(count(b.transition_pts_per40) OVER () - 1, 0) END,
+            CASE WHEN b.second_chance_pts_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.second_chance_pts_per40) - 1.0) / nullif(count(b.second_chance_pts_per40) OVER () - 1, 0) END,
+            CASE WHEN b.points_off_turnovers_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.points_off_turnovers_per40) - 1.0) / nullif(count(b.points_off_turnovers_per40) OVER () - 1, 0) END,
+            CASE WHEN b.fouls_drawn_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.fouls_drawn_per40) - 1.0) / nullif(count(b.fouls_drawn_per40) OVER () - 1, 0) END
         FROM best b
         ON CONFLICT (player_id, season) DO UPDATE
         SET ppg_pct = EXCLUDED.ppg_pct,
