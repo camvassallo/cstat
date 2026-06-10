@@ -12,7 +12,7 @@
     "script": "experiment_game_pbp.py",
     "setup": "shared chronological last-20%-of-2026 holdout (n=925), 12-season train (n=46791), production hyperparams, matrix built once with PBP_FEATURES=1, baseline = column subset",
     "features_added": 7,
-    "margin_mae": {"baseline": 8.0815, "pbp": 8.1568, "delta": 0.0752},
+    "margin_mae": {"baseline": 8.0815, "pbp": 8.1568, "delta_full_precision": 0.0752},
     "margin_win_acc": {"baseline": 0.7405, "pbp": 0.7319},
     "win_auc": {"baseline": 0.7961, "pbp": 0.7952},
     "win_log_loss": {"baseline": 0.5198, "pbp": 0.5193},
@@ -22,7 +22,7 @@
   },
   "trajectory": {
     "script": "experiment_trajectory_pbp.py",
-    "setup": "LOPO over 11 pairs, identical corpus (n=24,592 rows incl. extended joins), -1 missing sentinel, raw-rate and within-season-percentile encodings",
+    "setup": "LOPO over 11 pairs, identical corpus (n=24,592 = sum of per-pair n's in the LOPO output), -1 missing sentinel, raw-rate and within-season-percentile encodings",
     "lopo_pooled_mae": {"baseline": 2.1367, "raw_rates": 2.1395, "percentiles": 2.1403},
     "covered_subset_mae_sn_ge_2020": {"baseline": 2.1684, "raw_rates": 2.1708, "percentiles": 2.1712},
     "per_pair_wins": {"raw_rates": "5/11", "percentiles": "4/11"}

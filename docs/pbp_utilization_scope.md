@@ -87,13 +87,18 @@ values. That splits PBP features by source-robustness:
 
 ## 4. Utilization plan (tiered)
 
-**Tier 1 — skew-free tag features into the models (ship first).** Roll the
-`player_game_stats` PBP columns into roster-aggregate diff features for the
-existing 49-feature LightGBM (team paint%, transition rate, FT-rate,
-foul-drawing, A/TO, offense and defense). Zero train/serve skew by construction,
-available 2015–2026, computable nightly. No dependency on any lineup-accuracy
-work. Highest value-per-risk; unblocks the "PBP-features model beats baseline"
-acceptance test.
+**Tier 1 — skew-free tag features into the models (ship first). [CLOSED
+2026-06-10: backtested and REJECTED in all three model families — serving-only.]**
+The plan was to roll the `player_game_stats` PBP columns into diff features for
+the existing 49-feature LightGBM (team paint%, transition rate, foul-drawing,
+offense and defense). Zero train/serve skew by construction, available
+2020–2026 (contextual tags don't exist before 2020 — see §1), computable
+nightly. Outcome: margin MAE got 0.075 *worse* on a shared 2026 holdout;
+trajectory and archetype integrations also rejected (numbers in
+`training/eval_history/tier1_pbp_models_20260610_summary.json`). CamPom/GBPM
+already absorb the value signal the style rates carry. The gated plumbing
+(`PBP_FEATURES`, default off) and the `training/experiment_*_pbp.py` harnesses
+remain as the re-test path if the data changes.
 
 **Tier 2 — adopt the NatStat `lineups` object as the cross-season lineup
 source.** Build a `lineups`-object ingest (parse, name-resolve to UUIDs, store
