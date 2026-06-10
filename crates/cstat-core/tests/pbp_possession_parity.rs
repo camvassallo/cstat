@@ -114,4 +114,27 @@ async fn stint_possessions_track_box_score() {
         );
         println!("corrupt season {season}: lineup_aggregates cleared (0 rows) ✓");
     }
+
+    // The contextual-tag gate (compute_pbp_aggregates::pbp_lacks_context_tags)
+    // must leave pre-2020 seasons with no tag-derived aggregates — those feed
+    // vintages carry only box-event tags (zero paint/brk/2ch/offto/FOULED), so
+    // derived values would be misleading zeros, not data. Guards against the
+    // gate regressing and re-publishing "0 paint FGA / 0 fouls drawn" rows.
+    for season in [2015, 2016, 2017, 2018] {
+        let n: i64 = sqlx::query(
+            "SELECT count(*) FROM player_game_stats \
+             WHERE season = $1 AND paint_fga IS NOT NULL",
+        )
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
+        assert_eq!(
+            n, 0,
+            "pre-context-tag season {season} still has {n} non-NULL paint_fga rows — \
+             pbp_lacks_context_tags didn't gate it"
+        );
+        println!("pre-context-tag season {season}: tag aggregates cleared ✓");
+    }
 }

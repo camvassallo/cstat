@@ -43,6 +43,14 @@ if GBPM_VARIANT not in _GBPM_COLUMNS:
         f"GBPM_VARIANT={GBPM_VARIANT!r} not recognized; choose one of {list(_GBPM_COLUMNS)}"
     )
 
+# Tier-1 PBP tag features (team-level expanding rates → diff features).
+# Default OFF until the head-to-head backtest accepts them — flipping this on
+# changes the margin/win feature count, which is a wire contract with the Rust
+# Predictor (NUM_FEATURES). Coverage: contextual tags exist 2020+ only (2019
+# corrupt-gated); earlier seasons carry NaN, which LightGBM routes natively —
+# keep these columns OUT of any dropna completeness filter.
+PBP_FEATURES = os.environ.get("PBP_FEATURES", "0").strip() == "1"
+
 # ELO parameters
 ELO_K = 20.0
 ELO_HOME_ADV = 3.5
@@ -107,6 +115,9 @@ def load_player_game_stats(engine, seasons=None) -> pd.DataFrame:
                pgs.ftm, pgs.fta,
                pgs.off_rebounds, pgs.def_rebounds, pgs.total_rebounds,
                pgs.assists, pgs.turnovers, pgs.steals, pgs.blocks,
+               pgs.paint_fga, pgs.paint_fgm, pgs.perimeter_fga, pgs.perimeter_fgm,
+               pgs.transition_pts, pgs.second_chance_pts,
+               pgs.points_off_turnovers, pgs.fouls_drawn,
                pgs.game_score, pgs.usage_rate,
                pgs.team_fga, tgs.fgm AS team_fgm, pgs.team_fta, pgs.team_turnovers,
                COALESCE(tgs.minutes, 200) AS team_minutes,
@@ -528,6 +539,74 @@ def compute_cumulative_team_stats(tgs: pd.DataFrame, games_df: pd.DataFrame):
 
 
 # ---------------------------------------------------------------------------
+# Cumulative team PBP tag rates — expanding window, leak-free
+# ---------------------------------------------------------------------------
+
+def compute_cumulative_team_pbp(pgs: pd.DataFrame, tgs: pd.DataFrame) -> pd.DataFrame:
+    """
+    Team-level expanding-window PBP tag rates (Tier-1), shifted one game so
+    row i only sees games 0..i-1 — same leak-free convention as
+    compute_cumulative_team_stats.
+
+    Rate-encoded per the Tier-1 rule (NatStat tag density varies by season;
+    raw counts would bake that drift in). Diff features compare two teams in
+    the SAME season, so the shared season density cancels.
+
+    A team-game with no PBP coverage contributes NaN rates; the expanding
+    mean skips NaN, so the cumulative value reflects covered games only.
+    Seasons with no contextual tags (pre-2020, gated 2019) stay all-NaN.
+    """
+    team_pbp = pgs.groupby(["team_id", "game_id", "game_date"], as_index=False)[[
+        "paint_fga", "paint_fgm", "perimeter_fga", "perimeter_fgm",
+        "transition_pts", "second_chance_pts", "points_off_turnovers",
+        "fouls_drawn",
+    ]].sum(min_count=1)
+
+    # Team points + possessions denominators from the team box row.
+    tg = tgs[["team_id", "game_id", "points", "fga", "off_rebounds",
+              "turnovers", "fta"]].copy()
+    tg["possessions"] = (
+        tg["fga"].fillna(0) - tg["off_rebounds"].fillna(0)
+        + tg["turnovers"].fillna(0) + 0.44 * tg["fta"].fillna(0)
+    ).clip(lower=1)
+    team_pbp = team_pbp.merge(
+        tg[["team_id", "game_id", "points", "possessions"]],
+        on=["team_id", "game_id"], how="left",
+    )
+
+    tracked_fga = (team_pbp["paint_fga"] + team_pbp["perimeter_fga"]).replace(0, np.nan)
+    pts = team_pbp["points"].replace(0, np.nan)
+    team_pbp["pbp_paint_rate"] = team_pbp["paint_fga"] / tracked_fga
+    team_pbp["pbp_paint_fg_pct"] = (
+        team_pbp["paint_fgm"] / team_pbp["paint_fga"].replace(0, np.nan)
+    ).clip(upper=1.0)
+    team_pbp["pbp_perimeter_fg_pct"] = (
+        team_pbp["perimeter_fgm"] / team_pbp["perimeter_fga"].replace(0, np.nan)
+    ).clip(upper=1.0)
+    team_pbp["pbp_transition_rate"] = team_pbp["transition_pts"] / pts
+    team_pbp["pbp_second_chance_rate"] = team_pbp["second_chance_pts"] / pts
+    team_pbp["pbp_off_to_rate"] = team_pbp["points_off_turnovers"] / pts
+    team_pbp["pbp_fouls_drawn_per100"] = (
+        team_pbp["fouls_drawn"] / team_pbp["possessions"] * 100.0
+    )
+
+    rate_cols = [
+        "pbp_paint_rate", "pbp_paint_fg_pct", "pbp_perimeter_fg_pct",
+        "pbp_transition_rate", "pbp_second_chance_rate", "pbp_off_to_rate",
+        "pbp_fouls_drawn_per100",
+    ]
+
+    results = []
+    for team_id, team_df in team_pbp.groupby("team_id"):
+        team_df = team_df.sort_values("game_date").reset_index(drop=True)
+        for col in rate_cols:
+            team_df[f"cum_{col}"] = team_df[col].expanding().mean().shift(1)
+        results.append(team_df[["team_id", "game_id"] + [f"cum_{c}" for c in rate_cols]])
+
+    return pd.concat(results, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
 # Cumulative roster aggregates — expanding player averages
 # ---------------------------------------------------------------------------
 
@@ -878,6 +957,12 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
     print("Computing cumulative team stats...")
     cum_team = compute_cumulative_team_stats(tgs, games)
 
+    # 3b. Cumulative team PBP tag rates (Tier-1; gated)
+    cum_pbp = None
+    if PBP_FEATURES:
+        print("Computing cumulative team PBP tag rates...")
+        cum_pbp = compute_cumulative_team_pbp(pgs, tgs)
+
     # 4. Cumulative roster aggregates + rolling form
     print("Computing cumulative roster aggregates...")
     cum_roster = compute_cumulative_roster_stats(pgs, games, torvik)
@@ -959,6 +1044,18 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
             right_on=["game_id", "team_id"],
             how="left",
         ).drop(columns=["team_id"], errors="ignore")
+
+    # Cumulative team PBP rates (same exact-match merge shape as cum_team)
+    if cum_pbp is not None:
+        pbp_cols = [c for c in cum_pbp.columns if c.startswith("cum_pbp_")]
+        for prefix, tid_col in [("home", "home_team_id"), ("away", "away_team_id")]:
+            pbp_ren = cum_pbp.rename(columns={c: f"{prefix}_{c}" for c in pbp_cols})
+            df = df.merge(
+                pbp_ren,
+                left_on=["game_id", tid_col],
+                right_on=["game_id", "team_id"],
+                how="left",
+            ).drop(columns=["team_id"], errors="ignore")
 
     # Cumulative roster aggregates
     roster_cols_all = [c for c in cum_roster.columns if c not in ("team_id", "game_id", "game_date")]
@@ -1060,6 +1157,19 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         "w_ppg_trend": "w_ppg_trend",
         "w_gs_trend": "w_gs_trend",
     }
+
+    # Tier-1 PBP tag-rate diffs (gated; NaN for pre-2020 seasons — keep out
+    # of dropna filters, LightGBM routes missing natively)
+    if PBP_FEATURES:
+        diff_pairs.update({
+            "pbp_paint_rate": "cum_pbp_paint_rate",
+            "pbp_paint_fg_pct": "cum_pbp_paint_fg_pct",
+            "pbp_perimeter_fg_pct": "cum_pbp_perimeter_fg_pct",
+            "pbp_transition_rate": "cum_pbp_transition_rate",
+            "pbp_second_chance_rate": "cum_pbp_second_chance_rate",
+            "pbp_off_to_rate": "cum_pbp_off_to_rate",
+            "pbp_fouls_drawn_per100": "cum_pbp_fouls_drawn_per100",
+        })
 
     for name, col in diff_pairs.items():
         home_col = f"home_{col}"
