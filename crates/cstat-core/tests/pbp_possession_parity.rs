@@ -29,6 +29,11 @@ const MAX_MAE_PCT: f64 = 8.0;
 /// "2019 PBP tag corruption".
 const CORRUPT_PBP_SEASONS: &[i32] = &[2019];
 
+/// Feed vintages with zero contextual tags (paint/brk/2ch/offto/FOULED) —
+/// gated by `compute.rs::pbp_lacks_context_tags`. See ROADMAP "Coverage
+/// correction" under the Tier-1 item.
+const PRE_CONTEXT_TAG_SEASONS: &[i32] = &[2015, 2016, 2017, 2018];
+
 #[tokio::test]
 #[ignore = "needs local DB with PBP loaded + compute run"]
 async fn stint_possessions_track_box_score() {
@@ -55,7 +60,7 @@ async fn stint_possessions_track_box_score() {
     );
 
     let mut evaluated = 0;
-    for season in seasons {
+    for &season in &seasons {
         let row = sqlx::query(
             "WITH pbp AS (
                  SELECT game_id, team_id, sum(possessions_for) poss
@@ -113,5 +118,52 @@ async fn stint_possessions_track_box_score() {
             "corrupt season {season} still has {n} served lineup_aggregates rows — the coverage gate didn't clear it"
         );
         println!("corrupt season {season}: lineup_aggregates cleared (0 rows) ✓");
+    }
+
+    // The contextual-tag gate (compute_pbp_aggregates::pbp_lacks_context_tags)
+    // must leave pre-2020 seasons with no tag-derived aggregates — those feed
+    // vintages carry only box-event tags (zero paint/brk/2ch/offto/FOULED), so
+    // derived values would be misleading zeros, not data. Guards against the
+    // gate regressing and re-publishing "0 paint FGA / 0 fouls drawn" rows.
+    for &season in PRE_CONTEXT_TAG_SEASONS {
+        let n: i64 = sqlx::query(
+            "SELECT count(*) FROM player_game_stats \
+             WHERE season = $1 AND paint_fga IS NOT NULL",
+        )
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
+        assert_eq!(
+            n, 0,
+            "pre-context-tag season {season} still has {n} non-NULL paint_fga rows — \
+             pbp_lacks_context_tags didn't gate it"
+        );
+        println!("pre-context-tag season {season}: tag aggregates cleared ✓");
+    }
+
+    // ...and the symmetric guard: the gate must NOT fire on a contextual-era
+    // season. An over-eager gate (e.g. a threshold bump or a query bug) would
+    // silently wipe every served PBP surface; absence is only correct where
+    // the source truly lacks the vocabulary. Seasons come from the same
+    // dynamically-discovered set the parity loop used (so a partially-loaded
+    // DB doesn't false-fail), filtered to the contextual era.
+    for &season in seasons.iter().filter(|s| **s >= 2020) {
+        let n: i64 = sqlx::query(
+            "SELECT count(*) FROM player_game_stats \
+             WHERE season = $1 AND paint_fga IS NOT NULL",
+        )
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
+        assert!(
+            n > 0,
+            "contextual-era season {season} has no non-NULL paint_fga rows — \
+             the contextual-tag gate is over-firing (or aggregates never ran)"
+        );
+        println!("contextual-era season {season}: tag aggregates present ({n} rows) ✓");
     }
 }

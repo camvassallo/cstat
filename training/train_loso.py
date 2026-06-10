@@ -38,7 +38,7 @@ from sklearn.metrics import (
 )
 
 from db import get_engine
-from features import SEASONS, build_feature_matrix
+from features import SEASONS, build_feature_matrix, completeness_subset
 
 HOLDOUT_YEARS = [2021, 2022, 2023, 2024, 2025, 2026]
 OUTPUT_DIR = Path(__file__).parent / "models" / "loso"
@@ -160,9 +160,11 @@ def main():
     df, feature_cols, _sum_cols = build_feature_matrix(engine)
     print(f"  matrix built in {time.time()-t0:.1f}s; {len(df)} rows × {len(feature_cols)} feats")
 
-    # Drop rows missing any of the margin/win features (49 diffs).
+    # Drop rows missing any of the margin/win features (49 diffs). PBP diff
+    # columns are excluded — NaN there is pre-2020 source coverage, not row
+    # incompleteness (see features.completeness_subset).
     before = len(df)
-    df = df.dropna(subset=feature_cols).reset_index(drop=True)
+    df = df.dropna(subset=completeness_subset(feature_cols)).reset_index(drop=True)
     print(f"  {before} → {len(df)} after dropping rows with missing features")
 
     summary = []

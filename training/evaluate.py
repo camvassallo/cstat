@@ -34,7 +34,7 @@ from sklearn.metrics import (
 )
 
 from db import get_engine
-from features import SEASONS, build_feature_matrix
+from features import SEASONS, build_feature_matrix, completeness_subset
 
 MODEL_DIR = Path(__file__).parent / "models"
 EVAL_DIR = Path(__file__).parent / "eval_history"
@@ -352,10 +352,10 @@ def main():
     # Build features
     engine = get_engine()
     print("Building feature matrix (point-in-time)...")
-    df, feature_cols = build_feature_matrix(engine)
+    df, feature_cols, _sum_cols = build_feature_matrix(engine)
 
     before = len(df)
-    df = df.dropna(subset=feature_cols)
+    df = df.dropna(subset=completeness_subset(feature_cols))
     print(f"Games: {before} total, {len(df)} with complete features")
 
     # Run backtest

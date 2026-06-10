@@ -11,7 +11,7 @@ about *what the NatStat API actually serves*, and lays out a tiered plan.
 | Asset | Where | Span | Source / quality |
 |---|---|---|---|
 | Raw `play_by_play` (tags, score, clock, onfloor cols) | local only | 2015–2026 (2019 corrupt) | tags: CSV for 2015–2025, **API for 2026** (the onfloor backfill's `replace_game_pbp` swapped them — CSV and API tag streams verified equivalent, see scope §3); `onfloor_*` populated for 2026 only |
-| Tag aggregates → `player_game_stats` cols (paint/perimeter, transition, 2nd-chance, off-TO pts, fouls drawn, `plus_minus_pbp`) | **prod** | 2015–2026 | direct `player_id` rollup — **source-independent** |
+| Tag aggregates → `player_game_stats` cols (paint/perimeter, transition, 2nd-chance, off-TO pts, fouls drawn, `plus_minus_pbp`) | **prod** | **2020–2026 (2019 corrupt-gated)** — the 2015–2018 feeds carry only box-event tags, zero contextual vocabulary (paint share of tagged FGA = 0.000 vs ≥0.41 every 2020+ season; found 2026-06-09); `compute.rs::pbp_lacks_context_tags` gates them to NULL. `plus_minus_pbp` is stint-derived, unaffected (2015–2026). | direct `player_id` rollup — **source-independent** |
 | `lineup_stints` (per-stint 5-man + possessions) | local only | 2015–2026 | replay ~86% (CSV seasons) / onfloor (2026) |
 | `lineup_aggregates` (top lineups) | **prod** | 2015–2026 | replay / onfloor |
 | `player_on_off` | **prod** | 2015–2026 | replay / onfloor |
@@ -78,7 +78,8 @@ values. That splits PBP features by source-robustness:
 
 - **Skew-free** — direct `player_id` tag rollups (paint%, transition rate,
   2nd-chance, points-off-TO, fouls drawn, assist rate, true A/TO). Identical
-  under any lineup source; already on prod for all seasons.
+  under any lineup source; on prod for every season whose feed carries the
+  contextual vocabulary (2020+, see §1).
 - **Skew-prone** — anything depending on lineup membership (on/off,
   lineup_quality, RAPM). Today these are replay for history, onfloor for 2026 —
   a built-in skew. The `lineups`-object path removes it by making *all* seasons
@@ -86,13 +87,18 @@ values. That splits PBP features by source-robustness:
 
 ## 4. Utilization plan (tiered)
 
-**Tier 1 — skew-free tag features into the models (ship first).** Roll the
-`player_game_stats` PBP columns into roster-aggregate diff features for the
-existing 49-feature LightGBM (team paint%, transition rate, FT-rate,
-foul-drawing, A/TO, offense and defense). Zero train/serve skew by construction,
-available 2015–2026, computable nightly. No dependency on any lineup-accuracy
-work. Highest value-per-risk; unblocks the "PBP-features model beats baseline"
-acceptance test.
+**Tier 1 — skew-free tag features into the models (ship first). [CLOSED
+2026-06-10: backtested and REJECTED in all three model families — serving-only.]**
+The plan was to roll the `player_game_stats` PBP columns into diff features for
+the existing 49-feature LightGBM (team paint%, transition rate, foul-drawing,
+offense and defense). Zero train/serve skew by construction, available
+2020–2026 (contextual tags don't exist before 2020 — see §1), computable
+nightly. Outcome: margin MAE got 0.075 *worse* on a shared 2026 holdout;
+trajectory and archetype integrations also rejected (numbers in
+`training/eval_history/tier1_pbp_models_20260610_summary.json`). CamPom/GBPM
+already absorb the value signal the style rates carry. The gated plumbing
+(`PBP_FEATURES`, default off) and the `training/experiment_*_pbp.py` harnesses
+remain as the re-test path if the data changes.
 
 **Tier 2 — adopt the NatStat `lineups` object as the cross-season lineup
 source.** Build a `lineups`-object ingest (parse, name-resolve to UUIDs, store

@@ -141,7 +141,7 @@ def main():
     total_feature_cols = feature_cols + sum_cols
 
     before = len(df)
-    df = df.dropna(subset=total_feature_cols).reset_index(drop=True)
+    df = df.dropna(subset=features_mod.completeness_subset(total_feature_cols)).reset_index(drop=True)
     print(f"\nGames with complete features: {len(df)} / {before}")
     print(f"Features: {len(feature_cols)} diff + {len(sum_cols)} sum = {len(total_feature_cols)}")
 

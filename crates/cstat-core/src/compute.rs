@@ -1597,11 +1597,61 @@ async fn pbp_source_is_corrupt(pool: &PgPool, season: i32) -> Result<bool, sqlx:
     }
 }
 
+/// Minimum share of FGA-tagged plays that must also carry the `paint` location
+/// tag before we trust a season's CONTEXTUAL tags (paint/brk/2ch/offto/FOULED).
+/// The 2015-2018 NatStat feeds carry only box-event tags (FGA/FGM/REB/TOV/…) —
+/// zero contextual tags — so deriving from them yields misleading zeros
+/// (paint_fga=0 on every shot, perimeter_fga=all FGA, 0 transition points, 0
+/// fouls drawn). Observed paint share of tagged FGA: 2015-2018 ≈ 0.000, every
+/// contextual-era season (2020-2026) ≥ 0.41. The signal is effectively binary;
+/// 0.05 separates "vocabulary absent" from "present but season-sparse".
+const PBP_MIN_PAINT_TAG_COVERAGE: f64 = 0.05;
+
+/// True (with a warning) when the season's PBP feed predates the contextual tag
+/// vocabulary — the caller should clear and skip the tag-derived aggregates
+/// (the lineup/possession path is unaffected: it reads box-event tags + SUBs,
+/// which every vintage carries).
+async fn pbp_lacks_context_tags(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
+    // Single pass with FILTER — play_by_play has no season index, so two
+    // subselects would each full-scan the (32.8M-row local) table.
+    let row: (Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT \
+            count(*) FILTER (WHERE 'paint' = ANY(tags)), \
+            count(*) FILTER (WHERE 'FGA' = ANY(tags) OR '3FA' = ANY(tags)) \
+         FROM play_by_play WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    let (paint, fga) = (row.0.unwrap_or(0), row.1.unwrap_or(0));
+    if fga == 0 {
+        // No tagged FGA at all — nothing to derive from; the per-game UPDATE
+        // below would match zero rows anyway, so don't gate (and don't clear:
+        // a not-yet-loaded season should keep its NULLs untouched).
+        return Ok(false);
+    }
+    let cov = paint as f64 / fga as f64;
+    if cov < PBP_MIN_PAINT_TAG_COVERAGE {
+        warn!(
+            season,
+            coverage = format!("{cov:.3}"),
+            threshold = PBP_MIN_PAINT_TAG_COVERAGE,
+            "PBP feed lacks contextual tags (pre-2020 vocabulary) — clearing and \
+             skipping this season's tag-derived aggregates"
+        );
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     // Corruption gate: a season whose PBP tags don't cover the box-score FGA
     // (e.g. 2019's mis-tagged export) yields garbage aggregates, so clear any
-    // stale values and skip rather than serve them.
-    if pbp_source_is_corrupt(pool, season).await? {
+    // stale values and skip rather than serve them. The contextual-tag gate
+    // catches the orthogonal failure: pre-2020 feeds whose box-event tags are
+    // fine (so the corrupt gate passes) but which carry no paint/brk/2ch/offto/
+    // FOULED vocabulary at all — deriving from those yields zeros, not data.
+    if pbp_source_is_corrupt(pool, season).await? || pbp_lacks_context_tags(pool, season).await? {
         sqlx::query(
             "UPDATE player_game_stats \
              SET paint_fga = NULL, paint_fgm = NULL, perimeter_fga = NULL, \
