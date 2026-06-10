@@ -126,6 +126,25 @@ enum Commands {
         gamecode: Option<String>,
     },
 
+    /// Capture NatStat's per-game server-computed 5-man lineup units (the
+    /// `games;lineups` hydrate) into the durable `natstat_lineups` tables —
+    /// the Tier-2 cross-season membership source. ~1 call per Final game (a
+    /// season ≈ 11-13 hrs at the 500/hr cap); restart-safe — already-captured
+    /// games are skipped via the `natstat_lineup_games` ledger. Local-only,
+    /// never synced to prod.
+    Lineups {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Stop after fetching N games (budget control for partial runs).
+        #[arg(long)]
+        limit: Option<u64>,
+
+        /// Re-attempt games previously recorded as errors.
+        #[arg(long)]
+        retry_errors: bool,
+    },
+
     /// Incremental update: fetch recent games and performances, then run
     /// compute so derived stats stay fresh. Use `--no-compute` to skip the
     /// post-step (e.g. when batching several updates).
@@ -526,6 +545,22 @@ async fn main() -> Result<()> {
                     );
                 }
             };
+            println!("{report}");
+        }
+
+        Commands::Lineups {
+            year,
+            limit,
+            retry_errors,
+        } => {
+            let report = cstat_ingest::ingest::lineups::ingest_lineups_for_season(
+                &client,
+                &db.pool,
+                year,
+                limit,
+                retry_errors,
+            )
+            .await?;
             println!("{report}");
         }
 

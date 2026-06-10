@@ -123,13 +123,18 @@ impl NatStatClient {
     /// - `range`: optional comma-separated range params (season, date, team code, etc.)
     /// - `offset`: optional pagination offset
     fn build_url(&self, endpoint: &str, range: Option<&str>, offset: Option<u64>) -> String {
-        let mut url = format!(
-            "{}/{}/{}/{}",
-            self.base_url(),
-            self.api_key,
-            endpoint,
-            SERVICE
-        );
+        self.build_url_with_base(self.base_url(), endpoint, range, offset)
+    }
+
+    /// [`build_url`] against an explicit host, ignoring the v3 fallback flag.
+    fn build_url_with_base(
+        &self,
+        base: &str,
+        endpoint: &str,
+        range: Option<&str>,
+        offset: Option<u64>,
+    ) -> String {
+        let mut url = format!("{}/{}/{}/{}", base, self.api_key, endpoint, SERVICE);
         match (range, offset) {
             (Some(r), Some(o)) => url = format!("{}/{}/{}", url, r, o),
             (Some(r), None) => url = format!("{}/{}", url, r),
@@ -164,6 +169,32 @@ impl NatStatClient {
         offset: Option<u64>,
         ttl: Option<i64>,
     ) -> Result<Value, NatStatError> {
+        self.get_inner(endpoint, range, offset, ttl, false).await
+    }
+
+    /// Like [`Self::get`], but pinned to the v4 host: never falls back to v3
+    /// on timeouts/5xx, and ignores a fallback flag set earlier in the run.
+    /// For hydrated endpoints (`games;lineups`), which v3 does not support —
+    /// its per-game hydrate 302-redirects away. 5xx still retries with backoff
+    /// on v4 and surfaces as `HttpStatus` once the retry budget is exhausted.
+    pub async fn get_v4_only(
+        &self,
+        endpoint: &str,
+        range: Option<&str>,
+        offset: Option<u64>,
+        ttl: Option<i64>,
+    ) -> Result<Value, NatStatError> {
+        self.get_inner(endpoint, range, offset, ttl, true).await
+    }
+
+    async fn get_inner(
+        &self,
+        endpoint: &str,
+        range: Option<&str>,
+        offset: Option<u64>,
+        ttl: Option<i64>,
+        v4_only: bool,
+    ) -> Result<Value, NatStatError> {
         let cache_key = Self::cache_key(endpoint, range, offset);
 
         // Check cache first
@@ -172,7 +203,11 @@ impl NatStatClient {
             return Ok(cached);
         }
 
-        let mut url = self.build_url(endpoint, range, offset);
+        let mut url = if v4_only {
+            self.build_url_with_base(BASE_URL_V4, endpoint, range, offset)
+        } else {
+            self.build_url(endpoint, range, offset)
+        };
 
         let range_str = range.unwrap_or("_");
         let offset_val = offset.unwrap_or(0);
@@ -223,7 +258,7 @@ impl NatStatClient {
 
                     // Timeouts on v4 → switch to v3 immediately and retry without
                     // counting this against the retry budget.
-                    if is_timeout && !self.use_v3.load(Ordering::Relaxed) {
+                    if is_timeout && !v4_only && !self.use_v3.load(Ordering::Relaxed) {
                         self.switch_to_v3();
                         url = self.build_url(endpoint, range, offset);
                         continue;
@@ -258,7 +293,7 @@ impl NatStatClient {
                 // 5xx on v4 → switch to v3 immediately and retry without
                 // counting this against the retry budget. (429 still backs off
                 // normally since both APIs share the same rate limit.)
-                if status.is_server_error() && !self.use_v3.load(Ordering::Relaxed) {
+                if status.is_server_error() && !v4_only && !self.use_v3.load(Ordering::Relaxed) {
                     self.switch_to_v3();
                     url = self.build_url(endpoint, range, offset);
                     continue;
