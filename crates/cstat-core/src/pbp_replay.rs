@@ -261,24 +261,71 @@ pub fn game_stints(
     }
 }
 
+/// In-progress on-floor stint accumulator. Like [`Builder`] but holds each
+/// team's set as a `BTreeSet` so per-play onfloor sets can be unioned in (and so
+/// the finished lineup is naturally sorted+deduped).
+struct OnFloorSeg {
+    period: i32,
+    start_seq: i32,
+    end_seq: i32,
+    home: BTreeSet<Uuid>,
+    vis: BTreeSet<Uuid>,
+    end_home_score: i32,
+    end_vis_score: i32,
+}
+
+fn finish_onfloor(seg: OnFloorSeg, prev_home: &mut i32, prev_vis: &mut i32) -> Stint {
+    finish(
+        Builder {
+            period: seg.period,
+            start_seq: seg.start_seq,
+            end_seq: seg.end_seq,
+            // BTreeSet iterates ascending → same sorted, deduped Vec the old
+            // path produced via `.sort(); .dedup()`.
+            home: seg.home.into_iter().collect(),
+            vis: seg.vis.into_iter().collect(),
+            end_home_score: seg.end_home_score,
+            end_vis_score: seg.end_vis_score,
+        },
+        prev_home,
+        prev_vis,
+    )
+}
+
 /// Coalesce stints from stored on-floor strings (pure). Resolves the
 /// comma-separated NatStat codes to our UUIDs via `code_to_uuid`.
+///
+/// **Union reconstruction.** NatStat's `onfloorhome`/`onfloorvis` list only
+/// *four* of the five on-floor players on ~45% of plays (and three on ~8%) — the
+/// field is populated but per-play incomplete. Keying a stint on the exact
+/// per-play set (the prior behavior) therefore shatters every real stint into
+/// 4-man micro-fragments, which the downstream 5-man rollup discards — halving
+/// floor-time coverage and gutting the bench/OFF sample that on/off splits need
+/// (a heavy-minutes starter ended up with a ~0-possession OFF side).
+///
+/// Instead, within a run of plays we UNION the per-play sets: over a single true
+/// stint the union converges to exactly the five on the floor. A substitution is
+/// precisely the first play whose set would push a team's running union past
+/// five — the only point a sixth distinct player can appear — so we close the
+/// stint there and seed the next one from that play. Either team subbing ends
+/// the (joint) stint.
+///
+/// Limitation: if a stint's fifth player is never reported, or a sub lands while
+/// the union is still below five, that boundary is missed and the merged stint
+/// runs long; the downstream box-minute clamp (`compute_pbp_lineups`) drops the
+/// physically-impossible result, so it degrades rather than corrupts.
 fn stints_from_onfloor_rows(raw: &[RawPlay], code_to_uuid: &HashMap<String, Uuid>) -> Vec<Stint> {
-    let resolve = |s: &Option<String>| -> Vec<Uuid> {
-        let mut v: Vec<Uuid> = s
-            .as_deref()
+    let resolve = |s: &Option<String>| -> BTreeSet<Uuid> {
+        s.as_deref()
             .unwrap_or("")
             .split(',')
             .filter(|c| !c.is_empty())
             .filter_map(|c| code_to_uuid.get(c).copied())
-            .collect();
-        v.sort();
-        v.dedup();
-        v
+            .collect()
     };
 
     let mut stints = Vec::new();
-    let mut cur: Option<Builder> = None;
+    let mut cur: Option<OnFloorSeg> = None;
     let (mut last_home, mut last_vis) = (0i32, 0i32);
     let (mut prev_home, mut prev_vis) = (0i32, 0i32);
 
@@ -294,17 +341,22 @@ fn stints_from_onfloor_rows(raw: &[RawPlay], code_to_uuid: &HashMap<String, Uuid
         if home.is_empty() || vis.is_empty() {
             continue;
         }
+        // Extend the open stint while neither team's running union would exceed
+        // five; the first play that would push it past five is a substitution,
+        // so close the stint and seed the next one from this play.
         match cur.as_mut() {
-            Some(b) if b.home == home && b.vis == vis => {
-                b.end_seq = r.seq;
-                b.end_home_score = last_home;
-                b.end_vis_score = last_vis;
+            Some(seg) if seg.home.union(&home).count() <= 5 && seg.vis.union(&vis).count() <= 5 => {
+                seg.home.extend(home);
+                seg.vis.extend(vis);
+                seg.end_seq = r.seq;
+                seg.end_home_score = last_home;
+                seg.end_vis_score = last_vis;
             }
             _ => {
-                if let Some(b) = cur.take() {
-                    stints.push(finish(b, &mut prev_home, &mut prev_vis));
+                if let Some(done) = cur.take() {
+                    stints.push(finish_onfloor(done, &mut prev_home, &mut prev_vis));
                 }
-                cur = Some(Builder {
+                cur = Some(OnFloorSeg {
                     period: r.period,
                     start_seq: r.seq,
                     end_seq: r.seq,
@@ -316,8 +368,8 @@ fn stints_from_onfloor_rows(raw: &[RawPlay], code_to_uuid: &HashMap<String, Uuid
             }
         }
     }
-    if let Some(b) = cur.take() {
-        stints.push(finish(b, &mut prev_home, &mut prev_vis));
+    if let Some(seg) = cur.take() {
+        stints.push(finish_onfloor(seg, &mut prev_home, &mut prev_vis));
     }
     stints
 }
@@ -670,6 +722,69 @@ mod tests {
     // Home starters 1..5, vis starters 11..15.
     fn starters() -> (Vec<Uuid>, Vec<Uuid>) {
         ((1..=5).map(id).collect(), (11..=15).map(id).collect())
+    }
+
+    // natstat-code map for the on-floor tests: code "N" -> Uuid::from_u128(N).
+    fn codes() -> HashMap<String, Uuid> {
+        (1u128..=30).map(|n| (n.to_string(), id(n))).collect()
+    }
+
+    // A play carrying comma-separated on-floor codes (the only fields the
+    // on-floor stint builder reads besides seq/period/score).
+    fn onfloor(seq: i32, home: &str, vis: &str, sh: i32, sv: i32) -> RawPlay {
+        RawPlay {
+            seq,
+            period: 1,
+            team_id: None,
+            player_id: None,
+            description: None,
+            tags: vec![],
+            score_home: Some(sh),
+            score_vis: Some(sv),
+            onfloor_home: Some(home.to_string()),
+            onfloor_vis: Some(vis.to_string()),
+            clock: None,
+        }
+    }
+
+    #[test]
+    fn onfloor_union_reconstructs_one_five_from_flickering_four_man_rows() {
+        // NatStat lists only four of the five on most plays. Each row below is a
+        // different 4-man subset of home {1..5} / vis {11..15}; their union is
+        // the true five. Keying on the exact per-play set would emit three 4-man
+        // micro-stints — the union path must emit ONE complete 5-man stint.
+        let raw = vec![
+            onfloor(1, "1,2,3,4", "11,12,13,14", 0, 0),
+            onfloor(2, "2,3,4,5", "12,13,14,15", 2, 0),
+            onfloor(3, "1,3,4,5", "11,13,14,15", 2, 3),
+        ];
+        let stints = stints_from_onfloor_rows(&raw, &codes());
+        assert_eq!(stints.len(), 1, "flickering 4-man rows must coalesce");
+        assert_eq!(stints[0].home_lineup, (1..=5).map(id).collect::<Vec<_>>());
+        assert_eq!(stints[0].vis_lineup, (11..=15).map(id).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn onfloor_union_splits_when_a_sixth_player_appears() {
+        // Home subs: player 1 out, 6 in. The first row whose union exceeds five
+        // is the substitution boundary — close the first five, open the next.
+        let raw = vec![
+            onfloor(1, "1,2,3,4", "11,12,13,14", 0, 0),
+            onfloor(2, "1,2,3,4,5", "11,12,13,14,15", 2, 0),
+            // 6 enters for 1: union {1,2,3,4,5} ∪ {2,3,4,5,6} = 6 -> boundary.
+            onfloor(3, "2,3,4,6", "11,12,13,14", 2, 2),
+            onfloor(4, "3,4,5,6", "12,13,14,15", 4, 2),
+        ];
+        let stints = stints_from_onfloor_rows(&raw, &codes());
+        assert_eq!(stints.len(), 2, "a sixth player must start a new stint");
+        assert_eq!(stints[0].home_lineup, (1..=5).map(id).collect::<Vec<_>>());
+        assert_eq!(
+            stints[1].home_lineup,
+            [2, 3, 4, 5, 6].iter().map(|&n| id(n)).collect::<Vec<_>>()
+        );
+        // Score deltas chain across the boundary, not double-counted.
+        assert_eq!(stints[0].home_score_delta, 2);
+        assert_eq!(stints[1].home_score_delta, 2);
     }
 
     fn play(seq: i32, score_home: i32, score_vis: i32) -> ReplayPlay {

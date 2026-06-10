@@ -535,7 +535,10 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             usage_rate_pct, offensive_rating_pct, defensive_rating_pct,
             player_sos_pct,
             ast_pct_pct, tov_pct_pct, mpg_pct, topg_pct,
-            orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct
+            orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct, ft_rate_pct,
+            paint_rate_pct, paint_fg_pct_pct, perimeter_fg_pct_pct,
+            transition_pts_per40_pct, second_chance_pts_per40_pct,
+            points_off_turnovers_per40_pct, fouls_drawn_per40_pct
         )
         WITH best AS (
             SELECT DISTINCT ON (player_id)
@@ -543,12 +546,20 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
                 fg_pct, tp_pct, ft_pct, effective_fg_pct, true_shooting_pct,
                 usage_rate, offensive_rating, defensive_rating,
                 player_sos, ast_pct, tov_pct, minutes_per_game, topg,
-                orb_pct, drb_pct, stl_pct, blk_pct, ft_rate
+                orb_pct, drb_pct, stl_pct, blk_pct, ft_rate,
+                paint_rate, paint_fg_pct, perimeter_fg_pct,
+                transition_pts_per40, second_chance_pts_per40,
+                points_off_turnovers_per40, fouls_drawn_per40
             FROM player_season_stats
             WHERE season = $1
               AND games_played >= 10
               AND minutes_per_game >= 10
-            ORDER BY player_id, games_played DESC
+            -- `team_id` is a deterministic tiebreak so a transfer with two
+            -- team-rows tied on games_played always resolves to the same row
+            -- (and matches the `rates` CTE in queries::get_player_pbp_profile,
+            -- which orders identically — so a displayed rate and its percentile
+            -- come from the same team-row).
+            ORDER BY player_id, games_played DESC, team_id
         )
         SELECT
             gen_random_uuid(),
@@ -576,7 +587,23 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             PERCENT_RANK() OVER (ORDER BY b.drb_pct),
             PERCENT_RANK() OVER (ORDER BY b.stl_pct),
             PERCENT_RANK() OVER (ORDER BY b.blk_pct),
-            PERCENT_RANK() OVER (ORDER BY b.ft_rate)
+            PERCENT_RANK() OVER (ORDER BY b.ft_rate),
+            -- Tier-1 PBP rate percentiles, ranked over NON-NULL values only.
+            -- A plain PERCENT_RANK would count no-PBP players (NULL, sorted last)
+            -- in its denominator, compressing every real percentile. That's ~1%
+            -- with a full season loaded but balloons in-season (early-season the
+            -- partition is mostly sparse/NULL PBP), so we rank explicitly:
+            --   (rank among non-NULL − 1) / (count of non-NULL − 1)
+            -- which is PERCENT_RANK restricted to players who have the stat.
+            -- count(x) OVER () counts non-NULLs; rank() puts NULLs last so they
+            -- never shift a real row's rank; the CASE keeps no-data rows badge-less.
+            CASE WHEN b.paint_rate IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.paint_rate) - 1.0) / nullif(count(b.paint_rate) OVER () - 1, 0) END,
+            CASE WHEN b.paint_fg_pct IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.paint_fg_pct) - 1.0) / nullif(count(b.paint_fg_pct) OVER () - 1, 0) END,
+            CASE WHEN b.perimeter_fg_pct IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.perimeter_fg_pct) - 1.0) / nullif(count(b.perimeter_fg_pct) OVER () - 1, 0) END,
+            CASE WHEN b.transition_pts_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.transition_pts_per40) - 1.0) / nullif(count(b.transition_pts_per40) OVER () - 1, 0) END,
+            CASE WHEN b.second_chance_pts_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.second_chance_pts_per40) - 1.0) / nullif(count(b.second_chance_pts_per40) OVER () - 1, 0) END,
+            CASE WHEN b.points_off_turnovers_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.points_off_turnovers_per40) - 1.0) / nullif(count(b.points_off_turnovers_per40) OVER () - 1, 0) END,
+            CASE WHEN b.fouls_drawn_per40 IS NULL THEN NULL ELSE (rank() OVER (ORDER BY b.fouls_drawn_per40) - 1.0) / nullif(count(b.fouls_drawn_per40) OVER () - 1, 0) END
         FROM best b
         ON CONFLICT (player_id, season) DO UPDATE
         SET ppg_pct = EXCLUDED.ppg_pct,
@@ -601,7 +628,14 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             drb_pct_pct = EXCLUDED.drb_pct_pct,
             stl_pct_pct = EXCLUDED.stl_pct_pct,
             blk_pct_pct = EXCLUDED.blk_pct_pct,
-            ft_rate_pct = EXCLUDED.ft_rate_pct",
+            ft_rate_pct = EXCLUDED.ft_rate_pct,
+            paint_rate_pct = EXCLUDED.paint_rate_pct,
+            paint_fg_pct_pct = EXCLUDED.paint_fg_pct_pct,
+            perimeter_fg_pct_pct = EXCLUDED.perimeter_fg_pct_pct,
+            transition_pts_per40_pct = EXCLUDED.transition_pts_per40_pct,
+            second_chance_pts_per40_pct = EXCLUDED.second_chance_pts_per40_pct,
+            points_off_turnovers_per40_pct = EXCLUDED.points_off_turnovers_per40_pct,
+            fouls_drawn_per40_pct = EXCLUDED.fouls_drawn_per40_pct",
     )
     .bind(season)
     .execute(pool)
@@ -1578,6 +1612,18 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
         .bind(season)
         .execute(pool)
         .await?;
+        // Clear the season rate rollup too — its source columns above are now
+        // NULL, so a stale rollup would be inconsistent.
+        sqlx::query(
+            "UPDATE player_season_stats \
+             SET paint_rate = NULL, paint_fg_pct = NULL, perimeter_fg_pct = NULL, \
+                 transition_pts_per40 = NULL, second_chance_pts_per40 = NULL, \
+                 points_off_turnovers_per40 = NULL, fouls_drawn_per40 = NULL \
+             WHERE season = $1",
+        )
+        .bind(season)
+        .execute(pool)
+        .await?;
         return Ok(0);
     }
 
@@ -1621,6 +1667,76 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
     .execute(pool)
     .await?;
     let n = res.rows_affected();
+
+    // Clean-recompute the season rates: clear the season first, then repopulate
+    // covered players below. Without this, a player who lost ALL PBP coverage
+    // since the last run (rare — coverage normally only grows) would keep a stale
+    // rate, since the rollup UPDATE only touches (player_id, team_id) pairs still
+    // present in PBP-covered games. Symmetric with the corrupt-gate clear above.
+    sqlx::query(
+        "UPDATE player_season_stats \
+         SET paint_rate = NULL, paint_fg_pct = NULL, perimeter_fg_pct = NULL, \
+             transition_pts_per40 = NULL, second_chance_pts_per40 = NULL, \
+             points_off_turnovers_per40 = NULL, fouls_drawn_per40 = NULL \
+         WHERE season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    // Season rate rollup: fold the per-game tag columns just written into the
+    // comparable RATE forms on player_season_stats (Tier-1 feature substrate —
+    // see migration 036 / docs/pbp_utilization_scope.md). Rates, not counts, so
+    // they're robust to NatStat's season-varying tag density; aggregated only
+    // over PBP-covered games (`paint_fga IS NOT NULL`) so each rate's numerator
+    // and denominator share the same game set. Grouped by (player_id, team_id)
+    // to match player_season_stats' grain (a mid-season transfer has one row per
+    // team). NULL when a player logged no PBP-covered games.
+    sqlx::query(
+        "UPDATE player_season_stats pss
+         SET paint_rate                 = r.paint_rate,
+             paint_fg_pct               = r.paint_fg_pct,
+             perimeter_fg_pct           = r.perimeter_fg_pct,
+             transition_pts_per40       = r.transition_pts_per40,
+             second_chance_pts_per40    = r.second_chance_pts_per40,
+             points_off_turnovers_per40 = r.points_off_turnovers_per40,
+             fouls_drawn_per40          = r.fouls_drawn_per40
+         FROM (
+             SELECT
+                 player_id, team_id,
+                 -- Share of TRACKED shots in the paint. Denominator is the PBP
+                 -- total (paint + perimeter), NOT box `fga` — the tag stream and
+                 -- the box FGA disagree per game (a low-box-FGA player can carry
+                 -- more PBP paint tags than box attempts), and dividing across the
+                 -- two sources let paint_rate run past 1. paint_fga is a subset of
+                 -- the PBP total by construction, so this is bounded to [0,1].
+                 CASE WHEN sum(paint_fga + perimeter_fga) > 0
+                      THEN sum(paint_fga)::double precision / sum(paint_fga + perimeter_fga)
+                 END AS paint_rate,
+                 -- FG% clamped to 1.0: makes/attempts are separate tags, so a rare
+                 -- play tags a make without its attempt and fgm can edge past fga.
+                 CASE WHEN sum(paint_fga) > 0
+                      THEN LEAST(1.0, sum(paint_fgm)::double precision / sum(paint_fga))
+                 END AS paint_fg_pct,
+                 CASE WHEN sum(perimeter_fga) > 0
+                      THEN LEAST(1.0, sum(perimeter_fgm)::double precision / sum(perimeter_fga))
+                 END AS perimeter_fg_pct,
+                 sum(transition_pts)       * 40.0 / nullif(sum(minutes), 0) AS transition_pts_per40,
+                 sum(second_chance_pts)    * 40.0 / nullif(sum(minutes), 0) AS second_chance_pts_per40,
+                 sum(points_off_turnovers) * 40.0 / nullif(sum(minutes), 0) AS points_off_turnovers_per40,
+                 sum(fouls_drawn)          * 40.0 / nullif(sum(minutes), 0) AS fouls_drawn_per40
+             FROM player_game_stats
+             WHERE season = $1 AND paint_fga IS NOT NULL
+             GROUP BY player_id, team_id
+         ) r
+         WHERE pss.player_id = r.player_id
+           AND pss.team_id = r.team_id
+           AND pss.season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
     info!(season, updated = n, "computed PBP per-player aggregates");
     Ok(n)
 }
@@ -1852,6 +1968,20 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     // ones. The raw rows stay in `lineup_stints` (a serving filter, not a delete).
     // COALESCE to a huge ceiling when box minutes are unknown — keep a row we
     // can't prove impossible. See ROADMAP "SUB-replay lineup drift".
+    //
+    // **0-minute box rows are treated as UNKNOWN, not as a 0-minute ceiling**
+    // (`pgs.minutes > 0`, 2026-06-08). NatStat occasionally records a player with
+    // 0 box minutes who nonetheless appears in the on-floor lineup data (~1.1k
+    // such player-games in 2026, sometimes even flagged `starter=t`) — a box-side
+    // artifact, not a real 0-minute member. Without this guard, one such member
+    // collapses `min(box) + 1.0` to 1.0 and nukes an otherwise-valid bench
+    // lineup, which on `onfloor` data was the single biggest source of the
+    // false-positive invalidations that gutted high-minute starters' OFF samples
+    // (~20% of all clamp-killed minutes). Excluding the 0/NULL member from the
+    // min still constrains the lineup by its *positive*-minute members, so a
+    // genuine over-merge (the union reconstruction's known limit) is unaffected —
+    // it over-runs those members too. If EVERY member is 0/unknown, the subquery
+    // is empty and COALESCE keeps the row (can't prove it impossible).
     sqlx::query(
         "CREATE TEMPORARY TABLE _game_lineups ON COMMIT DROP AS
          SELECT ls.game_id, ls.team_id, ls.lineup,
@@ -1865,6 +1995,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 (sum(ls.seconds) / 60.0) <= COALESCE((
                     SELECT min(pgs.minutes) FROM player_game_stats pgs
                     WHERE pgs.game_id = ls.game_id AND pgs.player_id = ANY(ls.lineup)
+                      AND pgs.minutes > 0
                 ), 1e9) + 1.0                  AS valid
          FROM lineup_stints ls
          WHERE ls.season = $1 AND array_length(ls.lineup, 1) = 5
@@ -1915,13 +2046,33 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     .execute(&mut *tx)
     .await?;
 
-    // Player on/off splits (item "A"). Reuses the same validity-clamped
-    // `_game_lineups` set so on/off reconciles with the served aggregates and
-    // plus/minus. ON = the player's own valid stints; OFF = his team's remaining
-    // valid stints in the SAME games (team totals − ON), so a game he never
-    // played contributes nothing to either side (isolates rotation from
-    // availability). Rates are per-100-possession, NULL-guarded against a side
-    // with zero possessions (a player who literally never sat has no OFF rate).
+    // Player on/off splits (item "A"). ON = team offense/defense per 100 poss
+    // with the player on the floor; OFF = with him on the bench; `net_on_off` is
+    // the swing. Restricted to games he appeared in (isolates rotation from
+    // availability — a DNP contributes to neither side). Rates are
+    // per-100-possession, NULL-guarded against a side with zero possessions.
+    //
+    // **Unlike the top-lineup aggregates, on/off reads ALL stints (any lineup
+    // size), NOT the 5-man-only, box-minute-clamped `_game_lineups` set.**
+    // on/off attributes by individual *presence*, so a 3/4-man stint is still
+    // valid evidence for a known player's split — we don't need a clean 5-man
+    // unit. This matters because ~19% of 2026 onfloor player codes don't resolve
+    // to a roster row (deep-bench / walk-on garbage-time players absent from
+    // NatStat's DB); when one is the unresolved 5th, the stint stays sub-5-man
+    // and the 5-man rollup drops it — which disproportionately erased the bench
+    // (OFF) windows of high-minute starters. Reading all stints recovers them.
+    //
+    // **Per-player box-minute clamp** (replaces the lineup clamp for this
+    // surface): the onfloor reconstruction over-credits a high-minute player's
+    // ON time, because his brief rests fall in sparse-onfloor windows where it
+    // never registers him leaving (an iron-man reads ~94% on-floor vs ~86% by
+    // box). We cap each player's per-game ON accumulators at his box minutes
+    // (scale DOWN only — `LEAST(1.0, box/on)`), moving the excess to OFF. This
+    // recovers an honest off-court sample for exactly the starters raw on/off
+    // failed (Acuff 2026: OFF 11 → ~270 poss). We never scale UP: when the
+    // reconstruction UNDER-credits, we can't tell which possessions were his, so
+    // we leave them (he stays slightly under — the conservative direction). A
+    // player with no positive box-minute row that game is left unscaled.
     sqlx::query(
         "INSERT INTO player_on_off
              (season, team_id, player_id, games,
@@ -1930,60 +2081,69 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
               off_minutes, off_possessions_for, off_possessions_against,
               off_points_for, off_points_against, off_ortg, off_drtg, off_net_rtg,
               net_on_off, source)
-         WITH valid AS (
-             SELECT game_id, team_id, lineup, pf, pa, posf, posa, secs, has_onfloor
-             FROM _game_lineups WHERE valid
+         WITH stints AS (   -- ALL reconstructed stints (any size), this season
+             SELECT game_id, team_id, lineup,
+                    points_for pf, points_against pa,
+                    possessions_for posf, possessions_against posa, seconds secs,
+                    (source = 'onfloor') AS has_onfloor
+             FROM lineup_stints WHERE season = $1
          ),
-         team_game AS (   -- team totals per game over valid lineups
+         team_game AS (   -- team totals per game over ALL stints
              SELECT game_id, team_id,
                     sum(pf) tpf, sum(pa) tpa, sum(posf) tposf, sum(posa) tposa, sum(secs) tsecs
-             FROM valid GROUP BY game_id, team_id
+             FROM stints GROUP BY game_id, team_id
          ),
-         player_on AS (   -- a player's ON totals per game (he is one of the five)
-             -- DISTINCT inside the lineup: a SUB-replay artifact can emit a
-             -- 5-array with a duplicated player ({A,A,B,C,D} — really a 4-man
-             -- phantom). Counting that lineup twice for A would push his ON
-             -- total above the team total and drive OFF negative, so each
-             -- lineup contributes to a player exactly once.
+         player_on AS (   -- a player's raw ON totals per game
+             -- DISTINCT inside the lineup: a reconstruction artifact can emit a
+             -- lineup array with a duplicated player; each stint contributes to
+             -- a player exactly once.
              --
-             -- JOIN players … team_id = v.team_id: credit a player ONLY for his
-             -- own team's lineups. The replay/onfloor resolution occasionally
+             -- JOIN players … team_id = s.team_id: credit a player ONLY for his
+             -- own team's stints. The replay/onfloor resolution occasionally
              -- maps two same-named players on different teams to one UUID, so a
              -- player's UUID can leak into another team's lineup arrays. Keying
              -- on his canonical `players.team_id` (the box-score authority) drops
              -- those cross-team phantoms, so (season, player_id) is unique and a
-             -- player's on/off is never a different team's. (The underlying
-             -- lineup_aggregates contamination is a separate, pre-existing
-             -- resolution bug — see ROADMAP.)
-             SELECT v.game_id, v.team_id, pl.p AS player_id,
-                    sum(v.pf) opf, sum(v.pa) opa, sum(v.posf) oposf,
-                    sum(v.posa) oposa, sum(v.secs) osecs, bool_or(v.has_onfloor) hon
-             FROM valid v
-             CROSS JOIN LATERAL (SELECT DISTINCT p FROM unnest(v.lineup) AS p) pl
-             JOIN players pp ON pp.id = pl.p AND pp.season = $1 AND pp.team_id = v.team_id
-             GROUP BY v.game_id, v.team_id, pl.p
+             -- player's on/off is never a different team's.
+             SELECT s.game_id, s.team_id, pl.p AS player_id,
+                    sum(s.pf) opf, sum(s.pa) opa, sum(s.posf) oposf,
+                    sum(s.posa) oposa, sum(s.secs) osecs, bool_or(s.has_onfloor) hon
+             FROM stints s
+             CROSS JOIN LATERAL (SELECT DISTINCT p FROM unnest(s.lineup) AS p) pl
+             JOIN players pp ON pp.id = pl.p AND pp.season = $1 AND pp.team_id = s.team_id
+             GROUP BY s.game_id, s.team_id, pl.p
          ),
-         per_game AS (    -- off = team total − on, only for games he appeared in
+         scaled AS (   -- cap each (player, game) ON at his box minutes (scale DOWN only)
+             SELECT o.game_id, o.team_id, o.player_id, o.hon,
+                    o.opf, o.opa, o.oposf, o.oposa, o.osecs,
+                    LEAST(1.0, COALESCE(b.box_secs, o.osecs) / nullif(o.osecs, 0)) AS sc
+             FROM player_on o
+             LEFT JOIN (
+                 SELECT game_id, player_id, minutes * 60.0 AS box_secs
+                 FROM player_game_stats WHERE season = $1 AND minutes > 0
+             ) b ON b.game_id = o.game_id AND b.player_id = o.player_id
+         ),
+         per_game AS (    -- off = team total − scaled on, for games he appeared in
              -- GREATEST(0, …): a per-stint possession estimate can go slightly
-             -- negative in a short/garbled stint (e.g. an ORB with no FGA), so
-             -- when a player sits out only such a stint his ON total can edge a
-             -- hair above the team total. Clamp at 0 — a tiny/negative off
+             -- negative in a short/garbled stint (e.g. an ORB with no FGA), so a
+             -- tiny off slice can edge below 0. Clamp at 0 — a tiny/negative off
              -- sample then yields a NULL rate (nullif below), the honest
              -- no-meaningful-off-court-sample outcome.
-             SELECT o.team_id, o.player_id, o.hon,
-                    o.osecs, o.oposf, o.oposa, o.opf, o.opa,
-                    GREATEST(0, tg.tsecs - o.osecs)  AS off_secs,
-                    GREATEST(0, tg.tposf - o.oposf)  AS off_posf,
-                    GREATEST(0, tg.tposa - o.oposa)  AS off_posa,
-                    GREATEST(0, tg.tpf   - o.opf)    AS off_pf,
-                    GREATEST(0, tg.tpa   - o.opa)    AS off_pa
-             FROM player_on o
-             JOIN team_game tg ON tg.game_id = o.game_id AND tg.team_id = o.team_id
+             SELECT s.team_id, s.player_id, s.hon,
+                    s.sc * s.osecs AS on_secs, s.sc * s.oposf AS on_posf,
+                    s.sc * s.oposa AS on_posa, s.sc * s.opf AS on_pf, s.sc * s.opa AS on_pa,
+                    GREATEST(0, tg.tsecs - s.sc * s.osecs) AS off_secs,
+                    GREATEST(0, tg.tposf - s.sc * s.oposf) AS off_posf,
+                    GREATEST(0, tg.tposa - s.sc * s.oposa) AS off_posa,
+                    GREATEST(0, tg.tpf   - s.sc * s.opf)   AS off_pf,
+                    GREATEST(0, tg.tpa   - s.sc * s.opa)   AS off_pa
+             FROM scaled s
+             JOIN team_game tg ON tg.game_id = s.game_id AND tg.team_id = s.team_id
          ),
          roll AS (
              SELECT team_id, player_id, count(*) games, bool_or(hon) hon,
-                    sum(osecs) on_secs, sum(oposf) on_posf, sum(oposa) on_posa,
-                    sum(opf) on_pf, sum(opa) on_pa,
+                    sum(on_secs) on_secs, sum(on_posf) on_posf, sum(on_posa) on_posa,
+                    sum(on_pf) on_pf, sum(on_pa) on_pa,
                     sum(off_secs) off_secs, sum(off_posf) off_posf, sum(off_posa) off_posa,
                     sum(off_pf) off_pf, sum(off_pa) off_pa
              FROM per_game GROUP BY team_id, player_id
@@ -2001,15 +2161,19 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                   - (100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0)),
                 CASE WHEN hon THEN 'onfloor' ELSE 'replay' END
          FROM roll
-         -- Keep only rows with a real on-court sample on BOTH ends. Anyone with
-         -- genuine floor time faces offense and defense, so on_posf>0 AND
-         -- on_posa>0 holds for every real rotation player; the rows it drops are
-         -- 1-game cameos whose handful of stints net a non-positive possession
-         -- estimate on one side (per-stint counts can go slightly negative). The
-         -- AND also guarantees positive rate denominators, so no garbage ortg/
-         -- drtg. The UI hides the panel for a dropped player rather than
-         -- rendering NULL/nonsense rates.
-         WHERE on_posf > 0 AND on_posa > 0",
+         -- Minimum ON sample on BOTH ends (>= 100 possessions). on/off is only
+         -- meaningful for a real rotation player: below ~100 on-court possessions
+         -- the ON rating is noise (a benchwarmer's handful of garbage-time
+         -- possessions can read ±600 per 100), and since reading ALL stints now
+         -- gives every player who logged a few minutes a tiny ON slice, the old
+         -- `> 0` gate let those through and they topped the swing rankings. 100
+         -- matches the panel's existing OFF small-sample threshold; it drops only
+         -- sub-~3-min/game players (a 9-min/game role player clears it easily),
+         -- and the GREATEST-clamped OFF side stays meaningful via team-total
+         -- subtraction. The UI hides the panel/column for a dropped player.
+         -- (per-stint counts can go slightly negative, so the >= also guards the
+         -- rate denominators against a non-positive cameo sample.)
+         WHERE on_posf >= 100 AND on_posa >= 100",
     )
     .bind(season)
     .execute(&mut *tx)
