@@ -51,6 +51,16 @@ if GBPM_VARIANT not in _GBPM_COLUMNS:
 # keep these columns OUT of any dropna completeness filter.
 PBP_FEATURES = os.environ.get("PBP_FEATURES", "0").strip() == "1"
 
+
+def completeness_subset(cols: list[str]) -> list[str]:
+    """Columns a row must have to count as feature-complete. PBP diff
+    features are excluded: they're NaN for every pre-2020 season by source
+    coverage (contextual tags don't exist in those feeds), so a dropna over
+    them would silently discard 7 of 12 seasons. LightGBM routes their NaN
+    natively instead. Every consumer that dropna-filters the feature matrix
+    must go through this helper, not the raw feature list."""
+    return [c for c in cols if not c.startswith(("diff_pbp_", "sum_pbp_"))]
+
 # ELO parameters
 ELO_K = 20.0
 ELO_HOME_ADV = 3.5
