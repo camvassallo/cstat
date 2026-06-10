@@ -25,13 +25,12 @@ async fn pbp_season_rates_reconcile() {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
     let pool = PgPoolOptions::new().connect(&url).await.unwrap();
 
-    let total: i64 = sqlx::query(
-        "SELECT count(*) FROM player_season_stats WHERE paint_rate IS NOT NULL",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
+    let total: i64 =
+        sqlx::query("SELECT count(*) FROM player_season_stats WHERE paint_rate IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
     assert!(
         total > 0,
         "no PBP season rates — run `compute` for a PBP season first"
@@ -49,7 +48,10 @@ async fn pbp_season_rates_reconcile() {
     .await
     .unwrap()
     .get(0);
-    assert_eq!(bad_share, 0, "{bad_share} rows with a share rate outside [0,1]");
+    assert_eq!(
+        bad_share, 0,
+        "{bad_share} rows with a share rate outside [0,1]"
+    );
 
     // (2) Per-40 context-scoring rates are non-negative (counting stats / time).
     let neg_rate: i64 = sqlx::query(
@@ -127,7 +129,10 @@ async fn pbp_season_rates_reconcile() {
     .await
     .unwrap()
     .get(0);
-    assert_eq!(drift, 0, "{drift} rows where stored paint_rate != recomputed from per-game sums");
+    assert_eq!(
+        drift, 0,
+        "{drift} rows where stored paint_rate != recomputed from per-game sums"
+    );
 
     eprintln!("pbp_season_rates: {total} rate rows, all invariants hold");
 }

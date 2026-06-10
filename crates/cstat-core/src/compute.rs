@@ -554,7 +554,12 @@ pub async fn compute_player_percentiles(pool: &PgPool, season: i32) -> Result<u6
             WHERE season = $1
               AND games_played >= 10
               AND minutes_per_game >= 10
-            ORDER BY player_id, games_played DESC
+            -- `team_id` is a deterministic tiebreak so a transfer with two
+            -- team-rows tied on games_played always resolves to the same row
+            -- (and matches the `rates` CTE in queries::get_player_pbp_profile,
+            -- which orders identically — so a displayed rate and its percentile
+            -- come from the same team-row).
+            ORDER BY player_id, games_played DESC, team_id
         )
         SELECT
             gen_random_uuid(),
@@ -1662,6 +1667,22 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
     .execute(pool)
     .await?;
     let n = res.rows_affected();
+
+    // Clean-recompute the season rates: clear the season first, then repopulate
+    // covered players below. Without this, a player who lost ALL PBP coverage
+    // since the last run (rare — coverage normally only grows) would keep a stale
+    // rate, since the rollup UPDATE only touches (player_id, team_id) pairs still
+    // present in PBP-covered games. Symmetric with the corrupt-gate clear above.
+    sqlx::query(
+        "UPDATE player_season_stats \
+         SET paint_rate = NULL, paint_fg_pct = NULL, perimeter_fg_pct = NULL, \
+             transition_pts_per40 = NULL, second_chance_pts_per40 = NULL, \
+             points_off_turnovers_per40 = NULL, fouls_drawn_per40 = NULL \
+         WHERE season = $1",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
 
     // Season rate rollup: fold the per-game tag columns just written into the
     // comparable RATE forms on player_season_stats (Tier-1 feature substrate —

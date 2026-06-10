@@ -765,7 +765,10 @@ pub async fn get_player_pbp_profile(
                    second_chance_pts_per40, points_off_turnovers_per40, fouls_drawn_per40
             FROM player_season_stats
             WHERE player_id = $1 AND season = $2
-            ORDER BY games_played DESC NULLS LAST
+            -- Same ordering as the percentile pass (compute_player_percentiles'
+            -- DISTINCT ON), incl. the `team_id` tiebreak, so a transfer's
+            -- displayed rate and its percentile come from the same team-row.
+            ORDER BY games_played DESC NULLS LAST, team_id
             LIMIT 1
         ),
         pct AS (
