@@ -494,7 +494,7 @@ async fn game_codes_for_dates(
 }
 
 /// `teams.natstat_id (abbrev) -> teams.id` for the season.
-async fn team_abbrev_map(
+pub(crate) async fn team_abbrev_map(
     pool: &PgPool,
     season: i32,
 ) -> Result<HashMap<String, Uuid>, NatStatError> {
@@ -507,7 +507,10 @@ async fn team_abbrev_map(
 }
 
 /// `players.natstat_id -> players.id` for the season.
-async fn player_map(pool: &PgPool, season: i32) -> Result<HashMap<String, Uuid>, NatStatError> {
+pub(crate) async fn player_map(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<String, Uuid>, NatStatError> {
     let rows: Vec<(Uuid, String)> =
         sqlx::query_as("SELECT id, natstat_id FROM players WHERE season = $1")
             .bind(season)

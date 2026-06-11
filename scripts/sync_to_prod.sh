@@ -60,8 +60,10 @@ done
 
 # Tables to skip on both dump and truncate sides. See the header comment for
 # the rationale on each (api_cache / _sqlx_migrations: managed elsewhere;
-# play_by_play / lineup_stints: local-only raw PBP, never shipped to prod).
-EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints")
+# play_by_play / lineup_stints: local-only raw PBP, never shipped to prod;
+# natstat_lineups / natstat_lineup_games: local-only lineups-object capture,
+# prod serves only the derived lineup_aggregates / player_on_off).
+EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and
