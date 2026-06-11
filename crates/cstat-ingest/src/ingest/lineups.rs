@@ -184,9 +184,17 @@ pub async fn ingest_lineups_for_season(
                     report.games_no_lineups += 1;
                 }
             }
+            // An exhausted call budget is account-wide, not per-game: abort the
+            // sweep cleanly (ledger intact, resumable) instead of churning
+            // through every remaining game recording bogus 'error' rows.
+            Err(e) if is_rate_limit_error(&e) => {
+                tracing::error!(season, gamecode, error = %e, "lineups: rate limit hit — aborting sweep (resume later; ledger is intact)");
+                return Err(e);
+            }
             Err(e) => {
-                // Per-game errors must not kill a multi-hour sweep: record in
-                // the ledger (so the default rerun skips it) and keep going.
+                // Other per-game errors must not kill a multi-hour sweep:
+                // record in the ledger (so the default rerun skips it) and
+                // keep going.
                 warn!(season, gamecode, error = %e, "lineups: game errored — recorded, continuing");
                 record_status(pool, game_id, season, "error", 0).await?;
                 report.games_errored += 1;
@@ -207,6 +215,21 @@ pub async fn ingest_lineups_for_season(
 
     info!(season, %report, "lineups capture finished");
     Ok(report)
+}
+
+/// Rate-limit-shaped errors that should abort a sweep rather than be recorded
+/// per game. NatStat signals exhaustion as `OUT_OF_CALLS` (API-level) or
+/// HTTP 429 (the client retries 429 with backoff first, so reaching here
+/// means the budget is genuinely gone).
+fn is_rate_limit_error(e: &NatStatError) -> bool {
+    match e {
+        NatStatError::ApiError { code, .. } => {
+            let c = code.to_uppercase();
+            c.contains("OUT_OF_CALLS") || c.contains("RATE")
+        }
+        NatStatError::HttpStatus { status, .. } => *status == 429,
+        _ => false,
+    }
 }
 
 /// Fetch one game's hydrate and parse its lineup units. An absent lineups

@@ -379,6 +379,24 @@ impl NatStatClient {
                 return Err(NatStatError::ApiError { code, message });
             }
 
+            // NatStat's server-side throttle escalates before hard 429s /
+            // OUT_OF_CALLS — surface any non-zero level so an over-budget run
+            // is visible while it's still only being slowed, not refused.
+            // (The advertised ratelimit-remaining counter is unreliable —
+            // observed pinned at 500 across 600+ calls/hr on both v3 and v4.)
+            if let Some(level) = body
+                .get("user")
+                .and_then(|u| u.get("throttle-level"))
+                .and_then(|t| t.as_str())
+                && level != "0"
+            {
+                warn!(
+                    endpoint,
+                    throttle_level = level,
+                    "NatStat is throttling this account — consider lowering NATSTAT_MAX_PER_HOUR"
+                );
+            }
+
             // Cache the successful response
             let ttl = ttl.unwrap_or(self.default_ttl);
             self.cache.set(&cache_key, &cache_key, &body, ttl).await?;
