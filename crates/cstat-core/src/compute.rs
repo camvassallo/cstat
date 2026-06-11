@@ -2380,8 +2380,8 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
              -- GREATEST(0, …): a per-stint possession estimate can go slightly
              -- negative in a short/garbled stint (e.g. an ORB with no FGA), so a
              -- tiny off slice can edge below 0. Clamp at 0 — a tiny/negative off
-             -- sample then yields a NULL rate (nullif below), the honest
-             -- no-meaningful-off-court-sample outcome.
+             -- sample then yields a NULL rate (the >=10-possession floor in the
+             -- final SELECT), the honest no-meaningful-off-court-sample outcome.
              SELECT s.team_id, s.player_id, s.hon, s.hnat,
                     s.sc * s.osecs AS on_secs, s.sc * s.oposf AS on_posf,
                     s.sc * s.oposa AS on_posa, s.sc * s.opf AS on_pf, s.sc * s.opa AS on_pa,
@@ -2408,11 +2408,21 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 100.0 * on_pa / nullif(on_posa, 0),
                 100.0 * on_pf / nullif(on_posf, 0) - 100.0 * on_pa / nullif(on_posa, 0),
                 off_secs / 60.0, off_posf, off_posa, off_pf::int, off_pa::int,
-                100.0 * off_pf / nullif(off_posf, 0),
-                100.0 * off_pa / nullif(off_posa, 0),
-                100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0),
-                (100.0 * on_pf / nullif(on_posf, 0) - 100.0 * on_pa / nullif(on_posa, 0))
-                  - (100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0)),
+                -- OFF rates need a real possession floor, not nullif(x, 0):
+                -- per-game possession estimates carry ~±1-2 noise, so an
+                -- iron-man's OFF possessions can sum to a float residual
+                -- (~1e-13) while his integer OFF points stay nonzero — the
+                -- division then mints a 1e16 rating. Anything under ~10
+                -- possessions is indistinguishable from zero across a season,
+                -- so the rate is NULL (the honest no-off-court-sample
+                -- outcome; the UI already hides/flags NULL and small samples).
+                CASE WHEN off_posf >= 10 THEN 100.0 * off_pf / off_posf END,
+                CASE WHEN off_posa >= 10 THEN 100.0 * off_pa / off_posa END,
+                CASE WHEN off_posf >= 10 AND off_posa >= 10
+                     THEN 100.0 * off_pf / off_posf - 100.0 * off_pa / off_posa END,
+                CASE WHEN off_posf >= 10 AND off_posa >= 10
+                     THEN (100.0 * on_pf / nullif(on_posf, 0) - 100.0 * on_pa / nullif(on_posa, 0))
+                          - (100.0 * off_pf / off_posf - 100.0 * off_pa / off_posa) END,
                 CASE WHEN hnat THEN 'natstat_lineups'
                      WHEN hon THEN 'onfloor'
                      ELSE 'replay' END

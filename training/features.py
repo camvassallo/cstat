@@ -51,6 +51,13 @@ if GBPM_VARIANT not in _GBPM_COLUMNS:
 # keep these columns OUT of any dropna completeness filter.
 PBP_FEATURES = os.environ.get("PBP_FEATURES", "0").strip() == "1"
 
+# Tier-2 lineup-quality features (expanding lineup-continuity/concentration
+# from `lineup_stints` → diff features). Same contract caveats as
+# PBP_FEATURES: default OFF until a head-to-head backtest accepts them, and
+# NaN where a team has no stint coverage yet (2019 has no lineups at all) —
+# keep out of dropna completeness filters.
+LINEUP_FEATURES = os.environ.get("LINEUP_FEATURES", "0").strip() == "1"
+
 
 def completeness_subset(cols: list[str]) -> list[str]:
     """Columns a row must have to count as feature-complete. PBP diff
@@ -59,7 +66,7 @@ def completeness_subset(cols: list[str]) -> list[str]:
     them would silently discard 7 of 12 seasons. LightGBM routes their NaN
     natively instead. Every consumer that dropna-filters the feature matrix
     must go through this helper, not the raw feature list."""
-    return [c for c in cols if not c.startswith(("diff_pbp_", "sum_pbp_"))]
+    return [c for c in cols if not c.startswith(("diff_pbp_", "sum_pbp_", "diff_lu_"))]
 
 # ELO parameters
 ELO_K = 20.0
@@ -617,6 +624,90 @@ def compute_cumulative_team_pbp(pgs: pd.DataFrame, tgs: pd.DataFrame) -> pd.Data
 
 
 # ---------------------------------------------------------------------------
+# Cumulative team lineup-quality features — expanding window, leak-free
+# ---------------------------------------------------------------------------
+
+# A cumulative top-lineup needs a real sample before its net rating means
+# anything; below this many possessions on either end the value is NaN.
+LINEUP_NET_MIN_POSS = 20.0
+
+
+def compute_cumulative_team_lineups(engine, seasons) -> pd.DataFrame:
+    """
+    Team-level expanding lineup continuity/concentration features (Tier-2),
+    computed strictly from games BEFORE each row's game — same leak-free
+    convention as compute_cumulative_team_stats.
+
+    Built from 5-man `lineup_stints` (sub-5 stints are membership-incomplete
+    and their share varies by source, so they're excluded for cross-source
+    comparability). Lineup arrays are sorted+deduped at insert, so
+    md5(lineup::text) is a stable per-lineup key. Per team, before game i:
+
+      cum_lu_hhi        — Herfindahl index of offensive-possession shares
+                          across distinct lineups to date (rotation
+                          concentration; 1.0 = one lineup plays everything)
+      cum_lu_top_share  — the most-used lineup's share of possessions to date
+      cum_lu_top_net    — that lineup's net rating per 100 to date (NaN until
+                          it has LINEUP_NET_MIN_POSS on both ends)
+
+    Diff features compare two teams in the SAME season, so per-season source
+    density (replay vs onfloor vs natstat stint granularity) cancels. Teams
+    with no stint coverage yet contribute NaN; 2019 has no lineups at all.
+    """
+    q = """
+        SELECT ls.game_id, ls.team_id, g.game_date,
+               md5(ls.lineup::text)        AS lukey,
+               sum(ls.possessions_for)     AS posf,
+               sum(ls.possessions_against) AS posa,
+               sum(ls.points_for)          AS pf,
+               sum(ls.points_against)      AS pa
+        FROM lineup_stints ls
+        JOIN games g ON g.id = ls.game_id
+        WHERE ls.season = ANY(%(seasons)s)
+          AND array_length(ls.lineup, 1) = 5
+        GROUP BY ls.game_id, ls.team_id, g.game_date, md5(ls.lineup::text)
+    """
+    lu = pd.read_sql(q, engine, params={"seasons": list(seasons)})
+    print(f"  lineup stints: {len(lu):,} (game, team, lineup) rows")
+
+    out_rows = []
+    # teams are season-scoped UUIDs, so team_id alone identifies a team-season
+    for team_id, tdf in lu.groupby("team_id", sort=False):
+        acc: dict = {}  # lukey -> [posf, pf, pa, posa]
+        tot_posf = 0.0
+        games_iter = tdf.sort_values(["game_date", "game_id"]).groupby(
+            "game_id", sort=False
+        )
+        # groupby preserves first-appearance order of the sorted frame
+        for game_id, gdf in games_iter:
+            if tot_posf > 0 and acc:
+                hhi = sum((v[0] / tot_posf) ** 2 for v in acc.values())
+                top = max(acc.values(), key=lambda v: v[0])
+                top_share = top[0] / tot_posf
+                if top[0] >= LINEUP_NET_MIN_POSS and top[3] >= LINEUP_NET_MIN_POSS:
+                    top_net = 100.0 * top[1] / top[0] - 100.0 * top[2] / top[3]
+                else:
+                    top_net = np.nan
+            else:
+                hhi, top_share, top_net = np.nan, np.nan, np.nan
+            out_rows.append((team_id, game_id, hhi, top_share, top_net))
+
+            for r in gdf.itertuples(index=False):
+                slot = acc.setdefault(r.lukey, [0.0, 0.0, 0.0, 0.0])
+                slot[0] += r.posf
+                slot[1] += r.pf
+                slot[2] += r.pa
+                slot[3] += r.posa
+                tot_posf += r.posf
+
+    return pd.DataFrame(
+        out_rows,
+        columns=["team_id", "game_id", "cum_lu_hhi", "cum_lu_top_share",
+                 "cum_lu_top_net"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Cumulative roster aggregates — expanding player averages
 # ---------------------------------------------------------------------------
 
@@ -973,6 +1064,12 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
         print("Computing cumulative team PBP tag rates...")
         cum_pbp = compute_cumulative_team_pbp(pgs, tgs)
 
+    # 3c. Cumulative team lineup-quality features (Tier-2; gated)
+    cum_lu = None
+    if LINEUP_FEATURES:
+        print("Computing cumulative team lineup features...")
+        cum_lu = compute_cumulative_team_lineups(engine, seasons)
+
     # 4. Cumulative roster aggregates + rolling form
     print("Computing cumulative roster aggregates...")
     cum_roster = compute_cumulative_roster_stats(pgs, games, torvik)
@@ -1062,6 +1159,18 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
             pbp_ren = cum_pbp.rename(columns={c: f"{prefix}_{c}" for c in pbp_cols})
             df = df.merge(
                 pbp_ren,
+                left_on=["game_id", tid_col],
+                right_on=["game_id", "team_id"],
+                how="left",
+            ).drop(columns=["team_id"], errors="ignore")
+
+    # Cumulative team lineup features (same exact-match merge shape)
+    if cum_lu is not None:
+        lu_cols = [c for c in cum_lu.columns if c.startswith("cum_lu_")]
+        for prefix, tid_col in [("home", "home_team_id"), ("away", "away_team_id")]:
+            lu_ren = cum_lu.rename(columns={c: f"{prefix}_{c}" for c in lu_cols})
+            df = df.merge(
+                lu_ren,
                 left_on=["game_id", tid_col],
                 right_on=["game_id", "team_id"],
                 how="left",
@@ -1179,6 +1288,15 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
             "pbp_second_chance_rate": "cum_pbp_second_chance_rate",
             "pbp_off_to_rate": "cum_pbp_off_to_rate",
             "pbp_fouls_drawn_per100": "cum_pbp_fouls_drawn_per100",
+        })
+
+    # Tier-2 lineup-quality diffs (gated; NaN where a team has no stint
+    # coverage — 2019 entirely)
+    if LINEUP_FEATURES:
+        diff_pairs.update({
+            "lu_hhi": "cum_lu_hhi",
+            "lu_top_share": "cum_lu_top_share",
+            "lu_top_net": "cum_lu_top_net",
         })
 
     for name, col in diff_pairs.items():
