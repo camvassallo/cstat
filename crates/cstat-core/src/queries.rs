@@ -602,9 +602,10 @@ pub async fn resolve_team_id_for_season(
 }
 
 /// A team's 5-man on-floor lineup with its season totals, from the PBP-derived
-/// `lineup_aggregates` rollup. `source` is `'onfloor'` (exact, from the API
-/// on-floor five) or `'replay'` (~86%-accurate SUB-replay off the CSV) — exposed
-/// so the UI can flag approximate lineups.
+/// `lineup_aggregates` rollup. `source` is `'natstat_lineups'` (exact
+/// server-computed units off the captured lineups object), `'onfloor'` (exact,
+/// from the API on-floor five) or `'replay'` (~86%-accurate SUB-replay off the
+/// CSV) — exposed so the UI can flag approximate lineups.
 #[derive(Debug, Serialize, FromRow)]
 pub struct TeamLineup {
     pub lineup: Vec<Uuid>,

@@ -142,8 +142,8 @@ export interface RosterEntry {
   ftm: number | null;
   /// PBP on/off splits (from `player_on_off`): team net rating per 100 poss with
   /// vs without the player, and the on−off swing. `null` for a player with no
-  /// PBP-derived on/off row. `on_off_source` (onfloor/replay) carries the
-  /// lineup-accuracy caveat; `on_off_off_poss` is the off-court possession
+  /// PBP-derived on/off row. `on_off_source` (natstat_lineups/onfloor/replay)
+  /// carries the lineup-accuracy caveat; `on_off_off_poss` is the off-court possession
   /// sample (thin for heavy-minute starters).
   net_on_off: number | null;
   on_net_rtg: number | null;
@@ -896,7 +896,9 @@ export function fetchPlayerPbp(id: string, season?: number) {
 /// rollup): team offense/defense per 100 possessions with vs without him on the
 /// floor. `net_on_off` is the on−off swing. `ortg`/`drtg`/`net` are null when a
 /// side logged no possessions (a player who never sat has no off-court rate).
-/// `source` is `'onfloor'` (exact) or `'replay'` (~86%, carries the caveat).
+/// `source` is `'natstat_lineups'` (exact server-computed units), `'onfloor'`
+/// (exact) or `'replay'` (~86%, carries the caveat) — best source seen across
+/// the player's games.
 export interface PlayerOnOff {
   games: number;
   on_minutes: number;
@@ -1393,8 +1395,10 @@ export function fetchTeamCoach(teamId: string) {
 }
 
 /// A team's 5-man on-floor lineup with its season totals, from the
-/// PBP-derived `lineup_aggregates` rollup. `source` is `'onfloor'` (exact API
-/// on-floor five) or `'replay'` (~86%-accurate SUB-replay off the CSV).
+/// PBP-derived `lineup_aggregates` rollup. `source` is `'natstat_lineups'`
+/// (exact server-computed units off the captured lineups object), `'onfloor'`
+/// (exact API on-floor five) or `'replay'` (~86%-accurate SUB-replay off the
+/// CSV).
 export interface TeamLineup {
   lineup: string[];
   player_names: string[];

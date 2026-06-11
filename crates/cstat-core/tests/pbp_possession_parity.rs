@@ -104,20 +104,36 @@ async fn stint_possessions_track_box_score() {
     );
 
     // The corruption gate (compute_pbp_lineups) must leave a known-corrupt
-    // season with no served aggregates — better an absent surface than a wrong
-    // one. Guards against the gate silently regressing and re-publishing 2019.
+    // season with no REPLAY-derived aggregates — better an absent surface than
+    // a wrong one. Guards against the gate silently regressing and
+    // re-publishing 2019 off its mis-tagged play stream. Rows sourced from the
+    // captured NatStat lineups object ARE allowed: those are server-computed
+    // per-game units, unaffected by the corrupt tag CSV (and their possessions
+    // are rescaled to the box estimate, not derived from the tags).
     for &season in CORRUPT_PBP_SEASONS {
-        let n: i64 = sqlx::query("SELECT count(*) FROM lineup_aggregates WHERE season = $1")
-            .bind(season)
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get(0);
+        let n: i64 = sqlx::query(
+            "SELECT count(*) FROM lineup_aggregates WHERE season = $1 AND source <> 'natstat_lineups'",
+        )
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
         assert_eq!(
             n, 0,
-            "corrupt season {season} still has {n} served lineup_aggregates rows — the coverage gate didn't clear it"
+            "corrupt season {season} still has {n} replay/onfloor lineup_aggregates rows — the coverage gate didn't clear it"
         );
-        println!("corrupt season {season}: lineup_aggregates cleared (0 rows) ✓");
+        let nat: i64 = sqlx::query(
+            "SELECT count(*) FROM lineup_aggregates WHERE season = $1 AND source = 'natstat_lineups'",
+        )
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
+        println!(
+            "corrupt season {season}: no replay/onfloor aggregates ✓ ({nat} natstat-sourced rows)"
+        );
     }
 
     // The contextual-tag gate (compute_pbp_aggregates::pbp_lacks_context_tags)
