@@ -89,7 +89,7 @@ struct EnrichedTransfer {
     /// Source-season PBP on/off — team net per 100 poss with vs without the
     /// player at their old school, the season before they transferred. NULL when
     /// unmatched or the player has no PBP-derived on/off row. `on_off_source`
-    /// (onfloor/replay) carries the lineup-accuracy caveat.
+    /// (natstat_lineups/onfloor/replay) carries the lineup-accuracy caveat.
     net_on_off: Option<f64>,
     on_net_rtg: Option<f64>,
     off_net_rtg: Option<f64>,

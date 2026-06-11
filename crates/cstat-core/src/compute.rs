@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 use sqlx::Row;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -1791,6 +1791,162 @@ pub async fn compute_pbp_aggregates(pool: &PgPool, season: i32) -> Result<u64, s
     Ok(n)
 }
 
+/// Coherence gate for adopting a team-game's NatStat `lineups`-object units
+/// (the `natstat_lineups` capture) as that side's lineup source. The feed's
+/// completeness varies wildly by era (measured 2026-06-10 on the backfill):
+/// 2020-era games are near-complete (unit points sum to ~91% of the box score;
+/// 78% of sampled team-games pass ±5%), 2015 OVER-counts (~109% — overlapping
+/// unit windows), and 2025/2026 are sparse (~38% — NatStat appears to compute
+/// modern units from its incomplete onfloor stream). Points are exact on good
+/// games, so "unit points sum ≈ box score" is a complete-coverage oracle: a
+/// team-game passes only when |Σ unit pts − box score| ≤ TOL × box score.
+const NATSTAT_LINEUP_PTS_TOL: f64 = 0.05;
+
+/// Second gate axis: the share of unit player slots resolved to our player
+/// UUIDs (two-tier code/name resolution at capture time, see
+/// `cstat-ingest::ingest::lineups`). A poorly-resolved team-game (cross-era
+/// code mismatch + ambiguous abbreviated names) would emit lineups missing
+/// members — SUB-replay covers it better. Measured ≥0.97 on ~98% of captured
+/// games, so 0.90 only drops genuine resolution failures.
+const NATSTAT_LINEUP_MIN_RESOLVED_SHARE: f64 = 0.90;
+
+/// Team-games whose captured NatStat lineup units pass the coherence gate —
+/// these sides source their stints from `natstat_lineups` (exact membership,
+/// server-computed) and skip SUB-replay/onfloor reconstruction entirely.
+async fn natstat_covered_team_games(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<(Uuid, Uuid)>, sqlx::Error> {
+    sqlx::query_as(
+        "WITH per AS (
+             SELECT nl.game_id, nl.team_id,
+                    sum(COALESCE(nl.points, 0))::float8       AS unit_pts,
+                    sum(COALESCE(nl.possessions, 0))::float8  AS unit_poss,
+                    sum((SELECT count(*) FROM unnest(nl.player_ids) p WHERE p IS NOT NULL))::float8
+                      / nullif(sum(COALESCE(array_length(nl.player_ids, 1), 0)), 0)::float8
+                                                              AS resolved_share
+             FROM natstat_lineups nl
+             WHERE nl.season = $1 AND nl.team_id IS NOT NULL
+             GROUP BY nl.game_id, nl.team_id
+         )
+         SELECT per.game_id, per.team_id
+         FROM per
+         JOIN games g ON g.id = per.game_id
+         CROSS JOIN LATERAL (
+             SELECT CASE WHEN per.team_id = g.home_team_id THEN g.home_score
+                         WHEN per.team_id = g.away_team_id THEN g.away_score END AS box
+         ) b
+         WHERE per.unit_poss > 0
+           AND per.resolved_share >= $3
+           AND b.box IS NOT NULL AND b.box > 0
+           AND abs(per.unit_pts - b.box) <= $2 * b.box",
+    )
+    .bind(season)
+    .bind(NATSTAT_LINEUP_PTS_TOL)
+    .bind(NATSTAT_LINEUP_MIN_RESOLVED_SHARE)
+    .fetch_all(pool)
+    .await
+}
+
+/// Emit the gated team-games' NatStat units as `lineup_stints` rows
+/// (`source = 'natstat_lineups'`), inside the caller's atomic-swap transaction.
+///
+/// Mapping notes (the feed's numbers are not all on our scale):
+/// * `points`/`points-d` are exact (they reconcile with the box score on gated
+///   games — that's what the gate checks).
+/// * NatStat's `possessions` is NOT our possession unit — even on coherent
+///   games it sums to only ~55-66% of the box-score estimate
+///   (FGA − ORB + TOV + 0.44·FTA), so raw it would inflate every ortg/drtg.
+///   We keep each unit's *share* and rescale the team-game total to the box
+///   estimate, putting natstat-sourced rates on the same scale as
+///   replay/onfloor and team AdjO/AdjD. Defensive possessions are derived per
+///   unit as `points-d / dppp` where defined (~60% of units; the rest fall
+///   back to the unit's offensive count) and rescaled to the OPPONENT's box
+///   estimate.
+/// * The object is per-game aggregated — no clock. `seconds` is estimated as
+///   the unit's possession share of the team's box minutes (Σ box minutes / 5),
+///   so displayed lineup minutes stay meaningful; the box-minute validity
+///   clamps don't apply to this source (membership is exact, see the rollup).
+/// * Units with zero resolved players are kept with an empty lineup: they
+///   carry real team possessions/points that belong in the on/off team totals,
+///   while contributing to no player's ON sample and no 5-man aggregate.
+async fn insert_natstat_lineup_stints(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    season: i32,
+    covered: &[(Uuid, Uuid)],
+) -> Result<u64, sqlx::Error> {
+    if covered.is_empty() {
+        return Ok(0);
+    }
+    let (cov_games, cov_teams): (Vec<Uuid>, Vec<Uuid>) = covered.iter().copied().unzip();
+    let res = sqlx::query(
+        "WITH cov AS (
+             SELECT g AS game_id, t AS team_id
+             FROM unnest($2::uuid[], $3::uuid[]) AS c(g, t)
+         ),
+         units AS (
+             SELECT nl.game_id, nl.team_id, nl.natstat_lineup_id,
+                    COALESCE(nl.points, 0)   AS points,
+                    COALESCE(nl.points_d, 0) AS points_d,
+                    COALESCE(nl.possessions, 0)::float8 AS uposs,
+                    CASE WHEN (nl.raw->>'dppp')::float8 > 0 AND nl.points_d > 0
+                         THEN nl.points_d::float8 / (nl.raw->>'dppp')::float8
+                         ELSE COALESCE(nl.possessions, 0)::float8 END AS udposs,
+                    COALESCE((SELECT array_agg(DISTINCT p ORDER BY p)
+                              FROM unnest(nl.player_ids) AS p
+                              WHERE p IS NOT NULL), '{}'::uuid[]) AS lineup
+             FROM natstat_lineups nl
+             JOIN cov USING (game_id, team_id)
+             WHERE nl.season = $1
+         ),
+         tg AS (   -- per team-game unit totals (the rescale denominators)
+             SELECT game_id, team_id, sum(uposs) AS tposs, sum(udposs) AS tdposs
+             FROM units GROUP BY game_id, team_id
+         ),
+         box AS (   -- box-score possession estimate + team wall-clock seconds
+             SELECT pgs.game_id, pgs.team_id,
+                    sum(COALESCE(pgs.fga, 0)) - sum(COALESCE(pgs.off_rebounds, 0))
+                      + sum(COALESCE(pgs.turnovers, 0))
+                      + 0.44 * sum(COALESCE(pgs.fta, 0))     AS est_poss,
+                    sum(COALESCE(pgs.minutes, 0)) * 60.0 / 5.0 AS team_secs
+             FROM player_game_stats pgs
+             WHERE pgs.season = $1
+             GROUP BY pgs.game_id, pgs.team_id
+         )
+         INSERT INTO lineup_stints
+             (game_id, season, period, start_seq, end_seq, team_id, lineup,
+              opp_lineup, points_for, points_against, source,
+              possessions_for, possessions_against, seconds)
+         SELECT u.game_id, $1, 0, u.rn, u.rn, u.team_id, u.lineup, '{}'::uuid[],
+                u.points, u.points_d, 'natstat_lineups',
+                u.uposs  * COALESCE(bf.est_poss / nullif(t.tposs, 0), 1.0),
+                -- defensive rescale target is the OPPONENT's box estimate;
+                -- if that side has no box rows, the team's own offensive
+                -- scale is a far better proxy than the raw feed unit (which
+                -- runs ~55-66% of real)
+                u.udposs * COALESCE(ba.est_poss / nullif(t.tdposs, 0),
+                                    bf.est_poss / nullif(t.tposs, 0), 1.0),
+                COALESCE(round(COALESCE(nullif(bf.team_secs, 0.0), 2400.0)
+                               * u.uposs / nullif(t.tposs, 0)), 0)::int
+         FROM (SELECT units.*,
+                      row_number() OVER (PARTITION BY game_id, team_id
+                                         ORDER BY natstat_lineup_id)::int AS rn
+               FROM units) u
+         JOIN tg t USING (game_id, team_id)
+         JOIN games g ON g.id = u.game_id
+         LEFT JOIN box bf ON bf.game_id = u.game_id AND bf.team_id = u.team_id
+         LEFT JOIN box ba ON ba.game_id = u.game_id
+              AND ba.team_id = CASE WHEN u.team_id = g.home_team_id
+                                    THEN g.away_team_id ELSE g.home_team_id END",
+    )
+    .bind(season)
+    .bind(&cov_games)
+    .bind(&cov_teams)
+    .execute(&mut **tx)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 /// One per-team stint row staged for bulk insert into `lineup_stints`.
 struct StintRow {
     game_id: Uuid,
@@ -1808,9 +1964,11 @@ struct StintRow {
 }
 
 /// P2b: derive lineup stints, season lineup aggregates, and per-player PBP
-/// plus/minus from `play_by_play`. Hybrid sourcing per game — exact API
-/// on-floor lineups when stored, SUB-replay (~86%) off the CSV otherwise (see
-/// `pbp_replay` and `docs/pbp_methodology.md`).
+/// plus/minus. Hybrid sourcing per team-game, by descending fidelity:
+/// captured NatStat `lineups`-object units when they pass the coherence gate
+/// (`natstat_covered_team_games` — exact membership, points reconcile with the
+/// box score), else exact API on-floor lineups when stored, else SUB-replay
+/// (~86%) off the CSV (see `pbp_replay` and `docs/pbp_methodology.md`).
 ///
 /// `lineup_stints` is local-only (per-stint detail); `lineup_aggregates` and the
 /// `plus_minus_pbp` column ship to prod. Season-scoped clean recompute.
@@ -1819,8 +1977,8 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     // at the end — see the transaction below. Lets a mid-run failure leave the
     // prior season intact rather than a half-rebuilt, prod-shipped table.
 
-    // Games in this season that have play-by-play.
-    let games: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+    // Games in this season that have play-by-play (the replay/onfloor input).
+    let mut games: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
         "SELECT g.id, g.home_team_id, g.away_team_id
          FROM games g
          WHERE g.season = $1 AND EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id)",
@@ -1828,34 +1986,53 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     .bind(season)
     .fetch_all(pool)
     .await?;
-    if games.is_empty() {
-        return Ok(0); // no PBP loaded for this season — nothing to do
+
+    // Team-games sourced from the captured NatStat lineups object. Snapshot the
+    // set ONCE, before the replay loop — the lineups backfill may be writing
+    // `natstat_lineups` concurrently, and the same set must drive both the
+    // replay-side skip and the natstat insert or a game could be double-counted.
+    let covered_pairs = natstat_covered_team_games(pool, season).await?;
+    let covered: HashSet<(Uuid, Uuid)> = covered_pairs.iter().copied().collect();
+
+    if games.is_empty() && covered_pairs.is_empty() {
+        return Ok(0); // no PBP and no captured lineups — nothing to do
     }
 
     // Corruption gate: if the PBP tag stream doesn't cover the box-score FGA
-    // (2019's mis-tagged export), the derived stints/lineups/+/- are garbage.
-    // Clear any prior rows for the season and skip — better an absent surface
-    // than a wrong one (the UI hides it, same as a pre-PBP season).
-    if pbp_source_is_corrupt(pool, season).await? {
-        let mut tx = pool.begin().await?;
-        sqlx::query("DELETE FROM lineup_stints WHERE season = $1")
-            .bind(season)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM lineup_aggregates WHERE season = $1")
-            .bind(season)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("UPDATE player_game_stats SET plus_minus_pbp = NULL WHERE season = $1")
-            .bind(season)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM player_on_off WHERE season = $1")
-            .bind(season)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        return Ok(0);
+    // (2019's mis-tagged export), the REPLAY-derived stints/lineups/+/- are
+    // garbage — but the NatStat lineups object is server-computed and immune,
+    // so gated team-games still emit. A corrupt season becomes natstat-only;
+    // with no captured lineups either, clear any prior rows and skip — better
+    // an absent surface than a wrong one (the UI hides it, same as a pre-PBP
+    // season).
+    let corrupt = if games.is_empty() {
+        false
+    } else {
+        pbp_source_is_corrupt(pool, season).await?
+    };
+    if corrupt {
+        games.clear();
+        if covered_pairs.is_empty() {
+            let mut tx = pool.begin().await?;
+            sqlx::query("DELETE FROM lineup_stints WHERE season = $1")
+                .bind(season)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM lineup_aggregates WHERE season = $1")
+                .bind(season)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE player_game_stats SET plus_minus_pbp = NULL WHERE season = $1")
+                .bind(season)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM player_on_off WHERE season = $1")
+                .bind(season)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            return Ok(0);
+        }
     }
 
     // Bulk-load all per-game metadata once, rather than ~4 queries per game. The
@@ -1906,6 +2083,13 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         // emits no stint rows (guarded by the Option below).
         let ht = home_team.unwrap_or_else(Uuid::nil);
         let vt = away_team.unwrap_or_else(Uuid::nil);
+        // A side covered by gated NatStat units is sourced from those instead —
+        // emitting replay rows for it too would double-count the team-game.
+        let home_covered = covered.contains(&(*game_id, ht));
+        let vis_covered = covered.contains(&(*game_id, vt));
+        if home_covered && vis_covered {
+            continue; // both sides exact — skip the replay entirely
+        }
         let gs = starters.get(game_id);
         let pick = |team: Uuid| -> Vec<Uuid> {
             gs.map(|v| {
@@ -1940,7 +2124,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         for (st, m) in stints.into_iter().zip(metrics) {
             // One row per team's perspective (skip a side with no resolved team
             // or an empty lineup — e.g. an unresolved non-D1 opponent).
-            if home_team.is_some() && !st.home_lineup.is_empty() {
+            if home_team.is_some() && !home_covered && !st.home_lineup.is_empty() {
                 rows.push((
                     StintRow {
                         game_id: *game_id,
@@ -1959,7 +2143,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                     src,
                 ));
             }
-            if away_team.is_some() && !st.vis_lineup.is_empty() {
+            if away_team.is_some() && !vis_covered && !st.vis_lineup.is_empty() {
                 rows.push((
                     StintRow {
                         game_id: *game_id,
@@ -2004,6 +2188,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         .await?;
 
     insert_lineup_stints(&mut tx, season, &rows).await?;
+    let natstat_rows = insert_natstat_lineup_stints(&mut tx, season, &covered_pairs).await?;
 
     // Per-(game, team, lineup) rollup of 5-man stints with a physical-validity
     // flag, materialized once so both served surfaces below read the same set.
@@ -2041,12 +2226,18 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 sum(ls.possessions_for)        AS posf,
                 sum(ls.possessions_against)    AS posa,
                 sum(ls.seconds)                AS secs,
-                bool_or(ls.source = 'onfloor') AS has_onfloor,
-                (sum(ls.seconds) / 60.0) <= COALESCE((
+                bool_or(ls.source = 'onfloor')          AS has_onfloor,
+                bool_or(ls.source = 'natstat_lineups')  AS has_natstat,
+                -- natstat-sourced game-lineups are exempt from the box-minute
+                -- clamp: membership is exact and their seconds are possession-
+                -- share ESTIMATES (the object has no clock), so the clamp could
+                -- only false-kill real units there.
+                (bool_or(ls.source = 'natstat_lineups')
+                 OR (sum(ls.seconds) / 60.0) <= COALESCE((
                     SELECT min(pgs.minutes) FROM player_game_stats pgs
                     WHERE pgs.game_id = ls.game_id AND pgs.player_id = ANY(ls.lineup)
                       AND pgs.minutes > 0
-                ), 1e9) + 1.0                  AS valid
+                 ), 1e9) + 1.0)                          AS valid
          FROM lineup_stints ls
          WHERE ls.season = $1 AND array_length(ls.lineup, 1) = 5
          GROUP BY ls.game_id, ls.team_id, ls.lineup",
@@ -2063,7 +2254,11 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
               possessions_for, possessions_against, minutes, ortg, drtg, net_rtg)
          SELECT $1, team_id, lineup, sum(stints),
                 sum(pf), sum(pa), sum(pf - pa),
-                CASE WHEN bool_or(has_onfloor) THEN 'onfloor' ELSE 'replay' END,
+                -- best source seen for this lineup's games (same convention as
+                -- the pre-natstat onfloor/replay flag)
+                CASE WHEN bool_or(has_natstat) THEN 'natstat_lineups'
+                     WHEN bool_or(has_onfloor) THEN 'onfloor'
+                     ELSE 'replay' END,
                 sum(posf), sum(posa), sum(secs) / 60.0,
                 -- ortg/drtg = points per 100 possessions (same scale as team AdjO/AdjD);
                 -- NULL rather than divide-by-zero for a lineup with no logged possessions.
@@ -2131,11 +2326,12 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
               off_minutes, off_possessions_for, off_possessions_against,
               off_points_for, off_points_against, off_ortg, off_drtg, off_net_rtg,
               net_on_off, source)
-         WITH stints AS (   -- ALL reconstructed stints (any size), this season
+         WITH stints AS (   -- ALL stints (any size, any source), this season
              SELECT game_id, team_id, lineup,
                     points_for pf, points_against pa,
                     possessions_for posf, possessions_against posa, seconds secs,
-                    (source = 'onfloor') AS has_onfloor
+                    (source = 'onfloor') AS has_onfloor,
+                    (source = 'natstat_lineups') AS has_natstat
              FROM lineup_stints WHERE season = $1
          ),
          team_game AS (   -- team totals per game over ALL stints
@@ -2157,16 +2353,23 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
              -- player's on/off is never a different team's.
              SELECT s.game_id, s.team_id, pl.p AS player_id,
                     sum(s.pf) opf, sum(s.pa) opa, sum(s.posf) oposf,
-                    sum(s.posa) oposa, sum(s.secs) osecs, bool_or(s.has_onfloor) hon
+                    sum(s.posa) oposa, sum(s.secs) osecs, bool_or(s.has_onfloor) hon,
+                    bool_or(s.has_natstat) hnat
              FROM stints s
              CROSS JOIN LATERAL (SELECT DISTINCT p FROM unnest(s.lineup) AS p) pl
              JOIN players pp ON pp.id = pl.p AND pp.season = $1 AND pp.team_id = s.team_id
              GROUP BY s.game_id, s.team_id, pl.p
          ),
          scaled AS (   -- cap each (player, game) ON at his box minutes (scale DOWN only)
-             SELECT o.game_id, o.team_id, o.player_id, o.hon,
+             -- natstat-sourced games are exempt (sc = 1): membership is exact
+             -- and possessions are the real counts, while the stint seconds are
+             -- possession-share ESTIMATES — clamping exact possessions by an
+             -- estimated-seconds ratio would corrupt the better number.
+             SELECT o.game_id, o.team_id, o.player_id, o.hon, o.hnat,
                     o.opf, o.opa, o.oposf, o.oposa, o.osecs,
-                    LEAST(1.0, COALESCE(b.box_secs, o.osecs) / nullif(o.osecs, 0)) AS sc
+                    CASE WHEN o.hnat THEN 1.0
+                         ELSE LEAST(1.0, COALESCE(b.box_secs, o.osecs) / nullif(o.osecs, 0))
+                    END AS sc
              FROM player_on o
              LEFT JOIN (
                  SELECT game_id, player_id, minutes * 60.0 AS box_secs
@@ -2179,7 +2382,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
              -- tiny off slice can edge below 0. Clamp at 0 — a tiny/negative off
              -- sample then yields a NULL rate (nullif below), the honest
              -- no-meaningful-off-court-sample outcome.
-             SELECT s.team_id, s.player_id, s.hon,
+             SELECT s.team_id, s.player_id, s.hon, s.hnat,
                     s.sc * s.osecs AS on_secs, s.sc * s.oposf AS on_posf,
                     s.sc * s.oposa AS on_posa, s.sc * s.opf AS on_pf, s.sc * s.opa AS on_pa,
                     GREATEST(0, tg.tsecs - s.sc * s.osecs) AS off_secs,
@@ -2192,6 +2395,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
          ),
          roll AS (
              SELECT team_id, player_id, count(*) games, bool_or(hon) hon,
+                    bool_or(hnat) hnat,
                     sum(on_secs) on_secs, sum(on_posf) on_posf, sum(on_posa) on_posa,
                     sum(on_pf) on_pf, sum(on_pa) on_pa,
                     sum(off_secs) off_secs, sum(off_posf) off_posf, sum(off_posa) off_posa,
@@ -2209,7 +2413,9 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0),
                 (100.0 * on_pf / nullif(on_posf, 0) - 100.0 * on_pa / nullif(on_posa, 0))
                   - (100.0 * off_pf / nullif(off_posf, 0) - 100.0 * off_pa / nullif(off_posa, 0)),
-                CASE WHEN hon THEN 'onfloor' ELSE 'replay' END
+                CASE WHEN hnat THEN 'natstat_lineups'
+                     WHEN hon THEN 'onfloor'
+                     ELSE 'replay' END
          FROM roll
          -- Minimum ON sample on BOTH ends (>= 100 possessions). on/off is only
          -- meaningful for a real rotation player: below ~100 on-court possessions
@@ -2236,10 +2442,12 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         games = games.len(),
         onfloor_games,
         replay_games,
+        natstat_team_games = covered_pairs.len(),
         stint_rows = rows.len(),
+        natstat_unit_rows = natstat_rows,
         "computed PBP lineups"
     );
-    Ok(rows.len() as u64)
+    Ok(rows.len() as u64 + natstat_rows)
 }
 
 /// Load one game's raw plays for replay/on-floor stint building.

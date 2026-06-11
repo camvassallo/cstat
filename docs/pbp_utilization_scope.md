@@ -44,14 +44,30 @@ There are **two distinct NatStat lineup sources**, with very different availabil
 
 2. **Per-game `lineups` object** (the `games;playbyplay,lineups/mbb/{gamecode}`
    per-game hydrate).
-   - **All seasons.** Verified present for 2015, 2018, 2020, 2022, 2025 (46–77
-     5-man units per game). NatStat retains the per-game hydrate across the full
-     historical range, unlike the date-path.
-   - **Exact, server-computed.** Each unit carries `possessions`, `oppp`/`dppp`
-     (offensive/defensive points-per-possession), `effmargin`, `plusminus`,
-     `points`/`points-d`, and full offense/defense/margin box splits (fgm/fga,
-     3fm/3fa, ftm/fta, reb, ast, blk, stl). No replay reconstruction, no onfloor
-     gaps.
+   - **All seasons — but NOT complete in all seasons (coverage correction,
+     2026-06-10, off the first ~2,700 backfilled games).** The hydrate exists
+     for every season, but the unit set only *covers the full game* in the
+     middle era: unit points sum to ~91% of the box score on 2020 games (78%
+     of team-games within ±5%) vs **~38% on 2025/2026** (median 16 units/game
+     vs 53–57 — NatStat appears to compute modern units from its sparse
+     onfloor stream), and **2015 over-counts (~109%, overlapping windows)**.
+     The de-risk's "46–77 units per game" sample was not representative.
+     Coverage is a **gradient**, not a cliff: 2024 averages ~65% (uniform
+     across months) and passes the ±5% gate at only ~7.5% of team-games, so
+     the high-yield exact era is likely ≤2023 — boundary refines as the
+     backfill descends. Gate selection also carries a **mild winner lean**
+     in gradient seasons (2024 gated sides: avg margin +4.9, 60% winners) —
+     within-team rates stay exact, but gated games are not a random sample;
+     model features built on them must account for this.
+   - **Exact where coherent, server-computed.** Each unit carries
+     `possessions`, `oppp`/`dppp` (offensive/defensive points-per-possession),
+     `effmargin`, `plusminus`, `points`/`points-d`, and full
+     offense/defense/margin box splits (fgm/fga, 3fm/3fa, ftm/fta, reb, ast,
+     blk, stl). No replay reconstruction, no onfloor gaps. **Scale caveat:**
+     the `possessions` field is not cstat's possession unit — it sums to only
+     ~55–66% of the box-score estimate even on coherent games — so consumers
+     must rescale each team-game's unit possessions to the box estimate
+     (compute does).
    - **Caveats:** units are keyed by abbreviated name (`"D. Swain · M. Foster ·
      …"`), so players resolve by first-initial + last-name against the game's two
      box-score rosters (the existing null-player-sub fallback pattern). It is
@@ -63,12 +79,16 @@ There are **two distinct NatStat lineup sources**, with very different availabil
 3. **Raw plays + tags** — we already hold these for all seasons via the CSV
    backfill; the API isn't needed for them.
 
-**The headline:** for a *cross-season-consistent, exact* lineup source, the
-per-game `lineups` object is the answer — not onfloor. It is available for every
-season historically (backfill) *and* in-season (nightly per-game hydrate), so
-train and serve read the **same** source with **no skew**. Onfloor stays the
-high-resolution *current-season* source for per-play work and a prospective
-corpus for future per-possession models.
+**The headline (revised 2026-06-10):** the per-game `lineups` object is the
+exact lineup source *where it is coherent* — which the backfill shows is the
+middle era, not all seasons. The original "same source train↔serve, no skew,
+all seasons" framing is dead as stated: 2025/2026 units are too sparse to
+serve, so the modern era stays onfloor/replay and the object's value
+concentrates in ~2019–2024 (boundary to be confirmed as the backfill lands).
+Compute arbitrates per team-game with a coherence gate (unit points ≈ box
+score) rather than per source. Onfloor stays the high-resolution
+*current-season* source for per-play work and a prospective corpus for future
+per-possession models.
 
 ## 3. The train/serve compatibility lens
 
@@ -101,7 +121,8 @@ already absorb the value signal the style rates carry. The gated plumbing
 remain as the re-test path if the data changes.
 
 **Tier 2 — adopt the NatStat `lineups` object as the cross-season lineup
-source. [INGEST SHIPPED 2026-06-10 — `cstat-ingest lineups`; backfill running.]**
+source. [INGEST SHIPPED 2026-06-10; SOURCE SWAP SHIPPED 2026-06-11
+(coherence-gated); backfill running.]**
 The de-risk passed with three live findings now encoded in the loader
 (`crates/cstat-ingest/src/ingest/lineups.rs` module docs): unit player *codes*
 are cross-era unreliable (resolution is two-tier and game-scoped — code vs the
@@ -111,9 +132,22 @@ resolved on 2015/2020/2025/2026 samples), the hydrate must be lineups-only
 two team codes on some games (each unit resolves against both rosters; a clear
 majority overturns). Units + raw JSONB persist to the durable local-only
 `natstat_lineups` / `natstat_lineup_games` tables (migration 037) — the fetch is
-spent once; compute re-derives from the table. Remaining Tier-2 work: the
-compute-side source swap (re-emit `lineup_stints` / aggregates / on-off from
-`natstat_lineups`). This:
+spent once; compute re-derives from the table.
+
+**[SOURCE SWAP SHIPPED 2026-06-11 — coherence-gated, not blanket.]** The
+era-coverage finding (§2) forced a redesign: `compute_pbp_lineups` adopts a
+team-game's natstat units only when Σ unit points ≈ box score (±5%) and slot
+resolution ≥0.9 (`natstat_covered_team_games` in `compute.rs`); covered sides
+skip replay entirely, everything else stays replay/onfloor. Unit possessions
+are rescaled to the box-score estimate (defensive via `points-d / dppp`,
+rescaled to the opponent's), stint seconds are possession-share estimates (the
+object has no clock), and the box-minute validity clamps are skipped for this
+source (membership is exact). The corrupt-2019 gate now blocks only replay —
+gated natstat team-games still emit, so 2019 gets lineups/on-off once its
+backfill lands. Source label `'natstat_lineups'` flows through
+`lineup_stints` / `lineup_aggregates` / `player_on_off` (priority
+natstat > onfloor > replay, best-source-seen). The original intent below
+survives only where the gate passes. This:
 - gives **exact** `lineup_aggregates` / on/off for *all* seasons, retiring the
   replay-reconstruction fidelity gap (and sidestepping the onfloor 4-man
   reconstruction entirely for the served aggregates);
@@ -161,11 +195,13 @@ API has no historical onfloor (Section 2). The schedulable background jobs are:
    ingest/parse/resolve path shipped as `cstat-ingest lineups --year YYYY`
    (restart-safe: the `natstat_lineup_games` ledger is the done-set, per-game
    errors are recorded and skipped, rate-limit errors abort the sweep cleanly).
-   Sweep order 2025→2015 then 2026; **2019 is included** — the lineups object is
-   server-computed and unaffected by 2019's corrupt PBP tag CSV. Note on pace:
-   NatStat's advertised 500/hr is currently unmetered on v4 (confirmed against
-   the account dashboard — only v3 calls deplete), so the sweep runs above the
-   nominal cap via `NATSTAT_MAX_PER_HOUR`, with `throttle-level` warnings and a
+   Sweep order **reordered 2026-06-10 to 2024→2015 first, then 2025/2026** —
+   the coverage finding (§2) makes the middle era the payoff, so finding the
+   coherent-era boundary beats finishing sparse 2025; **2019 is included** —
+   the lineups object is server-computed and unaffected by 2019's corrupt PBP
+   tag CSV. Note on pace: only v3 calls deplete the metered budget, but
+   sustained 1500/hr on v4 drew `throttle-level=1` (2026-06-10), so the sweep
+   runs at the nominal 500/hr with `throttle-level` warnings and a
    429/OUT_OF_CALLS abort as the guardrails.
 
 So: (1) is still the to-schedule item; (2) is built and in flight.
@@ -176,8 +212,8 @@ So: (1) is still the to-schedule item; (2) is built and in flight.
    work, measurable lift. Do first.
 2. Decide **Tier 2**: commit to the `lineups`-object ingest as the cross-season
    lineup source (recommended), then run the historical backfill in the
-   background. *(Done 2026-06-10 — ingest shipped, backfill in flight; the
-   compute-side source swap is the remaining piece.)*
+   background. *(Done 2026-06-10/11 — ingest shipped, backfill in flight, and
+   the compute-side source swap shipped coherence-gated per team-game.)*
 3. Wire the **nightly capture** cron (onfloor + tags) so no future data is lost.
 4. **Tier 3 (RAPM)** once Tier 2's exact lineups exist.
 

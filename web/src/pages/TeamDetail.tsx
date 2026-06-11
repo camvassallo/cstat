@@ -575,7 +575,7 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
         {approximate && (
           <span
             className="text-xs px-1.5 py-0.5 rounded bg-gray-900 text-gray-400 uppercase tracking-wide"
-            title="Lineups reconstructed from play-by-play substitutions (~86% accurate). Exact when sourced from the live API on-floor feed."
+            title="Lineups reconstructed from play-by-play substitutions (~86% accurate). Exact when sourced from the live API on-floor feed or NatStat's official lineup units."
           >
             Approximate · replay
           </span>
