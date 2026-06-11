@@ -32,10 +32,13 @@ use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// Completed games are immutable, so cache their hydrates long enough that an
-/// interrupted run resumes nearly free (the durable table is the real store;
-/// this only saves budget when a game errored after fetch).
-const LINEUPS_TTL_SECS: i64 = 90 * 24 * 3600;
+/// Cache TTL for the hydrate responses. The durable `natstat_lineups` table
+/// is the real store — once a game persists, its cache row is redundant — so
+/// this only needs to cover short-horizon re-runs (dev iteration, a resolver
+/// fix re-applied to recent fetches). Kept deliberately short: `clean-cache`
+/// deletes only *expired* rows, and a season's hydrates are ~GBs of JSONB
+/// that shouldn't be pinned for months.
+const LINEUPS_TTL_SECS: i64 = 7 * 24 * 3600;
 
 /// Progress log cadence (games).
 const LOG_EVERY: u64 = 100;
@@ -440,6 +443,17 @@ enum ResolvedBy {
     None,
 }
 
+/// A unit flips to the *other* team only when that roster resolves a clear
+/// majority of its five slots, not merely strictly more. Without the floor, a
+/// game whose coded-team box roster is missing entirely (observed: Bellarmine
+/// 2022 has box rows for only one side) would flip units to the opponent off a
+/// single coincidental name match (1 > 0).
+const SWAP_MIN_RESOLVED: usize = 3;
+
+fn alternate_overturns(primary: usize, alternate: usize) -> bool {
+    alternate > primary && alternate >= SWAP_MIN_RESOLVED
+}
+
 /// Resolve every slot of a unit against one candidate roster.
 fn resolve_unit(u: &UnitRow, roster: &[RosterSlot]) -> Vec<(Option<Uuid>, ResolvedBy)> {
     u.player_codes
@@ -498,7 +512,7 @@ async fn persist_game(
             |r: &[(Option<Uuid>, ResolvedBy)]| r.iter().filter(|(id, _)| id.is_some()).count();
 
         let (team_id, slots) = match alternate_res {
-            Some(alt) if count(&alt) > count(&primary_res) => {
+            Some(alt) if alternate_overturns(count(&primary_res), count(&alt)) => {
                 if coded_team.is_some() {
                     report.team_swapped_units += 1;
                 }
@@ -700,6 +714,19 @@ mod tests {
         let roster = vec![slot("100", "Jalen Smith", 1), slot("200", "Jaden Smith", 2)];
         let (id, _) = resolve_slot("999999", Some("J. Smith"), &roster);
         assert_eq!(id, None);
+    }
+
+    #[test]
+    fn alternate_overturns_needs_a_clear_majority_not_just_strictly_more() {
+        // The real swapped game resolves ~5 v 0 — flips.
+        assert!(alternate_overturns(0, 5));
+        assert!(alternate_overturns(2, 3));
+        // A missing primary box roster + one coincidental opponent name
+        // match must NOT flip the unit.
+        assert!(!alternate_overturns(0, 1));
+        assert!(!alternate_overturns(0, 2));
+        // Ties keep the feed's attribution.
+        assert!(!alternate_overturns(3, 3));
     }
 
     #[test]

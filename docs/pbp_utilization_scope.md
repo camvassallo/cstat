@@ -101,8 +101,19 @@ already absorb the value signal the style rates carry. The gated plumbing
 remain as the re-test path if the data changes.
 
 **Tier 2 — adopt the NatStat `lineups` object as the cross-season lineup
-source.** Build a `lineups`-object ingest (parse, name-resolve to UUIDs, store
-per-game units; aggregate to season). This:
+source. [INGEST SHIPPED 2026-06-10 — `cstat-ingest lineups`; backfill running.]**
+The de-risk passed with three live findings now encoded in the loader
+(`crates/cstat-ingest/src/ingest/lineups.rs` module docs): unit player *codes*
+are cross-era unreliable (resolution is two-tier and game-scoped — code vs the
+game's box roster, then the abbreviated `lineupplayers` name; measured ≥99.2%
+resolved on 2015/2020/2025/2026 samples), the hydrate must be lineups-only
+(`games;playbyplay,lineups` 500s on 2026) and v4-pinned, and the feed swaps the
+two team codes on some games (each unit resolves against both rosters; a clear
+majority overturns). Units + raw JSONB persist to the durable local-only
+`natstat_lineups` / `natstat_lineup_games` tables (migration 037) — the fetch is
+spent once; compute re-derives from the table. Remaining Tier-2 work: the
+compute-side source swap (re-emit `lineup_stints` / aggregates / on-off from
+`natstat_lineups`). This:
 - gives **exact** `lineup_aggregates` / on/off for *all* seasons, retiring the
   replay-reconstruction fidelity gap (and sidestepping the onfloor 4-man
   reconstruction entirely for the served aggregates);
@@ -146,13 +157,18 @@ API has no historical onfloor (Section 2). The schedulable background jobs are:
    play-by-play --date {yesterday}` → compute → derived-only sync. This is the
    *only* way to accumulate onfloor for 2027+; skipping a season loses it forever.
    `scripts/onfloor_backfill.sh` already does the within-current-season catch-up.
-2. **`lineups`-object historical backfill (after the Tier-2 ingest exists).** A
-   per-game hydrate sweep over 2015–2026 (~130 hrs of API at the cap) → exact
-   cross-season `lineup_aggregates`. This is a real background job, but it cannot
-   be scheduled until the ingest/parse/name-resolve path is built — there is no
-   existing script for it (the onfloor backfill only does the date-path).
+2. **`lineups`-object historical backfill — RUNNING since 2026-06-10.** The
+   ingest/parse/resolve path shipped as `cstat-ingest lineups --year YYYY`
+   (restart-safe: the `natstat_lineup_games` ledger is the done-set, per-game
+   errors are recorded and skipped, rate-limit errors abort the sweep cleanly).
+   Sweep order 2025→2015 then 2026; **2019 is included** — the lineups object is
+   server-computed and unaffected by 2019's corrupt PBP tag CSV. Note on pace:
+   NatStat's advertised 500/hr is currently unmetered on v4 (confirmed against
+   the account dashboard — only v3 calls deplete), so the sweep runs above the
+   nominal cap via `NATSTAT_MAX_PER_HOUR`, with `throttle-level` warnings and a
+   429/OUT_OF_CALLS abort as the guardrails.
 
-So: we can schedule (1) immediately; (2) is a "build then schedule" item.
+So: (1) is still the to-schedule item; (2) is built and in flight.
 
 ## 7. Recommended sequence
 
@@ -160,7 +176,8 @@ So: we can schedule (1) immediately; (2) is a "build then schedule" item.
    work, measurable lift. Do first.
 2. Decide **Tier 2**: commit to the `lineups`-object ingest as the cross-season
    lineup source (recommended), then run the historical backfill in the
-   background.
+   background. *(Done 2026-06-10 — ingest shipped, backfill in flight; the
+   compute-side source swap is the remaining piece.)*
 3. Wire the **nightly capture** cron (onfloor + tags) so no future data is lost.
 4. **Tier 3 (RAPM)** once Tier 2's exact lineups exist.
 
