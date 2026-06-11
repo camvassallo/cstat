@@ -1920,9 +1920,14 @@ async fn insert_natstat_lineup_stints(
          SELECT u.game_id, $1, 0, u.rn, u.rn, u.team_id, u.lineup, '{}'::uuid[],
                 u.points, u.points_d, 'natstat_lineups',
                 u.uposs  * COALESCE(bf.est_poss / nullif(t.tposs, 0), 1.0),
-                u.udposs * COALESCE(ba.est_poss / nullif(t.tdposs, 0), 1.0),
-                round(COALESCE(nullif(bf.team_secs, 0.0), 2400.0)
-                      * u.uposs / t.tposs)::int
+                -- defensive rescale target is the OPPONENT's box estimate;
+                -- if that side has no box rows, the team's own offensive
+                -- scale is a far better proxy than the raw feed unit (which
+                -- runs ~55-66% of real)
+                u.udposs * COALESCE(ba.est_poss / nullif(t.tdposs, 0),
+                                    bf.est_poss / nullif(t.tposs, 0), 1.0),
+                COALESCE(round(COALESCE(nullif(bf.team_secs, 0.0), 2400.0)
+                               * u.uposs / nullif(t.tposs, 0)), 0)::int
          FROM (SELECT units.*,
                       row_number() OVER (PARTITION BY game_id, team_id
                                          ORDER BY natstat_lineup_id)::int AS rn

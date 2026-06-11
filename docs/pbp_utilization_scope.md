@@ -52,6 +52,13 @@ There are **two distinct NatStat lineup sources**, with very different availabil
      vs 53–57 — NatStat appears to compute modern units from its sparse
      onfloor stream), and **2015 over-counts (~109%, overlapping windows)**.
      The de-risk's "46–77 units per game" sample was not representative.
+     Coverage is a **gradient**, not a cliff: 2024 averages ~65% (uniform
+     across months) and passes the ±5% gate at only ~7.5% of team-games, so
+     the high-yield exact era is likely ≤2023 — boundary refines as the
+     backfill descends. Gate selection also carries a **mild winner lean**
+     in gradient seasons (2024 gated sides: avg margin +4.9, 60% winners) —
+     within-team rates stay exact, but gated games are not a random sample;
+     model features built on them must account for this.
    - **Exact where coherent, server-computed.** Each unit carries
      `possessions`, `oppp`/`dppp` (offensive/defensive points-per-possession),
      `effmargin`, `plusminus`, `points`/`points-d`, and full
