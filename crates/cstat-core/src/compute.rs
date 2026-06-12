@@ -1322,27 +1322,40 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     // Tier 3: SOS-then-volume-then-shrinkage. SOS is applied on top of
     // adj_gbpm so it scales with mp_factor (and is subsequently shrunk by GP).
     //
-    // Offensive / defensive split of SOS: proportional to each side's signed
-    // contribution to adj_gbpm. If adj_gbpm is ~0, fall back to a 50/50 split
-    // to avoid divide-by-zero blowups (only ~handful of players land there).
+    // Offensive / defensive split of SOS: proportional to each side's
+    // MAGNITUDE share, |adj_o| / (|adj_o| + |adj_d|) — bounded [0, 1], so the
+    // halves always sum exactly to the net and can never blow up. (The
+    // original signed-share allocation, sos_adj * adj_o / adj_gbpm, exploded
+    // whenever adj_gbpm ≈ 0 with opposite-signed components: a −2.2-ogbpm
+    // guard could read cam_o +23.6 with cam_d −22.2 cancelling it — the
+    // "Myles Rice 2026" bug, hundreds of low-|net| players affected, junk up
+    // to ±17,558. Magnitude shares agree with signed shares whenever both
+    // halves carry the net's sign — i.e. for every player the split was
+    // ever sane for.) 50/50 fallback only when both halves are ~0.
     sqlx::query(
         "UPDATE torvik_player_stats SET
              cam_gbpm_v3     = adj_gbpm_sos * mp_factor * gp_weight,
              min_adj_gbpm_v3 = adj_gbpm_sos * min_factor * gp_weight,
              cam_o_gbpm_v3   = (
                  ogbpm * power(usage_rate / $2, $3)
-                 + CASE
-                     WHEN abs(adj_gbpm) > 1e-9
-                       THEN sos_adj * (ogbpm * power(usage_rate / $2, $3)) / adj_gbpm
-                     ELSE sos_adj * 0.5
+                 + sos_adj * CASE
+                     WHEN abs(ogbpm * power(usage_rate / $2, $3))
+                          + abs(dgbpm * (1.0 - $4 * usage_rate / $2)) > 1e-9
+                       THEN abs(ogbpm * power(usage_rate / $2, $3))
+                            / (abs(ogbpm * power(usage_rate / $2, $3))
+                               + abs(dgbpm * (1.0 - $4 * usage_rate / $2)))
+                     ELSE 0.5
                    END
                ) * mp_factor * gp_weight,
              cam_d_gbpm_v3   = (
                  dgbpm * (1.0 - $4 * usage_rate / $2)
-                 + CASE
-                     WHEN abs(adj_gbpm) > 1e-9
-                       THEN sos_adj * (dgbpm * (1.0 - $4 * usage_rate / $2)) / adj_gbpm
-                     ELSE sos_adj * 0.5
+                 + sos_adj * CASE
+                     WHEN abs(ogbpm * power(usage_rate / $2, $3))
+                          + abs(dgbpm * (1.0 - $4 * usage_rate / $2)) > 1e-9
+                       THEN abs(dgbpm * (1.0 - $4 * usage_rate / $2))
+                            / (abs(ogbpm * power(usage_rate / $2, $3))
+                               + abs(dgbpm * (1.0 - $4 * usage_rate / $2)))
+                     ELSE 0.5
                    END
                ) * mp_factor * gp_weight
          WHERE season = $1
@@ -1367,24 +1380,28 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
                                   * t.mp_factor * t.gp_weight,
              min_adj_gbpm_v3_psos = (t.adj_gbpm + pss.player_sos * $2)
                                   * t.min_factor * t.gp_weight,
+             -- Magnitude-share SOS allocation — same rationale as the v3
+             -- split above (signed shares exploded for low-|net| players).
              cam_o_gbpm_v3_psos   = (
                  t.ogbpm * power(t.usage_rate / $3, $4)
-                 + CASE
-                     WHEN abs(t.adj_gbpm) > 1e-9
-                       THEN (pss.player_sos * $2)
-                              * (t.ogbpm * power(t.usage_rate / $3, $4))
-                              / t.adj_gbpm
-                     ELSE (pss.player_sos * $2) * 0.5
+                 + (pss.player_sos * $2) * CASE
+                     WHEN abs(t.ogbpm * power(t.usage_rate / $3, $4))
+                          + abs(t.dgbpm * (1.0 - $5 * t.usage_rate / $3)) > 1e-9
+                       THEN abs(t.ogbpm * power(t.usage_rate / $3, $4))
+                            / (abs(t.ogbpm * power(t.usage_rate / $3, $4))
+                               + abs(t.dgbpm * (1.0 - $5 * t.usage_rate / $3)))
+                     ELSE 0.5
                    END
                ) * t.mp_factor * t.gp_weight,
              cam_d_gbpm_v3_psos   = (
                  t.dgbpm * (1.0 - $5 * t.usage_rate / $3)
-                 + CASE
-                     WHEN abs(t.adj_gbpm) > 1e-9
-                       THEN (pss.player_sos * $2)
-                              * (t.dgbpm * (1.0 - $5 * t.usage_rate / $3))
-                              / t.adj_gbpm
-                     ELSE (pss.player_sos * $2) * 0.5
+                 + (pss.player_sos * $2) * CASE
+                     WHEN abs(t.ogbpm * power(t.usage_rate / $3, $4))
+                          + abs(t.dgbpm * (1.0 - $5 * t.usage_rate / $3)) > 1e-9
+                       THEN abs(t.dgbpm * (1.0 - $5 * t.usage_rate / $3))
+                            / (abs(t.ogbpm * power(t.usage_rate / $3, $4))
+                               + abs(t.dgbpm * (1.0 - $5 * t.usage_rate / $3)))
+                     ELSE 0.5
                    END
                ) * t.mp_factor * t.gp_weight
            FROM player_season_stats pss

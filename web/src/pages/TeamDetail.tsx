@@ -23,7 +23,7 @@ import { classColor, classTagline } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
-import { campomTier, campomTierColor } from '../components/campom';
+import { campomTier, campomTierColor, campomTitle } from '../components/campom';
 import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
@@ -849,7 +849,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                   current={sort}
                   onSort={onSort}
                   align="right"
-                  title="RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries). Hover a value for the raw on/off breakdown."
+                  title="RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries; stabilized with decayed prior-season stints). Hover a value for the raw on/off breakdown."
                   className="border-l border-gray-800"
                 />
               )}
@@ -933,7 +933,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                   {p.campom != null ? (
                     <span
                       className={`px-1.5 rounded border text-xs ${campomTierColor(campomTier(p.campom))}`}
-                      title={campomTier(p.campom) ?? ''}
+                      title={campomTitle(p.campom, p.campom_o, p.campom_d)}
                     >
                       {p.campom.toFixed(1)}
                     </span>

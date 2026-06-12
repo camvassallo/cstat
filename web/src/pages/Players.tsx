@@ -8,7 +8,7 @@ import {
 } from 'ag-grid-community';
 import { fetchPlayers, type PlayerRow } from '../api/client';
 import { gridTheme } from '../theme';
-import { campomTier, campomTierColor } from '../components/campom';
+import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
 import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
 import { agNullsBottom } from '../components/tableSort';
 import { classColor, classTagline } from '../components/archetypeColors';
@@ -37,13 +37,30 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
   const pctStr = pctVal != null ? Math.round(pctVal * 100) : null;
   return (
     <span className="inline-flex items-baseline gap-2">
-      <span className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`} title={tier ?? ''}>
+      <span
+        className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
+        title={campomTitle(p.value, p.data?.campom_o, p.data?.campom_d)}
+      >
         {p.value.toFixed(1)}
       </span>
       {pctStr != null && <span className="text-slate-400 text-xs">{pctStr}</span>}
     </span>
   );
 };
+
+// O/D CamPom halves — signed values on the shared diverging red→green
+// gradient (per-half saturation, see campomHalfColor), gated server-side
+// (±30 sanity envelope; unstable rows arrive null and render "—").
+const campomHalfRenderer = (side: 'o' | 'd') =>
+  function CampomHalfCell(p: { value: number | null }) {
+    return p.value != null ? (
+      <span className="tabular-nums text-xs" style={{ color: campomHalfColor(p.value, side) }}>
+        {`${p.value > 0 ? '+' : ''}${p.value.toFixed(1)}`}
+      </span>
+    ) : (
+      <span className="text-slate-500">—</span>
+    );
+  };
 
 // Adj on/off (RAPM) — colored value with the raw on/off breakdown in the
 // tooltip (shared helpers). "—" below the paired-possession display floor.
@@ -177,13 +194,34 @@ function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] 
     {
       field: 'campom',
       headerName: 'CamPom',
-      headerTooltip: 'Composite player valuation. Hover the chip for tier.',
+      headerTooltip: 'Composite player valuation. Hover the chip for tier and the O/D split.',
       width: 120,
       sort: 'desc',
       comparator: agNullsBottom,
       cellRenderer: campomCellRenderer,
       headerStyle: CATEGORY_DIVIDER_STYLE,
       cellStyle: CATEGORY_DIVIDER_STYLE,
+    },
+    {
+      field: 'campom_o',
+      headerName: 'CPO',
+      headerTooltip:
+        "CamPom's offensive half (O + D = CamPom, same per-100 scale). Hidden where the decomposition is numerically unstable (±30 sanity envelope).",
+      width: 70,
+      // First click sorts best-first (higher = better), matching CamPom.
+      sortingOrder: ['desc', 'asc', null],
+      comparator: agNullsBottom,
+      cellRenderer: campomHalfRenderer('o'),
+    },
+    {
+      field: 'campom_d',
+      headerName: 'CPD',
+      headerTooltip:
+        "CamPom's defensive half — positive is GOOD (defensive value added; O + D = CamPom). Hidden where the decomposition is numerically unstable.",
+      width: 70,
+      sortingOrder: ['desc', 'asc', null],
+      comparator: agNullsBottom,
+      cellRenderer: campomHalfRenderer('d'),
     },
     // Hidden for seasons with no RAPM fit (2019 / not-loaded) rather than
     // rendering an all-"—" column — same gate as the roster table.
@@ -193,7 +231,7 @@ function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] 
             field: 'rapm_net',
             headerName: 'Adj On/Off',
             headerTooltip:
-              'RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries). Hover a value for the raw on/off breakdown.',
+              'RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries; stabilized with decayed prior-season stints). Hover a value for the raw on/off breakdown.',
             width: 100,
             // Sort by the DISPLAYED value (null below the floor) so "—" rows
             // sink instead of clustering mid-table on hidden coefficients —

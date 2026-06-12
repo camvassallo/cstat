@@ -114,6 +114,11 @@ export interface RosterEntry {
   gbpm: number | null;
   campom: number | null;
   campom_pct: number | null;
+  // CamPom O/D decomposition (o + d = campom; d positive-good). Null outside
+  // the ±30 sanity envelope — the share-based split explodes when a player's
+  // ogbpm ≈ −dgbpm (the net stays sane while the halves are junk).
+  campom_o: number | null;
+  campom_d: number | null;
   ppg_pct: number | null;
   rpg_pct: number | null;
   apg_pct: number | null;
@@ -260,6 +265,9 @@ export interface PlayerRow {
   player_sos: number | null;
   campom: number | null;
   campom_pct: number | null;
+  // O/D decomposition, ±30 sanity envelope (see RosterEntry note).
+  campom_o: number | null;
+  campom_d: number | null;
   ast_pct: number | null;
   tov_pct: number | null;
   orb_pct: number | null;
@@ -453,6 +461,9 @@ export interface TransferRow {
   // Source-season "Adj on/off (RAPM)" — the displayed column.
   rapm_net: number | null;
   rapm_paired_poss: number | null;
+  // Source-season CamPom O/D decomposition (±30 sanity envelope).
+  campom_o: number | null;
+  campom_d: number | null;
 }
 
 export function fetchTransfers(year: number) {
@@ -805,6 +816,9 @@ export interface TorkvikStats {
   // CamPom (canonical site-wide composite)
   campom: number | null;
   campom_pct: number | null;
+  // O/D decomposition, ±30 sanity envelope (see RosterEntry note).
+  campom_o: number | null;
+  campom_d: number | null;
   // Percentiles
   gbpm_pct: number | null;
   ogbpm_pct: number | null;

@@ -280,6 +280,9 @@ pub struct RosterEntry {
     pub gbpm: Option<f64>,
     pub campom: Option<f64>,
     pub campom_pct: Option<f64>,
+    /// O/D decomposition (±30 sanity envelope — see TorkvikStatsRow docs).
+    pub campom_o: Option<f64>,
+    pub campom_d: Option<f64>,
     pub ppg_pct: Option<f64>,
     pub rpg_pct: Option<f64>,
     pub apg_pct: Option<f64>,
@@ -355,6 +358,9 @@ pub struct PlayerRow {
     pub player_sos: Option<f64>,
     pub campom: Option<f64>,
     pub campom_pct: Option<f64>,
+    /// O/D decomposition (±30 sanity envelope — see TorkvikStatsRow docs).
+    pub campom_o: Option<f64>,
+    pub campom_d: Option<f64>,
     // Rate stats — surfaced on the Players tab Rate view.
     pub ast_pct: Option<f64>,
     pub tov_pct: Option<f64>,
@@ -1144,6 +1150,11 @@ pub async fn get_team_roster(
             tps.gbpm,
             tps.cam_gbpm_v3_psos     AS campom,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
+            -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
             pp.true_shooting_pct_pct,
             pp.usage_rate_pct,
@@ -1247,6 +1258,11 @@ pub async fn search_players(
             pss.player_sos,
             tps.cam_gbpm_v3_psos     AS campom,
             tps.cam_gbpm_v3_psos_pct AS campom_pct,
+            -- O/D split, ±30 sanity envelope (see TorkvikStatsRow docs)
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
             pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
             pss.stl_pct, pss.blk_pct, pss.ft_rate,
             pp.ppg_pct, pp.rpg_pct, pp.apg_pct, pp.spg_pct, pp.bpg_pct, pp.topg_pct,
@@ -1484,6 +1500,15 @@ pub struct TorkvikStatsRow {
     // CamPom (canonical site-wide composite)
     pub campom: Option<f64>,
     pub campom_pct: Option<f64>,
+    /// CamPom's offensive/defensive decomposition (cam_o + cam_d = campom;
+    /// d positive-good). The compute-side SOS allocation uses bounded
+    /// magnitude shares (fixed 2026-06-12 — the original signed-share split
+    /// exploded for low-|net| players; see docs/campom_methodology.md "O/D
+    /// Decomposition"). NULL outside a ±30 sanity envelope, kept as a
+    /// regression guard: best legit split on record is +26.6 (Edey 2024 O),
+    /// so the envelope can only ever hide junk.
+    pub campom_o: Option<f64>,
+    pub campom_d: Option<f64>,
     // Percentiles (computed on-the-fly)
     pub gbpm_pct: Option<f64>,
     pub ogbpm_pct: Option<f64>,
@@ -1552,6 +1577,13 @@ pub async fn get_torvik_stats(
                recruiting_rank, player_type AS hometown,
                cam_gbpm_v3_psos     AS campom,
                cam_gbpm_v3_psos_pct AS campom_pct,
+               -- O/D split inside the ±30 sanity envelope (a regression
+               -- guard — the compute-side allocation is bounded since the
+               -- 2026-06-12 magnitude-share fix; see struct docs).
+               CASE WHEN abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
+                    THEN cam_o_gbpm_v3_psos END AS campom_o,
+               CASE WHEN abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
+                    THEN cam_d_gbpm_v3_psos END AS campom_d,
                gbpm_pct, ogbpm_pct, dgbpm_pct,
                adj_oe_pct, adj_de_pct,
                orb_pct_pct, drb_pct_pct, stl_pct_pct, blk_pct_pct,
