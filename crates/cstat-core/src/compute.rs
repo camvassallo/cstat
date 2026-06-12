@@ -1811,8 +1811,10 @@ const NATSTAT_LINEUP_PTS_TOL: f64 = 0.05;
 const NATSTAT_LINEUP_MIN_RESOLVED_SHARE: f64 = 0.90;
 
 /// Team-games whose captured NatStat lineup units pass the coherence gate —
-/// these sides source their stints from `natstat_lineups` (exact membership,
-/// server-computed) and skip SUB-replay/onfloor reconstruction entirely.
+/// these sides source their SERVED stints from `natstat_lineups` (exact
+/// membership, server-computed); their replay/onfloor reconstruction still
+/// runs but lands under the rollup-excluded `replay_shadow` label (the
+/// opponent-paired RAPM corpus, see `compute_pbp_lineups`).
 async fn natstat_covered_team_games(
     pool: &PgPool,
     season: i32,
@@ -1970,6 +1972,12 @@ struct StintRow {
 /// box score), else exact API on-floor lineups when stored, else SUB-replay
 /// (~86%) off the CSV (see `pbp_replay` and `docs/pbp_methodology.md`).
 ///
+/// Covered team-games ALSO keep their replay/onfloor rows under the
+/// `replay_shadow` source label: excluded from every served rollup here
+/// (aggregates, plus/minus, on/off — no double-count), read only by the
+/// offline RAPM fit (`training/rapm.py`), which needs the opponent-paired
+/// stints the per-game natstat units don't carry.
+///
 /// `lineup_stints` is local-only (per-stint detail); `lineup_aggregates` and the
 /// `plus_minus_pbp` column ship to prod. Season-scoped clean recompute.
 pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
@@ -2083,13 +2091,15 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         // emits no stint rows (guarded by the Option below).
         let ht = home_team.unwrap_or_else(Uuid::nil);
         let vt = away_team.unwrap_or_else(Uuid::nil);
-        // A side covered by gated NatStat units is sourced from those instead —
-        // emitting replay rows for it too would double-count the team-game.
+        // A side covered by gated NatStat units sources its SERVED stints from
+        // those instead — but its replay rows are still emitted under the
+        // `replay_shadow` label, which every served rollup below excludes (no
+        // double-count). Shadow rows exist for the paired-stint RAPM corpus:
+        // the natstat units carry no opponent lineup, so a blanket skip would
+        // evaporate the covered era's only opponent-paired stints as the
+        // lineups backfill lands (docs/rapm_methodology.md section 3.2).
         let home_covered = covered.contains(&(*game_id, ht));
         let vis_covered = covered.contains(&(*game_id, vt));
-        if home_covered && vis_covered {
-            continue; // both sides exact — skip the replay entirely
-        }
         let gs = starters.get(game_id);
         let pick = |team: Uuid| -> Vec<Uuid> {
             gs.map(|v| {
@@ -2124,7 +2134,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         for (st, m) in stints.into_iter().zip(metrics) {
             // One row per team's perspective (skip a side with no resolved team
             // or an empty lineup — e.g. an unresolved non-D1 opponent).
-            if home_team.is_some() && !home_covered && !st.home_lineup.is_empty() {
+            if home_team.is_some() && !st.home_lineup.is_empty() {
                 rows.push((
                     StintRow {
                         game_id: *game_id,
@@ -2140,10 +2150,10 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                         possessions_against: m.vis_possessions,
                         seconds: m.seconds,
                     },
-                    src,
+                    if home_covered { "replay_shadow" } else { src },
                 ));
             }
-            if away_team.is_some() && !vis_covered && !st.vis_lineup.is_empty() {
+            if away_team.is_some() && !st.vis_lineup.is_empty() {
                 rows.push((
                     StintRow {
                         game_id: *game_id,
@@ -2159,7 +2169,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                         possessions_against: m.home_possessions,
                         seconds: m.seconds,
                     },
-                    src,
+                    if vis_covered { "replay_shadow" } else { src },
                 ));
             }
         }
@@ -2239,7 +2249,10 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
                       AND pgs.minutes > 0
                  ), 1e9) + 1.0)                          AS valid
          FROM lineup_stints ls
+         -- replay_shadow rows are RAPM-corpus-only (their team-games are
+         -- served by natstat units) — including them would double-count.
          WHERE ls.season = $1 AND array_length(ls.lineup, 1) = 5
+           AND ls.source <> 'replay_shadow'
          GROUP BY ls.game_id, ls.team_id, ls.lineup",
     )
     .bind(season)
@@ -2326,13 +2339,16 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
               off_minutes, off_possessions_for, off_possessions_against,
               off_points_for, off_points_against, off_ortg, off_drtg, off_net_rtg,
               net_on_off, source)
-         WITH stints AS (   -- ALL stints (any size, any source), this season
+         WITH stints AS (   -- ALL stints (any size), minus the RAPM-only
+             -- replay_shadow rows: their team-games are already represented
+             -- by the natstat units, so counting both would double the
+             -- team totals AND the player ON samples.
              SELECT game_id, team_id, lineup,
                     points_for pf, points_against pa,
                     possessions_for posf, possessions_against posa, seconds secs,
                     (source = 'onfloor') AS has_onfloor,
                     (source = 'natstat_lineups') AS has_natstat
-             FROM lineup_stints WHERE season = $1
+             FROM lineup_stints WHERE season = $1 AND source <> 'replay_shadow'
          ),
          team_game AS (   -- team totals per game over ALL stints
              SELECT game_id, team_id,

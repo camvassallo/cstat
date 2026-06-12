@@ -1,12 +1,15 @@
 # RAPM: Regularized Adjusted Plus-Minus — Design
 
-**Status: spike COMPLETE 2026-06-12 — REJECTED as a standalone value metric
-(see §8); a narrowed display-only scope is an open product decision.** This
-is the Tier-3 membership item from `docs/pbp_utilization_scope.md`, and the
+**Status: COMPLETE 2026-06-12. REJECTED as a standalone value metric (§8);
+the narrowed display scope was approved and SHIPPED the same day as
+"Adj on/off (RAPM)" (§8.1) — `player_rapm` table, `training/rapm.py`, the
+`replay_shadow` compute change, API fields, and the PlayerDetail companion
+line. The trajectory-slot test also resolved: both add and swap variants
+rejected (§8.2) — the raw on/off block keeps its contract slot.** This is
+the Tier-3 membership item from `docs/pbp_utilization_scope.md`, and the
 merged form of two ROADMAP items: "Adjusted +/- (RAPM)" (PBP
 feature-incorporation list) and "Native cstat player impact metric" (folded
-in — same goal, stint resolution made it tractable). The spike verdict is in
-§8; the original PR plan in §9.
+in — same goal, stint resolution made it tractable).
 
 ## 1. Why RAPM
 
@@ -267,34 +270,71 @@ edge over raw on/off — the stat it was scoped to fix), but one college season
 of stints cannot identify ~4,900 players to value-metric precision. RAPM must
 not ship as a CamPom rival, a player-value grade, or an ML feature.
 
-**Open product decision (the narrowed scope):** ship per-season RAPM strictly
-as the *context-adjusted companion line in the on/off display* — where the
-comparison baseline is raw on/off (which it beats on every measure), not
-CamPom — or ship nothing. That is a product call, not an evidence call;
-steps 3–5 below are suspended pending it, and step 5 (ML trial) is dead
-either way on this evidence.
-
 **Re-test triggers:** a multi-season pooled design (shared cross-season
 coefficients via the dual key — the standard lever for RAPM stability, listed
 in §4.3 as out of v1 scope), or materially better stint data. The lineups
 backfill does NOT improve this corpus (natstat units are unpaired, §3.2).
 
-## 9. PR plan (pre-verdict; steps 3–5 suspended per §8)
+### 8.1 Product decision + ship (2026-06-12): "Adj on/off (RAPM)"
 
-1. **This design doc** + ROADMAP pointer. *(No code.)*
+The narrowed scope was approved: per-season RAPM ships strictly as the
+*context-adjusted companion line in the on/off display* — its comparison
+baseline is raw on/off (which it beats on every measure), not CamPom. Named
+"Adj on/off (RAPM)": the plain phrase tells a casual user what it is in the
+panel's context, the suffix gives the literature-precise term; the method IS
+canonical RAPM, so no cstat-novel coinage. **The zero-prior variant ships**,
+not the marginally-better-CV CamPom prior — a CamPom-flavored number next to
+CamPom on the same page would destroy its value as independent evidence.
+
+What shipped:
+
+- **`replay_shadow`** (`compute_pbp_lineups`): covered team-games keep their
+  replay rows under a rollup-excluded shadow label, so this corpus survives
+  the Tier-2 source swap as the backfill lands. Verified on 2020: all three
+  served surfaces checksum-identical, 1,727 shadow stints covering exactly
+  the 39 covered team-games; possession-parity suite green.
+- **Migration 038 `player_rapm`** + **`training/rapm.py`** (zero prior,
+  λ=1000): 52,421 rows across 11 seasons (~4.6–5.0k players each; 2019
+  legitimately absent). Intercepts track league scoring eras (96–107),
+  HCA +4 to +7 per 100. Not in `sync_to_prod.sh`'s exclusion list, so it
+  ships to prod with the other rollups.
+- **API**: `get_player_on_off` LEFT JOINs `player_rapm`; the on-off route
+  carries `rapm_o` / `rapm_d` / `rapm_net` / `rapm_paired_possessions`.
+- **UI**: an "adj on/off (RAPM)" line in the PlayerDetail on/off panel
+  (≥250 paired-possession display floor), with the panel's team-result
+  caveat updated to point at it.
+
+### 8.2 Trajectory-slot test (2026-06-12): REJECTED, on/off keeps the slot
+
+The natural follow-on question — the shipped trajectory on/off block is raw
+on/off, and RAPM is 2–5× more stable year-over-year; is it the better
+*feature*? No (`training/experiment_trajectory_rapm.py`, RAPM coverage 91%
+of paired rows vs 89% on/off): **swapping** the on/off block for RAPM is
+decisively worse (pooled LOPO MAE 2.1282 → 2.1382, −0.0100, 1/11 pairs) —
+raw on/off's team-context "contamination" is *signal* for projecting
+next-season CamPom, which is itself team-contextual. **Adding** RAPM on top
+(51→54) reads +0.0009 pooled (8/11 pairs) — ~6× smaller than the on/off
+block's accepted win and inside noise; not worth a contract change. Verdict
+recorded in `eval_history/trajectory_rapm_experiment_20260612_summary.json`.
+Stability and feature value are different questions; the harness answered
+the second one.
+
+## 9. PR plan (as executed)
+
+1. **This design doc** + ROADMAP pointer. *(Done.)*
 2. **Solver spike** — `training/experiment_rapm_spike.py`: 2026-only fit
    (onfloor corpus, zero prior), λ sweep with game-blocked CV, acceptance
-   metrics 2–4 on the single season, Zuby test. Go/no-go gate for the build.
-3. **Production v1** — the `replay_shadow` compute change (§3.2; small,
-   self-contained in `compute_pbp_lineups`), `training/rapm.py`, the
-   `player_rapm` migration, 11-season fit, full §6 acceptance evaluation →
-   verdict recorded in `training/eval_history/` + ROADMAP.
-4. **UI surface** *(conditional on §6)* — PlayerDetail panel line +
-   leaderboard column.
-5. **ML trial** *(separate, later, conditional)* — `prior_rapm` into the
-   trajectory harness next to the shipped on/off block; standard
-   experiment → verdict → contract-change pipeline.
+   metrics 2–4 on the single season, Zuby test. *(Done — the §8 verdict;
+   plus a `stability` mode for gate 1 across 2024–2026.)*
+3. **Production v1** — the `replay_shadow` compute change (§3.2),
+   `training/rapm.py`, the `player_rapm` migration, 11-season fit. *(Done,
+   under the narrowed §8.1 scope — the §6 evaluation happened in the spike
+   and set that scope.)*
+4. **UI surface** — PlayerDetail panel line. *(Done; the leaderboard column
+   was dropped — a value-metric surface would contradict the §8 verdict.)*
+5. **ML trial** — `prior_rapm` vs the shipped on/off block in the trajectory
+   harness. *(Done — REJECTED both ways, §8.2; the contract stays 51.)*
 
-Steps 2 and 3 do not depend on the lineups backfill finishing; step 3's
-shadow change exists precisely so the backfill's continued landing never
-degrades the RAPM corpus.
+All five steps landed in one PR on 2026-06-12; none waited on the lineups
+backfill, and step 3's shadow change exists precisely so the backfill's
+continued landing never degrades the RAPM corpus.

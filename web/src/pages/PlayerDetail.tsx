@@ -180,6 +180,11 @@ function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
   const offPoss = onOff.off_possessions_for + onOff.off_possessions_against;
   const thinOff = offPoss < 100;
 
+  // Adj on/off (RAPM) companion line — display floor on the fit sample so a
+  // garbage-time player's near-prior coefficient never headlines.
+  const showRapm =
+    onOff.rapm_net != null && (onOff.rapm_paired_possessions ?? 0) >= 250;
+
   const row = (
     label: string,
     sub: string,
@@ -229,6 +234,27 @@ function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
         {row('Off floor', `${onOff.off_minutes.toFixed(0)} min`, onOff.off_ortg, onOff.off_drtg, onOff.off_net_rtg)}
       </div>
 
+      {showRapm && (
+        <div className="mt-4 pt-3 border-t border-gray-700">
+          <div className="flex items-baseline gap-2">
+            <span className={`text-2xl font-bold tabular-nums ${netColor(onOff.rapm_net)}`}>
+              {signed(onOff.rapm_net)}
+            </span>
+            <span className="text-sm text-gray-400">
+              adj on/off (RAPM)
+            </span>
+            <span className="text-xs text-gray-500 tabular-nums">
+              O {signed(onOff.rapm_o)} / D {signed(onOff.rapm_d)}
+            </span>
+          </div>
+          <p className="text-xs text-gray-600 mt-1">
+            The same per-100 swing with teammates and opponents held constant (ridge-regressed
+            adjusted +/- over every stint) — removes the deep-team garbage-time bias raw on/off
+            carries. Negative D is good (points allowed below average).
+          </p>
+        </div>
+      )}
+
       {thinOff && (
         <p className="text-xs text-amber-500/80 mt-3">
           Small off-court sample ({Math.round(offPoss)} poss) — the split is noisy for a player
@@ -242,8 +268,9 @@ function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
       )}
       <p className="text-xs text-gray-600 mt-2">
         On/off is a team-result measure — it reflects whoever else is on the floor, so a strong
-        player can read negative on a deep team (the bench may feast in garbage time). Read it
-        alongside CamPom, not instead of it.
+        player can read negative on a deep team (the bench may feast in garbage time).
+        {showRapm ? ' The adjusted line above controls for that;' : ''} read it alongside CamPom,
+        not instead of it.
       </p>
     </div>
   );

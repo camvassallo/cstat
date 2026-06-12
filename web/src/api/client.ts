@@ -899,6 +899,11 @@ export function fetchPlayerPbp(id: string, season?: number) {
 /// `source` is `'natstat_lineups'` (exact server-computed units), `'onfloor'`
 /// (exact) or `'replay'` (~86%, carries the caveat) — best source seen across
 /// the player's games.
+///
+/// `rapm_*` is the context-adjusted companion ("Adj on/off"): a ridge-regressed
+/// adjusted +/- that holds teammates and opponents constant, fixing raw
+/// on/off's deep-bench garbage-time bias. Null when no fit exists (e.g. 2019);
+/// display only when `rapm_paired_possessions` clears a ~250 floor.
 export interface PlayerOnOff {
   games: number;
   on_minutes: number;
@@ -919,6 +924,10 @@ export interface PlayerOnOff {
   off_net_rtg: number | null;
   net_on_off: number | null;
   source: string;
+  rapm_o: number | null;
+  rapm_d: number | null;
+  rapm_net: number | null;
+  rapm_paired_possessions: number | null;
 }
 
 export function fetchPlayerOnOff(id: string, season?: number) {

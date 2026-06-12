@@ -802,6 +802,12 @@ pub async fn get_player_pbp_profile(
 /// `source` (`'onfloor'` exact / `'replay'` ~86%) carries the same accuracy
 /// caveat as the lineup waffle. Rates are `Option` — a player who never sat has
 /// no off-court possessions, so the off rates are NULL (UI shows "—").
+///
+/// The `rapm_*` fields are the context-adjusted companion ("Adj on/off") from
+/// `player_rapm` — a ridge-regressed adjusted +/- holding teammates and
+/// opponents constant (docs/rapm_methodology.md). NULL when no fit row exists
+/// (e.g. 2019). `rapm_paired_possessions` is the fit sample; the UI applies a
+/// ~250-possession display floor on it rather than the table gating rows.
 #[derive(Debug, Serialize, FromRow)]
 pub struct PlayerOnOff {
     pub games: i32,
@@ -823,6 +829,10 @@ pub struct PlayerOnOff {
     pub off_net_rtg: Option<f64>,
     pub net_on_off: Option<f64>,
     pub source: String,
+    pub rapm_o: Option<f64>,
+    pub rapm_d: Option<f64>,
+    pub rapm_net: Option<f64>,
+    pub rapm_paired_possessions: Option<f64>,
 }
 
 /// Fetch a player's season on/off split. Returns `None` when the player has no
@@ -840,8 +850,11 @@ pub async fn get_player_on_off(
                oo.on_points_for, oo.on_points_against, oo.on_ortg, oo.on_drtg, oo.on_net_rtg,
                oo.off_minutes, oo.off_possessions_for, oo.off_possessions_against,
                oo.off_points_for, oo.off_points_against, oo.off_ortg, oo.off_drtg, oo.off_net_rtg,
-               oo.net_on_off, oo.source
+               oo.net_on_off, oo.source,
+               pr.o_rapm AS rapm_o, pr.d_rapm AS rapm_d, pr.net_rapm AS rapm_net,
+               pr.paired_possessions AS rapm_paired_possessions
         FROM player_on_off oo
+        LEFT JOIN player_rapm pr ON pr.player_id = oo.player_id AND pr.season = oo.season
         -- Pin to the player's canonical team. The derivation now credits a player
         -- only to his own team's lineups so (season, player_id) is unique, but
         -- this guard keeps the route correct against any stale pre-fix rows
