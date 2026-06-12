@@ -159,6 +159,17 @@ Requires the historical backfill (Section 6) and a name-resolution step.
 possessions + margins are valid stints for a ridge-regressed adjusted +/-
 (game-level resolution). Onfloor adds true per-possession matchups where it
 exists (2026+). Multi-PR, own design doc, soft-blocked on Tier 2.
+*(Design doc landed 2026-06-12 — `docs/rapm_methodology.md` — with one
+correction to this paragraph: the lineups-object units are NOT RAPM
+observations (no opponent pairing, no clock), and the soft-block on Tier 2 is
+gone — replay carries both-side 5-man pairing in every season, so the paired
+replay/onfloor stints are the corpus. The Tier-2 source swap actually
+*removes* paired stints for covered team-games; the doc's `replay_shadow`
+decision protects the corpus as the backfill lands. **Resolved same day:
+spike REJECTED RAPM as a value metric / ML feature, and it SHIPPED narrowed
+as the "Adj on/off (RAPM)" display companion; the trajectory-slot test kept
+the raw on/off block (swap decisively worse, add noise). Tier 3 is closed —
+doc §8.**)*
 
 **Onfloor's role going forward.** Not the cross-season ML substrate (only 2026,
 non-backfillable). It is: (a) the **2026 site-display** source (the improved

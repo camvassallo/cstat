@@ -63,8 +63,13 @@ async fn stint_possessions_track_box_score() {
     for &season in &seasons {
         let row = sqlx::query(
             "WITH pbp AS (
+                 -- replay_shadow rows are the RAPM-only duplicates of
+                 -- natstat-covered team-games; counting both sides of the
+                 -- duplication would double the possession totals.
                  SELECT game_id, team_id, sum(possessions_for) poss
-                 FROM lineup_stints WHERE season = $1 GROUP BY game_id, team_id
+                 FROM lineup_stints WHERE season = $1
+                   AND source <> 'replay_shadow'
+                 GROUP BY game_id, team_id
              ),
              box AS (
                  SELECT game_id, team_id, fga - off_rebounds + turnovers + 0.44 * fta poss

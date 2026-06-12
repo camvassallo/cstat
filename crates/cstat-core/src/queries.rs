@@ -318,6 +318,11 @@ pub struct RosterEntry {
     pub off_net_rtg: Option<f64>,
     pub on_off_source: Option<String>,
     pub on_off_off_poss: Option<f64>,
+    /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off stays in
+    /// the row for the tooltip context). `rapm_paired_poss` is the fit sample
+    /// for the UI's ~250-possession display floor. See docs/rapm_methodology.md.
+    pub rapm_net: Option<f64>,
+    pub rapm_paired_poss: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -384,6 +389,10 @@ pub struct PlayerRow {
     pub off_net_rtg: Option<f64>,
     pub on_off_source: Option<String>,
     pub on_off_off_poss: Option<f64>,
+    /// "Adj on/off (RAPM)" — the displayed column (raw on/off stays for the
+    /// tooltip); `rapm_paired_poss` feeds the ~250-poss display floor.
+    pub rapm_net: Option<f64>,
+    pub rapm_paired_poss: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -802,6 +811,12 @@ pub async fn get_player_pbp_profile(
 /// `source` (`'onfloor'` exact / `'replay'` ~86%) carries the same accuracy
 /// caveat as the lineup waffle. Rates are `Option` — a player who never sat has
 /// no off-court possessions, so the off rates are NULL (UI shows "—").
+///
+/// The `rapm_*` fields are the context-adjusted companion ("Adj on/off") from
+/// `player_rapm` — a ridge-regressed adjusted +/- holding teammates and
+/// opponents constant (docs/rapm_methodology.md). NULL when no fit row exists
+/// (e.g. 2019). `rapm_paired_possessions` is the fit sample; the UI applies a
+/// ~250-possession display floor on it rather than the table gating rows.
 #[derive(Debug, Serialize, FromRow)]
 pub struct PlayerOnOff {
     pub games: i32,
@@ -823,6 +838,10 @@ pub struct PlayerOnOff {
     pub off_net_rtg: Option<f64>,
     pub net_on_off: Option<f64>,
     pub source: String,
+    pub rapm_o: Option<f64>,
+    pub rapm_d: Option<f64>,
+    pub rapm_net: Option<f64>,
+    pub rapm_paired_possessions: Option<f64>,
 }
 
 /// Fetch a player's season on/off split. Returns `None` when the player has no
@@ -840,8 +859,11 @@ pub async fn get_player_on_off(
                oo.on_points_for, oo.on_points_against, oo.on_ortg, oo.on_drtg, oo.on_net_rtg,
                oo.off_minutes, oo.off_possessions_for, oo.off_possessions_against,
                oo.off_points_for, oo.off_points_against, oo.off_ortg, oo.off_drtg, oo.off_net_rtg,
-               oo.net_on_off, oo.source
+               oo.net_on_off, oo.source,
+               pr.o_rapm AS rapm_o, pr.d_rapm AS rapm_d, pr.net_rapm AS rapm_net,
+               pr.paired_possessions AS rapm_paired_possessions
         FROM player_on_off oo
+        LEFT JOIN player_rapm pr ON pr.player_id = oo.player_id AND pr.season = oo.season
         -- Pin to the player's canonical team. The derivation now credits a player
         -- only to his own team's lineups so (season, player_id) is unique, but
         -- this guard keeps the route correct against any stale pre-fix rows
@@ -1132,13 +1154,16 @@ pub async fn get_team_roster(
             tps.rim_made, tps.mid_made, tps.tpm, tps.ftm,
             oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
             oo.source AS on_off_source,
-            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
+            pr.net_rapm AS rapm_net,
+            pr.paired_possessions AS rapm_paired_poss
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
         LEFT JOIN player_percentiles pp ON pp.player_id = p.id AND pp.season = p.season
         LEFT JOIN player_archetypes pa ON pa.player_id = p.id AND pa.season = p.season
         LEFT JOIN player_on_off oo ON oo.player_id = p.id AND oo.season = p.season AND oo.team_id = p.team_id
+        LEFT JOIN player_rapm pr ON pr.player_id = p.id AND pr.season = p.season
         WHERE p.team_id = $1 AND p.season = $2
         ORDER BY tps.cam_gbpm_v3_psos DESC NULLS LAST, pss.minutes_per_game DESC NULLS LAST
         "#,
@@ -1231,7 +1256,9 @@ pub async fn search_players(
             pa.primary_class, pa.secondary_class,
             oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
             oo.source AS on_off_source,
-            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
+            pr.net_rapm AS rapm_net,
+            pr.paired_possessions AS rapm_paired_poss
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -1241,6 +1268,8 @@ pub async fn search_players(
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         LEFT JOIN player_on_off oo
             ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
+        LEFT JOIN player_rapm pr
+            ON pr.player_id = p.id AND pr.season = pss.season
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10

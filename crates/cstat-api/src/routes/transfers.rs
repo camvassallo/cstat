@@ -95,6 +95,10 @@ struct EnrichedTransfer {
     off_net_rtg: Option<f64>,
     on_off_source: Option<String>,
     on_off_off_poss: Option<f64>,
+    /// Source-season "Adj on/off (RAPM)" — the displayed column (raw on/off
+    /// stays for the tooltip); `rapm_paired_poss` feeds the display floor.
+    rapm_net: Option<f64>,
+    rapm_paired_poss: Option<f64>,
 }
 
 /// One DB candidate row pulled by name match. We may have several per name
@@ -121,6 +125,8 @@ struct DbCandidate {
     off_net_rtg: Option<f64>,
     on_off_source: Option<String>,
     on_off_off_poss: Option<f64>,
+    rapm_net: Option<f64>,
+    rapm_paired_poss: Option<f64>,
 }
 
 /// Subset of a row from the `teams` table — just enough to map a 247 short
@@ -213,7 +219,9 @@ async fn transfer_list(
             oo.on_net_rtg            AS on_net_rtg,
             oo.off_net_rtg           AS off_net_rtg,
             oo.source                AS on_off_source,
-            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
+            pr.net_rapm              AS rapm_net,
+            pr.paired_possessions    AS rapm_paired_poss
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -223,6 +231,8 @@ async fn transfer_list(
             ON pa.player_id = p.id AND pa.season = pss.season
         LEFT JOIN player_on_off oo
             ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
+        LEFT JOIN player_rapm pr
+            ON pr.player_id = p.id AND pr.season = pss.season
         WHERE pss.season = $1
         "#,
     )
@@ -337,6 +347,8 @@ async fn transfer_list(
                 off_net_rtg: best.and_then(|c| c.off_net_rtg),
                 on_off_source: best.and_then(|c| c.on_off_source.clone()),
                 on_off_off_poss: best.and_then(|c| c.on_off_off_poss),
+                rapm_net: best.and_then(|c| c.rapm_net),
+                rapm_paired_poss: best.and_then(|c| c.rapm_paired_poss),
             }
         })
         .collect();

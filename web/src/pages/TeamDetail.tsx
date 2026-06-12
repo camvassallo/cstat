@@ -24,7 +24,7 @@ import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
 import { campomTier, campomTierColor } from '../components/campom';
-import { onOffColor, signedRtg, onOffTitle } from '../components/onoff';
+import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
@@ -686,7 +686,7 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
 type RosterSortKey =
   | 'name'
   | 'campom'
-  | 'net_on_off'
+  | 'rapm_net'
   | 'games_played'
   | 'minutes_per_game'
   | 'usage_rate'
@@ -792,12 +792,15 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
   };
 
   const sorted = useMemo(() => {
-    return [...roster].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir));
+    // rapm_net sorts by the DISPLAYED value (null below the floor), so "—"
+    // rows sink to the end instead of clustering mid-table on hidden values.
+    const val = (p: RosterEntry) => (sort.key === 'rapm_net' ? adjOnOff(p) : p[sort.key]);
+    return [...roster].sort((a, b) => compareValues(val(a), val(b), sort.dir));
   }, [roster, sort]);
 
-  // Only show the On/Off column when the season has PBP-derived splits (hidden
-  // for pre-2012 / not-loaded seasons rather than rendering an all-"—" column).
-  const hasOnOff = useMemo(() => roster.some((p) => p.net_on_off != null), [roster]);
+  // Only show the Adj On/Off column when the season has a RAPM fit (hidden for
+  // 2019 / not-loaded seasons rather than rendering an all-"—" column).
+  const hasOnOff = useMemo(() => roster.some((p) => adjOnOff(p) != null), [roster]);
 
   return (
     <div>
@@ -841,12 +844,12 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
               />
               {hasOnOff && (
                 <SortHeader
-                  label="On/Off"
-                  sortKey="net_on_off"
+                  label="Adj On/Off"
+                  sortKey="rapm_net"
                   current={sort}
                   onSort={onSort}
                   align="right"
-                  title="Team net rating per 100 possessions with vs without the player (on − off). PBP-derived; hover a value for the on/off breakdown."
+                  title="RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries). Hover a value for the raw on/off breakdown."
                   className="border-l border-gray-800"
                 />
               )}
@@ -940,9 +943,9 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 </td>
                 {hasOnOff && (
                   <td className="py-2 px-2 text-right border-l border-gray-800 tabular-nums">
-                    {p.net_on_off != null ? (
-                      <span style={{ color: onOffColor(p.net_on_off) }} title={onOffTitle(p)}>
-                        {signedRtg(p.net_on_off)}
+                    {adjOnOff(p) != null ? (
+                      <span style={{ color: onOffColor(adjOnOff(p), 8) }} title={adjOnOffTitle(p)}>
+                        {signedRtg(adjOnOff(p))}
                       </span>
                     ) : (
                       <span className="text-gray-600">—</span>

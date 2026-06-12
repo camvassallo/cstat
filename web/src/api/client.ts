@@ -150,6 +150,10 @@ export interface RosterEntry {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
+  /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off above stays
+  /// for the tooltip). `rapm_paired_poss` feeds the ~250-poss display floor.
+  rapm_net: number | null;
+  rapm_paired_poss: number | null;
 }
 
 export interface ArchetypeShare {
@@ -286,6 +290,9 @@ export interface PlayerRow {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
+  // "Adj on/off (RAPM)" — the displayed column; raw on/off stays for the tooltip.
+  rapm_net: number | null;
+  rapm_paired_poss: number | null;
 }
 
 export interface PlayerProfile {
@@ -443,6 +450,9 @@ export interface TransferRow {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
+  // Source-season "Adj on/off (RAPM)" — the displayed column.
+  rapm_net: number | null;
+  rapm_paired_poss: number | null;
 }
 
 export function fetchTransfers(year: number) {
@@ -899,6 +909,11 @@ export function fetchPlayerPbp(id: string, season?: number) {
 /// `source` is `'natstat_lineups'` (exact server-computed units), `'onfloor'`
 /// (exact) or `'replay'` (~86%, carries the caveat) — best source seen across
 /// the player's games.
+///
+/// `rapm_*` is the context-adjusted companion ("Adj on/off"): a ridge-regressed
+/// adjusted +/- that holds teammates and opponents constant, fixing raw
+/// on/off's deep-bench garbage-time bias. Null when no fit exists (e.g. 2019);
+/// display only when `rapm_paired_possessions` clears a ~250 floor.
 export interface PlayerOnOff {
   games: number;
   on_minutes: number;
@@ -919,6 +934,10 @@ export interface PlayerOnOff {
   off_net_rtg: number | null;
   net_on_off: number | null;
   source: string;
+  rapm_o: number | null;
+  rapm_d: number | null;
+  rapm_net: number | null;
+  rapm_paired_possessions: number | null;
 }
 
 export function fetchPlayerOnOff(id: string, season?: number) {
