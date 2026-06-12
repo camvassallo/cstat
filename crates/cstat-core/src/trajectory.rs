@@ -37,8 +37,8 @@ use crate::recruit_features::{
 use crate::roster_features::ARCHETYPES;
 
 /// Size of the trajectory-specific feature head (volume/context + box +
-/// rate + impact + archetype). The recruit block is appended after, and
-/// `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
+/// rate + impact + on/off + archetype). The recruit block is appended after,
+/// and `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
 const TRAJECTORY_HEAD_FEATURES: usize = 40;
 
 /// Number of input features each of the three trajectory ONNX models expects.
@@ -390,7 +390,9 @@ pub async fn fetch_player_trajectory_rows(
 /// back to `0.0`, but the training pipeline drops rows with these missing —
 /// at inference time, callers should check `row.campom.is_some()` before
 /// passing to the model to avoid serving a projection built from a sentinel
-/// zero.
+/// zero. Missing on/off splits fill `ONOFF_MISSING_SENTINEL` (-999), the
+/// same encoding training uses — these stay sentinel-filled rather than
+/// gated because absence is structural (sub-rotation players, 2019).
 ///
 /// `prior_season` is the season the row represents (= `s_n` in the
 /// trajectory pairing). It's used by the recruit block to compute
