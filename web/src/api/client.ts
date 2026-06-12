@@ -837,7 +837,7 @@ export interface SimilarPlayer {
 /// Phase 5c projection: next-season CamPom estimate with a quantile band.
 /// `null` when the player doesn't pass the qualification gate (≥5 GP /
 /// ≥5 MPG) for the requested season, or when they have no prior-season
-/// CamPom to project from. Honest framing: pooled LOPO MAE is ~2.3
+/// CamPom to project from. Honest framing: pooled LOPO MAE is ~2.1
 /// CamPom points; render as a directional projection, not a point
 /// estimate. Band width is what tells the user how much signal there is.
 export interface PlayerTrajectory {

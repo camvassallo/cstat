@@ -867,8 +867,8 @@ impl Predictor {
     /// projection / ceiling band. Three ONNX sessions run sequentially; total
     /// inference is ~1ms per player on the warm path.
     ///
-    /// Honest framing: pooled LOPO MAE is ~2.3 CamPom points (vs naive
-    /// "same as last year" baseline of ~2.44), so per-player projections
+    /// Honest framing: pooled LOPO MAE is ~2.13 CamPom points (vs naive
+    /// "same as last year" baseline of ~2.34), so per-player projections
     /// are directional, not point estimates. The quantile band width is
     /// what users should look at — wide = freshman with sparse signal,
     /// tight = senior with a stable profile.

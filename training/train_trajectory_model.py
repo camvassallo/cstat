@@ -2,8 +2,8 @@
 Phase 5c growth model: project a returning player's next-season CamPom v3.
 
 One row per (torvik_pid, season_N, season_N+1) pair. Trained on every
-consecutive-season player in DB (currently 2024→2025 and 2025→2026,
-~4,400 rows after the qualification gate).
+consecutive-season player in DB (currently the 11 pairs 2015→2016 ..
+2025→2026, ~24,600 rows after the qualification gate).
 
 Target: next-season `torvik_player_stats.cam_gbpm_v3_psos`.
 
@@ -31,10 +31,11 @@ Three LightGBMs trained per run: mean + q=0.1 + q=0.9. Three ONNX files
 shipped so the Rust inference path can return (predicted, lower, upper)
 as a single floor/ceiling band on PlayerDetail.
 
-Honest framing: 2 paired classes is thin. The per-class-year bucket is
-even thinner (a few hundred Fr→So pairs, even fewer Jr→Sr). Document MAE
-per bucket in the meta JSON; surface the headline MAE in the UI so users
-understand the projection is directional, not a point estimate.
+Honest framing: the corpus is deep (11 pairs) but per-player projections
+remain directional — pooled LOPO MAE ~2.1 CamPom points vs a ~2.3 naive
+baseline. Document MAE per bucket in the meta JSON; surface the headline
+MAE in the UI so users understand the projection is directional, not a
+point estimate.
 """
 
 from __future__ import annotations
@@ -300,9 +301,9 @@ def naive_baseline(df: pd.DataFrame) -> dict:
 
 
 def leave_one_pair_out(df: pd.DataFrame) -> tuple[dict, pd.Series]:
-    """Honest-backtest analog of the roster model's LOSO. With 4 pairs
-    (2022→23 .. 2025→26), train on three pairs and predict the held-out
-    fourth — repeat.
+    """Honest-backtest analog of the roster model's LOSO. With 11 pairs
+    (2015→16 .. 2025→26), train on ten pairs and predict the held-out
+    eleventh — repeat.
 
     Returns (metrics_dict, lopo_predictions). `lopo_predictions` is a Series
     aligned to `df.index` with each row's held-out mean prediction, used
