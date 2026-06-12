@@ -12,11 +12,14 @@
 //! don't pass a destination-team feature, so the model reads them the same
 //! way it reads same-team returners.
 //!
-//! Feature shape (48 cols, order is wire-locked):
+//! Feature shape (51 cols, order is wire-locked):
 //!   - 5 volume/context (mpg, gp, total_min, height_in, class_year_code)
 //!   - 6 box-score per-game (ppg, rpg, apg, spg, bpg, topg)
 //!   - 10 rate stats (ts, efg, usg, ast%, tov%, orb%, drb%, stl%, blk%, ft_rate)
 //!   - 4 impact metrics (ogbpm, dgbpm, gbpm, campom)
+//!   - 3 on/off splits (on_net_rtg, net_on_off, on_poss_share — the
+//!     `player_on_off` rollup; -999 sentinel where the rollup has no row.
+//!     Accepted by the Tier-2 membership backtest 2026-06-11.)
 //!   - 12 archetype mixture (primary 1.0× / secondary 0.5×)
 //!   - 11 recruit block (see `recruit_features.rs::RECRUIT_FEATURE_NAMES`)
 //!
@@ -36,11 +39,16 @@ use crate::roster_features::ARCHETYPES;
 /// Size of the trajectory-specific feature head (volume/context + box +
 /// rate + impact + archetype). The recruit block is appended after, and
 /// `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
-const TRAJECTORY_HEAD_FEATURES: usize = 37;
+const TRAJECTORY_HEAD_FEATURES: usize = 40;
 
 /// Number of input features each of the three trajectory ONNX models expects.
 /// Wire-locked to `trajectory_model_meta.json::features` order.
 pub const TRAJECTORY_NUM_FEATURES: usize = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES;
+
+/// Sentinel for missing on/off features — mirrors training's
+/// `ONOFF_MISSING_SENTINEL`. Cleanly outside every real range (net ratings
+/// ±~60, possession share in [0, 1]); LightGBM isolates it with one split.
+const ONOFF_MISSING_SENTINEL: f64 = -999.0;
 
 /// Feature names in the exact order the three ONNX models consume. Boot-time
 /// validator (see `inference.rs::validate_trajectory_meta`) hard-fails if
@@ -75,6 +83,12 @@ pub const TRAJECTORY_FEATURE_NAMES: [&str; TRAJECTORY_NUM_FEATURES] = [
     "prior_dgbpm",
     "prior_gbpm",
     "prior_campom",
+    // On/off splits (3) — -999 sentinel when `player_on_off` has no row
+    // (sub-rotation players, 2019's missing PBP) or the swing lacks an
+    // OFF sample (>=10-possession floor).
+    "prior_on_net_rtg",
+    "prior_net_on_off",
+    "prior_on_poss_share",
     // Archetype mixture (12)
     "arch_wizard",
     "arch_sorcerer",
@@ -105,9 +119,9 @@ pub const TRAJECTORY_FEATURE_NAMES: [&str; TRAJECTORY_NUM_FEATURES] = [
 ];
 
 /// One player's prior-season row, joined across `player_season_stats`,
-/// `torvik_player_stats`, `players`, and `player_archetypes`. Pulled by
-/// `fetch_player_trajectory_row` for a single (player_id, season) lookup;
-/// converted to the 37-element feature vector by
+/// `torvik_player_stats`, `players`, `player_on_off`, and
+/// `player_archetypes`. Pulled by `fetch_player_trajectory_row` for a
+/// single (player_id, season) lookup; converted to the feature vector by
 /// `build_trajectory_features`.
 ///
 /// Class year and archetype assignments may be NULL even for qualified
@@ -145,6 +159,13 @@ pub struct TrajectoryPlayerRow {
     pub dgbpm: Option<f64>,
     pub gbpm: Option<f64>,
     pub campom: Option<f64>,
+    // On/off splits — LEFT JOIN on `player_on_off`. None when the player
+    // has no rollup row (sub-rotation, 2019) or, for `net_on_off`, when
+    // the OFF sample is under the >=10-possession floor. None → -999
+    // sentinel in the feature vector (matches training).
+    pub on_net_rtg: Option<f64>,
+    pub net_on_off: Option<f64>,
+    pub on_poss_share: Option<f64>,
     // Archetype mixture
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
@@ -223,6 +244,12 @@ pub async fn fetch_player_trajectory_row(
             tps.dgbpm,
             tps.gbpm,
             tps.cam_gbpm_v3_psos AS campom,
+            oo.on_net_rtg,
+            oo.net_on_off,
+            CASE WHEN oo.on_possessions_for + oo.off_possessions_for > 0
+                 THEN oo.on_possessions_for
+                      / (oo.on_possessions_for + oo.off_possessions_for)
+            END AS on_poss_share,
             pa.primary_class,
             pa.secondary_class,
             rec.composite_rank   AS recruit_composite_rank,
@@ -238,6 +265,8 @@ pub async fn fetch_player_trajectory_row(
         JOIN players ply ON ply.id = pss.player_id
         LEFT JOIN torvik_player_stats tps
             ON tps.player_id = pss.player_id AND tps.season = pss.season
+        LEFT JOIN player_on_off oo
+            ON oo.player_id = pss.player_id AND oo.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         LEFT JOIN recruits rec
@@ -309,6 +338,12 @@ pub async fn fetch_player_trajectory_rows(
             tps.dgbpm,
             tps.gbpm,
             tps.cam_gbpm_v3_psos AS campom,
+            oo.on_net_rtg,
+            oo.net_on_off,
+            CASE WHEN oo.on_possessions_for + oo.off_possessions_for > 0
+                 THEN oo.on_possessions_for
+                      / (oo.on_possessions_for + oo.off_possessions_for)
+            END AS on_poss_share,
             pa.primary_class,
             pa.secondary_class,
             rec.composite_rank   AS recruit_composite_rank,
@@ -324,6 +359,8 @@ pub async fn fetch_player_trajectory_rows(
         JOIN players ply ON ply.id = pss.player_id
         LEFT JOIN torvik_player_stats tps
             ON tps.player_id = pss.player_id AND tps.season = pss.season
+        LEFT JOIN player_on_off oo
+            ON oo.player_id = pss.player_id AND oo.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         LEFT JOIN recruits rec
@@ -433,6 +470,13 @@ pub fn build_trajectory_features(
         row.dgbpm.unwrap_or(0.0),
         row.gbpm.unwrap_or(0.0),
         row.campom.unwrap_or(0.0),
+        // On/off splits (3) — NULL → -999 sentinel, matching training's
+        // ONOFF_MISSING_SENTINEL. Unlike the 0.0-filled box/rate stats,
+        // 0.0 is a *meaningful* on/off value (a perfectly neutral split),
+        // so missingness needs its own out-of-range encoding.
+        row.on_net_rtg.unwrap_or(ONOFF_MISSING_SENTINEL),
+        row.net_on_off.unwrap_or(ONOFF_MISSING_SENTINEL),
+        row.on_poss_share.unwrap_or(ONOFF_MISSING_SENTINEL),
         // Archetype mixture (12)
         arch[0],
         arch[1],
@@ -549,6 +593,9 @@ mod tests {
             dgbpm: Some(1.2),
             gbpm: Some(3.3),
             campom: Some(4.5),
+            on_net_rtg: Some(7.5),
+            net_on_off: Some(4.2),
+            on_poss_share: Some(0.71),
             primary_class: Some("Wizard".into()),
             secondary_class: Some("Bard".into()),
             recruit_composite_rank: None,
@@ -575,6 +622,9 @@ mod tests {
         assert_eq!(v[4], 2.0); // prior_class_year_code (Junior = 2)
         assert!((v[5] - 16.2).abs() < 1e-3); // prior_ppg
         assert!((v[24] - 4.5).abs() < 1e-3); // prior_campom (index 24)
+        assert!((v[25] - 7.5).abs() < 1e-3); // prior_on_net_rtg
+        assert!((v[26] - 4.2).abs() < 1e-3); // prior_net_on_off
+        assert!((v[27] - 0.71).abs() < 1e-3); // prior_on_poss_share
         // Wizard slot fires at 1.0; Bard at 0.5; rest 0.
         let wiz_idx = TRAJECTORY_FEATURE_NAMES
             .iter()
@@ -685,6 +735,9 @@ mod tests {
             dgbpm: None,
             gbpm: None,
             campom: None,
+            on_net_rtg: None,
+            net_on_off: None,
+            on_poss_share: None,
             primary_class: None,
             secondary_class: None,
             recruit_composite_rank: None,
@@ -700,7 +753,8 @@ mod tests {
         let v = build_trajectory_features(&row, 2026);
         // Sentinel slots: class_year_code (-1), recruit_composite_rank (-1),
         // recruit_position_rank (-1), recruit_position_code (-1),
-        // years_since_recruit (-1). Everything else 0.0.
+        // years_since_recruit (-1), and the three on/off features (-999).
+        // Everything else 0.0.
         let class_year_idx = TRAJECTORY_FEATURE_NAMES
             .iter()
             .position(|&n| n == "prior_class_year_code")
@@ -712,21 +766,31 @@ mod tests {
             "recruit_position_code",
             "years_since_recruit",
         ];
-        let neg_one_indices: Vec<usize> = neg_one_features
-            .iter()
-            .map(|name| {
-                TRAJECTORY_FEATURE_NAMES
-                    .iter()
-                    .position(|n| n == name)
-                    .unwrap()
-            })
-            .collect();
+        let onoff_features: &[&str] = &[
+            "prior_on_net_rtg",
+            "prior_net_on_off",
+            "prior_on_poss_share",
+        ];
+        let idx_of = |name: &str| {
+            TRAJECTORY_FEATURE_NAMES
+                .iter()
+                .position(|n| n == &name)
+                .unwrap()
+        };
+        let neg_one_indices: Vec<usize> = neg_one_features.iter().map(|n| idx_of(n)).collect();
+        let onoff_indices: Vec<usize> = onoff_features.iter().map(|n| idx_of(n)).collect();
         assert_eq!(v[class_year_idx], -1.0);
         for (i, &x) in v.iter().enumerate() {
             if neg_one_indices.contains(&i) {
                 assert_eq!(
                     x, -1.0,
                     "feature {} expected -1.0 got {}",
+                    TRAJECTORY_FEATURE_NAMES[i], x
+                );
+            } else if onoff_indices.contains(&i) {
+                assert_eq!(
+                    x, -999.0,
+                    "feature {} expected -999.0 got {}",
                     TRAJECTORY_FEATURE_NAMES[i], x
                 );
             } else {
