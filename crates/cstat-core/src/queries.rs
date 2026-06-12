@@ -318,6 +318,11 @@ pub struct RosterEntry {
     pub off_net_rtg: Option<f64>,
     pub on_off_source: Option<String>,
     pub on_off_off_poss: Option<f64>,
+    /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off stays in
+    /// the row for the tooltip context). `rapm_paired_poss` is the fit sample
+    /// for the UI's ~250-possession display floor. See docs/rapm_methodology.md.
+    pub rapm_net: Option<f64>,
+    pub rapm_paired_poss: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -1145,13 +1150,16 @@ pub async fn get_team_roster(
             tps.rim_made, tps.mid_made, tps.tpm, tps.ftm,
             oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
             oo.source AS on_off_source,
-            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
+            pr.net_rapm AS rapm_net,
+            pr.paired_possessions AS rapm_paired_poss
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
         LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
         LEFT JOIN player_percentiles pp ON pp.player_id = p.id AND pp.season = p.season
         LEFT JOIN player_archetypes pa ON pa.player_id = p.id AND pa.season = p.season
         LEFT JOIN player_on_off oo ON oo.player_id = p.id AND oo.season = p.season AND oo.team_id = p.team_id
+        LEFT JOIN player_rapm pr ON pr.player_id = p.id AND pr.season = p.season
         WHERE p.team_id = $1 AND p.season = $2
         ORDER BY tps.cam_gbpm_v3_psos DESC NULLS LAST, pss.minutes_per_game DESC NULLS LAST
         "#,

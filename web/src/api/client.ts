@@ -150,6 +150,10 @@ export interface RosterEntry {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
+  /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off above stays
+  /// for the tooltip). `rapm_paired_poss` feeds the ~250-poss display floor.
+  rapm_net: number | null;
+  rapm_paired_poss: number | null;
 }
 
 export interface ArchetypeShare {
