@@ -389,6 +389,10 @@ pub struct PlayerRow {
     pub off_net_rtg: Option<f64>,
     pub on_off_source: Option<String>,
     pub on_off_off_poss: Option<f64>,
+    /// "Adj on/off (RAPM)" — the displayed column (raw on/off stays for the
+    /// tooltip); `rapm_paired_poss` feeds the ~250-poss display floor.
+    pub rapm_net: Option<f64>,
+    pub rapm_paired_poss: Option<f64>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -1252,7 +1256,9 @@ pub async fn search_players(
             pa.primary_class, pa.secondary_class,
             oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
             oo.source AS on_off_source,
-            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
+            pr.net_rapm AS rapm_net,
+            pr.paired_possessions AS rapm_paired_poss
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -1262,6 +1268,8 @@ pub async fn search_players(
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         LEFT JOIN player_on_off oo
             ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
+        LEFT JOIN player_rapm pr
+            ON pr.player_id = p.id AND pr.season = pss.season
         WHERE pss.season = $1
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10

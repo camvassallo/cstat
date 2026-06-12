@@ -290,6 +290,9 @@ export interface PlayerRow {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
+  // "Adj on/off (RAPM)" — the displayed column; raw on/off stays for the tooltip.
+  rapm_net: number | null;
+  rapm_paired_poss: number | null;
 }
 
 export interface PlayerProfile {
@@ -447,6 +450,9 @@ export interface TransferRow {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
+  // Source-season "Adj on/off (RAPM)" — the displayed column.
+  rapm_net: number | null;
+  rapm_paired_poss: number | null;
 }
 
 export function fetchTransfers(year: number) {

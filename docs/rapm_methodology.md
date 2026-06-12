@@ -302,10 +302,14 @@ What shipped:
   carries `rapm_o` / `rapm_d` / `rapm_net` / `rapm_paired_possessions`.
 - **UI**: an "adj on/off (RAPM)" line in the PlayerDetail on/off panel
   (≥250 paired-possession display floor), with the panel's team-result
-  caveat updated to point at it. The TeamDetail roster column **replaces**
-  raw on/off with "Adj On/Off" (same floor; sorts by the displayed value);
-  the raw swing and its breakdown move into the cell tooltip. The Players /
-  Transfers grids keep raw on/off for now.
+  caveat updated to point at it. Every on/off *column* — the TeamDetail
+  roster, the Players grid, and the Transfer-portal grid (source-season) —
+  **replaces** raw on/off with "Adj On/Off" (same floor; sorts by the
+  displayed value so sub-floor "—" rows sink); the raw swing and its
+  breakdown move into the cell tooltip via the shared `onoff.ts` helpers
+  (`adjOnOff` / `adjOnOffTitle`). Raw on/off remains visible in the
+  PlayerDetail panel rows and every tooltip — replaced as the headline
+  column, not erased.
 
 ### 8.2 Trajectory-slot test (2026-06-12): REJECTED, on/off keeps the slot
 

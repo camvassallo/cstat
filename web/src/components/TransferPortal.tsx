@@ -4,7 +4,7 @@ import type { ColDef } from 'ag-grid-community';
 import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
-import { onOffColor, signedRtg, onOffTitle } from './onoff';
+import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from './onoff';
 import { classColor } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
@@ -260,16 +260,20 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
         );
       },
     },
-    // Hidden when the source season has no PBP-derived on/off (e.g. portal
-    // cycle 2019, the corrupt-gated season) rather than an all-"—" column.
+    // Hidden when the source season has no RAPM fit (e.g. portal cycle 2019,
+    // the corrupt-gated season) rather than an all-"—" column.
     ...(hasOnOff
       ? [
           {
-            headerName: 'On/Off',
-            field: 'net_on_off',
-            ...flexCol(1, 85),
+            headerName: 'Adj On/Off',
+            field: 'rapm_net',
+            ...flexCol(1, 95),
             headerTooltip:
-              "Source-season on/off: team net rating per 100 poss with vs without the player at their old school (their last season before transferring). PBP-derived; contextual (reflects teammates/opponents). NULL when unmatched or no PBP.",
+              'Source-season adj on/off (RAPM) at their old school: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries). Hover a value for the raw on/off breakdown. NULL when unmatched or below the sample floor.',
+            // Sort by the DISPLAYED value (null below the floor) so "—" rows
+            // sink instead of clustering mid-table on hidden coefficients.
+            valueGetter: (p: { data?: RankedTransfer }) =>
+              p.data ? adjOnOff(p.data) : null,
             comparator: (a: number | null, b: number | null) => {
               if (a == null && b == null) return 0;
               if (a == null) return 1;
@@ -278,7 +282,7 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
             },
             cellRenderer: (p: { value: number | null; data?: RankedTransfer }) =>
               p.value != null ? (
-                <span style={{ color: onOffColor(p.value) }} title={p.data ? onOffTitle(p.data) : ''}>
+                <span style={{ color: onOffColor(p.value, 8) }} title={p.data ? adjOnOffTitle(p.data) : ''}>
                   {signedRtg(p.value)}
                 </span>
               ) : (
@@ -445,7 +449,7 @@ export default function TransferPortal({ year }: Props) {
     };
   }, [year]);
 
-  const hasOnOff = useMemo(() => (rows ?? []).some((r) => r.net_on_off != null), [rows]);
+  const hasOnOff = useMemo(() => (rows ?? []).some((r) => adjOnOff(r) != null), [rows]);
   const columns = useMemo(
     () => buildColumns(isMobile, year, hasOnOff),
     [isMobile, year, hasOnOff],
