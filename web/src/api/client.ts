@@ -157,7 +157,10 @@ export interface RosterEntry {
   on_off_off_poss: number | null;
   /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off above stays
   /// for the tooltip). `rapm_paired_poss` feeds the ~250-poss display floor.
+  /// rapm_o/rapm_d power the roster's Adv view (d = points allowed, lower-better).
   rapm_net: number | null;
+  rapm_o: number | null;
+  rapm_d: number | null;
   rapm_paired_poss: number | null;
 }
 

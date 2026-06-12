@@ -323,8 +323,12 @@ pub struct RosterEntry {
     pub on_off_off_poss: Option<f64>,
     /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off stays in
     /// the row for the tooltip context). `rapm_paired_poss` is the fit sample
-    /// for the UI's ~250-possession display floor. See docs/rapm_methodology.md.
+    /// for the UI's ~250-possession display floor. `rapm_o`/`rapm_d` power the
+    /// roster's Adv view (d = points allowed, lower-better). See
+    /// docs/rapm_methodology.md.
     pub rapm_net: Option<f64>,
+    pub rapm_o: Option<f64>,
+    pub rapm_d: Option<f64>,
     pub rapm_paired_poss: Option<f64>,
 }
 
@@ -1167,6 +1171,8 @@ pub async fn get_team_roster(
             oo.source AS on_off_source,
             (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
             pr.net_rapm AS rapm_net,
+            pr.o_rapm AS rapm_o,
+            pr.d_rapm AS rapm_d,
             pr.paired_possessions AS rapm_paired_poss
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
@@ -1176,7 +1182,10 @@ pub async fn get_team_roster(
         LEFT JOIN player_on_off oo ON oo.player_id = p.id AND oo.season = p.season AND oo.team_id = p.team_id
         LEFT JOIN player_rapm pr ON pr.player_id = p.id AND pr.season = p.season
         WHERE p.team_id = $1 AND p.season = $2
-        ORDER BY tps.cam_gbpm_v3_psos DESC NULLS LAST, pss.minutes_per_game DESC NULLS LAST
+        -- Minutes-first default: consumers that take the order as-is (the
+        -- Predict matchup roster panels' top-N slice) show the actual
+        -- rotation; TeamDetail re-sorts client-side (also defaulting to MPG).
+        ORDER BY pss.minutes_per_game DESC NULLS LAST, tps.cam_gbpm_v3_psos DESC NULLS LAST
         "#,
     )
     .bind(team_id)

@@ -23,7 +23,7 @@ import { classColor, classTagline } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
-import { campomTier, campomTierColor, campomTitle } from '../components/campom';
+import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
 import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
@@ -686,7 +686,11 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
 type RosterSortKey =
   | 'name'
   | 'campom'
+  | 'campom_o'
+  | 'campom_d'
   | 'rapm_net'
+  | 'rapm_o'
+  | 'rapm_d'
   | 'games_played'
   | 'minutes_per_game'
   | 'usage_rate'
@@ -704,7 +708,7 @@ type RosterSortKey =
   | 'stl_pct'
   | 'blk_pct';
 
-type RosterView = 'raw' | 'rate';
+type RosterView = 'raw' | 'rate' | 'adv';
 
 // Continuous red → neutral → green gradient on percentile (0–1).
 // Anchors: red-400 (#f87171) → gray-200 (#e5e7eb, the table's default text) → green-400 (#4ade80).
@@ -769,16 +773,18 @@ function CoachCard({ coach }: { coach: TeamCoachCard }) {
 }
 
 function RosterTable({ roster }: { roster: RosterEntry[] }) {
-  const [view, setView] = useState<RosterView>('raw');
+  const [view, setView] = useState<RosterView>('adv');
   const [sort, setSort] = useState<{ key: RosterSortKey; dir: SortDir }>({
-    key: 'campom',
+    key: 'minutes_per_game',
     dir: 'desc',
   });
   const onSort = (key: RosterSortKey) => {
     setSort((s) =>
       s.key === key
         ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-        : { key, dir: key === 'name' ? 'asc' : 'desc' },
+        : // First click = best-first: ascending for name and for RAPM-D
+          // (points allowed, lower is better), descending otherwise.
+          { key, dir: key === 'name' || key === 'rapm_d' ? 'asc' : 'desc' },
     );
   };
 
@@ -787,14 +793,26 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
     setView(next);
     const rawOnly: RosterSortKey[] = ['ppg', 'rpg', 'apg', 'spg', 'bpg', 'topg'];
     const rateOnly: RosterSortKey[] = ['ast_pct', 'tov_pct', 'orb_pct', 'drb_pct', 'stl_pct', 'blk_pct'];
-    if (next === 'rate' && rawOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
-    if (next === 'raw' && rateOnly.includes(sort.key)) setSort({ key: 'campom', dir: 'desc' });
+    const advOnly: RosterSortKey[] = ['rapm_net', 'campom_o', 'campom_d', 'rapm_o', 'rapm_d'];
+    const visible: Record<RosterView, RosterSortKey[]> = {
+      raw: rawOnly, rate: rateOnly, adv: advOnly,
+    };
+    const hidden = [...rawOnly, ...rateOnly, ...advOnly].filter(
+      (k) => !visible[next].includes(k),
+    );
+    if (hidden.includes(sort.key)) setSort({ key: 'minutes_per_game', dir: 'desc' });
   };
 
   const sorted = useMemo(() => {
-    // rapm_net sorts by the DISPLAYED value (null below the floor), so "—"
-    // rows sink to the end instead of clustering mid-table on hidden values.
-    const val = (p: RosterEntry) => (sort.key === 'rapm_net' ? adjOnOff(p) : p[sort.key]);
+    // RAPM columns sort by the DISPLAYED value (null below the floor), so
+    // "—" rows sink to the end instead of clustering mid-table on hidden
+    // values (the O/D halves share rapm_net's floor gate).
+    const val = (p: RosterEntry) => {
+      if (sort.key === 'rapm_net') return adjOnOff(p);
+      if (sort.key === 'rapm_o') return adjOnOff(p) != null ? p.rapm_o : null;
+      if (sort.key === 'rapm_d') return adjOnOff(p) != null ? p.rapm_d : null;
+      return p[sort.key];
+    };
     return [...roster].sort((a, b) => compareValues(val(a), val(b), sort.dir));
   }, [roster, sort]);
 
@@ -819,6 +837,12 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
           >
             Rate
           </button>
+          <button
+            onClick={() => onViewChange('adv')}
+            className={`px-3 py-1 ${view === 'adv' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+          >
+            Adv
+          </button>
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -842,22 +866,57 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 title="Composite player valuation."
                 className="border-l border-gray-800"
               />
-              {hasOnOff && (
-                <SortHeader
-                  label="Adj On/Off"
-                  sortKey="rapm_net"
-                  current={sort}
-                  onSort={onSort}
-                  align="right"
-                  title="RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries; stabilized with decayed prior-season stints). Hover a value for the raw on/off breakdown."
-                  className="border-l border-gray-800"
-                />
-              )}
               <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" />
               <SortHeader label="MPG" sortKey="minutes_per_game" current={sort} onSort={onSort} align="right" />
               <SortHeader label="USG%" sortKey="usage_rate" current={sort} onSort={onSort} align="right" />
               <SortHeader label="TS%" sortKey="true_shooting_pct" current={sort} onSort={onSort} align="right" />
-              {view === 'raw' ? (
+              {view === 'adv' ? (
+                <>
+                  <SortHeader
+                    label="CPO"
+                    sortKey="campom_o"
+                    current={sort}
+                    onSort={onSort}
+                    align="right"
+                    title="CamPom's offensive half (O + D = CamPom). Hidden where the decomposition is numerically unstable."
+                    className="border-l border-gray-800"
+                  />
+                  <SortHeader
+                    label="CPD"
+                    sortKey="campom_d"
+                    current={sort}
+                    onSort={onSort}
+                    align="right"
+                    title="CamPom's defensive half — positive is GOOD (defensive value added)."
+                  />
+                  {hasOnOff && (
+                    <SortHeader
+                      label="RAPM"
+                      sortKey="rapm_net"
+                      current={sort}
+                      onSort={onSort}
+                      align="right"
+                      title="Adjusted on/off (RAPM): per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries; stabilized with decayed prior-season stints). Net = O − D. Hover a value for the raw on/off breakdown."
+                    />
+                  )}
+                  <SortHeader
+                    label="RAPM-O"
+                    sortKey="rapm_o"
+                    current={sort}
+                    onSort={onSort}
+                    align="right"
+                    title="Adjusted on/off, offensive half: points per 100 added on offense with teammates/opponents held constant."
+                  />
+                  <SortHeader
+                    label="RAPM-D"
+                    sortKey="rapm_d"
+                    current={sort}
+                    onSort={onSort}
+                    align="right"
+                    title="Adjusted on/off, defensive half: points per 100 ALLOWED while defending — negative is good. Sorts best-first."
+                  />
+                </>
+              ) : view === 'raw' ? (
                 <>
                   <SortHeader
                     label="PPG"
@@ -941,17 +1000,6 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="text-gray-600">—</span>
                   )}
                 </td>
-                {hasOnOff && (
-                  <td className="py-2 px-2 text-right border-l border-gray-800 tabular-nums">
-                    {adjOnOff(p) != null ? (
-                      <span style={{ color: onOffColor(adjOnOff(p), 8) }} title={adjOnOffTitle(p)}>
-                        {signedRtg(adjOnOff(p))}
-                      </span>
-                    ) : (
-                      <span className="text-gray-600">—</span>
-                    )}
-                  </td>
-                )}
                 <td className="py-2 px-2 text-right">{p.games_played}</td>
                 <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
                 <td className="py-2 px-2 text-right">
@@ -960,7 +1008,54 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 <td className="py-2 px-2 text-right">
                   <ValueWithPctile value={fracPct(p.true_shooting_pct)} pctile={p.true_shooting_pct_pct} />
                 </td>
-                {view === 'raw' ? (
+                {view === 'adv' ? (
+                  <>
+                    <td className="py-2 px-2 text-right border-l border-gray-800 tabular-nums">
+                      {p.campom_o != null ? (
+                        <span style={{ color: campomHalfColor(p.campom_o, 'o') }}>
+                          {signedRtg(p.campom_o)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-2 text-right tabular-nums">
+                      {p.campom_d != null ? (
+                        <span style={{ color: campomHalfColor(p.campom_d, 'd') }}>
+                          {signedRtg(p.campom_d)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </td>
+                    {hasOnOff && (
+                      <td className="py-2 px-2 text-right tabular-nums">
+                        {adjOnOff(p) != null ? (
+                          <span style={{ color: onOffColor(adjOnOff(p), 8) }} title={adjOnOffTitle(p)}>
+                            {signedRtg(adjOnOff(p))}
+                          </span>
+                        ) : (
+                          <span className="text-gray-600">—</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="py-2 px-2 text-right tabular-nums">
+                      {adjOnOff(p) != null && p.rapm_o != null ? (
+                        <span style={{ color: onOffColor(p.rapm_o, 5) }}>{signedRtg(p.rapm_o)}</span>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-2 text-right tabular-nums">
+                      {/* points allowed: negate for color so negative (good) reads green */}
+                      {adjOnOff(p) != null && p.rapm_d != null ? (
+                        <span style={{ color: onOffColor(-p.rapm_d, 5) }}>{signedRtg(p.rapm_d)}</span>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </td>
+                  </>
+                ) : view === 'raw' ? (
                   <>
                     <td className="py-2 px-2 text-right border-l border-gray-800">
                       <ValueWithPctile value={fmt(p.ppg)} pctile={p.ppg_pct} />

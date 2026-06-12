@@ -9,7 +9,6 @@ import {
 import { fetchPlayers, type PlayerRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
-import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
 import { agNullsBottom } from '../components/tableSort';
 import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
@@ -62,18 +61,6 @@ const campomHalfRenderer = (side: 'o' | 'd') =>
     );
   };
 
-// Adj on/off (RAPM) — colored value with the raw on/off breakdown in the
-// tooltip (shared helpers). "—" below the paired-possession display floor.
-const adjOnOffCellRenderer = (p: { data?: PlayerRow }) => {
-  const v = p.data ? adjOnOff(p.data) : null;
-  if (v == null) return <span className="text-slate-500">—</span>;
-  return (
-    <span style={{ color: onOffColor(v, 8) }} title={p.data ? adjOnOffTitle(p.data) : ''}>
-      {signedRtg(v)}
-    </span>
-  );
-};
-
 type ColumnView = 'raw' | 'rate';
 type PageMode = 'all' | 'transfers' | 'recruits';
 
@@ -98,7 +85,7 @@ function gradientCellStyle(
   };
 }
 
-function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] {
+function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
   // Pinned identity / context columns. Mirrors the roster table's first block
   // (Player | Class) plus team / conf which the roster doesn't need (already
   // scoped to one team).
@@ -197,6 +184,8 @@ function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] 
       headerTooltip: 'Composite player valuation. Hover the chip for tier and the O/D split.',
       width: 120,
       sort: 'desc',
+      // First click sorts best-first, matching CPO/CPD.
+      sortingOrder: ['desc', 'asc', null],
       comparator: agNullsBottom,
       cellRenderer: campomCellRenderer,
       headerStyle: CATEGORY_DIVIDER_STYLE,
@@ -223,25 +212,6 @@ function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] 
       comparator: agNullsBottom,
       cellRenderer: campomHalfRenderer('d'),
     },
-    // Hidden for seasons with no RAPM fit (2019 / not-loaded) rather than
-    // rendering an all-"—" column — same gate as the roster table.
-    ...(hasOnOff
-      ? [
-          {
-            field: 'rapm_net',
-            headerName: 'Adj On/Off',
-            headerTooltip:
-              'RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries; stabilized with decayed prior-season stints). Hover a value for the raw on/off breakdown.',
-            width: 100,
-            // Sort by the DISPLAYED value (null below the floor) so "—" rows
-            // sink instead of clustering mid-table on hidden coefficients —
-            // same convention as the roster table and the portal grid.
-            valueGetter: (p: { data?: PlayerRow }) => (p.data ? adjOnOff(p.data) : null),
-            comparator: agNullsBottom,
-            cellRenderer: adjOnOffCellRenderer,
-          } as ColDef<PlayerRow>,
-        ]
-      : []),
     { field: 'games_played', headerName: 'GP', width: 60 },
     {
       field: 'minutes_per_game', headerName: 'MPG', width: 70,
@@ -324,8 +294,7 @@ export default function Players() {
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const hasOnOff = useMemo(() => rows.some((r) => adjOnOff(r) != null), [rows]);
-  const columns = useMemo(() => buildColumns(view, hasOnOff), [view, hasOnOff]);
+  const columns = useMemo(() => buildColumns(view), [view]);
 
   // Single fetch loads the entire qualified pool; sort + search run client-
   // side via AG Grid's built-in sorting and `quickFilterText`. Pagination
