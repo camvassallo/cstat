@@ -859,7 +859,7 @@ impl Predictor {
     }
 
     /// Project a returning player's next-season CamPom v3 from their prior
-    /// season's 48-feature vector built by
+    /// season's 51-feature vector built by
     /// `trajectory::build_trajectory_features`.
     ///
     /// Returns mean (q=0.5 equivalent — LightGBM regression objective) plus
@@ -867,8 +867,8 @@ impl Predictor {
     /// projection / ceiling band. Three ONNX sessions run sequentially; total
     /// inference is ~1ms per player on the warm path.
     ///
-    /// Honest framing: pooled LOPO MAE is ~2.3 CamPom points (vs naive
-    /// "same as last year" baseline of ~2.44), so per-player projections
+    /// Honest framing: pooled LOPO MAE is ~2.13 CamPom points (vs naive
+    /// "same as last year" baseline of ~2.34), so per-player projections
     /// are directional, not point estimates. The quantile band width is
     /// what users should look at — wide = freshman with sparse signal,
     /// tight = senior with a stable profile.
@@ -1925,6 +1925,9 @@ mod tests {
             dgbpm: Some(0.8),
             gbpm: Some(2.3),
             campom: Some(2.5),
+            on_net_rtg: Some(5.5),
+            net_on_off: Some(2.8),
+            on_poss_share: Some(0.68),
             primary_class: Some("Wizard".into()),
             secondary_class: None,
             recruit_composite_rank: None,
@@ -2013,6 +2016,9 @@ mod tests {
             dgbpm: Some(0.8),
             gbpm: Some(2.3),
             campom: Some(2.5),
+            on_net_rtg: Some(5.5),
+            net_on_off: Some(2.8),
+            on_poss_share: Some(0.68),
             primary_class: Some("Wizard".into()),
             secondary_class: None,
             recruit_composite_rank: None,
@@ -2050,6 +2056,9 @@ mod tests {
             dgbpm: Some(3.5),
             gbpm: Some(11.5),
             campom: Some(18.0),
+            on_net_rtg: Some(16.0),
+            net_on_off: Some(8.5),
+            on_poss_share: Some(0.8),
             primary_class: Some("Druid".into()),
             secondary_class: Some("Wizard".into()),
             recruit_composite_rank: None,

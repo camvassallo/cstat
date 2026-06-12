@@ -194,14 +194,14 @@ export default function PlayerProgression() {
               // `trajectory_model_meta.json::mae_by_current_campom`.
               const regressionNote =
                 t.prior_campom != null && t.prior_campom >= 15
-                  ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15; +20+ inputs extrapolate beyond training). Read the q90 ceiling for the optimistic case.'
+                  ? ' Regression-to-the-mean: elite inputs project ≈2 CamPom below current — mostly real regression (residual bias vs actual ≈−0.7 on ≥+15; +20+ inputs extrapolate beyond training). Read the q90 ceiling for the optimistic case.'
                   : t.prior_campom != null && t.prior_campom >= 10
-                    ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
+                    ? ' Mild regression expected on this tier (projections sit ≈0.3 below current on +10..+15 inputs).'
                     : '';
               return (
                 <span
                   className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)}`}
-                  title={`Projected next-season CamPom. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.3 — directional, not a point estimate.${regressionNote}`}
+                  title={`Projected next-season CamPom. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.1 — directional, not a point estimate.${regressionNote}`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {seasonLabel(t.target_season)}

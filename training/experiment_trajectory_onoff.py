@@ -1,9 +1,15 @@
 """
 Tier-2 on/off features → trajectory model: accept/reject experiment.
 
-Adds prior-season player on/off splits (the `player_on_off` rollup, PBP
-item A) to the trajectory feature set and re-runs the leave-one-pair-out
-backtest against the current 48-feature baseline on the SAME corpus:
+ACCEPTED 2026-06-11 (the first positive PBP-feature verdict — see
+eval_history/tier2_membership_models_20260611_summary.json) and shipped
+into the production contract: `train_trajectory_model.py`'s PAIRED_QUERY /
+NUMERIC_FEATURE_COLS now carry the three on/off columns natively (48→51).
+This script is kept as the re-test harness: it ablates the on/off block
+from the production feature set and re-runs the LOPO comparison, so the
+"baseline" here is the pre-accept 48-feature model.
+
+The three features (prior-season `player_on_off` rollup, PBP item A):
 
   prior_on_net_rtg    — team net rating per 100 with the player ON
   prior_net_on_off    — the on/off swing (impact evidence the box can't see)
@@ -32,70 +38,18 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error
 
 import train_trajectory_model as base
-from db import get_engine
 
-ONOFF_COLS = [
-    "prior_on_net_rtg",
-    "prior_net_on_off",
-    "prior_on_poss_share",
-]
+ONOFF_COLS = list(base.ONOFF_FEATURE_COLS)
+MISSING_SENTINEL = base.ONOFF_MISSING_SENTINEL
 
-MISSING_SENTINEL = -999.0
-
-# Extend the locked production query with the on/off columns. LEFT JOIN —
-# the rollup's >=100-on-possession gate is stricter than the trajectory
-# 5 MPG / 5 GP gate, so some qualified rows legitimately miss; 2019 misses
-# entirely (no PBP/lineups).
-EXT_QUERY = base.PAIRED_QUERY.replace(
-    "    -- Archetype mixture (primary + secondary)",
-    """    -- On/off splits (Tier-2; NULL for 2019 / sub-rotation players)
-    ooN.on_net_rtg AS prior_on_net_rtg,
-    ooN.net_on_off AS prior_net_on_off,
-    CASE WHEN ooN.on_possessions_for + ooN.off_possessions_for > 0
-         THEN ooN.on_possessions_for
-              / (ooN.on_possessions_for + ooN.off_possessions_for)
-    END AS prior_on_poss_share,
-    -- Archetype mixture (primary + secondary)""",
-).replace(
-    "LEFT JOIN recruits rec",
-    """LEFT JOIN player_on_off ooN
-    ON ooN.player_id = base.pid_n AND ooN.season = base.s_n
-LEFT JOIN recruits rec""",
-)
+# The production feature set with the on/off block ablated — the
+# pre-accept 48-feature contract.
+BASELINE_COLS = [c for c in base.FEATURE_COLS if c not in ONOFF_COLS]
 
 
-def build_dataset_ext() -> pd.DataFrame:
-    engine = get_engine()
-    df = pd.read_sql(EXT_QUERY, engine, params={"seasons": list(base.SEASONS)})
-    print(f"Loaded {len(df):,} paired rows (extended query).")
-
-    df["prior_class_year_code"] = df["prior_class_year"].map(base.encode_class_year)
-    df = base.add_archetype_columns(df)
-    from recruit_features import derive_recruit_features
-    df = derive_recruit_features(df, prior_season_col="s_n")
-
-    pre = len(df)
-    df = df.dropna(subset=["prior_campom", "prior_ogbpm", "prior_dgbpm"])
-    if len(df) < pre:
-        print(f"  dropped {pre - len(df)} rows missing GBPM components")
-
-    for col in ONOFF_COLS:
-        df[col] = df[col].fillna(MISSING_SENTINEL).astype(float)
-
-    cov = (df["prior_on_net_rtg"] != MISSING_SENTINEL).groupby(df["s_n"]).mean()
-    print("On/off feature coverage by s_n:")
-    print((cov * 100).round(1).to_string())
-    return df.reset_index(drop=True)
-
-
-def run_variant(name: str, df: pd.DataFrame, extra_cols: list[str]) -> dict:
-    print(f"\n{'=' * 64}\nVariant: {name}  (+{len(extra_cols)} features)\n{'=' * 64}")
-    base.FEATURE_COLS = (
-        base.NUMERIC_FEATURE_COLS
-        + base.ARCH_FEATURE_COLS
-        + list(base.RECRUIT_FEATURE_NAMES)
-        + extra_cols
-    )
+def run_variant(name: str, df: pd.DataFrame, feature_cols: list[str]) -> dict:
+    print(f"\n{'=' * 64}\nVariant: {name}  ({len(feature_cols)} features)\n{'=' * 64}")
+    base.FEATURE_COLS = list(feature_cols)
     lopo, lopo_preds = base.leave_one_pair_out(df)
 
     mask = (df["prior_on_net_rtg"] != MISSING_SENTINEL) & lopo_preds.notna()
@@ -124,12 +78,13 @@ def run_variant(name: str, df: pd.DataFrame, extra_cols: list[str]) -> dict:
 
 
 def main() -> None:
-    df = build_dataset_ext()
+    production_cols = list(base.FEATURE_COLS)
+    df = base.build_dataset().reset_index(drop=True)
     print(f"Rows: {len(df):,}")
 
     results = {
-        "baseline": run_variant("baseline (48 features)", df, []),
-        "onoff": run_variant("on/off (+3)", df, ONOFF_COLS),
+        "baseline": run_variant("baseline (on/off ablated)", df, BASELINE_COLS),
+        "onoff": run_variant("production (with on/off)", df, production_cols),
     }
 
     print(f"\n{'=' * 64}\nSUMMARY (LOPO pooled MAE)\n{'=' * 64}")

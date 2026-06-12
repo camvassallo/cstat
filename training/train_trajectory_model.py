@@ -2,16 +2,19 @@
 Phase 5c growth model: project a returning player's next-season CamPom v3.
 
 One row per (torvik_pid, season_N, season_N+1) pair. Trained on every
-consecutive-season player in DB (currently 2024→2025 and 2025→2026,
-~4,400 rows after the qualification gate).
+consecutive-season player in DB (currently the 11 pairs 2015→2016 ..
+2025→2026, ~24,600 rows after the qualification gate).
 
 Target: next-season `torvik_player_stats.cam_gbpm_v3_psos`.
 
 Features come from the prior season only — rate stats + impact metrics
-(CamPom + GBPM components) + archetype mixture (primary 1.0× / secondary
-0.5×) + volume + class_year + height + recruit-rank block (composite rank,
-rating, star, position rank, rank movement, height/weight, BMI proxy,
-position code, years_since_recruit). Recruit features come via LEFT JOIN
+(CamPom + GBPM components) + prior-season on/off splits (on-court net
+rating, on/off swing, possession share; `player_on_off` rollup, -999
+sentinel where the rollup has no row — accepted by the Tier-2 membership
+backtest 2026-06-11, see eval_history) + archetype mixture (primary 1.0× /
+secondary 0.5×) + volume + class_year + height + recruit-rank block
+(composite rank, rating, star, position rank, rank movement, height/weight,
+BMI proxy, position code, years_since_recruit). Recruit features come via LEFT JOIN
 on `recruits.cstat_player_id`; only class-of-2024/2025 are ingested, so
 ~7% of training rows have a recruit row and the rest fall into the
 `recruit_is_ranked=0` bucket. LightGBM fits a separate split on the
@@ -28,10 +31,11 @@ Three LightGBMs trained per run: mean + q=0.1 + q=0.9. Three ONNX files
 shipped so the Rust inference path can return (predicted, lower, upper)
 as a single floor/ceiling band on PlayerDetail.
 
-Honest framing: 2 paired classes is thin. The per-class-year bucket is
-even thinner (a few hundred Fr→So pairs, even fewer Jr→Sr). Document MAE
-per bucket in the meta JSON; surface the headline MAE in the UI so users
-understand the projection is directional, not a point estimate.
+Honest framing: the corpus is deep (11 pairs) but per-player projections
+remain directional — pooled LOPO MAE ~2.1 CamPom points vs a ~2.3 naive
+baseline. Document MAE per bucket in the meta JSON; surface the headline
+MAE in the UI so users understand the projection is directional, not a
+point estimate.
 """
 
 from __future__ import annotations
@@ -118,6 +122,16 @@ SELECT
     tpsN.dgbpm AS prior_dgbpm,
     tpsN.gbpm AS prior_gbpm,
     tpsN.cam_gbpm_v3_psos AS prior_campom,
+    -- On/off splits (Tier-2 membership features; backtested 2026-06-11).
+    -- LEFT JOIN: the rollup's >=100-on-possession gate is stricter than the
+    -- 5 GP / 5 MPG gate here, so bench-fringe rows legitimately miss; 2019
+    -- misses entirely (no PBP/lineups). NULL -> -999 sentinel downstream.
+    ooN.on_net_rtg AS prior_on_net_rtg,
+    ooN.net_on_off AS prior_net_on_off,
+    CASE WHEN ooN.on_possessions_for + ooN.off_possessions_for > 0
+         THEN ooN.on_possessions_for
+              / (ooN.on_possessions_for + ooN.off_possessions_for)
+    END AS prior_on_poss_share,
     -- Archetype mixture (primary + secondary)
     paN.primary_class AS prior_primary_class,
     paN.secondary_class AS prior_secondary_class,
@@ -142,6 +156,8 @@ JOIN torvik_player_stats tpsN
     ON tpsN.player_id = base.pid_n AND tpsN.season = base.s_n
 LEFT JOIN player_archetypes paN
     ON paN.player_id = base.pid_n AND paN.season = base.s_n
+LEFT JOIN player_on_off ooN
+    ON ooN.player_id = base.pid_n AND ooN.season = base.s_n
 LEFT JOIN recruits rec
     ON rec.cstat_player_id = base.pid_n
 WHERE pssN.minutes_per_game >= 5
@@ -172,12 +188,22 @@ NUMERIC_FEATURE_COLS = [
     "prior_ast_pct", "prior_tov_pct",
     "prior_orb_pct", "prior_drb_pct", "prior_stl_pct", "prior_blk_pct", "prior_ft_rate",
     "prior_ogbpm", "prior_dgbpm", "prior_gbpm", "prior_campom",
+    "prior_on_net_rtg", "prior_net_on_off", "prior_on_poss_share",
 ]
 ARCH_FEATURE_COLS = [f"arch_{a.lower()}" for a in ARCHETYPES]
-# Numeric (25) + archetype shares (12) + recruit block (11) = 48 features.
+# Numeric (28) + archetype shares (12) + recruit block (11) = 51 features.
 # Recruit block order is locked in `training/recruit_features.py` and
 # mirrored by `cstat-core::recruit_features::RECRUIT_FEATURE_NAMES`.
 FEATURE_COLS = NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS + list(RECRUIT_FEATURE_NAMES)
+
+# On/off features are NULL where the player_on_off rollup has no row
+# (sub-rotation players, 2019's missing PBP) or where the swing has no
+# OFF sample (iron-men under the >=10-possession OFF floor). The Rust
+# serve path fills the same sentinel — -999 is cleanly outside every
+# real range (net ratings +/-~60, share in [0,1]) and, unlike NaN, needs
+# no special plumbing through the ONNX input tensor.
+ONOFF_FEATURE_COLS = ["prior_on_net_rtg", "prior_net_on_off", "prior_on_poss_share"]
+ONOFF_MISSING_SENTINEL = -999.0
 
 
 def encode_class_year(s: Optional[str]) -> int:
@@ -219,6 +245,13 @@ def build_dataset() -> pd.DataFrame:
     df = df.dropna(subset=["prior_campom", "prior_ogbpm", "prior_dgbpm"])
     if len(df) < pre_drop:
         print(f"  dropped {pre_drop - len(df)} rows missing GBPM components")
+
+    # On/off NULLs become the sentinel, never a dropped row — coverage is
+    # structural (era + rotation gate), not data quality.
+    for col in ONOFF_FEATURE_COLS:
+        df[col] = df[col].fillna(ONOFF_MISSING_SENTINEL).astype(float)
+    onoff_cov = float((df["prior_on_net_rtg"] != ONOFF_MISSING_SENTINEL).mean())
+    print(f"  on/off feature coverage: {onoff_cov:.1%}")
 
     print(f"After gates: {len(df):,} rows.")
     print(f"  by pair: {df.groupby(['s_n', 's_np1']).size().to_dict()}")
@@ -268,9 +301,9 @@ def naive_baseline(df: pd.DataFrame) -> dict:
 
 
 def leave_one_pair_out(df: pd.DataFrame) -> tuple[dict, pd.Series]:
-    """Honest-backtest analog of the roster model's LOSO. With 4 pairs
-    (2022→23 .. 2025→26), train on three pairs and predict the held-out
-    fourth — repeat.
+    """Honest-backtest analog of the roster model's LOSO. With 11 pairs
+    (2015→16 .. 2025→26), train on ten pairs and predict the held-out
+    eleventh — repeat.
 
     Returns (metrics_dict, lopo_predictions). `lopo_predictions` is a Series
     aligned to `df.index` with each row's held-out mean prediction, used
@@ -569,6 +602,8 @@ def main() -> None:
         export_to_onnx(model, len(FEATURE_COLS), path)
         print(f"Exported → {path}")
 
+    onoff_coverage = float((df["prior_on_net_rtg"] != ONOFF_MISSING_SENTINEL).mean())
+
     meta = {
         "model": "trajectory_model",
         "target": "cam_gbpm_v3_psos (season N+1)",
@@ -584,6 +619,12 @@ def main() -> None:
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
         # Quantile model alphas, in the order the Rust loader expects them.
         "quantile_alphas": {"q10": 0.1, "q90": 0.9},
+        # On/off features use this sentinel where `player_on_off` has no row
+        # (sub-rotation players, 2019) or the swing lacks an OFF sample. The
+        # Rust serve path (`trajectory.rs::build_trajectory_features`) fills
+        # the same value for NULLs.
+        "onoff_missing_sentinel": ONOFF_MISSING_SENTINEL,
+        "onoff_coverage": onoff_coverage,
         # Set true once the LOPO held-out predictions land in
         # `trajectory_oof_predictions`. The Rust boot validator gates on
         # this so a stale meta + empty table can't silently regress the

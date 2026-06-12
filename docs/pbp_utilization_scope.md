@@ -240,3 +240,15 @@ split sharpens Tier 3's prior: player-level membership signal is real where
 team-level continuity summaries are absorbed — RAPM (player-level by
 construction) stays the principled play; re-run the game-side harness only if
 natstat exact coverage materially upgrades stint quality.
+
+**[TRAJECTORY ON/OFF ACCEPTED + SHIPPED 2026-06-11.]** The positive verdict
+shipped end-to-end as the 48→51 trajectory contract change: the three on/off
+features are native to `train_trajectory_model.py` (the experiment harness now
+ablates them from production instead of re-adding), the Rust contract
+(`TRAJECTORY_FEATURE_NAMES`, `TrajectoryPlayerRow`, both fetch queries,
+sentinel fill) carries the `player_on_off` join, and the full downstream chain
+regenerated: OOF → roster-impact retrain → 11-season backtest dump (pooled
+roster_proj MAE 6.04 → 5.96) → CAE (guards pass) → `compute-projections`.
+Production retrain reproduced the accept exactly (pooled LOPO 2.133 → 2.127;
+`prior_on_net_rtg` 3rd of 51 by importance). Details in the ROADMAP ship
+bullet under P-onfloor-4. Tier-3 RAPM is now the next membership item.
