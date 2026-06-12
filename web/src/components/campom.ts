@@ -66,7 +66,6 @@ export function campomTitle(campom: number | null | undefined,
   return s;
 }
 
-
 /// Diverging red→gray→green for the O/D halves (shared gradient machinery
 /// from onoff.ts). Saturation tuned to each half's rotation-pool spread —
 /// O p05/p95 ≈ −4.6/+6.7 (scale 7), D ≈ −2.9/+3.8 (scale 4) — so a clearly

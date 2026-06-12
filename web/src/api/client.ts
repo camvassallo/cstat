@@ -115,8 +115,8 @@ export interface RosterEntry {
   campom: number | null;
   campom_pct: number | null;
   // CamPom O/D decomposition (o + d = campom; d positive-good). Null outside
-  // the ±30 sanity envelope — the share-based split explodes when a player's
-  // ogbpm ≈ −dgbpm (the net stays sane while the halves are junk).
+  // the ±30 sanity envelope — a regression guard; the compute-side SOS
+  // allocation is bounded since the 2026-06-12 magnitude-share fix.
   campom_o: number | null;
   campom_d: number | null;
   ppg_pct: number | null;
