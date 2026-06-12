@@ -1,0 +1,43 @@
+{
+  "experiment": "tier2_membership_features_into_models",
+  "date": "2026-06-11",
+  "verdicts": {
+    "game_models_lineup_quality": "REJECTED",
+    "trajectory_on_off": "POSITIVE (accept pending user decision - small but consistent: covered MAE -0.0107, 9/11 LOPO pairs win, all four class buckets improve)"
+  },
+  "data_quality_fix": "Pre-req bug fix shipped first: player_on_off OFF rates used nullif(x,0), which passes ~1e-13 float-residual possession sums while integer points stay nonzero, minting ~1e16 ratings (4 rows >1e6; ~27 rows |net|>1000). Plus 6 seasons (2016-2018, 2021-2023) carried stale rows predating the on/off rewrite's >=100-possession ON gate. Fix: >=10-possession floor on OFF-rate denominators in compute.rs + full 11-season recompute. Post-fix: 0 rows |net|>1000 (max 259), 0 rows below the ON gate, 17 honest NULL-net iron-men.",
+  "game_models": {
+    "script": "experiment_game_lineups.py",
+    "setup": "shared chronological last-20%-of-2026 holdout (n=925), 12-season train (n=46791), production hyperparams, matrix built once with LINEUP_FEATURES=1, baseline = column subset",
+    "features_added": 3,
+    "features": "diff_lu_hhi (possession HHI over 5-man lineups to date), diff_lu_top_share (most-used lineup's possession share), diff_lu_top_net (its net rating per 100, >=20-poss floor) - expanding-window, shift-one-game leak-free, 5-man stints only",
+    "coverage": "91-100% of kept rows every season except 2019 (0% - no lineups)",
+    "margin_mae": {"baseline": 8.1188, "lineup": 8.1487, "delta": 0.0300},
+    "margin_win_acc": {"baseline": 0.7416, "lineup": 0.7330},
+    "win_accuracy": {"baseline": 0.7308, "lineup": 0.7222},
+    "win_auc": {"baseline": 0.7957, "lineup": 0.7943},
+    "win_log_loss": {"baseline": 0.5211, "lineup": 0.5213},
+    "total_mae": {"baseline": 13.3573, "lineup": 13.4039},
+    "total_r2": {"baseline": 0.2140, "lineup": 0.2065},
+    "margin_best_iter": {"baseline": 347, "lineup": 269},
+    "note": "All 7 holdout metrics degrade. Same trap as Tier-1: the 3 diffs ranked 10/11/15 of 52 by importance while accuracy dropped - importance is not value. Earlier best_iter (347->269) suggests the features accelerate overfit. Continuity/concentration is either absorbed by AdjEM/roster channels or not predictive at game level."
+  },
+  "trajectory": {
+    "script": "experiment_trajectory_onoff.py",
+    "setup": "LOPO over 11 pairs, identical corpus (n=24,592), -999 missing sentinel, run AFTER the on/off bug fix + 11-season recompute",
+    "features_added": 3,
+    "features": "prior_on_net_rtg, prior_net_on_off, prior_on_poss_share (on_posf / (on_posf + off_posf))",
+    "coverage_by_sn": "96.4-98.9% every season except 2019 (0%)",
+    "lopo_pooled_mae": {"baseline": 2.1348, "onoff": 2.1270, "delta": -0.0078},
+    "covered_subset_mae": {"baseline": 2.1485, "onoff": 2.1378, "delta": -0.0107, "n": 21998},
+    "per_pair_wins": "9/11",
+    "per_class_mae_baseline_vs_onoff": {
+      "freshman": [2.024, 2.012],
+      "sophomore": [2.164, 2.154],
+      "junior": [2.186, 2.177],
+      "senior": [2.298, 2.281]
+    },
+    "note": "First positive PBP-feature verdict across Tier-1 + Tier-2: consistent direction (9/11 pairs, monotone improvement in every class bucket) where every rejected family was flat-to-negative with ~5/11 wins. On/off carries team-context impact evidence the box score and CamPom genuinely lack. Magnitude is modest (~0.5% relative); shipping costs a trajectory-contract change (48->51 features, retrain + ONNX re-export + Rust TRAJECTORY_FEATURE_NAMES + serving-side player_on_off lookup with sentinel fill) - a separate PR if accepted."
+  },
+  "disposition": "lineup_quality closes for game models (LINEUP_FEATURES plumbing kept gated off in features.py; experiment script kept as re-test harness, e.g. when natstat exact-membership coverage matures). Trajectory on/off is the candidate to ship. RAPM remains open as the principled membership play - this verdict pair sharpens its prior: player-level membership signal has value (trajectory accept-leaning), team-level continuity summaries do not (game reject)."
+}
