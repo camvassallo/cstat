@@ -1,0 +1,44 @@
+{
+  "season": 2026,
+  "n_stints_collapsed": 160050,
+  "n_players": 4898,
+  "weighted_possessions": 507366.16000000003,
+  "zero_prior_cv_mse": {
+    "50.0": 5343.597667234482,
+    "100.0": 5274.921843999009,
+    "200.0": 5215.977735494364,
+    "500.0": 5168.815768061595,
+    "1000.0": 5156.710451973131,
+    "2000.0": 5158.425289629418,
+    "5000.0": 5171.921326288355,
+    "10000.0": 5184.48456638833
+  },
+  "zero_prior_best_lambda": 1000.0,
+  "campom_prior_cv_mse": {
+    "50.0": 5343.67837619648,
+    "100.0": 5275.015744893533,
+    "200.0": 5215.912206726612,
+    "500.0": 5167.679131169369,
+    "1000.0": 5153.65236980954,
+    "2000.0": 5152.499688603491,
+    "5000.0": 5161.59113050367,
+    "10000.0": 5171.055690975804
+  },
+  "campom_prior_best_lambda": 2000.0,
+  "final_variant": "campom_prior",
+  "baseline_cv_mse": {
+    "intercept_hca": 5210.9265931545915,
+    "team_ridge": 5147.031058277323,
+    "team_ridge_lambda": 100.0,
+    "adjem_fullseason": 5119.214277714151
+  },
+  "gate4_beats_intercept_hca": true,
+  "gate4_beats_team_ridge": false,
+  "leaky_adjem_reference_beaten": false,
+  "top25_in_campom_top50": 15,
+  "spearman_vs_campom": 0.7178755208993512,
+  "spearman_vs_on_off": 0.377713804783682,
+  "zuby_core_net_positive": 5,
+  "zuby_net_rapm": 4.786225319837143,
+  "zuby_net_on_off": -10.609791232937013
+}
