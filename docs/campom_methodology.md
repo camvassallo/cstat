@@ -304,7 +304,7 @@ cam_o_gbpm_v3  = (OGBPM × usg_ratio^0.7        × mp_factor + sos_o_share) × g
 cam_d_gbpm_v3  = (DGBPM × (1 − 0.1×usg_ratio) × mp_factor + sos_d_share) × gp_weight
 ```
 
-Where `sos_o_share` and `sos_d_share` are the SOS adjustment proportionally split between offense and defense (split logic TBD as part of the 4f implementation — likely proportional to each side's contribution to `adj_gbpm`).
+Where `sos_o_share` and `sos_d_share` split the SOS adjustment between offense and defense by **magnitude shares** — `|adj_o| / (|adj_o| + |adj_d|)` — bounded [0, 1] so the halves always sum exactly to the net. (The first implementation used *signed* shares, `adj_o / adj_gbpm`, which explode when a player's halves nearly cancel — fixed 2026-06-12, see "O/D Decomposition" below.)
 
 ## Worked Example 1 — Flory Bidunga (Kansas, B12)
 
@@ -464,3 +464,39 @@ These motivate the iteration ideas in ROADMAP §4f.
 - ROADMAP.md §4f — full rollout plan: implement → validate against the baseline → iterate (predict-model fitness function, hyperparameter grid search, role-context extensions) → ship to API + tables across the site
 - `migrations/008_torvik_player_stats.sql` — schema for the input table
 - `docs/torvik-api-guide.md` — how the input data is fetched and parsed
+
+## O/D Decomposition: the SOS-allocation fix + surfacing (2026-06-12)
+
+`cam_o_gbpm_v3*` / `cam_d_gbpm_v3*` decompose each CamPom tier into offensive
+and defensive halves (`cam_o + cam_d = campom`; `cam_d` is positive-good,
+defensive value added).
+
+**The signed-share bug (fixed 2026-06-12).** The original v3/v3_psos split
+allocated the SOS adjustment proportional to each side's *signed* share of
+`adj_gbpm` (`sos_adj * adj_o / adj_gbpm`). Whenever a player's halves nearly
+cancel (`adj_gbpm ≈ 0`), the ratio explodes in opposite directions: tails to
+±17,558 on corrupt-minutes rows, but the damage extended far below — Myles
+Rice (Maryland 2026, ogbpm −2.2, net +1.4) read **O +23.6 / D −22.2**,
+"second-best offensive player in the nation," entirely from a ±6 SOS term
+divided by a 0.4 net. Hundreds of low-|net| players were affected; the net
+was always sane (the halves cancel by construction). The pre-surfacing spot
+check caught it. **Fix (compute.rs):** SOS is now allocated by **magnitude
+shares** — `|adj_o| / (|adj_o| + |adj_d|)` — bounded [0, 1], identical to
+the signed share whenever both halves carry the net's sign (i.e. for every
+player the old split was ever sane for), still summing exactly to the net,
+with a 50/50 fallback only when both halves are ~0. Post-fix the
+leaderboards are face-valid: CPO top = Boozer / Dybantsa / Acuff / Philon;
+CPD top = Hoiberg / Maliq Brown / Mara / Tugler. Net CamPom is untouched
+by the fix.
+
+**Serving rule (belt-and-suspenders).** The API exposes the split as
+`campom_o` / `campom_d` inside a **±30 sanity envelope** (`abs(cam_o) <= 30
+AND abs(cam_d) <= 30`, gated jointly). Post-fix nothing should ever trip it
+(best legit split on record: Zach Edey 2024, O +26.6) — it guards against
+future formula regressions and the handful of corrupt-Torvik-minutes rows.
+Outside the envelope the API returns NULL and the UI shows "—" — junk is
+hidden, never clipped into a fake value.
+
+Surfaces: PlayerDetail shows the split inline in the CamPom header chip;
+the Players grid carries sortable CPO / CPD columns; the TeamDetail
+roster shows the split in the CamPom cell tooltip.

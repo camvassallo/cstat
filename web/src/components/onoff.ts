@@ -21,7 +21,10 @@ export interface AdjOnOffFields extends OnOffFields {
 
 /// Display floor on the RAPM fit sample (paired possessions): below it a
 /// coefficient is mostly the ridge prior, so the cell shows "—" instead.
-/// Matches the PlayerDetail panel's floor.
+/// Matches the PlayerDetail panel's floor. Since the pooled ship the sample
+/// is the player's CAREER total across the decayed fit window (up to 3
+/// seasons), not the single season's — identification is what the floor
+/// guards, and identification now comes from the window.
 export const RAPM_DISPLAY_FLOOR = 250;
 
 /// Net on/off swing → red (negative) / gray (≈0) / green (positive), saturating
@@ -63,7 +66,7 @@ export function adjOnOff(p: AdjOnOffFields): number | null {
 export function adjOnOffTitle(p: AdjOnOffFields): string {
   let s =
     'RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant ' +
-    '(removes garbage-time/bench bias).';
+    '(removes garbage-time/bench bias). Stabilized with decayed prior-season stints.';
   if (p.net_on_off != null) {
     s += ` Raw on/off ${signedRtg(p.net_on_off)} — ${onOffTitle(p)}`;
   }

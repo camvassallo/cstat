@@ -11,6 +11,9 @@ merged form of two ROADMAP items: "Adjusted +/- (RAPM)" (PBP
 feature-incorporation list) and "Native cstat player impact metric" (folded
 in — same goal, stint resolution made it tractable).
 
+*(Follow-on: §10 designs the multi-season pooled fit — the §8 re-test
+trigger — added 2026-06-12, pre-implementation.)*
+
 ## 1. Why RAPM
 
 Raw on/off is a contextual team-result stat, not an individual-skill stat: a
@@ -345,3 +348,175 @@ the second one.
 All five steps landed in one PR on 2026-06-12; none waited on the lineups
 backfill, and step 3's shadow change exists precisely so the backfill's
 continued landing never degrades the RAPM corpus.
+
+## 10. Multi-season pooled RAPM — design (2026-06-12, pre-implementation)
+
+The §8 re-test trigger, designed. The single-season verdict's root cause was
+identification: ~350–500 possessions of paired stints per rotation player
+cannot separate ~4,900 coefficients, so ridge shrinkage crushes the top of
+the scale (measured: CamPom ≥8 players sit 10–18 percentile points below
+their CamPom rank; sub-+3 players drift ~5 up — within-team star-vs-6th-man
+gaps compress even though league-wide ordering survives). Pooling seasons is
+the standard lever: more possessions per player means less shrinkage bias,
+better star separation, and higher stability — NBA practice settled on 3-year
+RAPM for exactly this reason. The college complication NBA practice doesn't
+have: careers are short (1–5 seasons), skill genuinely moves year to year
+(the trajectory model exists because of it), and rosters turn over hard.
+
+### 10.1 Career keying
+
+`players.id` is season-scoped, so pooling needs career identity. Build
+career chains with the dual key (`natstat_id` OR `torvik_pid` — the standing
+rule; natstat_id alone drops transfers): union-find over season-pair matches,
+career_id = the chain. Unresolvable rows stay season-scoped singletons —
+they simply get no pooling (honest degradation, no forced joins). Expected
+chain coverage ~96% (torvik_pid coverage; see the cross-season-joins memory
+and `training/test_cross_season_joins.py` for the regression tests).
+
+### 10.2 Pooling shapes (the core design choice)
+
+- **(a) Full pooling** — one coefficient per career over a window. Rejected
+  at design time: assumes constant skill, which is exactly false for the
+  freshman→sophomore jumps that drive college value.
+- **(b) Season-coupled ridge (fused/random-walk)** — one coefficient per
+  player-season plus a coupling penalty `λ_t‖β_{t} − β_{t−1}‖²` linking
+  adjacent seasons of a career. The principled shape: per-season output
+  (fits every season-scoped table), strength borrowed across years, skill
+  drift allowed. One joint sparse solve over all seasons (~50k columns +
+  coupling rows — still comfortably sparse).
+- **(c) Decayed-window refit** — fit season `t` on its own stints plus the
+  career-matched stints of seasons `t−1, t−2` at decayed weights (e.g. 0.5,
+  0.25). The literature-standard "3-year RAPM": single solve per season,
+  per-season output, trivially incremental.
+
+**Spike order: (c) first** (cheapest, standard), **(b) if (c) shows
+promise** — (b) subsumes (c)'s benefit with a cleaner skill-drift model.
+
+### 10.3 The honesty trap: pooled YoY stability is mechanically inflated
+
+Adjacent pooled estimates share data, so the gate-1 YoY Spearman is no
+longer an honest stability read — it would rise even if pooling added zero
+information. The pooled acceptance suite replaces it with:
+
+1. **Prequential skill test (the headline):** the pooled estimate computed
+   through season `t` predicts season `t+1`'s held-out stint margins (same
+   game-blocked machinery), scored against single-season RAPM, the
+   team-columns ridge, and CamPom-as-predictor on identical folds. This is
+   the honest version of both gate 1 and gate 4 at once: no shared data
+   between estimate and target.
+2. **Split-half reliability:** odd/even game-block split within the pooled
+   window; correlation of the two estimates. Honest within-window precision.
+3. **Star-separation diagnostic:** the §8-measured percentile-gap-by-tier
+   table — pooling should pull the CamPom ≥8 tiers' −10..−18pp gap toward
+   0 without inflating the sub-+3 tier.
+4. **The Zuby test**, unchanged.
+
+### 10.4 What it would factor into (decision per surface, all gated)
+
+- **Display (the likely win):** upgrade the served "Adj on/off (RAPM)"
+  values in `player_rapm` — same table, `prior` column records the pooled
+  config; per-season output preserved by shapes (b)/(c). Ships only on the
+  §10.3 suite passing; the within-team compression caveat shrinks
+  correspondingly.
+- **Trajectory (player projection):** `prior_pooled_rapm` through the
+  existing harness (`experiment_trajectory_rapm.py` gains a variant). LOW
+  prior: the single-season test showed RAPM's context-stripping is exactly
+  what hurts there, and pooling doesn't restore context. One cheap run.
+- **Roster-impact / preseason team projection:** roster aggregates of pooled
+  RAPM next to the CamPom aggregates in the roster-impact harness. The most
+  interesting model slot: the maturity finding says that pipeline is
+  information-limited, and pooled RAPM is partially independent information
+  (lineup-evidence-based, less box-dependent than CamPom). Still a long
+  shot — every prior verdict says CamPom absorbs value signal.
+- **Game models:** NOT planned — team-level aggregates were absorbed
+  (lineup_quality verdict), and team strength is already directly modeled.
+- **Archetypes / CAE:** no (style features and a residual grade — wrong
+  shapes for a value metric).
+
+### 10.5 Mechanics that carry over / new wrinkles
+
+- Corpus, observation model, weights, HCA, solver: unchanged from §4 — the
+  design matrix just gains career-linked columns (b) or decayed rows (c).
+- **2019 bridges:** shape (c) windows simply lack 2019 stints; shape (b)
+  couples 2018↔2020 directly (one gap-spanning penalty, optionally halved).
+- **Era heterogeneity:** replay (2015–25) vs onfloor (2026) noise profiles
+  differ; report per-era diagnostics before trusting cross-era decay
+  weights.
+- **Tuning:** grid over (decay or coupling λ_t) × ridge λ on the prequential
+  metric; sensitivity curve reported, same discipline as §4.2.
+- **Prior interaction:** pooling and the CamPom prior are orthogonal levers
+  (pool the data, or inform the target). The display independence argument
+  (§8.1) still rules the prior out for the served line; pooling has no such
+  conflict — it is more stint evidence, not borrowed box evidence.
+
+### 10.6 PR plan
+
+1. **Spike** — `training/experiment_rapm_pooled.py`: career chains, shape
+   (c) at 2–3 windows × decay grid, the §10.3 suite on 2024→2025→2026 (and
+   one replay-era pair for era robustness). Go/no-go.
+2. **Shape (b)** *(conditional on 1 showing lift)* — joint fused solve,
+   same suite.
+3. **Production + display swap** *(conditional)* — `training/rapm.py
+   --pooled`, `player_rapm` regenerated, doc + UI tooltip updates.
+4. **Model trials** *(conditional, cheap, in either order)* — trajectory
+   harness variant; roster-impact aggregate experiment.
+
+Not blocked on anything external: career keys, stints, and harnesses all
+exist. The lineups backfill remains irrelevant to this corpus (§3.2).
+
+### 10.7 Pooled spike verdict (2026-06-12): method VALIDATED; display swap is an open product decision; model trials not pursued
+
+The spike ran (`training/experiment_rapm_pooled.py`; summary
+`rapm_pooled_spike_20260612` in eval_history). Career chains: 44,471
+player-seasons → 22,077 careers over 8 fitted seasons.
+
+**Prequential gate (fit through t → predict t+1's stints, shared
+intercept+HCA recentering):** pooled beats single-season RAPM on all three
+targets (2026: 5194.5 vs 5205.6; 2025: 6851.5 vs 6853.0; replay-era 2018:
+5604.1 vs 5607.5) **and beats the carried-over team ridge on all three** —
+out-of-year, player-level pooling carries more information than team
+strength, reversing the in-season gate-4 ordering. **But the clipped
+CamPom-carryover predictor still edges pooled** (5193.4 vs 5194.5 on the
+sweep target; calibration scale 0.47 on prior-season stints) — the §8
+value-metric verdict stands: CamPom absorbs the value signal, pooled or not.
+
+**Other gates:** split-half reliability net +0.295 → +0.382 (O +0.277 →
++0.363, D +0.189 → +0.282 — **D-RAPM is confirmed as the noisy side and
+stays noisier even pooled**, the literature pattern); star-separation gaps
+improve modestly (≥+15 tier −0.099 → −0.073, 8–15 −0.179 → −0.154 —
+direction right, compression not cured); Zuby +2.02 → +3.90, core 5/5.
+
+**Config finding:** flat pooling (decay 1.0, window 3, λ=2000) won the
+sweep *monotonically* — for predicting next season, maximal pooling beats
+recency-weighting. This sharpens the display tension: the
+prequentially-optimal config most blurs current-season form. If a display
+swap ships, decay 0.7/window 3/λ 2000 is the recommended compromise
+(5195.1, within noise of 5194.5, keeps the current season dominant).
+
+**Side-discovery (matters beyond RAPM):** `cam_o_gbpm_v3_psos` /
+`cam_d_gbpm_v3_psos` carry garbage tails for sub-minute players (cam_o to
++1681 with cam_d ≈ −1679 — the psos rescale explodes and the halves cancel,
+so the NET stays sane while the split is junk). Any consumer of the O/D
+split (display columns, priors, features) needs a quantile clip or sample
+floor; the unclipped tails silently zeroed the spike's CamPom baseline on
+2024/2025 until caught.
+
+**Decisions:** (i) *Display swap — APPROVED + SHIPPED 2026-06-12*: the
+served `player_rapm` values are now the pooled fit at **decay 0.7 / window
+3 / λ=2000** (the recency-keeping compromise, within noise of the
+prequential optimum), `prior = 'pooled_w3_d0.7'`. `training/rapm.py` pools
+by default (`--single` restores the old fit); 2019 is bridged by the window
+(e.g. 2021 fits on [2018, 2020, 2021]); the earliest seasons degrade to
+single-season-at-λ2000. `paired_possessions` is now the career's
+**window-total** sample (identification is what the ~250 display floor
+guards, and identification comes from the window — a freshman's window is
+just his own season, so his floor is unchanged). Every tooltip gained
+"stabilized with decayed prior-season stints," and the PlayerDetail panel
+explainer says career-informed-not-season-pure outright. Spot checks:
+Zuby 2026 net +3.39 (single +2.02, flat-pooled +3.90 — the decay
+compromise landing between them), per-season means ≈ 0, 52,421 rows
+unchanged. (ii) *Model trials* (§10.4 trajectory/roster-impact) — NOT
+pursued: pooled losing to CamPom-carryover prequentially puts the feature
+odds below the cost line; the harnesses remain if that changes. (iii)
+Shape (b) (fused ridge) — not built; flat-decay winning suggests its
+marginal value over (c) is small.

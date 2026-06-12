@@ -20,7 +20,7 @@ import {
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
-import { campomTier, campomTierColor } from '../components/campom';
+import { campomTier, campomTierColor, campomSplit } from '../components/campom';
 import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
@@ -254,7 +254,9 @@ function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
           <p className="text-xs text-gray-600 mt-1">
             The same per-100 swing with teammates and opponents held constant (ridge-regressed
             adjusted +/- over every stint) — removes the deep-team garbage-time bias raw on/off
-            carries. Negative D is good (points allowed below average).
+            carries. Stabilized with the player's prior-season stints at decayed weight, so it
+            reads career-informed, not season-pure. Negative D is good (points allowed below
+            average).
           </p>
         </div>
       )}
@@ -441,13 +443,21 @@ export default function PlayerDetail() {
             {torvik?.campom != null && (() => {
               const tier = campomTier(torvik.campom);
               const pctStr = torvik.campom_pct != null ? Math.round(torvik.campom_pct * 100) : null;
+              const split = campomSplit(torvik.campom_o, torvik.campom_d);
               return (
                 <span
                   className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border ${campomTierColor(tier)}`}
-                  title="CamPom: composite player valuation. See methodology in docs/campom_methodology.md."
+                  title={
+                    'CamPom: composite player valuation. ' +
+                    (split
+                      ? 'O/D halves sum to the total; D is positive-good (defensive value added). '
+                      : '') +
+                    'See methodology in docs/campom_methodology.md.'
+                  }
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">CamPom</span>
                   <span className="font-bold">{torvik.campom.toFixed(1)}</span>
+                  {split && <span className="text-xs opacity-80">{split}</span>}
                   {pctStr != null && <span className="text-xs opacity-80">{pctStr} pct</span>}
                   {tier && <span className="text-xs opacity-80">· {tier}</span>}
                 </span>

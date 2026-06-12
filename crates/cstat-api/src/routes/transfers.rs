@@ -99,6 +99,10 @@ struct EnrichedTransfer {
     /// stays for the tooltip); `rapm_paired_poss` feeds the display floor.
     rapm_net: Option<f64>,
     rapm_paired_poss: Option<f64>,
+    /// Source-season CamPom O/D decomposition (±30 sanity envelope — see
+    /// queries::TorkvikStatsRow docs).
+    campom_o: Option<f64>,
+    campom_d: Option<f64>,
 }
 
 /// One DB candidate row pulled by name match. We may have several per name
@@ -127,6 +131,8 @@ struct DbCandidate {
     on_off_off_poss: Option<f64>,
     rapm_net: Option<f64>,
     rapm_paired_poss: Option<f64>,
+    campom_o: Option<f64>,
+    campom_d: Option<f64>,
 }
 
 /// Subset of a row from the `teams` table — just enough to map a 247 short
@@ -221,7 +227,12 @@ async fn transfer_list(
             oo.source                AS on_off_source,
             (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
             pr.net_rapm              AS rapm_net,
-            pr.paired_possessions    AS rapm_paired_poss
+            pr.paired_possessions    AS rapm_paired_poss,
+            -- O/D split, ±30 sanity envelope (see queries::TorkvikStatsRow)
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -349,6 +360,8 @@ async fn transfer_list(
                 on_off_off_poss: best.and_then(|c| c.on_off_off_poss),
                 rapm_net: best.and_then(|c| c.rapm_net),
                 rapm_paired_poss: best.and_then(|c| c.rapm_paired_poss),
+                campom_o: best.and_then(|c| c.campom_o),
+                campom_d: best.and_then(|c| c.campom_d),
             }
         })
         .collect();

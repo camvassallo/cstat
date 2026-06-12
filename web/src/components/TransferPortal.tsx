@@ -3,8 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
-import { campomTier, campomTierColor } from './campom';
-import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from './onoff';
+import { campomTier, campomTierColor, campomHalfColor } from './campom';
 import { agNullsBottom } from './tableSort';
 import { classColor } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
@@ -56,7 +55,19 @@ function teamCellRenderer(opts: {
   );
 }
 
-function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDef<RankedTransfer>[] {
+// O/D CamPom halves — shared diverging gradient, "—" where envelope-gated.
+const campomHalfCell = (side: 'o' | 'd') =>
+  function CampomHalfCell(p: { value: number | null }) {
+    return p.value != null ? (
+      <span className="tabular-nums text-xs" style={{ color: campomHalfColor(p.value, side) }}>
+        {`${p.value > 0 ? '+' : ''}${p.value.toFixed(1)}`}
+      </span>
+    ) : (
+      <span className="text-gray-600 text-xs">—</span>
+    );
+  };
+
+function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[] {
   // Mobile: fixed natural width (= the existing minWidth) so AG Grid
   // horizontal-scrolls instead of compressing content. Desktop: keep the
   // original flex distribution.
@@ -135,20 +146,6 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
       },
     },
     {
-      headerName: 'Ht/Wt',
-      ...flexCol(1, 80),
-      sortable: false,
-      valueGetter: (p) => {
-        const h = p.data?.height;
-        const w = p.data?.weight;
-        if (!h && !w) return '';
-        return `${h ?? '—'}${w ? ` / ${w}` : ''}`;
-      },
-      cellRenderer: (p: { value: string }) => (
-        <span className="text-gray-400 text-xs">{p.value || '—'}</span>
-      ),
-    },
-    {
       headerName: 'Previous',
       field: 'previous_team',
       ...flexCol(2, 150),
@@ -186,6 +183,8 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
       field: 'projected_campom_mean',
       ...flexCol(1, 130),
       sort: 'desc',
+      // First click sorts best-first, matching the CamPom-family columns.
+      sortingOrder: ['desc', 'asc', null],
       headerTooltip:
         "Projected next-season CamPom (Phase 5c trajectory model) — the headline number for this page. Source-season CamPom shows as a small grey lead-in on the left when available, so you can read the delta directly (12.5 → 11.2). Trajectory model is destination-agnostic (no team feature), so the projection assumes a role similar to source team. Sort default is by projection desc. Tied/null projections fall back to source-season CamPom for tiebreak.",
       comparator: (a, b, nodeA, nodeB, isDescending) => {
@@ -268,32 +267,26 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
         );
       },
     },
-    // Hidden when the source season has no RAPM fit (e.g. portal cycle 2019,
-    // the corrupt-gated season) rather than an all-"—" column.
-    ...(hasOnOff
-      ? [
-          {
-            headerName: 'Adj On/Off',
-            field: 'rapm_net',
-            ...flexCol(1, 95),
-            headerTooltip:
-              'Source-season adj on/off (RAPM) at their old school: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries). Hover a value for the raw on/off breakdown. NULL when unmatched or below the sample floor.',
-            // Sort by the DISPLAYED value (null below the floor) so "—" rows
-            // sink instead of clustering mid-table on hidden coefficients.
-            valueGetter: (p: { data?: RankedTransfer }) =>
-              p.data ? adjOnOff(p.data) : null,
-            comparator: agNullsBottom,
-            cellRenderer: (p: { value: number | null; data?: RankedTransfer }) =>
-              p.value != null ? (
-                <span style={{ color: onOffColor(p.value, 8) }} title={p.data ? adjOnOffTitle(p.data) : ''}>
-                  {signedRtg(p.value)}
-                </span>
-              ) : (
-                <span className="text-gray-600 text-xs">—</span>
-              ),
-          } as ColDef<RankedTransfer>,
-        ]
-      : []),
+    {
+      headerName: 'CPO',
+      field: 'campom_o',
+      ...flexCol(1, 70),
+      headerTooltip:
+        "Source-season CamPom offensive half (O + D = CamPom). Hidden where the decomposition is numerically unstable (±30 sanity envelope).",
+      sortingOrder: ['desc', 'asc', null],
+      comparator: agNullsBottom,
+      cellRenderer: campomHalfCell('o'),
+    } as ColDef<RankedTransfer>,
+    {
+      headerName: 'CPD',
+      field: 'campom_d',
+      ...flexCol(1, 70),
+      headerTooltip:
+        "Source-season CamPom defensive half — positive is GOOD (defensive value added; O + D = CamPom). Hidden where the decomposition is numerically unstable.",
+      sortingOrder: ['desc', 'asc', null],
+      comparator: agNullsBottom,
+      cellRenderer: campomHalfCell('d'),
+    } as ColDef<RankedTransfer>,
     {
       headerName: '247',
       field: 'rank_247',
@@ -437,11 +430,7 @@ export default function TransferPortal({ year }: Props) {
     };
   }, [year]);
 
-  const hasOnOff = useMemo(() => (rows ?? []).some((r) => adjOnOff(r) != null), [rows]);
-  const columns = useMemo(
-    () => buildColumns(isMobile, year, hasOnOff),
-    [isMobile, year, hasOnOff],
-  );
+  const columns = useMemo(() => buildColumns(isMobile, year), [isMobile, year]);
 
   const filtered = useMemo(() => {
     if (!rows) return null;
