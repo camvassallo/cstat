@@ -220,3 +220,23 @@ So: (1) is still the to-schedule item; (2) is built and in flight.
 The on/off and top-lineup surfaces shipped this week stay as **site display**
 (now much improved for 2026) and become *ML* inputs only after the Tier-2 source
 decision.
+
+**[MEMBERSHIP-FEATURES BACKTEST 2026-06-11 — split verdict.]** The first
+membership-derived ML pass ran on the current (mostly replay/onfloor) stints,
+after a `player_on_off` data-quality fix (≥10-possession floor on OFF rates —
+`nullif(x, 0)` passed float-residual possession sums and minted ~1e16 ratings;
+plus an 11-season recompute flushing pre-gate stale rows). **Team-level
+`lineup_quality` → game models: REJECTED** (`experiment_game_lineups.py`; +3
+expanding diffs — possession HHI / top-lineup share / top-lineup net — degraded
+all 7 holdout metrics, margin MAE +0.030, while ranking 10–15/52 by importance:
+the Tier-1 importance-is-not-value trap again). **Player-level prior-season
+on/off → trajectory: POSITIVE** (`experiment_trajectory_onoff.py`; +3 features
+— `prior_on_net_rtg` / `prior_net_on_off` / `prior_on_poss_share` — covered
+LOPO MAE −0.011, 9/11 pairs, all class buckets improve — the first positive
+PBP-feature verdict; shipping it is a 48→51 trajectory-contract change, its own
+PR if accepted). Full numbers:
+`training/eval_history/tier2_membership_models_20260611_summary.json`. The
+split sharpens Tier 3's prior: player-level membership signal is real where
+team-level continuity summaries are absorbed — RAPM (player-level by
+construction) stays the principled play; re-run the game-side harness only if
+natstat exact coverage materially upgrades stint quality.
