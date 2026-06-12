@@ -10,6 +10,7 @@ import { fetchPlayers, type PlayerRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from '../components/campom';
 import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
+import { agNullsBottom } from '../components/tableSort';
 import { classColor, classTagline } from '../components/archetypeColors';
 import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
@@ -179,6 +180,7 @@ function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] 
       headerTooltip: 'Composite player valuation. Hover the chip for tier.',
       width: 120,
       sort: 'desc',
+      comparator: agNullsBottom,
       cellRenderer: campomCellRenderer,
       headerStyle: CATEGORY_DIVIDER_STYLE,
       cellStyle: CATEGORY_DIVIDER_STYLE,
@@ -193,6 +195,11 @@ function buildColumns(view: ColumnView, hasOnOff: boolean): ColDef<PlayerRow>[] 
             headerTooltip:
               'RAPM-adjusted on/off: per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries). Hover a value for the raw on/off breakdown.',
             width: 100,
+            // Sort by the DISPLAYED value (null below the floor) so "—" rows
+            // sink instead of clustering mid-table on hidden coefficients —
+            // same convention as the roster table and the portal grid.
+            valueGetter: (p: { data?: PlayerRow }) => (p.data ? adjOnOff(p.data) : null),
+            comparator: agNullsBottom,
             cellRenderer: adjOnOffCellRenderer,
           } as ColDef<PlayerRow>,
         ]

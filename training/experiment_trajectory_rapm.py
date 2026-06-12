@@ -20,8 +20,9 @@ Three variants on the production 51-feature contract:
 RAPM features join from `player_rapm` (training/rapm.py, zero prior,
 lambda=1000) on the prior-season side, same key as the on/off join. NULLs
 (2019 priors, players outside that season's paired-stint corpus) become the
-same -999 sentinel. Coverage runs HIGHER than on/off (~95% vs ~89%): the fit
-covers every player in a paired stint, with no >=100-on-possession gate.
+same -999 sentinel. Coverage runs HIGHER than on/off (measured 91.3% of
+paired rows vs ~89%): the fit covers every player in a paired stint, with no
+>=100-on-possession gate (the residual gap is 2019-prior rows).
 
 Decision metric: pooled LOPO MAE, plus the covered-subset MAE and per-pair
 wins — the same bar the on/off block cleared (full -0.006, covered -0.011,

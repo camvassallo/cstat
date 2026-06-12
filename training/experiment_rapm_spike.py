@@ -204,8 +204,9 @@ def build_prior(players: list[str], meta: pd.DataFrame) -> np.ndarray:
 def fit_prior_fold(x_tr, y_tr, w_tr, hca_tr, beta0, lam):
     """Calibrate the prior scale on train, then ridge the residual.
 
-    Returns (s, base_model, resid_model) where prediction =
-    s * (X @ beta0) + base intercept/HCA + resid ridge."""
+    Returns (base_model, resid_model); the fitted prior scale is
+    base_model.coef_[0], and prediction = base_model on [X @ beta0, hca]
+    + resid_model on X."""
     z_tr = x_tr @ beta0
     base_x = np.column_stack([z_tr, hca_tr])
     base = Ridge(alpha=0.0, fit_intercept=True)

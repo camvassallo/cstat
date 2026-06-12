@@ -5,6 +5,7 @@ import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor } from './campom';
 import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from './onoff';
+import { agNullsBottom } from './tableSort';
 import { classColor } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
@@ -70,6 +71,7 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
       pinned: 'left',
       headerTooltip:
         "Our rank among 247-ranked transfers, sorted by projected next-season CamPom. Forward-looking — favors players the trajectory model expects to be more impactful next year, not just who's good right now.",
+      comparator: agNullsBottom,
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="font-bold">{p.value}</span>
@@ -186,21 +188,27 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
       sort: 'desc',
       headerTooltip:
         "Projected next-season CamPom (Phase 5c trajectory model) — the headline number for this page. Source-season CamPom shows as a small grey lead-in on the left when available, so you can read the delta directly (12.5 → 11.2). Trajectory model is destination-agnostic (no team feature), so the projection assumes a role similar to source team. Sort default is by projection desc. Tied/null projections fall back to source-season CamPom for tiebreak.",
-      comparator: (a, b, nodeA, nodeB) => {
-        // Primary: projected_campom_mean desc (nulls last regardless of
-        // direction — keeps sub-qual / unmatched rows at the bottom).
-        // Secondary: source-season campom desc, used as a tiebreak
-        // inside the null cohort so those rows don't clump randomly.
+      comparator: (a, b, nodeA, nodeB, isDescending) => {
+        // Primary: projected_campom_mean, with nulls pinned to the BOTTOM in
+        // both directions (sub-qual / unmatched rows). AG Grid negates the
+        // comparator on descending sort, so the pin must pre-invert via
+        // isDescending — the old plain "+1 for null" floated blanks to the
+        // top exactly on the default desc sort (same bug as agNullsBottom
+        // fixes for the plain numeric columns).
+        // Secondary: source-season campom, used as a tiebreak inside the
+        // null cohort so those rows don't clump randomly; its own nulls pin
+        // to the very bottom the same way.
+        const pin = (r: number) => (isDescending ? -r : r);
         if (a == null && b == null) {
           const ca = nodeA.data?.campom ?? null;
           const cb = nodeB.data?.campom ?? null;
           if (ca == null && cb == null) return 0;
-          if (ca == null) return 1;
-          if (cb == null) return -1;
+          if (ca == null) return pin(1);
+          if (cb == null) return pin(-1);
           return ca - cb;
         }
-        if (a == null) return 1;
-        if (b == null) return -1;
+        if (a == null) return pin(1);
+        if (b == null) return pin(-1);
         return a - b;
       },
       cellRenderer: (p: { value: number | null; data?: RankedTransfer }) => {
@@ -274,12 +282,7 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
             // sink instead of clustering mid-table on hidden coefficients.
             valueGetter: (p: { data?: RankedTransfer }) =>
               p.data ? adjOnOff(p.data) : null,
-            comparator: (a: number | null, b: number | null) => {
-              if (a == null && b == null) return 0;
-              if (a == null) return 1;
-              if (b == null) return -1;
-              return a - b;
-            },
+            comparator: agNullsBottom,
             cellRenderer: (p: { value: number | null; data?: RankedTransfer }) =>
               p.value != null ? (
                 <span style={{ color: onOffColor(p.value, 8) }} title={p.data ? adjOnOffTitle(p.data) : ''}>
@@ -296,12 +299,7 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
       field: 'rank_247',
       ...flexCol(1, 70),
       headerTooltip: '247Sports rank (— for unranked portal entries)',
-      comparator: (a: number | null, b: number | null) => {
-        if (a == null && b == null) return 0;
-        if (a == null) return 1;
-        if (b == null) return -1;
-        return a - b;
-      },
+      comparator: agNullsBottom,
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="text-gray-400 text-xs">{p.value}</span>
@@ -315,13 +313,8 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
       ...flexCol(1, 80),
       headerTooltip:
         'Rank value vs. 247: 247 portal rank − our projected-CamPom rank. Positive (green) means cstat rates the player higher than 247 does after factoring in next-season projection — sort desc to find best values. Negative (red) means cstat is lower on the player. This is a RANK comparison; for the projection-vs-current point delta on a single player, see ΔCP.',
-      comparator: (a: number | null, b: number | null) => {
-        // Push unranked rows to the bottom regardless of sort direction.
-        if (a == null && b == null) return 0;
-        if (a == null) return 1;
-        if (b == null) return -1;
-        return a - b;
-      },
+      // Unranked rows pin to the bottom regardless of sort direction.
+      comparator: agNullsBottom,
       cellRenderer: (p: { value: number | null }) => {
         if (p.value == null) return <span className="text-gray-600">—</span>;
         const v = p.value;
@@ -347,12 +340,7 @@ function buildColumns(isMobile: boolean, year: number, hasOnOff: boolean): ColDe
       ...flexCol(1, 80),
       headerTooltip:
         "Projection vs. current: projected next-season CamPom − current CamPom, rounded to one decimal. Negative (red) means the model expects regression — common for elite transfers (≥+15 current) due to regression-to-the-mean in the trajectory model. Positive (green) means the model expects growth — typical for younger players still on the rising curve. Read alongside the q10–q90 band on the Proj column for the honest framing. Distinct from Δ247 (which is a RANK comparison).",
-      comparator: (a: number | null, b: number | null) => {
-        if (a == null && b == null) return 0;
-        if (a == null) return 1;
-        if (b == null) return -1;
-        return a - b;
-      },
+      comparator: agNullsBottom,
       cellRenderer: (p: { value: number | null }) => {
         if (p.value == null) return <span className="text-gray-600">—</span>;
         // Round once and derive both color and sign from the rounded

@@ -21,6 +21,7 @@ import {
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
 import { campomTier, campomTierColor } from '../components/campom';
+import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { SeasonLink } from '../components/SeasonLink';
@@ -181,9 +182,12 @@ function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
   const thinOff = offPoss < 100;
 
   // Adj on/off (RAPM) companion line — display floor on the fit sample so a
-  // garbage-time player's near-prior coefficient never headlines.
+  // garbage-time player's near-prior coefficient never headlines. (Can't use
+  // adjOnOff() here — the panel payload names the field rapm_paired_possessions,
+  // not the grids' rapm_paired_poss — but the floor constant is shared.)
   const showRapm =
-    onOff.rapm_net != null && (onOff.rapm_paired_possessions ?? 0) >= 250;
+    onOff.rapm_net != null &&
+    (onOff.rapm_paired_possessions ?? 0) >= RAPM_DISPLAY_FLOOR;
 
   const row = (
     label: string,
