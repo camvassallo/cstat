@@ -155,9 +155,9 @@ export interface RosterEntry {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
-  /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off above stays
-  /// for the tooltip). `rapm_paired_poss` feeds the ~250-poss display floor.
-  /// rapm_o/rapm_d power the roster's Adv view (d = points allowed, lower-better).
+  /// RAPM (adjusted on/off) — displayed in the roster's Adv view as
+  /// RAPM / RAPM-O / RAPM-D (d = points allowed, lower-better); raw on/off
+  /// stays for tooltip context. `rapm_paired_poss` feeds the ~250-poss floor.
   rapm_net: number | null;
   rapm_o: number | null;
   rapm_d: number | null;
@@ -301,7 +301,8 @@ export interface PlayerRow {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
-  // "Adj on/off (RAPM)" — the displayed column; raw on/off stays for the tooltip.
+  // RAPM — served but not displayed on this grid (lives on team-context
+  // surfaces: roster Adv view + PlayerDetail panel).
   rapm_net: number | null;
   rapm_paired_poss: number | null;
 }
@@ -461,7 +462,7 @@ export interface TransferRow {
   off_net_rtg: number | null;
   on_off_source: string | null;
   on_off_off_poss: number | null;
-  // Source-season "Adj on/off (RAPM)" — the displayed column.
+  // Source-season RAPM — served but not displayed on the portal grid.
   rapm_net: number | null;
   rapm_paired_poss: number | null;
   // Source-season CamPom O/D decomposition (±30 sanity envelope).

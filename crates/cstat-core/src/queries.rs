@@ -321,10 +321,10 @@ pub struct RosterEntry {
     pub off_net_rtg: Option<f64>,
     pub on_off_source: Option<String>,
     pub on_off_off_poss: Option<f64>,
-    /// "Adj on/off (RAPM)" — the displayed roster column (raw on/off stays in
-    /// the row for the tooltip context). `rapm_paired_poss` is the fit sample
-    /// for the UI's ~250-possession display floor. `rapm_o`/`rapm_d` power the
-    /// roster's Adv view (d = points allowed, lower-better). See
+    /// RAPM (adjusted on/off) — displayed in the roster's Adv view as
+    /// RAPM / RAPM-O / RAPM-D (d = points allowed, lower-better); raw on/off
+    /// stays in the row for tooltip context. `rapm_paired_poss` is the fit
+    /// sample for the UI's ~250-possession display floor. See
     /// docs/rapm_methodology.md.
     pub rapm_net: Option<f64>,
     pub rapm_o: Option<f64>,
@@ -399,8 +399,9 @@ pub struct PlayerRow {
     pub off_net_rtg: Option<f64>,
     pub on_off_source: Option<String>,
     pub on_off_off_poss: Option<f64>,
-    /// "Adj on/off (RAPM)" — the displayed column (raw on/off stays for the
-    /// tooltip); `rapm_paired_poss` feeds the ~250-poss display floor.
+    /// RAPM fields — served but no longer displayed on the Players grid (the
+    /// column moved to team-context surfaces: roster Adv view + PlayerDetail
+    /// panel); kept in the payload for tooling/future use.
     pub rapm_net: Option<f64>,
     pub rapm_paired_poss: Option<f64>,
 }

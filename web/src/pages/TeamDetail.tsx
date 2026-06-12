@@ -890,31 +890,33 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     title="CamPom's defensive half — positive is GOOD (defensive value added)."
                   />
                   {hasOnOff && (
-                    <SortHeader
-                      label="RAPM"
-                      sortKey="rapm_net"
-                      current={sort}
-                      onSort={onSort}
-                      align="right"
-                      title="Adjusted on/off (RAPM): per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries; stabilized with decayed prior-season stints). Net = O − D. Hover a value for the raw on/off breakdown."
-                    />
+                    <>
+                      <SortHeader
+                        label="RAPM"
+                        sortKey="rapm_net"
+                        current={sort}
+                        onSort={onSort}
+                        align="right"
+                        title="Adjusted on/off (RAPM): per-100 swing with teammates and opponents held constant (removes the garbage-time/bench bias raw on/off carries; stabilized with decayed prior-season stints). Net = O − D. Hover a value for the raw on/off breakdown."
+                      />
+                      <SortHeader
+                        label="RAPM-O"
+                        sortKey="rapm_o"
+                        current={sort}
+                        onSort={onSort}
+                        align="right"
+                        title="Adjusted on/off, offensive half: points per 100 added on offense with teammates/opponents held constant."
+                      />
+                      <SortHeader
+                        label="RAPM-D"
+                        sortKey="rapm_d"
+                        current={sort}
+                        onSort={onSort}
+                        align="right"
+                        title="Adjusted on/off, defensive half: points per 100 ALLOWED while defending — negative is good. Sorts best-first."
+                      />
+                    </>
                   )}
-                  <SortHeader
-                    label="RAPM-O"
-                    sortKey="rapm_o"
-                    current={sort}
-                    onSort={onSort}
-                    align="right"
-                    title="Adjusted on/off, offensive half: points per 100 added on offense with teammates/opponents held constant."
-                  />
-                  <SortHeader
-                    label="RAPM-D"
-                    sortKey="rapm_d"
-                    current={sort}
-                    onSort={onSort}
-                    align="right"
-                    title="Adjusted on/off, defensive half: points per 100 ALLOWED while defending — negative is good. Sorts best-first."
-                  />
                 </>
               ) : view === 'raw' ? (
                 <>
@@ -1029,31 +1031,33 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                       )}
                     </td>
                     {hasOnOff && (
-                      <td className="py-2 px-2 text-right tabular-nums">
-                        {adjOnOff(p) != null ? (
-                          <span style={{ color: onOffColor(adjOnOff(p), 8) }} title={adjOnOffTitle(p)}>
-                            {signedRtg(adjOnOff(p))}
-                          </span>
-                        ) : (
-                          <span className="text-gray-600">—</span>
-                        )}
-                      </td>
+                      <>
+                        <td className="py-2 px-2 text-right tabular-nums">
+                          {adjOnOff(p) != null ? (
+                            <span style={{ color: onOffColor(adjOnOff(p), 8) }} title={adjOnOffTitle(p)}>
+                              {signedRtg(adjOnOff(p))}
+                            </span>
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-2 text-right tabular-nums">
+                          {adjOnOff(p) != null && p.rapm_o != null ? (
+                            <span style={{ color: onOffColor(p.rapm_o, 5) }}>{signedRtg(p.rapm_o)}</span>
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-2 text-right tabular-nums">
+                          {/* points allowed: negate for color so negative (good) reads green */}
+                          {adjOnOff(p) != null && p.rapm_d != null ? (
+                            <span style={{ color: onOffColor(-p.rapm_d, 5) }}>{signedRtg(p.rapm_d)}</span>
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )}
+                        </td>
+                      </>
                     )}
-                    <td className="py-2 px-2 text-right tabular-nums">
-                      {adjOnOff(p) != null && p.rapm_o != null ? (
-                        <span style={{ color: onOffColor(p.rapm_o, 5) }}>{signedRtg(p.rapm_o)}</span>
-                      ) : (
-                        <span className="text-gray-600">—</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-2 text-right tabular-nums">
-                      {/* points allowed: negate for color so negative (good) reads green */}
-                      {adjOnOff(p) != null && p.rapm_d != null ? (
-                        <span style={{ color: onOffColor(-p.rapm_d, 5) }}>{signedRtg(p.rapm_d)}</span>
-                      ) : (
-                        <span className="text-gray-600">—</span>
-                      )}
-                    </td>
                   </>
                 ) : view === 'raw' ? (
                   <>
