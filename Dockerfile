@@ -53,6 +53,7 @@ COPY training/models/margin_model.onnx \
      training/models/total_model.onnx \
      training/models/roster_model.onnx \
      training/models/roster_impact_model.onnx \
+     training/models/roster_adjo_model.onnx \
      training/models/trajectory_mean_model.onnx \
      training/models/trajectory_q10_model.onnx \
      training/models/trajectory_q90_model.onnx \
@@ -63,6 +64,7 @@ COPY training/models/margin_model.onnx \
      training/models/model_meta.json \
      training/models/roster_model_meta.json \
      training/models/roster_impact_model_meta.json \
+     training/models/roster_adjo_model_meta.json \
      training/models/trajectory_model_meta.json \
      training/models/freshman_model_meta.json \
      training/models/pit_margin_model.onnx \
