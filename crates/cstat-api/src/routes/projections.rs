@@ -69,6 +69,17 @@ struct ProjectedTeam {
     /// there are no uncertain players. The headline sortable number;
     /// `None` for too-thin rosters.
     midpoint_adj_em: Option<f32>,
+    /// Projected next-season offensive efficiency (absolute ~105), from the
+    /// AdjO half of the NET+SPLIT decomposition — blended over the same
+    /// floor/ceiling scenarios and baseline-shrunk like `midpoint_adj_em`.
+    /// Display-only descriptive band; the served net (`midpoint_adj_em`) is
+    /// untouched. `None` for too-thin rosters.
+    projected_adj_o: Option<f32>,
+    /// Projected next-season defensive efficiency (absolute ~105), DERIVED
+    /// as `projected_adj_o − midpoint_adj_em` so the split reconciles
+    /// exactly to the served net (lower = better defense, KenPom
+    /// convention). `None` for too-thin rosters.
+    projected_adj_d: Option<f32>,
     /// Count of qualifying returning players (excludes Sr, outbound
     /// portal, firm draft departures, and uncertain draft cohort).
     returning_count: usize,
@@ -123,6 +134,20 @@ struct ProjectedTeam {
     /// The Future grid's "Departures" column surfaces this instead of the
     /// raw count.
     departures_cam_v3_sum: f32,
+    /// Per-cohort Σ of the base-season CamPom O/D halves (cam_o/cam_d,
+    /// envelope-gated per player like every other serving surface), in the
+    /// *prior-season* frame — there is no projected O/D split (the
+    /// trajectory model forecasts net only), so these describe the O/D
+    /// shape of the talent moving, not a forecast. Players whose split is
+    /// gated (or who lack torvik coverage) contribute 0 to both halves,
+    /// mirroring the cam_v3 sums' COALESCE convention. Recruits have no
+    /// prior season, hence no recruit O/D pair.
+    returning_cam_o_sum: f32,
+    returning_cam_d_sum: f32,
+    arrivals_cam_o_sum: f32,
+    arrivals_cam_d_sum: f32,
+    departures_cam_o_sum: f32,
+    departures_cam_d_sum: f32,
     /// True when `returning + arrivals < MIN_QUALIFYING_FOR_PROJECTION`.
     /// Frontend should render an explanation chip rather than the
     /// (null) prediction columns when this is set.
@@ -339,6 +364,17 @@ async fn projection_list(
             )
         })?;
 
+    // Base-season AdjO per team — the shrink anchor for the projected AdjO
+    // half. Same keying as baseline_map; a miss just skips AdjO shrinkage.
+    let baseline_o_map = fetch_baseline_adj_o(&state.db.pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("baseline AdjO fetch failed: {e}") })),
+            )
+        })?;
+
     // Actual target-season AdjEM, keyed by base-season team_id. Empty
     // for the live forecast year (target season not played yet) — those
     // teams get `actual_adj_em = None`. Powers the historical view's
@@ -393,9 +429,20 @@ async fn projection_list(
             std::collections::HashMap::new()
         });
 
+    // Base-season CamPom O/D split per player, for the cohort O/D sums
+    // (display-only roster-shape decoration). Cosmetic — degrade to empty
+    // (sums read 0 and the UI hides the split) rather than 500.
+    let cam_od_map = fetch_cam_od_map(&state.db.pool, base_season)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "cam O/D fetch failed; projections render without splits");
+            std::collections::HashMap::new()
+        });
+
     let mut rows: Vec<ProjectedTeam> = Vec::with_capacity(projections.len());
     for p in &projections {
         let baseline = baseline_map.get(&p.team_id).copied();
+        let baseline_o = baseline_o_map.get(&p.team_id).copied();
         let actual = actual_map.get(&p.team_id).copied();
         let p_return = mean_return_probability(p, &mock_by_name);
         let Some(mut row) = predict_team(
@@ -405,6 +452,8 @@ async fn projection_list(
             actual,
             p_return,
             &projected_cam,
+            &cam_od_map,
+            baseline_o,
         ) else {
             continue;
         };
@@ -446,6 +495,8 @@ async fn projection_list(
 /// D-I program in mid-transition). Errors from the ONNX session are
 /// logged and treated as "skip this team" rather than 500-ing the
 /// whole response.
+#[allow(clippy::too_many_arguments)] // cohesive per-team scoring inputs; a
+// struct wrapper would just move the noise without aiding readability.
 fn predict_team(
     p: &ProjectedRoster,
     predictor: &Predictor,
@@ -453,6 +504,8 @@ fn predict_team(
     actual: Option<f32>,
     p_return: f32,
     projected_cam: &std::collections::HashMap<Uuid, f64>,
+    cam_od: &std::collections::HashMap<Uuid, (f32, f32)>,
+    baseline_o: Option<f32>,
 ) -> Option<ProjectedTeam> {
     // Recruits count toward the qualifying-size gate: a returners-thin
     // team with a strong freshman class (e.g. Duke with 4 incoming
@@ -504,6 +557,19 @@ fn predict_team(
         .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
 
+    // Prior-season O/D split sums per cohort (gated/uncovered players
+    // contribute 0 to both halves — same convention as the cam_v3 sums).
+    let od_sum = |ids: &mut dyn Iterator<Item = Uuid>| -> (f32, f32) {
+        ids.filter_map(|id| cam_od.get(&id))
+            .fold((0.0, 0.0), |(o, d), (po, pd)| (o + po, d + pd))
+    };
+    let (returning_cam_o_sum, returning_cam_d_sum) =
+        od_sum(&mut p.returning.iter().map(|r| r.player_id));
+    let (arrivals_cam_o_sum, arrivals_cam_d_sum) =
+        od_sum(&mut p.arrivals.iter().map(|a| a.player_id));
+    let (departures_cam_o_sum, departures_cam_d_sum) =
+        od_sum(&mut p.departures.iter().map(|d| d.player_id()));
+
     // Top 5 recruits by composite_rank (NULL ranks last). Cloned so the
     // closure capture is move-friendly.
     let mut sorted_recruits: Vec<_> = p.recruits.iter().map(|(_, m)| m.clone()).collect();
@@ -533,41 +599,63 @@ fn predict_team(
     // Every team produces a row — too-thin rosters get null predictions
     // and a `too_thin = true` flag instead of being silently dropped.
     // This keeps "what happened to X?" auditable from the response.
-    let base = |floor: Option<f32>, ceiling: Option<f32>, too_thin: bool| ProjectedTeam {
-        team_id: p.team_id,
-        team_name: p.team_name.clone(),
-        team_full_name: p.team_full_name.clone(),
-        ceiling_adj_em: ceiling,
-        floor_adj_em: floor,
-        midpoint_adj_em: floor
-            .zip(ceiling)
-            .map(|(f, c)| p_return * c + (1.0 - p_return) * f),
-        returning_count: p.returning.len(),
-        returning_cam_v3_sum,
-        returning_projected_cam_v3_sum,
-        arrivals_count: p.arrivals.len(),
-        arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
-        arrivals_projected_cam_v3_sum,
-        recruits_count: p.recruits.len(),
-        recruits_cam_v3_sum,
-        top_recruits: top_recruits.clone(),
-        uncertain_count: p.uncertain.len(),
-        uncertain_cam_v3_sum,
-        departures_count: p.departures.len(),
-        departures_cam_v3_sum: p.departures_cam_v3_sum,
-        too_thin,
-        baseline_adj_em: baseline,
-        actual_adj_em: actual,
-        baseline_weight,
-        // Coach fields are decorative and filled by the handler after this
-        // returns (predict_team has no DB access); default to absent here.
-        coach_id: None,
-        coach_name: None,
-        coach_cae_shrunk: None,
-        coach_cae_reliability: None,
-        coach_n_seasons: None,
-        coach_is_new_hc: None,
-        coach_prev_team: None,
+    // `adjo_floor`/`adjo_ceiling` are the already-shrunk AdjO bounds (or
+    // None for too-thin); blended on the same `p_return` weight as the net,
+    // then AdjD derived as AdjO − AdjEM so the split reconciles exactly.
+    let base = |floor: Option<f32>,
+                ceiling: Option<f32>,
+                too_thin: bool,
+                adjo_floor: Option<f32>,
+                adjo_ceiling: Option<f32>|
+     -> ProjectedTeam {
+        let blend = |f: Option<f32>, c: Option<f32>| {
+            f.zip(c).map(|(f, c)| p_return * c + (1.0 - p_return) * f)
+        };
+        let midpoint_adj_em = blend(floor, ceiling);
+        let projected_adj_o = blend(adjo_floor, adjo_ceiling);
+        let projected_adj_d = projected_adj_o.zip(midpoint_adj_em).map(|(o, em)| o - em);
+        ProjectedTeam {
+            team_id: p.team_id,
+            team_name: p.team_name.clone(),
+            team_full_name: p.team_full_name.clone(),
+            ceiling_adj_em: ceiling,
+            floor_adj_em: floor,
+            midpoint_adj_em,
+            projected_adj_o,
+            projected_adj_d,
+            returning_count: p.returning.len(),
+            returning_cam_v3_sum,
+            returning_projected_cam_v3_sum,
+            arrivals_count: p.arrivals.len(),
+            arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
+            arrivals_projected_cam_v3_sum,
+            recruits_count: p.recruits.len(),
+            recruits_cam_v3_sum,
+            top_recruits: top_recruits.clone(),
+            uncertain_count: p.uncertain.len(),
+            uncertain_cam_v3_sum,
+            departures_count: p.departures.len(),
+            departures_cam_v3_sum: p.departures_cam_v3_sum,
+            returning_cam_o_sum,
+            returning_cam_d_sum,
+            arrivals_cam_o_sum,
+            arrivals_cam_d_sum,
+            departures_cam_o_sum,
+            departures_cam_d_sum,
+            too_thin,
+            baseline_adj_em: baseline,
+            actual_adj_em: actual,
+            baseline_weight,
+            // Coach fields are decorative and filled by the handler after this
+            // returns (predict_team has no DB access); default to absent here.
+            coach_id: None,
+            coach_name: None,
+            coach_cae_shrunk: None,
+            coach_cae_reliability: None,
+            coach_n_seasons: None,
+            coach_is_new_hc: None,
+            coach_prev_team: None,
+        }
     };
 
     if qualifying < MIN_QUALIFYING_FOR_PROJECTION {
@@ -575,47 +663,58 @@ fn predict_team(
         // qualifying-player roster (no freshmen / recruits modeled, so
         // the rate-stat aggregates over-weight the few starters). Surface
         // the row with metadata so the UI can show "—" and a tooltip.
-        return Some(base(None, None, true));
+        return Some(base(None, None, true, None, None));
     }
 
-    // Score each scenario with the roster-impact model.
+    // Score each scenario with the roster-impact model, AND the AdjO half
+    // on the identical feature vector (one build, two model runs). Returns
+    // (net AdjEM, AdjO); AdjD is derived downstream as AdjO − AdjEM.
     // Overwrite each returner / arrival's `cam_v3` with the trajectory
     // model's projection (recruits already carry the freshman model's
     // value from `freshman_row`); `build_roster_impact_features`
     // then does its own cam_v3-ranked canonical-MPG rotation
     // normalization — no separate `project_rotation` pass needed.
-    let score = |scenario| {
+    // Returns (net AdjEM, AdjO) for the scenario, or None on an ONNX error
+    // (logged) so the caller bails the whole team — matches the prior
+    // per-scenario error handling without naming `ort::Error` (not a direct
+    // dep of this crate).
+    let score = |scenario, label: &str| -> Option<(f32, f32)> {
         let mut roster = p.for_scenario(scenario);
         apply_projected_cam_v3(&mut roster, projected_cam);
-        predictor.predict_roster_impact(&build_roster_impact_features(
-            &roster,
-            p.outbound_cam_v3_sum,
-            p.inbound_cam_v3_sum,
-        ))
+        let feats =
+            build_roster_impact_features(&roster, p.outbound_cam_v3_sum, p.inbound_cam_v3_sum);
+        let net = match predictor.predict_roster_impact(&feats) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(team = %p.team_name, error = ?e, "{label} net predict failed");
+                return None;
+            }
+        };
+        let adjo = match predictor.predict_roster_adjo(&feats) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(team = %p.team_name, error = ?e, "{label} adjo predict failed");
+                return None;
+            }
+        };
+        Some((net, adjo))
     };
-    let floor_raw = match score(DraftScenario::Floor) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(team = %p.team_name, error = ?e, "floor predict failed");
-            return None;
-        }
-    };
-    let ceiling_raw = match score(DraftScenario::Ceiling) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(team = %p.team_name, error = ?e, "ceiling predict failed");
-            return None;
-        }
-    };
+    let (floor_raw, floor_o_raw) = score(DraftScenario::Floor, "floor")?;
+    let (ceiling_raw, ceiling_o_raw) = score(DraftScenario::Ceiling, "ceiling")?;
 
     // Baseline-shrink both bounds at the turnover-aware weight. The band
     // shrinks in width by `(1 - baseline_weight)` but stays internally
     // consistent (ceiling ≥ floor preserved for non-anomaly teams;
-    // negative-spread anomalies stay negative-spread).
+    // negative-spread anomalies stay negative-spread). The AdjO bounds
+    // shrink toward the prior-season *offense* (`baseline_o`) at the SAME
+    // weight, so the derived AdjD shrinks toward prior defense and the
+    // split stays coherent with the net headline.
     Some(base(
         Some(shrink(floor_raw, baseline, baseline_weight)),
         Some(shrink(ceiling_raw, baseline, baseline_weight)),
         false,
+        Some(shrink(floor_o_raw, baseline_o, baseline_weight)),
+        Some(shrink(ceiling_o_raw, baseline_o, baseline_weight)),
     ))
 }
 
@@ -722,6 +821,16 @@ async fn projection_team_detail(
             )
         })?;
     let baseline = baseline_map.get(&resolved_id).copied();
+    let baseline_o = fetch_baseline_adj_o(pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("baseline AdjO fetch failed: {e}") })),
+            )
+        })?
+        .get(&resolved_id)
+        .copied();
 
     // Actual target-season AdjEM for this team (None for the live year).
     let actual = fetch_actual_adj_em(pool, base_season, year)
@@ -935,6 +1044,15 @@ async fn projection_team_detail(
     // route skips None rows (`continue`); a single-team detail page
     // can't skip, so surface it as 500 rather than handing the
     // frontend a `projection: null` it isn't typed for.
+    // Cohort O/D sums for the detail payload — same display-only
+    // decoration as the list route; degrade to empty on failure.
+    let cam_od_map = fetch_cam_od_map(&state.db.pool, base_season)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "cam O/D fetch failed; detail renders without splits");
+            std::collections::HashMap::new()
+        });
+
     let Some(mut row) = predict_team(
         &projection,
         &state.predictor,
@@ -942,6 +1060,8 @@ async fn projection_team_detail(
         actual,
         p_return,
         &projected_cam,
+        &cam_od_map,
+        baseline_o,
     ) else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1225,6 +1345,67 @@ async fn fetch_baseline_adj_em(
     Ok(rows
         .into_iter()
         .map(|r| (r.team_id, r.adj_efficiency_margin as f32))
+        .collect())
+}
+
+/// Base-season `team_season_stats.adj_offense` (absolute ~105) per team —
+/// the shrink anchor for the projected AdjO half. Same shape/keying as
+/// `fetch_baseline_adj_em`; a team missing here just skips AdjO shrinkage.
+async fn fetch_baseline_adj_o(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+) -> Result<std::collections::HashMap<Uuid, f32>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        team_id: Uuid,
+        adj_offense: f64,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT team_id, adj_offense
+        FROM team_season_stats
+        WHERE season = $1 AND adj_offense IS NOT NULL
+        "#,
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.team_id, r.adj_offense as f32))
+        .collect())
+}
+
+/// Base-season CamPom O/D split per player, envelope-gated jointly
+/// (`abs() <= 30` on both halves — the same regression guard every other
+/// serving surface applies; see `queries::get_torvik_stats`). Keyed by
+/// player_id; gated/missing players are simply absent and contribute 0
+/// to the cohort sums. One query for the whole slate (~5k rows).
+async fn fetch_cam_od_map(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+) -> Result<std::collections::HashMap<Uuid, (f32, f32)>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        player_id: Uuid,
+        cam_o: f64,
+        cam_d: f64,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT player_id, cam_o_gbpm_v3_psos AS cam_o, cam_d_gbpm_v3_psos AS cam_d
+        FROM torvik_player_stats
+        WHERE season = $1
+          AND cam_o_gbpm_v3_psos IS NOT NULL AND cam_d_gbpm_v3_psos IS NOT NULL
+          AND abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
+        "#,
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.player_id, (r.cam_o as f32, r.cam_d as f32)))
         .collect())
 }
 

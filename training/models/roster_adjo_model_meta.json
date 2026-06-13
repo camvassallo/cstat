@@ -1,0 +1,115 @@
+{
+  "model": "roster_adjo_model",
+  "target": "adj_offense",
+  "decomposition": "NET+SPLIT: AdjD derived as AdjO - AdjEM at serve time",
+  "seasons": [
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025,
+    2026
+  ],
+  "n_rows": 4255,
+  "n_features": 27,
+  "features": [
+    "roster_size",
+    "cam_wmean",
+    "cam_sum",
+    "cam_top1",
+    "cam_top3_mean",
+    "cam_top7_mean",
+    "cam_count_gt5",
+    "cam_count_gt10",
+    "cam_count_gt15",
+    "exp_fr_share",
+    "exp_so_share",
+    "exp_jr_share",
+    "exp_sr_share",
+    "arch_wizard",
+    "arch_sorcerer",
+    "arch_warlock",
+    "arch_bard",
+    "arch_ranger",
+    "arch_barbarian",
+    "arch_paladin",
+    "arch_monk",
+    "arch_cleric",
+    "arch_druid",
+    "arch_rogue",
+    "arch_fighter",
+    "outbound_cam_v3_sum",
+    "inbound_cam_v3_sum"
+  ],
+  "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
+  "cam_v3_source": "oof",
+  "cam_v3_coverage": {
+    "n_player_rows": 47132,
+    "trajectory_oof": 24423,
+    "freshman_oof": 3250,
+    "actual_fallback": 18102,
+    "no_cam_v3": 1357,
+    "oof_pct": 58.7
+  },
+  "final_n_estimators": 214,
+  "backtest_loso": {
+    "pooled_mae": 3.3690568640219767,
+    "naive_mae": 7.023901496960099,
+    "per_season": {
+      "2015": {
+        "mae": 3.0012867825545375,
+        "n": 351
+      },
+      "2016": {
+        "mae": 3.1247616466872654,
+        "n": 351
+      },
+      "2017": {
+        "mae": 2.9674294907791134,
+        "n": 351
+      },
+      "2018": {
+        "mae": 3.1140791170701827,
+        "n": 351
+      },
+      "2019": {
+        "mae": 3.0032855856247638,
+        "n": 353
+      },
+      "2020": {
+        "mae": 3.032557383023233,
+        "n": 353
+      },
+      "2021": {
+        "mae": 4.139845308719022,
+        "n": 341
+      },
+      "2022": {
+        "mae": 3.792655411889298,
+        "n": 352
+      },
+      "2023": {
+        "mae": 3.181036972029122,
+        "n": 362
+      },
+      "2024": {
+        "mae": 3.0442836417213583,
+        "n": 362
+      },
+      "2025": {
+        "mae": 3.2282511197071133,
+        "n": 364
+      },
+      "2026": {
+        "mae": 4.7925286908035964,
+        "n": 364
+      }
+    }
+  }
+}

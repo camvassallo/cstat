@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchDraft, type DraftProspect } from '../api/client';
 import { gridTheme } from '../theme';
-import { campomTier, campomTierColor } from '../components/campom';
+import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
 import { SeasonLink } from '../components/SeasonLink';
 import { useIsMobile } from '../components/useIsMobile';
 import { useSeason } from '../components/season';
@@ -133,6 +133,20 @@ const nullsLast = (
   return a - b;
 };
 
+// O/D CamPom halves — signed values on the shared diverging red→green
+// gradient (per-half saturation, see campomHalfColor), gated server-side
+// (±30 sanity envelope; unstable rows arrive null and render "—").
+const campomHalfRenderer = (side: 'o' | 'd') =>
+  function CampomHalfCell(p: { value: number | null }) {
+    return p.value != null ? (
+      <span className="tabular-nums text-xs" style={{ color: campomHalfColor(p.value, side) }}>
+        {`${p.value > 0 ? '+' : ''}${p.value.toFixed(1)}`}
+      </span>
+    ) : (
+      <span className="text-gray-600 text-xs">—</span>
+    );
+  };
+
 function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
   // Mobile: fixed natural widths so AG Grid horizontal-scrolls instead of
   // compressing content. Desktop: flex distribution. Mirrors TransferPortal.
@@ -254,6 +268,24 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
           </span>
         );
       },
+    },
+    {
+      headerName: 'CPO',
+      field: 'campom_o',
+      ...flexCol(1, 80),
+      headerTooltip:
+        "CamPom's offensive half (O + D = CamPom, same per-100 scale). — for unmatched prospects or where the decomposition is numerically unstable (±30 sanity envelope).",
+      comparator: nullsLast,
+      cellRenderer: campomHalfRenderer('o'),
+    },
+    {
+      headerName: 'CPD',
+      field: 'campom_d',
+      ...flexCol(1, 80),
+      headerTooltip:
+        "CamPom's defensive half — positive is GOOD (defensive value added; O + D = CamPom). — for unmatched prospects or where the decomposition is numerically unstable.",
+      comparator: nullsLast,
+      cellRenderer: campomHalfRenderer('d'),
     },
     {
       headerName: 'Δ',

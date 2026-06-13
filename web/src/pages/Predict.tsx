@@ -13,7 +13,7 @@ import {
 } from '../api/client';
 import { useSeason, seasonHref } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
-import { campomTier, campomTierColor } from '../components/campom';
+import { campomTier, campomTierColor, campomTitle } from '../components/campom';
 import { classColor, classTitle } from '../components/archetypeColors';
 import { shortDate } from '../components/format';
 import { RosterWaffle } from '../components/RosterWaffle';
@@ -511,7 +511,7 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
       </div>
       <div
         className={`text-[11px] font-mono px-1.5 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
-        title={tier ? `${tier}` : undefined}
+        title={campomTitle(p.campom, p.campom_o, p.campom_d) || undefined}
       >
         {campomScore}
       </div>

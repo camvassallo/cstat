@@ -13,6 +13,7 @@ import {
 } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
+import { pctileTextColor } from '../components/pctile';
 import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
 
 // Projectable-year definitions are shared with the team projection ledger via
@@ -63,6 +64,12 @@ function nullsLast(
 const dashCell = <span className="text-slate-600 text-xs">—</span>;
 const fmtSigned = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
 
+// Tooltip line for a cohort's prior-season CamPom O/D split. Empty when
+// both halves are 0 (no O/D coverage for the cohort — e.g. the server
+// degraded the split fetch, or every member is envelope-gated).
+const odTipLine = (o: number, d: number) =>
+  o !== 0 || d !== 0 ? `\nprior O/D split: O ${fmtSigned(o)} / D ${fmtSigned(d)}` : '';
+
 // Last season's roster value (CamPom) — the shared denominator that makes
 // the roster-flow columns mesh: `returning + departures + uncertain`, all
 // on the prior-season frame (every player who was on last year's team).
@@ -101,15 +108,65 @@ function flowCellView(
 // `projRank`/`actRank` are team_id → 1-based rank (by projected and actual
 // AdjEM respectively), precomputed over the whole field so the rank-error
 // column can read them per row.
+// Per-team rank + color for a single O/D metric (rank 1 = best → greenest).
+type RankCell = { rank: number; color: string };
+// The four O/D columns' rank cells, keyed by metric. Partial — a team with
+// no value for a metric (e.g. 0/0 roster O/D) simply has no cell.
+type EffRank = { ao: RankCell; ad: RankCell; ro: RankCell; rd: RankCell };
+
 function buildColumns(
   isMobile: boolean,
   year: number,
   showActual: boolean,
   projRank: Map<string, number>,
   actRank: Map<string, number>,
+  effRank: Map<string, Partial<EffRank>>,
 ): ColDef<ProjectedTeam>[] {
   const flexCol = (flex: number, min: number) =>
     isMobile ? { width: min } : { flex, minWidth: min };
+
+  // Spread onto the leading column of each logical group to draw the
+  // vertical divider. Inline cellStyle (body cells only — header stays clean).
+  // gray-800 (matching Rankings/roster) reads as the grid background here, so
+  // we use a visibly lighter slate-600 line to actually separate the groups.
+  const divider = { cellStyle: { borderLeft: '1px solid #4b5563' } };
+
+  // Projected offensive / defensive efficiency (absolute ~105, KenPom
+  // convention). The NET+SPLIT halves of the headline: AdjEM = AdjO − AdjD,
+  // so they reconcile exactly. AdjO sorts high-first (better offense); AdjD
+  // sorts low-first (better defense). Descriptive, never a coach grade.
+  const projEffCol = (side: 'o' | 'd'): ColDef<ProjectedTeam> => {
+    const field = side === 'o' ? 'projected_adj_o' : 'projected_adj_d';
+    return {
+      headerName: side === 'o' ? 'Proj AdjO' : 'Proj AdjD',
+      colId: side === 'o' ? 'proj_adjo' : 'proj_adjd',
+      ...flexCol(1, 92),
+      headerTooltip:
+        side === 'o'
+          ? 'Projected offensive efficiency (points scored per 100 possessions, ~105 scale; higher is better). The offensive half of the net projection — AdjEM = AdjO − AdjD. Descriptive, not a coach grade.'
+          : 'Projected defensive efficiency (points allowed per 100 possessions, ~105 scale; LOWER is better). Derived as AdjO − AdjEM so the split reconciles exactly to the Proj AdjEM headline.',
+      sortingOrder: side === 'o' ? ['desc', 'asc', null] : ['asc', 'desc', null],
+      valueGetter: (p) => (p.data as ProjectedTeam | undefined)?.[field] ?? null,
+      comparator: nullsLast,
+      // Value with a small "#rank" subscript colored by field-wide rank
+      // percentile — the Rankings-page convention (RankedCell). Direction
+      // baked into the rank: #1 = best offense (AdjO) / best defense (AdjD).
+      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
+        if (p.value == null) return dashCell;
+        const cell = p.data && effRank.get(p.data.team_id)?.[side === 'o' ? 'ao' : 'ad'];
+        return (
+          <div className="leading-tight">
+            <div className="text-xs font-mono text-slate-200">{p.value.toFixed(1)}</div>
+            {cell && (
+              <div className="text-[10px] font-mono" style={{ color: cell.color }}>
+                #{cell.rank}
+              </div>
+            )}
+          </div>
+        );
+      },
+    };
+  };
 
   const actualColumns: ColDef<ProjectedTeam>[] = showActual
     ? [
@@ -117,6 +174,7 @@ function buildColumns(
           headerName: 'Actual',
           field: 'actual_adj_em',
           ...flexCol(1, 90),
+          ...divider,
           headerTooltip: `The team's actual AdjEM for ${seasonLabel(year)} — what really happened. Shown for completed seasons so the projection can be graded.`,
           comparator: nullsLast,
           cellRenderer: (p: { value: number | null }) => adjEmChip(p.value),
@@ -187,6 +245,58 @@ function buildColumns(
       ]
     : [];
 
+  // Two prior-season roster-shape columns: Σ CPO / Σ CPD over the known
+  // projected roster (returners + incoming transfers). Descriptive, not a
+  // projection — recruits and undecided draft entrants are excluded (no
+  // prior season / no O/D forecast). Both dash together when the team has
+  // no O/D coverage at all.
+  const rosterHalfCol = (side: 'o' | 'd'): ColDef<ProjectedTeam> => {
+    const long = side === 'o' ? 'offensive' : 'defensive';
+    const tag = side === 'o' ? 'CPO' : 'CPD';
+    const pick = (t: ProjectedTeam) =>
+      side === 'o'
+        ? t.returning_cam_o_sum + t.arrivals_cam_o_sum
+        : t.returning_cam_d_sum + t.arrivals_cam_d_sum;
+    return {
+      headerName: side === 'o' ? 'Roster O' : 'Roster D',
+      colId: side === 'o' ? 'roster_o' : 'roster_d',
+      ...flexCol(1, 90),
+      headerTooltip:
+        `Σ prior-season ${tag} (${long} CamPom) over the known projected roster — returners + incoming transfers. ` +
+        'Recruits and undecided draft entrants are excluded (no prior season). Descriptive, not a projection.',
+      sortingOrder: ['desc', 'asc', null],
+      comparator: (_a, _b, na, nb) => {
+        const v = (t?: ProjectedTeam) => (t ? pick(t) : 0);
+        return (
+          v(na.data as ProjectedTeam | undefined) - v(nb.data as ProjectedTeam | undefined)
+        );
+      },
+      cellRenderer: (p: { data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t) return dashCell;
+        const o = t.returning_cam_o_sum + t.arrivals_cam_o_sum;
+        const d = t.returning_cam_d_sum + t.arrivals_cam_d_sum;
+        if (o === 0 && d === 0) return dashCell;
+        const tip =
+          `Σ prior-season ${long} CamPom (${tag}) over returners + transfers in: ${fmtSigned(pick(t))}.` +
+          '\nRecruits + undecided draft entrants excluded (no prior season).';
+        // Value with a "#rank" subscript (higher Σ = more talent = rank 1),
+        // matching the projected-efficiency and Rankings columns.
+        const cell = effRank.get(t.team_id)?.[side === 'o' ? 'ro' : 'rd'];
+        return (
+          <div title={tip} className="leading-tight">
+            <div className="text-xs font-mono text-slate-200">{fmtSigned(pick(t))}</div>
+            {cell && (
+              <div className="text-[10px] font-mono" style={{ color: cell.color }}>
+                #{cell.rank}
+              </div>
+            )}
+          </div>
+        );
+      },
+    };
+  };
+
   return [
     {
       headerName: 'Rank',
@@ -249,44 +359,9 @@ function buildColumns(
         );
       },
     },
+    projEffCol('o'),
+    projEffCol('d'),
     ...actualColumns,
-    {
-      headerName: 'Δ vs last',
-      colId: 'delta_baseline',
-      ...flexCol(1, 90),
-      headerTooltip:
-        "Projected midpoint minus last season's actual AdjEM. Positive (green) = the model thinks this roster improves on last year. Negative (red) = regression. Null when we lack a baseline (new D-I) or the projection is gated.",
-      valueGetter: (p) => {
-        const t = p.data;
-        if (!t || t.midpoint_adj_em == null || t.baseline_adj_em == null) return null;
-        return t.midpoint_adj_em - t.baseline_adj_em;
-      },
-      comparator: nullsLast,
-      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
-        if (p.value == null) return <span className="text-slate-600 text-xs">—</span>;
-        const v = p.value;
-        const baseline = p.data?.baseline_adj_em ?? 0;
-        const tone =
-          v >= 3
-            ? 'text-emerald-300'
-            : v >= 1
-              ? 'text-emerald-400'
-              : v > -1
-                ? 'text-slate-400'
-                : v > -3
-                  ? 'text-rose-400'
-                  : 'text-rose-300';
-        const text = v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1);
-        return (
-          <span
-            className={`text-xs font-mono font-semibold ${tone}`}
-            title={`Projected ${(baseline + v).toFixed(1)} vs last year's ${baseline.toFixed(1)}`}
-          >
-            {text}
-          </span>
-        );
-      },
-    },
     {
       // Display-only. The coach grade is NOT in the projected AdjEM — a PIT
       // backtest found its forecast lift is program-level bias, not coaching
@@ -295,6 +370,7 @@ function buildColumns(
       headerName: 'Coach +/-',
       colId: 'coach_cae',
       ...flexCol(1, 100),
+      ...divider,
       headerTooltip:
         "Descriptive only — NOT included in the projected AdjEM. The head coach's career Coach-Above-Expectation: how much this program has historically beaten (or missed) its roster-only projection under them, EB-shrunk toward 0 for short tenures. A point-in-time backtest showed this signal is program-level, not coaching, so it never moves the forecast — it's shown for context.",
       valueGetter: (p) => (p.data as ProjectedTeam | undefined)?.coach_cae_shrunk ?? null,
@@ -359,10 +435,13 @@ function buildColumns(
         );
       },
     },
+    { ...rosterHalfCol('o'), ...divider },
+    rosterHalfCol('d'),
     {
       headerName: 'Returning',
       colId: 'returning',
       ...flexCol(1, 120),
+      ...divider,
       headerTooltip:
         "Returning players, shown as their *projected* next-season CamPom (trajectory forecast) with the share of last season's roster value retained beneath — i.e. roster continuity. 51% kept = a stable veteran core; 20% = a near-total rebuild. Excludes graduating seniors, outbound portal, and firm draft departures.",
       comparator: (_a, _b, na, nb) =>
@@ -378,7 +457,8 @@ function buildColumns(
           `${t.returning_count} returning · prior Σ ${fmtSigned(t.returning_cam_v3_sum)} → projected ${fmtSigned(val)}` +
           (pct != null
             ? `\n${Math.round(pct * 100)}% of last season's roster value retained (continuity)`
-            : '');
+            : '') +
+          odTipLine(t.returning_cam_o_sum, t.returning_cam_d_sum);
         return flowCellView(fmtSigned(val), pctText, 'text-slate-200', tip);
       },
     },
@@ -400,7 +480,8 @@ function buildColumns(
         const pctText = pct != null ? `+${Math.round(pct * 100)}%` : null;
         const tip =
           `${t.arrivals_count} transfers in · prior-school Σ ${fmtSigned(t.arrivals_cam_v3_sum)} → projected ${fmtSigned(val)}` +
-          (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '');
+          (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '') +
+          odTipLine(t.arrivals_cam_o_sum, t.arrivals_cam_d_sum);
         return flowCellView(fmtSigned(val), pctText, tone, tip);
       },
     },
@@ -447,7 +528,8 @@ function buildColumns(
         const pctText = pct != null ? `−${Math.round(pct * 100)}%` : null;
         const tip =
           `${t.departures_count} departures (Sr + portal-out + draft) · Σ prior CamPom ${fmtSigned(t.departures_cam_v3_sum)} leaving` +
-          (pct != null ? `\n${Math.round(pct * 100)}% of last season's roster value lost` : '');
+          (pct != null ? `\n${Math.round(pct * 100)}% of last season's roster value lost` : '') +
+          odTipLine(t.departures_cam_o_sum, t.departures_cam_d_sum);
         return flowCellView(fmtSigned(display), pctText, 'text-rose-400', tip);
       },
     },
@@ -538,9 +620,35 @@ function ProjectionView({ year }: { year: number }) {
     return { projRank, actRank };
   }, [teams]);
 
+  // Field-wide ranks for the four O/D columns — Proj AdjO / Proj AdjD /
+  // Roster O / Roster D — over scored teams, with the better direction as
+  // rank 1 (AdjD lower-is-better, the rest higher). Each cell carries its
+  // 1-based rank and the rank-percentile color (`pctileTextColor`), rendered
+  // as a small "#N" subscript under the value — the Rankings-page convention.
+  const effRank = useMemo(() => {
+    const m = new Map<string, Partial<EffRank>>();
+    const scored = teams?.filter((t) => !t.too_thin && t.projected_adj_o != null) ?? [];
+    if (scored.length < 2) return m;
+    const assign = (slot: keyof EffRank, key: (t: ProjectedTeam) => number | null, dir: 1 | -1) => {
+      const rows = [...scored].filter((t) => key(t) != null);
+      rows.sort((a, b) => dir * ((key(b) as number) - (key(a) as number)));
+      rows.forEach((t, i) => {
+        const pct = 1 - i / (rows.length - 1);
+        const cur = m.get(t.team_id) ?? {};
+        cur[slot] = { rank: i + 1, color: pctileTextColor(pct) };
+        m.set(t.team_id, cur);
+      });
+    };
+    assign('ao', (t) => t.projected_adj_o, 1);
+    assign('ad', (t) => t.projected_adj_d, -1); // lower = better
+    assign('ro', (t) => t.returning_cam_o_sum + t.arrivals_cam_o_sum, 1);
+    assign('rd', (t) => t.returning_cam_d_sum + t.arrivals_cam_d_sum, 1);
+    return m;
+  }, [teams]);
+
   const columns = useMemo(
-    () => buildColumns(isMobile, year, hasActuals, projRank, actRank),
-    [isMobile, year, hasActuals, projRank, actRank],
+    () => buildColumns(isMobile, year, hasActuals, projRank, actRank, effRank),
+    [isMobile, year, hasActuals, projRank, actRank, effRank],
   );
 
   const filtered = useMemo(() => {
@@ -611,6 +719,7 @@ function ProjectionView({ year }: { year: number }) {
           theme={gridTheme}
           columnDefs={columns}
           rowData={filtered ?? []}
+          rowHeight={48}
           defaultColDef={{
             sortable: true,
             resizable: true,

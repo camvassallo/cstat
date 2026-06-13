@@ -24,7 +24,7 @@ import {
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { classColor } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
-import { campomTier, campomTierColor } from '../components/campom';
+import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
 import { pctileTextColor } from '../components/pctile';
 import { SeasonLink } from '../components/SeasonLink';
 import { useIsMobile } from '../components/useIsMobile';
@@ -383,10 +383,11 @@ export default function PlayerProgression() {
             <StatRow label="ORTG" seasons={seasonsAsc} pick={(s) => s.season_stats?.offensive_rating ?? null} />
             <StatRow label="DRTG" seasons={seasonsAsc} pick={(s) => s.season_stats?.defensive_rating ?? null} />
             <StatRow label="Net" seasons={seasonsAsc} pick={(s) => s.season_stats?.net_rating ?? null} signed />
-            <StatRow label="GBPM" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.gbpm ?? null} pctile={(s) => s.torvik_stats?.gbpm_pct ?? null} signed />
-            <StatRow label="OGBPM" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.ogbpm ?? null} pctile={(s) => s.torvik_stats?.ogbpm_pct ?? null} signed />
-            <StatRow label="DGBPM" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.dgbpm ?? null} pctile={(s) => s.torvik_stats?.dgbpm_pct ?? null} signed />
             <StatRow label="CamPom" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom ?? null} pctile={(s) => s.torvik_stats?.campom_pct ?? null} signed />
+            {/* O/D halves (envelope-gated server-side; no percentile companion,
+                so shaded by the CamPom-half gradient instead). */}
+            <StatRow label="CPO" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_o ?? null} signed colorFor={(v) => (v != null ? campomHalfColor(v, 'o') : undefined)} />
+            <StatRow label="CPD" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_d ?? null} signed colorFor={(v) => (v != null ? campomHalfColor(v, 'd') : undefined)} />
           </tbody>
         </table>
       </div>
@@ -421,6 +422,7 @@ function StatRow({
   seasons,
   pick,
   pctile,
+  colorFor,
   fmt: fmtFn,
   decimals = 1,
   signed = false,
@@ -429,6 +431,10 @@ function StatRow({
   seasons: ProgressionSeason[];
   pick: (s: ProgressionSeason) => number | null;
   pctile?: (s: ProgressionSeason) => number | null;
+  /// Per-value text color override — takes precedence over the percentile
+  /// shading. Used by the CPO/CPD rows (no percentile companion) to apply
+  /// the CamPom-half gradient instead, keeping player surfaces gradient-shaded.
+  colorFor?: (v: number | null) => string | undefined;
   fmt?: (v: number | null) => string;
   decimals?: number;
   signed?: boolean;
@@ -445,7 +451,7 @@ function StatRow({
       {seasons.map((s) => {
         const value = pick(s);
         const pct = pctile?.(s) ?? null;
-        const color = pct != null ? pctileTextColor(pct) : undefined;
+        const color = colorFor ? colorFor(value) : pct != null ? pctileTextColor(pct) : undefined;
         return (
           <td key={s.season} className="text-right py-1 px-3 font-mono tabular-nums" style={color ? { color } : undefined}>
             {formatValue(value)}

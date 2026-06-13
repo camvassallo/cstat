@@ -495,6 +495,10 @@ export interface DraftProspect {
   team_name: string | null;
   player_id: string | null;
   campom: number | null;
+  // CamPom O/D decomposition (o + d = campom; d positive-good). Null when
+  // unmatched or where the split is numerically unstable (±30 envelope).
+  campom_o: number | null;
+  campom_d: number | null;
 }
 
 export function fetchDraft(year: number) {
@@ -601,12 +605,31 @@ export interface ProjectedTeam {
   departures_count: number;
   /// Σ base-season CamPom across all departures (Sr + portal-out + draft).
   departures_cam_v3_sum: number;
+  /// Per-cohort Σ of the base-season CamPom O/D halves (envelope-gated per
+  /// player; gated/uncovered players contribute 0 to both). Prior-season
+  /// frame — the trajectory model forecasts net only, so these describe
+  /// the O/D shape of the talent moving, not a forecast. Recruits have no
+  /// prior season, hence no recruit pair.
+  returning_cam_o_sum: number;
+  returning_cam_d_sum: number;
+  arrivals_cam_o_sum: number;
+  arrivals_cam_d_sum: number;
+  departures_cam_o_sum: number;
+  departures_cam_d_sum: number;
+  /// Projected next-season offensive / defensive efficiency (absolute ~105,
+  /// KenPom convention — lower AdjD is better). NET+SPLIT decomposition of
+  /// the headline: AdjEM = AdjO − AdjD, so these reconcile to
+  /// `midpoint_adj_em` exactly. Display-only; the served net is untouched.
+  /// `null` for too-thin rosters.
+  projected_adj_o: number | null;
+  projected_adj_d: number | null;
   /// True when (returning + arrivals + recruits) is below the projection
   /// threshold — render '—' instead of the prediction columns.
   too_thin: boolean;
   /// Team's AdjEM at the end of the base season (= year-1, the
-  /// just-completed season). Used as the shrinkage anchor and the
-  /// reference for the 'Δ vs last' column.
+  /// just-completed season). The shrinkage anchor for the projection
+  /// (blended into `midpoint_adj_em`) and the base for the roster-flow
+  /// continuity percentages.
   baseline_adj_em: number | null;
   /// Team's *actual* AdjEM for the projected season itself. Null for the
   /// live/upcoming forecast year (not played yet). Drives the historical
