@@ -55,6 +55,8 @@ struct DbCandidate {
     team_full_name: Option<String>,
     minutes_per_game: Option<f64>,
     campom: Option<f64>,
+    campom_o: Option<f64>,
+    campom_d: Option<f64>,
 }
 
 /// Subset of a `teams` row — enough to resolve a board school name to a
@@ -95,6 +97,11 @@ struct Prospect {
     /// CamPom v3 (`cam_gbpm_v3_psos`) for the matched player. `None` when
     /// unmatched.
     campom: Option<f64>,
+    /// CamPom O/D halves (`cam_{o,d}_gbpm_v3_psos`; o + d = campom, d
+    /// positive-good). `None` when unmatched or where the decomposition is
+    /// numerically unstable (±30 sanity envelope, gated server-side).
+    campom_o: Option<f64>,
+    campom_d: Option<f64>,
 }
 
 /// Derive the draft-eligibility status of a board prospect. `entrant_status`
@@ -182,7 +189,11 @@ async fn draft_board(
             COALESCE(t.short_name, t.name) AS team_name,
             t.name                   AS team_full_name,
             pss.minutes_per_game     AS minutes_per_game,
-            tps.cam_gbpm_v3_psos     AS campom
+            tps.cam_gbpm_v3_psos     AS campom,
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -282,6 +293,8 @@ async fn draft_board(
                 current_team: b.current_team,
                 player_id: best.map(|c| c.player_id),
                 campom: best.and_then(|c| c.campom),
+                campom_o: best.and_then(|c| c.campom_o),
+                campom_d: best.and_then(|c| c.campom_d),
             }
         })
         .collect();

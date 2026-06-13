@@ -32,13 +32,3 @@ body {
     animation: none;
   }
 }
-
-/* Future-grid column-group dividers: a light vertical line on the leading
- * column of each logical group (projection / actual / context / roster
- * shape / roster flow). Applied via the `group-divider` header+cell class
- * on those leading columns; the theme sets columnBorder:false so this is
- * the only left border the grid draws. */
-.ag-header-cell.group-divider,
-.ag-cell.group-divider {
-  border-left: 1px solid #4b5563 !important;
-}

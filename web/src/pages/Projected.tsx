@@ -13,6 +13,7 @@ import {
 } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
+import { pctileTextColor } from '../components/pctile';
 import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
 
 // Projectable-year definitions are shared with the team projection ledger via
@@ -107,19 +108,28 @@ function flowCellView(
 // `projRank`/`actRank` are team_id → 1-based rank (by projected and actual
 // AdjEM respectively), precomputed over the whole field so the rank-error
 // column can read them per row.
+// Per-team rank + color for a single O/D metric (rank 1 = best → greenest).
+type RankCell = { rank: number; color: string };
+// The four O/D columns' rank cells, keyed by metric. Partial — a team with
+// no value for a metric (e.g. 0/0 roster O/D) simply has no cell.
+type EffRank = { ao: RankCell; ad: RankCell; ro: RankCell; rd: RankCell };
+
 function buildColumns(
   isMobile: boolean,
   year: number,
   showActual: boolean,
   projRank: Map<string, number>,
   actRank: Map<string, number>,
+  effRank: Map<string, Partial<EffRank>>,
 ): ColDef<ProjectedTeam>[] {
   const flexCol = (flex: number, min: number) =>
     isMobile ? { width: min } : { flex, minWidth: min };
 
-  // Spread onto the leading column of each logical group to draw the light
-  // vertical divider (see `.group-divider` in index.css).
-  const divider = { headerClass: 'group-divider', cellClass: 'group-divider' };
+  // Spread onto the leading column of each logical group to draw the
+  // vertical divider. Inline cellStyle (body cells only — header stays clean).
+  // gray-800 (matching Rankings/roster) reads as the grid background here, so
+  // we use a visibly lighter slate-600 line to actually separate the groups.
+  const divider = { cellStyle: { borderLeft: '1px solid #4b5563' } };
 
   // Projected offensive / defensive efficiency (absolute ~105, KenPom
   // convention). The NET+SPLIT halves of the headline: AdjEM = AdjO − AdjD,
@@ -138,12 +148,23 @@ function buildColumns(
       sortingOrder: side === 'o' ? ['desc', 'asc', null] : ['asc', 'desc', null],
       valueGetter: (p) => (p.data as ProjectedTeam | undefined)?.[field] ?? null,
       comparator: nullsLast,
-      cellRenderer: (p: { value: number | null }) =>
-        p.value == null ? (
-          dashCell
-        ) : (
-          <span className="text-xs font-mono text-slate-200">{p.value.toFixed(1)}</span>
-        ),
+      // Value with a small "#rank" subscript colored by field-wide rank
+      // percentile — the Rankings-page convention (RankedCell). Direction
+      // baked into the rank: #1 = best offense (AdjO) / best defense (AdjD).
+      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
+        if (p.value == null) return dashCell;
+        const cell = p.data && effRank.get(p.data.team_id)?.[side === 'o' ? 'ao' : 'ad'];
+        return (
+          <div className="leading-tight">
+            <div className="text-xs font-mono text-slate-200">{p.value.toFixed(1)}</div>
+            {cell && (
+              <div className="text-[10px] font-mono" style={{ color: cell.color }}>
+                #{cell.rank}
+              </div>
+            )}
+          </div>
+        );
+      },
     };
   };
 
@@ -259,10 +280,18 @@ function buildColumns(
         const tip =
           `Σ prior-season ${long} CamPom (${tag}) over returners + transfers in: ${fmtSigned(pick(t))}.` +
           '\nRecruits + undecided draft entrants excluded (no prior season).';
+        // Value with a "#rank" subscript (higher Σ = more talent = rank 1),
+        // matching the projected-efficiency and Rankings columns.
+        const cell = effRank.get(t.team_id)?.[side === 'o' ? 'ro' : 'rd'];
         return (
-          <span title={tip} className="text-xs font-mono text-slate-200">
-            {fmtSigned(pick(t))}
-          </span>
+          <div title={tip} className="leading-tight">
+            <div className="text-xs font-mono text-slate-200">{fmtSigned(pick(t))}</div>
+            {cell && (
+              <div className="text-[10px] font-mono" style={{ color: cell.color }}>
+                #{cell.rank}
+              </div>
+            )}
+          </div>
         );
       },
     };
@@ -591,9 +620,35 @@ function ProjectionView({ year }: { year: number }) {
     return { projRank, actRank };
   }, [teams]);
 
+  // Field-wide ranks for the four O/D columns — Proj AdjO / Proj AdjD /
+  // Roster O / Roster D — over scored teams, with the better direction as
+  // rank 1 (AdjD lower-is-better, the rest higher). Each cell carries its
+  // 1-based rank and the rank-percentile color (`pctileTextColor`), rendered
+  // as a small "#N" subscript under the value — the Rankings-page convention.
+  const effRank = useMemo(() => {
+    const m = new Map<string, Partial<EffRank>>();
+    const scored = teams?.filter((t) => !t.too_thin && t.projected_adj_o != null) ?? [];
+    if (scored.length < 2) return m;
+    const assign = (slot: keyof EffRank, key: (t: ProjectedTeam) => number | null, dir: 1 | -1) => {
+      const rows = [...scored].filter((t) => key(t) != null);
+      rows.sort((a, b) => dir * ((key(b) as number) - (key(a) as number)));
+      rows.forEach((t, i) => {
+        const pct = 1 - i / (rows.length - 1);
+        const cur = m.get(t.team_id) ?? {};
+        cur[slot] = { rank: i + 1, color: pctileTextColor(pct) };
+        m.set(t.team_id, cur);
+      });
+    };
+    assign('ao', (t) => t.projected_adj_o, 1);
+    assign('ad', (t) => t.projected_adj_d, -1); // lower = better
+    assign('ro', (t) => t.returning_cam_o_sum + t.arrivals_cam_o_sum, 1);
+    assign('rd', (t) => t.returning_cam_d_sum + t.arrivals_cam_d_sum, 1);
+    return m;
+  }, [teams]);
+
   const columns = useMemo(
-    () => buildColumns(isMobile, year, hasActuals, projRank, actRank),
-    [isMobile, year, hasActuals, projRank, actRank],
+    () => buildColumns(isMobile, year, hasActuals, projRank, actRank, effRank),
+    [isMobile, year, hasActuals, projRank, actRank, effRank],
   );
 
   const filtered = useMemo(() => {
@@ -664,6 +719,7 @@ function ProjectionView({ year }: { year: number }) {
           theme={gridTheme}
           columnDefs={columns}
           rowData={filtered ?? []}
+          rowHeight={48}
           defaultColDef={{
             sortable: true,
             resizable: true,

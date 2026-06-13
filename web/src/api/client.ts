@@ -495,6 +495,10 @@ export interface DraftProspect {
   team_name: string | null;
   player_id: string | null;
   campom: number | null;
+  // CamPom O/D decomposition (o + d = campom; d positive-good). Null when
+  // unmatched or where the split is numerically unstable (±30 envelope).
+  campom_o: number | null;
+  campom_d: number | null;
 }
 
 export function fetchDraft(year: number) {
