@@ -478,6 +478,12 @@ pub struct Predictor {
     /// `validate_box_score_model_meta` can find `roster_model*.json/onnx`.
     model_dir: PathBuf,
     roster_impact_session: Mutex<Session>,
+    /// Offensive half of the NET+SPLIT team-rating decomposition: same
+    /// feature shape as `roster_impact_session`, target `adj_offense`
+    /// (absolute ~105). The served AdjEM stays the headline; AdjD is
+    /// derived as AdjO − AdjEM. Display-only (the Future page's projected
+    /// O/D bands), never feeds the net forecast.
+    roster_adjo_session: Mutex<Session>,
     trajectory_mean_session: Mutex<Session>,
     trajectory_q10_session: Mutex<Session>,
     trajectory_q90_session: Mutex<Session>,
@@ -546,6 +552,15 @@ impl Predictor {
             .commit_from_file(model_dir.join("roster_impact_model.onnx"))?;
 
         validate_roster_impact_meta(&model_dir.join("roster_impact_model_meta.json"))?;
+
+        // AdjO half of the NET+SPLIT decomposition — identical feature
+        // contract to the net model (validator reuses ROSTER_IMPACT names),
+        // so a mismatched export hard-fails boot the same way.
+        let roster_adjo_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("roster_adjo_model.onnx"))?;
+
+        validate_roster_impact_meta(&model_dir.join("roster_adjo_model_meta.json"))?;
 
         // Phase 5c trajectory: mean + q=0.1 + q=0.9 LightGBMs share one
         // feature shape; the meta JSON pins the alphas in the order the
@@ -617,6 +632,7 @@ impl Predictor {
             roster_session: Mutex::new(None),
             model_dir: model_dir.to_path_buf(),
             roster_impact_session: Mutex::new(roster_impact_session),
+            roster_adjo_session: Mutex::new(roster_adjo_session),
             trajectory_mean_session: Mutex::new(trajectory_mean_session),
             trajectory_q10_session: Mutex::new(trajectory_q10_session),
             trajectory_q90_session: Mutex::new(trajectory_q90_session),
@@ -823,6 +839,19 @@ impl Predictor {
         features: &[f32; ROSTER_IMPACT_NUM_FEATURES],
     ) -> Result<f32, ort::Error> {
         let mut session = self.roster_impact_session.lock().unwrap();
+        roster_impact_infer(&mut session, features)
+    }
+
+    /// Score a projected roster's next-season `adj_offense` (absolute ~105)
+    /// with the AdjO half of the NET+SPLIT decomposition. Same feature
+    /// vector as [`predict_roster_impact`]; the caller derives AdjD as
+    /// `AdjO − AdjEM` so the split reconciles exactly to the served net.
+    /// Display-only — never part of the projected-AdjEM forecast.
+    pub fn predict_roster_adjo(
+        &self,
+        features: &[f32; ROSTER_IMPACT_NUM_FEATURES],
+    ) -> Result<f32, ort::Error> {
+        let mut session = self.roster_adjo_session.lock().unwrap();
         roster_impact_infer(&mut session, features)
     }
 

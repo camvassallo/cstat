@@ -612,12 +612,20 @@ export interface ProjectedTeam {
   arrivals_cam_d_sum: number;
   departures_cam_o_sum: number;
   departures_cam_d_sum: number;
+  /// Projected next-season offensive / defensive efficiency (absolute ~105,
+  /// KenPom convention — lower AdjD is better). NET+SPLIT decomposition of
+  /// the headline: AdjEM = AdjO − AdjD, so these reconcile to
+  /// `midpoint_adj_em` exactly. Display-only; the served net is untouched.
+  /// `null` for too-thin rosters.
+  projected_adj_o: number | null;
+  projected_adj_d: number | null;
   /// True when (returning + arrivals + recruits) is below the projection
   /// threshold — render '—' instead of the prediction columns.
   too_thin: boolean;
   /// Team's AdjEM at the end of the base season (= year-1, the
-  /// just-completed season). Used as the shrinkage anchor and the
-  /// reference for the 'Δ vs last' column.
+  /// just-completed season). The shrinkage anchor for the projection
+  /// (blended into `midpoint_adj_em`) and the base for the roster-flow
+  /// continuity percentages.
   baseline_adj_em: number | null;
   /// Team's *actual* AdjEM for the projected season itself. Null for the
   /// live/upcoming forecast year (not played yet). Drives the historical
