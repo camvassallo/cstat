@@ -25,7 +25,7 @@ import {
   type PlayerRow,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
-import { campomTier, campomTierColor } from '../components/campom';
+import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
 import { ClassTooltip } from '../components/Archetype';
 import { classColor } from '../components/archetypeColors';
 import { useIsMobile } from '../components/useIsMobile';
@@ -105,15 +105,21 @@ interface StatCellProps {
   pctile?: number | null;
   color: string;
   chip?: ChipInfo | null;
+  /// Optional value-text color — used by the CPO/CPD rows (no percentile
+  /// companion / bar) to apply the CamPom-half gradient, so player surfaces
+  /// stay gradient-shaded. `color` above remains the player-identity bar tint.
+  valueColor?: string;
 }
 
-function StatCell({ value, pctile, color, chip }: StatCellProps) {
+function StatCell({ value, pctile, color, chip, valueColor }: StatCellProps) {
   const p = pctile != null ? Math.max(0, Math.min(1, pctile)) : null;
   return (
     <div>
       <div className="flex items-center justify-end gap-1.5">
         {chip && <Chip {...chip} />}
-        <span className="font-medium text-sm">{value}</span>
+        <span className="font-medium text-sm" style={valueColor ? { color: valueColor } : undefined}>
+          {value}
+        </span>
       </div>
       {p != null && (
         <div className="mt-1 h-1 bg-gray-700 rounded overflow-hidden">
@@ -458,10 +464,11 @@ export default function PlayerCompare() {
   const advancedRows: StatRow[] = hasTorvik
     ? [
         { label: 'CamPom', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom), pctile: p.torvik_stats?.campom_pct, color: PLAYER_COLORS[i] })) },
-        // O/D halves of CamPom (envelope-gated server-side; no percentile
-        // companion exists, so the cells render unshaded).
-        { label: 'CPO', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_o), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_o), color: PLAYER_COLORS[i] })) },
-        { label: 'CPD', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_d), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_d), color: PLAYER_COLORS[i] })) },
+        // O/D halves of CamPom (envelope-gated server-side). No percentile
+        // companion, so the value is shaded by the CamPom-half gradient
+        // (player surfaces are gradient-shaded; teams use rank).
+        { label: 'CPO', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_o), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_o), color: PLAYER_COLORS[i], valueColor: p.torvik_stats?.campom_o != null ? campomHalfColor(p.torvik_stats.campom_o, 'o') : undefined })) },
+        { label: 'CPD', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_d), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_d), color: PLAYER_COLORS[i], valueColor: p.torvik_stats?.campom_d != null ? campomHalfColor(p.torvik_stats.campom_d, 'd') : undefined })) },
         { label: 'Adj ORTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), pctile: p.torvik_stats?.adj_oe_pct ?? p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'Adj DRTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), pctile: p.torvik_stats?.adj_de_pct ?? p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'SOS', deltaFmt: dFmt2, raws: players.map((p) => p.season_stats?.player_sos), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },
