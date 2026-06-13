@@ -173,7 +173,7 @@ export function CoachDetail() {
               · descriptive context, not part of CAE
             </span>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Stat
               label="Team AdjEM"
               value={rating.career_adj_em.toFixed(1)}
@@ -228,10 +228,10 @@ export function CoachDetail() {
                   <th className="py-2 px-2 text-right" title="The team's actual AdjEM that season.">
                     AdjEM
                   </th>
-                  <th className="py-2 px-2 text-right" title="Team adjusted offensive efficiency that season.">
+                  <th className="hidden sm:table-cell py-2 px-2 text-right" title="Team adjusted offensive efficiency that season.">
                     AdjO
                   </th>
-                  <th className="py-2 px-2 text-right" title="Team adjusted defensive efficiency that season (lower is better).">
+                  <th className="hidden sm:table-cell py-2 px-2 text-right" title="Team adjusted defensive efficiency that season (lower is better).">
                     AdjD
                   </th>
                   <th className="py-2 px-2 text-right">Projected</th>
@@ -274,10 +274,10 @@ export function CoachDetail() {
                       <td className="py-1.5 px-2 text-right tabular-nums">
                         {s.actual_adjem != null ? s.actual_adjem.toFixed(1) : '—'}
                       </td>
-                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                      <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">
                         {s.adj_offense != null ? s.adj_offense.toFixed(1) : '—'}
                       </td>
-                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
+                      <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">
                         {s.adj_defense != null ? s.adj_defense.toFixed(1) : '—'}
                       </td>
                       {graded ? (

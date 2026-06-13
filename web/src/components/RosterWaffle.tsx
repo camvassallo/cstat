@@ -187,6 +187,11 @@ export function RosterWaffle({
         width={width}
         height={height}
         viewBox={`0 0 ${width} ${height}`}
+        // Natural width (356px at the default cell size) is the cap, but the
+        // viewBox lets the grid scale down to fit a narrow phone column rather
+        // than overflowing past `<main>`'s `overflow-x-clip` and getting
+        // silently clipped. `h-auto` keeps the squares square as it shrinks.
+        className="block max-w-full h-auto"
         role="img"
         aria-label="Team minutes distribution by archetype"
       >

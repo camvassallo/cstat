@@ -107,7 +107,7 @@ function FourFactors({
   return (
     <div className="bg-gray-800 rounded-lg p-4">
       <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">{label} Four Factors</h3>
-      <div className="grid grid-cols-4 gap-3 text-center">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
         {items.map((item) => {
           const pctile =
             item.rankNum != null && totalTeams != null && totalTeams > 1
@@ -146,7 +146,7 @@ function TeamViewToggle({
     <button
       type="button"
       onClick={() => onChange(m)}
-      className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+      className={`px-3 py-2 sm:py-1 text-xs font-semibold rounded transition-colors ${
         mode === m
           ? 'bg-slate-700 text-slate-100'
           : 'text-slate-400 hover:text-slate-200'
@@ -595,22 +595,33 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
               {i + 1}
             </div>
 
-            {/* Archetype-colored full-name pills, one per grid column (sorted
-                shortest -> tallest, so columns align by size across rows). */}
-            <div className="flex-1 min-w-0 grid grid-cols-5 gap-2.5">
+            {/* Archetype-colored pills, one per grid column (sorted shortest ->
+                tallest, so columns align by size across rows). The five columns
+                are kept even on phones — full names would truncate to noise at
+                that width, so we show first+last initials below `sm` and the
+                full name from `sm` up. The tooltip carries the full name either
+                way. */}
+            <div className="flex-1 min-w-0 grid grid-cols-5 gap-1 sm:gap-2.5">
               {l.lineup.map((pid, j) => {
                 const cls = l.player_classes[j];
                 const name = l.player_names[j] ?? 'Unknown';
+                const parts = name.split(/\s+/).filter(Boolean);
+                const initials = (
+                  parts.length > 1
+                    ? parts[0][0] + parts[parts.length - 1][0]
+                    : (parts[0] ?? '?').slice(0, 2)
+                ).toUpperCase();
                 const color = classColor(cls);
                 return (
                   <SeasonLink
                     key={j}
                     to={`/players/${pid}`}
-                    className="block w-full truncate text-center px-3 py-2.5 rounded-md text-xs font-medium hover:opacity-90 transition-opacity"
+                    className="block w-full truncate text-center px-1 sm:px-3 py-2.5 rounded-md text-xs font-medium hover:opacity-90 transition-opacity"
                     style={{ background: color, color: textOn(color) }}
                     title={`${name}${cls ? ` · ${cls} — ${classTagline(cls)}` : ''}`}
                   >
-                    {name}
+                    <span className="sm:hidden">{initials}</span>
+                    <span className="hidden sm:inline">{name}</span>
                   </SeasonLink>
                 );
               })}
@@ -619,13 +630,16 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
             {/* Headline stats — all possession-normalized (P3) so a heavily-used
                 lineup isn't penalized vs one that barely played: minutes (usage),
                 offensive/defensive rating (points per 100 poss), and net/100. */}
-            <div className="flex items-center gap-5 shrink-0 text-right">
+            <div className="flex items-center gap-3 sm:gap-5 shrink-0 text-right">
               <div>
                 <div className="text-sm font-semibold tabular-nums">{Math.round(l.minutes)}</div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-wide">min</div>
               </div>
+              {/* Off/def split is the decomposition of net (net = ORtg − DRtg),
+                  so it's redundant for a glance — hidden on phones to give the
+                  player pills room. Net (the headline +/-) and minutes stay. */}
               <div
-                className="w-20"
+                className="hidden sm:block w-20"
                 title="Offensive / defensive rating: points scored / allowed per 100 possessions (tempo-free, so it doesn't reward or punish a lineup for how many minutes it played)"
               >
                 <div className="text-sm font-semibold tabular-nums">
@@ -827,19 +841,19 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
         <div className="inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs">
           <button
             onClick={() => onViewChange('raw')}
-            className={`px-3 py-1 ${view === 'raw' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+            className={`px-3 py-2 sm:py-1 ${view === 'raw' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
           >
             Raw
           </button>
           <button
             onClick={() => onViewChange('rate')}
-            className={`px-3 py-1 ${view === 'rate' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+            className={`px-3 py-2 sm:py-1 ${view === 'rate' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
           >
             Rate
           </button>
           <button
             onClick={() => onViewChange('adv')}
-            className={`px-3 py-1 ${view === 'adv' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+            className={`px-3 py-2 sm:py-1 ${view === 'adv' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
           >
             Adv
           </button>
@@ -856,7 +870,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
               onSort={onSort}
               className="left-0 z-20 border-r border-gray-700"
             />
-            <StickyHeader>Class</StickyHeader>
+            <StickyHeader className="hidden sm:table-cell">Class</StickyHeader>
               <SortHeader
                 label="CamPom"
                 sortKey="campom"
@@ -866,7 +880,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 title="Composite player valuation."
                 className="border-l border-gray-800"
               />
-              <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell" />
               <SortHeader label="MPG" sortKey="minutes_per_game" current={sort} onSort={onSort} align="right" />
               <SortHeader label="USG%" sortKey="usage_rate" current={sort} onSort={onSort} align="right" />
               <SortHeader label="TS%" sortKey="true_shooting_pct" current={sort} onSort={onSort} align="right" />
@@ -961,7 +975,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     {p.name}
                   </SeasonLink>
                 </td>
-                <td className="py-2 px-2">
+                <td className="hidden sm:table-cell py-2 px-2">
                   {p.primary_class ? (
                     <span className="inline-flex items-center gap-1">
                       <ClassTooltip cls={p.primary_class}>
@@ -1002,7 +1016,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="text-gray-600">—</span>
                   )}
                 </td>
-                <td className="py-2 px-2 text-right">{p.games_played}</td>
+                <td className="hidden sm:table-cell py-2 px-2 text-right">{p.games_played}</td>
                 <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
                 <td className="py-2 px-2 text-right">
                   <ValueWithPctile value={fracPct(p.usage_rate)} pctile={p.usage_rate_pct} />
@@ -1138,7 +1152,7 @@ function ScheduleTable({
               <StickyHeader>Opponent</StickyHeader>
               <StickyHeader align="center">Result</StickyHeader>
               <StickyHeader align="center">Score</StickyHeader>
-              <StickyHeader align="center">Projected</StickyHeader>
+              <StickyHeader align="center" className="hidden sm:table-cell">Projected</StickyHeader>
             </tr>
           </thead>
           <tbody>
@@ -1298,7 +1312,7 @@ function ScheduleRow({
           '—'
         )}
       </td>
-      <td className="py-2 px-2 text-center">
+      <td className="hidden sm:table-cell py-2 px-2 text-center">
         {predictTo ? (
           <SeasonLink to={predictTo} className="hover:underline">
             {projected ?? <span className="text-gray-500">—</span>}
@@ -1657,7 +1671,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             </div>
           )}
         </div>
-        <div className={`grid gap-3 ${hasActual ? 'grid-cols-3 min-w-[360px]' : 'grid-cols-2 min-w-[280px]'}`}>
+        <div className={`grid gap-3 w-full sm:w-auto ${hasActual ? 'grid-cols-3 sm:min-w-[360px]' : 'grid-cols-2 sm:min-w-[280px]'}`}>
           <div className="bg-gray-800 rounded-lg p-3 text-center">
             <div className="text-[10px] text-gray-400 uppercase tracking-wide">Proj AdjEM</div>
             <div className={`mt-1 inline-block px-2 py-0.5 rounded border ${tone(p.midpoint_adj_em)}`}>

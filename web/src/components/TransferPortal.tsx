@@ -78,7 +78,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
     {
       headerName: 'Rank',
       field: 'rank_cstat',
-      width: 70,
+      width: 56,
       pinned: 'left',
       headerTooltip:
         "Our rank among 247-ranked transfers, sorted by projected next-season CamPom. Forward-looking — favors players the trajectory model expects to be more impactful next year, not just who's good right now.",
@@ -93,7 +93,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
     {
       headerName: 'Player',
       field: 'name',
-      width: 200,
+      width: isMobile ? 128 : 148,
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: RankedTransfer }) => {
         const id = p.data?.player_id;
@@ -467,13 +467,13 @@ export default function TransferPortal({ year }: Props) {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-3">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search transfers / teams…"
-          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-64"
+          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
         <span className="text-xs text-gray-500">
           {ranked} ranked transfers

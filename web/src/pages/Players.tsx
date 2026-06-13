@@ -95,8 +95,10 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
       headerName: 'Player',
       // Use the same natural width on mobile and desktop. Horizontal scroll
       // (AG Grid default) handles overflow rather than compressing the column
-      // and clipping long names with ellipsis.
-      width: 180,
+      // and clipping long names with ellipsis. Kept deliberately tight so the
+      // pinned identity block doesn't crowd out the stat columns — long names
+      // wrap to a second line (wrapText) at the 44px row height.
+      width: 132,
       pinned: 'left',
       // Long hyphenated names ("Olusegun-Kupono Aderoju") still wrap to a
       // second line at the natural width rather than truncating.
@@ -118,7 +120,7 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
     {
       field: 'team_name',
       headerName: 'Team',
-      width: 170,
+      width: 138,
       wrapText: true,
       cellRenderer: (p: { value: string | null; data?: PlayerRow }) => {
         if (!p.value) return <span className="text-gray-500">—</span>;
@@ -138,7 +140,7 @@ function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
     {
       field: 'conference',
       headerName: 'Conf',
-      width: 100,
+      width: 80,
       sortable: false,
     },
     {
