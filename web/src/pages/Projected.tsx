@@ -315,7 +315,7 @@ function buildColumns(
     {
       headerName: 'Team',
       field: 'team_name',
-      ...flexCol(3, 200),
+      ...flexCol(2, 130),
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: ProjectedTeam }) => (
         // `&view=projected` lands on TeamDetail's projection branch even
@@ -691,13 +691,13 @@ function ProjectionView({ year }: { year: number }) {
             (see the `setPageSeasons` effect above) — no page-local picker. */}
         <h1 className="text-2xl font-bold">Projected {seasonLabel(year)}</h1>
       </div>
-      <div className="flex items-center gap-3 mb-3">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search teams…"
-          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-64"
+          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
         <span className="text-xs text-gray-500">
           {scoredCount} teams scored · {thinCount} flagged thin roster

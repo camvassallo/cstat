@@ -116,14 +116,14 @@ function buildColumns(
     {
       field: 'rank',
       headerName: 'Rk',
-      width: 70,
+      width: 50,
       pinned: 'left',
       wrapHeaderText: false,
     },
     {
       field: 'name',
       headerName: 'Team',
-      width: isMobile ? 160 : 200,
+      width: isMobile ? 134 : 150,
       pinned: 'left',
       // Let long team names wrap onto a second line on mobile rather than
       // clipping with ellipsis. Row height of 48 fits two lines of text-sm.

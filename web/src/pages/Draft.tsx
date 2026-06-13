@@ -157,7 +157,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
     {
       headerName: '#',
       field: 'draft_rank',
-      width: 64,
+      width: 48,
       pinned: 'left',
       headerTooltip: "Tankathon's draft-board rank. — for the unranked tail.",
       comparator: nullsLast,
@@ -171,7 +171,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
     {
       headerName: 'Player',
       field: 'name',
-      width: isMobile ? 170 : 200,
+      width: isMobile ? 126 : 148,
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: RankedProspect }) => {
         const id = p.data?.player_id;
@@ -413,13 +413,13 @@ export default function Draft() {
         <span className="text-emerald-400 font-semibold">Δ</span> column flags CamPom's
         sleepers: positive means CamPom rates the player higher than the draft board does.
       </p>
-      <div className="flex items-center gap-3 mb-3">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search prospects / teams…"
-          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-64"
+          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
         <span className="text-xs text-gray-500">
           {total} prospects · {matched} with CamPom ·{' '}

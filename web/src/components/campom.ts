@@ -66,11 +66,53 @@ export function campomTitle(campom: number | null | undefined,
   return s;
 }
 
+// Per-half saturation scale, tuned to each half's rotation-pool spread —
+// O p05/p95 ≈ −4.6/+6.7 (scale 7), D ≈ −2.9/+3.8 (scale 4) — so a clearly
+// good half reads clearly green/full without every starter pinning the scale.
+// Shared by the color gradient and the diverging-bar fraction so the two
+// saturate together.
+const HALF_SCALE = { o: 7, d: 4 } as const;
+
 /// Diverging red→gray→green for the O/D halves (shared gradient machinery
-/// from onoff.ts). Saturation tuned to each half's rotation-pool spread —
-/// O p05/p95 ≈ −4.6/+6.7 (scale 7), D ≈ −2.9/+3.8 (scale 4) — so a clearly
-/// good half reads clearly green without every starter pinning the scale.
+/// from onoff.ts).
 export function campomHalfColor(v: number | null | undefined,
                                 side: "o" | "d"): string {
-  return onOffColor(v, side === "o" ? 7 : 4);
+  return onOffColor(v, HALF_SCALE[side]);
+}
+
+// Approximate D-I distribution of each half, fit to the documented rotation-
+// pool p05/p95 (O: −4.6/+6.7, D: −2.9/+3.8) as a normal: mean = midpoint,
+// sigma = span / (2 × 1.6449). The compute pipeline doesn't materialize a
+// PERCENT_RANK for the O/D halves the way it does for box/rate stats, so this
+// is a MODELED percentile (parametric estimate), not an exact rank — used only
+// to drive the CPO/CPD percentile bars on the compare screen.
+const HALF_DIST = {
+  o: { mean: 1.05, sigma: 3.435 },
+  d: { mean: 0.45, sigma: 2.036 },
+} as const;
+
+// erf via Abramowitz & Stegun 7.1.26 (max abs error ~1.5e-7) — enough for a bar.
+function erf(x: number): number {
+  const sign = x < 0 ? -1 : 1;
+  const ax = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * ax);
+  const y =
+    1 -
+    ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t +
+      0.254829592) *
+      t *
+      Math.exp(-ax * ax);
+  return sign * y;
+}
+
+/// Modeled D-I percentile in [0, 1] for a CPO/CPD half, so the value can drive
+/// a left-fill percentile bar consistent with the other compare-table rows.
+/// Positive = good for both halves (CPD is positive-good). Null where gated.
+/// Approximate — see `HALF_DIST`.
+export function campomHalfPctile(v: number | null | undefined,
+                                 side: "o" | "d"): number | null {
+  if (v == null || !Number.isFinite(v)) return null;
+  const { mean, sigma } = HALF_DIST[side];
+  const z = (v - mean) / sigma;
+  return Math.max(0, Math.min(1, 0.5 * (1 + erf(z / Math.SQRT2))));
 }

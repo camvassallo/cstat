@@ -25,7 +25,7 @@ import {
   type PlayerRow,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
-import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
+import { campomTier, campomTierColor, campomHalfPctile } from '../components/campom';
 import { ClassTooltip } from '../components/Archetype';
 import { classColor } from '../components/archetypeColors';
 import { useIsMobile } from '../components/useIsMobile';
@@ -105,21 +105,17 @@ interface StatCellProps {
   pctile?: number | null;
   color: string;
   chip?: ChipInfo | null;
-  /// Optional value-text color — used by the CPO/CPD rows (no percentile
-  /// companion / bar) to apply the CamPom-half gradient, so player surfaces
-  /// stay gradient-shaded. `color` above remains the player-identity bar tint.
-  valueColor?: string;
+  /// Optional cell tooltip — used by CPO/CPD to flag the modeled percentile.
+  title?: string;
 }
 
-function StatCell({ value, pctile, color, chip, valueColor }: StatCellProps) {
+function StatCell({ value, pctile, color, chip, title }: StatCellProps) {
   const p = pctile != null ? Math.max(0, Math.min(1, pctile)) : null;
   return (
-    <div>
+    <div title={title}>
       <div className="flex items-center justify-end gap-1.5">
         {chip && <Chip {...chip} />}
-        <span className="font-medium text-sm" style={valueColor ? { color: valueColor } : undefined}>
-          {value}
-        </span>
+        <span className="font-medium text-sm">{value}</span>
       </div>
       {p != null && (
         <div className="mt-1 h-1 bg-gray-700 rounded overflow-hidden">
@@ -270,13 +266,13 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
           )}
           {campom != null && (
             <span
-              className={`inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded border text-xs ${campomTierColor(tier)}`}
+              className={`inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 px-2 py-0.5 rounded border text-xs ${campomTierColor(tier)}`}
               title="CamPom: composite player valuation"
             >
               <span className="uppercase tracking-wide opacity-70">CamPom</span>
               <span className="font-bold">{campom.toFixed(1)}</span>
-              {pctStr != null && <span className="opacity-80">{pctStr} pct</span>}
-              {tier && <span className="opacity-80">· {tier}</span>}
+              {pctStr != null && <span className="opacity-80 whitespace-nowrap">{pctStr} pct</span>}
+              {tier && <span className="opacity-80 whitespace-nowrap">· {tier}</span>}
             </span>
           )}
         </div>
@@ -295,11 +291,13 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
 function PlayerPicker({
   onAdd,
   disabled,
+  max,
   existingIds,
   season,
 }: {
   onAdd: (id: string) => void;
   disabled: boolean;
+  max: number;
   existingIds: string[];
   season: number;
 }) {
@@ -337,7 +335,7 @@ function PlayerPicker({
         onChange={(e) => setSearch(e.target.value)}
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
-        placeholder={disabled ? `Up to ${MAX_PLAYERS} players` : 'Add player by name…'}
+        placeholder={disabled ? `Up to ${max} players` : 'Add player by name…'}
         disabled={disabled}
         className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
       />
@@ -390,6 +388,10 @@ export default function PlayerCompare() {
     setSelectedAxis(null),
   );
   const isMobile = useIsMobile();
+  // Phones can't fit 3–4 side-by-side comparison columns legibly, so cap the
+  // picker at 2 on mobile. Non-destructive: a shared deep-link with more ids
+  // still resolves and renders — we only stop the picker from adding more.
+  const maxPlayers = isMobile ? 2 : MAX_PLAYERS;
 
   useEffect(() => {
     if (ids.length === 0) {
@@ -419,7 +421,7 @@ export default function PlayerCompare() {
   };
 
   const addPlayer = (id: string) => {
-    if (ids.includes(id) || ids.length >= MAX_PLAYERS) return;
+    if (ids.includes(id) || ids.length >= maxPlayers) return;
     updateIds([...ids, id]);
   };
   const removePlayer = (id: string) => updateIds(ids.filter((x) => x !== id));
@@ -464,11 +466,13 @@ export default function PlayerCompare() {
   const advancedRows: StatRow[] = hasTorvik
     ? [
         { label: 'CamPom', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom), pctile: p.torvik_stats?.campom_pct, color: PLAYER_COLORS[i] })) },
-        // O/D halves of CamPom (envelope-gated server-side). No percentile
-        // companion, so the value is shaded by the CamPom-half gradient
-        // (player surfaces are gradient-shaded; teams use rank).
-        { label: 'CPO', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_o), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_o), color: PLAYER_COLORS[i], valueColor: p.torvik_stats?.campom_o != null ? campomHalfColor(p.torvik_stats.campom_o, 'o') : undefined })) },
-        { label: 'CPD', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_d), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_d), color: PLAYER_COLORS[i], valueColor: p.torvik_stats?.campom_d != null ? campomHalfColor(p.torvik_stats.campom_d, 'd') : undefined })) },
+        // O/D halves of CamPom (envelope-gated server-side). The compute
+        // pipeline doesn't materialize a PERCENT_RANK for the halves, so the
+        // bar is driven by a MODELED percentile (`campomHalfPctile`, fit to the
+        // documented O/D spread) — left-fill + advantage chips, consistent with
+        // the other rows.
+        { label: 'CPO', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_o), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_o), pctile: campomHalfPctile(p.torvik_stats?.campom_o, 'o'), color: PLAYER_COLORS[i], title: 'Offensive half of CamPom (per 100). Bar = modeled D-I percentile, estimated from the O/D spread.' })) },
+        { label: 'CPD', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_d), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_d), pctile: campomHalfPctile(p.torvik_stats?.campom_d, 'd'), color: PLAYER_COLORS[i], title: 'Defensive half of CamPom (per 100, positive = value added). Bar = modeled D-I percentile, estimated from the O/D spread.' })) },
         { label: 'Adj ORTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), pctile: p.torvik_stats?.adj_oe_pct ?? p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'Adj DRTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), pctile: p.torvik_stats?.adj_de_pct ?? p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'SOS', deltaFmt: dFmt2, raws: players.map((p) => p.season_stats?.player_sos), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },
@@ -529,14 +533,16 @@ export default function PlayerCompare() {
       <div>
         <h1 className="text-2xl font-bold">Player Comparison</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Compare up to {MAX_PLAYERS} players side by side. Bars show D-I percentile.
+          Compare up to {maxPlayers} players side by side. Bars show D-I percentile
+          (CPO/CPD modeled from the O/D spread).
         </p>
       </div>
 
       <div className="bg-gray-800 rounded-lg p-4 space-y-3">
         <PlayerPicker
           onAdd={addPlayer}
-          disabled={ids.length >= MAX_PLAYERS}
+          disabled={ids.length >= maxPlayers}
+          max={maxPlayers}
           existingIds={ids}
           season={season}
         />

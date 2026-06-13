@@ -94,7 +94,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
     {
       headerName: 'Player',
       field: 'name',
-      width: 200,
+      width: isMobile ? 128 : 148,
       pinned: 'left',
       cellRenderer: (p: { value: string; data?: RecruitRow }) => {
         const id = p.data?.player_id;
@@ -381,7 +381,7 @@ export default function RecruitClass({ year }: Props) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search recruits / schools / states…"
-          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-64"
+          className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
         <div className="flex items-center gap-1">
           {statusChip('Signed')}
