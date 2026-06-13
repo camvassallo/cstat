@@ -28,21 +28,42 @@ echo "=== lineups chain starting $(date '+%Y-%m-%d %H:%M:%S') :: seasons ${SEASO
 for S in "${SEASONS[@]}"; do
     echo "=== chain: begin season $S $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
     attempt=1
+    lineups_ok=0
     while (( attempt <= MAX_ATTEMPTS )); do
         echo "=== chain: season $S attempt $attempt/$MAX_ATTEMPTS ===" >> "$LOG"
         "$BIN" lineups --year "$S" >> "$LOG" 2>&1
         rc=$?
         if (( rc == 0 )); then
-            echo "=== chain: season $S DONE (exit 0) $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
+            echo "=== chain: season $S lineups DONE (exit 0) $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
+            lineups_ok=1
             break
         fi
         echo "=== chain: season $S exit $rc, retrying in 120s $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
         sleep 120
         (( attempt++ ))
     done
-    if (( attempt > MAX_ATTEMPTS )); then
-        echo "=== chain: season $S gave up after $MAX_ATTEMPTS attempts; moving on (re-run later to resume) ===" >> "$LOG"
+    if (( lineups_ok == 0 )); then
+        echo "=== chain: season $S gave up after $MAX_ATTEMPTS attempts; SKIPPING compute (re-run later to resume) ===" >> "$LOG"
+        continue
+    fi
+
+    # Lineups for this season are complete — refresh the derived tables that
+    # consume them. `compute_all` step 6/15 (compute_pbp_lineups) rebuilds
+    # lineup_stints / lineup_aggregates / player_on_off from the now-complete
+    # natstat_lineups; the other steps recompute idempotently from box data.
+    # Local + idempotent, so a failure here is non-fatal — the chain moves on and
+    # `cstat-ingest compute --year $S` can be re-run by hand. Pooled RAPM
+    # (training/rapm.py) and sync_to_prod are deliberately NOT here: RAPM wants
+    # all seasons present (run once at the end) and the prod push is user-owned.
+    echo "=== chain: season $S compute (refresh on-off / lineup aggregates) $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
+    "$BIN" compute --year "$S" >> "$LOG" 2>&1
+    crc=$?
+    if (( crc == 0 )); then
+        echo "=== chain: season $S compute DONE $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
+    else
+        echo "=== chain: season $S compute FAILED (exit $crc) — re-run 'cstat-ingest compute --year $S' by hand $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
     fi
 done
 
 echo "=== lineups chain COMPLETE $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG"
+echo "=== MANUAL END-STEPS (user-owned): (1) cd training && python rapm.py  [pooled, all seasons]  (2) ./scripts/sync_to_prod.sh  [pushes player_on_off / lineup_aggregates / player_rapm; confirm migration 038 on prod first] ===" >> "$LOG"
