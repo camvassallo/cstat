@@ -601,6 +601,17 @@ export interface ProjectedTeam {
   departures_count: number;
   /// Σ base-season CamPom across all departures (Sr + portal-out + draft).
   departures_cam_v3_sum: number;
+  /// Per-cohort Σ of the base-season CamPom O/D halves (envelope-gated per
+  /// player; gated/uncovered players contribute 0 to both). Prior-season
+  /// frame — the trajectory model forecasts net only, so these describe
+  /// the O/D shape of the talent moving, not a forecast. Recruits have no
+  /// prior season, hence no recruit pair.
+  returning_cam_o_sum: number;
+  returning_cam_d_sum: number;
+  arrivals_cam_o_sum: number;
+  arrivals_cam_d_sum: number;
+  departures_cam_o_sum: number;
+  departures_cam_d_sum: number;
   /// True when (returning + arrivals + recruits) is below the projection
   /// threshold — render '—' instead of the prediction columns.
   too_thin: boolean;

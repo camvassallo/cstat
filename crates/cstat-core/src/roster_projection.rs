@@ -96,6 +96,17 @@ pub enum DepartureReason {
     DraftGone { player_id: Uuid, name: String },
 }
 
+impl DepartureReason {
+    /// The departing player's base-season UUID, whatever the reason.
+    pub fn player_id(&self) -> Uuid {
+        match self {
+            Self::GraduatedSenior { player_id, .. }
+            | Self::Transferred { player_id, .. }
+            | Self::DraftGone { player_id, .. } => *player_id,
+        }
+    }
+}
+
 /// A declared-but-uncommitted draft entrant. They count as returning in
 /// the ceiling scenario and as departing in the floor scenario.
 #[derive(Debug, Clone, Serialize)]

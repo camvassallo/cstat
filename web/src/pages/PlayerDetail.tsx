@@ -623,10 +623,6 @@ export default function PlayerDetail() {
             {torvik && (
               <>
                 <h2 className="text-lg font-bold mt-5 mb-3">Advanced Metrics</h2>
-                <PercentileBar label="GBPM" value={fmt(torvik.gbpm)} pctile={torvik.gbpm_pct} />
-                <PercentileBar label="OGBPM" value={fmt(torvik.ogbpm)} pctile={torvik.ogbpm_pct} />
-                <PercentileBar label="DGBPM" value={fmt(torvik.dgbpm)} pctile={torvik.dgbpm_pct} />
-                <div className="border-t border-gray-700 my-2" />
                 <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
                 <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
               </>

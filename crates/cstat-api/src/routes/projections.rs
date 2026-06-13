@@ -123,6 +123,20 @@ struct ProjectedTeam {
     /// The Future grid's "Departures" column surfaces this instead of the
     /// raw count.
     departures_cam_v3_sum: f32,
+    /// Per-cohort Σ of the base-season CamPom O/D halves (cam_o/cam_d,
+    /// envelope-gated per player like every other serving surface), in the
+    /// *prior-season* frame — there is no projected O/D split (the
+    /// trajectory model forecasts net only), so these describe the O/D
+    /// shape of the talent moving, not a forecast. Players whose split is
+    /// gated (or who lack torvik coverage) contribute 0 to both halves,
+    /// mirroring the cam_v3 sums' COALESCE convention. Recruits have no
+    /// prior season, hence no recruit O/D pair.
+    returning_cam_o_sum: f32,
+    returning_cam_d_sum: f32,
+    arrivals_cam_o_sum: f32,
+    arrivals_cam_d_sum: f32,
+    departures_cam_o_sum: f32,
+    departures_cam_d_sum: f32,
     /// True when `returning + arrivals < MIN_QUALIFYING_FOR_PROJECTION`.
     /// Frontend should render an explanation chip rather than the
     /// (null) prediction columns when this is set.
@@ -393,6 +407,16 @@ async fn projection_list(
             std::collections::HashMap::new()
         });
 
+    // Base-season CamPom O/D split per player, for the cohort O/D sums
+    // (display-only roster-shape decoration). Cosmetic — degrade to empty
+    // (sums read 0 and the UI hides the split) rather than 500.
+    let cam_od_map = fetch_cam_od_map(&state.db.pool, base_season)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "cam O/D fetch failed; projections render without splits");
+            std::collections::HashMap::new()
+        });
+
     let mut rows: Vec<ProjectedTeam> = Vec::with_capacity(projections.len());
     for p in &projections {
         let baseline = baseline_map.get(&p.team_id).copied();
@@ -405,6 +429,7 @@ async fn projection_list(
             actual,
             p_return,
             &projected_cam,
+            &cam_od_map,
         ) else {
             continue;
         };
@@ -453,6 +478,7 @@ fn predict_team(
     actual: Option<f32>,
     p_return: f32,
     projected_cam: &std::collections::HashMap<Uuid, f64>,
+    cam_od: &std::collections::HashMap<Uuid, (f32, f32)>,
 ) -> Option<ProjectedTeam> {
     // Recruits count toward the qualifying-size gate: a returners-thin
     // team with a strong freshman class (e.g. Duke with 4 incoming
@@ -503,6 +529,19 @@ fn predict_team(
         .iter()
         .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
+
+    // Prior-season O/D split sums per cohort (gated/uncovered players
+    // contribute 0 to both halves — same convention as the cam_v3 sums).
+    let od_sum = |ids: &mut dyn Iterator<Item = Uuid>| -> (f32, f32) {
+        ids.filter_map(|id| cam_od.get(&id))
+            .fold((0.0, 0.0), |(o, d), (po, pd)| (o + po, d + pd))
+    };
+    let (returning_cam_o_sum, returning_cam_d_sum) =
+        od_sum(&mut p.returning.iter().map(|r| r.player_id));
+    let (arrivals_cam_o_sum, arrivals_cam_d_sum) =
+        od_sum(&mut p.arrivals.iter().map(|a| a.player_id));
+    let (departures_cam_o_sum, departures_cam_d_sum) =
+        od_sum(&mut p.departures.iter().map(|d| d.player_id()));
 
     // Top 5 recruits by composite_rank (NULL ranks last). Cloned so the
     // closure capture is move-friendly.
@@ -555,6 +594,12 @@ fn predict_team(
         uncertain_cam_v3_sum,
         departures_count: p.departures.len(),
         departures_cam_v3_sum: p.departures_cam_v3_sum,
+        returning_cam_o_sum,
+        returning_cam_d_sum,
+        arrivals_cam_o_sum,
+        arrivals_cam_d_sum,
+        departures_cam_o_sum,
+        departures_cam_d_sum,
         too_thin,
         baseline_adj_em: baseline,
         actual_adj_em: actual,
@@ -935,6 +980,15 @@ async fn projection_team_detail(
     // route skips None rows (`continue`); a single-team detail page
     // can't skip, so surface it as 500 rather than handing the
     // frontend a `projection: null` it isn't typed for.
+    // Cohort O/D sums for the detail payload — same display-only
+    // decoration as the list route; degrade to empty on failure.
+    let cam_od_map = fetch_cam_od_map(&state.db.pool, base_season)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "cam O/D fetch failed; detail renders without splits");
+            std::collections::HashMap::new()
+        });
+
     let Some(mut row) = predict_team(
         &projection,
         &state.predictor,
@@ -942,6 +996,7 @@ async fn projection_team_detail(
         actual,
         p_return,
         &projected_cam,
+        &cam_od_map,
     ) else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1225,6 +1280,39 @@ async fn fetch_baseline_adj_em(
     Ok(rows
         .into_iter()
         .map(|r| (r.team_id, r.adj_efficiency_margin as f32))
+        .collect())
+}
+
+/// Base-season CamPom O/D split per player, envelope-gated jointly
+/// (`abs() <= 30` on both halves — the same regression guard every other
+/// serving surface applies; see `queries::get_torvik_stats`). Keyed by
+/// player_id; gated/missing players are simply absent and contribute 0
+/// to the cohort sums. One query for the whole slate (~5k rows).
+async fn fetch_cam_od_map(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+) -> Result<std::collections::HashMap<Uuid, (f32, f32)>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        player_id: Uuid,
+        cam_o: f64,
+        cam_d: f64,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT player_id, cam_o_gbpm_v3_psos AS cam_o, cam_d_gbpm_v3_psos AS cam_d
+        FROM torvik_player_stats
+        WHERE season = $1
+          AND cam_o_gbpm_v3_psos IS NOT NULL AND cam_d_gbpm_v3_psos IS NOT NULL
+          AND abs(cam_o_gbpm_v3_psos) <= 30 AND abs(cam_d_gbpm_v3_psos) <= 30
+        "#,
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.player_id, (r.cam_o as f32, r.cam_d as f32)))
         .collect())
 }
 

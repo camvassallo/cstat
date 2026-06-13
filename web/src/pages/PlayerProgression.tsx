@@ -383,10 +383,10 @@ export default function PlayerProgression() {
             <StatRow label="ORTG" seasons={seasonsAsc} pick={(s) => s.season_stats?.offensive_rating ?? null} />
             <StatRow label="DRTG" seasons={seasonsAsc} pick={(s) => s.season_stats?.defensive_rating ?? null} />
             <StatRow label="Net" seasons={seasonsAsc} pick={(s) => s.season_stats?.net_rating ?? null} signed />
-            <StatRow label="GBPM" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.gbpm ?? null} pctile={(s) => s.torvik_stats?.gbpm_pct ?? null} signed />
-            <StatRow label="OGBPM" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.ogbpm ?? null} pctile={(s) => s.torvik_stats?.ogbpm_pct ?? null} signed />
-            <StatRow label="DGBPM" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.dgbpm ?? null} pctile={(s) => s.torvik_stats?.dgbpm_pct ?? null} signed />
             <StatRow label="CamPom" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom ?? null} pctile={(s) => s.torvik_stats?.campom_pct ?? null} signed />
+            {/* O/D halves (envelope-gated server-side; no percentile companion) */}
+            <StatRow label="CPO" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_o ?? null} signed />
+            <StatRow label="CPD" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_d ?? null} signed />
           </tbody>
         </table>
       </div>

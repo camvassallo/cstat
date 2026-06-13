@@ -458,9 +458,10 @@ export default function PlayerCompare() {
   const advancedRows: StatRow[] = hasTorvik
     ? [
         { label: 'CamPom', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom), pctile: p.torvik_stats?.campom_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'GBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.gbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.gbpm), pctile: p.torvik_stats?.gbpm_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'OGBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.ogbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.ogbpm), pctile: p.torvik_stats?.ogbpm_pct, color: PLAYER_COLORS[i] })) },
-        { label: 'DGBPM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.dgbpm), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.dgbpm), pctile: p.torvik_stats?.dgbpm_pct, color: PLAYER_COLORS[i] })) },
+        // O/D halves of CamPom (envelope-gated server-side; no percentile
+        // companion exists, so the cells render unshaded).
+        { label: 'CPO', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_o), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_o), color: PLAYER_COLORS[i] })) },
+        { label: 'CPD', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_d), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_d), color: PLAYER_COLORS[i] })) },
         { label: 'Adj ORTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), pctile: p.torvik_stats?.adj_oe_pct ?? p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'Adj DRTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), pctile: p.torvik_stats?.adj_de_pct ?? p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'SOS', deltaFmt: dFmt2, raws: players.map((p) => p.season_stats?.player_sos), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },

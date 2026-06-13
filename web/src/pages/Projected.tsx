@@ -63,6 +63,12 @@ function nullsLast(
 const dashCell = <span className="text-slate-600 text-xs">—</span>;
 const fmtSigned = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
 
+// Tooltip line for a cohort's prior-season CamPom O/D split. Empty when
+// both halves are 0 (no O/D coverage for the cohort — e.g. the server
+// degraded the split fetch, or every member is envelope-gated).
+const odTipLine = (o: number, d: number) =>
+  o !== 0 || d !== 0 ? `\nprior O/D split: O ${fmtSigned(o)} / D ${fmtSigned(d)}` : '';
+
 // Last season's roster value (CamPom) — the shared denominator that makes
 // the roster-flow columns mesh: `returning + departures + uncertain`, all
 // on the prior-season frame (every player who was on last year's team).
@@ -378,7 +384,8 @@ function buildColumns(
           `${t.returning_count} returning · prior Σ ${fmtSigned(t.returning_cam_v3_sum)} → projected ${fmtSigned(val)}` +
           (pct != null
             ? `\n${Math.round(pct * 100)}% of last season's roster value retained (continuity)`
-            : '');
+            : '') +
+          odTipLine(t.returning_cam_o_sum, t.returning_cam_d_sum);
         return flowCellView(fmtSigned(val), pctText, 'text-slate-200', tip);
       },
     },
@@ -400,7 +407,8 @@ function buildColumns(
         const pctText = pct != null ? `+${Math.round(pct * 100)}%` : null;
         const tip =
           `${t.arrivals_count} transfers in · prior-school Σ ${fmtSigned(t.arrivals_cam_v3_sum)} → projected ${fmtSigned(val)}` +
-          (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '');
+          (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '') +
+          odTipLine(t.arrivals_cam_o_sum, t.arrivals_cam_d_sum);
         return flowCellView(fmtSigned(val), pctText, tone, tip);
       },
     },
@@ -447,8 +455,46 @@ function buildColumns(
         const pctText = pct != null ? `−${Math.round(pct * 100)}%` : null;
         const tip =
           `${t.departures_count} departures (Sr + portal-out + draft) · Σ prior CamPom ${fmtSigned(t.departures_cam_v3_sum)} leaving` +
-          (pct != null ? `\n${Math.round(pct * 100)}% of last season's roster value lost` : '');
+          (pct != null ? `\n${Math.round(pct * 100)}% of last season's roster value lost` : '') +
+          odTipLine(t.departures_cam_o_sum, t.departures_cam_d_sum);
         return flowCellView(fmtSigned(display), pctText, 'text-rose-400', tip);
+      },
+    },
+    {
+      headerName: 'Roster O/D',
+      colId: 'roster_od',
+      ...flexCol(1, 130),
+      headerTooltip:
+        'O/D shape of the known projected roster — Σ prior-season CPO and CPD over returners + incoming transfers. Recruits and undecided draft entrants are excluded (no prior season / no O/D forecast exists). Sorts by offense tilt (O − D); descriptive, not a projection.',
+      sortingOrder: ['desc', 'asc', null],
+      comparator: (_a, _b, na, nb) => {
+        const tilt = (t?: ProjectedTeam) =>
+          t
+            ? t.returning_cam_o_sum +
+              t.arrivals_cam_o_sum -
+              (t.returning_cam_d_sum + t.arrivals_cam_d_sum)
+            : 0;
+        return (
+          tilt(na.data as ProjectedTeam | undefined) -
+          tilt(nb.data as ProjectedTeam | undefined)
+        );
+      },
+      cellRenderer: (p: { data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t) return dashCell;
+        const o = t.returning_cam_o_sum + t.arrivals_cam_o_sum;
+        const d = t.returning_cam_d_sum + t.arrivals_cam_d_sum;
+        if (o === 0 && d === 0) return dashCell;
+        const tip =
+          `Σ prior-season CamPom halves over returners + transfers in:\noffense ${fmtSigned(o)} / defense ${fmtSigned(d)} (tilt ${fmtSigned(o - d)})` +
+          '\nRecruits + undecided draft entrants excluded (no prior season).';
+        return (
+          <span title={tip} className="inline-flex items-baseline gap-1 whitespace-nowrap text-xs font-mono">
+            <span className="text-slate-200">O {fmtSigned(o)}</span>
+            <span className="text-slate-600">/</span>
+            <span className="text-slate-400">D {fmtSigned(d)}</span>
+          </span>
+        );
       },
     },
   ];

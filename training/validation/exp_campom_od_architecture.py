@@ -18,7 +18,19 @@ same prior-season features (matched 5-fold folds, identical feature set):
 Reports 5-fold CV MAE on cam_v3, cam_o, cam_d for each, plus the
 net-reconstruction residual and a formula-validation sanity check.
 
-Mirrors compute.rs:CAMPOM_* and the v3_psos o/d split (lines 1327-1346).
+Mirrors compute.rs:CAMPOM_* and the v3_psos o/d split — the FIXED
+magnitude-share SOS allocation (|adj_o| / (|adj_o| + |adj_d|)), not the
+original signed shares. The first run of this experiment (2026-06-08,
+"primitives beat direct by 8-32%") predates the fix: its DIRECT baseline
+trained on targets containing the signed-share junk (tails to ±17,558),
+so that margin needs this re-validation before anything builds on it.
+
+Second question (RAPM arm): do pooled RAPM-O/D (prior-season, from
+player_rapm — decayed 3-season window, so season-N values use no N+1
+information) add anything as FEATURES for projecting next-season
+cam/cam_o/cam_d? §10.7 closed RAPM as a model feature for game models
+and the trajectory net target; this is the O/D-projection variant of
+that question, run cheaply here on matched folds.
 """
 from __future__ import annotations
 
@@ -89,12 +101,28 @@ SELECT base.torvik_pid, base.s_n, base.s_np1,
   -- N+1 formula primitives (targets for the PRIMITIVES approach)
   tB.ogbpm AS y_ogbpm, tB.dgbpm AS y_dgbpm, tB.usage_rate AS y_usg,
   tB.min_per AS y_min_per, tB.games_played AS y_gp,
-  pB.player_sos AS y_psos, pN.player_sos AS f_psos
+  pB.player_sos AS y_psos, pN.player_sos AS f_psos,
+  -- prior-season pooled RAPM (player_rapm; decayed window ending at s_n,
+  -- so no N+1 information). NULL where no fit (e.g. 2019) — LGBM-native.
+  rN.o_rapm AS f_rapm_o, rN.d_rapm AS f_rapm_d, rN.net_rapm AS f_rapm_net,
+  rN.paired_possessions AS f_rapm_poss,
+  -- prior-season raw on/off (the production trajectory contract's trio plus
+  -- the O/D-decomposed swings) — the "already served" baseline RAPM must
+  -- beat to earn a slot.
+  ooN.on_net_rtg AS f_on_net, ooN.net_on_off AS f_net_onoff,
+  CASE WHEN ooN.on_possessions_for + ooN.off_possessions_for > 0
+       THEN ooN.on_possessions_for
+            / (ooN.on_possessions_for + ooN.off_possessions_for)
+  END AS f_on_share,
+  (ooN.on_ortg - ooN.off_ortg) AS f_oo_ortg,
+  (ooN.on_drtg - ooN.off_drtg) AS f_oo_drtg
 FROM base
 JOIN player_season_stats pN ON pN.player_id = base.pid_n AND pN.season = base.s_n
 JOIN player_season_stats pB ON pB.player_id = base.pid_np1 AND pB.season = base.s_np1
 JOIN torvik_player_stats tN ON tN.player_id = base.pid_n AND tN.season = base.s_n
 JOIN torvik_player_stats tB ON tB.player_id = base.pid_np1 AND tB.season = base.s_np1
+LEFT JOIN player_rapm rN ON rN.player_id = base.pid_n AND rN.season = base.s_n
+LEFT JOIN player_on_off ooN ON ooN.player_id = base.pid_n AND ooN.season = base.s_n
 WHERE pN.minutes_per_game >= 5 AND pN.games_played >= 5
   AND pB.minutes_per_game >= 5 AND pB.games_played >= 5
   AND tB.ogbpm IS NOT NULL AND tB.dgbpm IS NOT NULL
@@ -115,19 +143,23 @@ PARAMS = dict(objective="regression", metric="mae", num_leaves=24,
 
 
 def compose(ogbpm, dgbpm, usg, min_per, gp, psos, mean_min_per):
-    """Real compute.rs v3_psos formula -> (cam_o, cam_d, cam_v3)."""
+    """Real compute.rs v3_psos formula -> (cam_o, cam_d, cam_v3).
+
+    SOS split uses the FIXED magnitude-share allocation
+    (compute.rs:1383-1406): share = |adj_o| / (|adj_o| + |adj_d|),
+    bounded [0,1], 50/50 fallback only when both halves are ~0.
+    """
     usg_ratio = np.clip(usg, 0, None) / USG_REF
     o_part = ogbpm * (usg_ratio ** OFF_EXP)
     d_part = dgbpm * (1.0 - DEF_DISC * usg_ratio)
-    adj = o_part + d_part
     psos_adj = psos * PSOS_RATE
     mp = (np.clip(min_per, 0, None) / mean_min_per) ** MIN_EXP
     gpw = gp / (gp + GP_K)
-    safe = np.abs(adj) > 1e-9
-    o_sos = np.where(safe, psos_adj * o_part / np.where(safe, adj, 1.0), psos_adj * 0.5)
-    d_sos = np.where(safe, psos_adj * d_part / np.where(safe, adj, 1.0), psos_adj * 0.5)
-    cam_o = (o_part + o_sos) * mp * gpw
-    cam_d = (d_part + d_sos) * mp * gpw
+    denom = np.abs(o_part) + np.abs(d_part)
+    safe = denom > 1e-9
+    o_share = np.where(safe, np.abs(o_part) / np.where(safe, denom, 1.0), 0.5)
+    cam_o = (o_part + psos_adj * o_share) * mp * gpw
+    cam_d = (d_part + psos_adj * (1.0 - o_share)) * mp * gpw
     return cam_o, cam_d, cam_o + cam_d
 
 
@@ -242,6 +274,91 @@ def main():
             oofp[te] = fit_predict(X[tr], df[col].values[tr], X[te])
         print(f"  {nm:<8} CV-MAE={mae(df[col].values, oofp):.3f}"
               f"  (sd={df[col].std():.2f})")
+
+    # ---------------- RAPM-O/D feature arm ----------------
+    # Same matched folds, feature set extended with prior-season pooled RAPM.
+    rapm_feats = ["f_rapm_o", "f_rapm_d", "f_rapm_net", "f_rapm_poss"]
+    n_rapm = int(df["f_rapm_o"].notna().sum())
+    print("\n=== RAPM-O/D as features (matched folds, base vs base+RAPM) ===")
+    print(f"  coverage: {n_rapm:,}/{len(df):,} rows with prior-season RAPM "
+          f"({100 * n_rapm / len(df):.1f}%; gaps = 2019 + no-stint players)")
+    Xr = df[FEATURES + rapm_feats].values
+    folds = list(kf.split(X))
+    oof_r = {k: np.full(len(df), np.nan) for k in ["cam", "camo", "camd"]}
+    ppr = {k: np.full(len(df), np.nan) for k in ["og", "dg", "ug", "mp", "gp"]}
+    for tr, te in folds:
+        oof_r["cam"][te]  = fit_predict(Xr[tr], df.y_cam.values[tr], Xr[te])
+        oof_r["camo"][te] = fit_predict(Xr[tr], df.y_cam_o.values[tr], Xr[te])
+        oof_r["camd"][te] = fit_predict(Xr[tr], df.y_cam_d.values[tr], Xr[te])
+        for nm, col in [("og", "y_ogbpm"), ("dg", "y_dgbpm"), ("ug", "y_usg"),
+                        ("mp", "y_min_per"), ("gp", "y_gp")]:
+            ppr[nm][te] = fit_predict(Xr[tr], df[col].values[tr], Xr[te])
+    cor, cdr, cvr = compose(ppr["og"], ppr["dg"], ppr["ug"], ppr["mp"], ppr["gp"],
+                            df.y_psos.values, mean_min_by_season)
+
+    print(f"  {'target':<8}{'DIRECT':>9}{'+RAPM':>9}{'delta':>9}   "
+          f"{'PRIMTV':>9}{'+RAPM':>9}{'delta':>9}")
+    comps = [("cam_v3", yc, oof["D_cam"], oof_r["cam"], oof["P_cam"], cvr),
+             ("cam_o", yo, oof["D_camo"], oof_r["camo"], oof["P_camo"], cor),
+             ("cam_d", yd, oof["D_camd"], oof_r["camd"], oof["P_camd"], cdr)]
+    for nm, y, base_d, with_d, base_p, with_p in comps:
+        bd, wd = mae(y, base_d), mae(y, with_d)
+        bp, wp = mae(y, base_p), mae(y, with_p)
+        print(f"  {nm:<8}{bd:>9.3f}{wd:>9.3f}{wd - bd:>+9.4f}   "
+              f"{bp:>9.3f}{wp:>9.3f}{wp - bp:>+9.4f}")
+
+    print("  per-fold DIRECT delta (negative = RAPM helps):")
+    for nm, y, base_d, with_d, _, _ in comps:
+        ds = [mae(y[te], with_d[te]) - mae(y[te], base_d[te]) for _, te in folds]
+        wins = sum(1 for d in ds if d < 0)
+        print(f"    {nm:<8} {' '.join(f'{d:+.4f}' for d in ds)}  "
+              f"({wins}/5 folds helped)")
+
+    msk = df["f_rapm_o"].notna().values
+    print(f"  RAPM-covered rows only (n={int(msk.sum()):,}), DIRECT:")
+    for nm, y, base_d, with_d, _, _ in comps:
+        b, w = mae(y[msk], base_d[msk]), mae(y[msk], with_d[msk])
+        print(f"    {nm:<8} {b:.3f} -> {w:.3f} ({w - b:+.4f})")
+
+    for nm, col in [("cam_o", "y_cam_o"), ("cam_d", "y_cam_d"), ("cam_v3", "y_cam")]:
+        m = lgb.LGBMRegressor(**PARAMS)
+        m.fit(Xr, df[col].values)
+        imp = pd.Series(m.booster_.feature_importance("gain"),
+                        index=FEATURES + rapm_feats)
+        share = imp[rapm_feats].sum() / imp.sum()
+        order = imp.sort_values(ascending=False).index.tolist()
+        ranks = {f: order.index(f) + 1 for f in rapm_feats}
+        print(f"  {nm} full-fit gain share of RAPM feats: {100 * share:.1f}%  "
+              f"ranks(of {len(order)})={ranks}")
+
+    # ---------------- incremental test: RAPM beyond raw on/off ----------------
+    # The production trajectory contract already carries raw on/off
+    # (prior_on_net_rtg / prior_net_on_off / prior_on_poss_share); §10.7's
+    # add-test showed RAPM adds nothing on top for the NET target. This is
+    # the O/D-target version of that question: base+onoff vs base+onoff+RAPM.
+    onoff_feats = ["f_on_net", "f_net_onoff", "f_on_share", "f_oo_ortg", "f_oo_drtg"]
+    n_oo = int(df["f_on_net"].notna().sum())
+    print("\n=== incremental: RAPM beyond raw on/off (base+onoff vs +RAPM) ===")
+    print(f"  on/off coverage: {n_oo:,}/{len(df):,} ({100 * n_oo / len(df):.1f}%)")
+    Xo = df[FEATURES + onoff_feats].values
+    Xor = df[FEATURES + onoff_feats + rapm_feats].values
+    oof_o = {k: np.full(len(df), np.nan) for k in ["cam", "camo", "camd"]}
+    oof_or = {k: np.full(len(df), np.nan) for k in ["cam", "camo", "camd"]}
+    for tr, te in folds:
+        for key, ycol in [("cam", "y_cam"), ("camo", "y_cam_o"), ("camd", "y_cam_d")]:
+            oof_o[key][te] = fit_predict(Xo[tr], df[ycol].values[tr], Xo[te])
+            oof_or[key][te] = fit_predict(Xor[tr], df[ycol].values[tr], Xor[te])
+    print(f"  {'target':<8}{'base':>9}{'+onoff':>9}{'+oo+RAPM':>10}"
+          f"{'RAPM incr':>11}{'folds':>7}")
+    for nm, y, base_d, key in [("cam_v3", yc, oof["D_cam"], "cam"),
+                               ("cam_o", yo, oof["D_camo"], "camo"),
+                               ("cam_d", yd, oof["D_camd"], "camd")]:
+        mo, mor = mae(y, oof_o[key]), mae(y, oof_or[key])
+        ds = [mae(y[te], oof_or[key][te]) - mae(y[te], oof_o[key][te])
+              for _, te in folds]
+        wins = sum(1 for d in ds if d < 0)
+        print(f"  {nm:<8}{mae(y, base_d):>9.3f}{mo:>9.3f}{mor:>10.3f}"
+              f"{mor - mo:>+11.4f}{wins:>5}/5")
 
 
 if __name__ == "__main__":
