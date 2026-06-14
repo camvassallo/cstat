@@ -653,26 +653,50 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
                 </div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-wide">off/def 100</div>
               </div>
+              {/* Net rating (points per 100 poss) when possessions are trustworthy.
+                  For corrupt-PBP seasons (2019) the per-100 rates are suppressed
+                  server-side, but the raw +/- is reconstructed from the clean score
+                  field — fall back to that (net points while on the floor) rather
+                  than a dash. */}
               <div
                 className="w-16"
-                title="Net rating: offensive minus defensive rating, points per 100 possessions"
+                title={
+                  l.net_rtg == null
+                    ? 'Net points scored while these five were on the floor together (raw +/-). Per-100 ratings are unavailable for this season — its play-by-play possession data is corrupted.'
+                    : 'Net rating: offensive minus defensive rating, points per 100 possessions'
+                }
               >
-                <div
-                  className={`text-base font-bold tabular-nums ${
-                    l.net_rtg == null
-                      ? 'text-gray-400'
-                      : l.net_rtg > 0
-                        ? 'text-green-400'
-                        : l.net_rtg < 0
-                          ? 'text-red-400'
-                          : 'text-gray-400'
-                  }`}
-                >
-                  {l.net_rtg == null
-                    ? '—'
-                    : `${l.net_rtg > 0 ? '+' : ''}${l.net_rtg.toFixed(1)}`}
-                </div>
-                <div className="text-[10px] text-gray-500 uppercase tracking-wide">net/100</div>
+                {l.net_rtg == null ? (
+                  <>
+                    <div
+                      className={`text-base font-bold tabular-nums ${
+                        l.plus_minus > 0
+                          ? 'text-green-400'
+                          : l.plus_minus < 0
+                            ? 'text-red-400'
+                            : 'text-gray-400'
+                      }`}
+                    >
+                      {`${l.plus_minus > 0 ? '+' : ''}${l.plus_minus}`}
+                    </div>
+                    <div className="text-[10px] text-gray-500 uppercase tracking-wide">+/−</div>
+                  </>
+                ) : (
+                  <>
+                    <div
+                      className={`text-base font-bold tabular-nums ${
+                        l.net_rtg > 0
+                          ? 'text-green-400'
+                          : l.net_rtg < 0
+                            ? 'text-red-400'
+                            : 'text-gray-400'
+                      }`}
+                    >
+                      {`${l.net_rtg > 0 ? '+' : ''}${l.net_rtg.toFixed(1)}`}
+                    </div>
+                    <div className="text-[10px] text-gray-500 uppercase tracking-wide">net/100</div>
+                  </>
+                )}
               </div>
             </div>
           </div>
