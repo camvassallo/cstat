@@ -19,7 +19,7 @@ import {
   type TeamCoachCard,
 } from '../api/client';
 import { caeColor, fmtCae, tenureSpan } from '../components/cae';
-import { classColor, classTagline } from '../components/archetypeColors';
+import { classColor, classTagline, textOnClass } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
@@ -541,16 +541,6 @@ function HistoricalTeamDetail() {
   );
 }
 
-// Readable text color (dark or light) over an archetype pill's fill.
-function textOn(hex: string): string {
-  const c = hex.replace('#', '');
-  const r = parseInt(c.slice(0, 2), 16);
-  const g = parseInt(c.slice(2, 4), 16);
-  const b = parseInt(c.slice(4, 6), 16);
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return lum > 0.6 ? '#111827' : '#f9fafb';
-}
-
 /// Top-5 lineups as a per-row "waffle": five archetype-colored name pills (one
 /// per player, ordered shortest→tallest so grid columns align by size) so a
 /// lineup's identity reads at a glance from the colors, with the headline stats
@@ -617,7 +607,7 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
                     key={j}
                     to={`/players/${pid}`}
                     className="block w-full truncate text-center px-1 sm:px-3 py-2.5 rounded-md text-xs font-medium hover:opacity-90 transition-opacity"
-                    style={{ background: color, color: textOn(color) }}
+                    style={{ background: color, color: textOnClass(cls) }}
                     title={`${name}${cls ? ` · ${cls} — ${classTagline(cls)}` : ''}`}
                   >
                     <span className="sm:hidden">{initials}</span>

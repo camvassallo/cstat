@@ -78,6 +78,9 @@ export default function Layout() {
       <NavLink to="/archetypes" className={({ isActive }) => navLinkClass(isActive)}>
         Archetypes
       </NavLink>
+      <NavLink to="/lineups" className={({ isActive }) => navLinkClass(isActive)}>
+        Lineups
+      </NavLink>
       <NavLink to="/predict" className={({ isActive }) => navLinkClass(isActive)}>
         Predict
       </NavLink>
@@ -152,6 +155,9 @@ export default function Layout() {
           </NavLink>
           <NavLink to="/archetypes" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Archetypes
+          </NavLink>
+          <NavLink to="/lineups" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
+            Lineups
           </NavLink>
           <NavLink to="/predict" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Predict
