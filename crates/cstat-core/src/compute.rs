@@ -238,6 +238,148 @@ pub async fn reconcile_player_teams(pool: &PgPool, season: i32) -> Result<u64, s
     Ok(corrected)
 }
 
+/// Minimum share of a side's roster that must belong to the OTHER team in the
+/// game before we treat it as a fully-swapped game. The clean Duke/Kentucky and
+/// Yale/California swaps are 100%; 0.80 tolerates a stray unresolved/over-merged
+/// player on one side without admitting a partial mistag.
+const SWAPPED_GAME_MIN_CROSS_SHARE: f64 = 0.80;
+
+/// Correct games whose two teams' identities are swapped at the SOURCE (issue
+/// #119). NatStat occasionally labels a game's two rosters, scores, and box rows
+/// onto each other's team — e.g. the 2018 Champions Classic (game 1083775) is
+/// stored as Duke 84 / Kentucky 118 with Kentucky's players under "Duke", when
+/// Duke actually won 118-84 with Zion. [[reconcile_player_teams]] already fixes
+/// the season-roster `team_id` (so the player shows on the right team), but the
+/// GAME itself still has the labels crossed: wrong winner, and each team's box
+/// row → four factors → AdjEM / W-L is its opponent's.
+///
+/// Within a swapped game the two clusters are internally consistent (the 84-point
+/// box genuinely goes with Kentucky's roster) — only the team LABEL is crossed —
+/// so the fix is a pure relabel: swap `home`/`away` on `games` (scores stay with
+/// their physical side), swap the box-stat columns between the two
+/// `team_game_stats` rows (keeping `team_id` fixed — an in-place `team_id` swap
+/// trips the `(team_id, game_id)` unique index), and point each `player_game_stats`
+/// row at the player's reconciled real team. Downstream steps (four factors, W-L,
+/// AdjEM) then recompute from the corrected box rows.
+///
+/// Detection is conservative: only 2-team games where BOTH sides are
+/// `SWAPPED_GAME_MIN_CROSS_SHARE`+ the other team's players (by reconciled
+/// `players.team_id`). Idempotent — a relabeled game no longer matches. Must run
+/// after `reconcile_player_teams` (needs the real team) and before the four
+/// factors / W-L / AdjEM steps.
+pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let swapped: Vec<Uuid> = sqlx::query_scalar(
+        r#"
+        WITH gt AS (
+            SELECT pgs.game_id, pgs.team_id AS labeled, pl.team_id AS real_team, COUNT(*) AS n
+            FROM player_game_stats pgs
+            JOIN players pl ON pl.id = pgs.player_id
+            WHERE pgs.season = $1
+            GROUP BY pgs.game_id, pgs.team_id, pl.team_id
+        ),
+        two_team AS (
+            SELECT game_id FROM team_game_stats
+            WHERE season = $1 GROUP BY game_id HAVING COUNT(DISTINCT team_id) = 2
+        ),
+        sides AS (
+            SELECT game_id, labeled,
+                   SUM(n) AS tot,
+                   SUM(n) FILTER (WHERE real_team IS DISTINCT FROM labeled) AS mis
+            FROM gt
+            WHERE game_id IN (SELECT game_id FROM two_team)
+            GROUP BY game_id, labeled
+        )
+        SELECT game_id FROM sides
+        GROUP BY game_id
+        HAVING COUNT(*) = 2
+           AND MIN(mis::float8 / NULLIF(tot, 0)) >= $2
+        "#,
+    )
+    .bind(season)
+    .bind(SWAPPED_GAME_MIN_CROSS_SHARE)
+    .fetch_all(pool)
+    .await?;
+
+    if swapped.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+
+    // 1. games: swap home <-> away (RHS reads OLD values, so this swaps in one
+    //    statement). Scores stay with their physical side, so the result flips.
+    sqlx::query(
+        "UPDATE games SET home_team_id = away_team_id, away_team_id = home_team_id \
+         WHERE id = ANY($1)",
+    )
+    .bind(&swapped)
+    .execute(&mut *tx)
+    .await?;
+
+    // 2. team_game_stats: swap the box-stat columns between the two rows (team_id
+    //    fixed). The self-join reads the partner row's ORIGINAL values.
+    sqlx::query(
+        "UPDATE team_game_stats t1 SET
+             minutes = t2.minutes, points = t2.points,
+             fgm = t2.fgm, fga = t2.fga, tpm = t2.tpm, tpa = t2.tpa,
+             ftm = t2.ftm, fta = t2.fta,
+             off_rebounds = t2.off_rebounds, def_rebounds = t2.def_rebounds,
+             total_rebounds = t2.total_rebounds,
+             assists = t2.assists, steals = t2.steals, blocks = t2.blocks,
+             turnovers = t2.turnovers, fouls = t2.fouls
+         FROM team_game_stats t2
+         WHERE t1.game_id = t2.game_id AND t1.team_id <> t2.team_id
+           AND t1.game_id = ANY($1)",
+    )
+    .bind(&swapped)
+    .execute(&mut *tx)
+    .await?;
+
+    // 3. team_game_stats: recompute is_home / win from the corrected games row and
+    //    the now-swapped points (compute_derived_game_fields also rederives W-L,
+    //    but keep this row self-consistent immediately).
+    sqlx::query(
+        "UPDATE team_game_stats tgs SET
+             is_home = (tgs.team_id = g.home_team_id),
+             win = (tgs.points > opp.points)
+         FROM games g, team_game_stats opp
+         WHERE tgs.game_id = g.id
+           AND opp.game_id = tgs.game_id AND opp.team_id <> tgs.team_id
+           AND tgs.game_id = ANY($1)",
+    )
+    .bind(&swapped)
+    .execute(&mut *tx)
+    .await?;
+
+    // 4. player_game_stats: point each row at the player's reconciled real team;
+    //    opponent + is_home from the corrected games row. The IN-guard leaves any
+    //    over-merged phantom (a player whose real team isn't in this game) alone.
+    sqlx::query(
+        "UPDATE player_game_stats pgs SET
+             team_id = pl.team_id,
+             opponent_id = CASE WHEN pl.team_id = g.home_team_id
+                                THEN g.away_team_id ELSE g.home_team_id END,
+             is_home = (pl.team_id = g.home_team_id)
+         FROM players pl, games g
+         WHERE pgs.player_id = pl.id AND pgs.game_id = g.id
+           AND pgs.game_id = ANY($1)
+           AND pl.team_id IN (g.home_team_id, g.away_team_id)",
+    )
+    .bind(&swapped)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let n = swapped.len() as u64;
+    info!(
+        season,
+        corrected = n,
+        "corrected source-swapped games (team labels)"
+    );
+    Ok(n)
+}
+
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
     // Scrub fake rebound zeros. NatStat omits rebound data for ~68% of games
@@ -2659,57 +2801,63 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
         );
     }
 
-    info!("step 1/16: deduplicating players");
+    info!("step 1/17: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
     // Runs right after dedup (so it sees post-merge box rows) and before any
     // step that joins players on team_id. Corrects first-write-wins team_id
     // poisoning from source roster swaps (issue #119).
-    info!("step 2/16: reconciling player team_id to box-score majority");
+    info!("step 2/17: reconciling player team_id to box-score majority");
     report.reconciled_player_teams = reconcile_player_teams(pool, season).await?;
 
-    info!("step 3/16: backfilling derived game stats");
+    // Uses the reconciled team_id to find fully-swapped games and relabel them
+    // (games/team_game_stats/player_game_stats) so the four-factors / W-L / AdjEM
+    // steps below recompute from the corrected box rows (issue #119).
+    info!("step 3/17: correcting source-swapped games");
+    report.corrected_swapped_games = correct_swapped_games(pool, season).await?;
+
+    info!("step 4/17: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 4/16: estimating missing team defensive rebounds");
+    info!("step 5/17: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 5/16: computing player season stats (with rate stats)");
+    info!("step 6/17: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
     // PBP steps run after season stats and before team/CamPom steps. Both no-op
     // for seasons with no play_by_play rows loaded (pre-2012 / not ingested).
-    info!("step 6/16: computing play-by-play per-player aggregates");
+    info!("step 7/17: computing play-by-play per-player aggregates");
     report.pbp_aggregates = compute_pbp_aggregates(pool, season).await?;
 
-    info!("step 7/16: computing play-by-play lineups & stints");
+    info!("step 8/17: computing play-by-play lineups & stints");
     report.pbp_lineups = compute_pbp_lineups(pool, season).await?;
 
-    info!("step 8/16: computing team four factors");
+    info!("step 9/17: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 9/16: computing adjusted efficiency (KenPom-style)");
+    info!("step 10/17: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 10/16: computing individual ORTG/DRTG (Torvik passthrough)");
+    info!("step 11/17: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 11/16: computing player SOS");
+    info!("step 12/17: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 12/16: computing CamPom composites");
+    info!("step 13/17: computing CamPom composites");
     report.campom = compute_campom(pool, season).await?;
 
-    info!("step 13/16: computing rolling averages");
+    info!("step 14/17: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 14/16: computing derived game fields");
+    info!("step 15/17: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 15/16: computing schedules");
+    info!("step 16/17: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 16/16: computing player percentiles");
+    info!("step 17/17: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -2720,6 +2868,7 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
 pub struct ComputeReport {
     pub deduplicated_players: u64,
     pub reconciled_player_teams: u64,
+    pub corrected_swapped_games: u64,
     pub backfilled: u64,
     pub estimated_rebounds: u64,
     pub player_season_stats: u64,
@@ -2740,9 +2889,10 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} team reconciled, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.deduplicated_players,
             self.reconciled_player_teams,
+            self.corrected_swapped_games,
             self.backfilled,
             self.estimated_rebounds,
             self.player_season_stats,
