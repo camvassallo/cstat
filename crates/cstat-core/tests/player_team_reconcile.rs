@@ -4,7 +4,7 @@
 //! single source-swapped game — NatStat occasionally tags a game's two rosters
 //! onto each other's team, e.g. the 2018 Champions Classic that put Zion
 //! Williamson on Kentucky — permanently mis-teams every player whose first
-//! appearance was that game. `reconcile_player_teams` (compute step 2/16) makes
+//! appearance was that game. `reconcile_player_teams` (compute step 2/17) makes
 //! `team_id` derived: each player's team is the MODE of their `player_game_stats`
 //! teams. The invariant that must then hold for every player with box games:
 //!

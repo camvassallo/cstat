@@ -61,6 +61,8 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 ## Compute Pipeline
 
 `cstat-core/src/compute.rs` contains all derived metric calculations (~1,500 lines):
+- `reconcile_player_teams` — sets `players.team_id` to each player's *most-frequent* `player_game_stats` team (the box-score majority), undoing the ingest's first-write-wins `team_id` poisoning from NatStat source roster swaps (issue #119; e.g. a season opener that tagged Zion to Kentucky). Runs early so every team-joined step downstream sees the corrected roster.
+- `correct_swapped_games` — finds fully-swapped games (NatStat labels a 2-team game's rosters/scores/box rows onto each other's team — the 2018 Duke/Kentucky Champions Classic stored Duke as *losing* 118-84) via a conservative bidirectional-cross-tag detector, then relabels them: swap `home`/`away` on `games`, swap the box columns between the two `team_game_stats` rows, point each `player_game_stats` row at its reconciled real team. Runs after `reconcile_player_teams` and before four factors / W-L / AdjEM so they recompute from corrected box rows. Idempotent.
 - `backfill_game_stats` — defensive rebounds, assist-to-turnover ratio, game score
 - `compute_player_season_stats` — aggregates game stats into per-season averages, including rate stats (AST%, TOV%, ORB%, DRB%, STL%, BLK%, FT Rate) using possession-based Basketball Reference formulas
 - `compute_team_season_stats` — four factors, raw efficiency

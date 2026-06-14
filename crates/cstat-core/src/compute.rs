@@ -200,9 +200,10 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
 /// the authority: Zion Williamson has 32 Duke games vs 1 (swapped) Kentucky game,
 /// so the mode is Duke. Idempotent — only rewrites rows that disagree with their
 /// own box majority. Mirrors `compute_derived_game_fields`' "compute has the last
-/// word" treatment of W-L. NOTE: this corrects the roster/display `team_id` only;
-/// the swapped *games* themselves still carry reversed scores + per-game box tags
-/// (tracked separately — affects `team_game_stats`/AdjEM for those games).
+/// word" treatment of W-L. This corrects the roster/display `team_id`; the swapped
+/// *games* themselves (reversed scores + crossed box rows) are then relabeled by
+/// `correct_swapped_games`, which runs as the very next compute step using the
+/// real `team_id` this step establishes.
 pub async fn reconcile_player_teams(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
