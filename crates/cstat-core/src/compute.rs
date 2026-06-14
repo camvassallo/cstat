@@ -189,6 +189,55 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
     Ok(merged)
 }
 
+/// Reconcile `players.team_id` to each player's *most-frequent* team across their
+/// box-score games. The ingest path (`games.rs`) sets `team_id` first-write-wins
+/// (`COALESCE(EXCLUDED.team_id, players.team_id)`), so a single source-swapped
+/// game permanently mis-teams every player whose *first* appearance was that
+/// game. NatStat occasionally swaps a game's two rosters onto each other's team —
+/// notably season openers like the 2018 Champions Classic, where Duke's and
+/// Kentucky's players were tagged to the opposite team (issue #119), poisoning the
+/// whole season because the opener is the first write. The box-score majority is
+/// the authority: Zion Williamson has 32 Duke games vs 1 (swapped) Kentucky game,
+/// so the mode is Duke. Idempotent — only rewrites rows that disagree with their
+/// own box majority. Mirrors `compute_derived_game_fields`' "compute has the last
+/// word" treatment of W-L. NOTE: this corrects the roster/display `team_id` only;
+/// the swapped *games* themselves still carry reversed scores + per-game box tags
+/// (tracked separately — affects `team_game_stats`/AdjEM for those games).
+pub async fn reconcile_player_teams(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        WITH modal AS (
+            SELECT player_id, team_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY player_id
+                       ORDER BY COUNT(*) DESC, team_id
+                   ) AS rn
+            FROM player_game_stats
+            WHERE season = $1 AND team_id IS NOT NULL
+            GROUP BY player_id, team_id
+        )
+        UPDATE players p
+        SET team_id = m.team_id
+        FROM modal m
+        WHERE m.rn = 1
+          AND p.id = m.player_id
+          AND p.season = $1
+          AND p.team_id IS DISTINCT FROM m.team_id
+        "#,
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+    let corrected = result.rows_affected();
+    if corrected > 0 {
+        info!(
+            season,
+            corrected, "reconciled player team_id to box-score majority (source roster swaps)"
+        );
+    }
+    Ok(corrected)
+}
+
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
     // Scrub fake rebound zeros. NatStat omits rebound data for ~68% of games
@@ -2003,7 +2052,7 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
     // prior season intact rather than a half-rebuilt, prod-shipped table.
 
     // Games in this season that have play-by-play (the replay/onfloor input).
-    let mut games: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+    let games: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
         "SELECT g.id, g.home_team_id, g.away_team_id
          FROM games g
          WHERE g.season = $1 AND EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id)",
@@ -2023,42 +2072,24 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
         return Ok(0); // no PBP and no captured lineups — nothing to do
     }
 
-    // Corruption gate: if the PBP tag stream doesn't cover the box-score FGA
-    // (2019's mis-tagged export), the REPLAY-derived stints/lineups/+/- are
-    // garbage — but the NatStat lineups object is server-computed and immune,
-    // so gated team-games still emit. A corrupt season becomes natstat-only;
-    // with no captured lineups either, clear any prior rows and skip — better
-    // an absent surface than a wrong one (the UI hides it, same as a pre-PBP
-    // season).
-    let corrupt = if games.is_empty() {
+    // Corruption gate, made surgical (issue #119 dig, 2026-06-14). 2019's
+    // mis-tagged PBP export undercounts tagged FGA to ~56% of the box, so the
+    // tag-derived POSSESSIONS — and the per-100 ratings built on them — are wrong.
+    // But the three inputs the lineup reconstruction actually needs are immune:
+    // MEMBERSHIP (SUB events), MINUTES (the clock), and POINTS/plus-minus (the
+    // running `score_home`/`score_vis` field carried by `pbp_replay`, NOT
+    // tag-summed). So a corrupt season still replays valid lineups / minutes /
+    // plus-minus; the one bad dimension (possessions) is repaired below by
+    // rescaling each stint to the clean box-possession total per (game, team).
+    // Previously the whole replay was discarded, which — with 2019's replay-only
+    // fallback also blocked — collapsed every non-natstat-covered team-game to
+    // nothing (Duke 2019's waffle was a single coherent game: 9-min top lineup, no
+    // Zion). See ROADMAP "2019 PBP tag corruption".
+    let rescale_possessions_to_box = if games.is_empty() {
         false
     } else {
         pbp_source_is_corrupt(pool, season).await?
     };
-    if corrupt {
-        games.clear();
-        if covered_pairs.is_empty() {
-            let mut tx = pool.begin().await?;
-            sqlx::query("DELETE FROM lineup_stints WHERE season = $1")
-                .bind(season)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("DELETE FROM lineup_aggregates WHERE season = $1")
-                .bind(season)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("UPDATE player_game_stats SET plus_minus_pbp = NULL WHERE season = $1")
-                .bind(season)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("DELETE FROM player_on_off WHERE season = $1")
-                .bind(season)
-                .execute(&mut *tx)
-                .await?;
-            tx.commit().await?;
-            return Ok(0);
-        }
-    }
 
     // Bulk-load all per-game metadata once, rather than ~4 queries per game. The
     // only per-game query left is the plays themselves (PK-indexed by game_id).
@@ -2216,6 +2247,59 @@ pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx
 
     insert_lineup_stints(&mut tx, season, &rows).await?;
     let natstat_rows = insert_natstat_lineup_stints(&mut tx, season, &covered_pairs).await?;
+
+    // Corrupt-source seasons (2019): the replay produced valid lineup membership,
+    // minutes, and plus-minus (from clean subs/clock/score), but its POSSESSIONS
+    // are tag-derived and unusable — 2019's mis-tag drops tagged FGA to ~56% of
+    // box AND undercounts non-uniformly across stints, so even a per-team rescale
+    // leaves a tail of low-possession lineups with inflated per-100 ratings.
+    // Instead, REPLACE each served (non-shadow) stint's possessions with a clean,
+    // clock-based estimate: its share of the team's on-floor SECONDS times the box
+    // possession total per (game, team) — offense to the team's own box poss,
+    // defense to the opponent's. Seconds (clock) and the box four-factors (a
+    // different NatStat endpoint) are both immune to the PBP mis-tag, so this is a
+    // pace-uniform estimate that sums exactly to box and carries no tag noise.
+    // Non-corrupt seasons keep their raw possessions (FGA coverage ~0.98). Runs in
+    // the same tx as the rollups so the served surfaces never read half-rescaled rows.
+    if rescale_possessions_to_box {
+        sqlx::query(
+            "WITH gt AS (
+                 SELECT game_id, team_id, sum(seconds)::float8 AS total_secs
+                 FROM lineup_stints
+                 WHERE season = $1 AND source <> 'replay_shadow'
+                 GROUP BY game_id, team_id
+             ),
+             poss AS (
+                 SELECT gt.game_id, gt.team_id, gt.total_secs,
+                        (self.fga - COALESCE(self.off_rebounds, 0)
+                         + COALESCE(self.turnovers, 0)
+                         + 0.44 * COALESCE(self.fta, 0)) AS box_self,
+                        (opp.fga - COALESCE(opp.off_rebounds, 0)
+                         + COALESCE(opp.turnovers, 0)
+                         + 0.44 * COALESCE(opp.fta, 0)) AS box_opp
+                 FROM gt
+                 JOIN team_game_stats self
+                   ON self.game_id = gt.game_id AND self.team_id = gt.team_id
+                 LEFT JOIN team_game_stats opp
+                   ON opp.game_id = gt.game_id AND opp.team_id <> gt.team_id
+             )
+             UPDATE lineup_stints ls
+             SET possessions_for = CASE
+                     WHEN poss.total_secs > 0
+                     THEN (ls.seconds::float8 / poss.total_secs) * poss.box_self
+                     ELSE ls.possessions_for END,
+                 possessions_against = CASE
+                     WHEN poss.total_secs > 0 AND poss.box_opp IS NOT NULL
+                     THEN (ls.seconds::float8 / poss.total_secs) * poss.box_opp
+                     ELSE ls.possessions_against END
+             FROM poss
+             WHERE ls.season = $1 AND ls.source <> 'replay_shadow'
+               AND poss.game_id = ls.game_id AND poss.team_id = ls.team_id",
+        )
+        .bind(season)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     // Per-(game, team, lineup) rollup of 5-man stints with a physical-validity
     // flag, materialized once so both served surfaces below read the same set.
@@ -2575,51 +2659,57 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
         );
     }
 
-    info!("step 1/15: deduplicating players");
+    info!("step 1/16: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
-    info!("step 2/15: backfilling derived game stats");
+    // Runs right after dedup (so it sees post-merge box rows) and before any
+    // step that joins players on team_id. Corrects first-write-wins team_id
+    // poisoning from source roster swaps (issue #119).
+    info!("step 2/16: reconciling player team_id to box-score majority");
+    report.reconciled_player_teams = reconcile_player_teams(pool, season).await?;
+
+    info!("step 3/16: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 3/15: estimating missing team defensive rebounds");
+    info!("step 4/16: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 4/15: computing player season stats (with rate stats)");
+    info!("step 5/16: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
     // PBP steps run after season stats and before team/CamPom steps. Both no-op
     // for seasons with no play_by_play rows loaded (pre-2012 / not ingested).
-    info!("step 5/15: computing play-by-play per-player aggregates");
+    info!("step 6/16: computing play-by-play per-player aggregates");
     report.pbp_aggregates = compute_pbp_aggregates(pool, season).await?;
 
-    info!("step 6/15: computing play-by-play lineups & stints");
+    info!("step 7/16: computing play-by-play lineups & stints");
     report.pbp_lineups = compute_pbp_lineups(pool, season).await?;
 
-    info!("step 7/15: computing team four factors");
+    info!("step 8/16: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 8/15: computing adjusted efficiency (KenPom-style)");
+    info!("step 9/16: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 9/15: computing individual ORTG/DRTG (Torvik passthrough)");
+    info!("step 10/16: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 10/15: computing player SOS");
+    info!("step 11/16: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 11/15: computing CamPom composites");
+    info!("step 12/16: computing CamPom composites");
     report.campom = compute_campom(pool, season).await?;
 
-    info!("step 12/15: computing rolling averages");
+    info!("step 13/16: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 13/15: computing derived game fields");
+    info!("step 14/16: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 14/15: computing schedules");
+    info!("step 15/16: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 15/15: computing player percentiles");
+    info!("step 16/16: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -2629,6 +2719,7 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
 #[derive(Debug, Default)]
 pub struct ComputeReport {
     pub deduplicated_players: u64,
+    pub reconciled_player_teams: u64,
     pub backfilled: u64,
     pub estimated_rebounds: u64,
     pub player_season_stats: u64,
@@ -2649,8 +2740,9 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} team reconciled, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.deduplicated_players,
+            self.reconciled_player_teams,
             self.backfilled,
             self.estimated_rebounds,
             self.player_season_stats,
