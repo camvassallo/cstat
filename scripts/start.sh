@@ -13,14 +13,18 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 usage() {
-  echo "Usage: $0 {start|stop|restart|logs|status}"
+  echo "Usage: $0 {start|stop|restart|api|logs|status}"
   echo ""
   echo "Commands:"
   echo "  start       Start Postgres, API server, and web frontend"
-  echo "  stop        Stop all running services"
-  echo "  restart     Stop then start all services"
+  echo "  stop        Stop all services (incl. Postgres — full teardown)"
+  echo "  restart     Restart API + web only; leaves Postgres running"
+  echo "  api         Restart only the API server (fast path)"
   echo "  logs [svc]  Tail logs (all, or: api, web, postgres)"
   echo "  status      Show status of each service"
+  echo ""
+  echo "Note: 'restart' and 'api' deliberately do NOT bounce Postgres, so a"
+  echo "long-running ingest (e.g. the lineups backfill) survives a dev restart."
   exit 1
 }
 
@@ -109,18 +113,40 @@ do_start() {
   echo "Run '$0 logs' to tail all logs, or '$0 logs api' for a specific service."
 }
 
+# Stop one app process (api|web) by its pid file. Does not touch Postgres.
+stop_service() {
+  local svc=$1
+  if is_running "$svc"; then
+    local pid
+    pid="$(cat "$(pid_file "$svc")")"
+    echo -e "${YELLOW}Stopping $svc (pid $pid)...${NC}"
+    kill "$pid" 2>/dev/null || true
+    rm -f "$(pid_file "$svc")"
+  else
+    echo -e "$svc not running"
+  fi
+}
+
+# Restart only the API server. Leaves Postgres and web untouched, so an
+# in-flight ingest against the local DB is never disturbed.
+do_restart_api() {
+  stop_service api
+  start_api
+}
+
+# Restart the app processes (API + web). Postgres is left running — the
+# subsequent do_start's `docker compose up -d` is idempotent and a no-op when
+# the container is already up, so a long-running ingest survives the restart.
+do_restart() {
+  stop_service api
+  stop_service web
+  do_start
+}
+
+# Full teardown, including Postgres. Use when you're done for the day.
 do_stop() {
-  for svc in api web; do
-    if is_running "$svc"; then
-      local pid
-      pid="$(cat "$(pid_file "$svc")")"
-      echo -e "${YELLOW}Stopping $svc (pid $pid)...${NC}"
-      kill "$pid" 2>/dev/null || true
-      rm -f "$(pid_file "$svc")"
-    else
-      echo -e "$svc not running"
-    fi
-  done
+  stop_service api
+  stop_service web
 
   echo -e "${YELLOW}Stopping Postgres...${NC}"
   docker compose -f "$ROOT/docker-compose.yml" down 2>&1
@@ -161,7 +187,8 @@ do_logs() {
 case "$1" in
   start)   do_start ;;
   stop)    do_stop ;;
-  restart) do_stop; do_start ;;
+  restart) do_restart ;;
+  api)     do_restart_api ;;
   status)  do_status ;;
   logs)    do_logs "${2:-all}" ;;
   *)       usage ;;
