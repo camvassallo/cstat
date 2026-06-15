@@ -86,3 +86,16 @@ export function classTitle(cls: string | null | undefined): string {
   const tag = classTagline(cls);
   return tag ? `${cls} — ${tag}` : cls;
 }
+
+/// Readable text color (near-black or near-white) to lay over an archetype
+/// pill's fill, chosen by the fill's luminance. Shared by every surface that
+/// renders solid archetype-colored rectangles (TeamDetail waffle, Lineups page)
+/// so the pills look identical across the site.
+export function textOnClass(cls: string | null | undefined): string {
+  const hex = classColor(cls).replace('#', '');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? '#111827' : '#f9fafb';
+}

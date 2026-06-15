@@ -649,7 +649,22 @@ export default function PlayerDetail() {
       {pbp && <PbpProfilePanel pbp={pbp} />}
 
       {/* On/off splits (team rating with vs without the player) */}
-      {onOff && <OnOffPanel onOff={onOff} />}
+      {onOff && (
+        <>
+          <OnOffPanel onOff={onOff} />
+          {/* Lineup combos live on the dedicated cross-team Lineups tab now;
+              deep-link there pre-filtered to this player rather than crowding
+              the page with another table. */}
+          <div className="mt-3 text-sm">
+            <SeasonLink
+              to={`/lineups?player=${player.id}`}
+              className="text-blue-400 hover:underline"
+            >
+              View {player.name}'s lineup combos (duos / trios / 5-man) →
+            </SeasonLink>
+          </div>
+        </>
+      )}
 
       {/* Similar Players */}
       {similar.length > 0 && (

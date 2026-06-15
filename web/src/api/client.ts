@@ -988,6 +988,55 @@ export function fetchPlayerOnOff(id: string, season?: number) {
   );
 }
 
+export interface LineupRanking {
+  lineup: string[];
+  player_names: string[];
+  player_classes: (string | null)[];
+  team_id: string;
+  team_name: string;
+  stints: number;
+  minutes: number;
+  plus_minus: number;
+  possessions_for: number;
+  possessions_against: number;
+  ortg: number | null;
+  drtg: number | null;
+  net_rtg: number | null;
+  adj_ortg: number | null;
+  adj_drtg: number | null;
+  adj_net: number | null;
+  source: string;
+}
+
+/** Cross-team lineup-combination ranking. `size` is 2 (duos), 3 (trios), or 5
+ *  (full lineups). Optional `player` / `team` UUIDs filter to combos containing
+ *  that player / belonging to that team. */
+export function fetchLineupRankings(opts: {
+  size: 2 | 3 | 5;
+  season?: number;
+  player?: string;
+  team?: string;
+  minMinutes?: number;
+  limit?: number;
+  /** `'minutes'` (most-used) or the default `'adj_net'` (best, opponent-adjusted). */
+  order?: 'minutes' | 'adj_net';
+}) {
+  return fetchJson<{
+    season: number;
+    size: number;
+    min_minutes: number;
+    lineups: LineupRanking[];
+  }>(`/lineups`, {
+    season: opts.season?.toString(),
+    size: opts.size.toString(),
+    player: opts.player,
+    team: opts.team,
+    min_minutes: opts.minMinutes?.toString(),
+    limit: opts.limit?.toString(),
+    order: opts.order,
+  });
+}
+
 export function fetchPlayerDetail(id: string, season?: number) {
   return fetchJson<{
     player: PlayerProfile;

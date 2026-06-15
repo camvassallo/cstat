@@ -15,12 +15,16 @@ LOG="/tmp/lineups_backfill_2025.log"   # reuse the active 2025 log; later season
 cd "$REPO" || exit 1
 set -a; source "$REPO/.env"; set +a
 
-# 2025/2022 complete; 2021 omitted — NatStat has NO lineups object for the entire
-# 2020-21 season (0/9 sampled games across Nov 2020-Apr 2021; the games;lineups
-# hydrate returns a full game object with no `lineups` key). It is a genuine
-# one-year source gap, not era-thinning — 2020 and 2019<-2015 all sample 4-5/5
-# with 20-70 units/game. Re-running 2021 only burns ~6h of budget for zero.
-SEASONS=(2020 2019 2018 2017 2016 2015)
+# 2025/2022/2020/2019/2018 complete; 2021 omitted — NatStat has NO lineups object
+# for the entire 2020-21 season (0/9 sampled games across Nov 2020-Apr 2021; the
+# games;lineups hydrate returns a full game object with no `lineups` key). It is a
+# genuine one-year source gap, not era-thinning — 2020 and 2019<-2015 all sample
+# 4-5/5 with 20-70 units/game. Re-running 2021 only burns ~6h of budget for zero.
+#
+# 2026 (current season) moved to the front of the remaining queue at user request
+# (was previously left to the in-season `update` path). 2017 is resumed first —
+# the ledger skips its already-captured games, so the prior in-flight run continues.
+SEASONS=(2017 2026 2016 2015)
 MAX_ATTEMPTS=5   # transient-failure retries per season (ledger makes retries cheap)
 
 echo "=== lineups chain starting $(date '+%Y-%m-%d %H:%M:%S') :: seasons ${SEASONS[*]} ===" >> "$LOG"

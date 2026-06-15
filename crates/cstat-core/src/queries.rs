@@ -889,6 +889,231 @@ pub async fn get_player_on_off(
     .await
 }
 
+/// One ranked lineup combination (2-, 3-, or 5-man) across the league: the
+/// player set with their joint stints / minutes / +/- and per-100 team rates.
+/// `lineup`/`player_names`/`player_classes` are aligned by index and height-
+/// ordered (shortest→tallest, like the waffle). `source` is the dominant
+/// `'onfloor'`/`'replay'` flag.
+///
+/// `ortg`/`drtg`/`net_rtg` are the RAW on-court rates (what happened on the
+/// floor). `adj_ortg`/`adj_drtg`/`adj_net` are those same rates **opponent-
+/// adjusted** by the lineup's team schedule (each rate shifted by the team's
+/// `adjusted − raw` efficiency on that side), putting them on the KenPom AdjO /
+/// AdjD / AdjEM scale used by the team rankings page — `adj_net = adj_ortg −
+/// adj_drtg`. The page ranks by `adj_net`; a per-size minutes floor (not
+/// shrinkage) keeps thin-sample outliers out. All rates are `Option` (NULL where
+/// the combo logged no possessions of a side, or the team has no adjusted-
+/// efficiency row) and sort last.
+#[derive(Debug, Serialize, FromRow)]
+pub struct LineupRanking {
+    pub lineup: Vec<Uuid>,
+    pub player_names: Vec<String>,
+    pub player_classes: Vec<Option<String>>,
+    pub team_id: Uuid,
+    pub team_name: String,
+    pub stints: i64,
+    pub minutes: f64,
+    pub plus_minus: i64,
+    pub possessions_for: f64,
+    pub possessions_against: f64,
+    pub ortg: Option<f64>,
+    pub drtg: Option<f64>,
+    pub net_rtg: Option<f64>,
+    pub adj_ortg: Option<f64>,
+    pub adj_drtg: Option<f64>,
+    pub adj_net: Option<f64>,
+    pub source: String,
+}
+
+/// Rank lineup combinations of `size` (2, 3, or 5) players across all teams for
+/// a season, best **opponent-adjusted net** (`adj_net`) first among combos
+/// clearing the `min_minutes` floor. The floor (not shrinkage) is what keeps
+/// thin-sample outliers out — once the schedule adjustment removes weak-schedule
+/// inflation, the high-`adj_net` combos are the genuinely strong units, so a
+/// light per-size floor (5-man 100 / trio 200 / duo 300, set by the caller)
+/// suffices. Optionally filtered to combos containing `player` and/or belonging
+/// to `team`.
+///
+/// Duos and trios aren't stored — they're exploded at query time from the
+/// prod-resident 5-man `lineup_aggregates` (any time N players share the floor
+/// they're in *some* 5-man unit, so summing the rows whose `lineup` contains
+/// all N is the exact joint on-floor total). `size = 5` reads the rows directly.
+/// The combo key is the sorted player-UUID array, so a set counted once per
+/// contributing lineup aggregates cleanly across array orderings. Trio explosion
+/// is the heaviest (C(5,3)=10× row fan-out, ~1s/season); fine for a per-toggle
+/// ranking page, a candidate for materialization if it becomes hot.
+// Eight independent query knobs (season + size + floor + limit + two optional
+// filters + ordering) — all genuinely orthogonal, so a params struct would only
+// add ceremony.
+#[allow(clippy::too_many_arguments)]
+pub async fn get_lineup_rankings(
+    pool: &PgPool,
+    season: i32,
+    size: i32,
+    min_minutes: f64,
+    limit: i64,
+    player: Option<Uuid>,
+    team: Option<Uuid>,
+    // When true, order by most-used (minutes) instead of best (`adj_net`). The
+    // team-page duo/trio panels use this: a single team's combos vary wildly in
+    // absolute minutes (a thin team's top duo may be ~120 min vs a blue-blood's
+    // ~600), so a most-used ordering with no floor reliably surfaces each team's
+    // real top combos, where an `adj_net` order would need a floor and could
+    // leave thin teams empty.
+    order_by_minutes: bool,
+) -> Result<Vec<LineupRanking>, sqlx::Error> {
+    let order_clause = if order_by_minutes {
+        "ORDER BY s.minutes DESC, adj_net DESC NULLS LAST"
+    } else {
+        "ORDER BY adj_net DESC NULLS LAST, s.minutes DESC"
+    };
+    // The combination CTE differs per size (the number of `unnest` joins can't
+    // be parameterized at runtime). `size` is validated to {2,3,5} by the
+    // caller, so this match is exhaustive of the served values; any other value
+    // falls back to 5-man.
+    let combo_cte = match size {
+        2 => {
+            "SELECT la.team_id, la.season,
+                    ARRAY[LEAST(a.pid, b.pid), GREATEST(a.pid, b.pid)] AS combo,
+                    la.stint_count, la.minutes, la.plus_minus,
+                    la.points_for, la.points_against,
+                    la.possessions_for, la.possessions_against, la.source
+             FROM lineup_aggregates la,
+                  LATERAL unnest(la.lineup) WITH ORDINALITY AS a(pid, i),
+                  LATERAL unnest(la.lineup) WITH ORDINALITY AS b(pid, j)
+             WHERE la.season = $1 AND a.i < b.j"
+        }
+        3 => {
+            "SELECT la.team_id, la.season,
+                    ARRAY(SELECT x FROM unnest(ARRAY[a.pid, b.pid, c.pid]) AS x ORDER BY x) AS combo,
+                    la.stint_count, la.minutes, la.plus_minus,
+                    la.points_for, la.points_against,
+                    la.possessions_for, la.possessions_against, la.source
+             FROM lineup_aggregates la,
+                  LATERAL unnest(la.lineup) WITH ORDINALITY AS a(pid, i),
+                  LATERAL unnest(la.lineup) WITH ORDINALITY AS b(pid, j),
+                  LATERAL unnest(la.lineup) WITH ORDINALITY AS c(pid, k)
+             WHERE la.season = $1 AND a.i < b.j AND b.j < c.k"
+        }
+        _ => {
+            "SELECT la.team_id, la.season,
+                    ARRAY(SELECT x FROM unnest(la.lineup) AS x ORDER BY x) AS combo,
+                    la.stint_count, la.minutes, la.plus_minus,
+                    la.points_for, la.points_against,
+                    la.possessions_for, la.possessions_against, la.source
+             FROM lineup_aggregates la
+             WHERE la.season = $1"
+        }
+    };
+
+    let sql = format!(
+        r#"
+        WITH exploded AS ( {combo_cte} ),
+        agg AS (
+            SELECT team_id, season, combo,
+                   sum(stint_count)::bigint AS stints,
+                   sum(minutes) AS minutes,
+                   sum(plus_minus)::bigint AS plus_minus,
+                   sum(points_for) AS points_for,
+                   sum(points_against) AS points_against,
+                   sum(possessions_for) AS possessions_for,
+                   sum(possessions_against) AS possessions_against,
+                   mode() WITHIN GROUP (ORDER BY source) AS source
+            FROM exploded
+            GROUP BY team_id, season, combo
+        ),
+        -- Per-team RAW offensive / defensive efficiency (points per 100 poss,
+        -- possessions = FGA − OREB + TO + 0.44·FTA) straight from the box. The
+        -- gap between each side and the opponent-adjusted AdjO / AdjD is the
+        -- team's schedule strength on that side, which we add to each of its
+        -- lineups so the per-100 rates land on the KenPom adjusted scale (a
+        -- weak-schedule mid-major's inflated raw net gets discounted).
+        team_box AS (
+            SELECT s.team_id,
+                   100.0 * sum(s.points) / NULLIF(sum(
+                       s.fga - COALESCE(s.off_rebounds,0) + COALESCE(s.turnovers,0) + 0.44 * COALESCE(s.fta,0)
+                   ), 0) AS raw_off,
+                   100.0 * sum(o.points) / NULLIF(sum(
+                       o.fga - COALESCE(o.off_rebounds,0) + COALESCE(o.turnovers,0) + 0.44 * COALESCE(o.fta,0)
+                   ), 0) AS raw_def
+            FROM team_game_stats s
+            JOIN team_game_stats o ON o.game_id = s.game_id AND o.team_id <> s.team_id
+            WHERE s.season = $1
+            GROUP BY s.team_id
+        ),
+        sched AS (
+            SELECT tb.team_id,
+                   (ts.adj_offense - tb.raw_off) AS o_adj,
+                   (ts.adj_defense - tb.raw_def) AS d_adj
+            FROM team_box tb
+            JOIN team_season_stats ts ON ts.team_id = tb.team_id AND ts.season = $1
+            WHERE ts.adj_offense IS NOT NULL AND ts.adj_defense IS NOT NULL
+        ),
+        scored AS (
+            SELECT a.team_id, a.season, a.combo, a.stints, a.minutes, a.plus_minus,
+                   a.possessions_for, a.possessions_against, a.source,
+                   CASE WHEN a.possessions_for > 0
+                        THEN 100.0 * a.points_for / a.possessions_for END AS ortg,
+                   CASE WHEN a.possessions_against > 0
+                        THEN 100.0 * a.points_against / a.possessions_against END AS drtg,
+                   sc.o_adj, sc.d_adj
+            FROM agg a
+            LEFT JOIN sched sc ON sc.team_id = a.team_id
+        )
+        SELECT
+            lp.lineup,
+            lp.player_names,
+            lp.player_classes,
+            s.team_id,
+            COALESCE(t.short_name, t.name) AS team_name,
+            s.stints,
+            s.minutes,
+            s.plus_minus,
+            s.possessions_for,
+            s.possessions_against,
+            s.ortg,
+            s.drtg,
+            CASE WHEN s.ortg IS NOT NULL AND s.drtg IS NOT NULL
+                 THEN s.ortg - s.drtg END AS net_rtg,
+            -- Opponent-adjusted rates: raw per-100 shifted by the team's
+            -- schedule adjustment on each side (KenPom AdjO / AdjD / AdjEM scale).
+            CASE WHEN s.ortg IS NOT NULL AND s.o_adj IS NOT NULL
+                 THEN s.ortg + s.o_adj END AS adj_ortg,
+            CASE WHEN s.drtg IS NOT NULL AND s.d_adj IS NOT NULL
+                 THEN s.drtg + s.d_adj END AS adj_drtg,
+            CASE WHEN s.ortg IS NOT NULL AND s.drtg IS NOT NULL
+                  AND s.o_adj IS NOT NULL AND s.d_adj IS NOT NULL
+                 THEN (s.ortg + s.o_adj) - (s.drtg + s.d_adj) END AS adj_net,
+            s.source
+        FROM scored s
+        JOIN teams t ON t.id = s.team_id
+        CROSS JOIN LATERAL (
+            SELECT
+                array_agg(u.pid ORDER BY p.height_inches ASC NULLS LAST, u.ord) AS lineup,
+                array_agg(COALESCE(p.name, 'Unknown') ORDER BY p.height_inches ASC NULLS LAST, u.ord) AS player_names,
+                array_agg(pa.primary_class ORDER BY p.height_inches ASC NULLS LAST, u.ord) AS player_classes
+            FROM unnest(s.combo) WITH ORDINALITY AS u(pid, ord)
+            LEFT JOIN players p ON p.id = u.pid AND p.season = s.season
+            LEFT JOIN player_archetypes pa ON pa.player_id = u.pid AND pa.season = s.season
+        ) lp
+        WHERE s.minutes >= $2
+          AND ($4::uuid IS NULL OR $4 = ANY(s.combo))
+          AND ($5::uuid IS NULL OR s.team_id = $5)
+        {order_clause}
+        LIMIT $3
+        "#
+    );
+
+    sqlx::query_as::<_, LineupRanking>(&sql)
+        .bind(season)
+        .bind(min_minutes)
+        .bind(limit)
+        .bind(player)
+        .bind(team)
+        .fetch_all(pool)
+        .await
+}
+
 /// Map a season-scoped player UUID to the equivalent UUID for `season`.
 /// Tries the cross-season `natstat_id` first (the common case) and falls
 /// back to `torvik_pid` to handle transfers — NatStat issues a fresh
