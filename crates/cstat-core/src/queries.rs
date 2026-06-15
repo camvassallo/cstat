@@ -889,26 +889,21 @@ pub async fn get_player_on_off(
     .await
 }
 
-/// Possession-count prior for the empirical-Bayes shrinkage on a lineup's
-/// opponent-adjusted net. A combo's `adj_rating` is pulled toward 0 by
-/// `poss / (poss + K)`, so a small-sample blowout (a +44 over ~160 possessions)
-/// regresses hard while a heavily-used unit keeps most of its edge. K = 500 ≈ a
-/// few games of possessions; tuned so the 2025 top-10 reads as genuinely strong
-/// lineups rather than mid-major hot streaks.
-const LINEUP_SHRINKAGE_POSSESSIONS: f64 = 500.0;
-
 /// One ranked lineup combination (2-, 3-, or 5-man) across the league: the
 /// player set with their joint stints / minutes / +/- and per-100 team rates.
 /// `lineup`/`player_names`/`player_classes` are aligned by index and height-
-/// ordered (shortest→tallest, like the waffle). `ortg`/`drtg`/`net_rtg` are the
-/// RAW on-court rates (Option where the combo logged no possessions of a side);
-/// `source` is the dominant `'onfloor'`/`'replay'` flag.
+/// ordered (shortest→tallest, like the waffle). `source` is the dominant
+/// `'onfloor'`/`'replay'` flag.
 ///
-/// `sched_adj` is the combo's team schedule strength (team AdjEM − team raw
-/// efficiency margin) and `adj_rating` is the headline number the page ranks by:
-/// the opponent-adjusted net (`net_rtg + sched_adj`) shrunk toward 0 by sample
-/// size. Both are `Option` (NULL when the team has no adjusted-efficiency row or
-/// the combo logged no possessions) and sort last.
+/// `ortg`/`drtg`/`net_rtg` are the RAW on-court rates (what happened on the
+/// floor). `adj_ortg`/`adj_drtg`/`adj_net` are those same rates **opponent-
+/// adjusted** by the lineup's team schedule (each rate shifted by the team's
+/// `adjusted − raw` efficiency on that side), putting them on the KenPom AdjO /
+/// AdjD / AdjEM scale used by the team rankings page — `adj_net = adj_ortg −
+/// adj_drtg`. The page ranks by `adj_net`; a per-size minutes floor (not
+/// shrinkage) keeps thin-sample outliers out. All rates are `Option` (NULL where
+/// the combo logged no possessions of a side, or the team has no adjusted-
+/// efficiency row) and sort last.
 #[derive(Debug, Serialize, FromRow)]
 pub struct LineupRanking {
     pub lineup: Vec<Uuid>,
@@ -924,15 +919,20 @@ pub struct LineupRanking {
     pub ortg: Option<f64>,
     pub drtg: Option<f64>,
     pub net_rtg: Option<f64>,
-    pub sched_adj: Option<f64>,
-    pub adj_rating: Option<f64>,
+    pub adj_ortg: Option<f64>,
+    pub adj_drtg: Option<f64>,
+    pub adj_net: Option<f64>,
     pub source: String,
 }
 
 /// Rank lineup combinations of `size` (2, 3, or 5) players across all teams for
-/// a season, best net-per-100 first among combos clearing the `min_minutes`
-/// floor. Optionally filtered to combos containing `player` and/or belonging to
-/// `team`.
+/// a season, best **opponent-adjusted net** (`adj_net`) first among combos
+/// clearing the `min_minutes` floor. The floor (not shrinkage) is what keeps
+/// thin-sample outliers out — once the schedule adjustment removes weak-schedule
+/// inflation, the high-`adj_net` combos are the genuinely strong units, so a
+/// light per-size floor (5-man 100 / trio 200 / duo 300, set by the caller)
+/// suffices. Optionally filtered to combos containing `player` and/or belonging
+/// to `team`.
 ///
 /// Duos and trios aren't stored — they're exploded at query time from the
 /// prod-resident 5-man `lineup_aggregates` (any time N players share the floor
@@ -990,7 +990,6 @@ pub async fn get_lineup_rankings(
         }
     };
 
-    let shrink_k = LINEUP_SHRINKAGE_POSSESSIONS;
     let sql = format!(
         r#"
         WITH exploded AS ( {combo_cte} ),
@@ -1007,29 +1006,32 @@ pub async fn get_lineup_rankings(
             FROM exploded
             GROUP BY team_id, season, combo
         ),
-        -- Per-team RAW efficiency margin (points scored − allowed per 100 poss,
+        -- Per-team RAW offensive / defensive efficiency (points per 100 poss,
         -- possessions = FGA − OREB + TO + 0.44·FTA) straight from the box. The
-        -- gap between this and the opponent-adjusted AdjEM is the team's schedule
-        -- strength, which we add back to each of its lineups so a weak-schedule
-        -- mid-major's inflated raw net is discounted.
+        -- gap between each side and the opponent-adjusted AdjO / AdjD is the
+        -- team's schedule strength on that side, which we add to each of its
+        -- lineups so the per-100 rates land on the KenPom adjusted scale (a
+        -- weak-schedule mid-major's inflated raw net gets discounted).
         team_box AS (
             SELECT s.team_id,
                    100.0 * sum(s.points) / NULLIF(sum(
                        s.fga - COALESCE(s.off_rebounds,0) + COALESCE(s.turnovers,0) + 0.44 * COALESCE(s.fta,0)
-                   ), 0)
-                 - 100.0 * sum(o.points) / NULLIF(sum(
+                   ), 0) AS raw_off,
+                   100.0 * sum(o.points) / NULLIF(sum(
                        o.fga - COALESCE(o.off_rebounds,0) + COALESCE(o.turnovers,0) + 0.44 * COALESCE(o.fta,0)
-                   ), 0) AS raw_em
+                   ), 0) AS raw_def
             FROM team_game_stats s
             JOIN team_game_stats o ON o.game_id = s.game_id AND o.team_id <> s.team_id
             WHERE s.season = $1
             GROUP BY s.team_id
         ),
         sched AS (
-            SELECT tb.team_id, (ts.adj_efficiency_margin - tb.raw_em) AS sched_adj
+            SELECT tb.team_id,
+                   (ts.adj_offense - tb.raw_off) AS o_adj,
+                   (ts.adj_defense - tb.raw_def) AS d_adj
             FROM team_box tb
             JOIN team_season_stats ts ON ts.team_id = tb.team_id AND ts.season = $1
-            WHERE ts.adj_efficiency_margin IS NOT NULL
+            WHERE ts.adj_offense IS NOT NULL AND ts.adj_defense IS NOT NULL
         ),
         scored AS (
             SELECT a.team_id, a.season, a.combo, a.stints, a.minutes, a.plus_minus,
@@ -1038,10 +1040,7 @@ pub async fn get_lineup_rankings(
                         THEN 100.0 * a.points_for / a.possessions_for END AS ortg,
                    CASE WHEN a.possessions_against > 0
                         THEN 100.0 * a.points_against / a.possessions_against END AS drtg,
-                   CASE WHEN a.possessions_for > 0 AND a.possessions_against > 0
-                        THEN 100.0 * a.points_for / a.possessions_for
-                           - 100.0 * a.points_against / a.possessions_against END AS net_rtg,
-                   sc.sched_adj
+                   sc.o_adj, sc.d_adj
             FROM agg a
             LEFT JOIN sched sc ON sc.team_id = a.team_id
         )
@@ -1058,12 +1057,17 @@ pub async fn get_lineup_rankings(
             s.possessions_against,
             s.ortg,
             s.drtg,
-            s.net_rtg,
-            s.sched_adj,
-            -- Headline rating: opponent-adjusted net, shrunk toward 0 by sample.
-            CASE WHEN s.net_rtg IS NOT NULL AND s.sched_adj IS NOT NULL
-                 THEN (s.net_rtg + s.sched_adj) * s.possessions_for / (s.possessions_for + {shrink_k})
-                 END AS adj_rating,
+            CASE WHEN s.ortg IS NOT NULL AND s.drtg IS NOT NULL
+                 THEN s.ortg - s.drtg END AS net_rtg,
+            -- Opponent-adjusted rates: raw per-100 shifted by the team's
+            -- schedule adjustment on each side (KenPom AdjO / AdjD / AdjEM scale).
+            CASE WHEN s.ortg IS NOT NULL AND s.o_adj IS NOT NULL
+                 THEN s.ortg + s.o_adj END AS adj_ortg,
+            CASE WHEN s.drtg IS NOT NULL AND s.d_adj IS NOT NULL
+                 THEN s.drtg + s.d_adj END AS adj_drtg,
+            CASE WHEN s.ortg IS NOT NULL AND s.drtg IS NOT NULL
+                  AND s.o_adj IS NOT NULL AND s.d_adj IS NOT NULL
+                 THEN (s.ortg + s.o_adj) - (s.drtg + s.d_adj) END AS adj_net,
             s.source
         FROM scored s
         JOIN teams t ON t.id = s.team_id
@@ -1079,7 +1083,7 @@ pub async fn get_lineup_rankings(
         WHERE s.minutes >= $2
           AND ($4::uuid IS NULL OR $4 = ANY(s.combo))
           AND ($5::uuid IS NULL OR s.team_id = $5)
-        ORDER BY adj_rating DESC NULLS LAST, s.minutes DESC
+        ORDER BY adj_net DESC NULLS LAST, s.minutes DESC
         LIMIT $3
         "#
     );

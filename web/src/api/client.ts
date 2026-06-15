@@ -1002,8 +1002,9 @@ export interface LineupRanking {
   ortg: number | null;
   drtg: number | null;
   net_rtg: number | null;
-  sched_adj: number | null;
-  adj_rating: number | null;
+  adj_ortg: number | null;
+  adj_drtg: number | null;
+  adj_net: number | null;
   source: string;
 }
 

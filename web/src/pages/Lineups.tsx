@@ -24,12 +24,12 @@ const netColor = (v: number | null) =>
         ? 'text-red-400'
         : 'text-gray-300';
 
-/** Per-row breakdown of the headline Rating, for its hover tooltip. */
-function ratingTitle(r: LineupRanking): string {
-  if (r.adj_rating == null) return 'Opponent-adjusted rating unavailable for this team/season.';
+/** Per-row breakdown of the adjusted net (AdjEM), for its hover tooltip. */
+function adjTitle(r: LineupRanking): string {
+  if (r.adj_net == null) return 'Opponent-adjusted rating unavailable for this team/season.';
   const raw = r.net_rtg == null ? '—' : signed(r.net_rtg);
-  const sch = r.sched_adj == null ? '—' : signed(r.sched_adj);
-  return `Raw net ${raw} · schedule ${sch} · stabilized over ${Math.round(r.possessions_for)} poss → ${signed(r.adj_rating)}`;
+  const sch = signed(r.adj_net - (r.net_rtg ?? 0));
+  return `Raw on-court net ${raw} · schedule adjustment ${sch} → AdjEM ${signed(r.adj_net)} (opponent-adjusted, KenPom scale).`;
 }
 
 /** The combo's players as solid archetype-colored rectangle pills (one per
@@ -66,7 +66,7 @@ function LineupCell({ row }: { row: LineupRanking }) {
   );
 }
 
-type SortKey = 'team_name' | 'minutes' | 'plus_minus' | 'ortg' | 'drtg' | 'net_rtg' | 'adj_rating';
+type SortKey = 'team_name' | 'minutes' | 'plus_minus' | 'adj_ortg' | 'adj_drtg' | 'adj_net';
 
 export function Lineups() {
   usePageTitle('Lineups');
@@ -84,7 +84,7 @@ export function Lineups() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
-    key: 'adj_rating',
+    key: 'adj_net',
     dir: 'desc',
   });
 
@@ -126,7 +126,7 @@ export function Lineups() {
         ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
         : // Team opens ascending (A→Z), AdjD lower-is-better opens ascending;
           // every other metric opens descending.
-          { key, dir: key === 'team_name' || key === 'drtg' ? 'asc' : 'desc' },
+          { key, dir: key === 'team_name' || key === 'adj_drtg' ? 'asc' : 'desc' },
     );
   const sorted = useMemo(
     () => [...rows].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir)),
@@ -153,10 +153,9 @@ export function Lineups() {
           <h1 className="text-3xl font-bold">Lineups</h1>
           <p className="text-sm text-gray-400 mt-1 max-w-2xl">
             The most effective on-floor combinations across every team, ranked by{' '}
-            <span className="text-gray-300 font-semibold">Rating</span> — their net points per 100
+            <span className="text-gray-300 font-semibold">AdjEM</span> — their net points per 100
             possessions, <span className="text-gray-300">opponent-adjusted</span> for schedule
-            strength and stabilized for sample size, so genuinely strong units outrank small-sample
-            or weak-schedule hot streaks. Toggle between full{' '}
+            strength (same KenPom scale as the team rankings). Toggle between full{' '}
             <span className="text-gray-300">5-man</span> lineups and the{' '}
             <span className="text-gray-300">duo / trio</span> combinations within them.
           </p>
@@ -164,14 +163,14 @@ export function Lineups() {
             {minMinutes != null && (
               <>
                 Minimum <span className="text-gray-300">{Math.round(minMinutes)}</span> shared
-                minutes to qualify.{' '}
+                minutes to qualify (filters thin-sample outliers).{' '}
               </>
             )}
-            Rating adds each team's schedule adjustment (AdjEM − raw margin) to the raw net, then
-            shrinks toward zero by possessions; the raw <span className="text-gray-300">Net</span>{' '}
-            column is the unadjusted on-court figure. Possessions and minutes are reconstructed from
-            substitution play-by-play (~86% accurate), so totals are approximate. Lineups exist only
-            for PBP-covered seasons (2018+ are densest).
+            AdjO / AdjD / AdjEM shift each lineup's raw on-court rate by its team's schedule
+            adjustment (adjusted − raw efficiency); hover AdjEM for the raw → adjusted breakdown.
+            Possessions and minutes are reconstructed from substitution play-by-play (~86%
+            accurate), so totals are approximate. Lineups exist only for PBP-covered seasons (2018+
+            are densest).
           </p>
         </div>
         {/* 5-man / Trios / Duos toggle — pinned top-right, default 5-man. */}
@@ -216,14 +215,12 @@ export function Lineups() {
                   title="Shared on-floor minutes (replay-reconstructed)." />
                 <SortHeader label="+/−" sortKey="plus_minus" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
                   title="Raw point differential while the group was on the floor." />
-                <SortHeader label="ORtg" sortKey="ortg" current={sort} onSort={onSort} align="right" className="hidden md:table-cell"
-                  title="Team points scored per 100 possessions with the group on (raw)." />
-                <SortHeader label="DRtg" sortKey="drtg" current={sort} onSort={onSort} align="right" className="hidden md:table-cell"
-                  title="Team points allowed per 100 possessions with the group on (raw, lower is better)." />
-                <SortHeader label="Net" sortKey="net_rtg" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
-                  title="Raw on-court net rating per 100 possessions (ORtg − DRtg), before any opponent adjustment." />
-                <SortHeader label="Rating" sortKey="adj_rating" current={sort} onSort={onSort} align="right"
-                  title="Headline rating: raw net opponent-adjusted by the team's schedule (AdjEM − raw margin), then shrunk toward 0 by sample size. Ranks genuinely strong, well-tested lineups above small-sample or weak-schedule hot streaks." />
+                <SortHeader label="AdjO" sortKey="adj_ortg" current={sort} onSort={onSort} align="right" className="hidden md:table-cell"
+                  title="Opponent-adjusted offensive rating: points scored per 100 possessions with the group on, corrected for schedule (KenPom scale, like the team rankings)." />
+                <SortHeader label="AdjD" sortKey="adj_drtg" current={sort} onSort={onSort} align="right" className="hidden md:table-cell"
+                  title="Opponent-adjusted defensive rating: points allowed per 100 possessions with the group on (lower is better)." />
+                <SortHeader label="AdjEM" sortKey="adj_net" current={sort} onSort={onSort} align="right"
+                  title="Opponent-adjusted efficiency margin (AdjO − AdjD): net points per 100 possessions, schedule-corrected. The ranking metric — same scale as the team rankings' AdjEM. Hover a value for the raw → adjusted breakdown." />
               </tr>
             </thead>
             <tbody>
@@ -240,16 +237,13 @@ export function Lineups() {
                   <td className={`hidden sm:table-cell py-2 px-2 text-right tabular-nums font-medium ${netColor(r.plus_minus)}`}>
                     {signed(r.plus_minus, 0)}
                   </td>
-                  <td className="hidden md:table-cell py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.ortg)}</td>
-                  <td className="hidden md:table-cell py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.drtg)}</td>
-                  <td className={`hidden sm:table-cell py-2 px-2 text-right tabular-nums ${netColor(r.net_rtg)}`}>
-                    {signed(r.net_rtg)}
-                  </td>
+                  <td className="hidden md:table-cell py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.adj_ortg, 0)}</td>
+                  <td className="hidden md:table-cell py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.adj_drtg, 0)}</td>
                   <td
-                    className={`py-2 px-2 text-right tabular-nums font-semibold ${netColor(r.adj_rating)}`}
-                    title={ratingTitle(r)}
+                    className={`py-2 px-2 text-right tabular-nums font-semibold ${netColor(r.adj_net)}`}
+                    title={adjTitle(r)}
                   >
-                    {signed(r.adj_rating)}
+                    {signed(r.adj_net)}
                   </td>
                 </tr>
               ))}

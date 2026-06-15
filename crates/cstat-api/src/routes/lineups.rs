@@ -53,11 +53,12 @@ async fn lineup_rankings(
         Some(3) => 3,
         _ => 5,
     };
-    // Floor scales with combo size — a duo accrues minutes far faster than a
-    // 5-man unit, so it needs a higher bar to filter out noise.
+    // Floor scales with combo size — a duo/trio pools shared minutes across
+    // every 5-man unit it appears in, so it accrues minutes far faster than an
+    // exact 5-man and needs a higher bar to filter thin-sample outliers.
     let min_minutes = params.min_minutes.unwrap_or(match size {
-        2 => 200.0,
-        3 => 150.0,
+        2 => 300.0,
+        3 => 200.0,
         _ => 100.0,
     });
     let limit = params.limit.unwrap_or(100).clamp(1, 500);
