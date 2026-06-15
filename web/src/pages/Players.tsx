@@ -100,6 +100,9 @@ function buildColumns(
       width: 56,
       pinned: 'left',
       sortable: false,
+      // The synthetic rank is not a searchable attribute — keep it out of the
+      // quick-filter corpus so typing "5" doesn't match rank-5 rows.
+      getQuickFilterText: () => '',
       // The player's CamPom rank over the loaded qualified pool, NOT their
       // position in the currently displayed rows. Reading a filtered row index
       // here would renumber 1..N over whatever the search matched (issue #121);
