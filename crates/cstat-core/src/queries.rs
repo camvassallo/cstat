@@ -942,6 +942,10 @@ pub struct LineupRanking {
 /// contributing lineup aggregates cleanly across array orderings. Trio explosion
 /// is the heaviest (C(5,3)=10× row fan-out, ~1s/season); fine for a per-toggle
 /// ranking page, a candidate for materialization if it becomes hot.
+// Eight independent query knobs (season + size + floor + limit + two optional
+// filters + ordering) — all genuinely orthogonal, so a params struct would only
+// add ceremony.
+#[allow(clippy::too_many_arguments)]
 pub async fn get_lineup_rankings(
     pool: &PgPool,
     season: i32,
@@ -950,7 +954,19 @@ pub async fn get_lineup_rankings(
     limit: i64,
     player: Option<Uuid>,
     team: Option<Uuid>,
+    // When true, order by most-used (minutes) instead of best (`adj_net`). The
+    // team-page duo/trio panels use this: a single team's combos vary wildly in
+    // absolute minutes (a thin team's top duo may be ~120 min vs a blue-blood's
+    // ~600), so a most-used ordering with no floor reliably surfaces each team's
+    // real top combos, where an `adj_net` order would need a floor and could
+    // leave thin teams empty.
+    order_by_minutes: bool,
 ) -> Result<Vec<LineupRanking>, sqlx::Error> {
+    let order_clause = if order_by_minutes {
+        "ORDER BY s.minutes DESC, adj_net DESC NULLS LAST"
+    } else {
+        "ORDER BY adj_net DESC NULLS LAST, s.minutes DESC"
+    };
     // The combination CTE differs per size (the number of `unnest` joins can't
     // be parameterized at runtime). `size` is validated to {2,3,5} by the
     // caller, so this match is exhaustive of the served values; any other value
@@ -1083,7 +1099,7 @@ pub async fn get_lineup_rankings(
         WHERE s.minutes >= $2
           AND ($4::uuid IS NULL OR $4 = ANY(s.combo))
           AND ($5::uuid IS NULL OR s.team_id = $5)
-        ORDER BY adj_net DESC NULLS LAST, s.minutes DESC
+        {order_clause}
         LIMIT $3
         "#
     );

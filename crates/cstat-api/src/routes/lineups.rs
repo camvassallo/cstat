@@ -34,6 +34,9 @@ struct LineupRankingParams {
     player: Option<Uuid>,
     /// Optional: restrict to a single team.
     team: Option<Uuid>,
+    /// Ordering: `"minutes"` (most-used) or the default `"adj_net"` (best,
+    /// opponent-adjusted). The team-page duo/trio panels pass `minutes`.
+    order: Option<String>,
 }
 
 /// `GET /api/lineups` — cross-team ranking of lineup combinations (duos / trios
@@ -63,6 +66,7 @@ async fn lineup_rankings(
         _ => 100.0,
     });
     let limit = params.limit.unwrap_or(100).clamp(1, 500);
+    let order_by_minutes = params.order.as_deref() == Some("minutes");
 
     // Re-resolve an optional player filter to the requested season so a
     // cross-season UUID (e.g. arriving from a player page on a different year)
@@ -80,10 +84,18 @@ async fn lineup_rankings(
         None => None,
     };
 
-    let lineups =
-        queries::get_lineup_rankings(pool, season, size, min_minutes, limit, player, team)
-            .await
-            .map_err(internal)?;
+    let lineups = queries::get_lineup_rankings(
+        pool,
+        season,
+        size,
+        min_minutes,
+        limit,
+        player,
+        team,
+        order_by_minutes,
+    )
+    .await
+    .map_err(internal)?;
 
     Ok(Json(json!({
         "season": season,

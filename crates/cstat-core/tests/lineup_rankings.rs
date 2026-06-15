@@ -32,7 +32,7 @@ async fn lineup_rankings_invariants() {
         .expect("no lineup_aggregates rows — ingest lineups + run compute first");
 
     for size in [5_i32, 3, 2] {
-        let rows = queries::get_lineup_rankings(&pool, season, size, 100.0, 25, None, None)
+        let rows = queries::get_lineup_rankings(&pool, season, size, 100.0, 25, None, None, false)
             .await
             .unwrap();
         assert!(
@@ -73,14 +73,25 @@ async fn lineup_rankings_invariants() {
         }
     }
 
+    // Most-used ordering (team-page panels): rows come back by minutes desc.
+    let by_min = queries::get_lineup_rankings(&pool, season, 2, 0.0, 10, None, None, true)
+        .await
+        .unwrap();
+    let mut prev_min = f64::INFINITY;
+    for r in &by_min {
+        assert!(r.minutes <= prev_min + 1e-9, "not sorted by minutes desc");
+        prev_min = r.minutes;
+    }
+
     // `player` filter: every returned 5-man combo must contain the filter player.
-    let top = queries::get_lineup_rankings(&pool, season, 5, 100.0, 1, None, None)
+    let top = queries::get_lineup_rankings(&pool, season, 5, 100.0, 1, None, None, false)
         .await
         .unwrap();
     let pid = top[0].lineup[0];
-    let filtered = queries::get_lineup_rankings(&pool, season, 5, 100.0, 25, Some(pid), None)
-        .await
-        .unwrap();
+    let filtered =
+        queries::get_lineup_rankings(&pool, season, 5, 100.0, 25, Some(pid), None, false)
+            .await
+            .unwrap();
     assert!(!filtered.is_empty(), "player filter returned nothing");
     for r in &filtered {
         assert!(

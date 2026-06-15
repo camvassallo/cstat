@@ -1018,6 +1018,8 @@ export function fetchLineupRankings(opts: {
   team?: string;
   minMinutes?: number;
   limit?: number;
+  /** `'minutes'` (most-used) or the default `'adj_net'` (best, opponent-adjusted). */
+  order?: 'minutes' | 'adj_net';
 }) {
   return fetchJson<{
     season: number;
@@ -1031,6 +1033,7 @@ export function fetchLineupRankings(opts: {
     team: opts.team,
     min_minutes: opts.minMinutes?.toString(),
     limit: opts.limit?.toString(),
+    order: opts.order,
   });
 }
 

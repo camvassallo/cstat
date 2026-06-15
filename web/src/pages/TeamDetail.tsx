@@ -5,10 +5,12 @@ import {
   fetchProjectedTeam,
   fetchTeamCoach,
   fetchTeamLineups,
+  fetchLineupRankings,
   type TeamProfile,
   type ScheduleEntry,
   type RosterEntry,
   type TeamLineup,
+  type LineupRanking,
   type ArchetypeShare,
   type ProjectedReturning,
   type ProjectedArrival,
@@ -532,8 +534,8 @@ function HistoricalTeamDetail() {
       {/* Roster */}
       <RosterTable roster={roster} />
 
-      {/* Top 5-man lineups (PBP-derived): archetype waffle */}
-      {lineups.length > 0 && <LineupWaffle lineups={lineups} />}
+      {/* Top lineups (PBP-derived): 5-man / trios / duos toggle, archetype waffle */}
+      {lineups.length > 0 && <TeamLineupsPanel teamId={team.id} season={season} />}
 
       {/* Schedule */}
       <ScheduleTable schedule={schedule} teamName={team.name} season={season} />
@@ -541,70 +543,104 @@ function HistoricalTeamDetail() {
   );
 }
 
-/// Top-5 lineups as a per-row "waffle": five archetype-colored name pills (one
-/// per player, ordered shortest→tallest so grid columns align by size) so a
-/// lineup's identity reads at a glance from the colors, with the headline stats
-/// (stints, minutes, net rating per 100 poss) alongside. A full-width panel —
-/// the single lineups surface.
-function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
-  const top = lineups.slice(0, 5);
-  const approximate = top.some((l) => l.source === 'replay');
-  // Distinct archetypes present, for the color legend.
+/// Unified lineups panel: the team's top combinations with a 5-man / Trios /
+/// Duos toggle. All sizes come from the same `lineup_aggregates` source via
+/// `GET /api/lineups` (team-filtered, exploded server-side for 2/3-man), ordered
+/// by minutes ("most-used") with no floor — a single team's combos vary too much
+/// in absolute minutes for a fixed floor, and most-used reliably surfaces the
+/// real top combos for any team. Stats are **opponent-adjusted** (AdjO / AdjD /
+/// AdjEM, KenPom scale) and shown identically across every size; within a team
+/// the schedule adjustment is a constant offset, so the most-used ordering still
+/// matches an adjusted-net ordering.
+const LINEUP_SIZES = [
+  { n: 5 as const, label: '5-man' },
+  { n: 3 as const, label: 'Trios' },
+  { n: 2 as const, label: 'Duos' },
+];
+
+function TeamLineupsPanel({ teamId, season }: { teamId: string; season: number }) {
+  const [size, setSize] = useState<2 | 3 | 5>(5);
+  const [rows, setRows] = useState<LineupRanking[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchLineupRankings({ size, season, team: teamId, order: 'minutes', minMinutes: 0, limit: 5 })
+      .then((r) => !cancelled && setRows(r.lineups))
+      .catch(() => !cancelled && setRows([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [size, season, teamId]);
+
+  const approximate = rows.some((l) => l.source === 'replay');
   const classesPresent = useMemo(
     () =>
-      Array.from(
-        new Set(top.flatMap((l) => l.player_classes.filter((c): c is string => !!c))),
-      ),
-    [top],
+      Array.from(new Set(rows.flatMap((l) => l.player_classes.filter((c): c is string => !!c)))),
+    [rows],
   );
+  const rtg = (v: number | null) => (v == null ? '—' : v.toFixed(0));
+  const netColor = (v: number | null) =>
+    v == null ? 'text-gray-400' : v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-gray-300';
 
   return (
     <div className="bg-gray-800 rounded-lg p-5 mt-8">
       <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
-        <h2 className="text-xl font-bold">Top 5 Lineups</h2>
-        {approximate && (
-          <span
-            className="text-xs px-1.5 py-0.5 rounded bg-gray-900 text-gray-400 uppercase tracking-wide"
-            title="Lineups reconstructed from play-by-play substitutions (~86% accurate). Exact when sourced from the live API on-floor feed or NatStat's official lineup units."
-          >
-            Approximate · replay
-          </span>
-        )}
+        <h2 className="text-xl font-bold">Top Lineups</h2>
+        <div className="flex items-center gap-2">
+          {approximate && (
+            <span
+              className="text-xs px-1.5 py-0.5 rounded bg-gray-900 text-gray-400 uppercase tracking-wide"
+              title="Lineups reconstructed from play-by-play substitutions (~86% accurate). Exact when sourced from the live API on-floor feed or NatStat's official lineup units."
+            >
+              Approximate · replay
+            </span>
+          )}
+          {/* 5-man / Trios / Duos toggle */}
+          <div className="inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs">
+            {LINEUP_SIZES.map((s) => (
+              <button
+                key={s.n}
+                onClick={() => setSize(s.n)}
+                className={`px-3 py-1 ${
+                  size === s.n
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-900 text-gray-300 hover:bg-gray-800'
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
       <p className="text-xs text-gray-500 mb-4">
-        Colored by archetype, most-used first · +/- is net points while on the floor together.
+        Colored by archetype, most-used first · AdjO / AdjD / AdjEM are opponent-adjusted per 100
+        possessions (same scale as the team rankings).
       </p>
 
       <div>
-        {top.map((l, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-3 py-2.5 border-t border-gray-700/60"
-          >
-            <div className="w-4 text-right text-gray-500 text-sm tabular-nums shrink-0">
-              {i + 1}
-            </div>
+        {rows.map((l, i) => (
+          <div key={l.lineup.join('-')} className="flex items-center gap-3 py-2.5 border-t border-gray-700/60">
+            <div className="w-4 text-right text-gray-500 text-sm tabular-nums shrink-0">{i + 1}</div>
 
-            {/* Archetype-colored pills, one per grid column (sorted shortest ->
-                tallest, so columns align by size across rows). The five columns
-                are kept even on phones — full names would truncate to noise at
-                that width, so we show first+last initials below `sm` and the
-                full name from `sm` up. The tooltip carries the full name either
-                way. */}
-            <div className="flex-1 min-w-0 grid grid-cols-5 gap-1 sm:gap-2.5">
+            {/* Archetype-colored pills, one per grid column (sorted shortest →
+                tallest so columns align by size). Columns scale with the combo
+                size; full names from `sm` up, first/last initials below. */}
+            <div
+              className="flex-1 min-w-0 grid gap-1 sm:gap-2.5"
+              style={{ gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))` }}
+            >
               {l.lineup.map((pid, j) => {
                 const cls = l.player_classes[j];
                 const name = l.player_names[j] ?? 'Unknown';
                 const parts = name.split(/\s+/).filter(Boolean);
                 const initials = (
-                  parts.length > 1
-                    ? parts[0][0] + parts[parts.length - 1][0]
-                    : (parts[0] ?? '?').slice(0, 2)
+                  parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : (parts[0] ?? '?').slice(0, 2)
                 ).toUpperCase();
                 const color = classColor(cls);
                 return (
                   <SeasonLink
-                    key={j}
+                    key={pid}
                     to={`/players/${pid}`}
                     className="block w-full truncate text-center px-1 sm:px-3 py-2.5 rounded-md text-xs font-medium hover:opacity-90 transition-opacity"
                     style={{ background: color, color: textOnClass(cls) }}
@@ -617,80 +653,39 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
               })}
             </div>
 
-            {/* Headline stats — all possession-normalized (P3) so a heavily-used
-                lineup isn't penalized vs one that barely played: minutes (usage),
-                offensive/defensive rating (points per 100 poss), and net/100. */}
+            {/* Opponent-adjusted stats, identical format across sizes: minutes,
+                AdjO/AdjD split (hidden on phones), AdjEM headline. */}
             <div className="flex items-center gap-3 sm:gap-5 shrink-0 text-right">
               <div>
                 <div className="text-sm font-semibold tabular-nums">{Math.round(l.minutes)}</div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-wide">min</div>
               </div>
-              {/* Off/def split is the decomposition of net (net = ORtg − DRtg),
-                  so it's redundant for a glance — hidden on phones to give the
-                  player pills room. Net (the headline +/-) and minutes stay. */}
               <div
                 className="hidden sm:block w-20"
-                title="Offensive / defensive rating: points scored / allowed per 100 possessions (tempo-free, so it doesn't reward or punish a lineup for how many minutes it played)"
+                title="Opponent-adjusted offensive / defensive rating: points scored / allowed per 100 possessions, schedule-corrected (KenPom scale)."
               >
                 <div className="text-sm font-semibold tabular-nums">
-                  <span className="text-green-400">
-                    {l.ortg == null ? '—' : l.ortg.toFixed(0)}
-                  </span>
+                  <span className="text-green-400">{rtg(l.adj_ortg)}</span>
                   <span className="text-gray-500"> / </span>
-                  <span className="text-red-400">
-                    {l.drtg == null ? '—' : l.drtg.toFixed(0)}
-                  </span>
+                  <span className="text-red-400">{rtg(l.adj_drtg)}</span>
                 </div>
-                <div className="text-[10px] text-gray-500 uppercase tracking-wide">off/def 100</div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-wide">adj off/def</div>
               </div>
-              {/* Net rating (points per 100 poss) when possessions are trustworthy.
-                  For corrupt-PBP seasons (2019) the per-100 rates are suppressed
-                  server-side, but the raw +/- is reconstructed from the clean score
-                  field — fall back to that (net points while on the floor) rather
-                  than a dash. */}
               <div
                 className="w-16"
-                title={
-                  l.net_rtg == null
-                    ? 'Net points scored while these five were on the floor together (raw +/-). Per-100 ratings are unavailable for this season — its play-by-play possession data is corrupted.'
-                    : 'Net rating: offensive minus defensive rating, points per 100 possessions'
-                }
+                title="AdjEM: opponent-adjusted net rating (AdjO − AdjD), points per 100 possessions."
               >
-                {l.net_rtg == null ? (
-                  <>
-                    <div
-                      className={`text-base font-bold tabular-nums ${
-                        l.plus_minus > 0
-                          ? 'text-green-400'
-                          : l.plus_minus < 0
-                            ? 'text-red-400'
-                            : 'text-gray-400'
-                      }`}
-                    >
-                      {`${l.plus_minus > 0 ? '+' : ''}${l.plus_minus}`}
-                    </div>
-                    <div className="text-[10px] text-gray-500 uppercase tracking-wide">+/−</div>
-                  </>
-                ) : (
-                  <>
-                    <div
-                      className={`text-base font-bold tabular-nums ${
-                        l.net_rtg > 0
-                          ? 'text-green-400'
-                          : l.net_rtg < 0
-                            ? 'text-red-400'
-                            : 'text-gray-400'
-                      }`}
-                    >
-                      {`${l.net_rtg > 0 ? '+' : ''}${l.net_rtg.toFixed(1)}`}
-                    </div>
-                    <div className="text-[10px] text-gray-500 uppercase tracking-wide">net/100</div>
-                  </>
-                )}
+                <div className={`text-base font-bold tabular-nums ${netColor(l.adj_net)}`}>
+                  {l.adj_net == null ? '—' : `${l.adj_net > 0 ? '+' : ''}${l.adj_net.toFixed(1)}`}
+                </div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-wide">AdjEM</div>
               </div>
             </div>
           </div>
         ))}
+        {rows.length === 0 && (
+          <p className="text-sm text-gray-500 py-3">No qualifying combinations for this team.</p>
+        )}
       </div>
 
       {/* Archetype legend */}
@@ -698,10 +693,7 @@ function LineupWaffle({ lineups }: { lineups: TeamLineup[] }) {
         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 pt-3 border-t border-gray-700/60 text-[11px] text-gray-400">
           {classesPresent.map((c) => (
             <span key={c} className="inline-flex items-center gap-1">
-              <span
-                className="w-2.5 h-2.5 rounded-sm"
-                style={{ background: classColor(c) }}
-              />
+              <span className="w-2.5 h-2.5 rounded-sm" style={{ background: classColor(c) }} />
               {c}
             </span>
           ))}
