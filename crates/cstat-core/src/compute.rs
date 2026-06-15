@@ -381,6 +381,79 @@ pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sq
     Ok(n)
 }
 
+/// Reattach box-score rows that NatStat stamped with the WRONG same-name player's
+/// id. Common-name collisions occasionally arrive with a box line carrying the
+/// *other* same-name player's natstat id — e.g. two "Jake Davis" in 2026, one at
+/// Illinois (natstat 87832802) and one at Cal Poly (87913427), where two of Cal
+/// Poly Davis's early box lines came in stamped 87832802. `games.rs` resolves a
+/// player purely by natstat_id, so it files those rows under the wrong human; the
+/// result is a spurious second per-team `player_season_stats` row (issue #138 —
+/// Jake Davis showing 2 GP on his progression page) and 2 missing games on the
+/// real Cal Poly Davis.
+///
+/// The fingerprint is precise: a `player_game_stats` row sits on a team that is
+/// NOT its owner's reconciled majority team, while a DISTINCT player with the SAME
+/// name genuinely rosters to that team in that season. Those rows belong to the
+/// sibling — reattach them. Genuine mid-season transfers are untouched: a
+/// transferring human keeps one natstat_id, so their foreign-team rows have no
+/// same-name sibling rostered to that team and never match (DB-wide this fires on
+/// 54 rows / 25 player-seasons; the other ~950 foreign-team rows are real
+/// transfers, all correctly left alone).
+///
+/// Conservative on every axis — only fires when exactly one such sibling exists
+/// and the sibling has no row for that game (so the reattach can't trip the
+/// `(player_id, game_id)` unique index). Idempotent: once reattached the row's
+/// team equals its new owner's team, so it no longer looks foreign. Must run AFTER
+/// `reconcile_player_teams` (needs the majority `team_id` that defines "foreign")
+/// and BEFORE `compute_player_season_stats`.
+pub async fn reattach_misidentified_players(
+    pool: &PgPool,
+    season: i32,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        r#"
+        WITH sibling AS (
+            SELECT pgs.id AS pgs_id,
+                   pgs.game_id,
+                   (array_agg(b.id))[1] AS correct_player_id
+            FROM player_game_stats pgs
+            JOIN players a ON a.id = pgs.player_id
+            JOIN players b ON b.name = a.name
+                          AND b.season = pgs.season
+                          AND b.id <> a.id
+                          AND b.team_id = pgs.team_id
+            WHERE pgs.season = $1
+              AND a.team_id IS NOT NULL
+              AND pgs.team_id IS DISTINCT FROM a.team_id
+            GROUP BY pgs.id, pgs.game_id
+            -- only when the real owner is unambiguous (one same-name sibling on T)
+            HAVING COUNT(DISTINCT b.id) = 1
+        )
+        UPDATE player_game_stats p
+        SET player_id = s.correct_player_id
+        FROM sibling s
+        WHERE p.id = s.pgs_id
+          -- guard the (player_id, game_id) unique index
+          AND NOT EXISTS (
+                SELECT 1 FROM player_game_stats x
+                WHERE x.player_id = s.correct_player_id
+                  AND x.game_id = s.game_id
+          )
+        "#,
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+    let reattached = result.rows_affected();
+    if reattached > 0 {
+        info!(
+            season,
+            reattached, "reattached box rows stamped with a wrong same-name player's natstat id"
+        );
+    }
+    Ok(reattached)
+}
+
 /// Backfill derived columns on player_game_stats that can be computed from existing data.
 pub async fn backfill_game_stats(pool: &PgPool) -> Result<u64, sqlx::Error> {
     // Scrub fake rebound zeros. NatStat omits rebound data for ~68% of games
@@ -2802,63 +2875,69 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
         );
     }
 
-    info!("step 1/17: deduplicating players");
+    info!("step 1/18: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
     // Runs right after dedup (so it sees post-merge box rows) and before any
     // step that joins players on team_id. Corrects first-write-wins team_id
     // poisoning from source roster swaps (issue #119).
-    info!("step 2/17: reconciling player team_id to box-score majority");
+    info!("step 2/18: reconciling player team_id to box-score majority");
     report.reconciled_player_teams = reconcile_player_teams(pool, season).await?;
 
     // Uses the reconciled team_id to find fully-swapped games and relabel them
     // (games/team_game_stats/player_game_stats) so the four-factors / W-L / AdjEM
     // steps below recompute from the corrected box rows (issue #119).
-    info!("step 3/17: correcting source-swapped games");
+    info!("step 3/18: correcting source-swapped games");
     report.corrected_swapped_games = correct_swapped_games(pool, season).await?;
 
-    info!("step 4/17: backfilling derived game stats");
+    // Uses the reconciled team_id to move box rows that NatStat stamped with the
+    // wrong same-name player's id onto the real human, so season stats don't emit
+    // a spurious second per-team row (issue #138).
+    info!("step 4/18: reattaching misidentified same-name players");
+    report.reattached_misidentified = reattach_misidentified_players(pool, season).await?;
+
+    info!("step 5/18: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 5/17: estimating missing team defensive rebounds");
+    info!("step 6/18: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 6/17: computing player season stats (with rate stats)");
+    info!("step 7/18: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
     // PBP steps run after season stats and before team/CamPom steps. Both no-op
     // for seasons with no play_by_play rows loaded (pre-2012 / not ingested).
-    info!("step 7/17: computing play-by-play per-player aggregates");
+    info!("step 8/18: computing play-by-play per-player aggregates");
     report.pbp_aggregates = compute_pbp_aggregates(pool, season).await?;
 
-    info!("step 8/17: computing play-by-play lineups & stints");
+    info!("step 9/18: computing play-by-play lineups & stints");
     report.pbp_lineups = compute_pbp_lineups(pool, season).await?;
 
-    info!("step 9/17: computing team four factors");
+    info!("step 10/18: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 10/17: computing adjusted efficiency (KenPom-style)");
+    info!("step 11/18: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 11/17: computing individual ORTG/DRTG (Torvik passthrough)");
+    info!("step 12/18: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 12/17: computing player SOS");
+    info!("step 13/18: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 13/17: computing CamPom composites");
+    info!("step 14/18: computing CamPom composites");
     report.campom = compute_campom(pool, season).await?;
 
-    info!("step 14/17: computing rolling averages");
+    info!("step 15/18: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 15/17: computing derived game fields");
+    info!("step 16/18: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 16/17: computing schedules");
+    info!("step 17/18: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 17/17: computing player percentiles");
+    info!("step 18/18: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -2870,6 +2949,7 @@ pub struct ComputeReport {
     pub deduplicated_players: u64,
     pub reconciled_player_teams: u64,
     pub corrected_swapped_games: u64,
+    pub reattached_misidentified: u64,
     pub backfilled: u64,
     pub estimated_rebounds: u64,
     pub player_season_stats: u64,
@@ -2890,10 +2970,11 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.deduplicated_players,
             self.reconciled_player_teams,
             self.corrected_swapped_games,
+            self.reattached_misidentified,
             self.backfilled,
             self.estimated_rebounds,
             self.player_season_stats,
