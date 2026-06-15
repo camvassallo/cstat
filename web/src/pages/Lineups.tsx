@@ -133,6 +133,20 @@ export function Lineups() {
     [rows, sort],
   );
 
+  // Fixed AdjEM rank over the loaded board (best = 1), keyed by the row's
+  // identity. Bound to the data, so the rank stays with the lineup under
+  // re-sort — only the server-side player/team filter (which re-fetches `rows`)
+  // changes it. Mirrors the Rankings/Projected convention (issue #121): the `#`
+  // is a stable rank, not the displayed row position.
+  const adjNetRank = useMemo(() => {
+    const m = new Map<string, number>();
+    [...rows]
+      .filter((r) => r.adj_net != null)
+      .sort((a, b) => (b.adj_net as number) - (a.adj_net as number))
+      .forEach((r, i) => m.set(`${r.team_id}-${r.lineup.join('-')}`, i + 1));
+    return m;
+  }, [rows]);
+
   // Label for an active player filter: the matching name from any returned row.
   const filterLabel = useMemo(() => {
     if (teamFilter) return rows[0]?.team_name ?? 'this team';
@@ -224,9 +238,11 @@ export function Lineups() {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r, i) => (
+              {sorted.map((r) => (
                 <tr key={`${r.team_id}-${r.lineup.join('-')}`} className="border-b border-gray-800 hover:bg-gray-800/50">
-                  <td className="py-2 px-2 text-right tabular-nums text-gray-500">{i + 1}</td>
+                  <td className="py-2 px-2 text-right tabular-nums text-gray-500">
+                    {adjNetRank.get(`${r.team_id}-${r.lineup.join('-')}`) ?? '—'}
+                  </td>
                   <td className="py-2 px-2 pr-4"><LineupCell row={r} /></td>
                   <td className="py-2 px-2 text-gray-300">
                     <SeasonLink to={`/teams/${r.team_id}`} className="hover:underline">

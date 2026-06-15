@@ -145,6 +145,20 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
     [rows, sort],
   );
 
+  // Fixed Blend rank over the loaded board (best = 1), keyed by coach. Bound to
+  // the data, so the `#` stays with the coach under re-sort — it is a stable
+  // rank by the board's headline composite, not the displayed row position
+  // (issue #121). Blend is also the default sort, so the unfiltered view is
+  // unchanged. Null-blend (thin tenure, no z-score) renders "—".
+  const blendRank = useMemo(() => {
+    const m = new Map<string, number>();
+    [...rows]
+      .filter((c) => c.blend != null)
+      .sort((a, b) => (b.blend as number) - (a.blend as number))
+      .forEach((c, i) => m.set(c.coach_id, i + 1));
+    return m;
+  }, [rows]);
+
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-sm whitespace-nowrap">
@@ -176,9 +190,11 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {sorted.map((c, i) => (
+          {sorted.map((c) => (
             <tr key={c.coach_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-              <td className="py-1.5 px-2 text-right tabular-nums text-gray-500">{i + 1}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-500">
+                {blendRank.get(c.coach_id) ?? '—'}
+              </td>
               <td className="py-1.5 px-2 font-medium">
                 <Link to={`/coaches/${c.coach_id}`} className="hover:underline text-blue-300">
                   {c.name}
@@ -251,6 +267,19 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
     [rows, sort],
   );
 
+  // Fixed Blend rank over the loaded season board (best = 1), keyed by coach.
+  // Bound to the data, so the `#` is a stable rank by the headline composite,
+  // not the displayed row position (issue #121). Blend is the default sort, so
+  // the unfiltered view is unchanged; null-blend renders "—".
+  const blendRank = useMemo(() => {
+    const m = new Map<string, number>();
+    [...rows]
+      .filter((c) => c.blend != null)
+      .sort((a, b) => (b.blend as number) - (a.blend as number))
+      .forEach((c, i) => m.set(c.coach_id, i + 1));
+    return m;
+  }, [rows]);
+
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-sm whitespace-nowrap">
@@ -274,9 +303,11 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {sorted.map((c, i) => (
+          {sorted.map((c) => (
             <tr key={c.coach_id} className="border-b border-gray-800 hover:bg-gray-800/50">
-              <td className="py-1.5 px-2 text-right tabular-nums text-gray-500">{i + 1}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-500">
+                {blendRank.get(c.coach_id) ?? '—'}
+              </td>
               <td className="py-1.5 px-2 font-medium">
                 <Link to={`/coaches/${c.coach_id}`} className="hover:underline text-blue-300">
                   {c.name}

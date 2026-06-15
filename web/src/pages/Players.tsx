@@ -85,11 +85,34 @@ function gradientCellStyle(
   };
 }
 
-function buildColumns(view: ColumnView): ColDef<PlayerRow>[] {
+function buildColumns(
+  view: ColumnView,
+  campomRank: Map<string, number>,
+): ColDef<PlayerRow>[] {
   // Pinned identity / context columns. Mirrors the roster table's first block
   // (Player | Class) plus team / conf which the roster doesn't need (already
   // scoped to one team).
   const pinned: ColDef<PlayerRow>[] = [
+    {
+      headerName: 'Rk',
+      colId: 'campom_rank',
+      headerTooltip: 'CamPom rank within the loaded pool (best CamPom = 1).',
+      width: 56,
+      pinned: 'left',
+      sortable: false,
+      // The player's CamPom rank over the loaded qualified pool, NOT their
+      // position in the currently displayed rows. Reading a filtered row index
+      // here would renumber 1..N over whatever the search matched (issue #121);
+      // `campomRank` is bound to the row's data, so it stays fixed under
+      // search/sort and only changes when the archetype filter re-fetches.
+      valueGetter: (p) => (p.data ? (campomRank.get(p.data.player_id) ?? null) : null),
+      cellRenderer: (p: { value: number | null }) =>
+        p.value == null ? (
+          <span className="text-slate-600">—</span>
+        ) : (
+          <span className="text-gray-400 tabular-nums">{p.value}</span>
+        ),
+    },
     {
       field: 'name',
       headerName: 'Player',
@@ -296,7 +319,19 @@ export default function Players() {
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const columns = useMemo(() => buildColumns(view), [view]);
+  // CamPom rank over the loaded pool (best = 1), keyed by player_id. Recomputed
+  // when the fetch changes (archetype/season); deliberately NOT a function of
+  // search/sort, so the rank stays fixed to each player (issue #121).
+  const campomRank = useMemo(() => {
+    const m = new Map<string, number>();
+    [...rows]
+      .filter((p) => p.campom != null)
+      .sort((a, b) => (b.campom as number) - (a.campom as number))
+      .forEach((p, i) => m.set(p.player_id, i + 1));
+    return m;
+  }, [rows]);
+
+  const columns = useMemo(() => buildColumns(view, campomRank), [view, campomRank]);
 
   // Single fetch loads the entire qualified pool; sort + search run client-
   // side via AG Grid's built-in sorting and `quickFilterText`. Pagination
