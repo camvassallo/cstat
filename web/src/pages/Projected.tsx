@@ -304,8 +304,13 @@ function buildColumns(
       width: 60,
       pinned: 'left',
       sortable: false,
+      // The team's true field-wide rank (by projected AdjEM, the default sort),
+      // NOT its position in the currently displayed rows. Reading `rowIndex`
+      // here renumbers 1..N over whatever subset is visible, so a search that
+      // matches one team showed it as rank 1 (issue #121). `projRank` is the
+      // stable rank over the full field, so it stays fixed under filter/re-sort.
       valueGetter: (p) =>
-        p.node && typeof p.node.rowIndex === 'number' ? p.node.rowIndex + 1 : null,
+        p.data && !p.data.too_thin ? (projRank.get(p.data.team_id) ?? null) : null,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         if (p.value == null || p.data?.too_thin)
           return <span className="text-slate-600">—</span>;
