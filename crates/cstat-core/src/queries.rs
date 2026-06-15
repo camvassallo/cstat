@@ -1049,7 +1049,7 @@ pub async fn get_lineup_rankings(
             lp.player_names,
             lp.player_classes,
             s.team_id,
-            t.name AS team_name,
+            COALESCE(t.short_name, t.name) AS team_name,
             s.stints,
             s.minutes,
             s.plus_minus,
