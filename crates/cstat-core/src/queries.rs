@@ -1582,19 +1582,29 @@ pub async fn get_player_season_stats(
     player_id: Uuid,
     season: i32,
 ) -> Result<Option<PlayerSeasonStatsRow>, sqlx::Error> {
+    // A genuine mid-season transfer keeps one player row but earns a per-team
+    // `player_season_stats` row for each team it played for, so this can match
+    // more than one row. Pick deterministically: prefer the line on the player's
+    // reconciled display team (so the stat line agrees with the team shown on the
+    // page), then the most-games line. Without the ORDER BY this returned an
+    // arbitrary row — the surface behind issue #138's 2-GP progression line.
     sqlx::query_as::<_, PlayerSeasonStatsRow>(
         r#"
         SELECT
-            games_played, games_started, minutes_per_game,
-            ppg, rpg, apg, spg, bpg, topg,
-            fg_pct, tp_pct, ft_pct,
-            effective_fg_pct, true_shooting_pct,
-            offensive_rating, defensive_rating, net_rating,
-            usage_rate,
-            ast_pct, tov_pct, orb_pct, drb_pct, stl_pct, blk_pct,
-            ft_rate, player_sos
-        FROM player_season_stats
-        WHERE player_id = $1 AND season = $2
+            pss.games_played, pss.games_started, pss.minutes_per_game,
+            pss.ppg, pss.rpg, pss.apg, pss.spg, pss.bpg, pss.topg,
+            pss.fg_pct, pss.tp_pct, pss.ft_pct,
+            pss.effective_fg_pct, pss.true_shooting_pct,
+            pss.offensive_rating, pss.defensive_rating, pss.net_rating,
+            pss.usage_rate,
+            pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct, pss.stl_pct, pss.blk_pct,
+            pss.ft_rate, pss.player_sos
+        FROM player_season_stats pss
+        WHERE pss.player_id = $1 AND pss.season = $2
+        ORDER BY
+            (pss.team_id IS DISTINCT FROM (SELECT team_id FROM players WHERE id = $1)),
+            pss.games_played DESC
+        LIMIT 1
         "#,
     )
     .bind(player_id)
