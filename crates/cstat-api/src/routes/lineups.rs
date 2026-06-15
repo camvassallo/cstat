@@ -37,9 +37,10 @@ struct LineupRankingParams {
 }
 
 /// `GET /api/lineups` — cross-team ranking of lineup combinations (duos / trios
-/// / 5-man), best net-per-100 first among combos clearing the minutes floor.
-/// Exploded at query time from the prod-resident `lineup_aggregates`. Optional
-/// `player` / `team` filters drive the per-player drill-down.
+/// / 5-man), best opponent-adjusted net (AdjEM) first among combos clearing the
+/// minutes floor. Exploded at query time from the prod-resident
+/// `lineup_aggregates`. Optional `player` / `team` filters drive the per-player
+/// drill-down.
 async fn lineup_rankings(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LineupRankingParams>,
