@@ -33,8 +33,9 @@ cargo run --bin cstat-ingest -- <subcommand>    # Ingestion CLI
 # Local Postgres
 docker compose up -d               # Postgres 17 on :5432
 
-# Archetype training (Python)
-cd training && python -m archetypes --seasons 2025,2026 [--diagnostics]
+# Archetype training (Python) — pass ALL ingested seasons (the shipped model is one
+# combined-cohort fit; the CLI default of 2025,2026 is NOT a full retrain). Uses training/.venv.
+cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026 [--diagnostics]
 
 # Push local data to prod (no schema migrations needed if migrations/ is unchanged)
 ./scripts/sync_to_prod.sh [--dry-run]
@@ -77,7 +78,7 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 ## Player Archetypes
 
-12 D&D-class archetypes assigned via combined-cohort k-means clustering. Pipeline lives in `training/archetypes.py`; methodology and retraining playbook in `docs/archetypes_methodology.md`. Run with `cd training && python -m archetypes --seasons 2025,2026 [--diagnostics]` — `training/` has no `__init__.py`, so `python -m training.archetypes` from the repo root fails; you must `cd` in first. Default `--seasons` covers all currently-ingested seasons — clustering runs on the union and writes per-season rows to `player_archetypes` with shared centroids in `archetype_models`. Combined-cohort training is load-bearing for cross-season class stability (45.7% returning-player primary stability vs 28% for per-season fits) — read the doc before changing it.
+12 D&D-class archetypes assigned via combined-cohort k-means clustering. Pipeline lives in `training/archetypes.py`; methodology and retraining playbook in `docs/archetypes_methodology.md`. Run with `cd training && ./.venv/bin/python -m archetypes --seasons 2015,…,2026 [--diagnostics]` — `training/` has no `__init__.py`, so `python -m training.archetypes` from the repo root fails; you must `cd` in first. **A full retrain must pass EVERY ingested season explicitly** — the shipped model is a single combined-cohort fit over all 12 seasons (one shared centroid set in `archetype_models`, verified identical across season rows). The CLI's `--seasons` *default is only `2025,2026`*, which is a 2-season fit that does NOT match the shipped model and clusters differently (it tripped extra signature-alignment violations) — don't use the default for a refresh. Clustering runs on the union and writes per-season rows to `player_archetypes` with shared centroids. The signature-alignment guardrail hard-fails the write on label/cluster mismatch; bypass with `--no-verify` only after reviewing the diagnostics (e.g. the benign Rogue `blk_pct` flag — that weight is deliberately softened). Combined-cohort training is load-bearing for cross-season class stability (45.7% returning-player primary stability vs 28% for per-season fits) — read the doc before changing it.
 
 ## Database
 
