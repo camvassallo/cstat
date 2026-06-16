@@ -381,6 +381,290 @@ pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sq
     Ok(n)
 }
 
+/// Minimum share of EACH side's box rows that must resolve to an opponent player
+/// before a game is treated as a phantom-swap. Mirrors `SWAPPED_GAME_MIN_CROSS_SHARE`;
+/// 0.80 tolerates a genuine 1-game walk-on or a stray non-phantom row on a side.
+const PHANTOM_SWAP_MIN_RESOLVE_SHARE: f64 = 0.80;
+
+/// Repair fully-swapped games that NatStat delivered with brand-new "phantom"
+/// player ids (issue #140). A worse variant of [[correct_swapped_games]]: NatStat
+/// not only crossed the two rosters/scores onto each other's team, it minted a
+/// fresh natstat id for every player that appears in NO other game. Because each
+/// phantom's only box row is this one game, `reconcile_player_teams` reconciles it
+/// to the (wrong) labeled team, so the cross-tag detector in `correct_swapped_games`
+/// sees no displacement and the game slips through — leaving e.g. Virginia's 2025
+/// roster full of Villanova players (game 1265803, 2024-11-15, where the box says
+/// Villanova won 70-60 but Virginia actually won 70-60).
+///
+/// Each phantom is a duplicate of a real human on the OPPONENT team. We re-identify
+/// them by name against the opponent roster: exact normalized name first, then a
+/// unique last-name match (catches nickname / spelling / suffix variants the exact
+/// match misses — "DK Thorn"→"Dekedran Thorn", "Tobi Lawal"→"Toibu Lawal", "Ace
+/// Baldwin Jr."→"Ace Baldwin"), disambiguating by first name when a surname is
+/// shared. A phantom with no opponent counterpart is a GENUINE 1-game player caught
+/// in the swap (e.g. a walk-on whose only appearance is this game) — it is re-teamed
+/// to the opponent, not merged away.
+///
+/// Detection is conservative: only 2-team games where BOTH sides have
+/// `PHANTOM_SWAP_MIN_RESOLVE_SHARE`+ of their box rows resolving to the opponent
+/// roster (and at least 3 such rows a side). For each such game this: reattaches
+/// every phantom's `player_game_stats`, `play_by_play`, and `torvik_player_stats`
+/// rows to the real counterpart; relabels the game exactly as `correct_swapped_games`
+/// does (swap `home`/`away`, swap the `team_game_stats` stat columns, re-derive
+/// is_home/win) plus the box-row and play-by-play team side (and PBP running score /
+/// onfloor columns); re-teams genuine phantoms; and deletes the now-orphaned phantom
+/// players (their `player_archetypes` / `player_rapm` cascade). Idempotent — once
+/// merged the phantoms are gone, so a re-run (or a future re-ingest that re-mints
+/// them) self-heals. Must run after `reconcile_player_teams` and before
+/// `compute_player_season_stats` / four factors / W-L / AdjEM.
+pub async fn repair_phantom_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    // Build the phantom -> real mapping for every gated swapped game. `real_id`
+    // is NULL for a genuine 1-game player (no opponent counterpart). The name
+    // normalization strips punctuation and a trailing Jr./Sr./II–IV suffix; the
+    // last-name fallback only fires for a unique surname or a first-name match.
+    sqlx::query(
+        r#"
+        CREATE TEMP TABLE _phantom_swap_map ON COMMIT DROP AS
+        WITH np AS (
+            SELECT p.id, p.team_id,
+                   regexp_replace(lower(p.name),'[^a-z0-9]','','g') AS nn,
+                   lower(regexp_replace(split_part(
+                       regexp_replace(p.name,'( Jr\.?| Sr\.?| III| II| IV)$','','i'),' ',
+                       array_length(string_to_array(
+                           regexp_replace(p.name,'( Jr\.?| Sr\.?| III| II| IV)$','','i'),' '),1)),
+                       '[^a-z0-9]','','g')) AS ln,
+                   lower(split_part(p.name,' ',1)) AS fn,
+                   (SELECT count(*) FROM player_game_stats x WHERE x.player_id=p.id) AS gp
+            FROM players p WHERE p.season = $1
+        ),
+        games2 AS (
+            SELECT game_id FROM team_game_stats WHERE season = $1
+            GROUP BY game_id HAVING count(DISTINCT team_id) = 2
+        ),
+        ph AS (
+            SELECT pgs.id AS pgs_id, pgs.game_id, np.id AS phantom_pid, np.nn, np.ln, np.fn,
+                   (SELECT tg.team_id FROM team_game_stats tg
+                    WHERE tg.game_id = pgs.game_id AND tg.team_id <> pgs.team_id) AS opp_team
+            FROM player_game_stats pgs
+            JOIN np ON np.id = pgs.player_id
+            WHERE pgs.season = $1 AND np.gp = 1 AND pgs.game_id IN (SELECT game_id FROM games2)
+        ),
+        resolved AS (
+            SELECT ph.*, COALESCE(
+                (SELECT r.id FROM np r
+                  WHERE r.team_id = ph.opp_team AND r.gp > 1 AND r.nn = ph.nn LIMIT 1),
+                (SELECT r.id FROM np r
+                  WHERE r.team_id = ph.opp_team AND r.gp > 1 AND r.ln = ph.ln
+                    AND ((SELECT count(*) FROM np r2
+                          WHERE r2.team_id = ph.opp_team AND r2.gp > 1 AND r2.ln = ph.ln) = 1
+                         OR r.fn = ph.fn)
+                  LIMIT 1)
+            ) AS real_id
+            FROM ph
+        ),
+        gate AS (
+            SELECT game_id FROM (
+                SELECT pgs.game_id, pgs.team_id,
+                       count(*) AS box,
+                       count(*) FILTER (WHERE r.real_id IS NOT NULL) AS res
+                FROM player_game_stats pgs
+                LEFT JOIN resolved r ON r.pgs_id = pgs.id
+                WHERE pgs.season = $1 AND pgs.game_id IN (SELECT game_id FROM games2)
+                GROUP BY pgs.game_id, pgs.team_id
+            ) s
+            GROUP BY game_id
+            HAVING count(*) = 2 AND min(res::float8 / box) >= $2 AND min(res) >= 3
+        )
+        SELECT game_id, pgs_id, phantom_pid, opp_team, real_id
+        FROM resolved WHERE game_id IN (SELECT game_id FROM gate)
+        "#,
+    )
+    .bind(season)
+    .bind(PHANTOM_SWAP_MIN_RESOLVE_SHARE)
+    .execute(&mut *tx)
+    .await?;
+
+    let games: i64 = sqlx::query_scalar("SELECT count(DISTINCT game_id) FROM _phantom_swap_map")
+        .fetch_one(&mut *tx)
+        .await?;
+    if games == 0 {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
+    // 1. Reattach the phantom's box row to the real counterpart. The NOT EXISTS
+    //    guard protects the (player_id, game_id) unique index (the real player is
+    //    absent from this game, so it never trips — but stay defensive).
+    sqlx::query(
+        "UPDATE player_game_stats pgs SET player_id = m.real_id
+         FROM _phantom_swap_map m
+         WHERE pgs.id = m.pgs_id AND m.real_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM player_game_stats z
+                           WHERE z.player_id = m.real_id AND z.game_id = m.game_id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 2. Reattach play-by-play actor rows from the phantom to the real counterpart.
+    //    Not game-scoped: the phantom id also leaks into other games' play-by-play
+    //    (the human's PBP got split across the real and phantom ids), so consolidate
+    //    every phantom play onto the real player — and so the delete below isn't
+    //    blocked by a stray reference.
+    sqlx::query(
+        "UPDATE play_by_play pb SET player_id = m.real_id
+         FROM _phantom_swap_map m
+         WHERE pb.player_id = m.phantom_pid AND m.real_id IS NOT NULL",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 3. Torvik per-season rows: drop a phantom's row if the real player already
+    //    has one this season (avoid a duplicate), otherwise repoint it to the real.
+    sqlx::query(
+        "DELETE FROM torvik_player_stats t USING _phantom_swap_map m
+         WHERE t.player_id = m.phantom_pid AND m.real_id IS NOT NULL
+           AND EXISTS (SELECT 1 FROM torvik_player_stats t2
+                       WHERE t2.player_id = m.real_id AND t2.season = t.season)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE torvik_player_stats t SET player_id = m.real_id
+         FROM _phantom_swap_map m
+         WHERE t.player_id = m.phantom_pid AND m.real_id IS NOT NULL",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 4. Relabel the game: swap home <-> away (scores stay with their physical
+    //    side, so the result flips) — identical to correct_swapped_games.
+    sqlx::query(
+        "UPDATE games SET home_team_id = away_team_id, away_team_id = home_team_id
+         WHERE id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 5. team_game_stats: swap the box-stat columns between the two rows (team_id
+    //    fixed), then re-derive is_home / win from the corrected games row.
+    sqlx::query(
+        "UPDATE team_game_stats t1 SET
+             minutes = t2.minutes, points = t2.points,
+             fgm = t2.fgm, fga = t2.fga, tpm = t2.tpm, tpa = t2.tpa,
+             ftm = t2.ftm, fta = t2.fta,
+             off_rebounds = t2.off_rebounds, def_rebounds = t2.def_rebounds,
+             total_rebounds = t2.total_rebounds,
+             assists = t2.assists, steals = t2.steals, blocks = t2.blocks,
+             turnovers = t2.turnovers, fouls = t2.fouls
+         FROM team_game_stats t2
+         WHERE t1.game_id = t2.game_id AND t1.team_id <> t2.team_id
+           AND t1.game_id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE team_game_stats tgs SET
+             is_home = (tgs.team_id = g.home_team_id),
+             win = (tgs.points > opp.points)
+         FROM games g, team_game_stats opp
+         WHERE tgs.game_id = g.id
+           AND opp.game_id = tgs.game_id AND opp.team_id <> tgs.team_id
+           AND tgs.game_id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 6. Re-team EVERY box row in the swapped games to the game's other team — a
+    //    full swap crosses all rows, including merged phantoms (now the real
+    //    player), genuine phantoms, AND the occasional non-phantom real player who
+    //    happened to play that game (gp>1, so not in the map — e.g. a walk-on whose
+    //    box line would otherwise strand on the wrong team and split his season
+    //    stats into a spurious second per-team row). Flip via the games row: its
+    //    two teams are fixed (only the home/away role swapped in step 4), so a box
+    //    labeled A becomes B and vice versa, and opponent_id becomes the old label.
+    //    A stray play tagged to neither team is left alone by the IN-guard.
+    sqlx::query(
+        "UPDATE player_game_stats pgs SET
+             team_id = CASE WHEN pgs.team_id = g.home_team_id
+                            THEN g.away_team_id ELSE g.home_team_id END,
+             opponent_id = pgs.team_id,
+             is_home = (pgs.team_id = g.away_team_id)
+         FROM games g
+         WHERE g.id = pgs.game_id
+           AND pgs.team_id IN (g.home_team_id, g.away_team_id)
+           AND pgs.game_id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 7. Play-by-play team side: flip each tagged play between the game's two
+    //    teams (via the games row, so it's deterministic even when a stray play is
+    //    tagged to neither team — left untouched), and swap the home/visitor
+    //    running-score and onfloor columns to match the relabeled sides.
+    sqlx::query(
+        "UPDATE play_by_play pb SET
+             team_id = CASE WHEN pb.team_id = g.home_team_id THEN g.away_team_id
+                            WHEN pb.team_id = g.away_team_id THEN g.home_team_id
+                            ELSE pb.team_id END,
+             score_home = pb.score_vis, score_vis = pb.score_home,
+             score_diff = -pb.score_diff,
+             onfloor_home = pb.onfloor_vis, onfloor_vis = pb.onfloor_home
+         FROM games g
+         WHERE g.id = pb.game_id
+           AND pb.game_id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 8. Re-team genuine phantoms (no counterpart) onto the opponent so their
+    //    roster row is correct; merged phantoms are deleted below instead.
+    sqlx::query(
+        "UPDATE players p SET team_id = m.opp_team
+         FROM _phantom_swap_map m
+         WHERE p.id = m.phantom_pid AND m.real_id IS NULL",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 9. Delete the now-orphaned phantom duplicates (box / PBP / torvik rows have
+    //    been reattached). Their player_archetypes / player_rapm cascade; clear the
+    //    stale per-team season line first (RESTRICT). Guard against any phantom
+    //    that still owns a box row (a tripped unique-index guard in step 1).
+    sqlx::query(
+        "DELETE FROM player_season_stats WHERE player_id IN
+            (SELECT phantom_pid FROM _phantom_swap_map WHERE real_id IS NOT NULL)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM player_percentiles WHERE player_id IN
+            (SELECT phantom_pid FROM _phantom_swap_map WHERE real_id IS NOT NULL)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let deleted = sqlx::query(
+        "DELETE FROM players WHERE id IN
+            (SELECT phantom_pid FROM _phantom_swap_map WHERE real_id IS NOT NULL)
+         AND NOT EXISTS (SELECT 1 FROM player_game_stats z WHERE z.player_id = players.id)
+         AND NOT EXISTS (SELECT 1 FROM play_by_play z WHERE z.player_id = players.id)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let n = games as u64;
+    info!(
+        season,
+        games = n,
+        merged_phantoms = deleted.rows_affected(),
+        "repaired phantom-swapped games (issue #140)"
+    );
+    Ok(n)
+}
+
 /// Reattach box-score rows that NatStat stamped with the WRONG same-name player's
 /// id. Common-name collisions occasionally arrive with a box line carrying the
 /// *other* same-name player's natstat id — e.g. two "Jake Davis" in 2026, one at
@@ -2875,69 +3159,76 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
         );
     }
 
-    info!("step 1/18: deduplicating players");
+    info!("step 1/19: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
     // Runs right after dedup (so it sees post-merge box rows) and before any
     // step that joins players on team_id. Corrects first-write-wins team_id
     // poisoning from source roster swaps (issue #119).
-    info!("step 2/18: reconciling player team_id to box-score majority");
+    info!("step 2/19: reconciling player team_id to box-score majority");
     report.reconciled_player_teams = reconcile_player_teams(pool, season).await?;
 
     // Uses the reconciled team_id to find fully-swapped games and relabel them
     // (games/team_game_stats/player_game_stats) so the four-factors / W-L / AdjEM
     // steps below recompute from the corrected box rows (issue #119).
-    info!("step 3/18: correcting source-swapped games");
+    info!("step 3/19: correcting source-swapped games");
     report.corrected_swapped_games = correct_swapped_games(pool, season).await?;
+
+    // Repairs the harder swap variant where NatStat minted fresh per-game phantom
+    // ids that defeat the cross-tag detector above: re-identifies each phantom
+    // against the opponent roster, relabels the game + play-by-play, and deletes
+    // the phantom duplicates (issue #140).
+    info!("step 4/19: repairing phantom-swapped games");
+    report.repaired_phantom_swaps = repair_phantom_swapped_games(pool, season).await?;
 
     // Uses the reconciled team_id to move box rows that NatStat stamped with the
     // wrong same-name player's id onto the real human, so season stats don't emit
     // a spurious second per-team row (issue #138).
-    info!("step 4/18: reattaching misidentified same-name players");
+    info!("step 5/19: reattaching misidentified same-name players");
     report.reattached_misidentified = reattach_misidentified_players(pool, season).await?;
 
-    info!("step 5/18: backfilling derived game stats");
+    info!("step 6/19: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 6/18: estimating missing team defensive rebounds");
+    info!("step 7/19: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 7/18: computing player season stats (with rate stats)");
+    info!("step 8/19: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
     // PBP steps run after season stats and before team/CamPom steps. Both no-op
     // for seasons with no play_by_play rows loaded (pre-2012 / not ingested).
-    info!("step 8/18: computing play-by-play per-player aggregates");
+    info!("step 9/19: computing play-by-play per-player aggregates");
     report.pbp_aggregates = compute_pbp_aggregates(pool, season).await?;
 
-    info!("step 9/18: computing play-by-play lineups & stints");
+    info!("step 10/19: computing play-by-play lineups & stints");
     report.pbp_lineups = compute_pbp_lineups(pool, season).await?;
 
-    info!("step 10/18: computing team four factors");
+    info!("step 11/19: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 11/18: computing adjusted efficiency (KenPom-style)");
+    info!("step 12/19: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 12/18: computing individual ORTG/DRTG (Torvik passthrough)");
+    info!("step 13/19: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 13/18: computing player SOS");
+    info!("step 14/19: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 14/18: computing CamPom composites");
+    info!("step 15/19: computing CamPom composites");
     report.campom = compute_campom(pool, season).await?;
 
-    info!("step 15/18: computing rolling averages");
+    info!("step 16/19: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 16/18: computing derived game fields");
+    info!("step 17/19: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 17/18: computing schedules");
+    info!("step 18/19: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 18/18: computing player percentiles");
+    info!("step 19/19: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     info!(season, "compute pipeline complete");
@@ -2949,6 +3240,7 @@ pub struct ComputeReport {
     pub deduplicated_players: u64,
     pub reconciled_player_teams: u64,
     pub corrected_swapped_games: u64,
+    pub repaired_phantom_swaps: u64,
     pub reattached_misidentified: u64,
     pub backfilled: u64,
     pub estimated_rebounds: u64,
@@ -2970,10 +3262,11 @@ impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} phantom swaps repaired, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
             self.deduplicated_players,
             self.reconciled_player_teams,
             self.corrected_swapped_games,
+            self.repaired_phantom_swaps,
             self.reattached_misidentified,
             self.backfilled,
             self.estimated_rebounds,
