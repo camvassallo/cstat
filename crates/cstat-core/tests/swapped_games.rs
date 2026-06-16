@@ -72,3 +72,87 @@ async fn no_fully_swapped_games_remain() {
         rows.len()
     );
 }
+
+/// Invariant for `compute::repair_phantom_swapped_games` (issue #140).
+///
+/// The harder swap variant: NatStat delivered four 2024-11-15/16 games (Virginia/
+/// Villanova, Virginia Tech/Penn State, Holy Cross/Sacred Heart, UT Rio Grande
+/// Valley/Tennessee Tech) with the rosters crossed AND a brand-new per-game phantom
+/// id for every player, defeating the cross-tag detector above (each phantom's only
+/// game reconciles it to its own wrong label). The repair re-identifies each phantom
+/// against the opponent roster and merges it away. After `compute_all` has run for
+/// every season the invariant is: NO 2-team game still has a side that is mostly
+/// gp=1 phantoms resolving to the opponent roster.
+#[tokio::test]
+#[ignore = "needs local DB with compute run for all seasons"]
+async fn no_phantom_swapped_games_remain() {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = PgPoolOptions::new().connect(&url).await.unwrap();
+
+    // The same gate `repair_phantom_swapped_games` uses: 2-team games where BOTH
+    // sides have >=80% of box rows being gp=1 phantoms that resolve (exact name, or
+    // unique/first-name-disambiguated last name) to a real opponent-roster player.
+    let rows = sqlx::query(
+        r#"
+        WITH np AS (
+            SELECT p.id, p.season, p.team_id,
+                   regexp_replace(lower(p.name),'[^a-z0-9]','','g') AS nn,
+                   lower(regexp_replace(split_part(
+                       regexp_replace(p.name,'( Jr\.?| Sr\.?| III| II| IV)$','','i'),' ',
+                       array_length(string_to_array(
+                           regexp_replace(p.name,'( Jr\.?| Sr\.?| III| II| IV)$','','i'),' '),1)),
+                       '[^a-z0-9]','','g')) AS ln,
+                   lower(split_part(p.name,' ',1)) AS fn,
+                   (SELECT count(*) FROM player_game_stats x WHERE x.player_id=p.id) AS gp
+            FROM players p
+        ),
+        games2 AS (
+            SELECT game_id, season FROM team_game_stats
+            GROUP BY game_id, season HAVING count(DISTINCT team_id) = 2
+        ),
+        resolved AS (
+            SELECT pgs.id AS pgs_id, pgs.game_id,
+                   (SELECT EXISTS (
+                       SELECT 1 FROM np r
+                       WHERE r.season = np.season AND r.gp > 1
+                         AND r.team_id = (SELECT tg.team_id FROM team_game_stats tg
+                                          WHERE tg.game_id = pgs.game_id AND tg.team_id <> pgs.team_id)
+                         AND (r.nn = np.nn OR r.ln = np.ln))) AS resolves
+            FROM player_game_stats pgs
+            JOIN np ON np.id = pgs.player_id
+            WHERE np.gp = 1 AND pgs.game_id IN (SELECT game_id FROM games2)
+        ),
+        sides AS (
+            SELECT pgs.game_id, pgs.team_id,
+                   count(*) AS box,
+                   count(*) FILTER (WHERE r.resolves) AS res
+            FROM player_game_stats pgs
+            LEFT JOIN resolved r ON r.pgs_id = pgs.id
+            WHERE pgs.game_id IN (SELECT game_id FROM games2)
+            GROUP BY pgs.game_id, pgs.team_id
+        )
+        SELECT s.game_id, g.season, g.natstat_id
+        FROM sides s JOIN games g ON g.id = s.game_id
+        GROUP BY s.game_id, g.season, g.natstat_id
+        HAVING count(*) = 2 AND min(s.res::float8 / s.box) >= $1 AND min(s.res) >= 3
+        ORDER BY g.season
+        "#,
+    )
+    .bind(MIN_CROSS_SHARE)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    for r in &rows {
+        let season: i32 = r.get("season");
+        let natstat_id: String = r.get("natstat_id");
+        eprintln!("  still-phantom-swapped: season {season} game {natstat_id}");
+    }
+    assert_eq!(
+        rows.len(),
+        0,
+        "{} phantom-swapped game(s) remain — repair_phantom_swapped_games did not run \
+         for their season (or could not re-identify a side's phantoms)",
+        rows.len()
+    );
+}
