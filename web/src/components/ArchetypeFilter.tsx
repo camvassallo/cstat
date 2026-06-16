@@ -68,6 +68,8 @@ export default function ArchetypeFilter({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((o) => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs ${
           count > 0
             ? 'border-blue-500 bg-blue-600/20 text-blue-200'

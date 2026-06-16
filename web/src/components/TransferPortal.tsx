@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchTransfers, type TransferRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomHalfColor } from './campom';
 import { agNullsBottom } from './tableSort';
-import { classColor } from './archetypeColors';
+import { classColor, CLASS_ORDER } from './archetypeColors';
+import ArchetypeFilter from './ArchetypeFilter';
+import { useArchetypeFilter } from './useArchetypeFilter';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
 
@@ -369,6 +371,20 @@ export default function TransferPortal({ year }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const isMobile = useIsMobile();
+  // Archetype filter shared with the players page — the class shown is the
+  // transfer's prior (source-season) archetype, the right lens for portal
+  // scouting. Transfers with no qualified prior season carry a null class and
+  // drop out while a filter is active (same as null-class players).
+  const {
+    selected: selectedClasses,
+    matchMode,
+    includeSecondary,
+    toggleClass,
+    setMatchMode,
+    toggleIncludeSecondary,
+    clear: clearArchetypes,
+    filterRows,
+  } = useArchetypeFilter();
 
   useEffect(() => {
     let canceled = false;
@@ -440,7 +456,7 @@ export default function TransferPortal({ year }: Props) {
     // pass. Sub-qual transfers (those without a trajectory projection)
     // fall out of the ranked view; they still ride along on the page-
     // level state for the 2027 roster aggregator.
-    const ranked = rows.filter((t) => t.rank_cstat != null);
+    const ranked = filterRows(rows.filter((t) => t.rank_cstat != null));
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
     // Also match the resolved full team name (e.g. searching "Jayhawks"
@@ -453,7 +469,7 @@ export default function TransferPortal({ year }: Props) {
         (t.previous_team_full ?? '').toLowerCase().includes(q) ||
         (t.next_team ?? '').toLowerCase().includes(q),
     );
-  }, [rows, search]);
+  }, [rows, search, filterRows]);
 
   if (error) {
     return (
@@ -464,6 +480,8 @@ export default function TransferPortal({ year }: Props) {
   const ranked = rows?.filter((r) => r.rank_cstat != null).length ?? 0;
   const total = rows?.length ?? 0;
   const hidden = total - ranked;
+  const hasArch = selectedClasses.size > 0;
+  const shown = filtered?.length ?? 0;
 
   return (
     <div>
@@ -475,9 +493,20 @@ export default function TransferPortal({ year }: Props) {
           placeholder="Search transfers / teams…"
           className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
+        <ArchetypeFilter
+          selected={selectedClasses}
+          onToggle={toggleClass}
+          matchMode={matchMode}
+          onSetMatchMode={setMatchMode}
+          includeSecondary={includeSecondary}
+          onToggleIncludeSecondary={toggleIncludeSecondary}
+          onClear={clearArchetypes}
+        />
         <span className="text-xs text-gray-500">
-          {ranked} ranked transfers
-          {hidden > 0 && ` · ${hidden} hidden (unranked by 247 or no projection)`} ·{' '}
+          {hasArch
+            ? `${shown} matching transfers`
+            : `${ranked} ranked transfers${hidden > 0 ? ` · ${hidden} hidden (unranked by 247 or no projection)` : ''}`}{' '}
+          ·{' '}
           <a
             href={`https://247sports.com/season/${year}-basketball/transferportaltop/`}
             target="_blank"
@@ -488,6 +517,43 @@ export default function TransferPortal({ year }: Props) {
           </a>
         </span>
       </div>
+
+      {hasArch && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <span className="text-xs text-gray-500 uppercase tracking-wide">Filtering</span>
+          {CLASS_ORDER.filter((c) => selectedClasses.has(c)).map((cls, i) => (
+            <Fragment key={cls}>
+              {i > 0 && (
+                <span className="text-xs text-gray-500">
+                  {matchMode === 'all' ? 'and' : 'or'}
+                </span>
+              )}
+              <button
+                onClick={() => toggleClass(cls)}
+                className="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-full border text-xs"
+                style={{ borderColor: classColor(cls), color: classColor(cls) }}
+                title={`Remove ${cls}`}
+              >
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ backgroundColor: classColor(cls) }}
+                />
+                {cls}
+                <span className="text-gray-400 hover:text-gray-200">✕</span>
+              </button>
+            </Fragment>
+          ))}
+          {matchMode === 'any' && includeSecondary && (
+            <span className="text-xs text-gray-400">+ secondary class</span>
+          )}
+          <button
+            onClick={clearArchetypes}
+            className="text-xs px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+          >
+            Clear
+          </button>
+        </div>
+      )}
       <div style={{ height: 'calc(100dvh - 220px)', minHeight: '400px', width: '100%' }}>
         <AgGridReact<RankedTransfer>
           theme={gridTheme}

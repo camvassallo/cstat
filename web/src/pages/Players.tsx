@@ -11,7 +11,8 @@ import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
 import { agNullsBottom } from '../components/tableSort';
 import { classColor, CLASS_ORDER } from '../components/archetypeColors';
-import ArchetypeFilter, { type MatchMode } from '../components/ArchetypeFilter';
+import ArchetypeFilter from '../components/ArchetypeFilter';
+import { useArchetypeFilter } from '../components/useArchetypeFilter';
 import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
@@ -293,19 +294,18 @@ export default function Players() {
   const { season } = useSeason();
   usePageTitle('Players');
   const [searchParams, setSearchParams] = useSearchParams();
-  // Multi-archetype filter: `?archetypes=Paladin,Monk` (union/OR). The legacy
-  // single-class `?archetype=Wizard` (still emitted by the /archetypes cards and
-  // old bookmarks) is folded into the same set so those links keep working.
-  const selectedClasses = useMemo(() => {
-    const set = new Set<string>();
-    const multi = searchParams.get('archetypes');
-    if (multi) multi.split(',').map((s) => s.trim()).filter(Boolean).forEach((c) => set.add(c));
-    const legacy = searchParams.get('archetype');
-    if (legacy) set.add(legacy);
-    return set;
-  }, [searchParams]);
-  const includeSecondary = searchParams.get('include_secondary') === 'true';
-  const matchMode: MatchMode = searchParams.get('match') === 'all' ? 'all' : 'any';
+  // Multi-archetype filter (shared with the transfer portal) — URL-backed
+  // selection + OR/AND mode, applied client-side via `filterRows`.
+  const {
+    selected: selectedClasses,
+    matchMode,
+    includeSecondary,
+    toggleClass,
+    setMatchMode,
+    toggleIncludeSecondary,
+    clear: clearArchetypes,
+    filterRows,
+  } = useArchetypeFilter();
   const modeParam = searchParams.get('mode');
   const mode: PageMode =
     modeParam === 'transfers'
@@ -346,36 +346,14 @@ export default function Players() {
 
   // Apply the archetype filter client-side over the already-loaded pool — the
   // full qualified set is in memory, so re-filtering is instant with no
-  // round-trip. Empty selection = no filter. Two modes:
-  //   'any' (union): primary is selected, or — with include-secondary on —
-  //          secondary is. The default.
-  //   'all' (intersection): the player must hold EVERY selected class across
-  //          {primary, secondary}. Players have at most two classes, so this
-  //          always considers the secondary and returns nothing for 3+ selected.
-  const displayedRows = useMemo(() => {
-    if (selectedClasses.size === 0) return rows;
-    if (matchMode === 'all') {
-      return rows.filter((p) => {
-        for (const c of selectedClasses) {
-          if (p.primary_class !== c && p.secondary_class !== c) return false;
-        }
-        return true;
-      });
-    }
-    return rows.filter(
-      (p) =>
-        (p.primary_class != null && selectedClasses.has(p.primary_class)) ||
-        (includeSecondary &&
-          p.secondary_class != null &&
-          selectedClasses.has(p.secondary_class)),
-    );
-  }, [rows, selectedClasses, includeSecondary, matchMode]);
+  // round-trip. Empty selection = no filter (see useArchetypeFilter).
+  const displayedRows = useMemo(() => filterRows(rows), [filterRows, rows]);
 
   // CamPom rank over the displayed (post-filter) pool (best = 1), keyed by
   // player_id. A function of the loaded pool + archetype filter only —
   // deliberately NOT of search/sort, so the rank stays fixed to each player
-  // (issue #121). With an archetype filter active the rank is within that
-  // class union, matching the prior server-filtered behavior.
+  // (issue #121). With an archetype filter active the rank is within the
+  // filtered set, matching the prior server-filtered behavior.
   const campomRank = useMemo(() => {
     const m = new Map<string, number>();
     [...displayedRows]
@@ -419,74 +397,6 @@ export default function Players() {
       cancelled = true;
     };
   }, [season]);
-
-  // Toggle one class in the URL-backed selection. Normalizes any legacy
-  // `?archetype=` into the canonical `?archetypes=` list and keeps the list in
-  // CLASS_ORDER for stable, readable URLs.
-  const toggleClass = useCallback(
-    (cls: string) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        const set = new Set<string>();
-        const multi = next.get('archetypes');
-        if (multi) multi.split(',').map((s) => s.trim()).filter(Boolean).forEach((c) => set.add(c));
-        const legacy = next.get('archetype');
-        if (legacy) {
-          set.add(legacy);
-          next.delete('archetype');
-        }
-        if (set.has(cls)) set.delete(cls);
-        else set.add(cls);
-        if (set.size === 0) {
-          next.delete('archetypes');
-          next.delete('include_secondary');
-          next.delete('match');
-        } else {
-          next.set(
-            'archetypes',
-            CLASS_ORDER.filter((c) => set.has(c)).join(','),
-          );
-        }
-        return next;
-      });
-    },
-    [setSearchParams],
-  );
-
-  const setMatchMode = useCallback(
-    (m: MatchMode) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        if (m === 'all') next.set('match', 'all');
-        else next.delete('match');
-        return next;
-      });
-    },
-    [setSearchParams],
-  );
-
-  const clearArchetypes = useCallback(() => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.delete('archetypes');
-      next.delete('archetype');
-      next.delete('include_secondary');
-      next.delete('match');
-      return next;
-    });
-  }, [setSearchParams]);
-
-  const toggleIncludeSecondary = useCallback(() => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (includeSecondary) {
-        next.delete('include_secondary');
-      } else {
-        next.set('include_secondary', 'true');
-      }
-      return next;
-    });
-  }, [includeSecondary, setSearchParams]);
 
   // Top-level page-mode tabs (Players ↔ Transfer Portal). Sits above the
   // mode-specific toolbar so the two grids share a single chrome header.
