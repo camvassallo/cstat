@@ -29,12 +29,6 @@ export interface ArchetypeFilterState {
 //   ?archetypes=Paladin,Monk   selected classes (CLASS_ORDER, comma-joined)
 //   ?match=all                 AND (intersection); absent = OR (union, default)
 //   ?include_secondary=true    OR-mode widening to the secondary class
-//
-// DEPRECATED: the legacy single `?archetype=Wizard`. Nothing emits it anymore
-// (the /archetypes cards now link to `?archetypes=`), but we still read it and
-// fold it into the selection so old bookmarks / shared links keep resolving;
-// the first `toggleClass` rewrites such a URL to the canonical `?archetypes=`.
-// Safe to drop the back-compat read once those links have aged out.
 export function useArchetypeFilter(): ArchetypeFilterState {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -42,16 +36,13 @@ export function useArchetypeFilter(): ArchetypeFilterState {
     const set = new Set<string>();
     const multi = searchParams.get('archetypes');
     if (multi) multi.split(',').map((s) => s.trim()).filter(Boolean).forEach((c) => set.add(c));
-    const legacy = searchParams.get('archetype'); // deprecated; back-compat only
-    if (legacy) set.add(legacy);
     return set;
   }, [searchParams]);
 
   const includeSecondary = searchParams.get('include_secondary') === 'true';
   const matchMode: MatchMode = searchParams.get('match') === 'all' ? 'all' : 'any';
 
-  // Toggle one class. Migrates any deprecated `?archetype=` into the canonical
-  // `?archetypes=` list and keeps it in CLASS_ORDER for stable, readable URLs.
+  // Toggle one class, keeping the list in CLASS_ORDER for stable, readable URLs.
   const toggleClass = useCallback(
     (cls: string) => {
       setSearchParams((prev) => {
@@ -59,11 +50,6 @@ export function useArchetypeFilter(): ArchetypeFilterState {
         const set = new Set<string>();
         const multi = next.get('archetypes');
         if (multi) multi.split(',').map((s) => s.trim()).filter(Boolean).forEach((c) => set.add(c));
-        const legacy = next.get('archetype'); // deprecated; migrate then drop
-        if (legacy) {
-          set.add(legacy);
-          next.delete('archetype');
-        }
         if (set.has(cls)) set.delete(cls);
         else set.add(cls);
         if (set.size === 0) {
@@ -104,7 +90,6 @@ export function useArchetypeFilter(): ArchetypeFilterState {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete('archetypes');
-      next.delete('archetype');
       next.delete('include_secondary');
       next.delete('match');
       return next;
