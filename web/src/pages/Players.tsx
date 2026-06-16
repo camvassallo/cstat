@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import {
@@ -10,7 +10,9 @@ import { fetchPlayers, type PlayerRow } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
 import { agNullsBottom } from '../components/tableSort';
-import { classColor, classTagline } from '../components/archetypeColors';
+import { classColor, CLASS_ORDER } from '../components/archetypeColors';
+import ArchetypeFilter from '../components/ArchetypeFilter';
+import { useArchetypeFilter } from '../components/useArchetypeFilter';
 import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
@@ -88,6 +90,7 @@ function gradientCellStyle(
 function buildColumns(
   view: ColumnView,
   campomRank: Map<string, number>,
+  isDesktop: boolean,
 ): ColDef<PlayerRow>[] {
   // Pinned identity / context columns. Mirrors the roster table's first block
   // (Player | Class) plus team / conf which the roster doesn't need (already
@@ -107,7 +110,7 @@ function buildColumns(
       // position in the currently displayed rows. Reading a filtered row index
       // here would renumber 1..N over whatever the search matched (issue #121);
       // `campomRank` is bound to the row's data, so it stays fixed under
-      // search/sort and only changes when the archetype filter re-fetches.
+      // search/sort and only changes when the season or archetype filter changes.
       valueGetter: (p) => (p.data ? (campomRank.get(p.data.player_id) ?? null) : null),
       cellRenderer: (p: { value: number | null }) =>
         p.value == null ? (
@@ -119,16 +122,13 @@ function buildColumns(
     {
       field: 'name',
       headerName: 'Player',
-      // Use the same natural width on mobile and desktop. Horizontal scroll
-      // (AG Grid default) handles overflow rather than compressing the column
-      // and clipping long names with ellipsis. Kept deliberately tight so the
-      // pinned identity block doesn't crowd out the stat columns — long names
-      // wrap to a second line (wrapText) at the 44px row height.
-      width: 132,
+      // Desktop: a roomy single-line column so full names ("Olusegun-Kupono
+      // Aderoju") render without wrapping or clipping. Mobile: deliberately
+      // tight so the pinned identity block doesn't crowd out the stat columns —
+      // long names wrap to a second line (wrapText) at the 44px row height.
+      width: isDesktop ? 240 : 132,
       pinned: 'left',
-      // Long hyphenated names ("Olusegun-Kupono Aderoju") still wrap to a
-      // second line at the natural width rather than truncating.
-      wrapText: true,
+      wrapText: !isDesktop,
       cellRenderer: (p: { value: string; data?: PlayerRow }) => {
         const id = p.data?.player_id;
         if (!id) return <span>{p.value}</span>;
@@ -294,8 +294,18 @@ export default function Players() {
   const { season } = useSeason();
   usePageTitle('Players');
   const [searchParams, setSearchParams] = useSearchParams();
-  const archetype = searchParams.get('archetype');
-  const includeSecondary = searchParams.get('include_secondary') === 'true';
+  // Multi-archetype filter (shared with the transfer portal) — URL-backed
+  // selection + OR/AND mode, applied client-side via `filterRows`.
+  const {
+    selected: selectedClasses,
+    matchMode,
+    includeSecondary,
+    toggleClass,
+    setMatchMode,
+    toggleIncludeSecondary,
+    clear: clearArchetypes,
+    filterRows,
+  } = useArchetypeFilter();
   const modeParam = searchParams.get('mode');
   const mode: PageMode =
     modeParam === 'transfers'
@@ -319,45 +329,63 @@ export default function Players() {
   const [view, setView] = useState<ColumnView>('raw');
   const [searchInput, setSearchInput] = useState('');
   const [rows, setRows] = useState<PlayerRow[]>([]);
-  const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // CamPom rank over the loaded pool (best = 1), keyed by player_id. Recomputed
-  // when the fetch changes (archetype/season); deliberately NOT a function of
-  // search/sort, so the rank stays fixed to each player (issue #121).
+  // Track the `md` breakpoint (Tailwind's 768px) so the Player column can run
+  // full-width on desktop and stay tight (wrapping) on mobile — AG Grid column
+  // defs can't carry CSS media queries, so the breakpoint is read in JS.
+  const [isDesktop, setIsDesktop] = useState(
+    () => window.matchMedia('(min-width: 768px)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // Apply the archetype filter client-side over the already-loaded pool — the
+  // full qualified set is in memory, so re-filtering is instant with no
+  // round-trip. Empty selection = no filter (see useArchetypeFilter).
+  const displayedRows = useMemo(() => filterRows(rows), [filterRows, rows]);
+
+  // CamPom rank over the displayed (post-filter) pool (best = 1), keyed by
+  // player_id. A function of the loaded pool + archetype filter only —
+  // deliberately NOT of search/sort, so the rank stays fixed to each player
+  // (issue #121). With an archetype filter active the rank is within the
+  // filtered set, matching the prior server-filtered behavior.
   const campomRank = useMemo(() => {
     const m = new Map<string, number>();
-    [...rows]
+    [...displayedRows]
       .filter((p) => p.campom != null)
       .sort((a, b) => (b.campom as number) - (a.campom as number))
       .forEach((p, i) => m.set(p.player_id, i + 1));
     return m;
-  }, [rows]);
+  }, [displayedRows]);
 
-  const columns = useMemo(() => buildColumns(view, campomRank), [view, campomRank]);
+  const columns = useMemo(
+    () => buildColumns(view, campomRank, isDesktop),
+    [view, campomRank, isDesktop],
+  );
 
   // Single fetch loads the entire qualified pool; sort + search run client-
-  // side via AG Grid's built-in sorting and `quickFilterText`. Pagination
-  // (set on the grid below) keeps DOM small without bringing back the
-  // viewport-bound nested-scroll UX. Re-fetches only when the server-side
-  // filter dimensions change (archetype, season).
+  // side via AG Grid's built-in sorting and `quickFilterText`, and the
+  // archetype filter (above) is also client-side. Pagination (set on the
+  // grid below) keeps DOM small. Re-fetches only when the season changes.
   //
   // No `setLoading(true)` here — `react-hooks/set-state-in-effect` forbids
-  // it. The initial `useState(true)` covers first load; on subsequent
-  // archetype/season changes the previous data stays visible until the new
-  // fetch resolves. Mild stale-flicker, matches the Rankings page pattern.
+  // it. The initial `useState(true)` covers first load; on a season change
+  // the previous data stays visible until the new fetch resolves. Mild
+  // stale-flicker, matches the Rankings page pattern.
   useEffect(() => {
     let cancelled = false;
     fetchPlayers({
-      archetype: archetype || undefined,
-      includeSecondaryArchetype: archetype != null && includeSecondary,
       season,
       limit: PAGE_FETCH_LIMIT,
     })
       .then((r) => {
         if (cancelled) return;
         setRows(r.players);
-        setTotal(r.total);
       })
       .catch((err) => {
         console.error('fetchPlayers failed', err);
@@ -368,31 +396,7 @@ export default function Players() {
     return () => {
       cancelled = true;
     };
-  }, [archetype, includeSecondary, season]);
-
-  const clearArchetype = useCallback(() => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.delete('archetype');
-      next.delete('include_secondary');
-      return next;
-    });
-  }, [setSearchParams]);
-
-  const toggleIncludeSecondary = useCallback(() => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (includeSecondary) {
-        next.delete('include_secondary');
-      } else {
-        next.set('include_secondary', 'true');
-      }
-      return next;
-    });
-  }, [includeSecondary, setSearchParams]);
-
-  const archetypeColor = archetype ? classColor(archetype) : null;
-  const archetypeBlurb = archetype ? classTagline(archetype) : null;
+  }, [season]);
 
   // Top-level page-mode tabs (Players ↔ Transfer Portal). Sits above the
   // mode-specific toolbar so the two grids share a single chrome header.
@@ -460,8 +464,8 @@ export default function Players() {
       {modeTabs}
       <TableToolbar
         title="Player Stats"
-        count={total}
-        countLabel="qualified"
+        count={displayedRows.length}
+        countLabel={selectedClasses.size > 0 ? 'matching' : 'qualified'}
         search={
           <TableSearchInput
             value={searchInput}
@@ -471,6 +475,15 @@ export default function Players() {
         }
         controls={
           <>
+            <ArchetypeFilter
+              selected={selectedClasses}
+              onToggle={toggleClass}
+              matchMode={matchMode}
+              onSetMatchMode={setMatchMode}
+              includeSecondary={includeSecondary}
+              onToggleIncludeSecondary={toggleIncludeSecondary}
+              onClear={clearArchetypes}
+            />
             <span className="text-xs text-gray-500">View</span>
             <div className="inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs">
               <button
@@ -498,37 +511,39 @@ export default function Players() {
         }
       />
 
-      {archetype && (
-        <div
-          className="flex flex-wrap items-center gap-3 mb-3 px-3 py-2 rounded border-l-4 bg-gray-800/60"
-          style={{ borderLeftColor: archetypeColor ?? undefined }}
-        >
-          <div className="flex items-baseline gap-2">
-            <span className="text-xs text-gray-500 uppercase tracking-wide">Class</span>
-            <span
-              className="text-sm font-bold"
-              style={{ color: archetypeColor ?? undefined }}
-            >
-              {archetype}
-            </span>
-            {archetypeBlurb && (
-              <span className="text-xs text-gray-400">— {archetypeBlurb}</span>
-            )}
-          </div>
-          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={includeSecondary}
-              onChange={toggleIncludeSecondary}
-              className="rounded"
-            />
-            Include secondary class
-          </label>
+      {selectedClasses.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <span className="text-xs text-gray-500 uppercase tracking-wide">Filtering</span>
+          {CLASS_ORDER.filter((c) => selectedClasses.has(c)).map((cls, i) => (
+            <Fragment key={cls}>
+              {i > 0 && (
+                <span className="text-xs text-gray-500">
+                  {matchMode === 'all' ? 'and' : 'or'}
+                </span>
+              )}
+              <button
+                onClick={() => toggleClass(cls)}
+                className="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-full border text-xs"
+                style={{ borderColor: classColor(cls), color: classColor(cls) }}
+                title={`Remove ${cls}`}
+              >
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ backgroundColor: classColor(cls) }}
+                />
+                {cls}
+                <span className="text-gray-400 hover:text-gray-200">✕</span>
+              </button>
+            </Fragment>
+          ))}
+          {matchMode === 'any' && includeSecondary && (
+            <span className="text-xs text-gray-400">+ secondary class</span>
+          )}
           <button
-            onClick={clearArchetype}
-            className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 ml-auto"
+            onClick={clearArchetypes}
+            className="text-xs px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
           >
-            Clear filter
+            Clear
           </button>
         </div>
       )}
@@ -543,7 +558,7 @@ export default function Players() {
       <div style={{ width: '100%' }}>
         <AgGridReact<PlayerRow>
           theme={gridTheme}
-          rowData={rows}
+          rowData={displayedRows}
           columnDefs={columns}
           loading={loading}
           domLayout="autoHeight"
