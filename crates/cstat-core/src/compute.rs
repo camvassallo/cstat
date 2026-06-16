@@ -576,16 +576,25 @@ pub async fn repair_phantom_swapped_games(pool: &PgPool, season: i32) -> Result<
     .execute(&mut *tx)
     .await?;
 
-    // 6. Re-team every phantom box row to the opponent side (a full swap crosses
-    //    all rows). Covers both merged rows (now the real player) and genuine ones.
+    // 6. Re-team EVERY box row in the swapped games to the game's other team — a
+    //    full swap crosses all rows, including merged phantoms (now the real
+    //    player), genuine phantoms, AND the occasional non-phantom real player who
+    //    happened to play that game (gp>1, so not in the map — e.g. a walk-on whose
+    //    box line would otherwise strand on the wrong team and split his season
+    //    stats into a spurious second per-team row). Flip via the games row: its
+    //    two teams are fixed (only the home/away role swapped in step 4), so a box
+    //    labeled A becomes B and vice versa, and opponent_id becomes the old label.
+    //    A stray play tagged to neither team is left alone by the IN-guard.
     sqlx::query(
         "UPDATE player_game_stats pgs SET
-             team_id = m.opp_team,
-             opponent_id = CASE WHEN m.opp_team = g.home_team_id
-                                THEN g.away_team_id ELSE g.home_team_id END,
-             is_home = (m.opp_team = g.home_team_id)
-         FROM _phantom_swap_map m, games g
-         WHERE pgs.id = m.pgs_id AND g.id = m.game_id",
+             team_id = CASE WHEN pgs.team_id = g.home_team_id
+                            THEN g.away_team_id ELSE g.home_team_id END,
+             opponent_id = pgs.team_id,
+             is_home = (pgs.team_id = g.away_team_id)
+         FROM games g
+         WHERE g.id = pgs.game_id
+           AND pgs.team_id IN (g.home_team_id, g.away_team_id)
+           AND pgs.game_id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
     )
     .execute(&mut *tx)
     .await?;
