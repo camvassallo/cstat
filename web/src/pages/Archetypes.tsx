@@ -115,7 +115,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
       <div className="p-4 border-b border-gray-700/60">
         <div className="flex items-baseline justify-between gap-3">
           <SeasonLink
-            to={`/players?archetype=${encodeURIComponent(def.name)}`}
+            to={`/players?archetypes=${encodeURIComponent(def.name)}`}
             className="text-xl font-bold hover:underline"
             style={{ color }}
             title={`See all ${def.name}s ranked by CamPom`}
@@ -124,7 +124,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
           </SeasonLink>
           {info != null && (
             <SeasonLink
-              to={`/players?archetype=${encodeURIComponent(def.name)}`}
+              to={`/players?archetypes=${encodeURIComponent(def.name)}`}
               className="text-xs text-gray-400 shrink-0 hover:text-gray-200 hover:underline"
             >
               {info.count.toLocaleString()} players →
