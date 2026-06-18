@@ -509,12 +509,19 @@ fn parse_commit(
     (None, None, None)
 }
 
-/// Extract the trailing numeric ID from a 247 player profile URL.
-/// `/player/alex-constanza-46134907/` → `Some(46134907)`. The trailing slash
-/// is optional — the regex matches either form.
+/// Extract the player ID from a 247 player profile URL — the trailing number of
+/// the `/player/{slug}-{id}` segment.
+/// `/player/alex-constanza-46134907/` → `Some(46134907)`.
+///
+/// Anchored to the `/player/` segment rather than the end of the string because
+/// 247 began appending a `/high-school-{schoolId}/?Sport=2` suffix to these
+/// URLs (mid-2026). A trailing-`-(\d+)$` regex matched the *school* ID (or
+/// failed when `?Sport=2` was present), which silently re-keyed every recruit
+/// and produced duplicate rows on refresh. `[^/]*` stops at the first slash, so
+/// the capture stays inside the player segment regardless of trailing path.
 pub fn recruit_key_from_url(url: &str) -> Option<i64> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"-(\d+)/?$").unwrap());
+    let re = RE.get_or_init(|| Regex::new(r"/player/[^/]*-(\d+)").unwrap());
     re.captures(url)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<i64>().ok())
@@ -632,6 +639,23 @@ mod tests {
         assert_eq!(
             recruit_key_from_url("/player/sayon-keita-46160428"),
             Some(46_160_428)
+        );
+        // 247's mid-2026 URL change: a `/high-school-{id}/?Sport=2` suffix must
+        // NOT be mistaken for the player id. The player id is the trailing
+        // number of the `/player/{slug}-{id}` segment.
+        assert_eq!(
+            recruit_key_from_url("/player/aaron-mcgee-46160340/high-school-340449/?Sport=2"),
+            Some(46_160_340)
+        );
+        assert_eq!(
+            recruit_key_from_url("/player/aaron-mcgee-46160340/high-school-340449/"),
+            Some(46_160_340)
+        );
+        assert_eq!(
+            recruit_key_from_url(
+                "https://247sports.com/player/kendre-harrison-46138185/high-school-318679/?Sport=2"
+            ),
+            Some(46_138_185)
         );
         assert_eq!(recruit_key_from_url("/player/no-id/"), None);
         assert_eq!(recruit_key_from_url(""), None);

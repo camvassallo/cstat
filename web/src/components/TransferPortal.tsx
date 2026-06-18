@@ -106,9 +106,13 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
             </span>
           );
         }
+        // Pin the link to the player's actual source season (= portal year
+        // normally, earlier for a sat-out transfer; issue #146). SeasonLink
+        // leaves an explicit `?season=` in the destination untouched.
+        const srcSeason = p.data?.source_season ?? year;
         return (
           <SeasonLink
-            to={`/players/${id}`}
+            to={`/players/${id}?season=${srcSeason}`}
             onClick={(e) => e.stopPropagation()}
             className="text-blue-400 hover:underline"
           >
@@ -157,9 +161,11 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
           // fall back to the 247 short name verbatim if no match.
           name: p.data?.previous_team_full ?? p.data?.previous_team ?? null,
           id: p.data?.previous_team_id ?? null,
-          // Source team played the portal-cycle year (e.g. a 2025 portal
-          // entry was at their previous school during cstat-season 2025).
-          season: year,
+          // The season the player actually played at the previous school —
+          // the portal-cycle year for a normal transfer, but an earlier
+          // season for a sat-out one (issue #146, e.g. Pierce → Princeton
+          // 2025). Falls back to `year` when unmatched.
+          season: p.data?.source_season ?? year,
         }),
     },
     {

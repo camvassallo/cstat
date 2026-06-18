@@ -323,6 +323,14 @@ def main() -> None:
                 "paired_possessions": poss.get(c, 0.0),
                 "stint_count": stint_n.get(c, 0),
             })
+        if not rows:
+            # No season player maps into the fitted career window — happens for
+            # a CORRUPT_SEASONS year (e.g. 2019) that now has stints from the
+            # natstat_lineups capture but is still excluded from every window/
+            # chain, so none of its players land in `o_eff`. Skip rather than
+            # crash write_season on an empty (column-less) frame.
+            print("  -> no players mapped to fitted careers — skipped")
+            continue
         n = write_season(engine, season, pd.DataFrame(rows), lam, prior)
         total += n
         print(f"  -> wrote {n:,} player_rapm rows ({prior})")

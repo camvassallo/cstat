@@ -37,6 +37,8 @@ WHERE year = $base_season
 
 Per-team buckets then partition each row into `returning` / `arrivals` / `recruits` / `uncertain` (declared `?` cohort) / `departures` (audit-only).
 
+**Sat-out transfers** (issue #146): a transfer whose `cstat_player_id` is *not* in fetch 1 — they have no `base_season` stat row because they skipped the season to preserve eligibility (e.g. Caden Pierce: Princeton 2025 → sat out 2026 → Purdue 2027) — gets a fourth, targeted fetch. Their season-scoped `cstat_player_id` pins their last played season; that row (within `TRANSFER_SEASON_LOOKBACK` years, same gates) is folded into the lookup maps so the player still surfaces as an `arrival` at their destination. Without it the team showed "Incoming transfers (0)". Their projected `cam_v3` (see below) is built off that prior season — one-season-forward, so it can lag the actual destination year by one (and is blind to an earlier peak; see `docs/trajectory_methodology.md`).
+
 ## Recruit synthesis
 
 Each recruit becomes a minimal synthetic `PlayerRow` via `roster_projection.rs::freshman_row`, carrying exactly three load-bearing fields: the **freshman-impact model's per-recruit projected `cam_v3`**, `class_year = "Fr"`, and `primary_class = None`. Nothing else (mpg, box-score, rate stats) is synthesized — the served roster-impact model ranks the roster by `cam_v3` and weights every feature by canonical-rotation MPG, so it reads only those three fields off a recruit row. A 5★ projected to bust and a 5★ projected to star therefore get genuinely different rows.

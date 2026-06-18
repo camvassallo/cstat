@@ -15,6 +15,7 @@
 
 use crate::tfs::{TfsClient, TfsError};
 use chrono::{DateTime, Utc};
+use cstat_core::roster_projection::TRANSFER_SEASON_LOOKBACK;
 use cstat_core::team_name_match::team_match_score;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -516,6 +517,76 @@ async fn last_update_cursor(
     Ok(row.and_then(|(v,)| v))
 }
 
+#[derive(sqlx::FromRow)]
+struct PortalRow {
+    tfs_key: i64,
+    full_name: String,
+    source_institution: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct CandRow {
+    player_id: Uuid,
+    name: String,
+    team_short: Option<String>,
+    team_full: Option<String>,
+}
+
+/// Match each portal row to the best same-name candidate by source-team score,
+/// mirroring the route handler's `normalize` + `team_match_score` logic.
+/// Returns the resolved `(tfs_key, player_id)` pairs plus the portal rows that
+/// found no match, so the caller can retry the leftovers against an
+/// older-season candidate set.
+///
+/// `allow_nameonly_fallback` enables the single-same-name fallback (attach the
+/// lone candidate even when no team scored). Pass 1 keeps it on for backward
+/// compatibility; pass 2 (older-season lookback) turns it OFF and *requires* a
+/// team match — across multiple prior seasons a name-only match is far more
+/// likely a same-name collision, and we always have the 247 source school to
+/// verify against (issue #146 — e.g. a portal "Brayden Jackson / St.
+/// Bonaventure" must not bind to a Buffalo "Brayden Jackson").
+fn match_portal_to_candidates<'a>(
+    portal: &[&'a PortalRow],
+    by_name: &HashMap<String, Vec<&CandRow>>,
+    allow_nameonly_fallback: bool,
+) -> (Vec<(i64, Uuid)>, Vec<&'a PortalRow>) {
+    let mut matches: Vec<(i64, Uuid)> = Vec::new();
+    let mut leftover: Vec<&PortalRow> = Vec::new();
+    for &row in portal {
+        let Some(cands) = by_name.get(&normalize_name(&row.full_name)) else {
+            leftover.push(row);
+            continue;
+        };
+        let source = row.source_institution.as_deref().unwrap_or_default();
+        // Score every candidate's team against the 247 source string and pick
+        // the lowest score (best match; see `team_match_score`). Candidate
+        // buckets preserve the query's `season DESC` order, so `min_by_key`
+        // settles a score tie on the most-recent season.
+        let scored = cands
+            .iter()
+            .filter_map(|c| {
+                team_match_score(c.team_short.as_deref(), c.team_full.as_deref()?, source)
+                    .map(|s| (s, *c))
+            })
+            .min_by_key(|(s, _)| *s)
+            .map(|(_, c)| c);
+        let best = match scored {
+            Some(c) => Some(c),
+            // Fallback only when allowed AND there's exactly one same-name
+            // candidate. A single candidate has no other person it could be; a
+            // multi-candidate blind fallback would silently bind two different
+            // players who share a name (the old dangerous case).
+            None if allow_nameonly_fallback && cands.len() == 1 => Some(cands[0]),
+            None => None,
+        };
+        match best {
+            Some(c) => matches.push((row.tfs_key, c.player_id)),
+            None => leftover.push(row),
+        }
+    }
+    (matches, leftover)
+}
+
 /// Resolve `cstat_player_id` on transfer rows by matching each 247 portal
 /// entry to the cstat `players` row that played the previous college season
 /// at the same source school.
@@ -533,20 +604,6 @@ async fn last_update_cursor(
 /// answers for the same (player, source) pair. If a third consumer appears,
 /// promote these helpers to a shared crate.
 pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, TransferIngestError> {
-    #[derive(sqlx::FromRow)]
-    struct PortalRow {
-        tfs_key: i64,
-        full_name: String,
-        source_institution: Option<String>,
-    }
-    #[derive(sqlx::FromRow)]
-    struct CandRow {
-        player_id: Uuid,
-        name: String,
-        team_short: Option<String>,
-        team_full: Option<String>,
-    }
-
     // Only consider rows that have a source school to disambiguate against —
     // a portal row with NULL source can't be matched safely.
     let portal: Vec<PortalRow> = sqlx::query_as(
@@ -560,10 +617,11 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
     .fetch_all(pool)
     .await?;
 
-    // One candidate row per (player, team) stint in the season. Mid-season
-    // transfers appear twice (once per team) via `player_season_stats`, which
-    // is what lets us disambiguate when the 247 source names the *first*
-    // team.
+    // Pass 1 — the common case: the player's last completed season binds to the
+    // portal year (spring-2026 portal ⇒ 2025-26 ⇒ season 2026). One candidate
+    // row per (player, team) stint; mid-season transfers appear twice (once per
+    // team) via `player_season_stats`, which is what lets us disambiguate when
+    // the 247 source names the *first* team.
     let candidates: Vec<CandRow> = sqlx::query_as(
         r#"
         SELECT
@@ -588,53 +646,52 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
         by_name.entry(normalize_name(&c.name)).or_default().push(c);
     }
 
-    let mut tfs_keys: Vec<i64> = Vec::new();
-    let mut player_ids: Vec<Uuid> = Vec::new();
-    let mut unmatched_name = 0u64;
-    let mut unmatched_team = 0u64;
-    let mut single_bucket_fallback = 0u64;
+    let portal_refs: Vec<&PortalRow> = portal.iter().collect();
+    let (mut matched, leftover) = match_portal_to_candidates(&portal_refs, &by_name, true);
 
-    for row in &portal {
-        let Some(cands) = by_name.get(&normalize_name(&row.full_name)) else {
-            unmatched_name += 1;
-            continue;
-        };
-        let source = row.source_institution.as_deref().unwrap_or_default();
-        // Score every candidate's team against the 247 source string and pick
-        // the lowest score (best match; see `team_match_score`).
-        let scored = cands
-            .iter()
-            .filter_map(|c| {
-                team_match_score(c.team_short.as_deref(), c.team_full.as_deref()?, source)
-                    .map(|s| (s, *c))
-            })
-            .min_by_key(|(s, _)| *s)
-            .map(|(_, c)| c);
-        let best = match scored {
-            Some(c) => Some(c),
-            None => {
-                unmatched_team += 1;
-                // Fallback only when there's exactly one same-name candidate.
-                // Multi-candidate fallback was the previous behavior and the
-                // dangerous case — it would silently bind two different players
-                // who share a name. With a single candidate there's no other
-                // person it could be, so the worst case is "we attached a
-                // player who happens to share a name with the portal entry,"
-                // which a downstream 2027 projection aggregator can still
-                // sanity-check against `previous_team`.
-                if cands.len() == 1 {
-                    single_bucket_fallback += 1;
-                    Some(cands[0])
-                } else {
-                    None
-                }
-            }
-        };
-        if let Some(c) = best {
-            tfs_keys.push(row.tfs_key);
-            player_ids.push(c.player_id);
+    // Pass 2 — players absent from the target season (sat out / redshirt / grad
+    // gap; issue #146). Re-match the leftovers against the most recent prior
+    // season they DID play, scanning back `TRANSFER_SEASON_LOOKBACK` years and
+    // preferring the newest (the `season DESC` order makes `min_by_key` settle
+    // ties on the most-recent stint). Pass 1 is left byte-identical so the
+    // ~99% contiguous case is untouched.
+    let pass2_matched = if leftover.is_empty() {
+        0
+    } else {
+        let prior: Vec<CandRow> = sqlx::query_as(
+            r#"
+            SELECT
+                p.id          AS player_id,
+                p.name        AS name,
+                t.short_name  AS team_short,
+                t.name        AS team_full
+            FROM player_season_stats pss
+            JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+            LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
+            WHERE pss.season BETWEEN $1 AND $2
+            ORDER BY pss.season DESC
+            "#,
+        )
+        .bind(year - TRANSFER_SEASON_LOOKBACK)
+        .bind(year - 1)
+        .fetch_all(pool)
+        .await?;
+
+        let mut prior_by_name: HashMap<String, Vec<&CandRow>> = HashMap::new();
+        for c in &prior {
+            prior_by_name
+                .entry(normalize_name(&c.name))
+                .or_default()
+                .push(c);
         }
-    }
+        let (more, _) = match_portal_to_candidates(&leftover, &prior_by_name, false);
+        let n = more.len();
+        matched.extend(more);
+        n
+    };
+
+    let tfs_keys: Vec<i64> = matched.iter().map(|(k, _)| *k).collect();
+    let player_ids: Vec<Uuid> = matched.iter().map(|(_, p)| *p).collect();
 
     // Batched UPDATE via UNNEST — one round-trip regardless of match count.
     // `IS DISTINCT FROM` avoids a no-op write when the row is already
@@ -660,10 +717,8 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
         portal_rows = portal.len(),
         candidates = candidates.len(),
         matched = tfs_keys.len(),
+        pass2_matched,
         updated = n,
-        unmatched_name,
-        team_score_miss = unmatched_team,
-        single_bucket_fallback,
         "cstat_player_id resolution complete"
     );
     if tfs_keys.is_empty() {

@@ -440,6 +440,12 @@ export interface TransferRow {
   previous_team: string | null;
   previous_team_full: string | null;
   previous_team_id: string | null;
+  // The cstat season the matched player / previous-team rows belong to: the
+  // portal year for a normal transfer, an earlier season for a sat-out one
+  // (issue #146, e.g. Caden Pierce's Princeton 2025). Used as the ?season=
+  // target for the player + previous-team links so they land on the season
+  // the player actually played, not the empty portal-cycle year.
+  source_season: number | null;
   next_team: string | null;
   next_team_id: string | null;
   primary_class: string | null;

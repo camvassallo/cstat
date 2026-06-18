@@ -100,7 +100,7 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
             traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
             traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
         }
-        let projected_cam = project_returner_cam_v3(pool, predictor, &traj_ids, base_season, year)
+        let projected_cam = project_returner_cam_v3(pool, predictor, &traj_ids, year)
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!(
