@@ -5,9 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
-use cstat_core::roster_projection::{
-    TRANSFER_SEASON_LOOKBACK, normalize_player_name as normalize,
-};
+use cstat_core::roster_projection::{TRANSFER_SEASON_LOOKBACK, normalize_player_name as normalize};
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -431,9 +429,9 @@ async fn transfer_list(
             // school to verify against. The `season DESC` order makes `find`
             // settle on the most recent matching stint.
             let best: Option<&DbCandidate> = prev.as_deref().and_then(|p| {
-                cands.iter().find(|c| {
-                    team_matches(c.team_name.as_deref(), c.team_full_name.as_deref(), p)
-                })
+                cands
+                    .iter()
+                    .find(|c| team_matches(c.team_name.as_deref(), c.team_full_name.as_deref(), p))
             });
             if let Some(c) = best {
                 let e = &mut enriched[i];

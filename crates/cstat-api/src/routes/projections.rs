@@ -405,13 +405,13 @@ async fn projection_list(
     }
     let projected_cam = project_returner_cam_v3(&state.db.pool, &state.predictor, &traj_ids, year)
         .await
-    .unwrap_or_else(|e| {
-        tracing::warn!(
-            error = %e,
-            "trajectory cam_v3 projection failed; projecting on current-season cam_v3",
-        );
-        std::collections::HashMap::new()
-    });
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                "trajectory cam_v3 projection failed; projecting on current-season cam_v3",
+            );
+            std::collections::HashMap::new()
+        });
 
     // Display-only coach grade per team (descriptive; never feeds the
     // projection — see the coach fields on `ProjectedTeam`). A failure here is
