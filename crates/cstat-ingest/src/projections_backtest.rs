@@ -216,8 +216,7 @@ async fn backtest_year(
         traj_ids.extend(p.returning.iter().map(|r| r.player_id));
         traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
         traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
-        let projected_cam =
-            project_returner_cam_v3(pool, predictor, &traj_ids, base_season, year).await?;
+        let projected_cam = project_returner_cam_v3(pool, predictor, &traj_ids, year).await?;
 
         let mut roster_b = p.for_scenario(DraftScenario::Ceiling);
         apply_projected_cam_v3(&mut roster_b, &projected_cam);

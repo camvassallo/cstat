@@ -5,7 +5,9 @@ use axum::{
     response::Json,
     routing::get,
 };
-use cstat_core::roster_projection::normalize_player_name as normalize;
+use cstat_core::roster_projection::{
+    TRANSFER_SEASON_LOOKBACK, normalize_player_name as normalize,
+};
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -63,6 +65,12 @@ struct EnrichedTransfer {
     previous_team: Option<String>,
     previous_team_full: Option<String>,
     previous_team_id: Option<Uuid>,
+    /// The cstat season the matched player/previous-team rows belong to —
+    /// the portal `year` for a normal transfer, an earlier season for a
+    /// sat-out one (issue #146). The frontend uses it as the `?season=`
+    /// target for the player and previous-team links so they land on the
+    /// season the player actually played, not the (empty) portal-cycle year.
+    source_season: Option<i32>,
     next_team: Option<String>,
     next_team_id: Option<Uuid>,
     primary_class: Option<String>,
@@ -113,6 +121,10 @@ struct EnrichedTransfer {
 #[derive(sqlx::FromRow)]
 struct DbCandidate {
     player_id: Uuid,
+    /// The season this stint belongs to. Usually the portal `year`, but an
+    /// earlier season for a sat-out transfer surfaced by the pass-2 lookback
+    /// (issue #146). Drives the source-season link target on the frontend.
+    season: i32,
     name: String,
     team_id: Option<Uuid>,
     team_name: Option<String>,
@@ -142,6 +154,63 @@ struct DbTeam {
     id: Uuid,
     name: String,
     short_name: Option<String>,
+}
+
+/// Fetch candidate player-season rows (one per player-team stint) for seasons in
+/// `[season_lo, season_hi]`, newest season first so name-bucket consumers settle
+/// ties on the most recent stint. Carries the enrichment stats (CamPom, on/off,
+/// RAPM, archetypes) so a matched candidate hydrates the response directly.
+async fn fetch_candidates(
+    pool: &sqlx::PgPool,
+    season_lo: i32,
+    season_hi: i32,
+) -> Result<Vec<DbCandidate>, sqlx::Error> {
+    sqlx::query_as::<_, DbCandidate>(
+        r#"
+        SELECT
+            p.id                     AS player_id,
+            pss.season               AS season,
+            p.name                   AS name,
+            t.id                     AS team_id,
+            COALESCE(t.short_name, t.name) AS team_name,
+            t.name                   AS team_full_name,
+            pss.minutes_per_game     AS minutes_per_game,
+            pss.games_played         AS games_played,
+            tps.cam_gbpm_v3_psos     AS campom,
+            tps.cam_gbpm_v3_psos_pct AS campom_pct,
+            pa.primary_class         AS primary_class,
+            pa.secondary_class       AS secondary_class,
+            oo.net_on_off            AS net_on_off,
+            oo.on_net_rtg            AS on_net_rtg,
+            oo.off_net_rtg           AS off_net_rtg,
+            oo.source                AS on_off_source,
+            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
+            pr.net_rapm              AS rapm_net,
+            pr.paired_possessions    AS rapm_paired_poss,
+            -- O/D split, ±30 sanity envelope (see queries::TorkvikStatsRow)
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
+            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
+                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d
+        FROM player_season_stats pss
+        JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+        LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
+        LEFT JOIN torvik_player_stats tps
+            ON tps.player_id = p.id AND tps.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = p.id AND pa.season = pss.season
+        LEFT JOIN player_on_off oo
+            ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
+        LEFT JOIN player_rapm pr
+            ON pr.player_id = p.id AND pr.season = pss.season
+        WHERE pss.season BETWEEN $1 AND $2
+        ORDER BY pss.season DESC
+        "#,
+    )
+    .bind(season_lo)
+    .bind(season_hi)
+    .fetch_all(pool)
+    .await
 }
 
 async fn transfer_list(
@@ -207,55 +276,15 @@ async fn transfer_list(
     // `lower(name) = ANY(...)` comparison; doing the matching in Rust lets
     // both sides go through the same normalize() function. ~5K rows ≈ 1MB,
     // small enough that we don't need an index-friendly join here.
-    let candidates: Vec<DbCandidate> = sqlx::query_as::<_, DbCandidate>(
-        r#"
-        SELECT
-            p.id                     AS player_id,
-            p.name                   AS name,
-            t.id                     AS team_id,
-            COALESCE(t.short_name, t.name) AS team_name,
-            t.name                   AS team_full_name,
-            pss.minutes_per_game     AS minutes_per_game,
-            pss.games_played         AS games_played,
-            tps.cam_gbpm_v3_psos     AS campom,
-            tps.cam_gbpm_v3_psos_pct AS campom_pct,
-            pa.primary_class         AS primary_class,
-            pa.secondary_class       AS secondary_class,
-            oo.net_on_off            AS net_on_off,
-            oo.on_net_rtg            AS on_net_rtg,
-            oo.off_net_rtg           AS off_net_rtg,
-            oo.source                AS on_off_source,
-            (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
-            pr.net_rapm              AS rapm_net,
-            pr.paired_possessions    AS rapm_paired_poss,
-            -- O/D split, ±30 sanity envelope (see queries::TorkvikStatsRow)
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
-            CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d
-        FROM player_season_stats pss
-        JOIN players p ON p.id = pss.player_id AND p.season = pss.season
-        LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = p.id AND tps.season = pss.season
-        LEFT JOIN player_archetypes pa
-            ON pa.player_id = p.id AND pa.season = pss.season
-        LEFT JOIN player_on_off oo
-            ON oo.player_id = p.id AND oo.season = pss.season AND oo.team_id = p.team_id
-        LEFT JOIN player_rapm pr
-            ON pr.player_id = p.id AND pr.season = pss.season
-        WHERE pss.season = $1
-        "#,
-    )
-    .bind(year)
-    .fetch_all(&state.db.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("candidates query failed: {e}") })),
-        )
-    })?;
+    let candidates: Vec<DbCandidate> =
+        fetch_candidates(&state.db.pool, year, year)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("candidates query failed: {e}") })),
+                )
+            })?;
 
     // Pull every team for the season so we can resolve 247 short names
     // (e.g. "Kansas") to a cstat team_id for the previous/next team links.
@@ -341,6 +370,7 @@ async fn transfer_list(
                 previous_team: t.source_institution,
                 previous_team_full: best.and_then(|c| c.team_name.clone()),
                 previous_team_id,
+                source_season: best.map(|c| c.season),
                 next_team: t.destination_institution,
                 next_team_id,
                 primary_class: best.and_then(|c| c.primary_class.clone()),
@@ -365,6 +395,73 @@ async fn transfer_list(
             }
         })
         .collect();
+
+    // Pass 2 — issue #146. A transfer whose player sat out the target season
+    // (graduated early to preserve eligibility, redshirt, gap year) has no
+    // `season = year` candidate, so pass 1 left them unmatched. Re-match those
+    // against the most recent season they DID play within
+    // `TRANSFER_SEASON_LOOKBACK` years and splice the stats in. Pass 1 owns the
+    // ~99% contiguous case; this only touches rows still missing a player_id.
+    let unmatched: Vec<(usize, String, Option<String>)> = enriched
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.player_id.is_none())
+        .map(|(i, e)| (i, e.name.clone(), e.previous_team.clone()))
+        .collect();
+    if !unmatched.is_empty() {
+        let prior = fetch_candidates(&state.db.pool, year - TRANSFER_SEASON_LOOKBACK, year - 1)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("prior-season candidates query failed: {e}") })),
+                )
+            })?;
+        let mut prior_by_name: HashMap<String, Vec<DbCandidate>> = HashMap::new();
+        for c in prior {
+            prior_by_name.entry(normalize(&c.name)).or_default().push(c);
+        }
+        for (i, name, prev) in unmatched {
+            let Some(cands) = prior_by_name.get(&normalize(&name)) else {
+                continue;
+            };
+            // REQUIRE a team match here — no most-played fallback. Across
+            // multiple prior seasons a name-only match is far more likely a
+            // same-name collision (issue #146), and we have the 247 source
+            // school to verify against. The `season DESC` order makes `find`
+            // settle on the most recent matching stint.
+            let best: Option<&DbCandidate> = prev.as_deref().and_then(|p| {
+                cands.iter().find(|c| {
+                    team_matches(c.team_name.as_deref(), c.team_full_name.as_deref(), p)
+                })
+            });
+            if let Some(c) = best {
+                let e = &mut enriched[i];
+                e.player_id = Some(c.player_id);
+                // Prefer the linked team_id over the earlier short-name fallback.
+                if let Some(tid) = c.team_id {
+                    e.previous_team_id = Some(tid);
+                }
+                e.source_season = Some(c.season);
+                e.previous_team_full = c.team_name.clone();
+                e.primary_class = c.primary_class.clone();
+                e.secondary_class = c.secondary_class.clone();
+                e.campom = c.campom;
+                e.campom_pct = c.campom_pct;
+                e.minutes_per_game = c.minutes_per_game;
+                e.games_played = c.games_played;
+                e.net_on_off = c.net_on_off;
+                e.on_net_rtg = c.on_net_rtg;
+                e.off_net_rtg = c.off_net_rtg;
+                e.on_off_source = c.on_off_source.clone();
+                e.on_off_off_poss = c.on_off_off_poss;
+                e.rapm_net = c.rapm_net;
+                e.rapm_paired_poss = c.rapm_paired_poss;
+                e.campom_o = c.campom_o;
+                e.campom_d = c.campom_d;
+            }
+        }
+    }
 
     // Phase 5c trajectory projections — predicted CamPom for the
     // transfer's first destination season (= source-season `year` + 1).
@@ -411,17 +508,20 @@ async fn transfer_list(
             }
         }
         if !need_live.is_empty() {
-            match fetch_player_trajectory_rows(&state.db.pool, &need_live, year).await {
+            match fetch_player_trajectory_rows(&state.db.pool, &need_live).await {
                 Ok(row_map) => {
                     let mut indices: Vec<usize> = Vec::new();
                     let mut feature_vectors: Vec<[f32; TRAJECTORY_NUM_FEATURES]> = Vec::new();
                     for (i, e) in enriched.iter().enumerate() {
                         if let Some(pid) = e.player_id
                             && !oof_map.contains_key(&pid)
-                            && let Some(row) = row_map.get(&pid)
+                            && let Some((row, src_season)) = row_map.get(&pid)
                         {
                             indices.push(i);
-                            feature_vectors.push(build_trajectory_features(row, year));
+                            // `src_season` is the player's own source season —
+                            // `year` for a normal transfer, earlier for a sat-out
+                            // one (issue #146, e.g. Pierce's Princeton 2025).
+                            feature_vectors.push(build_trajectory_features(row, *src_season));
                         }
                     }
                     match state.predictor.predict_trajectory_batch(&feature_vectors) {

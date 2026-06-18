@@ -50,6 +50,15 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use uuid::Uuid;
 
+/// How many seasons before a transfer's portal `year` to look back when the
+/// player has no stat row in the season the portal year binds to — they sat out
+/// / graduated early to preserve eligibility (issue #146, e.g. Caden Pierce:
+/// last played Princeton 2025, sat out 2026, entered the 2026 portal bound for
+/// Purdue). Single source of truth shared by the transfer→player resolver
+/// (`cstat-ingest`), the `/api/transfers/{year}` route, and the roster
+/// projection's incoming-arrivals path below.
+pub const TRANSFER_SEASON_LOOKBACK: i32 = 2;
+
 /// Which NBA-draft scenario to materialize. The floor / ceiling pair is
 /// the API's honesty story for the *pre-deadline* window: while a player is
 /// only `declared` we don't know if they'll withdraw, so we project both
@@ -726,6 +735,72 @@ pub async fn compose_all_projections(
         roster_by_team.entry(team_id).or_default().push((row, name));
     }
 
+    // Issue #146 — a transfer whose player sat out the base season (graduated
+    // early to preserve eligibility, redshirt, gap year) has no base-season
+    // stat row, so they're absent from `player_team` above and the bucketing
+    // loop below would silently drop them (no incoming arrival at their
+    // destination). Their resolved `cstat_player_id` is season-scoped, so it
+    // pins the exact source-season row; pull those directly and fold them into
+    // the lookup maps. Bounded by `TRANSFER_SEASON_LOOKBACK` to match the
+    // resolver. These rows belong to a *prior*-season team UUID that the
+    // per-team loop (over base-season `teams`) never visits, so they only ever
+    // surface as arrivals at their destination — never as a returning/outbound
+    // member of some stale team.
+    let satout_lookup: HashMap<Uuid, PlayerRow> = {
+        let known: HashSet<Uuid> = player_team.keys().copied().collect();
+        let satout_ids: Vec<Uuid> = transfers
+            .iter()
+            .filter_map(|t| t.cstat_player_id)
+            .filter(|pid| !known.contains(pid))
+            .collect();
+        let mut lookup: HashMap<Uuid, PlayerRow> = HashMap::new();
+        if !satout_ids.is_empty() {
+            let satout_rows: Vec<RosterRow> = sqlx::query_as::<_, RosterRow>(
+                r#"
+                SELECT
+                    p.id   AS player_id,
+                    p.name AS player_name,
+                    pss.team_id,
+                    p.class_year,
+                    (COALESCE(pss.minutes_per_game, 0) * COALESCE(pss.games_played, 0))::float8 AS total_min,
+                    COALESCE(pss.minutes_per_game, 0)::float8 AS mpg,
+                    pss.ppg, pss.rpg, pss.apg, pss.spg, pss.bpg, pss.topg,
+                    pss.true_shooting_pct AS ts,
+                    pss.effective_fg_pct  AS efg,
+                    pss.usage_rate        AS usg,
+                    pss.ast_pct, pss.tov_pct, pss.orb_pct, pss.drb_pct,
+                    pss.stl_pct, pss.blk_pct, pss.ft_rate,
+                    pa.primary_class,
+                    pa.secondary_class,
+                    tps.cam_gbpm_v3_psos AS cam_v3
+                FROM player_season_stats pss
+                JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+                LEFT JOIN player_archetypes pa
+                    ON pa.player_id = pss.player_id AND pa.season = pss.season
+                LEFT JOIN torvik_player_stats tps
+                    ON tps.player_id = pss.player_id AND tps.season = pss.season
+                WHERE p.id = ANY($1)
+                  AND pss.season BETWEEN $2 AND $3
+                  AND COALESCE(pss.games_played, 0) >= $4
+                  AND COALESCE(pss.minutes_per_game, 0) >= $5
+                "#,
+            )
+            .bind(&satout_ids)
+            .bind(base_season - TRANSFER_SEASON_LOOKBACK)
+            .bind(base_season - 1)
+            .bind(QUAL_MIN_GAMES_PLAYED)
+            .bind(QUAL_MIN_MPG)
+            .fetch_all(pool)
+            .await?;
+            for row in satout_rows {
+                let pid = row.player_id;
+                player_team.insert(pid, row.team_id);
+                lookup.insert(pid, row.into_player_row());
+            }
+        }
+        lookup
+    };
+
     // Recruits: bucket by destination team_id. Each recruit synthesises
     // a minimal PlayerRow (`freshman_row`) carrying the freshman model's
     // per-recruit projected CamPom. Predictions are batched: one [N, 13]
@@ -908,13 +983,16 @@ pub async fn compose_all_projections(
     // --- Per-team composition. ------------------------------------------
     // PlayerRow lookup so the incoming-portal arrivals can pull the
     // source-team PlayerRow without re-querying.
-    let player_row_lookup: HashMap<Uuid, PlayerRow> = roster_by_team
+    let mut player_row_lookup: HashMap<Uuid, PlayerRow> = roster_by_team
         .values()
         .flat_map(|rows| {
             rows.iter()
                 .map(|(r, _)| (r.player_id, r.clone().into_player_row()))
         })
         .collect();
+    // Fold in the sat-out transfers (issue #146) so their destination's
+    // `arrivals` lookup resolves to the prior-season source PlayerRow.
+    player_row_lookup.extend(satout_lookup);
 
     let mut out: Vec<ProjectedRoster> = Vec::with_capacity(teams.len());
     for team in &teams {
@@ -1069,8 +1147,9 @@ pub async fn compose_all_projections(
 /// trained on, `trajectory_oof_predictions` holds leave-one-pair-out
 /// predictions — honest, not in-sample. Players without an OOF row
 /// (the live forward year, or transitions the model didn't train on)
-/// fall through to live trajectory inference off their `base_season`
-/// line.
+/// fall through to live trajectory inference off each player's own source
+/// season (season-scoped `player_id`, so it's self-pinning — a returner's
+/// base season, or an earlier season for a sat-out arrival; issue #146).
 ///
 /// Returns a `player_id → projected cam_v3` map. Players the trajectory
 /// model can't score (no qualifying prior season) are simply absent;
@@ -1082,7 +1161,6 @@ pub async fn project_returner_cam_v3(
     pool: &PgPool,
     predictor: &Predictor,
     player_ids: &[Uuid],
-    base_season: i32,
     target_season: i32,
 ) -> Result<HashMap<Uuid, f64>, sqlx::Error> {
     if player_ids.is_empty() {
@@ -1102,12 +1180,15 @@ pub async fn project_returner_cam_v3(
         .copied()
         .collect();
     if !need_live.is_empty() {
-        let row_map = fetch_player_trajectory_rows(pool, &need_live, base_season).await?;
+        let row_map = fetch_player_trajectory_rows(pool, &need_live).await?;
         let mut ids: Vec<Uuid> = Vec::with_capacity(row_map.len());
         let mut feats = Vec::with_capacity(row_map.len());
-        for (pid, row) in row_map {
+        // `src_season` is each player's own season (base_season for returners,
+        // an earlier season for a sat-out arrival; issue #146) — not a fixed
+        // year — so the feature block's season-derived inputs stay correct.
+        for (pid, (row, src_season)) in row_map {
             ids.push(pid);
-            feats.push(build_trajectory_features(&row, base_season));
+            feats.push(build_trajectory_features(&row, src_season));
         }
         if !feats.is_empty() {
             match predictor.predict_trajectory_batch(&feats) {

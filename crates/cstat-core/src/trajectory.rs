@@ -290,15 +290,22 @@ pub async fn fetch_player_trajectory_row(
 /// player_id so the caller can pair predictions back to its own list
 /// (transfer route's matched players, projection route's roster, etc.).
 ///
-/// Players who don't pass the gate (`≥5 GP, ≥5 MPG` in the requested
+/// Players who don't pass the gate (`≥5 GP, ≥5 MPG` in their source
 /// season) are silently absent from the returned map — same semantics as
 /// the single-row helper returning `None`. The caller renders "no
 /// projection" for those.
+///
+/// `player_id` is season-scoped (one row per `(natstat_id, season)`), so each
+/// id pins its own source season; there's no need to constrain it externally.
+/// The returned tuple carries that source season alongside the row so the caller
+/// feeds the correct `prior_season` to [`build_trajectory_features`]. Dropping
+/// the old explicit-season filter is what lets a transfer who sat out the
+/// nominal portal year still project from their last played season (issue #146,
+/// e.g. Caden Pierce → Princeton 2025).
 pub async fn fetch_player_trajectory_rows(
     pool: &PgPool,
     player_ids: &[Uuid],
-    season: i32,
-) -> Result<std::collections::HashMap<Uuid, TrajectoryPlayerRow>, sqlx::Error> {
+) -> Result<std::collections::HashMap<Uuid, (TrajectoryPlayerRow, i32)>, sqlx::Error> {
     if player_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
@@ -306,6 +313,7 @@ pub async fn fetch_player_trajectory_rows(
     #[derive(sqlx::FromRow)]
     struct RowWithId {
         player_id: Uuid,
+        season: i32,
         #[sqlx(flatten)]
         row: TrajectoryPlayerRow,
     }
@@ -314,6 +322,7 @@ pub async fn fetch_player_trajectory_rows(
         r#"
         SELECT
             pss.player_id,
+            pss.season,
             pss.minutes_per_game,
             pss.games_played,
             ply.height_inches,
@@ -366,19 +375,17 @@ pub async fn fetch_player_trajectory_rows(
         LEFT JOIN recruits rec
             ON rec.cstat_player_id = pss.player_id
         WHERE pss.player_id = ANY($1)
-          AND pss.season = $2
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 5
         "#,
     )
     .bind(player_ids)
-    .bind(season)
     .fetch_all(pool)
     .await?;
 
     let mut map = std::collections::HashMap::with_capacity(rows.len());
     for r in rows {
-        map.insert(r.player_id, r.row);
+        map.insert(r.player_id, (r.row, r.season));
     }
     Ok(map)
 }

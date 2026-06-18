@@ -403,14 +403,8 @@ async fn projection_list(
         traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
         traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
     }
-    let projected_cam = project_returner_cam_v3(
-        &state.db.pool,
-        &state.predictor,
-        &traj_ids,
-        base_season,
-        year,
-    )
-    .await
+    let projected_cam = project_returner_cam_v3(&state.db.pool, &state.predictor, &traj_ids, year)
+        .await
     .unwrap_or_else(|e| {
         tracing::warn!(
             error = %e,
@@ -894,15 +888,18 @@ async fn projection_team_detail(
             std::collections::HashMap::new()
         } else {
             let arrival_pids: Vec<Uuid> = projection.arrivals.iter().map(|a| a.player_id).collect();
+            // No season filter: an arrival's `player_id` is season-scoped (one
+            // row per player per season), so it pins its own source season —
+            // base_season for a normal transfer, an earlier season for a player
+            // who sat out (issue #146, e.g. Caden Pierce's Princeton 2025 row).
             let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
                 r#"
             SELECT pss.player_id, t.id, COALESCE(t.short_name, t.name)
             FROM player_season_stats pss
             JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
-            WHERE pss.season = $1 AND pss.player_id = ANY($2)
+            WHERE pss.player_id = ANY($1)
             "#,
             )
-            .bind(base_season)
             .bind(&arrival_pids)
             .fetch_all(pool)
             .await
@@ -989,13 +986,16 @@ async fn projection_team_detail(
             .copied()
             .collect();
         if !need_live.is_empty() {
-            match fetch_player_trajectory_rows(pool, &need_live, base_season).await {
+            match fetch_player_trajectory_rows(pool, &need_live).await {
                 Ok(row_map) => {
                     let mut ids: Vec<Uuid> = Vec::new();
                     let mut feature_vectors: Vec<[f32; TRAJECTORY_NUM_FEATURES]> = Vec::new();
-                    for (pid, row) in row_map {
+                    // `src_season` is each player's own season — base_season for a
+                    // returner, an earlier season for a sat-out arrival (issue
+                    // #146) — so season-derived features stay correct.
+                    for (pid, (row, src_season)) in row_map {
                         ids.push(pid);
-                        feature_vectors.push(build_trajectory_features(&row, base_season));
+                        feature_vectors.push(build_trajectory_features(&row, src_season));
                     }
                     match state.predictor.predict_trajectory_batch(&feature_vectors) {
                         Ok(preds) => {
