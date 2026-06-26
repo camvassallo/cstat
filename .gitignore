@@ -101,6 +101,12 @@ __pycache__/
 # for review locally, never meant to ship.
 pr.diff
 
+# Ad-hoc debugging scratch — PBP audit exports and pasted box scores from
+# one-off investigations (e.g. the NatStat lineup-coverage audit). Local only.
+/boxscore.txt
+/natstat_pbp_*.json
+/natstat_pbp_*.csv
+
 # Hand-written PR description draft — local scratch, never meant to ship.
 pr.md
 

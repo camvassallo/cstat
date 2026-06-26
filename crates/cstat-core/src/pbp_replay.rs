@@ -21,7 +21,7 @@
 //! tested deterministically; the DB-backed runner and the oracle-accuracy
 //! measurement live alongside it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
 /// One play as the replay consumes it, in `seq` order within a single game.
@@ -66,6 +66,11 @@ pub struct ReplayResult {
     /// Non-sub plays attributed while a team's set was not exactly five — the
     /// honest quality signal for how clean the replay was.
     pub plays_off_five: u32,
+    /// Over-five sets repaired by pulling forward a mis-ordered sub-out (the
+    /// 2025 PBP feed emits plays out of `seq` order, landing a sub-in before its
+    /// paired sub-out). Each eviction rescues a stint that the exactly-5 rollup
+    /// would otherwise drop. See `evict_pending_subout`.
+    pub over_five_evictions: u32,
 }
 
 /// In-progress stint accumulator.
@@ -98,8 +103,12 @@ pub fn replay_game(
     let (mut last_home, mut last_vis) = (0i32, 0i32);
     // Score at the end of the previously-closed stint, for delta chaining.
     let (mut prev_home, mut prev_vis) = (0i32, 0i32);
+    // Sub rows already applied early by `evict_pending_subout`'s lookahead; skip
+    // them when iteration reaches their index so a sub isn't applied twice.
+    let mut consumed: HashSet<usize> = HashSet::new();
 
-    for p in plays {
+    for i in 0..plays.len() {
+        let p = &plays[i];
         // Carry the running score forward with `max`: it only ever increases, so
         // a spurious low/zero value (some event rows — "media timeout", "End of
         // period" — report score 0 instead of the running total) must not reset
@@ -112,12 +121,27 @@ pub fn replay_game(
         }
 
         if p.is_sub {
+            if consumed.contains(&i) {
+                continue; // already applied early via lookahead
+            }
             match (p.team_id, p.player_id) {
                 (Some(team), Some(player)) if team == home_team => {
                     apply_sub(&mut home, player, p.sub_in);
+                    if p.sub_in
+                        && home.len() > 5
+                        && evict_pending_subout(&mut home, home_team, plays, i, &mut consumed)
+                    {
+                        result.over_five_evictions += 1;
+                    }
                 }
                 (Some(team), Some(player)) if team == vis_team => {
                     apply_sub(&mut vis, player, p.sub_in);
+                    if p.sub_in
+                        && vis.len() > 5
+                        && evict_pending_subout(&mut vis, vis_team, plays, i, &mut consumed)
+                    {
+                        result.over_five_evictions += 1;
+                    }
                 }
                 _ => result.unresolved_subs += 1,
             }
@@ -166,6 +190,51 @@ fn apply_sub(set: &mut BTreeSet<Uuid>, player: Uuid, sub_in: bool) {
     } else {
         set.remove(&player);
     }
+}
+
+/// How far forward to scan for the pending sub-out when a set goes over five.
+/// A mis-ordered sub-out lands within the same dead-ball cluster — a handful of
+/// rows away — so the window is deliberately tight: it bounds the cost and
+/// avoids stealing a player's genuinely-later sub-out.
+const OVER_FIVE_LOOKAHEAD: usize = 24;
+
+/// Repair an over-five set produced by out-of-order play rows: a sub-in landed
+/// before its paired sub-out (the set grew to six instead of swapping at five).
+/// The player the live sub-in actually displaced is the one whose sub-out comes
+/// *next* for this team, so scan a bounded window ahead for that team's next
+/// sub-OUT of a player still on the floor, apply it now, and mark its row
+/// `consumed` so iteration skips it on arrival. Returns whether it evicted.
+///
+/// Without this, the next attributable play is charged to a six-man lineup that
+/// the exactly-5 rollup discards — the mechanism behind the 2025-26 lineup
+/// consolidation regression. When no pending sub-out is found in the window
+/// (a genuinely lost event), the set is left as-is: degrades to the prior
+/// behavior rather than evicting the wrong player.
+fn evict_pending_subout(
+    set: &mut BTreeSet<Uuid>,
+    team: Uuid,
+    plays: &[ReplayPlay],
+    from: usize,
+    consumed: &mut HashSet<usize>,
+) -> bool {
+    for (j, q) in plays
+        .iter()
+        .enumerate()
+        .skip(from + 1)
+        .take(OVER_FIVE_LOOKAHEAD)
+    {
+        if q.is_sub
+            && !q.sub_in
+            && q.team_id == Some(team)
+            && !consumed.contains(&j)
+            && let Some(pl) = q.player_id
+            && set.remove(&pl)
+        {
+            consumed.insert(j);
+            return true;
+        }
+    }
+    false
 }
 
 /// Close a builder into a stint, charging it the scoring since the previous
@@ -811,6 +880,49 @@ mod tests {
             score_home: None,
             score_vis: None,
         }
+    }
+
+    #[test]
+    fn over_five_from_misordered_subout_is_repaired() {
+        // The 2025 PBP feed lands plays out of `seq` order: player 6 subs IN
+        // before the paired sub-out of player 5, with a scoring play wedged
+        // between. Naively the wedged play is charged to a six-man home set (and
+        // the exactly-5 rollup drops it). The lookahead must pull player 5's
+        // pending sub-out forward so the play reads as the intended {1,2,3,4,6}.
+        let (hs, vs) = starters(); // home 1..5, vis 11..15
+        let plays = vec![
+            play(0, 0, 0),
+            sub(1, HOME, 6, true), // 6 in -> home would balloon to {1,2,3,4,5,6}
+            play(2, 2, 0),         // must attribute to {1,2,3,4,6}, not six-man
+            sub(3, HOME, 5, false), // 5 out — mis-ordered to land after the play
+            play(4, 4, 0),
+        ];
+        let r = replay_game(HOME, VIS, &hs, &vs, &plays);
+        assert_eq!(r.over_five_evictions, 1);
+        assert_eq!(r.plays_off_five, 0, "no play charged to an off-five set");
+        for s in &r.stints {
+            assert_eq!(s.home_lineup.len(), 5, "every stint is exactly five");
+        }
+        assert_eq!(
+            r.stints.last().unwrap().home_lineup,
+            [1, 2, 3, 4, 6].iter().map(|&n| id(n)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn in_order_swap_triggers_no_eviction() {
+        // Sanity: a clean swap (5 out THEN 6 in) never exceeds five, so the
+        // lookahead stays dormant and the prior behavior is unchanged.
+        let (hs, vs) = starters();
+        let plays = vec![
+            play(0, 0, 0),
+            sub(1, HOME, 5, false),
+            sub(2, HOME, 6, true),
+            play(3, 2, 0),
+        ];
+        let r = replay_game(HOME, VIS, &hs, &vs, &plays);
+        assert_eq!(r.over_five_evictions, 0);
+        assert_eq!(r.plays_off_five, 0);
     }
 
     #[test]
