@@ -217,9 +217,12 @@ fn evict_pending_subout(
     from: usize,
     consumed: &mut HashSet<usize>,
 ) -> bool {
-    let end = (from + 1 + OVER_FIVE_LOOKAHEAD).min(plays.len());
-    for j in (from + 1)..end {
-        let q = &plays[j];
+    for (j, q) in plays
+        .iter()
+        .enumerate()
+        .skip(from + 1)
+        .take(OVER_FIVE_LOOKAHEAD)
+    {
         if q.is_sub
             && !q.sub_in
             && q.team_id == Some(team)
@@ -889,8 +892,8 @@ mod tests {
         let (hs, vs) = starters(); // home 1..5, vis 11..15
         let plays = vec![
             play(0, 0, 0),
-            sub(1, HOME, 6, true),  // 6 in -> home would balloon to {1,2,3,4,5,6}
-            play(2, 2, 0),          // must attribute to {1,2,3,4,6}, not six-man
+            sub(1, HOME, 6, true), // 6 in -> home would balloon to {1,2,3,4,5,6}
+            play(2, 2, 0),         // must attribute to {1,2,3,4,6}, not six-man
             sub(3, HOME, 5, false), // 5 out — mis-ordered to land after the play
             play(4, 4, 0),
         ];
