@@ -623,6 +623,40 @@ pub async fn ingest_all_team_performances(
     Ok(count)
 }
 
+/// Ingest team performances (team-level box scores) for a specific date range.
+///
+/// Mirrors [`ingest_player_performances_by_date_range`] so the incremental
+/// `update` path can populate `team_game_stats` (four-factors / AdjEM / W-L
+/// inputs) for newly-ingested games — not just `player_game_stats`.
+pub async fn ingest_team_performances_by_date_range(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    start: &str,
+    end: &str,
+) -> Result<u64, NatStatError> {
+    let range = format!("{},{}", start, end);
+    let pages = client
+        .get_all_pages("teamperfs", Some(&range), None)
+        .await?;
+
+    let mut count = 0u64;
+    for page in &pages {
+        let perfs = extract_results(page);
+        for perf in perfs {
+            if upsert_team_game_stats(perf, pool, season).await? {
+                count += 1;
+            }
+        }
+    }
+
+    info!(
+        count,
+        season, start, end, "team performances ingested for date range"
+    );
+    Ok(count)
+}
+
 /// Ingest team performances (team-level box scores) for a specific team and season.
 pub async fn ingest_team_performances(
     client: &NatStatClient,

@@ -175,10 +175,24 @@ impl<'a> SeasonIngester<'a> {
         )
         .await?;
 
+        // Team-level box scores must be ingested too — `team_game_stats` feeds
+        // four-factors / AdjEM / W-L derivation. Omitting this is why games
+        // brought in by the incremental path historically carried player box
+        // scores but no team box scores (issue #148).
+        ingest.team_performances = super::games::ingest_team_performances_by_date_range(
+            self.client,
+            self.pool,
+            self.season,
+            start_date,
+            end_date,
+        )
+        .await?;
+
         info!(
             season = self.season,
             games = ingest.games,
             player_performances = ingest.player_performances,
+            team_performances = ingest.team_performances,
             "incremental ingestion complete"
         );
 
