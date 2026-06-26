@@ -60,10 +60,16 @@ async fn lineup_rankings(
     // Floor scales with combo size — a duo/trio pools shared minutes across
     // every 5-man unit it appears in, so it accrues minutes far faster than an
     // exact 5-man and needs a higher bar to filter thin-sample outliers.
+    //
+    // Floors lowered (was 300/200/100) for the heavily-substituted modern game:
+    // at the old 100-min 5-man bar only ~23% of 2026 teams had a single
+    // qualifying unit (vs ~70% in 2023-24), so most teams — including Duke,
+    // whose top unit lands at 99.1 min — vanished from the ranking entirely.
+    // 50 restores ~68% team coverage, comparable to what 2023-24 saw at 100.
     let min_minutes = params.min_minutes.unwrap_or(match size {
-        2 => 300.0,
-        3 => 200.0,
-        _ => 100.0,
+        2 => 150.0,
+        3 => 100.0,
+        _ => 50.0,
     });
     let limit = params.limit.unwrap_or(100).clamp(1, 500);
     let order_by_minutes = params.order.as_deref() == Some("minutes");

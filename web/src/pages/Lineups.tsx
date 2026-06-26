@@ -104,9 +104,25 @@ export function Lineups() {
 
   useEffect(() => {
     let cancelled = false;
+    // Drill-down mode: when filtered to one player or team, this is no longer
+    // the cross-team leaderboard, so the per-size denoising floor (50/100/150)
+    // is wrong — it hides every exact 5-man unit of a deep-rotation player whose
+    // floor-time scatters across many small combos (e.g. a player whose top duo
+    // pools 580 min but whose best single 5-man is ~45 min would show duos/trios
+    // but no 5-man). Mirror the team-page panels: order by most-used and drop to
+    // a token floor that only trims 1-possession blowout noise. The unfiltered
+    // global ranking keeps its default floor + adj_net ordering.
+    const drill = Boolean(playerFilter || teamFilter);
     // No synchronous reset — the prior table stays up until the new one lands
     // (project convention; see Rankings.tsx).
-    fetchLineupRankings({ size, season, player: playerFilter, team: teamFilter })
+    fetchLineupRankings({
+      size,
+      season,
+      player: playerFilter,
+      team: teamFilter,
+      order: drill ? 'minutes' : undefined,
+      minMinutes: drill ? 10 : undefined,
+    })
       .then((res) => {
         if (cancelled) return;
         setRows(res.lineups);
