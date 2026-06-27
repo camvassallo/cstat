@@ -58,11 +58,12 @@ const BASE_URL_V4: &str = "https://api4.natst.at";
 const BASE_URL_V3: &str = "https://api3.natst.at";
 const SERVICE: &str = "mbb";
 
-/// Default rate budget (calls/hour) — NatStat standard tier.
-pub const DEFAULT_MAX_PER_HOUR: u32 = 500;
+/// Default rate budget (calls/hour) — NatStat API+ tier (upgraded from the
+/// 500/hr standard tier). Override with `NATSTAT_MAX_PER_HOUR`.
+pub const DEFAULT_MAX_PER_HOUR: u32 = 2500;
 
 /// Read the per-hour rate budget from `NATSTAT_MAX_PER_HOUR`, falling back to
-/// the standard-tier default. Values that fail to parse OR parse to a
+/// the [`DEFAULT_MAX_PER_HOUR`] API+ default. Values that fail to parse OR parse to a
 /// non-positive integer log a warning and fall back; an unset variable falls
 /// back silently.
 pub fn rate_budget_from_env() -> u32 {
@@ -85,7 +86,7 @@ impl NatStatClient {
     /// Create a new NatStat API v4 client.
     ///
     /// - `api_key`: your NatStat API key (format: `xxxx-xxxxxx`)
-    /// - `max_per_hour`: rate limit (500 for standard accounts)
+    /// - `max_per_hour`: rate limit (2500 for the API+ tier; 500 standard)
     pub fn new(pool: PgPool, api_key: String, max_per_hour: u32) -> Self {
         Self {
             http: Client::builder()

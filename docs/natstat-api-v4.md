@@ -46,6 +46,7 @@ https://api4.natst.at/{apikey}/{endpoint}/{service}/{range}/{offset}
 | Standard | 500 calls/hour | Top of each hour | Max 4 queries/sec |
 | API+ | 100,000 calls/day | 12:01 AM ET daily | Unlimited |
 
+- cstat is on **API+**; the client defaults to **2500 calls/hour** (`DEFAULT_MAX_PER_HOUR`), a safe sustained rate under the 100k/day cap. Override with `NATSTAT_MAX_PER_HOUR`.
 - Standard accounts are limited to a certain number of different IP blocks within 24 hours
 - Rate limit status is returned in the `user` node of every response:
   - `ratelimit` — total limit
@@ -147,7 +148,9 @@ Auto-populated nodes (always included):
 
 ---
 
-## Endpoints (All 30 MBB-Compatible)
+## Endpoints
+
+The MBB endpoint dropdown lists **31** endpoints; all are documented below. 30 return MBB data — `pitchfx` is a baseball-only endpoint that appears in the shared dropdown but returns `NO_DATA` for MBB (see [Sport-Inapplicable](#sport-inapplicable-endpoints)).
 
 ### Primary Endpoints
 
@@ -194,11 +197,13 @@ List of games in reverse chronological order. With game code: full metadata, sco
 ### Secondary Endpoints
 
 #### /playerperfs
-All player performances (box scores) in reverse chronological order. Filter by season, player, game, team, date range.
+All player performances (box scores) in reverse chronological order. Filter by season, player, team, date range.
 
 **Max results:** 100
 
-**Range params:** `dataformat`, `season`, `date`, `daterange`, `teamcode`, `leaguecode`, `playercode`, `gamecode`, `search`
+**Range params:** `dataformat`, `season`, `date`, `daterange`, `teamcode`, `leaguecode`, `playercode`, `search`
+
+**Caveat (verified 2026-06-27, v4 beta):** a bare `gamecode` in the range does **not** filter to a single game — `playerperfs/mbb/<gamecode>` (and `season,gamecode` / `game,gamecode` variants) all return the entire league (`results-total` unchanged). For a single game's player box scores use the `games;boxscores/<gamecode>` hydration instead (its `playerperfs` / `teamperfs` sub-objects carry the per-game lines). See [/games](#games).
 
 #### /teamperfs
 All team performances in reverse chronological order.
@@ -379,6 +384,8 @@ List of player codes for use in other queries.
 
 **Max results:** 100
 
+**Range params:** none (per the official param reference — unlike `/teamcodes` and `/leaguecodes`, `/playercodes` takes no range filters; paginate the full list).
+
 #### /leaguecodes
 List of league codes for use in other queries.
 
@@ -398,6 +405,11 @@ Returns: `status` (current season, season day, qualifier criteria), `totals` (ga
 ```
 
 As of 2026-04-09 for MBB: 159,537 games, 2.2M performances, 3.4M play-by-play, data back to 2007.
+
+### Sport-Inapplicable Endpoints
+
+#### /pitchfx
+Baseball pitch-tracking data. Surfaces in the MBB endpoint dropdown because the account has all-sports NatStat access and the dropdown shares one endpoint list across sports; it returns `NO_DATA` (`success: 0`) for MBB — there is no basketball equivalent. Listed here only so the reference accounts for all 31 dropdown entries; do not query it for this (MBB) project.
 
 ---
 

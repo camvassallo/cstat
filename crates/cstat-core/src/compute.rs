@@ -123,6 +123,16 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
                 .execute(pool)
                 .await?;
 
+            // player_on_off has a RESTRICT FK to players(id) AND a UNIQUE
+            // (season, player_id) that would collide if we reassigned the dup's
+            // rows onto the primary. It's fully deleted + recomputed later in
+            // the pipeline (compute_pbp_lineups), so drop the dup's rows here
+            // like the season stats / percentiles above rather than reassign.
+            sqlx::query("DELETE FROM player_on_off WHERE player_id = $1")
+                .bind(dup_id)
+                .execute(pool)
+                .await?;
+
             // Step 3.5: Reassign player_id on tables whose FK to players is
             // RESTRICT (no CASCADE) and whose rows are valuable enough to
             // keep through the merge. Torvik has UNIQUE(torvik_pid, season),

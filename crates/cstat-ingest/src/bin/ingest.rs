@@ -624,7 +624,8 @@ async fn main() -> Result<()> {
 
         Commands::Status => {
             let remaining = client.rate_limit_remaining().await;
-            println!("Local rate limit tokens: {remaining}/1500");
+            let budget = cstat_ingest::rate_budget_from_env();
+            println!("Local rate limit tokens: {remaining}/{budget}");
         }
 
         Commands::CleanCache => {
