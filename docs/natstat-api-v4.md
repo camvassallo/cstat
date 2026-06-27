@@ -46,6 +46,7 @@ https://api4.natst.at/{apikey}/{endpoint}/{service}/{range}/{offset}
 | Standard | 500 calls/hour | Top of each hour | Max 4 queries/sec |
 | API+ | 100,000 calls/day | 12:01 AM ET daily | Unlimited |
 
+- cstat is on **API+**; the client defaults to **2500 calls/hour** (`DEFAULT_MAX_PER_HOUR`), a safe sustained rate under the 100k/day cap. Override with `NATSTAT_MAX_PER_HOUR`.
 - Standard accounts are limited to a certain number of different IP blocks within 24 hours
 - Rate limit status is returned in the `user` node of every response:
   - `ratelimit` — total limit
