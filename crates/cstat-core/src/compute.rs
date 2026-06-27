@@ -126,7 +126,7 @@ pub async fn deduplicate_players(pool: &PgPool, season: i32) -> Result<u64, sqlx
             // player_on_off has a RESTRICT FK to players(id) AND a UNIQUE
             // (season, player_id) that would collide if we reassigned the dup's
             // rows onto the primary. It's fully deleted + recomputed later in
-            // the pipeline (compute_player_on_off), so drop the dup's rows here
+            // the pipeline (compute_pbp_lineups), so drop the dup's rows here
             // like the season stats / percentiles above rather than reassign.
             sqlx::query("DELETE FROM player_on_off WHERE player_id = $1")
                 .bind(dup_id)
