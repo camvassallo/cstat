@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CLASS_ORDER, classColor, classTagline } from './archetypeColors';
 
 export type MatchMode = 'any' | 'all';
@@ -40,7 +40,29 @@ export default function ArchetypeFilter({
   onClear,
 }: Props) {
   const [open, setOpen] = useState(false);
+  // Which button edge the panel anchors to. The filter lives in different
+  // layouts (right-aligned toolbar controls on Players, left-wrapping flex on
+  // the Transfer Portal), so a fixed `right-0` would spill the 240px panel off
+  // the left edge on mobile. Pick the side with more room on open + resize.
+  const [align, setAlign] = useState<'left' | 'right'>('right');
   const ref = useRef<HTMLDivElement>(null);
+
+  // Anchor to whichever side keeps the panel on-screen (more available width).
+  // Combined with the panel's viewport-clamped max-width, it can never clip.
+  useLayoutEffect(() => {
+    if (!open || !ref.current) return;
+    const place = () => {
+      const btn = ref.current?.getBoundingClientRect();
+      if (!btn) return;
+      const MARGIN = 8;
+      const rightRoom = btn.right - MARGIN; // panel grows left from button's right edge
+      const leftRoom = window.innerWidth - MARGIN - btn.left; // grows right from left edge
+      setAlign(rightRoom >= leftRoom ? 'right' : 'left');
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open]);
 
   // Close on outside-click / Escape.
   useEffect(() => {
@@ -84,7 +106,11 @@ export default function ArchetypeFilter({
       </button>
 
       {open && (
-        <div className="absolute z-20 mt-1 right-0 w-60 rounded-md border border-gray-700 bg-gray-900 shadow-lg py-1 text-xs">
+        <div
+          className={`absolute z-20 mt-1 w-60 max-w-[calc(100vw-1rem)] rounded-md border border-gray-700 bg-gray-900 shadow-lg py-1 text-xs ${
+            align === 'right' ? 'right-0' : 'left-0'
+          }`}
+        >
           {/* Match mode — OR (union, 'any') vs AND (intersection, 'all'). */}
           <div className="flex items-center justify-between gap-2 px-3 py-1.5">
             <span className="text-gray-500">Match</span>
