@@ -1176,8 +1176,13 @@ saturated server still passes its platform healthcheck):
   (fail fast when the pool is saturated) and a 15s per-connection
   `statement_timeout` (kill runaway queries) — API pool only; the ingest/compute
   CLI keeps the unguarded `connect` so its long batch writes aren't capped.
-Follow-up (deferred): long-lived `Cache-Control` on the hashed SPA assets
-(`/assets/*`), and an optional Cloudflare cache-purge call wired into
+- **Immutable SPA asset caching** (`static_asset_cache`): content-hashed
+  `/assets/*` build files get `Cache-Control: public, max-age=31536000,
+  immutable` (the Vite filename hash is the cache-buster). index.html / favicon
+  are excluded so they fall through to `ServeDir`'s ETag revalidation and a
+  deploy is picked up immediately. Applied by wrapping the static fallback in a
+  nested `Router` so the layer covers it unambiguously.
+Follow-up (deferred): an optional Cloudflare cache-purge call wired into
 `sync_to_prod.sh` so a prod push invalidates the edge immediately.
 
 ### coach_seasons name-variant dedup (ingest)

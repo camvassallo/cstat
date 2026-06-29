@@ -31,6 +31,11 @@ const DEFAULT_MAX_INFLIGHT: usize = 256;
 /// read-only with no per-user state, so shared (`public`) caching is safe.
 const CACHE_CONTROL_VALUE: &str = "public, max-age=300, stale-while-revalidate=600";
 
+/// `Cache-Control` for content-hashed SPA build assets — cache effectively
+/// forever. Safe because the filename hash changes whenever the content does,
+/// so a new build is a new URL (cache-busting is automatic).
+const IMMUTABLE_ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+
 /// Per-request timeout (`REQUEST_TIMEOUT_SECS`, default 30s). Read once at
 /// startup and threaded in as middleware state so it isn't re-parsed per
 /// request.
@@ -109,6 +114,31 @@ pub async fn load_shed(State(sem): State<Arc<Semaphore>>, req: Request, next: Ne
     }
 }
 
+/// Whether a request path serves a content-hashed, immutable build asset. Vite
+/// emits `/assets/<name>-<hash>.{js,css}`; the hash changes on every content
+/// change, so these are safe to cache forever. `index.html`, `/favicon.svg`,
+/// and other un-hashed files are deliberately excluded so a deploy is picked up
+/// immediately (they fall through to `ServeDir`'s ETag/Last-Modified
+/// revalidation instead).
+fn is_immutable_asset_path(path: &str) -> bool {
+    path.starts_with("/assets/")
+}
+
+/// Long-cache content-hashed SPA build assets (`/assets/*`). Applied app-wide
+/// (outermost) so it wraps the static fallback service; a no-op on every other
+/// path, including `/api/*` (which carry their own short-TTL `Cache-Control`).
+pub async fn static_asset_cache(req: Request, next: Next) -> Response {
+    let is_asset = is_immutable_asset_path(req.uri().path());
+    let mut resp = next.run(req).await;
+    if is_asset && resp.status().is_success() {
+        resp.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(IMMUTABLE_ASSET_CACHE_CONTROL),
+        );
+    }
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +161,19 @@ mod tests {
             false
         ));
         assert!(!should_set_cache_header(StatusCode::REQUEST_TIMEOUT, false));
+    }
+
+    #[test]
+    fn only_hashed_asset_paths_are_immutable() {
+        // Content-hashed build assets → cache forever.
+        assert!(is_immutable_asset_path("/assets/index-BgU49MO1.js"));
+        assert!(is_immutable_asset_path("/assets/index-Bg26EKn4.css"));
+        // Un-hashed files must stay revalidatable so deploys are picked up.
+        assert!(!is_immutable_asset_path("/"));
+        assert!(!is_immutable_asset_path("/index.html"));
+        assert!(!is_immutable_asset_path("/favicon.svg"));
+        // API paths carry their own short-TTL header, not the immutable one.
+        assert!(!is_immutable_asset_path("/api/teams/rankings"));
     }
 
     #[test]

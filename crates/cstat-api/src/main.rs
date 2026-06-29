@@ -86,7 +86,16 @@ async fn main() -> Result<()> {
     // but with a 404 status, and browsers bailed before React Router
     // could mount. `fallback(…)` skips that wrapper.
     let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
-    let spa = ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
+    let spa_files =
+        ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
+    // Wrap the static service so content-hashed `/assets/*` get a 1-year
+    // immutable `Cache-Control` (the hash is the cache-buster), while
+    // index.html / favicon fall through to ServeDir's ETag revalidation so a
+    // deploy is picked up immediately. A nested `Router` makes the layer wrap
+    // the fallback service unambiguously.
+    let spa: Router<()> = Router::new()
+        .fallback_service(spa_files)
+        .layer(from_fn(guards::static_asset_cache));
 
     // Serving guards layered onto the data routes only (NOT health/status):
     //   - cache_headers: short-TTL `Cache-Control` so a CDN/browser can serve
