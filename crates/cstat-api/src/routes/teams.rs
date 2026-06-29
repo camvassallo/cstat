@@ -9,10 +9,23 @@ use cstat_core::queries::{self, SortOrder, TeamSortField};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::routes::predict::predict_projection;
+use crate::routes::predict::{ProjectionSummary, predict_projection};
+
+/// Max schedule-game projections in flight at once inside `team_detail`.
+///
+/// Each completed game's projection runs a full-season `compute_pit_campom`
+/// aggregate (its dominant cost), so overlapping them is the win; the bound
+/// keeps a single page load from monopolizing the shared connection pool
+/// (each projection peaks at ~6 connections during its inner `try_join`).
+/// 6 concurrent games overlaps the heavy scans while leaving pool headroom
+/// for other endpoints; sqlx queues any acquire overflow, so this can't
+/// deadlock even if every game peaks together.
+const SCHEDULE_PROJECTION_CONCURRENCY: usize = 6;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -62,9 +75,10 @@ async fn team_lineups(
 /// `GET /api/teams/{id}/coach` — the coach card for a team-detail page.
 ///
 /// Deliberately a DEDICATED route, NOT folded into `team_detail`: that handler
-/// is latency-bound by its serial ~30-game `predict_projection` loop (point-in-
-/// time CamPom rebuild per completed game). This query is two indexed lookups
-/// (`coach_seasons` → `coach_ratings`) and must not wait on that loop, so the
+/// still carries a ~30-game `predict_projection` fan-out (point-in-time CamPom
+/// rebuild per completed game) — now bounded-concurrent rather than serial, but
+/// still the page's heaviest step. This query is two indexed lookups
+/// (`coach_seasons` → `coach_ratings`) and must not wait on that work, so the
 /// frontend fetches it in parallel and the card paints immediately. See
 /// ROADMAP "API latency — team-detail schedule projections".
 ///
@@ -181,32 +195,44 @@ async fn team_detail(
             )
         })?;
 
-    // Project every game using the existing predictor. Inference is fast
-    // (sub-ms per call) so doing it inline keeps the team-detail endpoint a
-    // single round-trip surface. Failures per-game are silently dropped —
-    // the schedule still renders, just without a projection on that row.
+    // Project every game using the existing predictor. Each *completed*
+    // game rebuilds CamPom v3 from pre-game state via the pit bundle, and
+    // that path runs a full-season `compute_pit_campom` aggregate — so a
+    // serial loop over a ~30-game schedule was the team-detail page's
+    // dominant latency. We fan the per-game projections out concurrently
+    // instead, bounded by a semaphore so a single page load can't drain the
+    // shared connection pool out from under other endpoints. Results are
+    // written back by row index, so schedule order is preserved.
+    // Per-game failures are silently dropped — the row still renders, just
+    // without a projection.
+    //
     // Sign convention: `projected_margin` is from the *requested team's*
     // perspective (positive = requested team favored), regardless of host.
     //
     // Honest projections for completed games: when both teams' scores are
     // populated, we treat the row as historical and pass `as_of_date =
     // game_date - 1 day` to the predictor so it rebuilds CamPom v3 from
-    // pre-game state via the pit model bundle. Upcoming games pass `None`
-    // (current behavior — "today" is the only honest cutoff for an unplayed
-    // game). This closes the audit's R3 surface: the column is no longer
-    // a leaky "we'd predict X today" on rows where we already know the
-    // outcome.
-    for entry in schedule.iter_mut() {
-        let opp_id = match entry.opponent_id {
-            Some(id) => id,
-            None => continue,
+    // pre-game state. Upcoming games pass `None` ("today" is the only honest
+    // cutoff for an unplayed game). This closes the audit's R3 surface: the
+    // column is no longer a leaky "we'd predict X today" on rows where we
+    // already know the outcome.
+    let sem = Arc::new(Semaphore::new(SCHEDULE_PROJECTION_CONCURRENCY));
+    let mut tasks: JoinSet<(
+        usize,
+        bool,
+        Option<chrono::NaiveDate>,
+        Option<ProjectionSummary>,
+    )> = JoinSet::new();
+    for (idx, entry) in schedule.iter().enumerate() {
+        let Some(opp_id) = entry.opponent_id else {
+            continue;
         };
         let is_neutral = entry.is_neutral.unwrap_or(false);
         let is_conference = entry.is_conference.unwrap_or(false);
-        // Sort home/away for the predictor's frame, then flip the sign back
-        // to the requested team's perspective if the requested team is
-        // visiting. Neutral games predict symmetric to argument order so the
-        // sign flip is purely semantic.
+        // Sort home/away for the predictor's frame; the sign flip back to the
+        // requested team's perspective happens when results land. Neutral
+        // games predict symmetric to argument order, so the flip is purely
+        // semantic there.
         let requested_is_home = entry.is_home.unwrap_or(false);
         let (host_id, visitor_id) = if requested_is_home {
             (resolved_id, opp_id)
@@ -219,48 +245,61 @@ async fn team_detail(
         } else {
             None
         };
-        if let Ok(proj) = predict_projection(
-            &state,
-            host_id,
-            visitor_id,
-            season,
-            is_neutral,
-            is_conference,
-            as_of_date,
-        )
-        .await
-        {
-            let (margin_team, p_team, score_team, score_opp) = if requested_is_home {
-                (
-                    proj.margin as f64,
-                    proj.home_win_prob,
-                    proj.home_score,
-                    proj.away_score,
-                )
-            } else {
-                (
-                    -proj.margin as f64,
-                    1.0 - proj.home_win_prob,
-                    proj.away_score,
-                    proj.home_score,
-                )
-            };
-            // Round to 1 decimal / 3 decimals to match the rest of the API.
-            entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
-            entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
-            entry.projected_score_team = Some(score_team);
-            entry.projected_score_opp = Some(score_opp);
-            // Honesty label travels with the projection — set ONLY when
-            // the predictor succeeds, so a failed prediction can't leave
-            // the row labelled "pre-game projection" with null margin
-            // (and frontend deep-links can't end up carrying as_of_date
-            // for a row whose pit prediction the server already failed).
-            // `as_of_date.is_some()` is the load-bearing flag: a
-            // completed game whose date can't be decremented
-            // (NaiveDate::MIN sentinel) falls through with as_of_date =
-            // None and is correctly NOT labelled pre-game.
-            entry.is_pre_game_projection = as_of_date.is_some();
-        }
+        let state = Arc::clone(&state);
+        let sem = Arc::clone(&sem);
+        tasks.spawn(async move {
+            // Permit is held for the projection's lifetime and released when
+            // the task ends, capping concurrent pit aggregates against the
+            // pool. `acquire_owned` only errors if the semaphore is closed,
+            // which never happens here.
+            let _permit = sem.acquire_owned().await.expect("semaphore open");
+            let proj = predict_projection(
+                &state,
+                host_id,
+                visitor_id,
+                season,
+                is_neutral,
+                is_conference,
+                as_of_date,
+            )
+            .await
+            .ok();
+            (idx, requested_is_home, as_of_date, proj)
+        });
+    }
+
+    while let Some(joined) = tasks.join_next().await {
+        // A task panic (JoinError) drops just that row's projection.
+        let Ok((idx, requested_is_home, as_of_date, Some(proj))) = joined else {
+            continue;
+        };
+        let entry = &mut schedule[idx];
+        let (margin_team, p_team, score_team, score_opp) = if requested_is_home {
+            (
+                proj.margin as f64,
+                proj.home_win_prob,
+                proj.home_score,
+                proj.away_score,
+            )
+        } else {
+            (
+                -proj.margin as f64,
+                1.0 - proj.home_win_prob,
+                proj.away_score,
+                proj.home_score,
+            )
+        };
+        // Round to 1 decimal / 3 decimals to match the rest of the API.
+        entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
+        entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
+        entry.projected_score_team = Some(score_team);
+        entry.projected_score_opp = Some(score_opp);
+        // Honesty label travels with the projection — set ONLY when the
+        // predictor succeeds, so a failed prediction can't leave the row
+        // labelled "pre-game projection" with a null margin. A completed
+        // game whose date can't be decremented (NaiveDate::MIN sentinel)
+        // has as_of_date = None and is correctly NOT labelled pre-game.
+        entry.is_pre_game_projection = as_of_date.is_some();
     }
 
     Ok(Json(json!({

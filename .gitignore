@@ -101,6 +101,12 @@ __pycache__/
 # for review locally, never meant to ship.
 pr.diff
 
+# Saved-webpage debugging dumps (e.g. a "Save Page As" of the Cloudflare
+# dashboard while configuring cache rules). Local only — never meant to ship.
+/cache.html
+/cache_files/
+*Cloudflare.html
+
 # Ad-hoc debugging scratch — PBP audit exports and pasted box scores from
 # one-off investigations (e.g. the NatStat lineup-coverage audit). Local only.
 /boxscore.txt
