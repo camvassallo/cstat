@@ -1123,34 +1123,62 @@ gate from the boot path. Small, isolated `cstat-core` change; the only behaviora
 is the API no longer requires the file at boot.
 
 ### API latency — team-detail schedule projections (and other inline-inference routes)
-*(captured 2026-05-31 during PR3 coach-surface scoping)* `team_detail`
-(`crates/cstat-api/src/routes/teams.rs:132`) is the slowest read surface on the
-site. After the parallel `try_join!` of base queries, it walks **every game in
-the schedule (~30 rows) and calls `predict_projection(...).await` serially** in
-a `for` loop. For each *completed* game it passes `as_of_date = game_date − 1
-day`, which forces the predictor to **rebuild CamPom v3 from pre-game
-point-in-time state** — so the route pays ~30 sequential point-in-time feature
-rebuilds before it returns the JSON. That serial loop, not the roster or the DB
-queries, is the dominant latency. Options, cheapest first:
-- **Parallelize the loop** — replace the serial `for … .await` with a
-  `futures::stream::iter(...).buffer_unordered(N)` (or `join_all`) over the
-  per-game projections. Inference is CPU-bound but the pit feature rebuild does
-  DB I/O, so bounded concurrency should cut wall-time substantially for near-zero
-  risk. Lowest-effort win; do this first.
-- **Precompute + cache pit projections** — completed-game projections are
-  deterministic given pre-game state, so they never change once played. Persist
-  them (a `game_projections` table, or extend `game_forecasts`) at ingest/compute
-  time and have `team_detail` read instead of recompute. Upcoming games still
-  project live (only a handful per page). Removes the bulk of the loop entirely.
-- **Lazy/split the surface** — return the schedule immediately and let the
+*(captured 2026-05-31 during PR3 coach-surface scoping; Tier 1 shipped 2026-06-28)*
+`team_detail` (`crates/cstat-api/src/routes/teams.rs`) was the slowest read
+surface on the site. After the parallel `try_join!` of base queries, it walked
+**every game in the schedule (~30 rows) and called `predict_projection(...).await`
+serially** in a `for` loop. For each *completed* game it passes `as_of_date =
+game_date − 1 day`, which forces the predictor to **rebuild CamPom v3 from
+pre-game point-in-time state** via `compute_pit_campom` — a full-season GROUP BY
+over `torvik_player_game_stats`. So the route paid ~30 sequential full-season
+point-in-time rebuilds before returning. That serial loop, not the roster or the
+base DB queries, was the dominant latency (the old "inference is sub-ms" comment
+predated the pit path).
+- [x] **Parallelize the loop** *(shipped 2026-06-28)* — the serial `for … .await`
+  is now a bounded-concurrency fan-out (`tokio::task::JoinSet` + a `Semaphore`
+  capped at `SCHEDULE_PROJECTION_CONCURRENCY = 6`), results written back by row
+  index so schedule order and per-game failure isolation are preserved. The DB
+  pool was raised 10 → 25 (`DATABASE_MAX_CONNECTIONS`, `db.rs`) so the inner
+  6-query `try_join` per game has room to overlap. Expect ~4–6× on the loop for a
+  fully-played schedule.
+- [ ] **Precompute + cache pit projections** *(the remaining structural win)* —
+  completed-game projections are deterministic given pre-game state, so they never
+  change once played. Persist them (a `game_projections` table, or extend
+  `game_forecasts`) at ingest/compute time and have `team_detail` read instead of
+  recompute. Upcoming games still project live (only a handful per page). Removes
+  the bulk of the loop entirely and doubles as the deferred "retroactive
+  `game_forecasts`" surface (Phase 4 "point-in-time historical predictions").
+- [ ] **Lazy/split the surface** — return the schedule immediately and let the
   frontend fetch projections in a second call (or stream per-row), so the page
   paints before inference finishes.
 This is the optimization the PR3 coach routes were deliberately decoupled from:
 the coach card is a **dedicated `GET /api/teams/{id}/coach` route**, never folded
-into `team_detail`, precisely so a single-digit-ms indexed lookup isn't held
-hostage to this loop — and so this refactor lands without touching the coach
-surfaces. Audit other routes for the same inline-inference pattern (`predict`,
+into `team_detail`, so a single-digit-ms indexed lookup isn't held hostage to
+this loop. Audit other routes for the same inline-inference pattern (`predict`,
 projections) while in here.
+
+### Edge caching + serving guards (shipped 2026-06-28)
+*(shipped alongside the latency work)* The API is read-only with no per-user
+state, so it's a clean fit for edge/browser caching and load-shedding. Added in
+`crates/cstat-api/src/guards.rs` (small `from_fn` middlewares, no new deps),
+layered onto the data routes only (NOT `/api/health`/`/api/status`, so a
+saturated server still passes its platform healthcheck):
+- **`Cache-Control: public, max-age=300, stale-while-revalidate=600`** on
+  successful data responses (errors left uncached). Drives browser caching
+  immediately and CDN caching once a Cloudflare Cache Rule marks `/api/*`
+  eligible (respecting origin TTL). 5-min TTL means a nightly ingest is visible
+  within minutes.
+- **Request timeout** (`REQUEST_TIMEOUT_SECS`, default 30) → 408 instead of
+  holding a DB handle open.
+- **Load shed** (`MAX_INFLIGHT_REQUESTS`, default 256) → 503 + `Retry-After`
+  past capacity instead of piling up against the pool.
+- **DB serving guardrails** (`Database::connect_api`): a 10s `acquire_timeout`
+  (fail fast when the pool is saturated) and a 15s per-connection
+  `statement_timeout` (kill runaway queries) — API pool only; the ingest/compute
+  CLI keeps the unguarded `connect` so its long batch writes aren't capped.
+Follow-up (deferred): long-lived `Cache-Control` on the hashed SPA assets
+(`/assets/*`), and an optional Cloudflare cache-purge call wired into
+`sync_to_prod.sh` so a prod push invalidates the edge immediately.
 
 ### coach_seasons name-variant dedup (ingest)
 *(captured 2026-05-31 during PR3)* `coach_seasons` holds **two rows for 9

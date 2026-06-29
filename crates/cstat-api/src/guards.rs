@@ -54,13 +54,23 @@ pub fn inflight_semaphore() -> Arc<Semaphore> {
     Arc::new(Semaphore::new(max))
 }
 
+/// Whether a response with this status should receive the default
+/// `Cache-Control`. Pure so the contract — cache only 2xx, never override a
+/// header a handler already set — is unit-testable without a router harness.
+fn should_set_cache_header(status: StatusCode, already_present: bool) -> bool {
+    status.is_success() && !already_present
+}
+
 /// Add a short-TTL `Cache-Control` to successful responses that don't already
 /// set one (so a handler can opt a route into a different TTL later). Errors
 /// (4xx/5xx) are intentionally left uncached — a transient failure must not be
 /// pinned at the edge.
 pub async fn cache_headers(req: Request, next: Next) -> Response {
     let mut resp = next.run(req).await;
-    if resp.status().is_success() && !resp.headers().contains_key(header::CACHE_CONTROL) {
+    if should_set_cache_header(
+        resp.status(),
+        resp.headers().contains_key(header::CACHE_CONTROL),
+    ) {
         resp.headers_mut().insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static(CACHE_CONTROL_VALUE),
@@ -96,5 +106,42 @@ pub async fn load_shed(State(sem): State<Arc<Semaphore>>, req: Request, next: Ne
             Json(json!({ "error": "server busy, please retry shortly" })),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caches_only_successful_responses_without_an_existing_header() {
+        // 2xx with no header → set it.
+        assert!(should_set_cache_header(StatusCode::OK, false));
+        assert!(should_set_cache_header(StatusCode::NO_CONTENT, false));
+        // Never override a header a handler already set (per-route TTL wins).
+        assert!(!should_set_cache_header(StatusCode::OK, true));
+        // Never cache errors — a transient 4xx/5xx must not be pinned at the edge.
+        assert!(!should_set_cache_header(StatusCode::NOT_FOUND, false));
+        assert!(!should_set_cache_header(
+            StatusCode::SERVICE_UNAVAILABLE,
+            false
+        ));
+        assert!(!should_set_cache_header(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            false
+        ));
+        assert!(!should_set_cache_header(StatusCode::REQUEST_TIMEOUT, false));
+    }
+
+    #[test]
+    fn load_shed_semaphore_hands_out_then_refuses() {
+        // Mirrors `load_shed`'s admission test: permits are granted up to the
+        // cap, then `try_acquire` fails (→ 503) until one is released.
+        let sem = Semaphore::new(2);
+        let p1 = sem.try_acquire().expect("permit 1");
+        let _p2 = sem.try_acquire().expect("permit 2");
+        assert!(sem.try_acquire().is_err(), "should shed past capacity");
+        drop(p1);
+        assert!(sem.try_acquire().is_ok(), "slot frees on release");
     }
 }

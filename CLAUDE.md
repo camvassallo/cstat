@@ -47,7 +47,7 @@ Copy `.env.example` to `.env`. Required:
 - `DATABASE_URL` — Postgres connection string
 - `NATSTAT_API_KEY` — NatStat API v4 key (format: `xxxx-xxxxxx`)
 
-Optional: `BIND_ADDR` (default `0.0.0.0:8080`), `RUST_LOG` (tracing filter)
+Optional: `BIND_ADDR` (default `0.0.0.0:8080`), `RUST_LOG` (tracing filter). API-serving knobs (all defaulted, override only to tune): `DATABASE_MAX_CONNECTIONS` (pool size, default 25), `REQUEST_TIMEOUT_SECS` (per-request 408 timeout, default 30), `MAX_INFLIGHT_REQUESTS` (concurrency before 503 load-shed, default 256) — see `crates/cstat-api/src/guards.rs`. The API connects via `Database::connect_api` (adds an `acquire_timeout` + per-connection `statement_timeout`); the ingest/compute CLI uses the unguarded `Database::connect` so its long batch writes aren't capped.
 
 ## Architecture
 
