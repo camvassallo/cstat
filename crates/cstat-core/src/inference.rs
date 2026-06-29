@@ -888,7 +888,7 @@ impl Predictor {
     }
 
     /// Project a returning player's next-season CamPom v3 from their prior
-    /// season's 51-feature vector built by
+    /// season's `TRAJECTORY_NUM_FEATURES`-length feature vector built by
     /// `trajectory::build_trajectory_features`.
     ///
     /// Returns mean (q=0.5 equivalent — LightGBM regression objective) plus

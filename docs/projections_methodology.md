@@ -76,6 +76,8 @@ Why this is the right consumer for cam_v3: `train_roster_model.py` (the box-scor
 
 ## Model training (v2 — "train on what you serve")
 
+> **Refit 2026-06-27 (multi-season trajectory PR).** The trajectory model gained a multi-season history block, which improved its held-out CamPom and repopulated `trajectory_oof_predictions`. Since this calibrator trains on that table, it was retrained to stay consistent ("train on what you serve") — refitting it is mandatory, not optional, once the OOF shifts. The retrained calibrator is a *better raw projector*: on the current `projections-backtest` (target seasons 2022–2026, n=1487) raw pooled MAE is **5.98** (bias +0.16, near-zero) and the best **flat** blend is **w=0.30 / MAE 5.79** (vs w=0.50 / 5.84). **The served transition-blend weights (below) are unchanged** — the flat-sweep optimum isn't a drop-in for the served *variable* weight (0.50→0.25 by roster turnover), and a better raw projector helps at any fixed weight, so the served projection isn't worse, just leaving a small gain on the table. Re-deriving the served transition-blend against the current backtest scope is a tracked follow-up (ROADMAP §5b). The specific figures in the rest of this section (496 team-years / 5.86 / w=0.50 / raw 6.39) describe the **prior** calibrator regime and are retained for context until that re-derivation lands.
+
 `training/train_roster_impact_model.py` trains the model on 4,255 team-seasons (2015–2026), target `team_season_stats.adj_efficiency_margin`. The load-bearing detail is *which* `cam_v3` the training aggregator sees:
 
 - **v1** trained on each player's *actual* same-season `cam_gbpm_v3_psos`.
