@@ -12,7 +12,7 @@
 //! don't pass a destination-team feature, so the model reads them the same
 //! way it reads same-team returners.
 //!
-//! Feature shape (51 cols, order is wire-locked):
+//! Feature shape (60 cols, order is wire-locked):
 //!   - 5 volume/context (mpg, gp, total_min, height_in, class_year_code)
 //!   - 6 box-score per-game (ppg, rpg, apg, spg, bpg, topg)
 //!   - 10 rate stats (ts, efg, usg, ast%, tov%, orb%, drb%, stl%, blk%, ft_rate)
@@ -20,6 +20,10 @@
 //!   - 3 on/off splits (on_net_rtg, net_on_off, on_poss_share — the
 //!     `player_on_off` rollup; -999 sentinel where the rollup has no row.
 //!     Accepted by the Tier-2 membership backtest 2026-06-11.)
+//!   - 9 multi-season history (prior2 CamPom/mpg/gp/usg/ppg levels, has_prior2
+//!     indicator, slope deltas campom/mpg/usg — the prior-PRIOR season and
+//!     year-over-year trajectory; -999 level / 0 delta sentinel where the
+//!     player has no N-1 season. Validated 2026-06-18, serve parity 2026-06-27.)
 //!   - 12 archetype mixture (primary 1.0× / secondary 0.5×)
 //!   - 11 recruit block (see `recruit_features.rs::RECRUIT_FEATURE_NAMES`)
 //!
@@ -37,9 +41,10 @@ use crate::recruit_features::{
 use crate::roster_features::ARCHETYPES;
 
 /// Size of the trajectory-specific feature head (volume/context + box +
-/// rate + impact + on/off + archetype). The recruit block is appended after,
-/// and `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
-const TRAJECTORY_HEAD_FEATURES: usize = 40;
+/// rate + impact + on/off + multi-season history + archetype). The recruit
+/// block is appended after, and
+/// `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
+const TRAJECTORY_HEAD_FEATURES: usize = 49;
 
 /// Number of input features each of the three trajectory ONNX models expects.
 /// Wire-locked to `trajectory_model_meta.json::features` order.
@@ -49,6 +54,14 @@ pub const TRAJECTORY_NUM_FEATURES: usize = TRAJECTORY_HEAD_FEATURES + RECRUIT_NU
 /// `ONOFF_MISSING_SENTINEL`. Cleanly outside every real range (net ratings
 /// ±~60, possession share in [0, 1]); LightGBM isolates it with one split.
 const ONOFF_MISSING_SENTINEL: f64 = -999.0;
+
+/// Sentinel for missing multi-season history. Lag-2 LEVELS fill this same
+/// out-of-range value (CamPom/mpg/gp/usg/ppg never reach -999); slope DELTAS
+/// fill 0.0 (a delta of "no change" is consistent train↔serve, and
+/// `has_prior2` isolates the no-history cohort). Mirrors training's
+/// `LAG2_LEVEL_SENTINEL` / `SLOPE_DELTA_FILL`.
+const LAG2_LEVEL_SENTINEL: f64 = -999.0;
+const SLOPE_DELTA_FILL: f64 = 0.0;
 
 /// Feature names in the exact order the three ONNX models consume. Boot-time
 /// validator (see `inference.rs::validate_trajectory_meta`) hard-fails if
@@ -89,6 +102,20 @@ pub const TRAJECTORY_FEATURE_NAMES: [&str; TRAJECTORY_NUM_FEATURES] = [
     "prior_on_net_rtg",
     "prior_net_on_off",
     "prior_on_poss_share",
+    // Multi-season history (9) — prior-PRIOR (N-1) season levels + slope.
+    // Levels fill -999 / deltas fill 0 where the player has no N-1 season;
+    // `has_prior2` lets the tree isolate the no-history cohort. Validated
+    // 2026-06-18 (covered LOPO MAE 2.206→2.141, 10/11 folds), serve parity
+    // confirmed under sentinel encoding 2026-06-27.
+    "prior2_campom",
+    "prior2_mpg",
+    "prior2_gp",
+    "prior2_usg",
+    "prior2_ppg",
+    "has_prior2",
+    "delta_campom",
+    "delta_mpg",
+    "delta_usg",
     // Archetype mixture (12)
     "arch_wizard",
     "arch_sorcerer",
@@ -166,6 +193,16 @@ pub struct TrajectoryPlayerRow {
     pub on_net_rtg: Option<f64>,
     pub net_on_off: Option<f64>,
     pub on_poss_share: Option<f64>,
+    // Multi-season history — the prior-PRIOR (N-1) season, LEFT JOINed on the
+    // cross-season `torvik_pid` (stable across transfers; #146-style sit-outs
+    // still link). None for freshmen-as-N and careers starting before the
+    // 2015 data floor. The slope deltas + `has_prior2` indicator are DERIVED
+    // in `build_trajectory_features` from these plus the prior-season values.
+    pub prior2_campom: Option<f64>,
+    pub prior2_mpg: Option<f64>,
+    pub prior2_gp: Option<i32>,
+    pub prior2_usg: Option<f64>,
+    pub prior2_ppg: Option<f64>,
     // Archetype mixture
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
@@ -250,6 +287,11 @@ pub async fn fetch_player_trajectory_row(
                  THEN oo.on_possessions_for
                       / (oo.on_possessions_for + oo.off_possessions_for)
             END AS on_poss_share,
+            tps_nm1.cam_gbpm_v3_psos AS prior2_campom,
+            pss_nm1.minutes_per_game AS prior2_mpg,
+            pss_nm1.games_played AS prior2_gp,
+            pss_nm1.usage_rate AS prior2_usg,
+            pss_nm1.ppg AS prior2_ppg,
             pa.primary_class,
             pa.secondary_class,
             rec.composite_rank   AS recruit_composite_rank,
@@ -271,6 +313,13 @@ pub async fn fetch_player_trajectory_row(
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         LEFT JOIN recruits rec
             ON rec.cstat_player_id = pss.player_id
+        -- Prior-PRIOR (N-1) season via the cross-season torvik_pid (stable
+        -- across transfers). Two-hop: tps (current) → tps_nm1 (N-1, same
+        -- torvik_pid) → pss_nm1 (N-1 box/role). NULL → history sentinels.
+        LEFT JOIN torvik_player_stats tps_nm1
+            ON tps_nm1.torvik_pid = tps.torvik_pid AND tps_nm1.season = pss.season - 1
+        LEFT JOIN player_season_stats pss_nm1
+            ON pss_nm1.player_id = tps_nm1.player_id AND pss_nm1.season = pss.season - 1
         WHERE pss.player_id = $1
           AND pss.season = $2
           AND pss.games_played >= 5
@@ -353,6 +402,11 @@ pub async fn fetch_player_trajectory_rows(
                  THEN oo.on_possessions_for
                       / (oo.on_possessions_for + oo.off_possessions_for)
             END AS on_poss_share,
+            tps_nm1.cam_gbpm_v3_psos AS prior2_campom,
+            pss_nm1.minutes_per_game AS prior2_mpg,
+            pss_nm1.games_played AS prior2_gp,
+            pss_nm1.usage_rate AS prior2_usg,
+            pss_nm1.ppg AS prior2_ppg,
             pa.primary_class,
             pa.secondary_class,
             rec.composite_rank   AS recruit_composite_rank,
@@ -374,6 +428,13 @@ pub async fn fetch_player_trajectory_rows(
             ON pa.player_id = pss.player_id AND pa.season = pss.season
         LEFT JOIN recruits rec
             ON rec.cstat_player_id = pss.player_id
+        -- Prior-PRIOR (N-1) season via the cross-season torvik_pid (stable
+        -- across transfers). Two-hop: tps (current) → tps_nm1 (N-1, same
+        -- torvik_pid) → pss_nm1 (N-1 box/role). NULL → history sentinels.
+        LEFT JOIN torvik_player_stats tps_nm1
+            ON tps_nm1.torvik_pid = tps.torvik_pid AND tps_nm1.season = pss.season - 1
+        LEFT JOIN player_season_stats pss_nm1
+            ON pss_nm1.player_id = tps_nm1.player_id AND pss_nm1.season = pss.season - 1
         WHERE pss.player_id = ANY($1)
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 5
@@ -413,6 +474,36 @@ pub fn build_trajectory_features(
         _ => None,
     };
     let class_year_code = encode_class_year(row.class_year.as_deref()) as f64;
+
+    // Multi-season history (9). `has_prior2` keys off the lag-2 CamPom (the
+    // torvik N-1 anchor). Each level/delta is filled independently — a torvik
+    // N-1 row without a matching `player_season_stats` row degrades per-column,
+    // matching training's column-wise fillna (levels → -999, deltas → 0).
+    let has_prior2 = if row.prior2_campom.is_some() {
+        1.0
+    } else {
+        0.0
+    };
+    let prior2_campom = row.prior2_campom.unwrap_or(LAG2_LEVEL_SENTINEL);
+    let prior2_mpg = row.prior2_mpg.unwrap_or(LAG2_LEVEL_SENTINEL);
+    let prior2_gp = row
+        .prior2_gp
+        .map(|x| x as f64)
+        .unwrap_or(LAG2_LEVEL_SENTINEL);
+    let prior2_usg = row.prior2_usg.unwrap_or(LAG2_LEVEL_SENTINEL);
+    let prior2_ppg = row.prior2_ppg.unwrap_or(LAG2_LEVEL_SENTINEL);
+    let delta_campom = match (row.campom, row.prior2_campom) {
+        (Some(a), Some(b)) => a - b,
+        _ => SLOPE_DELTA_FILL,
+    };
+    let delta_mpg = match (row.minutes_per_game, row.prior2_mpg) {
+        (Some(a), Some(b)) => a - b,
+        _ => SLOPE_DELTA_FILL,
+    };
+    let delta_usg = match (row.usage_rate, row.prior2_usg) {
+        (Some(a), Some(b)) => a - b,
+        _ => SLOPE_DELTA_FILL,
+    };
 
     // Archetype mixture: primary 1.0× / secondary 0.5×. Same weighting as
     // the team Identity/Gaps index in §5a.
@@ -486,6 +577,17 @@ pub fn build_trajectory_features(
         row.on_net_rtg.unwrap_or(ONOFF_MISSING_SENTINEL),
         row.net_on_off.unwrap_or(ONOFF_MISSING_SENTINEL),
         row.on_poss_share.unwrap_or(ONOFF_MISSING_SENTINEL),
+        // Multi-season history (9) — lag-2 levels + has_prior2 + slope deltas.
+        // Levels -999 / deltas 0 where no N-1 season (computed above).
+        prior2_campom,
+        prior2_mpg,
+        prior2_gp,
+        prior2_usg,
+        prior2_ppg,
+        has_prior2,
+        delta_campom,
+        delta_mpg,
+        delta_usg,
         // Archetype mixture (12)
         arch[0],
         arch[1],
@@ -605,6 +707,11 @@ mod tests {
             on_net_rtg: Some(7.5),
             net_on_off: Some(4.2),
             on_poss_share: Some(0.71),
+            prior2_campom: Some(2.0),
+            prior2_mpg: Some(24.0),
+            prior2_gp: Some(30),
+            prior2_usg: Some(0.20),
+            prior2_ppg: Some(12.5),
             primary_class: Some("Wizard".into()),
             secondary_class: Some("Bard".into()),
             recruit_composite_rank: None,
@@ -634,6 +741,21 @@ mod tests {
         assert!((v[25] - 7.5).abs() < 1e-3); // prior_on_net_rtg
         assert!((v[26] - 4.2).abs() < 1e-3); // prior_net_on_off
         assert!((v[27] - 0.71).abs() < 1e-3); // prior_on_poss_share
+        // Multi-season history block (make_row has a full N-1 season).
+        let hidx = |name: &str| {
+            TRAJECTORY_FEATURE_NAMES
+                .iter()
+                .position(|&n| n == name)
+                .unwrap()
+        };
+        assert!((v[hidx("prior2_campom")] - 2.0).abs() < 1e-3);
+        assert!((v[hidx("prior2_mpg")] - 24.0).abs() < 1e-3);
+        assert!((v[hidx("prior2_gp")] - 30.0).abs() < 1e-3);
+        assert!((v[hidx("prior2_ppg")] - 12.5).abs() < 1e-3);
+        assert_eq!(v[hidx("has_prior2")], 1.0);
+        assert!((v[hidx("delta_campom")] - (4.5 - 2.0)).abs() < 1e-3); // campom − prior2_campom
+        assert!((v[hidx("delta_mpg")] - (28.4 - 24.0)).abs() < 1e-3);
+        assert!((v[hidx("delta_usg")] - (0.22 - 0.20)).abs() < 1e-3);
         // Wizard slot fires at 1.0; Bard at 0.5; rest 0.
         let wiz_idx = TRAJECTORY_FEATURE_NAMES
             .iter()
@@ -747,6 +869,11 @@ mod tests {
             on_net_rtg: None,
             net_on_off: None,
             on_poss_share: None,
+            prior2_campom: None,
+            prior2_mpg: None,
+            prior2_gp: None,
+            prior2_usg: None,
+            prior2_ppg: None,
             primary_class: None,
             secondary_class: None,
             recruit_composite_rank: None,
@@ -762,7 +889,9 @@ mod tests {
         let v = build_trajectory_features(&row, 2026);
         // Sentinel slots: class_year_code (-1), recruit_composite_rank (-1),
         // recruit_position_rank (-1), recruit_position_code (-1),
-        // years_since_recruit (-1), and the three on/off features (-999).
+        // years_since_recruit (-1), the three on/off features (-999), and the
+        // five lag-2 history LEVELS (-999). The slope deltas + has_prior2 fall
+        // into the 0.0 bucket (no N-1 season → 0 delta, has_prior2=0).
         // Everything else 0.0.
         let class_year_idx = TRAJECTORY_FEATURE_NAMES
             .iter()
@@ -779,6 +908,12 @@ mod tests {
             "prior_on_net_rtg",
             "prior_net_on_off",
             "prior_on_poss_share",
+            // Lag-2 levels share the -999 sentinel when no N-1 season exists.
+            "prior2_campom",
+            "prior2_mpg",
+            "prior2_gp",
+            "prior2_usg",
+            "prior2_ppg",
         ];
         let idx_of = |name: &str| {
             TRAJECTORY_FEATURE_NAMES

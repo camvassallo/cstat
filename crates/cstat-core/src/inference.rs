@@ -888,7 +888,7 @@ impl Predictor {
     }
 
     /// Project a returning player's next-season CamPom v3 from their prior
-    /// season's 51-feature vector built by
+    /// season's `TRAJECTORY_NUM_FEATURES`-length feature vector built by
     /// `trajectory::build_trajectory_features`.
     ///
     /// Returns mean (q=0.5 equivalent — LightGBM regression objective) plus
@@ -1957,6 +1957,11 @@ mod tests {
             on_net_rtg: Some(5.5),
             net_on_off: Some(2.8),
             on_poss_share: Some(0.68),
+            prior2_campom: Some(1.2),
+            prior2_mpg: Some(20.0),
+            prior2_gp: Some(28),
+            prior2_usg: Some(0.19),
+            prior2_ppg: Some(9.0),
             primary_class: Some("Wizard".into()),
             secondary_class: None,
             recruit_composite_rank: None,
@@ -2048,6 +2053,11 @@ mod tests {
             on_net_rtg: Some(5.5),
             net_on_off: Some(2.8),
             on_poss_share: Some(0.68),
+            prior2_campom: Some(1.2),
+            prior2_mpg: Some(20.0),
+            prior2_gp: Some(28),
+            prior2_usg: Some(0.19),
+            prior2_ppg: Some(9.0),
             primary_class: Some("Wizard".into()),
             secondary_class: None,
             recruit_composite_rank: None,
@@ -2088,6 +2098,11 @@ mod tests {
             on_net_rtg: Some(16.0),
             net_on_off: Some(8.5),
             on_poss_share: Some(0.8),
+            prior2_campom: Some(12.0),
+            prior2_mpg: Some(30.0),
+            prior2_gp: Some(33),
+            prior2_usg: Some(0.26),
+            prior2_ppg: Some(16.0),
             primary_class: Some("Druid".into()),
             secondary_class: Some("Wizard".into()),
             recruit_composite_rank: None,

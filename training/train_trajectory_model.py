@@ -7,8 +7,12 @@ consecutive-season player in DB (currently the 11 pairs 2015→2016 ..
 
 Target: next-season `torvik_player_stats.cam_gbpm_v3_psos`.
 
-Features come from the prior season only — rate stats + impact metrics
-(CamPom + GBPM components) + prior-season on/off splits (on-court net
+Features are anchored on the prior season — rate stats + impact metrics
+(CamPom + GBPM components) + a multi-season history block (prior-PRIOR-season
+CamPom/mpg/gp/usg/ppg levels + year-over-year slope deltas + a has_prior2
+indicator, so the model sees a player's progression trajectory rather than a
+single snapshot; validated 2026-06-18, ~53% coverage, biggest lift on
+upperclassmen) + prior-season on/off splits (on-court net
 rating, on/off swing, possession share; `player_on_off` rollup, -999
 sentinel where the rollup has no row — accepted by the Tier-2 membership
 backtest 2026-06-11, see eval_history) + archetype mixture (primary 1.0× /
@@ -78,11 +82,19 @@ WITH base AS (
         a.player_id AS pid_n,
         b.season AS s_np1,
         b.player_id AS pid_np1,
-        b.cam_gbpm_v3_psos AS target_campom
+        b.cam_gbpm_v3_psos AS target_campom,
+        -- Prior-PRIOR (N-1) season for the multi-season history block. LEFT
+        -- JOIN on the same stable torvik_pid: adds columns, drops zero rows,
+        -- so the row set is identical to the single-season contract. NULL for
+        -- freshmen-as-N and careers starting before the 2015 data floor.
+        c.player_id AS pid_nm1,
+        c.cam_gbpm_v3_psos AS prior2_campom
     FROM torvik_player_stats a
     JOIN torvik_player_stats b
         ON a.torvik_pid = b.torvik_pid
         AND b.season = a.season + 1
+    LEFT JOIN torvik_player_stats c
+        ON c.torvik_pid = a.torvik_pid AND c.season = a.season - 1
     WHERE a.torvik_pid IS NOT NULL
       AND a.cam_gbpm_v3_psos IS NOT NULL
       AND b.cam_gbpm_v3_psos IS NOT NULL
@@ -144,7 +156,15 @@ SELECT
     rec.height           AS recruit_height_raw,
     rec.weight           AS recruit_weight_raw,
     rec.position         AS recruit_position_raw,
-    rec.year             AS recruit_year_raw
+    rec.year             AS recruit_year_raw,
+    -- Multi-season history (N-1): lag-2 CamPom level from the base CTE, plus
+    -- N-1 box/role from player_season_stats. Slope (delta_*) is derived in
+    -- build_dataset() as prior_N − prior_{N-1}. NULL where no N-1 season.
+    base.prior2_campom AS prior2_campom,
+    pssNM1.minutes_per_game AS prior2_mpg,
+    pssNM1.games_played AS prior2_gp,
+    pssNM1.usage_rate AS prior2_usg,
+    pssNM1.ppg AS prior2_ppg
 FROM base
 JOIN player_season_stats pssN
     ON pssN.player_id = base.pid_n AND pssN.season = base.s_n
@@ -158,6 +178,8 @@ LEFT JOIN player_archetypes paN
     ON paN.player_id = base.pid_n AND paN.season = base.s_n
 LEFT JOIN player_on_off ooN
     ON ooN.player_id = base.pid_n AND ooN.season = base.s_n
+LEFT JOIN player_season_stats pssNM1
+    ON pssNM1.player_id = base.pid_nm1 AND pssNM1.season = base.s_n - 1
 LEFT JOIN recruits rec
     ON rec.cstat_player_id = base.pid_n
 WHERE pssN.minutes_per_game >= 5
@@ -189,9 +211,18 @@ NUMERIC_FEATURE_COLS = [
     "prior_orb_pct", "prior_drb_pct", "prior_stl_pct", "prior_blk_pct", "prior_ft_rate",
     "prior_ogbpm", "prior_dgbpm", "prior_gbpm", "prior_campom",
     "prior_on_net_rtg", "prior_net_on_off", "prior_on_poss_share",
+    # Multi-season history block (9) — lag-2 levels + has_prior2 indicator +
+    # slope deltas. Validated 2026-06-18 (covered LOPO MAE 2.206→2.141, 10/11
+    # folds), serve-parity confirmed under sentinel encoding 2026-06-27
+    # (covered +0.0625). Levels fill -999 / deltas fill 0 where no N-1 season
+    # exists; has_prior2 lets the tree isolate the no-history cohort. See
+    # docs/trajectory_methodology.md and eval_history/trajectory_history_*.
+    "prior2_campom", "prior2_mpg", "prior2_gp", "prior2_usg", "prior2_ppg",
+    "has_prior2",
+    "delta_campom", "delta_mpg", "delta_usg",
 ]
 ARCH_FEATURE_COLS = [f"arch_{a.lower()}" for a in ARCHETYPES]
-# Numeric (28) + archetype shares (12) + recruit block (11) = 51 features.
+# Numeric (37) + archetype shares (12) + recruit block (11) = 60 features.
 # Recruit block order is locked in `training/recruit_features.py` and
 # mirrored by `cstat-core::recruit_features::RECRUIT_FEATURE_NAMES`.
 FEATURE_COLS = NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS + list(RECRUIT_FEATURE_NAMES)
@@ -204,6 +235,17 @@ FEATURE_COLS = NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS + list(RECRUIT_FEATURE_N
 # no special plumbing through the ONNX input tensor.
 ONOFF_FEATURE_COLS = ["prior_on_net_rtg", "prior_net_on_off", "prior_on_poss_share"]
 ONOFF_MISSING_SENTINEL = -999.0
+
+# Multi-season history fills. Lag-2 LEVELS get the same -999 out-of-range
+# sentinel as on/off (CamPom/mpg/gp/usg/ppg never reach it). SLOPE deltas
+# fill 0.0 — a delta of 0 ("no change") is consistent train↔serve and the
+# `has_prior2` indicator lets the tree split out the no-history cohort
+# explicitly, so the exact delta value for absent rows is immaterial. Serve
+# parity (sentinel vs NaN-native) cost only ~0.004 covered MAE (2026-06-27).
+LAG2_LEVEL_COLS = ["prior2_campom", "prior2_mpg", "prior2_gp", "prior2_usg", "prior2_ppg"]
+SLOPE_DELTA_COLS = ["delta_campom", "delta_mpg", "delta_usg"]
+LAG2_LEVEL_SENTINEL = -999.0
+SLOPE_DELTA_FILL = 0.0
 
 
 def encode_class_year(s: Optional[str]) -> int:
@@ -252,6 +294,21 @@ def build_dataset() -> pd.DataFrame:
         df[col] = df[col].fillna(ONOFF_MISSING_SENTINEL).astype(float)
     onoff_cov = float((df["prior_on_net_rtg"] != ONOFF_MISSING_SENTINEL).mean())
     print(f"  on/off feature coverage: {onoff_cov:.1%}")
+
+    # Multi-season history block. `has_prior2` and the slope deltas are derived
+    # from the still-NaN lag-2 columns (so absence is read off the real NULL
+    # pattern), THEN the levels/deltas are sentinel-filled. Mirrors the Rust
+    # serve path in `trajectory.rs::build_trajectory_features`.
+    df["has_prior2"] = df["prior2_campom"].notna().astype(float)
+    df["delta_campom"] = df["prior_campom"] - df["prior2_campom"]
+    df["delta_mpg"] = df["prior_mpg"] - df["prior2_mpg"]
+    df["delta_usg"] = df["prior_usg"] - df["prior2_usg"]
+    for col in LAG2_LEVEL_COLS:
+        df[col] = df[col].fillna(LAG2_LEVEL_SENTINEL).astype(float)
+    for col in SLOPE_DELTA_COLS:
+        df[col] = df[col].fillna(SLOPE_DELTA_FILL).astype(float)
+    prior2_cov = float((df["has_prior2"] == 1.0).mean())
+    print(f"  prior-2 season coverage: {prior2_cov:.1%}")
 
     print(f"After gates: {len(df):,} rows.")
     print(f"  by pair: {df.groupby(['s_n', 's_np1']).size().to_dict()}")
@@ -603,6 +660,7 @@ def main() -> None:
         print(f"Exported → {path}")
 
     onoff_coverage = float((df["prior_on_net_rtg"] != ONOFF_MISSING_SENTINEL).mean())
+    prior2_coverage = float((df["has_prior2"] == 1.0).mean())
 
     meta = {
         "model": "trajectory_model",
@@ -625,6 +683,11 @@ def main() -> None:
         # the same value for NULLs.
         "onoff_missing_sentinel": ONOFF_MISSING_SENTINEL,
         "onoff_coverage": onoff_coverage,
+        # Multi-season history block: lag-2 levels fill this sentinel, slope
+        # deltas fill 0.0, where the player has no N-1 season. The Rust serve
+        # path (`trajectory.rs::build_trajectory_features`) fills identically.
+        "lag2_level_sentinel": LAG2_LEVEL_SENTINEL,
+        "prior2_coverage": prior2_coverage,
         # Set true once the LOPO held-out predictions land in
         # `trajectory_oof_predictions`. The Rust boot validator gates on
         # this so a stale meta + empty table can't silently regress the

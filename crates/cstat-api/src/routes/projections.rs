@@ -168,7 +168,7 @@ struct ProjectedTeam {
 
     /// The baseline weight used in the served blend for this team:
     /// `midpoint ≈ baseline_weight·(last-yr AdjEM) + (1−baseline_weight)·roster`.
-    /// The stable 0.50 for continuity rosters, ramping down toward 0.25 for
+    /// The stable 0.45 for continuity rosters, ramping down toward 0.20 for
     /// roster-overhaul teams (low talent retained) — last season's result is a
     /// stale anchor when the roster turns over, so the blend leans on the roster
     /// projection. See `roster_projection::transition_shrink_weight`. Lets the UI
@@ -585,7 +585,7 @@ fn predict_team(
         })
         .collect();
 
-    // Turnover-aware baseline weight: stable 0.50, lower for overhaul rosters.
+    // Turnover-aware baseline weight: stable 0.45, lower for overhaul rosters.
     // Derived from `p` by the shared helper, identical to what the offline
     // `score_projection_adj_em` computes, so the two serving paths never diverge.
     let baseline_weight = cstat_core::roster_projection::transition_shrink_weight(p);
@@ -1567,7 +1567,7 @@ mod tests {
     fn overhaul_weight_leans_off_a_stale_baseline() {
         // At a lower (overhaul) weight the blend sits closer to the roster
         // projection than to a stale baseline. raw=10, baseline=25:
-        // w=0.50 → 17.5; w=0.25 → 13.75 (nearer raw).
+        // w=0.45 → 16.75; w=0.20 → 13.0 (nearer raw).
         let raw = 10.0_f32;
         let baseline = 25.0_f32;
         let stable = shrink(raw, Some(baseline), SHRINK_WEIGHT);
@@ -1577,7 +1577,7 @@ mod tests {
             cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT_OVERHAUL,
         );
         assert!(overhaul < stable, "lower weight should pull toward raw");
-        assert!((overhaul - 13.75).abs() < 1e-5);
+        assert!((overhaul - 13.0).abs() < 1e-5);
     }
 
     #[test]

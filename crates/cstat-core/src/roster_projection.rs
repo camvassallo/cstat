@@ -1215,9 +1215,12 @@ pub async fn project_returner_cam_v3(
 /// `shrink = w·baseline + (1−w)·raw + offset`. Canonical home for the
 /// calibration constants the `/api/projections` route and the
 /// `cstat-ingest compute-projections` step share — a recalibration touches
-/// one place and both surfaces stay in lockstep. Tuned on the LOSO backtest
-/// (ROADMAP §5b v2): w=0.50 / offset=0.0 minimize pooled MAE.
-pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.50;
+/// one place and both surfaces stay in lockstep. Retuned 2026-06-27 on the
+/// LOSO backtest after the multi-season-trajectory calibrator refit
+/// (`training/transition_blend_diagnostic.py`, targets 2019–2026, n=1487):
+/// the continuity cohort's (≥40% talent retained) own backtest optimum moved
+/// 0.50 → 0.45 against the better raw projector. offset stays 0.0.
+pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.45;
 /// Additive bias correction applied after the baseline shrink. The roster-impact model's
 /// raw residual at `PROJECTION_SHRINK_WEIGHT` is ≈−0.10 — within noise, so
 /// the offset stays 0.0 (the box-score model's old +2.0 hack is retired).
@@ -1234,23 +1237,28 @@ pub const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 /// the systematic over-projection of overhaul teams.
 ///
 /// Validated on the LOSO backtest (`training/transition_blend_diagnostic.py`,
-/// targets 2019–2026): a turnover-conditional weight beats the flat 0.50 by
-/// ~+0.04 MAE pooled — concentrated on overhaul teams — and corrects their
-/// ≈+0.7 AdjEM over-projection bias. Deliberately keyed on roster turnover
-/// ALONE, not `is_new_hc`: turnover is the stronger signal (it directly
-/// measures baseline staleness, and subsumes 61% of new-HC teams), it has no
-/// false positives from same-roster coaching changes, and it lives on
-/// [`ProjectedRoster`] — so both serving surfaces (`/api/projections` and
-/// `compute-projections`) stay in lockstep with NO extra DB fetch.
-pub const PROJECTION_SHRINK_WEIGHT_OVERHAUL: f32 = 0.25;
+/// targets 2019–2026): a turnover-conditional weight beats the flat served
+/// weight — concentrated on overhaul teams — and corrects their ≈+0.7 AdjEM
+/// over-projection bias. Deliberately keyed on roster turnover ALONE, not
+/// `is_new_hc`: turnover is the stronger signal (it directly measures baseline
+/// staleness, and subsumes 61% of new-HC teams), it has no false positives
+/// from same-roster coaching changes, and it lives on [`ProjectedRoster`] — so
+/// both serving surfaces (`/api/projections` and `compute-projections`) stay in
+/// lockstep with NO extra DB fetch.
+///
+/// Retuned 2026-06-27 (multi-season-trajectory calibrator refit): the overhaul
+/// cohort's (<40% retained) own backtest optimum moved 0.25 → 0.20. The
+/// honest leave-one-season-out test gives transition-conditional weights
+/// (stable 0.45 / overhaul 0.20) pooled MAE 5.788 vs 5.842 flat (+0.054 lift).
+pub const PROJECTION_SHRINK_WEIGHT_OVERHAUL: f32 = 0.20;
 
 /// Retained-talent fraction at/below which the overhaul weight applies in full.
 const OVERHAUL_RETAINED_FULL: f32 = 0.20;
 /// Retained-talent fraction at/above which the stable weight applies in full;
 /// the blend weight ramps linearly between the two bounds. `[0.20, 0.40]` keeps
 /// every team that returns ≥40% of last season's cam-weighted talent at the
-/// unchanged 0.50 (the continuity cohort's own backtest optimum), so only
-/// genuine overhauls deviate.
+/// stable 0.45 (the continuity cohort's own backtest optimum), so only genuine
+/// overhauls deviate.
 const STABLE_RETAINED_FULL: f32 = 0.40;
 
 /// Fraction of last season's roster TALENT retained into the projected season:
@@ -1440,7 +1448,7 @@ mod tests {
 
     #[test]
     fn retained_fraction_and_weight_ramp() {
-        // Continuity: returns 24 of 30 cam (0.80 ≥ 0.40) → unchanged stable 0.50.
+        // Continuity: returns 24 of 30 cam (0.80 ≥ 0.40) → stable weight (0.45).
         let stable = roster_with(&[12.0, 12.0], 6.0);
         assert!((retained_talent_fraction(&stable).unwrap() - 0.80).abs() < 1e-5);
         assert!((transition_shrink_weight(&stable) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
@@ -1453,10 +1461,10 @@ mod tests {
         );
 
         // Mid-ramp at retained 0.30 (midpoint of [0.20,0.40]) → weight is the
-        // midpoint of [0.25,0.50] = 0.375. ret 9, dep 21, total 30 → 0.30.
+        // midpoint of [0.20,0.45] = 0.325. ret 9, dep 21, total 30 → 0.30.
         let mid = roster_with(&[9.0], 21.0);
         assert!((retained_talent_fraction(&mid).unwrap() - 0.30).abs() < 1e-5);
-        assert!((transition_shrink_weight(&mid) - 0.375).abs() < 1e-5);
+        assert!((transition_shrink_weight(&mid) - 0.325).abs() < 1e-5);
 
         // No measurable prior talent (new D-I program) → stable default, no panic.
         let empty = roster_with(&[], 0.0);

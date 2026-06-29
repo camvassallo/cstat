@@ -14,7 +14,7 @@ cstat ships four LightGBM model families, all exported to ONNX and loaded at API
 | **Freshman** | Project freshman-season CamPom v3 for new recruits | 3,253 freshmen (12 recruit classes 2014-2025) | Recruits page (Projection column + Δ247), 2027 projection page recruit cards |
 | **Roster-impact** (served projection calibrator) | Project team AdjEM from minutes-weighted CamPom-v3 roster aggregates | 4,255 team-seasons (12 seasons 2015-2026), 27 features | 2027 projection page team rows, the served `/api/projections` AdjEM band |
 
-> **Note on the roster family.** The served preseason projection runs the **27-feature roster-impact model** (cam_v3-distribution calibrator) — methodology and *end-to-end* projection accuracy (blended MAE **5.86**, r≈0.88) live in `docs/projections_methodology.md`. The roster-impact model's own standalone LOSO (~3.67 CV MAE) is a *calibrator-fit* metric, not projection accuracy — most of the upstream error lives in the projected cam_v3 inputs, by design. §4 below documents the **legacy 36-feature box-score roster model**, now **deprecated and unloaded** (its last consumer, the freshman statline, was deleted in #108/#109); its numbers are kept for the record. The archetype-based transfer "what-if" (`roster_fit`) replaced the box-score swap-Δ tool.
+> **Note on the roster family.** The served preseason projection runs the **27-feature roster-impact model** (cam_v3-distribution calibrator) — methodology and *end-to-end* projection accuracy (blended LOSO MAE **5.79** after the 2026-06-27 calibrator refit + transition-blend retune; ~5.86 in the prior regime) live in `docs/projections_methodology.md`. The roster-impact model's own standalone LOSO (~3.6 CV MAE) is a *calibrator-fit* metric, not projection accuracy — most of the upstream error lives in the projected cam_v3 inputs, by design. §4 below documents the **legacy 36-feature box-score roster model**, now **deprecated and unloaded** (its last consumer, the freshman statline, was deleted in #108/#109); its numbers are kept for the record. The archetype-based transfer "what-if" (`roster_fit`) replaced the box-score swap-Δ tool.
 
 All four models follow the same rhythm: 5-fold random CV for headline metrics, an out-of-sample backtest (chronological 80/20 for the game model; leave-one-pair-out / leave-one-class-out / leave-one-season-out for trajectory / freshman / roster), and a final fit on all data for the shipped artifacts.
 
@@ -68,37 +68,39 @@ The previously-published **5-fold-CV AUC 0.816** and **chronological-backtest 0.
 
 ## 2. Trajectory model (returner N → N+1)
 
-Three LightGBM regressors (mean + q10 + q90) trained on a shared 48-feature input. Projects a returning player's next-season CamPom v3 from prior-season stats, archetype, and recruit-rank features.
+Three LightGBM regressors (mean + q10 + q90) trained on a shared 60-feature input. Projects a returning player's next-season CamPom v3 from prior-season stats, archetype, recruit-rank features, prior-season on/off splits, and a multi-season history block (prior-PRIOR-season levels + year-over-year slope) so the model sees a player's progression trajectory, not just a snapshot.
 
 **Backtest:** leave-one-pair-out across the 11 transition pairs (2015→2016 through 2025→2026) — for each held-out pair, retrain on the other 10 and score the held-out cohort. Pre-2021 pairs were added 2026-05-17 via the 12-season NatStat backfill; recruit features per row are richer since 2026-05-18 with the pre-2021 247 recruit ingest (LEFT JOIN, doesn't add new pairs).
 
-| Pooled metric | This model | Prior 4-pair model |
-|---------------|-----------:|-------------------:|
-| LOPO MAE | **2.136** | 2.204 |
-| LOPO RMSE | 2.798 | 2.881 |
-| LOPO R² | 0.604 | 0.588 |
-| Naive baseline (N+1 ≈ N) | 2.339 | 2.392 |
-| n | 24,168 | 9,239 |
+| Pooled metric | This model (60-feat) | Single-season (51-feat) | Prior 4-pair model |
+|---------------|-----------:|-----------:|-------------------:|
+| LOPO MAE | **2.088** | 2.133 | 2.204 |
+| LOPO RMSE | 2.725 | 2.792 | 2.881 |
+| LOPO R² | 0.623 | 0.606 | 0.588 |
+| Naive baseline (N+1 ≈ N) | 2.342 | 2.339 | 2.392 |
+| n | 24,708 | 24,168 | 9,239 |
 
-Per-pair LOPO MAE: 2015→2016: 2.05 / 2016→2017: 2.13 / 2017→2018: 2.09 / 2018→2019: 2.16 / 2019→2020: 2.05 / 2020→2021: 2.10 / 2021→2022: 2.18 / 2022→2023: 2.13 / 2023→2024: 2.12 / 2024→2025: 2.17 / 2025→2026: 2.30. Older seasons fit slightly better than newer ones — likely cohort-stability rather than era effects, since per-feature distributions match closely across the window.
+The multi-season history block (added 2026-06-27) took the model from 2.133 → 2.088 pooled; on the 52.8% of rows with a prior-2 season the gain is larger (covered MAE 2.206 → 2.141). See `docs/trajectory_methodology.md` for the covered-subset breakdown.
 
-5-fold random CV: MAE 2.134 (gap vs LOPO = +0.002 — no fold-overlap leakage).
+Per-pair LOPO MAE: 2015→2016: 2.05 / 2016→2017: 2.07 / 2017→2018: 2.06 / 2018→2019: 2.08 / 2019→2020: 1.98 / 2020→2021: 2.07 / 2021→2022: 2.08 / 2022→2023: 2.05 / 2023→2024: 2.11 / 2024→2025: 2.13 / 2025→2026: 2.26. Older seasons fit slightly better than newer ones — likely cohort-stability rather than era effects, since per-feature distributions match closely across the window.
 
-**Top features:** `prior_campom`, `prior_usg`, `prior_dgbpm`, `prior_ogbpm`, `prior_gbpm`, `prior_efg`, `prior_mpg`, `prior_ft_rate`. Prior-season CamPom alone carries the most signal; the model's value-add is the regression-to-the-mean correction and class-year × archetype interactions.
+5-fold random CV: MAE 2.084 (gap vs LOPO = −0.004 — no fold-overlap leakage).
+
+**Top features:** `prior_campom`, `prior_on_net_rtg`, `prior_usg`, `delta_campom`, `prior_net_on_off`, `prior_efg`, `prior2_campom`, `prior_gbpm`. Prior-season CamPom carries the most signal; the on/off splits and the multi-season history block (`delta_campom` #4, `prior2_campom` #7) are the biggest value-adds beyond it, on top of the regression-to-the-mean correction and class-year × archetype interactions.
 
 **Calibration by current CamPom bucket** (OOF, post-12-season retrain):
 
 | Bucket | n | Mean predicted | Mean actual | Bias |
 |--------|---|----------------|-------------|------|
-| < −5 | 1,647 | −3.76 | −3.83 | +0.07 |
-| −5..0 | 12,378 | −1.34 | −1.35 | +0.01 |
-| 0..+5 | 7,612 | +2.43 | +2.43 | −0.01 |
-| +5..+10 | 2,139 | +7.13 | +7.18 | −0.04 |
-| +10..+15 | 349 | +11.26 | +11.32 | −0.06 |
-| +15..+20 | 41 | +14.34 | +15.02 | **−0.68** |
-| ≥ +20 | 2 | +17.29 | +26.74 | **−9.45** |
+| < −5 | 1,711 | −3.76 | −3.84 | +0.07 |
+| −5..0 | 12,678 | −1.34 | −1.34 | +0.01 |
+| 0..+5 | 7,756 | +2.42 | +2.43 | −0.01 |
+| +5..+10 | 2,168 | +7.14 | +7.18 | −0.04 |
+| +10..+15 | 352 | +11.30 | +11.33 | −0.03 |
+| +15..+20 | 41 | +14.21 | +15.02 | **−0.80** |
+| ≥ +20 | 2 | +16.32 | +26.73 | **−10.41** |
 
-Elite-tier bias improved meaningfully with the 12-season corpus: `+15..+20` went from n=20 / bias −2.12 (pre-retrain) → n=41 / bias **−0.68** (~3× better calibration in this bucket). The `≥+20` bucket still has only n=2 training rows and the model under-predicts by ~10 — genuine extrapolation, not a fixable bias. The trajectory tooltip on PlayerDetail / Transfer / Projection pages surfaces this caveat conditionally.
+Calibration is essentially unbiased through `+15`. The `+15..+20` bucket sits at bias **−0.80** (n=41) — much improved over the single-season model's −3.42 in this bucket, because the multi-season history block lets the model trust returners whose prior-2 history confirms they're genuinely elite rather than regressing them all to the mean. The `≥+20` bucket still has only n=2 training rows and the model under-predicts by ~10 — genuine extrapolation, not a fixable bias. The trajectory tooltip on PlayerDetail / Transfer / Projection pages surfaces this caveat conditionally.
 
 **Known limitations:**
 - Destination-agnostic for transferring returners (no destination-team archetype mix in v1 features).
@@ -180,7 +182,7 @@ A LOCO-aligned ablation (`training/spike_247_baseline.py`) trains the same Light
 
 ## 4. Roster model (team AdjEM from roster) — LEGACY / DEPRECATED
 
-> **This section documents the box-score roster model (`roster_model.onnx`), which is DEAD — deprecated and no longer loaded at API boot (#108/#109 deleted its last consumer).** The served preseason projection uses the **27-feature roster-impact model** instead; see `docs/projections_methodology.md` for it and for the *end-to-end* projection accuracy (blended MAE 5.86). The box-score numbers below are retained as a historical record of the 12-season retrain (#79); they are no longer a live model family.
+> **This section documents the box-score roster model (`roster_model.onnx`), which is DEAD — deprecated and no longer loaded at API boot (#108/#109 deleted its last consumer).** The served preseason projection uses the **27-feature roster-impact model** instead; see `docs/projections_methodology.md` for it and for the *end-to-end* projection accuracy (blended LOSO MAE 5.79 after the 2026-06-27 refit + retune). The box-score numbers below are retained as a historical record of the 12-season retrain (#79); they are no longer a live model family.
 
 Single LightGBM regressor on 36 features: roster shape (size, total minutes, top-1/top-5 min share, minutes stddev), minutes-weighted player rate stats, star indicators, and one-hot archetype counts.
 

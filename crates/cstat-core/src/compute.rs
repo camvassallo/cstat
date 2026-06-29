@@ -455,8 +455,14 @@ pub async fn repair_phantom_swapped_games(pool: &PgPool, season: i32) -> Result<
         ),
         ph AS (
             SELECT pgs.id AS pgs_id, pgs.game_id, np.id AS phantom_pid, np.nn, np.ln, np.fn,
+                   -- season-scoped: a game_id can carry team_game_stats rows in
+                   -- more than one season (a NatStat duplicate with a typo'd date
+                   -- lands the same game in two seasons), so without this filter
+                   -- the scalar subquery returns >1 opponent row and aborts the
+                   -- whole compute. The pairing we want is always this season's.
                    (SELECT tg.team_id FROM team_game_stats tg
-                    WHERE tg.game_id = pgs.game_id AND tg.team_id <> pgs.team_id) AS opp_team
+                    WHERE tg.game_id = pgs.game_id AND tg.team_id <> pgs.team_id
+                      AND tg.season = $1) AS opp_team
             FROM player_game_stats pgs
             JOIN np ON np.id = pgs.player_id
             WHERE pgs.season = $1 AND np.gp = 1 AND pgs.game_id IN (SELECT game_id FROM games2)
@@ -570,6 +576,7 @@ pub async fn repair_phantom_swapped_games(pool: &PgPool, season: i32) -> Result<
              turnovers = t2.turnovers, fouls = t2.fouls
          FROM team_game_stats t2
          WHERE t1.game_id = t2.game_id AND t1.team_id <> t2.team_id
+           AND t2.season = t1.season
            AND t1.game_id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
     )
     .execute(&mut *tx)
@@ -581,6 +588,7 @@ pub async fn repair_phantom_swapped_games(pool: &PgPool, season: i32) -> Result<
          FROM games g, team_game_stats opp
          WHERE tgs.game_id = g.id
            AND opp.game_id = tgs.game_id AND opp.team_id <> tgs.team_id
+           AND opp.season = tgs.season
            AND tgs.game_id IN (SELECT DISTINCT game_id FROM _phantom_swap_map)",
     )
     .execute(&mut *tx)
