@@ -1,6 +1,8 @@
+mod guards;
 mod routes;
 
 use anyhow::Result;
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::{Router, extract::State, response::Json, routing::get};
 use cstat_core::{Database, Predictor};
 use cstat_ingest::NatStatClient;
@@ -37,7 +39,7 @@ async fn main() -> Result<()> {
 
     // Connect to database
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db = Database::connect(&database_url).await?;
+    let db = Database::connect_api(&database_url).await?;
     info!("connected to database");
 
     db.migrate().await?;
@@ -86,10 +88,31 @@ async fn main() -> Result<()> {
     let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
     let spa = ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
 
+    // Serving guards layered onto the data routes only (NOT health/status):
+    //   - cache_headers: short-TTL `Cache-Control` so a CDN/browser can serve
+    //     most reads without hitting the origin (innermost — tags the
+    //     successful response on its way out).
+    //   - enforce_timeout: 408 a request that overruns instead of holding its
+    //     DB handle open.
+    //   - load_shed: 503 past `MAX_INFLIGHT_REQUESTS` (outermost — sheds before
+    //     any work or DB acquisition happens).
+    // Health stays un-guarded so a saturated server still passes its platform
+    // healthcheck rather than getting load-shed and bouncing.
+    let data_api = routes::api_routes()
+        .layer(from_fn(guards::cache_headers))
+        .layer(from_fn_with_state(
+            guards::timeout_duration(),
+            guards::enforce_timeout,
+        ))
+        .layer(from_fn_with_state(
+            guards::inflight_semaphore(),
+            guards::load_shed,
+        ));
+
     let app = Router::new()
         .route("/api/health", get(health_check))
         .route("/api/status", get(api_status))
-        .merge(routes::api_routes())
+        .merge(data_api)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
