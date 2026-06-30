@@ -141,3 +141,15 @@ pub async fn purge_edge_cache() {
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_env_vars_are_stable() {
+        // These names are a contract with the deployed Railway env config — a
+        // silent rename here stops prod alerts from posting. Pin them.
+        assert_eq!(SlackChannel::Cron.env_var(), "SLACK_WEBHOOK_CRON");
+    }
+}
