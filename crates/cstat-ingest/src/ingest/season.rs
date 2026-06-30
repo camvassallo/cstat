@@ -1,10 +1,13 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
+use crate::run_ledger::{RunLedger, StepStatus};
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
+use chrono::Utc;
 use cstat_core::compute::{ComputeReport, compute_all};
 use sqlx::PgPool;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 /// Orchestrates full-season data ingestion.
 pub struct SeasonIngester<'a> {
@@ -209,6 +212,246 @@ impl<'a> SeasonIngester<'a> {
         Ok(UpdateReport { ingest, compute })
     }
 
+    /// In-season **nightly** orchestration — the production "keep the site
+    /// current" path. Refreshes the full *served-critical* input set in
+    /// dependency order, recomputes derived stats, and records every step to
+    /// the `ingest_runs` ledger.
+    ///
+    /// The load-bearing difference from [`ingest_recent`](Self::ingest_recent):
+    /// it refreshes **game forecasts and Torvik (with per-game persistence)
+    /// BEFORE `compute_all`**. `compute_campom` rebuilds `cam_gbpm_v3` from
+    /// `torvik_player_stats`, and the served point-in-time model reads
+    /// `torvik_player_game_stats`; without the Torvik refresh a nightly
+    /// recompute would rebuild CamPom from stale Torvik and the in-season
+    /// predictions would silently rot even though NatStat games ingest fine.
+    ///
+    /// Step isolation: the NatStat box-score steps and the final compute are
+    /// load-bearing — a failure there aborts the run (returns `Err`). Forecasts
+    /// and Torvik are best-effort — a failure is logged, recorded as `failed`
+    /// in the ledger, and the run continues (yesterday's value beats none).
+    pub async fn nightly(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        run_compute: bool,
+    ) -> Result<NightlyReport, NatStatError> {
+        let ledger = RunLedger::start(self.pool, self.season);
+        let mut report = NightlyReport {
+            ingest: IngestReport::default(),
+            torvik: None,
+            torvik_games_persisted: 0,
+            torvik_rebounds_updated: 0,
+            compute: None,
+            run_id: ledger.run_id(),
+        };
+
+        info!(
+            season = self.season,
+            start_date,
+            end_date,
+            run_id = %ledger.run_id(),
+            "starting nightly ingestion"
+        );
+
+        // --- 1. games (load-bearing) ---
+        let t0 = Utc::now();
+        match super::games::ingest_games_by_date_range(
+            self.client,
+            self.pool,
+            self.season,
+            start_date,
+            end_date,
+        )
+        .await
+        {
+            Ok(n) => {
+                report.ingest.games = n;
+                ledger
+                    .record("games", StepStatus::Ok, Some(n as i64), t0, None)
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                ledger
+                    .record("games", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                return Err(e);
+            }
+        }
+
+        // --- 2. player performances (load-bearing) ---
+        let t0 = Utc::now();
+        match super::games::ingest_player_performances_by_date_range(
+            self.client,
+            self.pool,
+            self.season,
+            start_date,
+            end_date,
+        )
+        .await
+        {
+            Ok(n) => {
+                report.ingest.player_performances = n;
+                ledger
+                    .record("player_perfs", StepStatus::Ok, Some(n as i64), t0, None)
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                ledger
+                    .record("player_perfs", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                return Err(e);
+            }
+        }
+
+        // --- 3. team performances (load-bearing — feeds four factors / AdjEM / W-L) ---
+        let t0 = Utc::now();
+        match super::games::ingest_team_performances_by_date_range(
+            self.client,
+            self.pool,
+            self.season,
+            start_date,
+            end_date,
+        )
+        .await
+        {
+            Ok(n) => {
+                report.ingest.team_performances = n;
+                ledger
+                    .record("team_perfs", StepStatus::Ok, Some(n as i64), t0, None)
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                ledger
+                    .record("team_perfs", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                return Err(e);
+            }
+        }
+
+        // --- 4. game forecasts (best-effort — feeds the `diff_elo_rating` feature) ---
+        let t0 = Utc::now();
+        match super::elo::ingest_game_forecasts(self.client, self.pool, self.season).await {
+            Ok(n) => {
+                report.ingest.game_forecasts = n;
+                ledger
+                    .record("forecasts", StepStatus::Ok, Some(n as i64), t0, None)
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg, "forecasts refresh failed; continuing");
+                ledger
+                    .record("forecasts", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+            }
+        }
+
+        // --- 5. Torvik player season stats (best-effort — feeds cam_gbpm_v3) ---
+        let torvik_client = TorkvikClient::new();
+        let t0 = Utc::now();
+        match super::torvik::ingest_torvik_player_stats(&torvik_client, self.pool, self.season)
+            .await
+        {
+            Ok((upserted, matched)) => {
+                report.torvik = Some(TorvikReport { upserted, matched });
+                ledger
+                    .record("torvik", StepStatus::Ok, Some(upserted as i64), t0, None)
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg, "Torvik season-stats refresh failed; served CamPom may be stale");
+                ledger
+                    .record("torvik", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+            }
+        }
+
+        // --- 6. Torvik per-game persistence + rebound backfill (best-effort) ---
+        // One gzip fetch (`{year}_all_advgames.json.gz`) feeds both. This keeps
+        // `torvik_player_game_stats` — the pit_cam_v3 serving input — fresh.
+        let t0 = Utc::now();
+        match torvik_client.fetch_game_stats(self.season).await {
+            Ok(games) => {
+                let persisted = match super::torvik::apply_persist_torvik_game_stats(
+                    self.pool,
+                    &games,
+                    self.season,
+                )
+                .await
+                {
+                    Ok(n) => n,
+                    Err(e) => {
+                        warn!(season = self.season, error = %e, "Torvik per-game persist failed");
+                        0
+                    }
+                };
+                let rebounds = match super::torvik::apply_rebound_backfill(
+                    self.pool,
+                    &games,
+                    self.season,
+                )
+                .await
+                {
+                    Ok(n) => n,
+                    Err(e) => {
+                        warn!(season = self.season, error = %e, "Torvik rebound backfill failed");
+                        0
+                    }
+                };
+                report.torvik_games_persisted = persisted;
+                report.torvik_rebounds_updated = rebounds;
+                ledger
+                    .record(
+                        "torvik_games",
+                        StepStatus::Ok,
+                        Some(persisted as i64),
+                        t0,
+                        None,
+                    )
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg, "Torvik game-stats fetch failed; pit CamPom source not refreshed");
+                ledger
+                    .record("torvik_games", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+            }
+        }
+
+        // --- 7. compute (load-bearing — recomputes every derived metric) ---
+        if run_compute {
+            let t0 = Utc::now();
+            match compute_all(self.pool, self.season).await {
+                Ok(c) => {
+                    ledger
+                        .record("compute", StepStatus::Ok, None, t0, None)
+                        .await;
+                    report.compute = Some(c);
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    ledger
+                        .record("compute", StepStatus::Failed, None, t0, Some(&msg))
+                        .await;
+                    return Err(NatStatError::Database(e));
+                }
+            }
+        }
+
+        info!(
+            season = self.season,
+            run_id = %ledger.run_id(),
+            "nightly ingestion complete"
+        );
+
+        Ok(report)
+    }
+
     /// Ingest everything needed for a single team: roster (player metadata),
     /// team details (TCR/ELO/W-L), per-player box scores, and per-team box
     /// scores. Lives on `SeasonIngester` (rather than the bin) so the same
@@ -331,6 +574,43 @@ pub struct UpdateReport {
 impl std::fmt::Display for UpdateReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{}", self.ingest)?;
+        if let Some(c) = &self.compute {
+            writeln!(f, "{c}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Aggregate report for the `nightly` command — the full served-critical
+/// refresh (box scores + forecasts + Torvik) plus the compute pass.
+#[derive(Debug)]
+pub struct NightlyReport {
+    pub ingest: IngestReport,
+    /// `None` when the Torvik season-stats refresh failed (served CamPom may
+    /// be stale until the next successful run).
+    pub torvik: Option<TorvikReport>,
+    pub torvik_games_persisted: u64,
+    pub torvik_rebounds_updated: u64,
+    pub compute: Option<ComputeReport>,
+    /// Grouping id for this run's rows in the `ingest_runs` ledger.
+    pub run_id: Uuid,
+}
+
+impl std::fmt::Display for NightlyReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Nightly run {}", self.run_id)?;
+        writeln!(f, "{}", self.ingest)?;
+        match &self.torvik {
+            Some(t) => writeln!(
+                f,
+                "Torvik: {} upserted, {} matched; {} per-game rows, {} rebound rows",
+                t.upserted, t.matched, self.torvik_games_persisted, self.torvik_rebounds_updated
+            )?,
+            None => writeln!(
+                f,
+                "Torvik: refresh FAILED — served CamPom may be stale (see ingest_runs)"
+            )?,
+        }
         if let Some(c) = &self.compute {
             writeln!(f, "{c}")?;
         }
