@@ -33,7 +33,8 @@ This is the central finding. `update` today refreshes the box-score chain but **
 | games / player_game_stats / team_game_stats | NatStat games/perfs/teamperfs | AdjEM, four factors, season stats, margin/win/total models | ✅ yes | **Nightly** | Railway cron |
 | `compute_all` (season stats, AdjEM, rolling, percentiles, CamPom) | derived | every model + every page | ✅ yes | **Nightly** | Railway cron |
 | **torvik_player_stats + torvik_player_game_stats** | barttorvik advgames | **CamPom v3 (cam_gbpm_*), pit_cam_v3 serving model, roster aggregates** | 🔴 **NO** | **Nightly** (`torvik --persist-games`) | Railway cron |
-| game_forecasts (ELO) | NatStat forecasts | `diff_elo_rating` feature | 🔴 no | **Nightly** | Railway cron |
+| team_season_stats.elo_rating / elo_rank | NatStat `/elo` | **`diff_elo_rating` served feature** (sole writer) | 🔴 no | **Nightly** | Railway cron |
+| game_forecasts | NatStat forecasts | per-game ELO / win exp / lines | 🔴 no | **Nightly** | Railway cron |
 | transfers | 247 portal (JWT) | next-season roster projection | 🔴 no | **In portal windows** (fail-soft) | Local or Railway w/ JWT |
 | recruits | 247 composite (cookie) | freshman model, roster projection | 🔴 no | **Weekly in offseason** | Local |
 | coaches (coachdict) | barttorvik | CAE (display) | 🔴 no | **Weekly** | Railway cron |
@@ -124,7 +125,7 @@ M1–M4 should all land **before October 2026** — the pipeline can't be first-
 
 The correctness fix + ledger + CLI landed and were verified live against the local DB:
 
-- **`cstat-ingest nightly [--year] [--from] [--to] [--no-compute]`** — new orchestrator (`SeasonIngester::nightly`, `crates/cstat-ingest/src/ingest/season.rs`). Runs games → player_perfs → team_perfs (load-bearing, hard-fail) → forecasts → torvik → torvik per-game persist + rebounds (best-effort, fail-soft) → `compute_all` (hard-fail). Defaults the window to yesterday..today (UTC). **Fixes the stale-CamPom bug**: Torvik refreshes *before* compute, so `cam_gbpm_v3` and the `pit_cam_v3` serving input (`torvik_player_game_stats`) stay fresh.
+- **`cstat-ingest nightly [--year] [--from] [--to] [--no-compute]`** — new orchestrator (`SeasonIngester::nightly`, `crates/cstat-ingest/src/ingest/season.rs`). Runs games → player_perfs → team_perfs (load-bearing, hard-fail) → forecasts → **ELO ratings** → torvik → torvik per-game persist + rebounds (best-effort, fail-soft) → `compute_all` (hard-fail). Defaults the window to yesterday..today (UTC). **Fixes the stale-CamPom bug**: Torvik refreshes *before* compute, so `cam_gbpm_v3` and the `pit_cam_v3` serving input (`torvik_player_game_stats`) stay fresh. The `/elo` step is the sole writer of `team_season_stats.elo_rating` (the served `diff_elo_rating` feature) — `compute` never touches it, so it too would go stale without nightly refresh. `teams`/`team_details` are deliberately omitted (reference data / W-L overwritten by compute / conference static in-season).
 - **`ingest_runs` ledger** (migration `039_ingest_runs.sql`, module `crates/cstat-ingest/src/run_ledger.rs`) — one row per step per run, with status / rows_touched / timing / error. Excluded from `sync_to_prod.sh` (runtime-written on prod). This is the data source for the future `/api/health/ingest` route + staleness alerting (M2).
 - **Verified**: off-season smoke run refreshed 5,695 forecasts + 4,978 Torvik players + 113,882 per-game rows; all 6 ledger steps recorded `ok` with per-step timings. fmt/clippy clean, ledger unit test green.
 

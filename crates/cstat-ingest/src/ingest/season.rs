@@ -226,9 +226,17 @@ impl<'a> SeasonIngester<'a> {
     /// predictions would silently rot even though NatStat games ingest fine.
     ///
     /// Step isolation: the NatStat box-score steps and the final compute are
-    /// load-bearing — a failure there aborts the run (returns `Err`). Forecasts
-    /// and Torvik are best-effort — a failure is logged, recorded as `failed`
-    /// in the ledger, and the run continues (yesterday's value beats none).
+    /// load-bearing — a failure there aborts the run (returns `Err`). Forecasts,
+    /// ELO ratings, and Torvik are best-effort — a failure is logged, recorded
+    /// as `failed` in the ledger, and the run continues (yesterday's value beats
+    /// none).
+    ///
+    /// Steps: games → player perfs → team perfs → forecasts → ELO ratings →
+    /// Torvik (season + per-game) → compute. Two `ingest_full_season` steps are
+    /// deliberately **omitted** because nothing they uniquely feed changes
+    /// mid-season: `teams` (the reference team list — new teams only appear at a
+    /// season bootstrap) and `team_details` (TCR is unserved, W-L is overwritten
+    /// by `compute_derived_game_fields`, and conference is static in-season).
     pub async fn nightly(
         &self,
         start_date: &str,
@@ -331,7 +339,9 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
-        // --- 4. game forecasts (best-effort — feeds the `diff_elo_rating` feature) ---
+        // --- 4. game forecasts (best-effort — refreshes `game_forecasts`:
+        // per-game pre/post ELO, win expectancy, betting lines). May be empty
+        // off-season / before NatStat's nightly run, so it must not fail the run. ---
         let t0 = Utc::now();
         match super::elo::ingest_game_forecasts(self.client, self.pool, self.season).await {
             Ok(n) => {
@@ -349,7 +359,30 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
-        // --- 5. Torvik player season stats (best-effort — feeds cam_gbpm_v3) ---
+        // --- 5. ELO ratings (best-effort — the `/elo` endpoint is the SOLE
+        // writer of `team_season_stats.elo_rating`/`elo_rank`, which feeds the
+        // served `diff_elo_rating` model feature; `compute_all` never touches
+        // those columns, so without this step the ELO feature would go stale
+        // all season. Distinct from forecasts above, which writes `game_forecasts`.
+        // May be empty before NatStat's nightly ELO run — fail-soft. ---
+        let t0 = Utc::now();
+        match super::elo::ingest_elo_ratings(self.client, self.pool, self.season).await {
+            Ok(n) => {
+                report.ingest.elo_ratings = n;
+                ledger
+                    .record("elo", StepStatus::Ok, Some(n as i64), t0, None)
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg, "ELO ratings refresh failed; continuing");
+                ledger
+                    .record("elo", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+            }
+        }
+
+        // --- 6. Torvik player season stats (best-effort — feeds cam_gbpm_v3) ---
         let torvik_client = TorkvikClient::new();
         let t0 = Utc::now();
         match super::torvik::ingest_torvik_player_stats(&torvik_client, self.pool, self.season)
@@ -370,7 +403,7 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
-        // --- 6. Torvik per-game persistence + rebound backfill (best-effort) ---
+        // --- 7. Torvik per-game persistence + rebound backfill (best-effort) ---
         // One gzip fetch (`{year}_all_advgames.json.gz`) feeds both. This keeps
         // `torvik_player_game_stats` — the pit_cam_v3 serving input — fresh.
         let t0 = Utc::now();
@@ -423,7 +456,7 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
-        // --- 7. compute (load-bearing — recomputes every derived metric) ---
+        // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
             match compute_all(self.pool, self.season).await {
@@ -599,7 +632,18 @@ pub struct NightlyReport {
 impl std::fmt::Display for NightlyReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Nightly run {}", self.run_id)?;
-        writeln!(f, "{}", self.ingest)?;
+        // Only the fields nightly actually refreshes — `teams`/`team_details`
+        // are intentionally not part of this path (see `nightly` docs), so
+        // listing them as "0" would misleadingly read as a no-op.
+        writeln!(
+            f,
+            "Ingested: {} games, {} player perfs, {} team perfs, {} ELO ratings, {} game forecasts",
+            self.ingest.games,
+            self.ingest.player_performances,
+            self.ingest.team_performances,
+            self.ingest.elo_ratings,
+            self.ingest.game_forecasts,
+        )?;
         match &self.torvik {
             Some(t) => writeln!(
                 f,
