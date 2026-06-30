@@ -28,8 +28,25 @@
 #       now so it's excluded the moment that table lands.
 #
 # Usage:
-#   ./scripts/sync_to_prod.sh              # full run
-#   ./scripts/sync_to_prod.sh --dry-run    # preview without applying
+#   ./scripts/sync_to_prod.sh                          # full run (all tables)
+#   ./scripts/sync_to_prod.sh --dry-run                # preview without applying
+#   ./scripts/sync_to_prod.sh --tables a,b,c           # push only these tables
+#   ./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
+#
+# --tables restricts the dump/TRUNCATE/restore to a comma-separated subset
+# (intersected with the live, non-excluded local tables). This is the targeted
+# mode for the Railway-direct nightly architecture: the serving-critical tables
+# are written on prod by the nightly cron job, so the local machine pushes ONLY
+# its heavy derived tables (PBP/RAPM/archetype/lineup outputs) without a full
+# truncate clobbering what the cron just wrote. Names in EXCLUDED can never be
+# selected; an unknown name aborts before any write.
+#
+# CAVEAT: the restore still uses TRUNCATE ... CASCADE, so targeting a table that
+# is *referenced* by a foreign key (e.g. `teams`, which `players`/`games` point
+# at) would cascade-wipe those dependents on prod even though they aren't in your
+# list. --tables is intended for LEAF / derived output tables (lineup_aggregates,
+# player_on_off, player_rapm, player_archetypes, archetype_models, …) that nothing
+# references. The confirmation prompt prints the exact TRUNCATE — read it.
 #
 # PROD_DATABASE_URL is auto-loaded from ../.env (gitignored). Override with
 # `PROD_DATABASE_URL=... ./scripts/sync_to_prod.sh` if needed.
@@ -49,12 +66,15 @@ fi
 LOCAL_URL="${LOCAL_DATABASE_URL:-postgres://cstat:cstat@localhost:5432/cstat}"
 PROD_URL="${PROD_DATABASE_URL:?Set PROD_DATABASE_URL in .env or your shell to the Railway prod connection string}"
 DRY_RUN=0
+REQUESTED_TABLES=""   # empty = all (full sync); set by --tables for targeted mode
 
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run|-n) DRY_RUN=1 ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run|-n) DRY_RUN=1; shift ;;
+    --tables) REQUESTED_TABLES="${2:?--tables needs a comma-separated list}"; shift 2 ;;
+    --tables=*) REQUESTED_TABLES="${1#--tables=}"; shift ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \?//'; exit 0 ;;
-    *) echo "Unknown arg: $arg"; exit 2 ;;
+    *) echo "Unknown arg: $1"; exit 2 ;;
   esac
 done
 
@@ -107,10 +127,43 @@ if [[ -z "$TABLE_LIST" ]]; then
   exit 1
 fi
 
+# Targeted mode: keep only the requested tables, validating each against the
+# live non-excluded set so a typo or an excluded/local-only name fails loudly
+# instead of silently syncing nothing (or everything).
+if [[ -n "$REQUESTED_TABLES" ]]; then
+  SELECTED=""
+  for want in ${REQUESTED_TABLES//,/ }; do
+    found=0
+    for have in ${TABLE_LIST//,/ }; do
+      [[ "$want" == "$have" ]] && { found=1; break; }
+    done
+    if [[ "$found" -eq 0 ]]; then
+      echo "✗ --tables: '$want' is not a syncable table (unknown, excluded, or local-only)."
+      echo "  Syncable: ${TABLE_LIST//,/, }"
+      exit 2
+    fi
+    SELECTED="${SELECTED:+$SELECTED,}$want"
+  done
+  TABLE_LIST="$SELECTED"
+fi
+
+# pg_dump must restrict to the selected tables too, else the dump still carries
+# every table's data even when we only TRUNCATE/restore a subset. Build -t flags
+# in targeted mode (full mode keeps the simple -T exclude flags above).
+TABLE_FLAGS=()
+if [[ -n "$REQUESTED_TABLES" ]]; then
+  for t in ${TABLE_LIST//,/ }; do
+    TABLE_FLAGS+=("-t" "$t")
+  done
+fi
+
 mask_url() { sed -E 's|://[^@]+@|://***@|' <<<"$1"; }
 
 echo "→ Local:    $(mask_url "$LOCAL_URL")"
 echo "→ Prod:     $(mask_url "$PROD_URL")"
+if [[ -n "$REQUESTED_TABLES" ]]; then
+  echo "→ Mode:     TARGETED (--tables) — only the tables below are touched on prod"
+fi
 echo "→ Tables:   ${TABLE_LIST//,/, }"
 echo "→ Excluded: ${EXCLUDED[*]} (stay local — never pushed to prod)"
 echo
@@ -145,6 +198,7 @@ echo "→ Dumping local data (custom binary format)..."
   --no-privileges \
   --compress=6 \
   "${EXCLUDE_FLAGS[@]}" \
+  ${TABLE_FLAGS[@]+"${TABLE_FLAGS[@]}"} \
   > "$TMPFILE"
 
 DUMP_SIZE=$(du -h "$TMPFILE" | cut -f1 | tr -d '[:space:]')
@@ -159,6 +213,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
+if [[ -n "$REQUESTED_TABLES" ]]; then
+  echo "→ TARGETED restore uses TRUNCATE ... CASCADE on: ${TABLE_LIST//,/, }"
+  echo "  CASCADE follows foreign keys — if any of these is REFERENCED by another"
+  echo "  table, that dependent is wiped too. Only proceed for leaf/derived tables."
+fi
 read -r -p "→ Apply to PROD? This TRUNCATEs every table above and restores from the dump. [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
 

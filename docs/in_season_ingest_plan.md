@@ -114,7 +114,7 @@ This keeps the serving path robust and always-on (Railway), while the laptop-bou
 ## Sequencing & milestones
 
 1. **M1 — Complete + correct nightly (Phase 0 + 1.1/1.5 + 2.1/2.2).** The job exists, fetches the full served-critical set, is idempotent, and records runs. *Highest value; unblocks everything.* **— core SHIPPED 2026-06-29** (see *M1 status* below).
-2. **M2 — Scheduled + observable (Phase 2.3–2.8).** It runs unattended on Railway with health endpoint + alerting + edge coherence.
+2. **M2 — Scheduled + observable (Phase 2.3–2.8).** It runs unattended on Railway with health endpoint + alerting + edge coherence. **— code SHIPPED 2026-06-29** (see *M2 status* below); only the Railway dashboard wiring is operator-side.
 3. **M3 — Connectivity fail-soft (Phase 1.2–1.4).** Preflight + JWT expiry handling + v3-fallback visibility.
 4. **M4 — Simulatable + CI-protected (Phase 3).** Clock injection + replay driver + synthetic fixtures. *Run M4's replay weekly from now until tipoff.*
 5. **M5 — Quality gates + runbook (Phase 4).** Invariant gates, self-heal, opening-night checklist.
@@ -131,10 +131,24 @@ The correctness fix + ledger + CLI landed and were verified live against the loc
 
 **Still open in M1's phase group (rolled into M2/M3):** explicit HTTP timeouts (1.1), Torvik CSV schema guard (1.5), and the full e2e replay idempotency test (lands with the Phase 3 synthetic-fixture harness — idempotency today rests on the `ON CONFLICT` upsert paths `update` already uses).
 
+## M2 status — code shipped 2026-06-29
+
+The scheduling/observability/alerting layer landed; everything is code except the
+Railway dashboard wiring (documented in `docs/deploy_nightly_cron.md`).
+
+- **`GET /api/health/ingest`** (2.3) — `crates/cstat-api/src/routes/health.rs`, mounted un-guarded next to `/api/health`. Per-step last-OK timestamp + last status from `ingest_runs`, an overall `healthy`/`stale` verdict (any served-critical step >36h or never-run → stale), and **HTTP 503 when stale** so an external uptime monitor flips red without parsing the body. `forecasts` is excluded from the staleness gate (legitimately empty off-season).
+- **Slack notifications** (2.4) — `crates/cstat-ingest/src/notify.rs` (`post_slack`, fail-soft) wired into `SeasonIngester::nightly`, one post per run: a `:white_check_mark:` **success heartbeat** (with games/perfs/ELO/forecasts/Torvik/compute counts + remaining rate budget — also confirms the cron fired) on a clean run, a `:warning:` **degraded** post when the run completes but a best-effort feed failed (or budget low), and a `:rotating_light:` **critical** alert when a load-bearing step aborts the run. Routing is **per-channel** via a `SlackChannel` registry (a Slack webhook is bound to one channel): nightly posts to `#cron-job-alerts` via `SLACK_WEBHOOK_CRON` (legacy `INGEST_ALERT_WEBHOOK` honoured); future buckets (`#errors-api`, `#errors-web`) add a variant + `SLACK_WEBHOOK_*` var. Unset = log-only.
+- **Rate-budget headroom** (2.5) — nightly snapshots `rate_limit_remaining()` before/after, logs both net drawdown and remaining headroom vs `NATSTAT_MAX_PER_HOUR`, and warns + adds a degraded-alert line when drawdown ≥80% *or* remaining ≤20% (the bucket refills mid-run, so remaining is the load-bearing signal; an exact per-call count would need the ledger's unused `api_calls` column — deferred).
+- **Edge cache purge** (2.7) — `notify::purge_edge_cache` (fail-soft) fires after a successful compute when `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` are set; otherwise the 5-min `Cache-Control` TTL alone keeps the site fresh within minutes.
+- **Targeted sync** (2.8) — `scripts/sync_to_prod.sh --tables a,b,c` restricts the dump/TRUNCATE/restore to a validated subset, the required primitive for the Railway-direct split (local heavy jobs push only their derived tables without truncating the cron-written serving tables).
+- **Schedule** (2.6) — operator step, not code: runbook in `docs/deploy_nightly_cron.md` (Railway cron service on the API image, `cstat-ingest nightly`, ~09:30 UTC ≈ 04:30 ET, shared env).
+
+**Still open (rolled into M3+):** the in-process >36h staleness *alert* is delegated to an external monitor polling `/api/health/ingest` (the nightly can't alert about a night it didn't run); a Railway healthcheck/native cron-failure hook is the operator's to wire. Connectivity fail-soft (preflight, JWT expiry, v3-fallback visibility) remains M3.
+
 ## Decisions (resolved 2026-06-29)
 
 1. **Runtime split** — ✅ **Railway-direct serving nightly + targeted local sync.** The serving-critical nightly runs on Railway against prod; heavy local jobs push only their tables via a new `sync_to_prod.sh --tables` mode (Phase 2.8 is now a required dependency of the split, not optional).
-2. **Alerting channel** — ✅ **Slack webhook.** Failures + >36h staleness post to a Slack channel via an incoming-webhook URL in env (`INGEST_ALERT_WEBHOOK`). No infra.
+2. **Alerting channel** — ✅ **Slack webhooks, per-channel.** Each channel = its own incoming-webhook URL in its own `SLACK_WEBHOOK_*` env var (a webhook is bound to one channel), registered in `notify::SlackChannel`. Nightly → `#cron-job-alerts` (`SLACK_WEBHOOK_CRON`). No infra.
 3. **Build order** — ✅ **M1 first** (complete + correct nightly: fold Torvik/forecasts into one idempotent orchestrator + `ingest_runs` ledger; fixes the stale-CamPom bug).
 
 ## Still open (defaulted, revisit if it bites)

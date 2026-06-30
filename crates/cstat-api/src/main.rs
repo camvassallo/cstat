@@ -120,6 +120,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/api/health", get(health_check))
+        .route("/api/health/ingest", get(routes::health::ingest_health))
         .route("/api/status", get(api_status))
         .merge(data_api)
         .layer(CorsLayer::permissive())
