@@ -1,7 +1,9 @@
 //! Barttorvik data ingestion: player season stats and per-game rebound backfill.
 
 use crate::torvik::{TorkvikClient, TorkvikGameRow};
-use sqlx::PgPool;
+use chrono::NaiveDate;
+use sqlx::{PgPool, QueryBuilder};
+use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
 
@@ -222,117 +224,96 @@ pub async fn apply_persist_torvik_game_stats(
     games: &[TorkvikGameRow],
     season: i32,
 ) -> anyhow::Result<u64> {
-    let mut inserted: u64 = 0;
+    // Stage valid rows, dedup by the (pid, game_uid) conflict key — a batched
+    // INSERT ... ON CONFLICT can't touch the same key twice, and we keep the
+    // last occurrence to match the prior row-by-row upsert. This collapses a
+    // ~113k-query N+1 (seconds on localhost, but ~10 min over the prod DB's
+    // round-trip latency — see docs/in_season_ingest_plan.md) into ~115 batched
+    // statements.
     let mut skipped: u64 = 0;
-
+    let mut by_key: HashMap<(i32, &str), (i32, NaiveDate, &TorkvikGameRow)> =
+        HashMap::with_capacity(games.len());
     for g in games {
-        let pid = match g.pid {
-            Some(v) => v,
-            None => {
-                skipped += 1;
-                continue;
-            }
+        let Some(pid) = g.pid else {
+            skipped += 1;
+            continue;
         };
-        let game_date = match chrono::NaiveDate::parse_from_str(&g.date_str, "%Y%m%d") {
-            Ok(d) => d,
-            Err(_) => {
-                skipped += 1;
-                continue;
-            }
+        let Ok(game_date) = NaiveDate::parse_from_str(&g.date_str, "%Y%m%d") else {
+            skipped += 1;
+            continue;
         };
+        by_key.insert((pid, g.game_uid.as_str()), (pid, game_date, g));
+    }
+    let staged: Vec<(i32, NaiveDate, &TorkvikGameRow)> = by_key.into_values().collect();
 
-        let result = sqlx::query(
-            r#"INSERT INTO torvik_player_game_stats (
-                    pid, game_uid, season, game_date,
-                    team, opponent, location, class_year, height_inches,
-                    minutes_pct, o_rtg, usage, pts, oreb, dreb, ast, tov, stl, blk, pf,
-                    two_pm, two_pa, tpm, tpa, ftm, fta,
-                    rim_made, rim_attempted, mid_made, mid_attempted, dunks_made, dunks_attempted,
-                    bpm, obpm, dbpm, possessions
-               ) VALUES (
-                    $1, $2, $3, $4,
-                    $5, $6, $7, $8, $9,
-                    $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                    $21, $22, $23, $24, $25, $26,
-                    $27, $28, $29, $30, $31, $32,
-                    $33, $34, $35, $36
-               )
-               ON CONFLICT (pid, game_uid) DO UPDATE SET
-                    season = EXCLUDED.season,
-                    game_date = EXCLUDED.game_date,
-                    team = EXCLUDED.team,
-                    opponent = EXCLUDED.opponent,
-                    location = EXCLUDED.location,
-                    class_year = EXCLUDED.class_year,
-                    height_inches = EXCLUDED.height_inches,
-                    minutes_pct = EXCLUDED.minutes_pct,
-                    o_rtg = EXCLUDED.o_rtg,
-                    usage = EXCLUDED.usage,
-                    pts = EXCLUDED.pts,
-                    oreb = EXCLUDED.oreb,
-                    dreb = EXCLUDED.dreb,
-                    ast = EXCLUDED.ast,
-                    tov = EXCLUDED.tov,
-                    stl = EXCLUDED.stl,
-                    blk = EXCLUDED.blk,
-                    pf = EXCLUDED.pf,
-                    two_pm = EXCLUDED.two_pm,
-                    two_pa = EXCLUDED.two_pa,
-                    tpm = EXCLUDED.tpm,
-                    tpa = EXCLUDED.tpa,
-                    ftm = EXCLUDED.ftm,
-                    fta = EXCLUDED.fta,
-                    rim_made = EXCLUDED.rim_made,
-                    rim_attempted = EXCLUDED.rim_attempted,
-                    mid_made = EXCLUDED.mid_made,
-                    mid_attempted = EXCLUDED.mid_attempted,
-                    dunks_made = EXCLUDED.dunks_made,
-                    dunks_attempted = EXCLUDED.dunks_attempted,
-                    bpm = EXCLUDED.bpm,
-                    obpm = EXCLUDED.obpm,
-                    dbpm = EXCLUDED.dbpm,
-                    possessions = EXCLUDED.possessions"#,
-        )
-        .bind(pid)
-        .bind(&g.game_uid)
-        .bind(season)
-        .bind(game_date)
-        .bind(&g.team)
-        .bind(&g.opponent)
-        .bind(&g.location)
-        .bind(&g.class_year)
-        .bind(g.height_inches)
-        .bind(g.minutes_pct)
-        .bind(g.o_rtg)
-        .bind(g.usage)
-        .bind(g.pts)
-        .bind(g.oreb)
-        .bind(g.dreb)
-        .bind(g.ast)
-        .bind(g.tov)
-        .bind(g.stl)
-        .bind(g.blk)
-        .bind(g.pf)
-        .bind(g.two_pm)
-        .bind(g.two_pa)
-        .bind(g.tpm)
-        .bind(g.tpa)
-        .bind(g.ftm)
-        .bind(g.fta)
-        .bind(g.rim_made)
-        .bind(g.rim_attempted)
-        .bind(g.mid_made)
-        .bind(g.mid_attempted)
-        .bind(g.dunks_made)
-        .bind(g.dunks_attempted)
-        .bind(g.bpm)
-        .bind(g.obpm)
-        .bind(g.dbpm)
-        .bind(g.possessions)
-        .execute(pool)
-        .await?;
-
-        inserted += result.rows_affected();
+    let mut inserted: u64 = 0;
+    // 36 columns/row; chunk so each statement stays under Postgres' 65535-bind
+    // cap (1000 * 36 = 36000).
+    for chunk in staged.chunks(1000) {
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO torvik_player_game_stats (\
+             pid, game_uid, season, game_date, team, opponent, location, class_year, height_inches, \
+             minutes_pct, o_rtg, usage, pts, oreb, dreb, ast, tov, stl, blk, pf, \
+             two_pm, two_pa, tpm, tpa, ftm, fta, \
+             rim_made, rim_attempted, mid_made, mid_attempted, dunks_made, dunks_attempted, \
+             bpm, obpm, dbpm, possessions) ",
+        );
+        qb.push_values(chunk, |mut b, row| {
+            let (pid, game_date, g) = (row.0, row.1, row.2);
+            b.push_bind(pid)
+                .push_bind(&g.game_uid)
+                .push_bind(season)
+                .push_bind(game_date)
+                .push_bind(&g.team)
+                .push_bind(&g.opponent)
+                .push_bind(&g.location)
+                .push_bind(&g.class_year)
+                .push_bind(g.height_inches)
+                .push_bind(g.minutes_pct)
+                .push_bind(g.o_rtg)
+                .push_bind(g.usage)
+                .push_bind(g.pts)
+                .push_bind(g.oreb)
+                .push_bind(g.dreb)
+                .push_bind(g.ast)
+                .push_bind(g.tov)
+                .push_bind(g.stl)
+                .push_bind(g.blk)
+                .push_bind(g.pf)
+                .push_bind(g.two_pm)
+                .push_bind(g.two_pa)
+                .push_bind(g.tpm)
+                .push_bind(g.tpa)
+                .push_bind(g.ftm)
+                .push_bind(g.fta)
+                .push_bind(g.rim_made)
+                .push_bind(g.rim_attempted)
+                .push_bind(g.mid_made)
+                .push_bind(g.mid_attempted)
+                .push_bind(g.dunks_made)
+                .push_bind(g.dunks_attempted)
+                .push_bind(g.bpm)
+                .push_bind(g.obpm)
+                .push_bind(g.dbpm)
+                .push_bind(g.possessions);
+        });
+        qb.push(
+            " ON CONFLICT (pid, game_uid) DO UPDATE SET \
+             season = EXCLUDED.season, game_date = EXCLUDED.game_date, team = EXCLUDED.team, \
+             opponent = EXCLUDED.opponent, location = EXCLUDED.location, class_year = EXCLUDED.class_year, \
+             height_inches = EXCLUDED.height_inches, minutes_pct = EXCLUDED.minutes_pct, \
+             o_rtg = EXCLUDED.o_rtg, usage = EXCLUDED.usage, pts = EXCLUDED.pts, \
+             oreb = EXCLUDED.oreb, dreb = EXCLUDED.dreb, ast = EXCLUDED.ast, tov = EXCLUDED.tov, \
+             stl = EXCLUDED.stl, blk = EXCLUDED.blk, pf = EXCLUDED.pf, \
+             two_pm = EXCLUDED.two_pm, two_pa = EXCLUDED.two_pa, tpm = EXCLUDED.tpm, tpa = EXCLUDED.tpa, \
+             ftm = EXCLUDED.ftm, fta = EXCLUDED.fta, \
+             rim_made = EXCLUDED.rim_made, rim_attempted = EXCLUDED.rim_attempted, \
+             mid_made = EXCLUDED.mid_made, mid_attempted = EXCLUDED.mid_attempted, \
+             dunks_made = EXCLUDED.dunks_made, dunks_attempted = EXCLUDED.dunks_attempted, \
+             bpm = EXCLUDED.bpm, obpm = EXCLUDED.obpm, dbpm = EXCLUDED.dbpm, \
+             possessions = EXCLUDED.possessions",
+        );
+        inserted += qb.build().execute(pool).await?.rows_affected();
     }
 
     info!(
