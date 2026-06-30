@@ -1,0 +1,17 @@
+# campom.org crawl policy.
+#
+# Search crawlers (Googlebot, Applebot, Bingbot, …) are welcome on the SPA
+# pages — /predict, /players/*, /teams/*, /coaches/* etc. — but NOT on the JSON
+# API. /api/* routes aren't pages (no indexable content) and are the heaviest
+# endpoints to serve (/api/predict runs model inference; /api/lineups and the
+# per-player /pbp + /on-off routes are expensive queries), so there's no SEO
+# value in crawling them and real cost in letting bots hammer them.
+#
+# AI-training crawlers (GPTBot, ClaudeBot, CCBot, Google-Extended, Bytespider,
+# Amazonbot, Applebot-Extended, meta-externalagent, …) are blocked separately by
+# Cloudflare's managed robots.txt, which is prepended to this file at the edge.
+
+User-agent: *
+Disallow: /api/
+
+Sitemap: https://campom.org/sitemap.xml

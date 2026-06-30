@@ -19,6 +19,9 @@ pub struct AppState {
     pub db: Database,
     pub natstat: NatStatClient,
     pub predictor: Predictor,
+    /// SPA `index.html` parsed once for per-page social-meta injection
+    /// (`routes::meta`). Cheap clone-free reads on the entity document routes.
+    pub spa_index: routes::meta::SpaTemplate,
 }
 
 /// Default season used by route handlers when `?season=` is omitted.
@@ -66,10 +69,16 @@ async fn main() -> Result<()> {
     })?;
     info!("loaded ONNX models from {}", model_dir.display());
 
+    // SPA dir is needed both for the static file service (below) and to parse
+    // index.html once for per-page social-meta injection.
+    let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
+    let spa_index = routes::meta::SpaTemplate::load(&spa_dir);
+
     let state = Arc::new(AppState {
         db,
         natstat,
         predictor,
+        spa_index,
     });
 
     // Static file serving for React SPA. ServeDir handles asset paths
@@ -85,7 +94,6 @@ async fn main() -> Result<()> {
     // to `/predict`, `/teams/<id>`, etc. served the right HTML body
     // but with a 404 status, and browsers bailed before React Router
     // could mount. `fallback(…)` skips that wrapper.
-    let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
     let spa_files =
         ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
     // Wrap the static service so content-hashed `/assets/*` get a 1-year
@@ -122,6 +130,18 @@ async fn main() -> Result<()> {
         .route("/api/health", get(health_check))
         .route("/api/health/ingest", get(routes::health::ingest_health))
         .route("/api/status", get(api_status))
+        // SEO: sitemap index + child sitemaps (DB-generated), and per-page social
+        // meta injected into the SPA's index.html for entity document routes.
+        // These are non-/api paths that would otherwise fall through to the SPA.
+        .route("/sitemap.xml", get(routes::sitemap::index))
+        .route("/sitemap-static.xml", get(routes::sitemap::static_pages))
+        .route("/sitemap-teams.xml", get(routes::sitemap::teams))
+        .route("/sitemap-players.xml", get(routes::sitemap::players))
+        .route("/sitemap-coaches.xml", get(routes::sitemap::coaches))
+        .route("/players/{id}", get(routes::meta::player_document))
+        .route("/teams/{id}", get(routes::meta::team_document))
+        .route("/coaches/{id}", get(routes::meta::coach_document))
+        .route("/og/players/{id}", get(routes::og_image::player_card))
         .merge(data_api)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
