@@ -69,10 +69,16 @@ async fn main() -> Result<()> {
     })?;
     info!("loaded ONNX models from {}", model_dir.display());
 
+    // SPA dir is needed both for the static file service (below) and to parse
+    // index.html once for per-page social-meta injection.
+    let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
+    let spa_index = routes::meta::SpaTemplate::load(&spa_dir);
+
     let state = Arc::new(AppState {
         db,
         natstat,
         predictor,
+        spa_index,
     });
 
     // Static file serving for React SPA. ServeDir handles asset paths
@@ -88,7 +94,6 @@ async fn main() -> Result<()> {
     // to `/predict`, `/teams/<id>`, etc. served the right HTML body
     // but with a 404 status, and browsers bailed before React Router
     // could mount. `fallback(…)` skips that wrapper.
-    let spa_dir = std::env::var("SPA_DIR").unwrap_or_else(|_| "web/dist".into());
     let spa_files =
         ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
     // Wrap the static service so content-hashed `/assets/*` get a 1-year
