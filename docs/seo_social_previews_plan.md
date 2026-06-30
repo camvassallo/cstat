@@ -1,6 +1,6 @@
 # SEO + social-preview plan (per-page unfurls + sitemap)
 
-*Scoping doc — drafted 2026-06-30. Status: #1 (static default meta) shipped in `web/index.html`; #2 and #3 below are proposed, not yet built.*
+*Scoping doc — drafted 2026-06-30. Status: **#1, #2a, and #3 all shipped 2026-06-30.** #2b (generated per-entity OG card image) and JSON-LD remain proposed. See "Shipped" note at the bottom.*
 
 ## Background — why the SPA needs server help
 
@@ -139,3 +139,27 @@ line. No schema or model changes.
 Plus the smaller items from the SEO review: `rel="canonical"` everywhere (folded
 into #2), and JSON-LD structured data (`Person` for players, `SportsTeam` for
 teams) for rich-result eligibility — a later, low-priority add.
+
+---
+
+## Shipped 2026-06-30 (#1, #2a, #3)
+
+- **#1** — static default OG/Twitter/description meta in `web/index.html`, with
+  the overridable tags wrapped in `<!--SSR_META_START/END-->` markers. Image:
+  `web/public/og-image.png` (1424x752, ~1.91:1).
+- **#2a** — `crates/cstat-api/src/routes/meta.rs`: `SpaTemplate` parses
+  `index.html` once at startup (held on `AppState.spa_index`); the document
+  routes `/players/{id}`, `/teams/{id}`, `/coaches/{id}` (mounted in `main.rs`
+  before the SPA fallback) look the entity up and inject per-page title +
+  canonical + OG/Twitter into the marker region. Non-UUID segments (e.g.
+  `/players/compare`), misses, and DB errors fall back to the default page.
+  Dynamic values are HTML-escaped. Live-verified: "Darnez Slater — Colorado St.
+  (2026)", "Rider 2026 · AdjEM -29.7 (#356) · 4-24 · MAAC", coach CAE line.
+  Reuses the static `og-image.png` (per-entity images = #2b).
+- **#3** — `crates/cstat-api/src/routes/sitemap.rs`: `/sitemap.xml` index +
+  `/sitemap-{static,teams,players,coaches}.xml`, DB-generated, newest-season
+  scoped (players 5096, teams 364, coaches 687 — all under the 50k cap), clean
+  canonical URLs, `application/xml`, 1h cache. Referenced in
+  `web/public/robots.txt` via `Sitemap:`. Submit it in Google Search Console.
+- **Config:** `PUBLIC_BASE_URL` (default `https://campom.org`) feeds the absolute
+  URLs in both the sitemap and the injected `og:url`/canonical.

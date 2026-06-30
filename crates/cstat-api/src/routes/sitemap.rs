@@ -88,7 +88,14 @@ pub async fn static_pages(State(_state): State<Arc<AppState>>) -> Response {
     // Only param-less, indexable routes (tools like /players/compare are
     // omitted — no SEO value). Kept in sync with `web/src/App.tsx`.
     let paths = [
-        "/", "/players", "/predict", "/archetypes", "/projected", "/draft", "/lineups", "/coaches",
+        "/",
+        "/players",
+        "/predict",
+        "/archetypes",
+        "/projected",
+        "/draft",
+        "/lineups",
+        "/coaches",
     ];
     xml_response(urlset(paths.iter().map(|p| p.to_string())))
 }
@@ -96,12 +103,11 @@ pub async fn static_pages(State(_state): State<Arc<AppState>>) -> Response {
 /// `GET /sitemap-teams.xml` — every team page for the newest season.
 pub async fn teams(State(state): State<Arc<AppState>>) -> Result<Response, (StatusCode, String)> {
     let season = newest_season(&state).await;
-    let ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM teams WHERE season = $1 ORDER BY id")
-            .bind(season)
-            .fetch_all(&state.db.pool)
-            .await
-            .map_err(db_err)?;
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM teams WHERE season = $1 ORDER BY id")
+        .bind(season)
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(db_err)?;
     Ok(xml_response(urlset(
         ids.into_iter().map(|id| format!("/teams/{id}")),
     )))
@@ -110,12 +116,11 @@ pub async fn teams(State(state): State<Arc<AppState>>) -> Result<Response, (Stat
 /// `GET /sitemap-players.xml` — every player page for the newest season.
 pub async fn players(State(state): State<Arc<AppState>>) -> Result<Response, (StatusCode, String)> {
     let season = newest_season(&state).await;
-    let ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM players WHERE season = $1 ORDER BY id")
-            .bind(season)
-            .fetch_all(&state.db.pool)
-            .await
-            .map_err(db_err)?;
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM players WHERE season = $1 ORDER BY id")
+        .bind(season)
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(db_err)?;
     Ok(xml_response(urlset(
         ids.into_iter().map(|id| format!("/players/{id}")),
     )))
@@ -123,11 +128,10 @@ pub async fn players(State(state): State<Arc<AppState>>) -> Result<Response, (St
 
 /// `GET /sitemap-coaches.xml` — every rated coach (career-scoped, one per coach).
 pub async fn coaches(State(state): State<Arc<AppState>>) -> Result<Response, (StatusCode, String)> {
-    let ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT coach_id FROM coach_ratings ORDER BY coach_id")
-            .fetch_all(&state.db.pool)
-            .await
-            .map_err(db_err)?;
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT coach_id FROM coach_ratings ORDER BY coach_id")
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(db_err)?;
     Ok(xml_response(urlset(
         ids.into_iter().map(|id| format!("/coaches/{id}")),
     )))

@@ -128,11 +128,7 @@ fn page(state: &AppState, meta: Option<String>) -> Response {
         Some(m) => state.spa_index.render(&m),
         None => state.spa_index.default_page(),
     };
-    (
-        [(header::CACHE_CONTROL, "public, max-age=300")],
-        Html(html),
-    )
-        .into_response()
+    ([(header::CACHE_CONTROL, "public, max-age=300")], Html(html)).into_response()
 }
 
 async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> Option<String> {
