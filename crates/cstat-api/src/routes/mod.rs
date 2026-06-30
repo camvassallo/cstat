@@ -5,6 +5,7 @@ pub mod games;
 pub mod health;
 pub mod lineups;
 pub mod meta;
+pub mod og_image;
 pub mod players;
 pub mod predict;
 pub mod projections;

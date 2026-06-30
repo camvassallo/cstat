@@ -180,8 +180,15 @@ async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> O
         parts.join(" · ")
     };
 
-    let url = format!("{}/players/{}", public_base_url(), resolved);
-    Some(render_tags(&title, &desc, &url))
+    let base = public_base_url();
+    let url = format!("{base}/players/{resolved}");
+    // Players get a generated per-player card; everything else uses the default.
+    let img = OgImage {
+        url: format!("{base}/og/players/{resolved}.png"),
+        w: crate::routes::og_image::CARD_W,
+        h: crate::routes::og_image::CARD_H,
+    };
+    Some(render_tags(&title, &desc, &url, &img))
 }
 
 async fn build_team_meta(state: &AppState, id: &str, season: Option<i32>) -> Option<String> {
@@ -221,7 +228,7 @@ async fn build_team_meta(state: &AppState, id: &str, season: Option<i32>) -> Opt
     };
 
     let url = format!("{}/teams/{}", public_base_url(), resolved);
-    Some(render_tags(&title, &desc, &url))
+    Some(render_tags(&title, &desc, &url, &OgImage::default_card()))
 }
 
 async fn build_coach_meta(state: &AppState, id: &str) -> Option<String> {
@@ -242,15 +249,37 @@ async fn build_coach_meta(state: &AppState, id: &str) -> Option<String> {
     desc.push_str(" — on CamPom.");
 
     let url = format!("{}/coaches/{}", public_base_url(), uuid);
-    Some(render_tags(&title, &desc, &url))
+    Some(render_tags(&title, &desc, &url, &OgImage::default_card()))
+}
+
+/// The image a card points at: absolute URL + pixel dimensions (the `og:image`
+/// width/height hints help unfurlers lay out the preview before the image loads).
+struct OgImage {
+    url: String,
+    w: u32,
+    h: u32,
+}
+
+impl OgImage {
+    /// The static fallback card (`web/public/og-image.png`), for team/coach
+    /// pages and any entity without a generated image.
+    fn default_card() -> Self {
+        Self {
+            url: format!("{}/og-image.png", public_base_url()),
+            w: 1424,
+            h: 752,
+        }
+    }
 }
 
 /// Build the replacement `<head>` tag block. All dynamic values are HTML-escaped
 /// (names can contain `&`, `'`, `"`, e.g. "Texas A&M", "Saint Mary's").
-fn render_tags(title: &str, desc: &str, url: &str) -> String {
+fn render_tags(title: &str, desc: &str, url: &str, img: &OgImage) -> String {
     let t = esc(title);
     let d = esc(desc);
     let u = esc(url);
+    let img_url = esc(&img.url);
+    let (iw, ih) = (img.w, img.h);
     format!(
         "<title>{t}</title>\n    \
          <link rel=\"canonical\" href=\"{u}\" />\n    \
@@ -258,8 +287,12 @@ fn render_tags(title: &str, desc: &str, url: &str) -> String {
          <meta property=\"og:url\" content=\"{u}\" />\n    \
          <meta property=\"og:title\" content=\"{t}\" />\n    \
          <meta property=\"og:description\" content=\"{d}\" />\n    \
+         <meta property=\"og:image\" content=\"{img_url}\" />\n    \
+         <meta property=\"og:image:width\" content=\"{iw}\" />\n    \
+         <meta property=\"og:image:height\" content=\"{ih}\" />\n    \
          <meta name=\"twitter:title\" content=\"{t}\" />\n    \
-         <meta name=\"twitter:description\" content=\"{d}\" />"
+         <meta name=\"twitter:description\" content=\"{d}\" />\n    \
+         <meta name=\"twitter:image\" content=\"{img_url}\" />"
     )
 }
 

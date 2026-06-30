@@ -1,6 +1,6 @@
 # SEO + social-preview plan (per-page unfurls + sitemap)
 
-*Scoping doc — drafted 2026-06-30. Status: **#1, #2a, and #3 all shipped 2026-06-30.** #2b (generated per-entity OG card image) and JSON-LD remain proposed. See "Shipped" note at the bottom.*
+*Scoping doc — drafted 2026-06-30. Status: **#1, #2a, #2b, and #3 all shipped 2026-06-30.** Only JSON-LD structured data remains proposed. See "Shipped" note at the bottom.*
 
 ## Background — why the SPA needs server help
 
@@ -155,7 +155,19 @@ teams) for rich-result eligibility — a later, low-priority add.
   `/players/compare`), misses, and DB errors fall back to the default page.
   Dynamic values are HTML-escaped. Live-verified: "Darnez Slater — Colorado St.
   (2026)", "Rider 2026 · AdjEM -29.7 (#356) · 4-24 · MAAC", coach CAE line.
-  Reuses the static `og-image.png` (per-entity images = #2b).
+  Player pages point `og:image` at the #2b generated card; teams/coaches reuse
+  the static `og-image.png`.
+- **#2b** — `crates/cstat-api/src/routes/og_image.rs`: `GET /og/players/{id}.png`
+  renders a 1200x630 PNG stat card (wordmark, name, team·season, big CamPom
+  value, archetype/position/class) from an SVG template via `resvg`. Fonts: a
+  vendored DejaVu face (`crates/cstat-api/assets/fonts/`) embedded with
+  `include_bytes!` + loaded once into a shared `fontdb` — so it renders in the
+  slim Docker image with no system fonts. Fail-soft: non-UUID / missing / render
+  error → 307 redirect to the static `/og-image.png`. Edge-cached 6h. Brand:
+  bg `#0b0b0c`, accent `#60a5fa` (the navbar wordmark blue). Live-verified
+  (75 KB, exactly 1200x630, visually clean). **The `.ttf` files must be
+  committed** — they're compiled into the binary, so the Docker build fails
+  without them.
 - **#3** — `crates/cstat-api/src/routes/sitemap.rs`: `/sitemap.xml` index +
   `/sitemap-{static,teams,players,coaches}.xml`, DB-generated, newest-season
   scoped (players 5096, teams 364, coaches 687 — all under the 50k cap), clean

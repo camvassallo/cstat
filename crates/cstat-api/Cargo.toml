@@ -23,6 +23,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 dotenvy = { workspace = true }
+# Server-side OG card rendering (SVG -> PNG) for per-player social images.
+# default-features = false drops the system-fonts / text-layout extras we don't
+# need; we load a vendored DejaVu font explicitly (assets/fonts/).
+resvg = "0.45"
 
 [dev-dependencies]
 serde_urlencoded = "0.7.1"

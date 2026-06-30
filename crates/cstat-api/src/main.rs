@@ -141,6 +141,7 @@ async fn main() -> Result<()> {
         .route("/players/{id}", get(routes::meta::player_document))
         .route("/teams/{id}", get(routes::meta::team_document))
         .route("/coaches/{id}", get(routes::meta::coach_document))
+        .route("/og/players/{id}", get(routes::og_image::player_card))
         .merge(data_api)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

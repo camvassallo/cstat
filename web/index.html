@@ -15,16 +15,14 @@
       lives between the SSR_META markers and is replaced server-side for entity
       routes (/players/:id, /teams/:id, /coaches/:id) — see
       crates/cstat-api/src/routes/meta.rs and docs/seo_social_previews_plan.md.
-      og:image must be an ABSOLUTE https URL to a real raster file
-      (web/public/og-image.png, 1200x630 — SVG won't unfurl).
+      og:image must be an ABSOLUTE https URL to a real raster file. The default
+      below is the static card (web/public/og-image.png); player pages swap it
+      for a generated per-player card (/og/players/{id}.png) — which is why
+      og:image + its dimensions live INSIDE the marker region.
     -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="CamPom" />
-    <meta property="og:image" content="https://campom.org/og-image.png" />
-    <meta property="og:image:width" content="1424" />
-    <meta property="og:image:height" content="752" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="https://campom.org/og-image.png" />
 
     <!--
       Per-page-overridable defaults. The server swaps everything between the
@@ -38,8 +36,12 @@
     <meta property="og:url" content="https://campom.org/" />
     <meta property="og:title" content="CamPom — College Basketball Analytics" />
     <meta property="og:description" content="KenPom-style ratings, player projections and archetypes, and game predictions." />
+    <meta property="og:image" content="https://campom.org/og-image.png" />
+    <meta property="og:image:width" content="1424" />
+    <meta property="og:image:height" content="752" />
     <meta name="twitter:title" content="CamPom — College Basketball Analytics" />
     <meta name="twitter:description" content="KenPom-style ratings, player projections and archetypes, and game predictions." />
+    <meta name="twitter:image" content="https://campom.org/og-image.png" />
     <!--SSR_META_END-->
   </head>
   <body>
