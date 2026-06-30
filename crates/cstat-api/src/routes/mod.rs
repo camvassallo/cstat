@@ -2,6 +2,7 @@ pub mod archetypes;
 pub mod coaches;
 pub mod draft;
 pub mod games;
+pub mod health;
 pub mod lineups;
 pub mod players;
 pub mod predict;

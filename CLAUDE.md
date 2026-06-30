@@ -39,6 +39,9 @@ cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,20
 
 # Push local data to prod (no schema migrations needed if migrations/ is unchanged)
 ./scripts/sync_to_prod.sh [--dry-run]
+# Targeted push — only the named tables (Railway-direct split: local heavy jobs
+# push their derived tables without truncating the cron-written serving tables):
+./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
 ```
 
 ## Environment Variables
@@ -49,13 +52,15 @@ Copy `.env.example` to `.env`. Required:
 
 Optional: `BIND_ADDR` (default `0.0.0.0:8080`), `RUST_LOG` (tracing filter). API-serving knobs (all defaulted, override only to tune): `DATABASE_MAX_CONNECTIONS` (pool size, default 25), `REQUEST_TIMEOUT_SECS` (per-request 408 timeout, default 30), `MAX_INFLIGHT_REQUESTS` (concurrency before 503 load-shed, default 256) — see `crates/cstat-api/src/guards.rs`. The API connects via `Database::connect_api` (adds an `acquire_timeout` + per-connection `statement_timeout`); the ingest/compute CLI uses the unguarded `Database::connect` so its long batch writes aren't capped.
 
+Nightly-ingest (M2, set on the Railway cron service, not the API — all fail-soft / no-op when unset): `INGEST_ALERT_WEBHOOK` (Slack incoming-webhook; `cstat-ingest nightly` posts a critical alert on an aborted run and a degraded alert on a best-effort-feed failure or ≥80% rate-budget use), `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` (when both set, nightly purges the Cloudflare edge after a successful compute; otherwise the 5-min `Cache-Control` TTL handles it). See `crates/cstat-ingest/src/notify.rs` and `docs/deploy_nightly_cron.md`.
+
 ## Architecture
 
 Three-crate Rust workspace:
 
 - **cstat-core** — Shared types, DB models (`models/`), query layer (`db.rs`), and compute pipeline (`compute.rs`). The `Database` struct wraps `PgPool` and handles migrations via SQLx.
 - **cstat-ingest** — NatStat API client (`client.rs`), response cache (`cache.rs`), token-bucket rate limiter (`rate_limiter.rs`), and ingestion pipeline (`ingest/`). CLI binary at `src/bin/ingest.rs` with subcommands: `season`, `teams`, `players`, `team`, `games`, `perfs`, `update`, `elo`, `forecasts`, `compute`, `status`, `clean-cache`, `torvik`, `campom-parity`, `explore`, `bootstrap-csv` (historical CSV bootstrap), `playbyplay` (intra-season PBP loader), `lineups` (NatStat `games;lineups`-object capture into the durable local-only `natstat_lineups` tables — restart-safe via its ledger, v4-pinned), `transfers` / `recruits` / `coaches` (247-portal / 247-recruit / coachdict ingest), and the projection/eval tooling `projections-backtest`, `compute-projections`, `measure-blend-accuracy`. **`season` is the bootstrap command** — it runs the seven NatStat steps, then Torvik, then `compute_all`, in one call. `update` likewise runs compute at the end by default. Both accept `--no-torvik` / `--no-compute` opt-outs. **`nightly` is the in-season production refresh** (`SeasonIngester::nightly`) — the served-critical subset (games/perfs/teamperfs by date range → forecasts → `/elo` ratings → Torvik with per-game persistence) **before** `compute_all`, recording each step to the `ingest_runs` ledger; window defaults to yesterday..today (UTC). Unlike `update` it refreshes Torvik + `/elo` first, so `cam_gbpm_v3`/`pit_cam_v3` and `team_season_stats.elo_rating` (the served `diff_elo_rating` feature) don't go stale on a recompute. Full plan: `docs/in_season_ingest_plan.md`. **`--year` defaults to `current_natstat_season()`** (date-derived in `crates/cstat-ingest/src/lib.rs`), so the binary stays correct as the calendar rolls. Single team-id resolver lives at `cstat_ingest::team_id_by_code_and_season`; don't inline the `(natstat_id, season)` lookup. The `Team` subcommand delegates to `SeasonIngester::ingest_team(code)` — keep new per-team orchestration there, not in the bin.
-- **cstat-api** — Axum HTTP server. `AppState` holds `Database` + `NatStatClient` + `Predictor`. Routes under `/api/`.
+- **cstat-api** — Axum HTTP server. `AppState` holds `Database` + `NatStatClient` + `Predictor`. Routes under `/api/`. Health/observability routes (`/api/health`, `/api/status`, `/api/health/ingest`) are mounted **un-guarded** in `main.rs` so a saturated server or stale pipeline still answers — they bypass the cache/timeout/load-shed layer that wraps the data routes. `GET /api/health/ingest` (`routes/health.rs`) reports per-step freshness from `ingest_runs` and returns **503 when any served-critical step is >36h stale**, so an external uptime monitor catches a missed nightly.
 
 Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) → cstat-api → frontend/ML**
 

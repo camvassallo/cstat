@@ -1,5 +1,6 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
+use crate::notify;
 use crate::run_ledger::{RunLedger, StepStatus};
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
@@ -253,11 +254,23 @@ impl<'a> SeasonIngester<'a> {
             run_id: ledger.run_id(),
         };
 
+        // Best-effort step failures accumulate here; a non-empty list at the end
+        // of the run fires a single summary Slack alert. Hard-fail steps alert
+        // immediately (with this context) before aborting.
+        let mut failures: Vec<String> = Vec::new();
+
+        // Rate-budget headroom (2.5): snapshot tokens before the run so we can
+        // log consumption and warn if a busy night eats most of the budget.
+        let budget = crate::rate_budget_from_env();
+        let tokens_before = self.client.rate_limit_remaining().await;
+
         info!(
             season = self.season,
             start_date,
             end_date,
             run_id = %ledger.run_id(),
+            rate_budget = budget,
+            rate_tokens_available = tokens_before,
             "starting nightly ingestion"
         );
 
@@ -283,6 +296,12 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("games", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
+                notify::post_slack_alert(&format!(
+                    ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `games` failed: {msg}",
+                    self.season,
+                    ledger.run_id()
+                ))
+                .await;
                 return Err(e);
             }
         }
@@ -309,6 +328,12 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("player_perfs", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
+                notify::post_slack_alert(&format!(
+                    ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `player_perfs` failed: {msg}",
+                    self.season,
+                    ledger.run_id()
+                ))
+                .await;
                 return Err(e);
             }
         }
@@ -335,6 +360,12 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("team_perfs", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
+                notify::post_slack_alert(&format!(
+                    ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `team_perfs` failed: {msg}",
+                    self.season,
+                    ledger.run_id()
+                ))
+                .await;
                 return Err(e);
             }
         }
@@ -356,6 +387,7 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("forecasts", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
+                failures.push(format!("forecasts: {msg}"));
             }
         }
 
@@ -379,6 +411,7 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("elo", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
+                failures.push(format!("elo: {msg}"));
             }
         }
 
@@ -400,6 +433,7 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("torvik", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
+                failures.push(format!("torvik: {msg}"));
             }
         }
 
@@ -453,6 +487,7 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("torvik_games", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
+                failures.push(format!("torvik_games: {msg}"));
             }
         }
 
@@ -471,14 +506,75 @@ impl<'a> SeasonIngester<'a> {
                     ledger
                         .record("compute", StepStatus::Failed, None, t0, Some(&msg))
                         .await;
+                    notify::post_slack_alert(&format!(
+                        ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `compute` failed: {msg}",
+                        self.season,
+                        ledger.run_id()
+                    ))
+                    .await;
                     return Err(NatStatError::Database(e));
                 }
             }
         }
 
+        // --- Rate-budget headroom (2.5) ---
+        // Tokens are an hourly bucket that refills mid-run, so this is the net
+        // visible drawdown, not an exact call count — enough to flag a night
+        // that's eating most of the budget (a March Saturday safety check).
+        let tokens_after = self.client.rate_limit_remaining().await;
+        let consumed = tokens_before.saturating_sub(tokens_after);
+        let pct_used = if budget > 0 {
+            (consumed as f64 / budget as f64) * 100.0
+        } else {
+            0.0
+        };
+        if pct_used >= 80.0 {
+            warn!(
+                season = self.season,
+                consumed,
+                budget,
+                pct_used = format!("{pct_used:.0}%"),
+                "nightly consumed >=80% of the hourly rate budget"
+            );
+            failures.push(format!(
+                "rate budget: consumed ~{consumed}/{budget} tokens ({pct_used:.0}%)"
+            ));
+        } else {
+            info!(
+                season = self.season,
+                consumed,
+                budget,
+                pct_used = format!("{pct_used:.0}%"),
+                "nightly rate-budget headroom"
+            );
+        }
+
+        // --- Best-effort failure alert (2.4) ---
+        // Hard-fail steps already alerted-and-aborted above; this covers the
+        // degraded-but-completed case (a feed was down but the run finished).
+        if !failures.is_empty() {
+            notify::post_slack_alert(&format!(
+                ":warning: cstat nightly completed DEGRADED (season {}, run {}) — {} issue(s): {}",
+                self.season,
+                ledger.run_id(),
+                failures.len(),
+                failures.join("; ")
+            ))
+            .await;
+        }
+
+        // --- Edge cache coherence (2.7) ---
+        // After a successful compute the served tables changed; purge the edge
+        // so fresh rankings/predictions land immediately instead of waiting out
+        // the 5-min TTL. No-op unless CF_* env is configured. Fail-soft.
+        if report.compute.is_some() {
+            notify::purge_edge_cache().await;
+        }
+
         info!(
             season = self.season,
             run_id = %ledger.run_id(),
+            degraded = !failures.is_empty(),
             "nightly ingestion complete"
         );
 
