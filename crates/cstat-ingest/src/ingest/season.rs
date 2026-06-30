@@ -296,7 +296,7 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("games", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
-                notify::post_slack_alert(&format!(
+                notify::post_slack(notify::SlackChannel::Cron, &format!(
                     ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `games` failed: {msg}",
                     self.season,
                     ledger.run_id()
@@ -328,7 +328,7 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("player_perfs", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
-                notify::post_slack_alert(&format!(
+                notify::post_slack(notify::SlackChannel::Cron, &format!(
                     ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `player_perfs` failed: {msg}",
                     self.season,
                     ledger.run_id()
@@ -360,7 +360,7 @@ impl<'a> SeasonIngester<'a> {
                 ledger
                     .record("team_perfs", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
-                notify::post_slack_alert(&format!(
+                notify::post_slack(notify::SlackChannel::Cron, &format!(
                     ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `team_perfs` failed: {msg}",
                     self.season,
                     ledger.run_id()
@@ -506,7 +506,7 @@ impl<'a> SeasonIngester<'a> {
                     ledger
                         .record("compute", StepStatus::Failed, None, t0, Some(&msg))
                         .await;
-                    notify::post_slack_alert(&format!(
+                    notify::post_slack(notify::SlackChannel::Cron, &format!(
                         ":rotating_light: cstat nightly ABORTED (season {}, run {}) — step `compute` failed: {msg}",
                         self.season,
                         ledger.run_id()
@@ -518,9 +518,13 @@ impl<'a> SeasonIngester<'a> {
         }
 
         // --- Rate-budget headroom (2.5) ---
-        // Tokens are an hourly bucket that refills mid-run, so this is the net
-        // visible drawdown, not an exact call count — enough to flag a night
-        // that's eating most of the budget (a March Saturday safety check).
+        // The token bucket refills mid-run (~budget/3600 per sec), so `consumed`
+        // (before − after) UNDER-reports actual calls on a long run — refill
+        // masks them. The operationally meaningful number is the *remaining*
+        // headroom: if the bucket is draining faster than it refills it trends
+        // toward 0 and the next calls block on the limiter. So we warn on either
+        // signal — a big visible drawdown OR low absolute headroom — and log
+        // both, with `remaining` as the one to watch.
         let tokens_after = self.client.rate_limit_remaining().await;
         let consumed = tokens_before.saturating_sub(tokens_after);
         let pct_used = if budget > 0 {
@@ -528,32 +532,71 @@ impl<'a> SeasonIngester<'a> {
         } else {
             0.0
         };
-        if pct_used >= 80.0 {
+        let pct_remaining = if budget > 0 {
+            (tokens_after as f64 / budget as f64) * 100.0
+        } else {
+            100.0
+        };
+        if pct_used >= 80.0 || pct_remaining <= 20.0 {
             warn!(
                 season = self.season,
                 consumed,
+                remaining = tokens_after,
                 budget,
                 pct_used = format!("{pct_used:.0}%"),
-                "nightly consumed >=80% of the hourly rate budget"
+                pct_remaining = format!("{pct_remaining:.0}%"),
+                "nightly rate-budget headroom low"
             );
             failures.push(format!(
-                "rate budget: consumed ~{consumed}/{budget} tokens ({pct_used:.0}%)"
+                "rate budget low: ~{consumed} consumed, {tokens_after}/{budget} remaining ({pct_remaining:.0}%)"
             ));
         } else {
             info!(
                 season = self.season,
                 consumed,
+                remaining = tokens_after,
                 budget,
                 pct_used = format!("{pct_used:.0}%"),
+                pct_remaining = format!("{pct_remaining:.0}%"),
                 "nightly rate-budget headroom"
             );
         }
 
-        // --- Best-effort failure alert (2.4) ---
-        // Hard-fail steps already alerted-and-aborted above; this covers the
-        // degraded-but-completed case (a feed was down but the run finished).
-        if !failures.is_empty() {
-            notify::post_slack_alert(&format!(
+        // --- Run-completion notification (2.4) ---
+        // Hard-fail steps already alerted-and-aborted above. A run that reaches
+        // here either completed clean (success heartbeat) or completed with a
+        // best-effort feed down (degraded warning). The success ping doubles as
+        // a "the cron fired and finished" heartbeat.
+        if failures.is_empty() {
+            let torvik_note = match &report.torvik {
+                Some(t) => format!(
+                    "Torvik {}up/{} per-game",
+                    t.upserted, report.torvik_games_persisted
+                ),
+                None => "Torvik skipped".to_string(),
+            };
+            let compute_note = if report.compute.is_some() {
+                "compute ok"
+            } else {
+                "compute skipped"
+            };
+            notify::post_slack(notify::SlackChannel::Cron, &format!(
+                ":white_check_mark: cstat nightly OK (season {}, run {}) — {} games, {} player perfs, {} team perfs, {} ELO, {} forecasts; {}; {}; rate {}/{} left",
+                self.season,
+                ledger.run_id(),
+                report.ingest.games,
+                report.ingest.player_performances,
+                report.ingest.team_performances,
+                report.ingest.elo_ratings,
+                report.ingest.game_forecasts,
+                torvik_note,
+                compute_note,
+                tokens_after,
+                budget,
+            ))
+            .await;
+        } else {
+            notify::post_slack(notify::SlackChannel::Cron, &format!(
                 ":warning: cstat nightly completed DEGRADED (season {}, run {}) — {} issue(s): {}",
                 self.season,
                 ledger.run_id(),

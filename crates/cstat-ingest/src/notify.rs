@@ -1,12 +1,16 @@
-//! Out-of-band notifications fired by the nightly orchestrator: Slack failure
-//! alerts and an optional edge cache-purge. Both are **fail-soft** side effects
-//! — a failure to notify must never abort (or fail) the ingest it observes. The
-//! pipeline's job is to refresh data; telling someone about it is best-effort.
+//! Out-of-band notifications fired by the nightly orchestrator: Slack run
+//! notifications (success / degraded / aborted) and an optional edge cache-purge.
+//! Both are **fail-soft** side effects — a failure to notify must never abort (or
+//! fail) the ingest it observes. The pipeline's job is to refresh data; telling
+//! someone about it is best-effort.
 //!
 //! Configuration is entirely env-driven so the same binary is a no-op locally
-//! (no webhook configured) and alerting in prod (webhook set on the Railway
-//! cron service):
-//!   - `INGEST_ALERT_WEBHOOK`   — Slack incoming-webhook URL. Absent → no alerts.
+//! (no webhook configured) and posting in prod (webhook set on the Railway
+//! services):
+//!   - one Slack incoming-webhook URL **per channel** — see [`SlackChannel`].
+//!     A Slack incoming webhook is locked to the single channel it was created
+//!     for, so routing to a different channel means a different webhook URL in a
+//!     different env var, not a `channel` field on the payload.
 //!   - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — Cloudflare zone + scoped API
 //!     token. Both absent → no purge (the 5-min `Cache-Control` TTL still makes
 //!     fresh data land within minutes; the purge just makes it instant).
@@ -20,26 +24,56 @@ use tracing::{info, warn};
 /// we never want a stalled Slack/Cloudflare socket to hold the run open.
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Slack incoming-webhook URL from `INGEST_ALERT_WEBHOOK`, if configured.
-pub fn alert_webhook_from_env() -> Option<String> {
-    non_empty_env("INGEST_ALERT_WEBHOOK")
+/// A logical Slack destination. Each maps to its own incoming-webhook URL in
+/// env, because a Slack webhook is bound to exactly one channel.
+///
+/// **To add a channel** (e.g. `#errors-api`): add a variant here, map it to a
+/// new `SLACK_WEBHOOK_*` env var in [`SlackChannel::env_var`], document it in
+/// `.env.example`, and create the webhook + env var on the relevant service.
+/// Nothing else changes — call sites just pass the new variant to [`post_slack`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlackChannel {
+    /// `#cron-job-alerts` — nightly ingest run notifications (success heartbeat /
+    /// degraded / aborted). Set on the Railway cron service.
+    Cron,
+    // Future buckets, wired the day their producer exists:
+    //   ErrorsApi,  // #errors-api — cstat-api runtime errors  → SLACK_WEBHOOK_ERRORS_API
+    //   ErrorsWeb,  // #errors-web — frontend error reports     → SLACK_WEBHOOK_ERRORS_WEB
 }
 
-/// Post a message to the configured Slack webhook. No-op (and `Ok`-equivalent)
-/// when no webhook is set. Never panics, never propagates an error — a failed
-/// alert is logged and swallowed.
-pub async fn post_slack_alert(text: &str) {
-    let Some(webhook) = alert_webhook_from_env() else {
-        // No webhook configured (e.g. local runs) — surface the would-be alert
+impl SlackChannel {
+    /// Primary env var holding this channel's incoming-webhook URL.
+    pub fn env_var(self) -> &'static str {
+        match self {
+            SlackChannel::Cron => "SLACK_WEBHOOK_CRON",
+        }
+    }
+
+    /// Resolve the webhook URL for this channel from env, if configured.
+    /// `Cron` also honours the legacy `INGEST_ALERT_WEBHOOK` name so an existing
+    /// deployment keeps working after the rename.
+    fn webhook(self) -> Option<String> {
+        non_empty_env(self.env_var()).or_else(|| match self {
+            SlackChannel::Cron => non_empty_env("INGEST_ALERT_WEBHOOK"),
+        })
+    }
+}
+
+/// Post a message to a Slack channel (used for success heartbeats as well as
+/// failure alerts). No-op when that channel's webhook env var is unset. Never
+/// panics, never propagates an error — a failed post is logged and swallowed.
+pub async fn post_slack(channel: SlackChannel, text: &str) {
+    let Some(webhook) = channel.webhook() else {
+        // No webhook configured (e.g. local runs) — surface the would-be message
         // in the logs so it isn't lost, then return.
-        info!(alert = %text, "INGEST_ALERT_WEBHOOK unset; skipping Slack alert");
+        info!(message = %text, env = channel.env_var(), "Slack webhook unset; skipping post");
         return;
     };
 
     let client = match reqwest::Client::builder().timeout(NOTIFY_TIMEOUT).build() {
         Ok(c) => c,
         Err(e) => {
-            warn!(error = %e, "failed to build Slack HTTP client; skipping alert");
+            warn!(error = %e, "failed to build Slack HTTP client; skipping post");
             return;
         }
     };
@@ -51,13 +85,13 @@ pub async fn post_slack_alert(text: &str) {
         .await
     {
         Ok(resp) if resp.status().is_success() => {
-            info!("posted ingest alert to Slack");
+            info!(channel = ?channel, "posted notification to Slack");
         }
         Ok(resp) => {
-            warn!(status = %resp.status(), "Slack alert returned non-success; continuing");
+            warn!(status = %resp.status(), "Slack post returned non-success; continuing");
         }
         Err(e) => {
-            warn!(error = %e, "failed to post Slack alert; continuing");
+            warn!(error = %e, "failed to post to Slack; continuing");
         }
     }
 }

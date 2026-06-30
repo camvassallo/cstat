@@ -41,6 +41,13 @@
 # truncate clobbering what the cron just wrote. Names in EXCLUDED can never be
 # selected; an unknown name aborts before any write.
 #
+# CAVEAT: the restore still uses TRUNCATE ... CASCADE, so targeting a table that
+# is *referenced* by a foreign key (e.g. `teams`, which `players`/`games` point
+# at) would cascade-wipe those dependents on prod even though they aren't in your
+# list. --tables is intended for LEAF / derived output tables (lineup_aggregates,
+# player_on_off, player_rapm, player_archetypes, archetype_models, …) that nothing
+# references. The confirmation prompt prints the exact TRUNCATE — read it.
+#
 # PROD_DATABASE_URL is auto-loaded from ../.env (gitignored). Override with
 # `PROD_DATABASE_URL=... ./scripts/sync_to_prod.sh` if needed.
 
@@ -206,6 +213,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
+if [[ -n "$REQUESTED_TABLES" ]]; then
+  echo "→ TARGETED restore uses TRUNCATE ... CASCADE on: ${TABLE_LIST//,/, }"
+  echo "  CASCADE follows foreign keys — if any of these is REFERENCED by another"
+  echo "  table, that dependent is wiped too. Only proceed for leaf/derived tables."
+fi
 read -r -p "→ Apply to PROD? This TRUNCATEs every table above and restores from the dump. [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
 

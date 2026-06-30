@@ -45,7 +45,8 @@ cron service reuses it — no separate build.
    - `DATABASE_URL` — the prod Postgres connection string
    - `NATSTAT_API_KEY`
    - `NATSTAT_MAX_PER_HOUR` — `2500` on the API+ tier (matches the API service)
-   - `INGEST_ALERT_WEBHOOK` — Slack incoming-webhook URL (see Alerting)
+   - `SLACK_WEBHOOK_CRON` — Slack incoming-webhook URL for `#cron-job-alerts`
+     (see Alerting; legacy name `INGEST_ALERT_WEBHOOK` still works)
    - `MODEL_DIR` is **not** needed (the nightly job runs no ONNX inference).
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
 
@@ -78,23 +79,52 @@ self-alert when it actually runs. The endpoint is un-guarded (never load-shed).
 
 ## Alerting (Slack)
 
-`INGEST_ALERT_WEBHOOK` is a Slack incoming-webhook URL. The nightly job posts:
+`SLACK_WEBHOOK_CRON` is a Slack incoming-webhook URL for the `#cron-job-alerts`
+channel (the legacy `INGEST_ALERT_WEBHOOK` name is still accepted as a fallback).
+A Slack webhook is locked to one channel, so other subsystems route to their own
+channels via their own `SLACK_WEBHOOK_*` vars — see the channel registry in
+`crates/cstat-ingest/src/notify.rs` (`SlackChannel`). The nightly job posts
+exactly one message per run:
 
+- **Success** (`:white_check_mark:`) — a clean run, with a one-line summary
+  (games / player perfs / team perfs / ELO / forecasts / Torvik / compute +
+  remaining rate budget). This doubles as a heartbeat: seeing it confirms the
+  cron fired and finished.
+- **Degraded** (`:warning:`) — the run completed but a best-effort feed
+  (forecasts / ELO / Torvik) failed, or rate-budget headroom got low. Lists each
+  issue.
 - **Critical** (`:rotating_light:`) — a load-bearing step (games / player_perfs
   / team_perfs / compute) failed and the run aborted.
-- **Degraded** (`:warning:`) — the run completed but a best-effort feed
-  (forecasts / ELO / Torvik) failed, or it consumed ≥80% of the hourly rate
-  budget. Lists each issue.
 
-Unset webhook → no posts (the message is still logged). Alerts are fail-soft: a
+Unset webhook → no posts (the message is still logged). Posts are fail-soft: a
 Slack outage never affects the ingest. Create the webhook at
-`api.slack.com/apps → Incoming Webhooks`.
+`api.slack.com/apps → Incoming Webhooks`. If the nightly success ping becomes
+noise, mute the channel rather than unsetting the var — you still want the
+degraded/critical posts.
+
+### Adding a new alert channel
+
+Because a webhook is bound to one channel, a new bucket (e.g. `#errors-api`,
+`#errors-web`) is a new webhook + a new env var, registered in one place:
+
+1. In Slack, create the channel and add an Incoming Webhook to it; copy the URL.
+2. In `crates/cstat-ingest/src/notify.rs`, add a `SlackChannel` variant and map
+   it to a `SLACK_WEBHOOK_*` env var in `SlackChannel::env_var` (the file's
+   doc-comment spells this out). Document the var in `.env.example`.
+3. Set that env var on whichever service produces those messages (API errors →
+   the API service, not the cron).
+4. Call `notify::post_slack(SlackChannel::TheNewOne, &msg)` from the producer.
+
+No central wiring to touch — the registry is the single source of truth.
 
 ## Rate-budget headroom
 
-Each run logs net token drawdown vs `NATSTAT_MAX_PER_HOUR` and warns (and adds a
-degraded-alert line) at ≥80%. A peak March Saturday is ~40–60% of the 2500/hr
-ceiling, so this is a safety tripwire, not an expected condition.
+Each run logs both the net token drawdown and the **remaining** headroom vs
+`NATSTAT_MAX_PER_HOUR`, and warns (adding a degraded-alert line) when drawdown is
+≥80% *or* remaining is ≤20%. The bucket refills mid-run, so remaining is the
+number to watch — it trends toward 0 only if calls are outpacing the refill. A
+peak March Saturday is ~40–60% of the 2500/hr ceiling, so this is a safety
+tripwire, not an expected condition.
 
 ## Local heavy jobs → targeted sync
 
@@ -110,7 +140,11 @@ only the derived tables the heavy local jobs produce:
 
 `--tables` validates each name against the live non-excluded set and aborts on a
 typo before any write. `ingest_runs` (and the other runtime/local-only tables)
-can never be selected — they're in the script's `EXCLUDED` list.
+can never be selected — they're in the script's `EXCLUDED` list. **Use it only
+for leaf/derived tables**: the restore is `TRUNCATE … CASCADE`, so targeting a
+*referenced* table (e.g. `teams`) would cascade-wipe its dependents on prod even
+though they aren't in your list. The confirmation prompt flags this in targeted
+mode.
 
 ## First-night checklist (opening week)
 
