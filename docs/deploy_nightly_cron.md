@@ -29,19 +29,38 @@ recompute from stale inputs (the M1 correctness fix).
 The API image already ships the `cstat-ingest` binary (see `Dockerfile`), so the
 cron service reuses it — no separate build.
 
+> **STOP — do NOT add the cron schedule to the API service.** Railway runs a
+> service's *start command* on the schedule, and the API's start command
+> (`cstat-api`, from `railway.json`) is a never-exiting web server — so the cron
+> would just relaunch the API and the ingest would never run (`ingest_runs`
+> stays empty, you'll see only API request logs). Worse, Railway **strips the
+> restart policy and serverless from any service that has a cron schedule** (it
+> says so in the service settings), so scheduling the API turns the live site
+> into a cron job with no auto-restart — a latent outage. The cron must be its
+> own **separate service**. A cron command must *exit*; `cstat-ingest nightly`
+> runs ~5 min and exits, `cstat-api` never does.
+
 1. **Create a second service** in the same Railway project as the API, from the
-   same repo/image. Railway calls this a *Cron* (scheduled) service.
-2. **Schedule:** `30 9 * * *` (cron is UTC on Railway → 09:30 UTC ≈ **04:30
-   ET**, after NatStat's ~3 AM re-tabulation). Adjust for EST/EDT as desired;
-   exactness doesn't matter, "a few hours after the games settle" does.
-3. **Start command:**
+   same repo/image. Railway calls this a *Cron* (scheduled) service. Keep the
+   API service schedule-free so it stays always-on with its restart policy.
+2. **Point it at its own config file** — Service → Settings → *Config-as-code*
+   → set the config file path to **`/railway.cron.json`** (absolute path from the
+   repo root, per Railway's docs: *"provide the absolute path to the file in your
+   repository, for example `/backend/railway.toml`"*). This is the load-bearing
+   step. Railway: *"Configuration defined in code will always override values from
+   the dashboard"*, so the API's `railway.json` (`startCommand: cstat-api`,
+   `healthcheckPath: /api/health`) would otherwise force the cron service to run
+   the web server with a healthcheck it can never pass — typing a start command
+   into the dashboard field does *not* override it. `/railway.cron.json` instead
+   supplies:
+   ```jsonc
+   { "deploy": { "startCommand": "cstat-ingest nightly",
+                 "cronSchedule": "30 9 * * *" } }   // no healthcheckPath
    ```
-   cstat-ingest nightly
-   ```
-   `--year` defaults to the current season (date-derived), and the window
-   defaults to yesterday..today — no args needed. Override for a backfill:
-   `cstat-ingest nightly --from 2026-11-08 --to 2026-11-10`.
-4. **Shared variables** (reference the same Postgres plugin + key as the API):
+   so the cron service gets the right command, the schedule (09:30 UTC ≈ **04:30
+   ET**, after NatStat's ~3 AM re-tabulation), and **no healthcheck** — all from
+   code, nothing to hand-set per deploy.
+3. **Shared variables** (reference the same Postgres plugin + key as the API):
    - `DATABASE_URL` — the prod Postgres connection string
    - `NATSTAT_API_KEY`
    - `NATSTAT_MAX_PER_HOUR` — `2500` on the API+ tier (matches the API service)
@@ -53,6 +72,19 @@ cron service reuses it — no separate build.
 The cron service shares the API's database, so migrations (incl. `039`
 `ingest_runs`) are applied by the API at boot; the nightly binary just writes to
 the table.
+
+**Manual runs / backfill.** The nightly writes straight to the prod DB, so a
+one-off catch-up is just the same command pointed at prod — no service
+reconfiguration (a dashboard start command wouldn't override `/railway.cron.json`
+anyway). Run it from your laptop against the prod `DATABASE_URL`, or via
+`railway run` to borrow the service's env:
+
+```bash
+DATABASE_URL="$PROD_DATABASE_URL" NATSTAT_API_KEY=… \
+  cargo run --bin cstat-ingest -- nightly --from 2026-11-08 --to 2026-11-10
+# or, with the cron service's env injected by the Railway CLI:
+railway run --service <cron-service> cstat-ingest nightly --from 2026-11-08 --to 2026-11-10
+```
 
 ## Observability — `GET /api/health/ingest`
 
@@ -72,10 +104,12 @@ plus an overall verdict:
 ```
 
 Returns **200** when healthy, **503** when stale — so an external uptime monitor
-(UptimeRobot, BetterStack, a Railway healthcheck, etc.) flips red on a *missed*
-night without parsing the body. Point a monitor at this URL; that monitor is
-what covers the "last success > 36h" case, since the nightly process can only
-self-alert when it actually runs. The endpoint is un-guarded (never load-shed).
+(UptimeRobot, BetterStack, etc.) flips red on a *missed* night without parsing
+the body. Point a monitor at this URL; that monitor is what covers the "last
+success > 36h" case, since the nightly process can only self-alert when it
+actually runs. The endpoint is un-guarded (never load-shed). Do **not** wire it
+as the API service's Railway healthcheck — a stale cron would then mark the API
+unhealthy and restart it, coupling the live site's uptime to the ingest cadence.
 
 ## Alerting (Slack)
 
