@@ -29,18 +29,37 @@ recompute from stale inputs (the M1 correctness fix).
 The API image already ships the `cstat-ingest` binary (see `Dockerfile`), so the
 cron service reuses it — no separate build.
 
+> **STOP — do NOT add the cron schedule to the API service.** Railway runs a
+> service's *start command* on the schedule, and the API's start command
+> (`cstat-api`, from `railway.json`) is a never-exiting web server — so the cron
+> would just relaunch the API and the ingest would never run (`ingest_runs`
+> stays empty, you'll see only API request logs). Worse, Railway **strips the
+> restart policy and serverless from any service that has a cron schedule** (it
+> says so in the service settings), so scheduling the API turns the live site
+> into a cron job with no auto-restart — a latent outage. The cron must be its
+> own **separate service**. A cron command must *exit*; `cstat-ingest nightly`
+> runs ~5 min and exits, `cstat-api` never does.
+
 1. **Create a second service** in the same Railway project as the API, from the
-   same repo/image. Railway calls this a *Cron* (scheduled) service.
-2. **Schedule:** `30 9 * * *` (cron is UTC on Railway → 09:30 UTC ≈ **04:30
-   ET**, after NatStat's ~3 AM re-tabulation). Adjust for EST/EDT as desired;
-   exactness doesn't matter, "a few hours after the games settle" does.
-3. **Start command:**
+   same repo/image. Railway calls this a *Cron* (scheduled) service. Keep the
+   API service schedule-free so it stays always-on with its restart policy.
+2. **Point it at its own config file** — Service → Settings → *Config-as-code*
+   (a.k.a. "Railway Config File") → set the path to **`railway.cron.json`**.
+   This is the load-bearing step. **Config-as-code takes precedence over the
+   dashboard**, so the API's `railway.json` (`startCommand: cstat-api`,
+   `healthcheckPath: /api/health`) would otherwise force the cron service to run
+   the web server with a healthcheck it can never pass — typing a start command
+   into the dashboard field does *not* override `railway.json`. `railway.cron.json`
+   instead supplies:
+   ```jsonc
+   { "deploy": { "startCommand": "cstat-ingest nightly",
+                 "cronSchedule": "30 9 * * *" } }   // no healthcheckPath
    ```
-   cstat-ingest nightly
-   ```
-   `--year` defaults to the current season (date-derived), and the window
-   defaults to yesterday..today — no args needed. Override for a backfill:
-   `cstat-ingest nightly --from 2026-11-08 --to 2026-11-10`.
+   so the cron service gets the right command, the schedule (09:30 UTC ≈ **04:30
+   ET**, after NatStat's ~3 AM re-tabulation), and **no healthcheck** — all from
+   code, nothing to hand-set per deploy. For a one-off backfill, temporarily set
+   a dashboard start command `cstat-ingest nightly --from 2026-11-08 --to 2026-11-10`
+   (a *new* file isn't needed for a manual run).
 4. **Shared variables** (reference the same Postgres plugin + key as the API):
    - `DATABASE_URL` — the prod Postgres connection string
    - `NATSTAT_API_KEY`
