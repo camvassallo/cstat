@@ -61,7 +61,16 @@ cron service reuses it — no separate build.
    ET**, after NatStat's ~3 AM re-tabulation), and **no healthcheck** — all from
    code, nothing to hand-set per deploy.
 3. **Shared variables** (reference the same Postgres plugin + key as the API):
-   - `DATABASE_URL` — the prod Postgres connection string
+   - `DATABASE_URL` — **use the PRIVATE Postgres URL** (`${{Postgres.DATABASE_PRIVATE_URL}}`
+     / the `…railway.internal` host), **not** the public `…proxy.rlwy.net` one,
+     and put the cron service in the **same region as Postgres** (private
+     networking is per-region). This is load-bearing, not a nicety: the nightly
+     runs several large per-row DB loops (e.g. `torvik_games` upserts ~113k rows
+     one statement at a time, forecasts ~5.6k). At sub-millisecond in-region
+     latency that's ~2 min; over the public proxy / cross-region (~85 ms/round-trip)
+     the same loops take **hours**, and the run never finishes. (Symptom seen in
+     practice: games/perfs/team_perfs record in the ledger, then nothing for
+     tens of minutes — it's not hung, it's crawling through round-trips.)
    - `NATSTAT_API_KEY`
    - `NATSTAT_MAX_PER_HOUR` — `2500` on the API+ tier (matches the API service)
    - `SLACK_WEBHOOK_CRON` — Slack incoming-webhook URL for `#cron-job-alerts`
