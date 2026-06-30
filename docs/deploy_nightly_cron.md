@@ -44,13 +44,15 @@ cron service reuses it — no separate build.
    same repo/image. Railway calls this a *Cron* (scheduled) service. Keep the
    API service schedule-free so it stays always-on with its restart policy.
 2. **Point it at its own config file** — Service → Settings → *Config-as-code*
-   (a.k.a. "Railway Config File") → set the path to **`railway.cron.json`**.
-   This is the load-bearing step. **Config-as-code takes precedence over the
-   dashboard**, so the API's `railway.json` (`startCommand: cstat-api`,
+   → set the config file path to **`/railway.cron.json`** (absolute path from the
+   repo root, per Railway's docs: *"provide the absolute path to the file in your
+   repository, for example `/backend/railway.toml`"*). This is the load-bearing
+   step. Railway: *"Configuration defined in code will always override values from
+   the dashboard"*, so the API's `railway.json` (`startCommand: cstat-api`,
    `healthcheckPath: /api/health`) would otherwise force the cron service to run
    the web server with a healthcheck it can never pass — typing a start command
-   into the dashboard field does *not* override `railway.json`. `railway.cron.json`
-   instead supplies:
+   into the dashboard field does *not* override it. `/railway.cron.json` instead
+   supplies:
    ```jsonc
    { "deploy": { "startCommand": "cstat-ingest nightly",
                  "cronSchedule": "30 9 * * *" } }   // no healthcheckPath
