@@ -62,8 +62,10 @@ done
 # the rationale on each (api_cache / _sqlx_migrations: managed elsewhere;
 # play_by_play / lineup_stints: local-only raw PBP, never shipped to prod;
 # natstat_lineups / natstat_lineup_games: local-only lineups-object capture,
-# prod serves only the derived lineup_aggregates / player_on_off).
-EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games")
+# prod serves only the derived lineup_aggregates / player_on_off;
+# ingest_runs: runtime ledger written directly by the prod nightly job — a
+# local full-sync must not truncate it out from under the live pipeline).
+EXCLUDED=("api_cache" "_sqlx_migrations" "play_by_play" "lineup_stints" "natstat_lineups" "natstat_lineup_games" "ingest_runs")
 
 # Prefer host-installed psql tools; fall back to running them inside the local
 # Postgres docker container. The container ships matching client tools and

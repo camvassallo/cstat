@@ -6,6 +6,7 @@ pub mod ingest;
 pub mod measure_blend_accuracy;
 pub mod projections_backtest;
 pub mod rate_limiter;
+pub mod run_ledger;
 pub mod tfs;
 pub mod tfs_recruits;
 pub mod torvik;

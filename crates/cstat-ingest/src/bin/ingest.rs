@@ -13,6 +13,18 @@ fn default_season() -> i32 {
     current_natstat_season()
 }
 
+/// Default `nightly` window: yesterday..today (UTC). Run at ~04:30 ET this
+/// covers the prior night's games plus any corrections from NatStat's overnight
+/// re-tabulation. Returns `(from, to)` as `YYYY-MM-DD`.
+fn default_nightly_window() -> (String, String) {
+    let today = chrono::Utc::now().date_naive();
+    let yesterday = today - chrono::Duration::days(1);
+    (
+        yesterday.format("%Y-%m-%d").to_string(),
+        today.format("%Y-%m-%d").to_string(),
+    )
+}
+
 #[derive(Parser)]
 #[command(name = "cstat-ingest", about = "NatStat data ingestion CLI for cstat")]
 struct Cli {
@@ -159,6 +171,29 @@ enum Commands {
         /// End date (YYYY-MM-DD)
         #[arg(long)]
         to: String,
+
+        /// Skip the compute pipeline at the end.
+        #[arg(long)]
+        no_compute: bool,
+    },
+
+    /// Nightly in-season refresh: the full served-critical input set (box
+    /// scores + game forecasts + Torvik with per-game persistence) followed by
+    /// compute, with each step recorded to the `ingest_runs` ledger. Unlike
+    /// `update`, this refreshes Torvik BEFORE compute so the served CamPom /
+    /// pit_cam_v3 inputs don't go stale. Defaults the window to yesterday..today
+    /// (UTC) so late stat corrections are picked up.
+    Nightly {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Start date (YYYY-MM-DD). Defaults to yesterday (UTC).
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date (YYYY-MM-DD). Defaults to today (UTC).
+        #[arg(long)]
+        to: Option<String>,
 
         /// Skip the compute pipeline at the end.
         #[arg(long)]
@@ -619,6 +654,20 @@ async fn main() -> Result<()> {
         } => {
             let ingester = SeasonIngester::new(&client, &db.pool, year);
             let report = ingester.ingest_recent(&from, &to, !no_compute).await?;
+            print!("{report}");
+        }
+
+        Commands::Nightly {
+            year,
+            from,
+            to,
+            no_compute,
+        } => {
+            let (default_from, default_to) = default_nightly_window();
+            let from = from.unwrap_or(default_from);
+            let to = to.unwrap_or(default_to);
+            let ingester = SeasonIngester::new(&client, &db.pool, year);
+            let report = ingester.nightly(&from, &to, !no_compute).await?;
             print!("{report}");
         }
 
