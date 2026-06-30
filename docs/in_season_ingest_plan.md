@@ -145,6 +145,14 @@ Railway dashboard wiring (documented in `docs/deploy_nightly_cron.md`).
 
 **Still open (rolled into M3+):** the in-process >36h staleness *alert* is delegated to an external monitor polling `/api/health/ingest` (the nightly can't alert about a night it didn't run); a Railway healthcheck/native cron-failure hook is the operator's to wire. Connectivity fail-soft (preflight, JWT expiry, v3-fallback visibility) remains M3.
 
+### Production lesson — DB connection latency vs. per-row loops (2026-06-30)
+
+First live cron runs stalled: the ledger recorded games/perfs/team_perfs and then nothing for tens of minutes. Not a hang — the nightly has several **per-row DB loops** that are fine on a localhost DB (sub-ms/round-trip) but pathological over a high-latency connection. The cron was on the **public proxy URL, cross-region** (~85 ms/round-trip), and a step's thousands-to-100k sequential round-trips ballooned to tens of minutes / hours. Offenders by volume: `torvik_games` upsert (~113k rows, still per-row), `forecasts` (~5.6k, ~5 queries each = ~28k), `elo` (~728).
+
+- **Operational fix (required, the real unblock):** cron `DATABASE_URL` = the **private** in-region Postgres URL, cron co-located with Postgres. Documented in `docs/deploy_nightly_cron.md`.
+- **Code fix shipped:** `ingest_game_forecasts` now prefetches teams + games into maps, dedups by `game_id`, and batches the upsert — ~28k queries → ~10 (`crates/cstat-ingest/src/ingest/elo.rs`). Verified identical output + idempotent.
+- **Follow-up (M3 hardening):** batch `apply_persist_torvik_game_stats` the same way (largest remaining per-row loop); audit other ingest loops for N+1. Tracked alongside the M3 connectivity work.
+
 ## Decisions (resolved 2026-06-29)
 
 1. **Runtime split** — ✅ **Railway-direct serving nightly + targeted local sync.** The serving-critical nightly runs on Railway against prod; heavy local jobs push only their tables via a new `sync_to_prod.sh --tables` mode (Phase 2.8 is now a required dependency of the split, not optional).
