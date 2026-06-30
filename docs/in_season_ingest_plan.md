@@ -150,8 +150,8 @@ Railway dashboard wiring (documented in `docs/deploy_nightly_cron.md`).
 First live cron runs stalled: the ledger recorded games/perfs/team_perfs and then nothing for tens of minutes. Not a hang — the nightly has several **per-row DB loops** that are fine on a localhost DB (sub-ms/round-trip) but pathological over a high-latency connection. The cron was on the **public proxy URL, cross-region** (~85 ms/round-trip), and a step's thousands-to-100k sequential round-trips ballooned to tens of minutes / hours. Offenders by volume: `torvik_games` upsert (~113k rows, still per-row), `forecasts` (~5.6k, ~5 queries each = ~28k), `elo` (~728).
 
 - **Operational fix (required, the real unblock):** cron `DATABASE_URL` = the **private** in-region Postgres URL, cron co-located with Postgres. Documented in `docs/deploy_nightly_cron.md`.
-- **Code fix shipped:** `ingest_game_forecasts` now prefetches teams + games into maps, dedups by `game_id`, and batches the upsert — ~28k queries → ~10 (`crates/cstat-ingest/src/ingest/elo.rs`). Verified identical output + idempotent.
-- **Follow-up (M3 hardening):** batch `apply_persist_torvik_game_stats` the same way (largest remaining per-row loop); audit other ingest loops for N+1. Tracked alongside the M3 connectivity work.
+- **Code fixes shipped:** (1) `ingest_game_forecasts` prefetches teams + games into maps, dedups by `game_id`, batches the upsert — ~28k queries → ~10 (`crates/cstat-ingest/src/ingest/elo.rs`); (2) `apply_persist_torvik_game_stats` stages + dedups by `(pid, game_uid)` and batches the 36-column upsert — ~113k queries → ~115 (`crates/cstat-ingest/src/ingest/torvik.rs`). Both verified identical output + idempotent against the local DB.
+- **Follow-up (M3 hardening):** `apply_rebound_backfill` is still a per-row nested-UPDATE loop (~19k); tolerable in-region (~95s) but batchable. Audit remaining ingest loops for N+1; the `elo` step is also N+1 (~728) but small.
 
 ## Decisions (resolved 2026-06-29)
 
