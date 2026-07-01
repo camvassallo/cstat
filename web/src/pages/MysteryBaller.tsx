@@ -345,16 +345,18 @@ function MysteryGame({
   // auto-expanded view).
   const radarBody =
     radarData.length > 0 ? (
-      <ResponsiveContainer width="100%" height={isMobile ? 220 : 260}>
-        <RadarChart data={radarData}>
-          <PolarGrid stroke="#475569" />
-          <PolarAngleAxis dataKey="stat" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-          <Radar dataKey="v" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.35} />
-        </RadarChart>
-      </ResponsiveContainer>
+      <div className="min-h-0 flex-1" style={{ minHeight: isMobile ? 240 : 300 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <RadarChart data={radarData} outerRadius="80%" margin={{ top: 12, right: 24, bottom: 12, left: 24 }}>
+            <PolarGrid stroke="#475569" />
+            <PolarAngleAxis dataKey="stat" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+            <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+            <Radar dataKey="v" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.35} />
+          </RadarChart>
+        </ResponsiveContainer>
+      </div>
     ) : (
-      <div className="flex h-[220px] items-center justify-center text-xs text-gray-600">
+      <div className="flex min-h-[240px] flex-1 items-center justify-center text-xs text-gray-600">
         Loading profile…
       </div>
     );
@@ -504,7 +506,7 @@ function HintPanel({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-lg bg-gray-800 p-4">
+    <div className="flex flex-col rounded-lg bg-gray-800 p-4">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-300">{label}</h2>
         {used && !locked && (
@@ -512,7 +514,7 @@ function HintPanel({
         )}
       </div>
       {revealed ? (
-        children
+        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       ) : (
         <button
           type="button"
