@@ -94,7 +94,10 @@ export default function MysteryBaller() {
   }, [poolReady, practice, pool, mode, practiceNonce, season, dateKey]);
 
   // Remounts the game (fresh state) whenever the puzzle identity changes.
-  const gameKey = practice ? `practice:${practiceNonce}` : dailyKey;
+  // Practice includes `mode` so switching pools re-rolls rather than re-scoring
+  // the existing guesses against a new answer; daily already carries mode+season
+  // in `dailyKey`.
+  const gameKey = practice ? `practice:${mode}:${practiceNonce}` : dailyKey;
 
   const handleModeChange = (next: GameMode) => {
     if (next === mode) return;
