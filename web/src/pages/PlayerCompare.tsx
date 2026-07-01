@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SeasonLink } from '../components/SeasonLink';
 import { useSeason } from '../components/season';
@@ -19,12 +19,11 @@ import {
   Legend,
 } from 'recharts';
 import {
-  fetchPlayers,
   fetchPlayerCompare,
   type ComparePlayer,
-  type PlayerRow,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
+import { PlayerPicker } from '../components/PlayerPicker';
 import { campomTier, campomTierColor, campomHalfPctile } from '../components/campom';
 import { ClassTooltip } from '../components/Archetype';
 import { classColor } from '../components/archetypeColors';
@@ -284,87 +283,6 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
       >
         ×
       </button>
-    </div>
-  );
-}
-
-function PlayerPicker({
-  onAdd,
-  disabled,
-  max,
-  existingIds,
-  season,
-}: {
-  onAdd: (id: string) => void;
-  disabled: boolean;
-  max: number;
-  existingIds: string[];
-  season: number;
-}) {
-  const [search, setSearch] = useState('');
-  const [results, setResults] = useState<PlayerRow[]>([]);
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const reqRef = useRef(0);
-
-  useEffect(() => {
-    const term = search.trim();
-    const reqId = ++reqRef.current;
-    if (term.length < 2) return;
-    const handle = setTimeout(() => {
-      setLoading(true);
-      fetchPlayers({ search: term, limit: 12, season })
-        .then((r) => {
-          if (reqRef.current === reqId) setResults(r.players);
-        })
-        .finally(() => {
-          if (reqRef.current === reqId) setLoading(false);
-        });
-    }, 200);
-    return () => clearTimeout(handle);
-  }, [search, season]);
-
-  const filtered =
-    search.trim().length >= 2 ? results.filter((r) => !existingIds.includes(r.player_id)) : [];
-
-  return (
-    <div className="relative">
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        placeholder={disabled ? `Up to ${max} players` : 'Add player by name…'}
-        disabled={disabled}
-        className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
-      />
-      {open && search.trim().length >= 2 && (
-        <div className="absolute z-10 mt-1 w-full bg-gray-900 border border-gray-700 rounded shadow-lg max-h-72 overflow-y-auto">
-          {loading && <div className="px-3 py-2 text-xs text-gray-500">Searching…</div>}
-          {!loading && filtered.length === 0 && (
-            <div className="px-3 py-2 text-xs text-gray-500">No players found</div>
-          )}
-          {filtered.map((p) => (
-            <button
-              key={p.player_id}
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                onAdd(p.player_id);
-                setSearch('');
-                setResults([]);
-              }}
-              className="w-full text-left px-3 py-2 hover:bg-gray-800 text-sm flex items-center justify-between gap-3"
-            >
-              <span className="truncate">{p.name}</span>
-              <span className="text-xs text-gray-500 truncate">
-                {p.team_name ?? '—'} · {fmt(p.ppg)} PPG
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -247,6 +247,8 @@ export interface PlayerRow {
   conference: string | null;
   position: string | null;
   class_year: string | null;
+  // Listed height in inches — surfaced for the Mystery Baller Height column.
+  height_inches: number | null;
   season: number;
   games_played: number;
   minutes_per_game: number | null;
