@@ -35,9 +35,11 @@ from build_historical_draft_entrants import RAW
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "data" / "draft"
 
-# Capture date of the underlying Tankathon past-drafts paste (see the sibling
-# builder's header). Stamped on every row for provenance parity with 2026.
+# Capture date of the underlying Tankathon past-drafts paste for 2015-2025 (see
+# the sibling builder's header); 2026 results were fetched later, on draft night.
+# Stamped on every row for provenance.
 AS_OF = "2026-06-01"
+AS_OF_2026 = "2026-07-01"
 
 # 2026 real draft results (Tankathon past-drafts/2026, fetched 2026-07-01). Kept
 # LOCAL to this script rather than folded into the sibling builder's RAW so it
@@ -124,7 +126,7 @@ def tier_for(pick: int) -> str:
     return "2nd-round"
 
 
-def parse(block: str) -> list[dict]:
+def parse(block: str, as_of: str) -> list[dict]:
     out = []
     for line in block.strip().splitlines():
         line = line.strip()
@@ -141,7 +143,7 @@ def parse(block: str) -> list[dict]:
             "name": name,
             "tier": tier_for(pick),
             "source": "tankathon",
-            "as_of": AS_OF,
+            "as_of": as_of,
         }
         if "NON-COLLEGE" in team.upper():
             # No cstat college row; flag international so the route skips the
@@ -162,10 +164,11 @@ def parse(block: str) -> list[dict]:
 
 
 def main() -> None:
-    # 2015-2025 from the shared past-drafts paste + 2026 real results (local).
+    # 2015-2025 from the shared past-drafts paste (captured AS_OF) + 2026 real
+    # results (fetched later, on draft night).
     blocks = {**RAW, 2026: RAW_2026}
     for year, block in sorted(blocks.items()):
-        rows = parse(block)
+        rows = parse(block, AS_OF_2026 if year == 2026 else AS_OF)
         path = OUT_DIR / f"{year}_big_board.json"
         path.write_text(json.dumps(rows, indent=2) + "\n")
         college = sum(1 for r in rows if r["current_team"] != "International")
