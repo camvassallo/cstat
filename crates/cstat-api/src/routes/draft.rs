@@ -98,7 +98,6 @@ struct Prospect {
     secondary_archetype: Option<String>,
 }
 
-
 async fn draft_board(
     State(state): State<Arc<AppState>>,
     Path(year): Path<i32>,
