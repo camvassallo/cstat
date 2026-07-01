@@ -14,6 +14,7 @@ import Lineups from './pages/Lineups';
 import Coaches from './pages/Coaches';
 import CoachDetail from './pages/CoachDetail';
 import MysteryBaller from './pages/MysteryBaller';
+import WhichClass from './pages/WhichClass';
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
           <Route path="/coaches" element={<Coaches />} />
           <Route path="/coaches/:id" element={<CoachDetail />} />
           <Route path="/mystery-baller" element={<MysteryBaller />} />
+          <Route path="/which-class" element={<WhichClass />} />
         </Route>
       </Routes>
     </BrowserRouter>
