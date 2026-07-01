@@ -4,7 +4,7 @@ import {
   type Arrow,
   type CellState,
   type GuessCell,
-} from '../../lib/mysteryBaller';
+} from '../../lib/portle';
 import { classColor } from '../archetypeColors';
 
 export interface GuessRow {

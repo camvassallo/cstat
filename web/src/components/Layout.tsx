@@ -38,7 +38,7 @@ const FORECAST_ITEMS: NavItem[] = [
   { to: '/projected?season=2027', label: 'Future' },
 ];
 const PLAY_ITEMS: NavItem[] = [
-  { to: '/mystery-baller', label: 'Mystery Baller' },
+  { to: '/portle', label: 'Portle' },
   { to: '/which-class', label: 'Class Quiz' },
 ];
 
@@ -187,7 +187,7 @@ export default function Layout() {
   // A group's trigger is active whenever any of its routes is current.
   const playersActive = pathname.startsWith('/players') || pathname === '/archetypes';
   const forecastActive = pathname === '/predict' || pathname.startsWith('/projected');
-  const playActive = pathname === '/mystery-baller' || pathname === '/which-class';
+  const playActive = pathname === '/portle' || pathname === '/which-class';
 
   // Auto-close the mobile menu when a link is tapped. We attach onClick to
   // each mobile NavLink rather than reacting to pathname in an effect (the

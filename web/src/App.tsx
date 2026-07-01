@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import Layout from './components/Layout';
 import Rankings from './pages/Rankings';
 import TeamDetail from './pages/TeamDetail';
@@ -12,7 +12,7 @@ import Projected, { ProjectedYearRedirect } from './pages/Projected';
 import Lineups from './pages/Lineups';
 import Coaches from './pages/Coaches';
 import CoachDetail from './pages/CoachDetail';
-import MysteryBaller from './pages/MysteryBaller';
+import Portle from './pages/Portle';
 import WhichClass from './pages/WhichClass';
 
 // The draft board now lives as a mode tab on /players. Redirect the legacy
@@ -22,6 +22,13 @@ function DraftRedirect() {
   const season = params.get('season');
   const to = season ? `/players?mode=draft&season=${season}` : '/players?mode=draft';
   return <Navigate to={to} replace />;
+}
+
+// "Mystery Baller" was renamed to "Portle". Redirect the legacy /mystery-baller
+// URL (including practice-share ?seed=&mode=&season= params) to /portle.
+function PortleRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/portle${search}`} replace />;
 }
 
 export default function App() {
@@ -47,7 +54,10 @@ export default function App() {
           <Route path="/lineups" element={<Lineups />} />
           <Route path="/coaches" element={<Coaches />} />
           <Route path="/coaches/:id" element={<CoachDetail />} />
-          <Route path="/mystery-baller" element={<MysteryBaller />} />
+          <Route path="/portle" element={<Portle />} />
+          {/* Renamed from "Mystery Baller" — keep old (possibly shared)
+              /mystery-baller links working, carrying practice query params. */}
+          <Route path="/mystery-baller" element={<PortleRedirect />} />
           <Route path="/which-class" element={<WhichClass />} />
         </Route>
       </Routes>
