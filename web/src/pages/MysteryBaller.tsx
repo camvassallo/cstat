@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Radar,
   RadarChart,
@@ -39,6 +40,11 @@ const CONFIG_KEY = 'mb:config';
 const STATS_KEY = 'mb:stats';
 const stateKeyFor = (key: string) => `mb:state:${key}`;
 
+// A fresh random seed for each practice game. Generated in event handlers (never
+// during render), so every session/roll is genuinely random rather than walking
+// a fixed sequence.
+const makeSeed = () => Math.floor(Math.random() * 0x7fffffff);
+
 type AnswerDetail = Awaited<ReturnType<typeof fetchPlayerDetail>>;
 
 function initialMode(): GameMode {
@@ -56,9 +62,24 @@ export default function MysteryBaller() {
   // Today's puzzle flips at the player's local midnight (Wordle convention).
   const dateKey = useMemo(() => localDateKey(new Date()), []);
 
-  const [mode, setMode] = useState<GameMode>(initialMode);
-  const [practice, setPractice] = useState(false);
-  const [practiceNonce, setPracticeNonce] = useState(0);
+  // A shared practice link carries `?seed=&mode=&season=` — the seed reproduces
+  // the exact answer client-side without naming it, so friends play the same
+  // round. Read once at mount to seed initial state.
+  const [searchParams] = useSearchParams();
+  const sharedSeedRaw = searchParams.get('seed');
+  const sharedSeed =
+    sharedSeedRaw != null && Number.isFinite(Number(sharedSeedRaw))
+      ? Math.floor(Number(sharedSeedRaw))
+      : null;
+  const sharedMode = searchParams.get('mode');
+
+  const [mode, setMode] = useState<GameMode>(() =>
+    sharedMode && (MODE_ORDER as readonly string[]).includes(sharedMode)
+      ? (sharedMode as GameMode)
+      : initialMode(),
+  );
+  const [practice, setPractice] = useState(() => sharedSeed != null);
+  const [practiceSeed, setPracticeSeed] = useState(() => sharedSeed ?? 0);
 
   const [pool, setPool] = useState<PlayerRow[]>([]);
   // Track which season `pool` belongs to so a mid-flight season change never
@@ -89,15 +110,14 @@ export default function MysteryBaller() {
   const answer = useMemo(() => {
     if (!poolReady) return null;
     return practice
-      ? practiceAnswerByNonce(pool, mode, practiceNonce)
+      ? practiceAnswerByNonce(pool, mode, practiceSeed)
       : dailyAnswer(pool, mode, season, dateKey);
-  }, [poolReady, practice, pool, mode, practiceNonce, season, dateKey]);
+  }, [poolReady, practice, pool, mode, practiceSeed, season, dateKey]);
 
   // Remounts the game (fresh state) whenever the puzzle identity changes.
-  // Practice includes `mode` so switching pools re-rolls rather than re-scoring
-  // the existing guesses against a new answer; daily already carries mode+season
-  // in `dailyKey`.
-  const gameKey = practice ? `practice:${mode}:${practiceNonce}` : dailyKey;
+  // Practice includes `mode` + the random seed so switching pools or rolling a
+  // new game starts fresh; daily already carries mode+season in `dailyKey`.
+  const gameKey = practice ? `practice:${mode}:${practiceSeed}` : dailyKey;
 
   const handleModeChange = (next: GameMode) => {
     if (next === mode) return;
@@ -108,7 +128,7 @@ export default function MysteryBaller() {
   const selectPractice = (toPractice: boolean) => {
     if (toPractice === practice) return;
     setPractice(toPractice);
-    if (toPractice) setPracticeNonce((n) => n + 1);
+    if (toPractice) setPracticeSeed(makeSeed());
   };
 
   const recordDaily = (won: boolean, guesses: number, hintsUsed: number) => {
@@ -123,7 +143,9 @@ export default function MysteryBaller() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-100">Mystery Baller</h1>
+          <h1 className="text-2xl font-bold text-gray-100">
+            <span className="text-blue-400">CamPom</span> × Mystery Baller
+          </h1>
           <p className="text-sm text-gray-400">
             Guess the mystery player in {MAX_GUESSES} tries. Each guess reveals how it
             compares — <span className="text-emerald-300">green</span> = exact,{' '}
@@ -170,11 +192,14 @@ export default function MysteryBaller() {
             </button>
           ))}
         </div>
-        <span className="text-xs text-gray-500">Season {season}</span>
+        <span className="text-xs text-gray-500">
+          Season {season}
+          {!practice && ` · ${dateKey}`}
+        </span>
         {practice && (
           <button
             type="button"
-            onClick={() => setPracticeNonce((n) => n + 1)}
+            onClick={() => setPracticeSeed(makeSeed())}
             className="rounded border border-gray-600 bg-gray-800 px-3 py-1 text-xs text-gray-200 hover:bg-gray-700"
           >
             New game
@@ -198,10 +223,11 @@ export default function MysteryBaller() {
           mode={mode}
           isDaily={!practice}
           dateKey={dateKey}
+          seed={practiceSeed}
           stateKey={stateKeyFor(dailyKey)}
           isMobile={isMobile}
           onDailyFinish={recordDaily}
-          onPlayAgain={() => setPracticeNonce((n) => n + 1)}
+          onPlayAgain={() => setPracticeSeed(makeSeed())}
         />
       )}
 
@@ -229,6 +255,7 @@ function MysteryGame({
   mode,
   isDaily,
   dateKey,
+  seed,
   stateKey,
   isMobile,
   onDailyFinish,
@@ -240,6 +267,7 @@ function MysteryGame({
   mode: GameMode;
   isDaily: boolean;
   dateKey: string;
+  seed: number;
   stateKey: string;
   isMobile: boolean;
   onDailyFinish: (won: boolean, guesses: number, hintsUsed: number) => void;
@@ -307,6 +335,13 @@ function MysteryGame({
     persist(guessedRows, status, next);
   };
 
+  const handleGiveUp = () => {
+    if (status !== 'playing') return;
+    setStatus('lost');
+    persist(guessedRows, 'lost', openHints);
+    if (isDaily) onDailyFinish(false, guessedRows.length, openHints.size);
+  };
+
   const guessRows: GuessRow[] = useMemo(
     () => guessedRows.map((g) => ({ player: g, cells: compareGuess(g, answer) })),
     [guessedRows, answer],
@@ -325,18 +360,19 @@ function MysteryGame({
   const won = status === 'won';
   const guessesLeft = MAX_GUESSES - guessedRows.length;
   const hintsUsed = openHints.size;
+  const answerHref = `/players/${answer.player_id}?season=${season}`;
 
   const handleShare = () => {
+    // Daily shares the bare page (everyone gets today's puzzle). Practice
+    // encodes mode+season+seed so a friend replays the exact same answer —
+    // the seed reproduces the pick client-side without naming the player.
+    const base = `${window.location.origin}/mystery-baller`;
+    const url = isDaily
+      ? base
+      : `${base}?${new URLSearchParams({ mode, season: String(season), seed: String(seed) }).toString()}`;
     const text = buildShare(
       guessRows.map((r) => r.cells),
-      {
-        mode,
-        won,
-        hintsUsed,
-        daily: isDaily,
-        dateKey,
-        url: `${window.location.origin}/mystery-baller`,
-      },
+      { mode, won, hintsUsed, daily: isDaily, dateKey, url },
     );
     navigator.clipboard
       ?.writeText(text)
@@ -385,7 +421,14 @@ function MysteryGame({
         <span className="text-base font-bold text-gray-100">
           {solved ? (
             <>
-              {answer.name}
+              <a
+                href={answerHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-blue-300 hover:underline"
+              >
+                {answer.name}
+              </a>
               {answer.team_name ? (
                 <span className="ml-1 text-sm font-normal text-gray-400">· {answer.team_name}</span>
               ) : null}
@@ -428,8 +471,17 @@ function MysteryGame({
             placeholder="Guess a player by name…"
             hideStats
           />
-          <div className="text-xs text-gray-500">
-            {guessesLeft} {guessesLeft === 1 ? 'guess' : 'guesses'} left
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">
+              {guessesLeft} {guessesLeft === 1 ? 'guess' : 'guesses'} left
+            </span>
+            <button
+              type="button"
+              onClick={handleGiveUp}
+              className="rounded border border-gray-700 px-3 py-1 text-xs text-gray-400 hover:border-rose-500/50 hover:text-rose-300"
+            >
+              Give up
+            </button>
           </div>
         </div>
       ) : (
@@ -451,11 +503,28 @@ function MysteryGame({
                       {' '}· {hintsUsed} {hintsUsed === 1 ? 'hint' : 'hints'}
                     </span>
                   )}
-                  ! It was <span className="font-bold">{answer.name}</span>.
+                  ! It was{' '}
+                  <a
+                    href={answerHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-bold hover:text-blue-300 hover:underline"
+                  >
+                    {answer.name}
+                  </a>
+                  .
                 </>
               ) : (
                 <>
-                  Out of guesses — it was <span className="font-bold">{answer.name}</span>
+                  The answer was{' '}
+                  <a
+                    href={answerHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-bold hover:text-blue-300 hover:underline"
+                  >
+                    {answer.name}
+                  </a>
                   {answer.team_name ? ` (${answer.team_name})` : ''}.
                 </>
               )}
@@ -484,7 +553,7 @@ function MysteryGame({
 
       {/* Guess grid */}
       <div className="mt-4">
-        <GuessGrid rows={guessRows} />
+        <GuessGrid rows={guessRows} season={season} />
       </div>
     </>
   );

@@ -45,8 +45,9 @@ function Cell({ cell }: { cell: GuessCell }) {
 }
 
 /** The stack of guessed rows plus a sticky column header. Horizontally
- *  scrollable on phones; the name column stays put. */
-export function GuessGrid({ rows }: { rows: GuessRow[] }) {
+ *  scrollable on phones; the name column stays put. Names link to the player's
+ *  detail page in a new tab so an in-progress game isn't lost. */
+export function GuessGrid({ rows, season }: { rows: GuessRow[]; season: number }) {
   if (rows.length === 0) return null;
   // Name column + one per attribute.
   const gridTemplate = `minmax(9rem, 1.4fr) repeat(${GUESS_COLUMNS.length}, minmax(3.5rem, 1fr))`;
@@ -71,7 +72,14 @@ export function GuessGrid({ rows }: { rows: GuessRow[] }) {
             style={{ gridTemplateColumns: gridTemplate }}
           >
             <div className="flex h-12 items-center rounded border border-gray-700 bg-gray-800/60 px-2 text-sm font-medium text-gray-100">
-              <span className="truncate">{row.player.name}</span>
+              <a
+                href={`/players/${row.player.player_id}?season=${season}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="truncate hover:text-blue-300 hover:underline"
+              >
+                {row.player.name}
+              </a>
             </div>
             {row.cells.map((cell) => (
               <Cell key={cell.key} cell={cell} />

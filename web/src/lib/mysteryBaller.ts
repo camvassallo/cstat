@@ -9,6 +9,10 @@ import type { PlayerRow } from '../api/client';
 // Config / eligibility
 // ---------------------------------------------------------------------------
 
+/** User-facing game title (CamPom-branded). Used in the page header and the
+ *  shareable result so shared scores carry the brand. */
+export const GAME_TITLE = 'CamPom × Mystery Baller';
+
 export type GameMode = 'p5' | 'starters' | 'all';
 
 export const MODE_LABELS: Record<GameMode, string> = {
@@ -19,15 +23,17 @@ export const MODE_LABELS: Record<GameMode, string> = {
 
 export const MODE_ORDER: readonly GameMode[] = ['p5', 'starters', 'all'];
 
-export const MAX_GUESSES = 8;
+export const MAX_GUESSES = 10;
 
 // Exact NatStat conference codes for the power conferences, verified against
 // the live `/api/players` data (2026): ACC / Big Ten / Big 12 / SEC + Big
 // East. Pac-12 no longer fields a men's league, so there's no PAC12 code.
 const P5_CONFERENCES = new Set(['ACC', 'BIG10', 'BIG12', 'SEC', 'BIGEAST']);
 
-// "Starters" floor. The API already gates the pool to GP>=5 & MPG>=10; this
-// lifts the minutes bar so answers are recognizable rotation regulars.
+// Minutes floors on top of the API's GP>=5 & MPG>=10 gate, so answers are
+// recognizable. P5 lifts it modestly (drop deep-bench power-conf players);
+// Starters lifts it further to genuine starter minutes.
+const P5_MIN_MPG = 20;
 const STARTER_MIN_MPG = 24;
 
 /** A player is answerable only if we have the fields the grid + reveal lean
@@ -42,7 +48,12 @@ export function filterPool(pool: PlayerRow[], mode: GameMode): PlayerRow[] {
   return pool.filter((p) => {
     if (!isAnswerable(p)) return false;
     if (mode === 'p5') {
-      return p.conference != null && P5_CONFERENCES.has(p.conference);
+      return (
+        p.conference != null &&
+        P5_CONFERENCES.has(p.conference) &&
+        p.minutes_per_game != null &&
+        p.minutes_per_game >= P5_MIN_MPG
+      );
     }
     if (mode === 'starters') {
       return p.minutes_per_game != null && p.minutes_per_game >= STARTER_MIN_MPG;
@@ -82,7 +93,7 @@ export function puzzleKey(mode: GameMode, season: number, dateKey: string): stri
 }
 
 /** Pick the daily answer: seed an index into the mode-filtered pool sorted by
- *  a stable key (player_id) so the choice is independent of API row order.
+ *  a per-player rendezvous hash (min of `hash32(salt:player_id)`).
  *  Returns null when the eligible pool is empty. */
 export function dailyAnswer(
   pool: PlayerRow[],
@@ -90,12 +101,7 @@ export function dailyAnswer(
   season: number,
   dateKey: string,
 ): PlayerRow | null {
-  const eligible = filterPool(pool, mode).slice().sort((a, b) =>
-    a.player_id.localeCompare(b.player_id),
-  );
-  if (eligible.length === 0) return null;
-  const idx = hash32(puzzleKey(mode, season, dateKey)) % eligible.length;
-  return eligible[idx];
+  return pickByHash(filterPool(pool, mode), puzzleKey(mode, season, dateKey));
 }
 
 /** Pick a random answer for practice mode. `rng` is injectable for tests;
@@ -110,18 +116,35 @@ export function randomAnswer(
   return eligible[Math.floor(rng() * eligible.length)];
 }
 
-/** Deterministic practice pick keyed by a monotonically-bumped nonce. Lets the
- *  page derive the practice answer during render (no effect, no Math.random in
- *  render) while "New game" just increments the nonce. Returns null when the
- *  eligible pool is empty. */
+/** Deterministic practice pick keyed by a seed (random per game, or from a
+ *  shared link). Same rendezvous-hash scheme as the daily so the pick is stable
+ *  against unrelated pool churn. Returns null when the eligible pool is empty. */
 export function practiceAnswerByNonce(
   pool: PlayerRow[],
   mode: GameMode,
   nonce: number,
 ): PlayerRow | null {
-  const eligible = filterPool(pool, mode);
+  return pickByHash(filterPool(pool, mode), `practice:${nonce}`);
+}
+
+/** Rendezvous ("highest random weight") selection: hash `salt:player_id` for
+ *  every candidate and keep the minimum, tie-broken by `player_id`. Unlike
+ *  `hash(salt) % length`, adding/removing OTHER candidates doesn't change the
+ *  winner — only the winner entering/leaving the pool does — so the daily answer
+ *  stays put across filter tweaks and roster churn. Order-independent. */
+function pickByHash(eligible: PlayerRow[], salt: string): PlayerRow | null {
   if (eligible.length === 0) return null;
-  return eligible[hash32(`practice:${nonce}`) % eligible.length];
+  let best = eligible[0];
+  let bestH = hash32(`${salt}:${best.player_id}`);
+  for (let i = 1; i < eligible.length; i++) {
+    const p = eligible[i];
+    const h = hash32(`${salt}:${p.player_id}`);
+    if (h < bestH || (h === bestH && p.player_id < best.player_id)) {
+      best = p;
+      bestH = h;
+    }
+  }
+  return best;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +327,7 @@ export function buildShare(
   const n = opts.hintsUsed ?? 0;
   const hint = n > 0 ? ` (${n} hint${n > 1 ? 's' : ''})` : '';
   const scope = opts.daily === false ? 'Practice' : opts.dateKey ?? 'Daily';
-  const header = `Mystery Baller · ${scope} · ${MODE_LABELS[opts.mode]} · ${score}${hint}`;
+  const header = `${GAME_TITLE} · ${scope} · ${MODE_LABELS[opts.mode]} · ${score}${hint}`;
   const grid = rows.map((r) => r.map((c) => SHARE_EMOJI[c.state]).join('')).join('\n');
   return opts.url ? `${header}\n${grid}\n${opts.url}` : `${header}\n${grid}`;
 }
@@ -341,7 +364,7 @@ export const EMPTY_STATS: MbStats = {
   streak: 0,
   maxStreak: 0,
   cleanWins: 0,
-  dist: [0, 0, 0, 0, 0, 0, 0, 0],
+  dist: new Array(MAX_GUESSES).fill(0),
 };
 
 /** Fold a finished daily result into the running stats (pure — the caller

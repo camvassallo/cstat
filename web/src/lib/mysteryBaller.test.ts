@@ -101,6 +101,7 @@ describe('localDateKey', () => {
 describe('filterPool / isAnswerable', () => {
   const pool = [
     player({ player_id: 'acc-starter', conference: 'ACC', minutes_per_game: 30 }),
+    player({ player_id: 'acc-bench', conference: 'ACC', minutes_per_game: 14 }),
     player({ player_id: 'mid-bench', conference: 'A-10', minutes_per_game: 12 }),
     player({ player_id: 'bigeast', conference: 'BIGEAST', minutes_per_game: 26 }),
     player({ player_id: 'no-campom', campom: null }),
@@ -108,8 +109,9 @@ describe('filterPool / isAnswerable', () => {
   ];
 
   it('gates out unanswerable rows (null campom / archetype) in every mode', () => {
-    expect(isAnswerable(pool[3])).toBe(false);
-    expect(isAnswerable(pool[4])).toBe(false);
+    const byId = (id: string) => pool.find((p) => p.player_id === id)!;
+    expect(isAnswerable(byId('no-campom'))).toBe(false);
+    expect(isAnswerable(byId('no-class'))).toBe(false);
     for (const mode of ['all', 'p5', 'starters'] as const) {
       const ids = filterPool(pool, mode).map((p) => p.player_id);
       expect(ids).not.toContain('no-campom');
@@ -117,11 +119,12 @@ describe('filterPool / isAnswerable', () => {
     }
   });
 
-  it('p5 keeps only power conferences', () => {
+  it('p5 keeps only power conferences at >= 20 mpg', () => {
     const ids = filterPool(pool, 'p5').map((p) => p.player_id);
     expect(ids).toContain('acc-starter');
     expect(ids).toContain('bigeast');
-    expect(ids).not.toContain('mid-bench');
+    expect(ids).not.toContain('mid-bench'); // wrong conference
+    expect(ids).not.toContain('acc-bench'); // P5 but sub-20 mpg
   });
 
   it('starters keeps only >= 24 mpg', () => {
@@ -268,7 +271,7 @@ describe('buildShare', () => {
       dateKey: '2026-07-01',
       url: 'https://x/mystery-baller',
     });
-    expect(out).toContain('Mystery Baller · 2026-07-01 · Power 5 · 2/8');
+    expect(out).toContain('CamPom × Mystery Baller · 2026-07-01 · Power 5 · 2/10');
     expect(out).toContain('https://x/mystery-baller');
     expect(out).not.toContain('answer');
     expect(out.split('\n')).toHaveLength(4); // header + 2 grid rows + url
@@ -280,7 +283,7 @@ describe('buildShare', () => {
       won: false,
       daily: false,
     });
-    expect(out).toContain('Mystery Baller · Practice · All D-I · X/8');
+    expect(out).toContain('CamPom × Mystery Baller · Practice · All D-I · X/10');
   });
   it('annotates hinted solves', () => {
     const out = buildShare([compareGuess(answer, answer)], {
@@ -289,7 +292,7 @@ describe('buildShare', () => {
       hintsUsed: 2,
       dateKey: '2026-07-01',
     });
-    expect(out).toContain('1/8 (2 hints)');
+    expect(out).toContain('1/10 (2 hints)');
   });
 });
 
