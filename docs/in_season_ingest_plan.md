@@ -174,4 +174,4 @@ Every external feed now degrades gracefully; a single dead dependency can't hang
 ## Still open (defaulted, revisit if it bites)
 
 - **transfers/recruits in-season cadence** — how live next-season projections need to be *during* the current season. Default: JWT-gated 247 runs only in portal windows, fail-soft.
-- **247 auth durability** — default: accept manual ~6h JWT recapture + fail-soft for v1; revisit if it bites.
+- **247 auth durability** — M3 default is manual ~6h JWT recapture + fail-soft. **Resolution scoped (2026-07-01):** the public portal page embeds a server-minted **guest JWT** (~12h, returns the full portal incl. ratings) that can be scraped and used as the Bearer — a fully-programmatic path that removes the manual paste. Tracked as its own ROADMAP item *"247 guest-token auto-fetch"* (separate PR).

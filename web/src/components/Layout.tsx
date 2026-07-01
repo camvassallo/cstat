@@ -93,6 +93,9 @@ export default function Layout() {
       <NavLink to="/coaches" className={({ isActive }) => navLinkClass(isActive)}>
         Coaches
       </NavLink>
+      <NavLink to="/mystery-baller" className={({ isActive }) => navLinkClass(isActive)}>
+        Play
+      </NavLink>
     </>
   );
 
@@ -170,6 +173,9 @@ export default function Layout() {
           </NavLink>
           <NavLink to="/coaches" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Coaches
+          </NavLink>
+          <NavLink to="/mystery-baller" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
+            Play
           </NavLink>
         </div>
       )}

@@ -341,6 +341,9 @@ pub struct PlayerRow {
     pub conference: Option<String>,
     pub position: Option<String>,
     pub class_year: Option<String>,
+    /// Listed height in inches (from `players`). Surfaced for the Mystery
+    /// Baller guessing game's Height column; NULL when NatStat has no height.
+    pub height_inches: Option<i32>,
     pub season: i32,
     pub games_played: i32,
     pub minutes_per_game: Option<f64>,
@@ -1482,6 +1485,7 @@ pub async fn search_players(
             t.conference,
             p.position,
             p.class_year,
+            p.height_inches,
             pss.season,
             pss.games_played,
             pss.minutes_per_game,

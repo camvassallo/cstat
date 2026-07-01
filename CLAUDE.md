@@ -30,6 +30,12 @@ cargo test test_name               # single test
 cargo run -p cstat-api                          # API server (default :8080)
 cargo run --bin cstat-ingest -- <subcommand>    # Ingestion CLI
 
+# Frontend (web/) — React + Vite + TS
+cd web && npm run dev                            # dev server (proxies /api)
+cd web && npm run build                          # tsc -b && vite build
+cd web && npm run lint                           # eslint (CI-relevant)
+cd web && npm test                               # vitest (pure-logic unit tests, e.g. Mystery Baller)
+
 # Local Postgres
 docker compose up -d               # Postgres 17 on :5432
 
