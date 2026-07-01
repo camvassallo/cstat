@@ -328,49 +328,49 @@ fn parse_player_csv(body: &str) -> anyhow::Result<Vec<TorkvikPlayerSeason>> {
 }
 
 /// Sanity-check that the positional Torvik player CSV still matches the column
-/// map `parse_player_csv` relies on. Because the feed is headerless we can't
-/// assert header names, so we assert the *type shape* of a few load-bearing
-/// columns on the first data row: text columns (name/team/conf) must not be
-/// purely numeric, and numeric columns (gp/usage/pid/gbpm) must parse as numbers
-/// when present. If Bart inserts or reorders a column a name lands where a number
-/// is expected (or vice-versa) and at least one check trips. Empty cells are
-/// tolerated — a legitimate row can have blank optional numerics.
+/// map `parse_player_csv` relies on. Because the feed is headerless we assert the
+/// *type shape* of a few load-bearing columns on the first data row.
+///
+/// Two signal tiers, tuned to catch a column insert/reorder without false-firing
+/// on a stray value (the existing per-field parse already tolerates non-numerics
+/// by yielding `None`, so the guard must be at least as forgiving):
+/// - **Strong:** a text column (name/team/conf) that is a *bare number*. A real
+///   player name / team / conference is never purely numeric, so even one is drift.
+/// - **Weak:** a numeric column (gp/usage/pid/gbpm) holding non-numeric text. A
+///   lone one could be a sentinel (`"N/A"`), so we only treat **two or more** as
+///   drift — a genuine shift misaligns all of them at once.
+///
+/// Empty cells are tolerated throughout — a legitimate row can have blank optional
+/// fields.
 fn validate_player_csv_schema(rec: &csv::StringRecord) -> anyhow::Result<()> {
-    // A non-empty text column must not be a bare number.
-    let text_ok = |idx: usize| {
-        rec.get(idx)
-            .map(str::trim)
-            .is_none_or(|s| s.is_empty() || s.parse::<f64>().is_err())
-    };
-    // A non-empty numeric column must parse as a number.
-    let num_ok = |idx: usize| {
-        rec.get(idx)
-            .map(str::trim)
-            .is_none_or(|s| s.is_empty() || s.parse::<f64>().is_ok())
-    };
+    let cell = |idx: usize| rec.get(idx).map(str::trim).filter(|s| !s.is_empty());
+    let is_pure_number = |idx: usize| cell(idx).is_some_and(|s| s.parse::<f64>().is_ok());
+    let is_nonnumeric = |idx: usize| cell(idx).is_some_and(|s| s.parse::<f64>().is_err());
 
-    let checks = [
-        (0usize, "player_name", text_ok(0)),
-        (1, "team", text_ok(1)),
-        (2, "conf", text_ok(2)),
-        (3, "gp", num_ok(3)),
-        (6, "usage", num_ok(6)),
-        (32, "pid", num_ok(32)),
-        (53, "gbpm", num_ok(53)),
-    ];
-    let bad: Vec<String> = checks
+    // Strong: a numeric value in a text slot — one is enough.
+    let mut violations: Vec<String> = [(0usize, "player_name"), (1, "team"), (2, "conf")]
         .iter()
-        .filter(|(_, _, ok)| !ok)
-        .map(|(i, name, _)| format!("col {i} ({name})"))
+        .filter(|(i, _)| is_pure_number(*i))
+        .map(|(i, n)| format!("col {i} ({n}) is numeric"))
         .collect();
+    let text_drift = !violations.is_empty();
 
-    if !bad.is_empty() {
+    // Weak: non-numeric text in a numeric slot — needs two-plus to count.
+    let num_violations: Vec<String> = [(3usize, "gp"), (6, "usage"), (32, "pid"), (53, "gbpm")]
+        .iter()
+        .filter(|(i, _)| is_nonnumeric(*i))
+        .map(|(i, n)| format!("col {i} ({n}) is non-numeric"))
+        .collect();
+    let num_drift = num_violations.len() >= 2;
+    violations.extend(num_violations);
+
+    if text_drift || num_drift {
         let sample: Vec<&str> = rec.iter().take(8).collect();
         anyhow::bail!(
             "Torvik player CSV schema drift — the positional column map is stale \
-             (did barttorvik add/reorder a column?). Type-shape violated at: {}. \
+             (did barttorvik add/reorder a column?). Violations: {}. \
              Refusing to write misaligned rows. First 8 cells: {sample:?}",
-            bad.join(", ")
+            violations.join(", ")
         );
     }
     Ok(())
@@ -537,6 +537,25 @@ mod tests {
             err.to_string().contains("schema drift"),
             "expected a schema-drift error, got: {err}"
         );
+    }
+
+    #[test]
+    fn parse_csv_tolerates_lone_nonnumeric_sentinel() {
+        // A stray non-numeric value in ONE numeric column (e.g. a "N/A" sentinel)
+        // must not be mistaken for a column shift — the per-field parse already
+        // tolerates it by yielding None, and the guard requires a numeric name/
+        // team/conf or 2+ misaligned numeric columns before declaring drift.
+        let mut cols = vec![""; 64];
+        cols[0] = "Test Player";
+        cols[1] = "Team";
+        cols[2] = "Conf";
+        cols[3] = "35"; // gp numeric
+        cols[6] = "N/A"; // lone non-numeric in the usage slot — tolerated
+        cols[53] = "8.7"; // gbpm numeric
+        let csv_line = cols.join(",");
+        let players = parse_player_csv(&csv_line).unwrap();
+        assert_eq!(players.len(), 1);
+        assert!(players[0].usage.is_none());
     }
 
     #[test]

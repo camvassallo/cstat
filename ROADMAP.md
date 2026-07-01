@@ -833,6 +833,71 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
 
 ---
 
+## Phase 7: Off-Season Fun & Engagement
+> Give people a reason to visit in July. A cluster of lightweight games, quizzes, and toys that lean into the one thing that makes cstat unique — the 12 D&D-class archetype system — and otherwise reuse surfaces we've already built (percentile radars, shot diets, CamPom, the prediction engine, `similar`, OG cards). None of this is served-critical; all of it is read-only against existing tables, so it carries no ingest/compute risk. Sequence descriptive-first: ship the daily game (habit), then the quiz (viral funnel), then the toys.
+
+Naming note: "archetype-dle" is a placeholder. Candidate names for the daily game (pick one before build): **Scouting Report** (each daily mystery player is a scouting report you decode — on-brand), **Statline**, **Mystery Baller**, **The Daily Draft**, **Hoopdle**. The quiz and matchup toys can share the eventual brand.
+
+### 7a: Daily Player Guessing Game ("Scouting Report" / archetype-dle) ← next up
+A Wordle-style daily puzzle: reveal a mystery player's archetype radar + shot diet + a few blurred stats; the user guesses the player in N tries, each guess narrowing via directional hints. Deterministic daily seed (date-derived, same puzzle for everyone — same pattern as `current_natstat_season()`) so results are comparable and shareable. Fully read-only over `player_season_stats` / `player_percentiles` / `player_archetypes` / CamPom.
+
+- [ ] **Daily seed + answer selection** — date → deterministic index into the eligible player pool. No new table needed for v1 (pure function of date + pool); a `daily_puzzle` table is only needed if we later want to pin/curate specific days.
+- [ ] **Guess feedback engine** — per guess, reveal directional hints against the answer: same/different **archetype** (primary + secondary), higher/lower **CamPom**, same/different **conference**, higher/lower **PPG / usage / minutes**, same/different **class year**. Reuse the percentile-color logic (`pctile`) for the higher/lower chips.
+- [ ] **Reveal panel** — starts with the archetype radar + shot-diet court (blurred name), progressively unblurs stats as guesses are spent. Reuses the radar + `ShotDiet` components verbatim.
+- [ ] **Guess input** — the debounced player-search autocomplete already built for PlayerCompare (`/api/players` search).
+- [ ] **Shareable result** — Wordle-style emoji grid (hint colors per row) + streak counter in `localStorage`. No auth; no server state for v1.
+- [ ] **Difficulty / scope configs** (the requested modes — a mode selector on the game header):
+  - [ ] **Power-5 only** — restrict the answer pool to P5 conferences (+ Big East). The obvious default for casual fans.
+  - [ ] **Starters only** — restrict to high-minutes players (minutes-share or GP/MPG threshold) so answers are recognizable names.
+  - [ ] **All D-I** — the full pool (hard mode).
+  - [ ] **Season scope** — current season by default; optional "any season 2015–2026" for a deep-cut mode (ties into the site-wide `?season=` plumbing).
+  - [ ] **Archetype-locked** — optional daily variant where the answer's class is given and you guess within it.
+  - [ ] (Config surface: a small settings popover; persist choice in `localStorage`. Keep the *daily* seed shared per-config so "P5 mode today" is the same for everyone in that mode.)
+
+### 7b: "Which Class Are You?" Personality Quiz
+A 6–8 question personality quiz that maps the visitor to one of the 12 archetypes and shows the class blurb + real-player comps. Pure funnel into `/archetypes`, inherently shareable, doubles as marketing.
+
+- [ ] **Question set** — 6–8 questions whose answers map onto the archetype centroid axes we already cluster on (shot diet, playmaking vs scoring, defense, tempo/role). Each answer contributes weights toward classes.
+- [ ] **Scoring** — softmax over accumulated weights → primary + secondary class, mirroring the real `affinity_scores` framing so it feels consistent with the rest of the site.
+- [ ] **Result card** — class-tinted card (reuse `archetypeColors.ts` + `ClassTooltip`), the class blurb, and 2–3 real exemplar players for that class pulled from `GET /api/archetypes` (`per_class`), each deep-linking to the player.
+- [ ] **Shareable** — reuse/extend the OG-card infrastructure so a shared quiz result renders a proper social preview ("I'm a Warlock").
+- [ ] Client-only; no new endpoint required (reads the existing archetype glossary route).
+
+### 7c: Time Machine — Cross-Season / Cross-Team Fantasy Matchups
+Let users pit any two team-seasons against each other in the predictor — 2015 Kentucky vs 2026 Duke. Technically enabled today by season-scoped team UUIDs + the existing `/api/predict` stack; this is a UI affordance plus a small prediction-path consideration.
+
+- [ ] **Cross-season matchup UI** — extend the Predict team pickers so `home` and `away` can each carry their own season (two season selectors, not one site-wide season). Reuse the existing team autocomplete.
+- [ ] **Prediction path** — confirm `/api/predict` can accept a per-team season (features are built per team-season already). If the current signature assumes a single `season`, add optional `home_season` / `away_season` params; fall back to `season` when absent (backward compatible).
+- [ ] **Honesty labeling** — a cross-era matchup is inherently a fantasy/what-if (no shared schedule, era pace/rule differences). Label it clearly as "Fantasy matchup" and suppress the point-in-time / prior-meetings sections (which assume same-season, real-schedule context). Surface the `prediction_basis` chip as usual.
+- [ ] **Deep-linkable** — `/predict?home=...&home_season=2015&away=...&away_season=2026` so results are shareable, matching the existing ticker deep-link pattern.
+- [ ] **Discovery entry point** — a "Time Machine" tile/CTA (e.g., "Pick two teams from any two seasons") plus a few curated marquee matchups to seed the idea.
+
+### 7d: Higher / Lower (CamPom Edition)
+Dead-simple, addictive streak game: "Who had the higher CamPom — Player A or Player B?" One round = two random eligible players; correct guess advances, wrong guess ends the run; track best streak in `localStorage`.
+
+- [ ] **Round generation** — sample two players from the eligible pool (reuse the 7a scope configs: P5-only / starters / all D-I / season). Read `cam_gbpm_v3` (+ percentile) straight from the players surface.
+- [ ] **Reveal + streak** — flip to show both CamPom values, animate the winner, increment/reset streak; personal-best persisted client-side.
+- [ ] **Variants (optional)** — swap the compared metric (PPG, on/off net, RAPM, usage) for replay variety; each is a column we already serve.
+- [ ] Client-only over the existing players data; no new endpoint for v1.
+
+### 7e: Build-a-Roster / Pack Opening
+Give the user a CamPom budget and legal archetype-slot constraints, let them draft real players into a 5-man (or full rotation), then score the roster by feeding its aggregate through the `roster_impact_model` to output a projected AdjEM and a "your team would rank #X." This is the `/projected` machinery turned into a game. The "pack opening" framing is the fun onboarding: reveal players as randomized packs (rarity by CamPom percentile — Common → Mythic), then build from what you pull.
+
+- [ ] **Pack opening** — randomized reveal of N players with rarity tiers keyed to CamPom percentile (reuse the tier-chip color scale: Elite/Strong/… → Mythic/Rare/…). Purely cosmetic randomness (vary by session, not a shared daily seed).
+- [ ] **Roster builder** — draft into archetype slots with a CamPom budget cap; legal-lineup validation (must field a valid 5; optional bench). Reuse archetype chips + player search.
+- [ ] **Scoring** — aggregate the drafted roster into the roster-impact feature vector and run it through `roster_impact_model` (the preseason projection calibrator) for a projected AdjEM + implied national rank. **Dependency**: the model expects a specific roster-aggregate feature shape — either reuse the projection feature-builder path or expose a small "score this hypothetical roster" endpoint (`POST /api/roster/score` with a list of `player_id`s). Note this is the one Phase-7 item that likely needs a new endpoint; everything else is client-only over existing routes.
+- [ ] **Shareable result** — final team card (starting 5 by archetype color + projected AdjEM + rank), OG-card friendly.
+- [ ] **Trading-card tie-in (stretch)** — the per-player "pull" reuses/becomes the shareable player trading card (archetype-bordered, CamPom headline, rarity tier), which is also a standalone share surface on player pages.
+
+### 7f: Easter Eggs (low effort, high delight)
+- [ ] **Konami code → "chaos mode"** — re-skin AdjEM/CamPom tier labels with D&D flavor ("Legendary" … "Commoner") and/or swap archetype badges for dice icons. Purely cosmetic, dismissible.
+- [ ] **"Party of the day"** — a small homepage card presenting a random real 5-man lineup from `lineup_aggregates` as a D&D adventuring party ("1 Wizard, 2 Fighters, a Cleric, a Barbarian — Adjusted Net +18.2"), deep-linking to `/lineups`.
+- [ ] **The record books (`/legends`)** — surface the extremes already in the DB: highest single-season CamPom, biggest on/off swing, most lopsided game the model got wrong, the "purest" archetype (highest `primary_score`). All reads.
+- [ ] **D&D loading flavor text** — rotate themed quips during React Query fetches ("Consulting the ancient scrolls of possession data…").
+- [ ] (Related existing item: the **D&D alignment-grid placement** easter egg parked under §5a.)
+
+---
+
 ## Honest Caveats & Open Questions
 
 Things we've shipped (or scoped) that we're squinting at. Each entry is a one-line summary plus a pointer to the inline detail. The goal: a single discoverable place for "what's questionable about cstat right now" without burying the rationale away from the work it modifies.
