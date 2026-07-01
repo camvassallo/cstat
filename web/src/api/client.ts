@@ -484,20 +484,15 @@ export function fetchTransfers(year: number) {
   );
 }
 
-// NBA Draft big board — one row per curated draft prospect for a given draft
-// cycle year, sourced from `data/draft/{year}_big_board.json` (Tankathon) and
-// joined to cstat players for CamPom. `campom` / `player_id` are null for
-// prospects with no college row this season (seniors who left, internationals,
-// G-Leaguers). `status` is derived: gone / declared / senior / international /
-// g-league / prospect. (`gone` = on the early-entrant list and locked in
-// post-withdrawal-deadline; `declared` = declared with the window still open.)
+// NBA Draft big board — one row per draft pick for a given draft cycle year,
+// sourced from `data/draft/{year}_big_board.json` (historical years = actual
+// draft order; the live year = Tankathon prospect board) and joined to cstat
+// players for CamPom + archetype. `campom` / `player_id` / archetypes are null
+// for picks with no college row this season (internationals, G-Leaguers, or an
+// unmatched name).
 export interface DraftProspect {
   draft_rank: number | null;
   name: string;
-  tier: string;
-  position: string | null;
-  class_year: string | null;
-  status: string;
   current_team: string;
   team_id: string | null;
   team_name: string | null;
@@ -507,6 +502,10 @@ export interface DraftProspect {
   // unmatched or where the split is numerically unstable (±30 envelope).
   campom_o: number | null;
   campom_d: number | null;
+  // D&D-class archetype (primary / secondary) for the matched player's season.
+  // Null when unmatched or the player didn't cluster that season.
+  primary_archetype: string | null;
+  secondary_archetype: string | null;
 }
 
 export function fetchDraft(year: number) {

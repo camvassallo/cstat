@@ -4,6 +4,7 @@ import type { ColDef } from 'ag-grid-community';
 import { fetchDraft, type DraftProspect } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
+import { classColor } from '../components/archetypeColors';
 import { SeasonLink } from '../components/SeasonLink';
 import { useIsMobile } from '../components/useIsMobile';
 import { useSeason } from '../components/season';
@@ -22,99 +23,6 @@ type RankedProspect = DraftProspect & {
 // Stable identity for the CamPom-rank lookup. Name alone can collide across
 // schools; pairing it with the board team keeps each of the ~116 rows unique.
 const rowKey = (p: DraftProspect) => `${p.name}|${p.current_team}`;
-
-// Tier chip — Tankathon's bucket maps onto NBA draft-round structure. Ordered
-// best (lottery) to worst (unranked); reuses the CamPom chip palette so the
-// page reads consistently with the rest of the site.
-function tierChipClass(tier: string): string {
-  switch (tier) {
-    case 'lottery':
-      return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
-    case '1st-round':
-      return 'bg-sky-500/20 text-sky-300 border-sky-500/40';
-    case '2nd-round':
-      return 'bg-blue-500/20 text-blue-300 border-blue-500/40';
-    case 'fringe':
-      return 'bg-amber-500/20 text-amber-300 border-amber-500/40';
-    default: // unranked
-      return 'bg-slate-700/40 text-slate-400 border-slate-600/40';
-  }
-}
-
-function tierLabel(tier: string): string {
-  switch (tier) {
-    case 'lottery':
-      return 'Lottery';
-    case '1st-round':
-      return '1st Rd';
-    case '2nd-round':
-      return '2nd Rd';
-    case 'fringe':
-      return 'Fringe';
-    default:
-      return 'Unranked';
-  }
-}
-
-// Tier quality order for sorting. The tier is a categorical string, so a plain
-// sort would land alphabetically (1st-round, 2nd-round, fringe, lottery, …)
-// instead of best-to-worst — this maps each tier to its rank so the Tier
-// column sorts lottery → unranked. Unknown values sort last.
-const TIER_ORDER: Record<string, number> = {
-  lottery: 0,
-  '1st-round': 1,
-  '2nd-round': 2,
-  fringe: 3,
-  unranked: 4,
-};
-const tierComparator = (a: string, b: string) =>
-  (TIER_ORDER[a] ?? 99) - (TIER_ORDER[b] ?? 99);
-
-// Status chip — derived eligibility state from the API (early-entrant
-// cross-reference + class year).
-function statusChip(status: string): { label: string; cls: string; title: string } {
-  switch (status) {
-    case 'gone':
-      return {
-        label: 'In Draft',
-        cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-        title:
-          'Declared for the draft and did not withdraw before the deadline — locked into the draft, not returning to college.',
-      };
-    case 'declared':
-      return {
-        label: 'Declared',
-        cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-        title:
-          'Underclassman who has declared for the draft with the withdrawal window still open — not yet final.',
-      };
-    case 'senior':
-      return {
-        label: 'Senior',
-        cls: 'bg-slate-600/30 text-slate-300 border-slate-500/40',
-        title: 'Senior — automatically draft-eligible, no early-entry declaration needed.',
-      };
-    case 'international':
-      return {
-        label: 'Intl',
-        cls: 'bg-violet-500/20 text-violet-300 border-violet-500/40',
-        title: 'International prospect — not in the college dataset, so no CamPom value.',
-      };
-    case 'g-league':
-      return {
-        label: 'G League',
-        cls: 'bg-violet-500/20 text-violet-300 border-violet-500/40',
-        title: 'G League prospect — not in the college dataset, so no CamPom value.',
-      };
-    default: // prospect
-      return {
-        label: 'Watch',
-        cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-        title:
-          'On the board but has not declared — an underclassman with remaining eligibility that scouts are tracking.',
-      };
-  }
-}
 
 // Nulls-last numeric comparator. AG Grid inverts a comparator's result for
 // descending sort, so we read `isDescending` and pre-invert the null verdict —
@@ -157,9 +65,14 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
     {
       headerName: '#',
       field: 'draft_rank',
-      width: 48,
+      // Wide enough for a 2-digit pick plus the always-visible sort arrow so
+      // "60" doesn't truncate.
+      width: 72,
       pinned: 'left',
-      headerTooltip: "Tankathon's draft-board rank. — for the unranked tail.",
+      // Default sort: draft order (ascending pick number). — for the unranked
+      // tail sorts last in both directions via nullsLast.
+      sort: 'asc',
+      headerTooltip: 'Draft pick number (draft order). — for the unranked tail.',
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
@@ -216,43 +129,39 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
       },
     },
     {
-      headerName: 'Pos',
-      field: 'position',
-      ...flexCol(1, 70),
+      headerName: 'Archetype',
+      colId: 'archetype',
+      // Primary / secondary combo in one column, mirroring the Players and
+      // Transfer Portal pages. — for picks with no cstat college row
+      // (internationals, G-Leaguers, or an unmatched name).
+      ...flexCol(2, 150),
       sortable: false,
-      cellRenderer: (p: { value: string | null }) => (
-        <span className="text-gray-400 text-xs">{p.value || '—'}</span>
-      ),
-    },
-    {
-      headerName: 'Class',
-      field: 'class_year',
-      ...flexCol(1, 100),
-      sortable: false,
-      cellRenderer: (p: { value: string | null }) => (
-        <span className="text-gray-400 text-xs">{p.value || '—'}</span>
-      ),
-    },
-    {
-      headerName: 'Tier',
-      field: 'tier',
-      ...flexCol(1, 100),
       headerTooltip:
-        'Tankathon tier mapped to NBA draft-round structure: Lottery (1–14), 1st Rd (15–30), 2nd Rd (31–60), Fringe (61+), Unranked. Sorts best-to-worst.',
-      comparator: tierComparator,
-      cellRenderer: (p: { value: string }) => (
-        <span
-          className={`px-1.5 py-0.5 rounded border text-[11px] font-semibold ${tierChipClass(p.value)}`}
-        >
-          {tierLabel(p.value)}
-        </span>
-      ),
+        "The matched player's D&D-class archetype (primary / secondary) for their just-completed college season. — for picks with no cstat college row.",
+      cellRenderer: (p: { data?: RankedProspect }) => {
+        const cls = p.data?.primary_archetype;
+        if (!cls) return <span className="text-gray-600 text-xs">—</span>;
+        const sec = p.data?.secondary_archetype;
+        return (
+          <span
+            className="text-xs font-bold uppercase tracking-wide whitespace-nowrap"
+            style={{ color: classColor(cls) }}
+            title={sec ? `${cls} / ${sec}` : cls}
+          >
+            {cls}
+            {sec && (
+              <span className="ml-1 opacity-70" style={{ color: classColor(sec) }}>
+                / {sec}
+              </span>
+            )}
+          </span>
+        );
+      },
     },
     {
       headerName: 'CamPom',
       field: 'campom',
       ...flexCol(1, 100),
-      sort: 'desc',
       headerTooltip:
         "cstat's CamPom v3 player value for this prospect's just-completed college season. — for prospects with no college row (internationals, G-Leaguers).",
       comparator: nullsLast,
@@ -307,22 +216,6 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
             title={rc != null ? `CamPom rank ${rc} vs draft rank ${p.data?.draft_rank}` : undefined}
           >
             {text}
-          </span>
-        );
-      },
-    },
-    {
-      headerName: 'Status',
-      field: 'status',
-      ...flexCol(1, 100),
-      cellRenderer: (p: { value: string }) => {
-        const chip = statusChip(p.value);
-        return (
-          <span
-            className={`px-1.5 py-0.5 rounded border text-[11px] font-semibold ${chip.cls}`}
-            title={chip.title}
-          >
-            {chip.label}
           </span>
         );
       },
@@ -409,9 +302,9 @@ export default function Draft() {
     <div>
       <h1 className="text-2xl font-bold text-gray-100 mb-1">NBA Draft Big Board</h1>
       <p className="text-sm text-gray-400 mb-3">
-        {season} draft class — Tankathon's ranked prospects joined to CamPom. The{' '}
-        <span className="text-emerald-400 font-semibold">Δ</span> column flags CamPom's
-        sleepers: positive means CamPom rates the player higher than the draft board does.
+        {season} draft — picks in draft order, joined to each player's CamPom value and
+        archetype. The <span className="text-emerald-400 font-semibold">Δ</span> column flags
+        CamPom's sleepers: positive means CamPom rates the player higher than draft slot does.
       </p>
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <input
@@ -422,7 +315,7 @@ export default function Draft() {
           className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
         <span className="text-xs text-gray-500">
-          {total} prospects · {matched} with CamPom ·{' '}
+          {total} picks · {matched} with CamPom ·{' '}
           <a
             href="https://www.tankathon.com/big_board"
             target="_blank"
