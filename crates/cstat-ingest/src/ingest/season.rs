@@ -568,41 +568,60 @@ impl<'a> SeasonIngester<'a> {
         // best-effort feed down (degraded warning). The success ping doubles as
         // a "the cron fired and finished" heartbeat.
         if failures.is_empty() {
-            let torvik_note = match &report.torvik {
+            let torvik_line = match &report.torvik {
                 Some(t) => format!(
-                    "Torvik {}up/{} per-game",
+                    "*Torvik:*  {} season · {} per-game",
                     t.upserted, report.torvik_games_persisted
                 ),
-                None => "Torvik skipped".to_string(),
+                None => "*Torvik:*  skipped".to_string(),
             };
-            let compute_note = if report.compute.is_some() {
-                "compute ok"
+            let compute_str = if report.compute.is_some() {
+                "ok"
             } else {
-                "compute skipped"
+                "skipped"
             };
-            notify::post_slack(notify::SlackChannel::Cron, &format!(
-                ":white_check_mark: cstat nightly OK (season {}, run {}) — {} games, {} player perfs, {} team perfs, {} ELO, {} forecasts; {}; {}; rate {}/{} left",
-                self.season,
-                ledger.run_id(),
-                report.ingest.games,
-                report.ingest.player_performances,
-                report.ingest.team_performances,
-                report.ingest.elo_ratings,
-                report.ingest.game_forecasts,
-                torvik_note,
-                compute_note,
-                tokens_after,
-                budget,
-            ))
+            notify::post_slack(
+                notify::SlackChannel::Cron,
+                &format!(
+                    ":white_check_mark: *Nightly ingest OK* — season {season}\n\
+                     *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
+                     *Feeds:*  {elo} ELO · {fc} forecasts\n\
+                     {torvik_line}\n\
+                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}\n\
+                     _run {run_id}_",
+                    season = self.season,
+                    games = report.ingest.games,
+                    pp = report.ingest.player_performances,
+                    tp = report.ingest.team_performances,
+                    elo = report.ingest.elo_ratings,
+                    fc = report.ingest.game_forecasts,
+                    torvik_line = torvik_line,
+                    compute_str = compute_str,
+                    remaining = tokens_after,
+                    budget = budget,
+                    run_id = ledger.run_id(),
+                ),
+            )
             .await;
         } else {
-            notify::post_slack(notify::SlackChannel::Cron, &format!(
-                ":warning: cstat nightly completed DEGRADED (season {}, run {}) — {} issue(s): {}",
-                self.season,
-                ledger.run_id(),
-                failures.len(),
-                failures.join("; ")
-            ))
+            let issues = failures
+                .iter()
+                .map(|f| format!("•  {f}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            notify::post_slack(
+                notify::SlackChannel::Cron,
+                &format!(
+                    ":warning: *Nightly ingest DEGRADED* — season {season}\n\
+                     Completed with {n} issue(s):\n\
+                     {issues}\n\
+                     _run {run_id}_",
+                    season = self.season,
+                    n = failures.len(),
+                    issues = issues,
+                    run_id = ledger.run_id(),
+                ),
+            )
             .await;
         }
 

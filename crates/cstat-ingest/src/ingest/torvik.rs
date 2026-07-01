@@ -355,52 +355,54 @@ pub async fn apply_rebound_backfill(
         name_map.entry(normalize_name(name)).or_default().push(*id);
     }
 
-    let mut updated: u64 = 0;
-
+    // Stage the (player_id, game_date) -> (oreb, dreb, total) updates, deduped
+    // by the join key (keep last), then apply them in batched
+    // `UPDATE ... FROM (VALUES ...)` statements. The old code issued one UPDATE
+    // per torvik row (~113k) — fine on localhost but ~5 min over the prod DB's
+    // round-trip latency (the run's long pole once the persist was batched).
+    let mut by_key: HashMap<(Uuid, NaiveDate), (i32, i32, i32)> = HashMap::new();
     for g in games {
-        let oreb = match g.oreb {
-            Some(v) => v as i32,
-            None => continue,
+        let (Some(oreb), Some(dreb)) = (g.oreb, g.dreb) else {
+            continue;
         };
-        let dreb = match g.dreb {
-            Some(v) => v as i32,
-            None => continue,
-        };
+        let (oreb, dreb) = (oreb as i32, dreb as i32);
         let total_reb = oreb + dreb;
-
-        let game_date = match chrono::NaiveDate::parse_from_str(&g.date_str, "%Y%m%d") {
-            Ok(d) => d,
-            Err(_) => continue,
+        let Ok(game_date) = NaiveDate::parse_from_str(&g.date_str, "%Y%m%d") else {
+            continue;
         };
-
-        let normalized = normalize_name(&g.player_name);
-        let player_ids = match name_map.get(&normalized) {
-            Some(ids) => ids,
-            None => continue,
+        let Some(player_ids) = name_map.get(&normalize_name(&g.player_name)) else {
+            continue;
         };
-
         for pid in player_ids {
-            let result = sqlx::query(
-                r#"UPDATE player_game_stats
-                   SET off_rebounds = $1,
-                       def_rebounds = $2,
-                       total_rebounds = $3
-                   WHERE player_id = $4
-                     AND season = $5
-                     AND game_date = $6
-                     AND (total_rebounds IS NULL OR total_rebounds = 0)"#,
-            )
-            .bind(oreb)
-            .bind(dreb)
-            .bind(total_reb)
-            .bind(pid)
-            .bind(season)
-            .bind(game_date)
-            .execute(pool)
-            .await?;
-
-            updated += result.rows_affected();
+            by_key.insert((*pid, game_date), (oreb, dreb, total_reb));
         }
+    }
+    let staged: Vec<(Uuid, NaiveDate, i32, i32, i32)> = by_key
+        .into_iter()
+        .map(|((pid, date), (oreb, dreb, total_reb))| (pid, date, oreb, dreb, total_reb))
+        .collect();
+
+    let mut updated: u64 = 0;
+    // 5 binds/row; chunk well under Postgres' 65535-param cap.
+    for chunk in staged.chunks(2000) {
+        let mut qb = QueryBuilder::new(
+            "UPDATE player_game_stats AS p \
+             SET off_rebounds = v.oreb, def_rebounds = v.dreb, total_rebounds = v.total_reb \
+             FROM ( ",
+        );
+        qb.push_values(chunk, |mut b, (pid, date, oreb, dreb, total_reb)| {
+            b.push_bind(*pid)
+                .push_bind(*date)
+                .push_bind(*oreb)
+                .push_bind(*dreb)
+                .push_bind(*total_reb);
+        });
+        qb.push(" ) AS v(player_id, game_date, oreb, dreb, total_reb) WHERE p.player_id = v.player_id AND p.season = ");
+        qb.push_bind(season);
+        qb.push(
+            " AND p.game_date = v.game_date AND (p.total_rebounds IS NULL OR p.total_rebounds = 0)",
+        );
+        updated += qb.build().execute(pool).await?.rows_affected();
     }
 
     info!(season, updated, "Torvik rebound backfill complete");
