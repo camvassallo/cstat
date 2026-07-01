@@ -11,7 +11,7 @@ import {
   practiceAnswerByNonce,
   recordResult,
   EMPTY_STATS,
-} from './mysteryBaller';
+} from './portle';
 
 // Minimal PlayerRow factory — every field the game reads has a default; tests
 // override just what they exercise.
@@ -269,10 +269,10 @@ describe('buildShare', () => {
       won: true,
       daily: true,
       dateKey: '2026-07-01',
-      url: 'https://x/mystery-baller',
+      url: 'https://x/portle',
     });
-    expect(out).toContain('CamPom · Mystery Baller · 2026-07-01 · Power 5 · 2/10');
-    expect(out).toContain('https://x/mystery-baller');
+    expect(out).toContain('CamPom · Portle · 2026-07-01 · Power 5 · 2/10');
+    expect(out).toContain('https://x/portle');
     expect(out).not.toContain('answer');
     expect(out.split('\n')).toHaveLength(4); // header + 2 grid rows + url
     expect(out).toMatch(/[🟩🟨⬛]/u);
@@ -283,7 +283,7 @@ describe('buildShare', () => {
       won: false,
       daily: false,
     });
-    expect(out).toContain('CamPom · Mystery Baller · Practice · All D-I · X/10');
+    expect(out).toContain('CamPom · Portle · Practice · All D-I · X/10');
   });
   it('annotates hinted solves', () => {
     const out = buildShare([compareGuess(answer, answer)], {

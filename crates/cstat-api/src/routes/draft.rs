@@ -5,7 +5,7 @@ use axum::{
     response::Json,
     routing::get,
 };
-use cstat_core::roster_projection::{fetch_draft_entrants, normalize_player_name as normalize};
+use cstat_core::roster_projection::normalize_player_name as normalize;
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -21,11 +21,12 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 /// One curated prospect from `data/draft/{year}_big_board.json`. Schema is
-/// documented in ROADMAP.md (Phase 5b "NBA Draft Big Board") and produced by
-/// `scripts/parse_tankathon.py` from a Tankathon paste. We model only the
-/// fields the `/draft` page renders; the rest of the board JSON (`height`,
-/// `weight`, `age`, `stats`, `source`, `as_of`) is left as unknown keys for
-/// serde to ignore.
+/// documented in ROADMAP.md (Phase 5b "NBA Draft Big Board"). Historical years
+/// are actual draft results (`scripts/build_historical_draft_boards.py`); the
+/// live year starts as a Tankathon prospect board. We model only the fields the
+/// `/draft` page consumes — `rank` / `name` / `current_team`; every other key
+/// (`position`, `class_year`, `tier`, `height`, `weight`, `age`, `stats`,
+/// `source`, `as_of`) is left as an unknown key for serde to ignore.
 #[derive(Debug, Deserialize)]
 struct BoardEntry {
     /// Tankathon draft rank. `None` for the alphabetical "unranked" tail
@@ -34,12 +35,6 @@ struct BoardEntry {
     name: String,
     /// School / team name as Tankathon writes it ("Duke", "Kansas", "BYU").
     current_team: String,
-    #[serde(default)]
-    position: Option<String>,
-    #[serde(default)]
-    class_year: Option<String>,
-    /// `lottery` | `1st-round` | `2nd-round` | `fringe` | `unranked`.
-    tier: String,
 }
 
 /// A cstat player row pulled by season for name-matching against the board.
@@ -57,6 +52,10 @@ struct DbCandidate {
     campom: Option<f64>,
     campom_o: Option<f64>,
     campom_d: Option<f64>,
+    /// D&D-class archetype for the season (primary / secondary), from
+    /// `player_archetypes`. `None` when the player didn't cluster this season.
+    primary_archetype: Option<String>,
+    secondary_archetype: Option<String>,
 }
 
 /// Subset of a `teams` row — enough to resolve a board school name to a
@@ -68,23 +67,14 @@ struct DbTeam {
     short_name: Option<String>,
 }
 
-/// One prospect returned to the frontend — exactly the fields the `/draft`
-/// page renders: the board basics plus the cstat player match (if any) and a
-/// derived draft `status`.
+/// One prospect returned to the frontend — the board rank/name/team plus the
+/// cstat player match (if any): CamPom value + its O/D halves and the player's
+/// D&D-class archetypes.
 #[derive(Serialize)]
 struct Prospect {
     /// Tankathon draft rank (`None` for the unranked tail).
     draft_rank: Option<i32>,
     name: String,
-    tier: String,
-    position: Option<String>,
-    /// Academic class as Tankathon writes it (Freshman / … / Senior /
-    /// International / G League).
-    class_year: Option<String>,
-    /// Derived eligibility status — see `classify_status`. One of
-    /// `gone` / `declared` / `senior` / `international` / `g-league` /
-    /// `prospect`.
-    status: &'static str,
     /// Board school name (verbatim from Tankathon).
     current_team: String,
     /// Resolved cstat team — from the matched player's team, or a school-name
@@ -102,37 +92,10 @@ struct Prospect {
     /// numerically unstable (±30 sanity envelope, gated server-side).
     campom_o: Option<f64>,
     campom_d: Option<f64>,
-}
-
-/// Derive the draft-eligibility status of a board prospect. `entrant_status`
-/// is the player's status on the early-entrant list (`None` if they aren't
-/// on it), passed through from `data/draft/{year}_early_entrants.json`.
-///
-/// - `international` / `g-league` — not a college player; no cstat row.
-/// - `gone` — on the early-entrant list and firmly in the draft (the
-///   withdrawal deadline has passed without a withdrawal). Counts as a
-///   final departure everywhere.
-/// - `declared` — on the early-entrant list with the withdrawal window still
-///   open; an early-entry declaration that could still be pulled.
-/// - `senior` — automatically draft-eligible; no "early entry" needed.
-/// - `prospect` — on the board but not on the entrant list; an underclassman
-///   with remaining eligibility (a name scouts are watching, not yet in).
-fn classify_status(class_year: Option<&str>, entrant_status: Option<&str>) -> &'static str {
-    let cy = class_year.unwrap_or_default().to_ascii_lowercase();
-    if cy.contains("international") {
-        "international"
-    } else if cy.contains("g league") || cy.contains("g-league") {
-        "g-league"
-    } else {
-        match entrant_status {
-            Some("gone") => "gone",
-            Some("declared") => "declared",
-            // Not on the entrant list (or some other status) → fall back to
-            // the class-year-derived bucket.
-            _ if cy.starts_with("sr") || cy.starts_with("sen") => "senior",
-            _ => "prospect",
-        }
-    }
+    /// Primary / secondary D&D-class archetype for the matched player's season
+    /// (`player_archetypes`). `None` when unmatched or unclustered.
+    primary_archetype: Option<String>,
+    secondary_archetype: Option<String>,
 }
 
 async fn draft_board(
@@ -162,21 +125,6 @@ async fn draft_board(
         )
     })?;
 
-    // Cross-reference list: underclassmen who've declared for the draft,
-    // keyed by normalized name → status (`declared` while the withdrawal
-    // window is open, `gone` once they're locked in post-deadline). The
-    // early-entrant list is only Fr/So/Jr by construction — seniors never
-    // appear. Missing file degrades to "nobody declared" rather than
-    // failing the request.
-    // From the `draft_entrants` table (keyed by draft year). A DB error
-    // degrades to "nobody declared" rather than failing the board request.
-    let entrants: HashMap<String, String> = fetch_draft_entrants(&state.db.pool, year)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| (normalize(&e.name), e.status))
-        .collect();
-
     // Every season player, so we can name-match the board against cstat in
     // Rust through the same normalize() both sides go through. ~5K rows is
     // small enough not to need an index-friendly join. Mirrors transfers.rs.
@@ -193,12 +141,16 @@ async fn draft_board(
             CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
                  THEN tps.cam_o_gbpm_v3_psos END AS campom_o,
             CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
-                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d
+                 THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
+            pa.primary_class         AS primary_archetype,
+            pa.secondary_class       AS secondary_archetype
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
         LEFT JOIN torvik_player_stats tps
             ON tps.player_id = p.id AND tps.season = pss.season
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = p.id AND pa.season = pss.season
         WHERE pss.season = $1
         "#,
     )
@@ -276,18 +228,10 @@ async fn draft_board(
             let team_id = best
                 .and_then(|c| c.team_id)
                 .or_else(|| resolve_team_id(&b.current_team));
-            let status = classify_status(
-                b.class_year.as_deref(),
-                entrants.get(&key).map(String::as_str),
-            );
 
             Prospect {
                 draft_rank: b.rank,
                 name: b.name,
-                tier: b.tier,
-                position: b.position,
-                class_year: b.class_year,
-                status,
                 team_id,
                 team_name: best.and_then(|c| c.team_name.clone()),
                 current_team: b.current_team,
@@ -295,6 +239,8 @@ async fn draft_board(
                 campom: best.and_then(|c| c.campom),
                 campom_o: best.and_then(|c| c.campom_o),
                 campom_d: best.and_then(|c| c.campom_d),
+                primary_archetype: best.and_then(|c| c.primary_archetype.clone()),
+                secondary_archetype: best.and_then(|c| c.secondary_archetype.clone()),
             }
         })
         .collect();
@@ -311,60 +257,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classify_status_covers_every_branch() {
-        // International / G League win regardless of entrant state —
-        // they're not college players, so the early-entrant list is moot.
-        assert_eq!(
-            classify_status(Some("International"), None),
-            "international"
-        );
-        assert_eq!(
-            classify_status(Some("International"), Some("gone")),
-            "international"
-        );
-        assert_eq!(classify_status(Some("G League"), None), "g-league");
-        // On the entrant list, locked in post-deadline → firmly in the draft.
-        assert_eq!(classify_status(Some("Freshman"), Some("gone")), "gone");
-        assert_eq!(classify_status(Some("Sophomore"), Some("gone")), "gone");
-        // On the list, withdrawal window still open → pending declaration.
-        assert_eq!(
-            classify_status(Some("Freshman"), Some("declared")),
-            "declared"
-        );
-        // An underclassman NOT on the list is a watch-list prospect.
-        assert_eq!(classify_status(Some("Junior"), None), "prospect");
-        // Seniors are auto-eligible — never on the early-entrant list.
-        assert_eq!(classify_status(Some("Senior"), None), "senior");
-        // Missing class year degrades to the watch-list bucket.
-        assert_eq!(classify_status(None, None), "prospect");
-    }
-
-    #[test]
     fn board_entry_deserializes_real_schema() {
-        // Mirrors `data/draft/2026_big_board.json`, including the keys we
-        // deliberately don't model (`height` / `weight` / `age` / `stats` /
-        // `source` / `as_of`) — serde must ignore them — and both a ranked
-        // and an unranked entry.
+        // Mirrors `data/draft/{year}_big_board.json`, including the keys we
+        // deliberately don't model (`position` / `class_year` / `tier` /
+        // `height` / `weight` / `age` / `stats` / `source` / `as_of`) — serde
+        // must ignore them — and both a ranked and an unranked entry.
         let raw = r#"[
             { "rank": 1, "name": "Cameron Boozer", "current_team": "Duke",
               "position": "PF", "height": "6-9", "weight": 250,
               "class_year": "Freshman", "age": 18.9, "tier": "lottery",
               "stats": { "pts": 24.2, "reb": 11.0, "ast": 4.4, "blk": 0.7, "stl": 1.5 },
               "source": "tankathon", "as_of": "2026-05-10" },
-            { "rank": null, "name": "Some Walkon", "current_team": "Whoever",
-              "tier": "unranked" }
+            { "rank": null, "name": "Some Walkon", "current_team": "Whoever" }
         ]"#;
         let board: Vec<BoardEntry> = serde_json::from_str(raw).expect("board parses");
         assert_eq!(board.len(), 2);
         assert_eq!(board[0].rank, Some(1));
         assert_eq!(board[0].name, "Cameron Boozer");
-        assert_eq!(board[0].position.as_deref(), Some("PF"));
-        assert_eq!(board[0].class_year.as_deref(), Some("Freshman"));
-        assert_eq!(board[0].tier, "lottery");
-        // The unranked tail: rank and the optional fields absent.
+        assert_eq!(board[0].current_team, "Duke");
+        // The unranked tail: rank absent → None; unmodeled keys ignored.
         assert_eq!(board[1].rank, None);
-        assert_eq!(board[1].tier, "unranked");
-        assert_eq!(board[1].position, None);
-        assert_eq!(board[1].class_year, None);
+        assert_eq!(board[1].name, "Some Walkon");
     }
 }

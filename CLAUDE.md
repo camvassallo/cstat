@@ -34,7 +34,7 @@ cargo run --bin cstat-ingest -- <subcommand>    # Ingestion CLI
 cd web && npm run dev                            # dev server (proxies /api)
 cd web && npm run build                          # tsc -b && vite build
 cd web && npm run lint                           # eslint (CI-relevant)
-cd web && npm test                               # vitest (pure-logic unit tests, e.g. Mystery Baller)
+cd web && npm test                               # vitest (pure-logic unit tests, e.g. Portle)
 
 # Local Postgres
 docker compose up -d               # Postgres 17 on :5432

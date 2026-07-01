@@ -17,6 +17,7 @@ import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
+import DraftBoard from '../components/DraftBoard';
 import RecruitClass from '../components/RecruitClass';
 import { SeasonLink } from '../components/SeasonLink';
 import { useSeason } from '../components/season';
@@ -64,7 +65,7 @@ const campomHalfRenderer = (side: 'o' | 'd') =>
   };
 
 type ColumnView = 'raw' | 'rate';
-type PageMode = 'all' | 'transfers' | 'recruits';
+type PageMode = 'all' | 'transfers' | 'recruits' | 'draft';
 
 // Subtle vertical divider matching the roster table's `border-l border-gray-800`.
 // Applied via inline style so it survives AG Grid's themed cell borders.
@@ -312,7 +313,9 @@ export default function Players() {
       ? 'transfers'
       : modeParam === 'recruits'
         ? 'recruits'
-        : 'all';
+        : modeParam === 'draft'
+          ? 'draft'
+          : 'all';
 
   const setMode = useCallback(
     (next: PageMode) => {
@@ -432,6 +435,16 @@ export default function Players() {
       >
         Recruits
       </button>
+      <button
+        onClick={() => setMode('draft')}
+        className={`px-3 py-1 ${
+          mode === 'draft'
+            ? 'bg-blue-600 text-white'
+            : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+        }`}
+      >
+        Draft
+      </button>
     </div>
   );
 
@@ -455,6 +468,18 @@ export default function Players() {
       <div>
         {modeTabs}
         <RecruitClass year={season} />
+      </div>
+    );
+  }
+
+  if (mode === 'draft') {
+    // The NBA draft board is per-season (draft-cycle year = the just-completed
+    // college season). Surface the site-selected year so the season dropdown
+    // repoints the board.
+    return (
+      <div>
+        {modeTabs}
+        <DraftBoard year={season} />
       </div>
     );
   }

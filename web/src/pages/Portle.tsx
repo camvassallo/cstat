@@ -13,7 +13,7 @@ import { useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
 import { PlayerPicker } from '../components/PlayerPicker';
-import { GuessGrid, type GuessRow } from '../components/mysteryBaller/GuessGrid';
+import { GuessGrid, type GuessRow } from '../components/portle/GuessGrid';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { resolveAxes } from '../components/radarAxes';
 import { loadJson, saveJson } from '../lib/localStore';
@@ -34,7 +34,7 @@ import {
   type GameStatus,
   type MbStats,
   type SavedGame,
-} from '../lib/mysteryBaller';
+} from '../lib/portle';
 
 const CONFIG_KEY = 'mb:config';
 const STATS_KEY = 'mb:stats';
@@ -54,8 +54,8 @@ function initialMode(): GameMode {
     : 'p5';
 }
 
-export default function MysteryBaller() {
-  usePageTitle('Mystery Baller');
+export default function Portle() {
+  usePageTitle('Portle');
   const isMobile = useIsMobile();
   const { season } = useSeason();
 
@@ -97,7 +97,7 @@ export default function MysteryBaller() {
         setPool(r.players);
         setPoolSeason(season);
       })
-      .catch((err) => console.error('Mystery Baller pool load failed', err));
+      .catch((err) => console.error('Portle pool load failed', err));
     return () => {
       cancelled = true;
     };
@@ -143,7 +143,7 @@ export default function MysteryBaller() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-100">Mystery Baller</h1>
+          <h1 className="text-2xl font-bold text-gray-100">Portle</h1>
           <p className="text-sm text-gray-400">
             Guess the mystery player in {MAX_GUESSES} tries. Each guess reveals how it
             compares — <span className="text-emerald-300">green</span> = exact,{' '}
@@ -364,7 +364,7 @@ function MysteryGame({
     // Daily shares the bare page (everyone gets today's puzzle). Practice
     // encodes mode+season+seed so a friend replays the exact same answer —
     // the seed reproduces the pick client-side without naming the player.
-    const base = `${window.location.origin}/mystery-baller`;
+    const base = `${window.location.origin}/portle`;
     const url = isDaily
       ? base
       : `${base}?${new URLSearchParams({ mode, season: String(season), seed: String(seed) }).toString()}`;

@@ -1,7 +1,7 @@
-// Mystery Baller — pure game logic (no React, no DOM). Kept side-effect-free
-// so it's trivially unit-testable and reused by both the daily and practice
-// modes. The page layer (pages/MysteryBaller.tsx) owns fetching, state, and
-// persistence; everything deterministic lives here.
+// Portle — pure game logic (no React, no DOM). Kept side-effect-free so it's
+// trivially unit-testable and reused by both the daily and practice modes. The
+// page layer (pages/Portle.tsx) owns fetching, state, and persistence;
+// everything deterministic lives here.
 
 import type { PlayerRow } from '../api/client';
 
@@ -9,10 +9,10 @@ import type { PlayerRow } from '../api/client';
 // Config / eligibility
 // ---------------------------------------------------------------------------
 
-/** Branded title for the shareable result (the page header just says "Mystery
- *  Baller" — CamPom is already in the navbar). Uses the same ` · ` separator as
- *  the rest of the share header. */
-export const GAME_TITLE = 'CamPom · Mystery Baller';
+/** Branded title for the shareable result (the page header just says "Portle"
+ *  — CamPom is already in the navbar). Uses the same ` · ` separator as the
+ *  rest of the share header. */
+export const GAME_TITLE = 'CamPom · Portle';
 
 export type GameMode = 'p5' | 'starters' | 'all';
 

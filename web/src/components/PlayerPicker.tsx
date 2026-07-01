@@ -4,7 +4,7 @@ import { fetchPlayers, type PlayerRow } from '../api/client';
 const fmtPpg = (v: number | null | undefined) => (v != null ? v.toFixed(1) : '—');
 
 /** Debounced player-search autocomplete. Extracted from PlayerCompare so the
- *  Compare page and Mystery Baller share one picker. Fires `onAdd(id)` and/or
+ *  Compare page and Portle share one picker. Fires `onAdd(id)` and/or
  *  `onPick(row)` when a result is chosen (Compare only needs the id; the game
  *  wants the full row). Min 2 chars, 200ms debounce, 12-result cap; stale
  *  requests are dropped via a request counter. */

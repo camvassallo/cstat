@@ -1,5 +1,5 @@
 // Tiny typed localStorage helpers. The app had no persistence layer before
-// Mystery Baller (season state lives in the URL), so this is the first place
+// Portle (season state lives in the URL), so this is the first place
 // we keep client-only state across reloads: the daily game's in-progress
 // guesses and the player's streak stats.
 //

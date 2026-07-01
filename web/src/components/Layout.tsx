@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAvailableSeasons, usePageSeasons, useSeason, type Season } from './season';
 
@@ -17,6 +17,117 @@ const mobileNavLinkClass = (active: boolean) =>
       ? 'bg-blue-600 text-white'
       : 'text-gray-300 hover:bg-gray-800 hover:text-gray-100'
   }`;
+
+// One nav destination. `to` may carry a query (e.g. `/players?mode=draft`,
+// `/projected?season=2027`) — the active-matching below is query-aware.
+type NavItem = { to: string; label: string };
+
+// Grouped nav — the players pod (roster + its mode tabs + the two player-level
+// analysis pages), the forecast pod (game predictor + preseason projections),
+// and the just-for-fun games. Rankings / Lineups / Coaches stay top-level.
+const PLAYERS_ITEMS: NavItem[] = [
+  { to: '/players', label: 'Overview' },
+  { to: '/players/compare', label: 'Compare' },
+  { to: '/archetypes', label: 'Archetypes' },
+  { to: '/players?mode=transfers', label: 'Transfer Portal' },
+  { to: '/players?mode=recruits', label: 'Recruits' },
+  { to: '/players?mode=draft', label: 'Draft' },
+];
+const FORECAST_ITEMS: NavItem[] = [
+  { to: '/predict', label: 'Predict' },
+  { to: '/projected?season=2027', label: 'Future' },
+];
+const PLAY_ITEMS: NavItem[] = [
+  { to: '/portle', label: 'Portle' },
+  { to: '/which-class', label: 'Class Quiz' },
+];
+
+// Desktop hover-dropdown for a nav group. Opens on mouse-enter (and on
+// keyboard focus entering the group), closes on mouse-leave or when focus
+// leaves the group. `active` highlights the trigger whenever any child route
+// is current; `isItemActive` highlights the open row.
+function NavDropdown({
+  label,
+  active,
+  items,
+  isItemActive,
+}: {
+  label: string;
+  active: boolean;
+  items: NavItem[];
+  isItemActive: (to: string) => boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close when keyboard focus leaves the group entirely (Tab out of the menu).
+  const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    const next = e.relatedTarget as Node | null;
+    if (!ref.current || !next || !ref.current.contains(next)) setOpen(false);
+  };
+
+  return (
+    <div
+      ref={ref}
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={handleBlur}
+    >
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        // Click also toggles, for touch / explicit taps on hybrid displays.
+        onClick={() => setOpen((v) => !v)}
+        className={`${navLinkClass(active)} inline-flex items-center gap-1`}
+      >
+        {label}
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`transition-transform ${open ? 'rotate-180' : ''}`}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {open && (
+        // `top-full pt-1` keeps the hover area continuous from the trigger into
+        // the menu — the transparent padding bridges the visual gap so moving
+        // the pointer onto the menu doesn't fire mouse-leave and close it.
+        <div className="absolute left-0 top-full pt-1 z-50">
+          <div
+            role="menu"
+            className="min-w-[11rem] rounded-md border border-gray-800 bg-gray-950 py-1 shadow-lg"
+          >
+            {items.map((it) => (
+              <NavLink
+                key={it.to}
+                to={it.to}
+                role="menuitem"
+                onClick={() => setOpen(false)}
+                className={`block px-3 py-2 text-sm transition-colors ${
+                  isItemActive(it.to)
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-300 hover:bg-gray-800 hover:text-gray-100'
+                }`}
+              >
+                {it.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SeasonSelector() {
   const { season, setSeason } = useSeason();
@@ -50,14 +161,33 @@ function SeasonSelector() {
 }
 
 export default function Layout() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const currentMode = new URLSearchParams(search).get('mode');
 
-  // Players highlights on /players and /players/<id>, but not /players/compare.
-  const playersActive =
-    pathname === '/players' ||
-    (pathname.startsWith('/players/') && pathname !== '/players/compare');
-  const compareActive = pathname === '/players/compare';
+  // Per-item active state (query-aware). The Players group shares the
+  // `/players` pathname across its mode tabs, so Overview vs Transfers/…/Draft
+  // is disambiguated by the `?mode=` param; Compare / Archetypes are their own
+  // pathnames; Future matches any /projected route.
+  const itemActive = (to: string): boolean => {
+    const [path, query] = to.split('?');
+    const mode = query ? new URLSearchParams(query).get('mode') : null;
+    if (path === '/players') {
+      if (mode) return pathname === '/players' && currentMode === mode;
+      // Overview: bare /players (no mode) plus the player detail pages.
+      return (
+        (pathname === '/players' && !currentMode) ||
+        (pathname.startsWith('/players/') && pathname !== '/players/compare')
+      );
+    }
+    if (path === '/projected') return pathname.startsWith('/projected');
+    return pathname === path;
+  };
+
+  // A group's trigger is active whenever any of its routes is current.
+  const playersActive = pathname.startsWith('/players') || pathname === '/archetypes';
+  const forecastActive = pathname === '/predict' || pathname.startsWith('/projected');
+  const playActive = pathname === '/portle' || pathname === '/which-class';
 
   // Auto-close the mobile menu when a link is tapped. We attach onClick to
   // each mobile NavLink rather than reacting to pathname in an effect (the
@@ -69,37 +199,51 @@ export default function Layout() {
       <NavLink to="/" end className={({ isActive }) => navLinkClass(isActive)}>
         Rankings
       </NavLink>
-      <NavLink to="/players" className={() => navLinkClass(playersActive)}>
-        Players
-      </NavLink>
-      <NavLink to="/players/compare" className={() => navLinkClass(compareActive)}>
-        Compare
-      </NavLink>
-      <NavLink to="/archetypes" className={({ isActive }) => navLinkClass(isActive)}>
-        Archetypes
-      </NavLink>
+      <NavDropdown
+        label="Players"
+        active={playersActive}
+        items={PLAYERS_ITEMS}
+        isItemActive={itemActive}
+      />
       <NavLink to="/lineups" className={({ isActive }) => navLinkClass(isActive)}>
         Lineups
       </NavLink>
-      <NavLink to="/predict" className={({ isActive }) => navLinkClass(isActive)}>
-        Predict
-      </NavLink>
-      <NavLink to="/projected?season=2027" className={({ isActive }) => navLinkClass(isActive)}>
-        Future
-      </NavLink>
-      <NavLink to="/draft" className={({ isActive }) => navLinkClass(isActive)}>
-        Draft
-      </NavLink>
+      <NavDropdown
+        label="Forecast"
+        active={forecastActive}
+        items={FORECAST_ITEMS}
+        isItemActive={itemActive}
+      />
       <NavLink to="/coaches" className={({ isActive }) => navLinkClass(isActive)}>
         Coaches
       </NavLink>
-      <NavLink to="/mystery-baller" className={({ isActive }) => navLinkClass(isActive)}>
-        Play
-      </NavLink>
-      <NavLink to="/which-class" className={({ isActive }) => navLinkClass(isActive)}>
-        Quiz
-      </NavLink>
+      <NavDropdown
+        label="Play"
+        active={playActive}
+        items={PLAY_ITEMS}
+        isItemActive={itemActive}
+      />
     </>
+  );
+
+  // Mobile drawer: the same groups, flattened into labeled sections (no nested
+  // collapse state — the drawer is already a vertical list).
+  const mobileGroup = (label: string, items: NavItem[]) => (
+    <div className="mt-1">
+      <div className="px-4 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+        {label}
+      </div>
+      {items.map((it) => (
+        <NavLink
+          key={it.to}
+          to={it.to}
+          onClick={closeMenu}
+          className={() => `${mobileNavLinkClass(itemActive(it.to))} pl-6`}
+        >
+          {it.label}
+        </NavLink>
+      ))}
+    </div>
   );
 
   return (
@@ -153,36 +297,15 @@ export default function Layout() {
           <NavLink to="/" end onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Rankings
           </NavLink>
-          <NavLink to="/players" onClick={closeMenu} className={() => mobileNavLinkClass(playersActive)}>
-            Players
-          </NavLink>
-          <NavLink to="/players/compare" onClick={closeMenu} className={() => mobileNavLinkClass(compareActive)}>
-            Compare
-          </NavLink>
-          <NavLink to="/archetypes" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
-            Archetypes
-          </NavLink>
+          {mobileGroup('Players', PLAYERS_ITEMS)}
           <NavLink to="/lineups" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Lineups
           </NavLink>
-          <NavLink to="/predict" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
-            Predict
-          </NavLink>
-          <NavLink to="/projected?season=2027" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
-            Future
-          </NavLink>
-          <NavLink to="/draft" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
-            Draft
-          </NavLink>
+          {mobileGroup('Forecast', FORECAST_ITEMS)}
           <NavLink to="/coaches" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Coaches
           </NavLink>
-          <NavLink to="/mystery-baller" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
-            Play
-          </NavLink>
-          <NavLink to="/which-class" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
-            Quiz
-          </NavLink>
+          {mobileGroup('Play', PLAY_ITEMS)}
         </div>
       )}
       {/* `overflow-x-clip` is a safety net for charts and sticky cells that
