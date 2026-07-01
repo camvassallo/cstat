@@ -274,6 +274,36 @@ impl<'a> SeasonIngester<'a> {
             "starting nightly ingestion"
         );
 
+        // --- 0. preflight connectivity check (M3 1.2) ---
+        // Probe the serving-critical feeds up front so a dead dependency is
+        // diagnosed here rather than surfacing as an opaque mid-run failure. 247
+        // is skipped (`include_tfs = false`): it's offseason roster-construction,
+        // never in the nightly chain, so probing it nightly would just burn a 247
+        // call on an already-expired in-season token. Does NOT gate control flow
+        // — the per-step isolation below already fail-softs best-effort feeds and
+        // hard-fails the serving-critical chain — but a down serving-critical feed
+        // is recorded as a failed ledger step and added to the degraded summary.
+        let t0 = Utc::now();
+        let preflight = crate::preflight::run(self.client, self.pool, self.season, false).await;
+        preflight.log();
+        if preflight.critical_down() {
+            let down = preflight.down_feeds().join(", ");
+            ledger
+                .record(
+                    "preflight",
+                    StepStatus::Failed,
+                    None,
+                    t0,
+                    Some(&format!("serving-critical feed(s) down: {down}")),
+                )
+                .await;
+            failures.push(format!("preflight: serving-critical feed(s) down: {down}"));
+        } else {
+            ledger
+                .record("preflight", StepStatus::Ok, None, t0, None)
+                .await;
+        }
+
         // --- 1. games (load-bearing) ---
         let t0 = Utc::now();
         match super::games::ingest_games_by_date_range(
@@ -515,6 +545,29 @@ impl<'a> SeasonIngester<'a> {
                     return Err(NatStatError::Database(e));
                 }
             }
+        }
+
+        // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
+        // The client silently downgrades to the v3 host on a persistent v4
+        // timeout/5xx (it only logs a warning). A downgrade means v4 was failing
+        // for this whole run — surface it as a ledger row + degraded line so a
+        // prolonged v4 outage is visible instead of masked by the v3 serve.
+        if self.client.used_v3_fallback() {
+            let t0 = Utc::now();
+            warn!(
+                season = self.season,
+                "NatStat v4 host fell back to v3 during this run — v4 may be down"
+            );
+            ledger
+                .record(
+                    "natstat_v4",
+                    StepStatus::Failed,
+                    None,
+                    t0,
+                    Some("v4 host persistently failed — fell back to v3 for the remainder of the run"),
+                )
+                .await;
+            failures.push("natstat v4→v3 fallback (v4 host was failing)".to_string());
         }
 
         // --- Rate-budget headroom (2.5) ---

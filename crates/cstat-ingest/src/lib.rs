@@ -5,6 +5,7 @@ pub mod compute_projections;
 pub mod ingest;
 pub mod measure_blend_accuracy;
 pub mod notify;
+pub mod preflight;
 pub mod projections_backtest;
 pub mod rate_limiter;
 pub mod run_ledger;
@@ -13,7 +14,7 @@ pub mod tfs_recruits;
 pub mod torvik;
 
 pub use client::{NatStatClient, rate_budget_from_env};
-pub use tfs::TfsClient;
+pub use tfs::{AuthProbe, TfsClient, TfsError};
 pub use tfs_recruits::{InstitutionGroup, Recruit247Client, RecruitError};
 pub use torvik::TorkvikClient;
 

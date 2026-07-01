@@ -71,6 +71,17 @@ pub struct TfsClient {
     rate_limiter: RateLimiter,
 }
 
+/// Outcome of a lightweight 247 auth probe ([`TfsClient::probe_auth`]).
+#[derive(Debug)]
+pub enum AuthProbe {
+    /// The JWT was accepted and page 1 returned; `count` is the portal size.
+    Valid { count: u32 },
+    /// 247 rejected the JWT (401/403) — expired or revoked; re-capture needed.
+    Expired { status: u16 },
+    /// The feed was unreachable for another reason (network / 5xx / parse).
+    Unreachable(String),
+}
+
 /// Parsed pagination metadata from a `getTransferRanking` response.
 #[derive(Debug, Clone)]
 pub struct TfsPagination {
@@ -116,6 +127,24 @@ impl TfsClient {
                 .expect("failed to build HTTP client"),
             jwt,
             rate_limiter: RateLimiter::new(max_per_hour),
+        }
+    }
+
+    /// Lightweight auth probe: fetch page 1 for `year` and classify the result.
+    ///
+    /// 247's JWT expires ~6h after issue with no renewal, so it is the single
+    /// biggest connectivity risk in the pipeline. This "peek page 1" check is the
+    /// ground truth (does 247 accept the token *right now*), used by the
+    /// `preflight` command and the transfers ingest to distinguish an expired
+    /// token (skip + keep the last snapshot) from a transient outage (retry).
+    /// Costs one API call.
+    pub async fn probe_auth(&self, year: i32) -> AuthProbe {
+        match self.fetch_page(year, 1).await {
+            Ok(page) => AuthProbe::Valid {
+                count: page.pagination.count,
+            },
+            Err(TfsError::JwtExpired { status }) => AuthProbe::Expired { status },
+            Err(e) => AuthProbe::Unreachable(e.to_string()),
         }
     }
 
