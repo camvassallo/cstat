@@ -96,6 +96,9 @@ export default function Layout() {
       <NavLink to="/mystery-baller" className={({ isActive }) => navLinkClass(isActive)}>
         Play
       </NavLink>
+      <NavLink to="/which-class" className={({ isActive }) => navLinkClass(isActive)}>
+        Quiz
+      </NavLink>
     </>
   );
 
@@ -176,6 +179,9 @@ export default function Layout() {
           </NavLink>
           <NavLink to="/mystery-baller" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Play
+          </NavLink>
+          <NavLink to="/which-class" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
+            Quiz
           </NavLink>
         </div>
       )}
