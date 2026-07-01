@@ -9,9 +9,10 @@ import type { PlayerRow } from '../api/client';
 // Config / eligibility
 // ---------------------------------------------------------------------------
 
-/** User-facing game title (CamPom-branded). Used in the page header and the
- *  shareable result so shared scores carry the brand. */
-export const GAME_TITLE = 'CamPom × Mystery Baller';
+/** Branded title for the shareable result (the page header just says "Mystery
+ *  Baller" — CamPom is already in the navbar). Uses the same ` · ` separator as
+ *  the rest of the share header. */
+export const GAME_TITLE = 'CamPom · Mystery Baller';
 
 export type GameMode = 'p5' | 'starters' | 'all';
 

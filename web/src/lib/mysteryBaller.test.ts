@@ -271,7 +271,7 @@ describe('buildShare', () => {
       dateKey: '2026-07-01',
       url: 'https://x/mystery-baller',
     });
-    expect(out).toContain('CamPom × Mystery Baller · 2026-07-01 · Power 5 · 2/10');
+    expect(out).toContain('CamPom · Mystery Baller · 2026-07-01 · Power 5 · 2/10');
     expect(out).toContain('https://x/mystery-baller');
     expect(out).not.toContain('answer');
     expect(out.split('\n')).toHaveLength(4); // header + 2 grid rows + url
@@ -283,7 +283,7 @@ describe('buildShare', () => {
       won: false,
       daily: false,
     });
-    expect(out).toContain('CamPom × Mystery Baller · Practice · All D-I · X/10');
+    expect(out).toContain('CamPom · Mystery Baller · Practice · All D-I · X/10');
   });
   it('annotates hinted solves', () => {
     const out = buildShare([compareGuess(answer, answer)], {

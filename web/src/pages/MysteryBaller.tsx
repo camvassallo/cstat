@@ -143,9 +143,7 @@ export default function MysteryBaller() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-100">
-            <span className="text-blue-400">CamPom</span> × Mystery Baller
-          </h1>
+          <h1 className="text-2xl font-bold text-gray-100">Mystery Baller</h1>
           <p className="text-sm text-gray-400">
             Guess the mystery player in {MAX_GUESSES} tries. Each guess reveals how it
             compares — <span className="text-emerald-300">green</span> = exact,{' '}
