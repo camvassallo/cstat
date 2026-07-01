@@ -92,6 +92,12 @@ impl NatStatClient {
             http: Client::builder()
                 .user_agent("cstat/0.1.0")
                 .gzip(true)
+                // Explicit timeouts so a stalled socket self-aborts instead of
+                // hanging the nightly run indefinitely (reqwest's default is
+                // effectively infinite). A NatStat page is small (~100 rows), so
+                // 60s is generous; a timeout here fails over to v3 in `get_inner`.
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(60))
                 .build()
                 .expect("failed to build HTTP client"),
             api_key,
@@ -576,6 +582,17 @@ impl NatStatClient {
     /// Get the number of rate limit tokens currently available (local tracker).
     pub async fn rate_limit_remaining(&self) -> u32 {
         self.rate_limiter.available().await
+    }
+
+    /// Whether this client has fallen back to the v3 host during this run.
+    ///
+    /// The fallback (flipped in [`switch_to_v3`](Self::switch_to_v3) on a
+    /// persistent v4 timeout/5xx) is otherwise silent — it only logs a warning.
+    /// The nightly orchestrator reads this after the run so a prolonged v4
+    /// outage surfaces as a structured flag in the `ingest_runs` ledger + a
+    /// degraded Slack line, instead of being masked by the transparent v3 serve.
+    pub fn used_v3_fallback(&self) -> bool {
+        self.use_v3.load(Ordering::Relaxed)
     }
 
     /// Purge expired cache entries.

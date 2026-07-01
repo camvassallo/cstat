@@ -4,7 +4,7 @@ use cstat_core::Database;
 use cstat_ingest::current_natstat_season;
 use cstat_ingest::ingest::{BootstrapOptions, SeasonIngester};
 use cstat_ingest::{NatStatClient, TorkvikClient};
-use tracing::info;
+use tracing::{info, warn};
 
 /// CLI default for `--year`. Resolved at parse time so the binary picks up
 /// the current NCAA basketball season automatically as the calendar rolls
@@ -220,6 +220,18 @@ enum Commands {
 
     /// Show rate limit status.
     Status,
+
+    /// Preflight connectivity check: ping every feed (DB, NatStat, Torvik, and
+    /// 247 if a JWT is set) and report reachable/skipped/down. Exits non-zero if
+    /// a serving-critical feed is down (or, with --strict, if any feed is down).
+    Preflight {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Also fail (non-zero exit) when a non-critical feed (247) is down.
+        #[arg(long)]
+        strict: bool,
+    },
 
     /// Clean up expired cache entries.
     CleanCache,
@@ -677,6 +689,20 @@ async fn main() -> Result<()> {
             println!("Local rate limit tokens: {remaining}/{budget}");
         }
 
+        Commands::Preflight { year, strict } => {
+            let report = cstat_ingest::preflight::run(&client, &db.pool, year).await;
+            print!("{}", report.render());
+            let fail = if strict {
+                report.any_down()
+            } else {
+                report.critical_down()
+            };
+            if fail {
+                let down = report.down_feeds().join(", ");
+                anyhow::bail!("preflight failed — feed(s) down: {down}");
+            }
+        }
+
         Commands::CleanCache => {
             let removed = client.cleanup_cache().await?;
             println!("Removed {removed} expired cache entries");
@@ -796,8 +822,45 @@ async fn main() -> Result<()> {
                         .await?
                 } else {
                     let tfs = cstat_ingest::TfsClient::from_env()?;
-                    cstat_ingest::ingest::transfers::ingest_live(&tfs, &db.pool, year, incremental)
-                        .await?
+                    match cstat_ingest::ingest::transfers::ingest_live(
+                        &tfs,
+                        &db.pool,
+                        year,
+                        incremental,
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        // JWT expiry (401/403) is the #1 247 connectivity risk
+                        // (~6h token, no renewal). Don't hard-fail: fall back to
+                        // the last committed snapshot so stale-but-present beats
+                        // empty, and point at the re-capture runbook.
+                        Err(cstat_ingest::ingest::transfers::TransferIngestError::Tfs(
+                            cstat_ingest::TfsError::JwtExpired { status },
+                        )) => {
+                            let snapshot =
+                                std::path::PathBuf::from(format!("data/transfers/{year}_raw.json"));
+                            warn!(
+                                year,
+                                status,
+                                snapshot = %snapshot.display(),
+                                "247 JWT rejected (expired/revoked) — re-capture it (see docs/247_jwt_recapture.md). Falling back to last snapshot"
+                            );
+                            if snapshot.exists() {
+                                cstat_ingest::ingest::transfers::bootstrap_from_snapshot(
+                                    &db.pool, year, &snapshot,
+                                )
+                                .await?
+                            } else {
+                                anyhow::bail!(
+                                    "247 JWT expired (HTTP {status}) and no fallback snapshot at {}. \
+                                     Re-capture the JWT (docs/247_jwt_recapture.md) and re-run.",
+                                    snapshot.display()
+                                );
+                            }
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
                 };
                 println!(
                     "transfers {}: {} upserted, {} pruned across {} page(s)",

@@ -8,6 +8,7 @@ use reqwest::Client;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
+use std::time::Duration;
 use tracing::info;
 
 /// Raw player season stats from the Torvik CSV endpoint.
@@ -140,8 +141,28 @@ impl TorkvikClient {
         Self {
             http: Client::builder()
                 .user_agent("cstat/0.1")
+                // Explicit timeouts so a stalled Torvik socket self-aborts
+                // instead of hanging the nightly. The per-game gzip file is
+                // several MB (~30s to fetch), so the request ceiling is looser
+                // than NatStat's; a hard stall still aborts within 120s.
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(120))
                 .build()
                 .expect("failed to build HTTP client"),
+        }
+    }
+
+    /// Lightweight reachability probe for the `preflight` health check. Issues a
+    /// GET against a small known endpoint (`coachdict.json`) and checks the
+    /// status without downloading/parsing the whole body — enough to confirm the
+    /// host is up and serving 2xx before the nightly commits to the big fetches.
+    pub async fn probe(&self) -> anyhow::Result<()> {
+        let url = "https://barttorvik.com/coachdict.json";
+        let status = self.http.get(url).send().await?.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            anyhow::bail!("Torvik returned HTTP {}", status.as_u16())
         }
     }
 
@@ -220,11 +241,21 @@ fn parse_player_csv(body: &str) -> anyhow::Result<Vec<TorkvikPlayerSeason>> {
         .has_headers(false)
         .from_reader(body.as_bytes());
     let mut players = Vec::new();
+    let mut schema_checked = false;
 
     for result in rdr.records() {
         let rec = result?;
         if rec.len() < 64 {
             continue;
+        }
+        // Schema guard: the CSV is headerless, so a column Bart inserts or
+        // reorders would silently misalign every downstream field. Assert the
+        // *shape* of a handful of load-bearing columns on the first data row and
+        // fail loudly instead of writing garbage. Runs once (all rows share a
+        // layout).
+        if !schema_checked {
+            validate_player_csv_schema(&rec)?;
+            schema_checked = true;
         }
         players.push(TorkvikPlayerSeason {
             player_name: rec.get(0).unwrap_or("").to_string(),
@@ -294,6 +325,55 @@ fn parse_player_csv(body: &str) -> anyhow::Result<Vec<TorkvikPlayerSeason>> {
         });
     }
     Ok(players)
+}
+
+/// Sanity-check that the positional Torvik player CSV still matches the column
+/// map `parse_player_csv` relies on. Because the feed is headerless we can't
+/// assert header names, so we assert the *type shape* of a few load-bearing
+/// columns on the first data row: text columns (name/team/conf) must not be
+/// purely numeric, and numeric columns (gp/usage/pid/gbpm) must parse as numbers
+/// when present. If Bart inserts or reorders a column a name lands where a number
+/// is expected (or vice-versa) and at least one check trips. Empty cells are
+/// tolerated — a legitimate row can have blank optional numerics.
+fn validate_player_csv_schema(rec: &csv::StringRecord) -> anyhow::Result<()> {
+    // A non-empty text column must not be a bare number.
+    let text_ok = |idx: usize| {
+        rec.get(idx)
+            .map(str::trim)
+            .is_none_or(|s| s.is_empty() || s.parse::<f64>().is_err())
+    };
+    // A non-empty numeric column must parse as a number.
+    let num_ok = |idx: usize| {
+        rec.get(idx)
+            .map(str::trim)
+            .is_none_or(|s| s.is_empty() || s.parse::<f64>().is_ok())
+    };
+
+    let checks = [
+        (0usize, "player_name", text_ok(0)),
+        (1, "team", text_ok(1)),
+        (2, "conf", text_ok(2)),
+        (3, "gp", num_ok(3)),
+        (6, "usage", num_ok(6)),
+        (32, "pid", num_ok(32)),
+        (53, "gbpm", num_ok(53)),
+    ];
+    let bad: Vec<String> = checks
+        .iter()
+        .filter(|(_, _, ok)| !ok)
+        .map(|(i, name, _)| format!("col {i} ({name})"))
+        .collect();
+
+    if !bad.is_empty() {
+        let sample: Vec<&str> = rec.iter().take(8).collect();
+        anyhow::bail!(
+            "Torvik player CSV schema drift — the positional column map is stale \
+             (did barttorvik add/reorder a column?). Type-shape violated at: {}. \
+             Refusing to write misaligned rows. First 8 cells: {sample:?}",
+            bad.join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn parse_f64(rec: &csv::StringRecord, idx: usize) -> Option<f64> {
@@ -438,6 +518,25 @@ mod tests {
         let csv = "a,b,c\n"; // only 3 columns
         let players = parse_player_csv(csv).unwrap();
         assert!(players.is_empty());
+    }
+
+    #[test]
+    fn parse_csv_rejects_shifted_schema() {
+        // Simulate barttorvik inserting a leading column: every field shifts
+        // right by one, so a numeric value (usage) lands in the player-name slot
+        // and the real name lands in the team slot. The schema guard must reject.
+        let mut cols = vec![""; 65];
+        cols[0] = "28.1"; // a number where the name should be — the tell
+        cols[1] = "Cooper Flagg";
+        cols[2] = "Duke";
+        cols[3] = "ACC";
+        cols[4] = "35";
+        let csv_line = cols.join(",");
+        let err = parse_player_csv(&csv_line).unwrap_err();
+        assert!(
+            err.to_string().contains("schema drift"),
+            "expected a schema-drift error, got: {err}"
+        );
     }
 
     #[test]
