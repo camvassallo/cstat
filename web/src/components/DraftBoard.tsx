@@ -3,17 +3,16 @@ import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchDraft, type DraftProspect } from '../api/client';
 import { gridTheme } from '../theme';
-import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
-import { classColor } from '../components/archetypeColors';
-import { SeasonLink } from '../components/SeasonLink';
-import { useIsMobile } from '../components/useIsMobile';
-import { useSeason } from '../components/season';
+import { campomTier, campomTierColor, campomHalfColor } from './campom';
+import { classColor } from './archetypeColors';
+import { SeasonLink } from './SeasonLink';
+import { useIsMobile } from './useIsMobile';
 
 // A prospect decorated with the CamPom-derived rank and the headline Δ.
 // `rank_cstat` is the row's position among draft-ranked prospects (those with
-// a Tankathon number) sorted by CamPom desc. `rank_delta = draft_rank −
+// a draft pick number) sorted by CamPom desc. `rank_delta = draft_rank −
 // rank_cstat`: positive means CamPom rates the player higher than the draft
-// board does — a sleeper. Both are null when the prospect has no CamPom value
+// order does — a sleeper. Both are null when the prospect has no CamPom value
 // or no draft rank (the unranked tail), so Δ can't be computed.
 type RankedProspect = DraftProspect & {
   rank_cstat: number | null;
@@ -21,7 +20,7 @@ type RankedProspect = DraftProspect & {
 };
 
 // Stable identity for the CamPom-rank lookup. Name alone can collide across
-// schools; pairing it with the board team keeps each of the ~116 rows unique.
+// schools; pairing it with the board team keeps each row unique.
 const rowKey = (p: DraftProspect) => `${p.name}|${p.current_team}`;
 
 // Nulls-last numeric comparator. AG Grid inverts a comparator's result for
@@ -201,7 +200,7 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
       field: 'rank_delta',
       ...flexCol(1, 80),
       headerTooltip:
-        "Value vs. the draft board: draft rank − CamPom rank (CamPom rank = position among draft-ranked prospects sorted by CamPom). Positive (green) means CamPom rates the player higher than scouts do — a sleeper. Negative (red) means scouts are higher on them than CamPom. — when the prospect has no CamPom value or no draft rank.",
+        "Value vs. the draft order: draft rank − CamPom rank (CamPom rank = position among draft-ranked prospects sorted by CamPom). Positive (green) means CamPom rates the player higher than scouts do — a sleeper. Negative (red) means scouts are higher on them than CamPom. — when the prospect has no CamPom value or no draft rank.",
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: RankedProspect }) => {
         if (p.value == null) return <span className="text-gray-600">—</span>;
@@ -223,8 +222,10 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
   ];
 }
 
-export default function Draft() {
-  const { season } = useSeason();
+// The NBA Draft big board for a single draft-cycle year — a mode tab on the
+// Players page (mirrors TransferPortal / RecruitClass). `year` is the
+// site-selected season, plumbed from the Players page.
+export default function DraftBoard({ year }: { year: number }) {
   const [rows, setRows] = useState<DraftProspect[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -235,7 +236,7 @@ export default function Draft() {
   // fetch resolves (mild stale-flicker, matches the Rankings/Players pattern).
   useEffect(() => {
     let canceled = false;
-    fetchDraft(season)
+    fetchDraft(year)
       .then((r) => {
         if (canceled) return;
         setRows(r.prospects);
@@ -247,12 +248,12 @@ export default function Draft() {
     return () => {
       canceled = true;
     };
-  }, [season]);
+  }, [year]);
 
   // Decorate each prospect with its CamPom rank and the headline Δ. The
   // CamPom rank only ranks prospects that have BOTH a draft rank and a CamPom
   // value — the same cohort the draft rank covers — so Δ stays a like-for-like
-  // comparison. Display order is left to AG Grid (default sort = CamPom desc).
+  // comparison. Display order is left to AG Grid (default sort = draft order).
   const ranked = useMemo<RankedProspect[]>(() => {
     if (!rows) return [];
     const rankable = rows
@@ -285,12 +286,9 @@ export default function Draft() {
 
   if (error) {
     return (
-      <div>
-        <h1 className="text-2xl font-bold text-gray-100 mb-1">NBA Draft Big Board</h1>
-        <div className="mt-4 p-4 rounded bg-gray-800 text-gray-300">
-          No draft board available for {season}.
-          <div className="text-xs text-gray-500 mt-1">{error}</div>
-        </div>
+      <div className="mt-1 p-4 rounded bg-gray-800 text-gray-300">
+        No draft board available for {year}.
+        <div className="text-xs text-gray-500 mt-1">{error}</div>
       </div>
     );
   }
@@ -300,9 +298,8 @@ export default function Draft() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-100 mb-1">NBA Draft Big Board</h1>
       <p className="text-sm text-gray-400 mb-3">
-        {season} draft — picks in draft order, joined to each player's CamPom value and
+        {year} draft — picks in draft order, joined to each player's CamPom value and
         archetype. The <span className="text-emerald-400 font-semibold">Δ</span> column flags
         CamPom's sleepers: positive means CamPom rates the player higher than draft slot does.
       </p>
