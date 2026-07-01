@@ -690,7 +690,9 @@ async fn main() -> Result<()> {
         }
 
         Commands::Preflight { year, strict } => {
-            let report = cstat_ingest::preflight::run(&client, &db.pool, year).await;
+            // Standalone check includes 247 (an operator may run this before a
+            // transfers/recruits capture); the nightly deliberately does not.
+            let report = cstat_ingest::preflight::run(&client, &db.pool, year, true).await;
             print!("{}", report.render());
             let fail = if strict {
                 report.any_down()

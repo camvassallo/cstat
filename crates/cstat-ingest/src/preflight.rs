@@ -1,20 +1,24 @@
 //! Preflight connectivity health check (`cstat-ingest preflight`).
 //!
-//! Pings every external feed the nightly depends on — Postgres, NatStat, Torvik,
-//! and (if a JWT is configured) 247 — and reports each as reachable, skipped, or
-//! down. Two consumers:
+//! Pings the external feeds the pipeline depends on and reports each as
+//! reachable, skipped, or down. Two consumers:
 //!
 //! 1. **The nightly orchestrator** runs it first ([`SeasonIngester::nightly`])
-//!    and logs a per-feed summary + records a `preflight` ledger row, so a dead
-//!    dependency is diagnosed up front instead of surfacing as an opaque mid-run
-//!    failure. It does not change control flow — the per-step isolation already
-//!    fail-softs best-effort feeds and hard-fails the serving-critical chain.
-//! 2. **Operators / an external monitor** run the standalone command for a quick
-//!    "is everything reachable right now" readout (exit code gated on severity).
+//!    over the *serving-critical* feeds (Postgres, NatStat, Torvik) and logs a
+//!    per-feed summary + records a `preflight` ledger row, so a dead dependency
+//!    is diagnosed up front instead of surfacing as an opaque mid-run failure. It
+//!    does not change control flow — the per-step isolation already fail-softs
+//!    best-effort feeds and hard-fails the serving-critical chain.
+//! 2. **Operators / an external monitor** run the standalone command for a full
+//!    "is everything reachable right now" readout, *including* 247 (exit code
+//!    gated on severity).
 //!
-//! Design note: 247 is intentionally *not* serving-critical (its ~6h JWT lapses
-//! routinely — see `docs/247_jwt_recapture.md`), so an expired token is reported
-//! but never blocks a default preflight.
+//! Design note: 247 is intentionally *not* serving-critical and is **skipped by
+//! the nightly entirely** — it's offseason roster-construction (transfers /
+//! recruits), its ~6h JWT lapses routinely (see `docs/247_jwt_recapture.md`), and
+//! the transfers ingest already fails soft to the last snapshot. It's probed only
+//! when a caller explicitly opts in (`include_tfs`), and even then an expired
+//! token never blocks a default preflight.
 
 use crate::client::NatStatClient;
 use crate::tfs::{AuthProbe, TfsClient};
@@ -130,11 +134,22 @@ impl PreflightReport {
     }
 }
 
-/// Run the full preflight sweep. `year` scopes the NatStat + 247 probes.
+/// Run the preflight sweep. `year` scopes the NatStat + 247 probes.
+///
+/// `include_tfs` gates the 247 probe: the nightly passes `false` (247 is
+/// roster-construction — offseason / portal-window only, never in the nightly
+/// chain — so probing it every night just burns a 247 call, usually on an
+/// already-expired in-season token). The standalone `preflight` command passes
+/// `true` so an operator running it before a transfers capture gets a full read.
 ///
 /// Each probe is independent and fail-soft: a panic-free `Down` is recorded
 /// rather than propagated, so one dead feed never aborts the check itself.
-pub async fn run(client: &NatStatClient, pool: &PgPool, year: i32) -> PreflightReport {
+pub async fn run(
+    client: &NatStatClient,
+    pool: &PgPool,
+    year: i32,
+    include_tfs: bool,
+) -> PreflightReport {
     let mut feeds = Vec::new();
 
     // --- Postgres: SELECT 1 ---
@@ -184,23 +199,29 @@ pub async fn run(client: &NatStatClient, pool: &PgPool, year: i32) -> PreflightR
         critical: true,
     });
 
-    // --- 247: only if a JWT is configured. Not serving-critical — an expired
-    // token is expected and fail-soft (falls back to the last snapshot). ---
-    let tfs = match TfsClient::from_env() {
-        Ok(tfs) => match tfs.probe_auth(year).await {
-            AuthProbe::Valid { count } => FeedHealth::Ok(format!("JWT valid, {count} in portal")),
-            AuthProbe::Expired { status } => {
-                FeedHealth::Down(format!("JWT rejected (HTTP {status}) — re-capture it"))
-            }
-            AuthProbe::Unreachable(msg) => FeedHealth::Down(msg),
-        },
-        Err(_) => FeedHealth::Skipped("no TFS_247_JWT configured".into()),
-    };
-    feeds.push(FeedReport {
-        feed: "247",
-        health: tfs,
-        critical: false,
-    });
+    // --- 247: only when explicitly requested (the standalone command), and
+    // only if a JWT is configured. Not serving-critical — the nightly skips it
+    // entirely (247 is offseason roster-construction), and even here an expired
+    // token is expected and fail-soft (transfers falls back to the last snapshot). ---
+    if include_tfs {
+        let tfs = match TfsClient::from_env() {
+            Ok(tfs) => match tfs.probe_auth(year).await {
+                AuthProbe::Valid { count } => {
+                    FeedHealth::Ok(format!("JWT valid, {count} in portal"))
+                }
+                AuthProbe::Expired { status } => {
+                    FeedHealth::Down(format!("JWT rejected (HTTP {status}) — re-capture it"))
+                }
+                AuthProbe::Unreachable(msg) => FeedHealth::Down(msg),
+            },
+            Err(_) => FeedHealth::Skipped("no TFS_247_JWT configured".into()),
+        };
+        feeds.push(FeedReport {
+            feed: "247",
+            health: tfs,
+            critical: false,
+        });
+    }
 
     PreflightReport { feeds }
 }

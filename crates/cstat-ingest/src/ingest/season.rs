@@ -275,13 +275,16 @@ impl<'a> SeasonIngester<'a> {
         );
 
         // --- 0. preflight connectivity check (M3 1.2) ---
-        // Probe every feed up front so a dead dependency is diagnosed here rather
-        // than surfacing as an opaque mid-run failure. Does NOT gate control flow
+        // Probe the serving-critical feeds up front so a dead dependency is
+        // diagnosed here rather than surfacing as an opaque mid-run failure. 247
+        // is skipped (`include_tfs = false`): it's offseason roster-construction,
+        // never in the nightly chain, so probing it nightly would just burn a 247
+        // call on an already-expired in-season token. Does NOT gate control flow
         // — the per-step isolation below already fail-softs best-effort feeds and
         // hard-fails the serving-critical chain — but a down serving-critical feed
         // is recorded as a failed ledger step and added to the degraded summary.
         let t0 = Utc::now();
-        let preflight = crate::preflight::run(self.client, self.pool, self.season).await;
+        let preflight = crate::preflight::run(self.client, self.pool, self.season, false).await;
         preflight.log();
         if preflight.critical_down() {
             let down = preflight.down_feeds().join(", ");
