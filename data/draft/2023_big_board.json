@@ -1,63 +1,68 @@
 [
   {
     "rank": 1,
-    "name": "AJ Dybantsa",
-    "current_team": "BYU",
+    "name": "Victor Wembanyama",
+    "current_team": "International",
+    "class_year": "International",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 2,
-    "name": "Darryn Peterson",
-    "current_team": "Kansas",
+    "name": "Brandon Miller",
+    "current_team": "Alabama",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 3,
-    "name": "Cameron Boozer",
-    "current_team": "Duke",
+    "name": "Scoot Henderson",
+    "current_team": "International",
+    "class_year": "International",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 4,
-    "name": "Caleb Wilson",
-    "current_team": "North Carolina",
+    "name": "Amen Thompson",
+    "current_team": "International",
+    "class_year": "International",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 5,
-    "name": "Keaton Wagler",
-    "current_team": "Illinois",
+    "name": "Ausar Thompson",
+    "current_team": "International",
+    "class_year": "International",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 6,
-    "name": "Mikel Brown Jr.",
-    "current_team": "Louisville",
-    "tier": "lottery",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 7,
-    "name": "Darius Acuff Jr.",
+    "name": "Anthony Black",
     "current_team": "Arkansas",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
+    "rank": 7,
+    "name": "Bilal Coulibaly",
+    "current_team": "International",
+    "class_year": "International",
+    "tier": "lottery",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
     "rank": 8,
-    "name": "Kingston Flemings",
+    "name": "Jarace Walker",
     "current_team": "Houston",
     "tier": "lottery",
     "source": "tankathon",
@@ -65,23 +70,23 @@
   },
   {
     "rank": 9,
-    "name": "Morez Johnson Jr.",
-    "current_team": "Michigan",
+    "name": "Taylor Hendricks",
+    "current_team": "UCF",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 10,
-    "name": "Brayden Burries",
-    "current_team": "Arizona",
+    "name": "Cason Wallace",
+    "current_team": "Kentucky",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 11,
-    "name": "Yaxel Lendeborg",
+    "name": "Jett Howard",
     "current_team": "Michigan",
     "tier": "lottery",
     "source": "tankathon",
@@ -89,63 +94,63 @@
   },
   {
     "rank": 12,
-    "name": "Aday Mara",
-    "current_team": "Michigan",
+    "name": "Dereck Lively II",
+    "current_team": "Duke",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 13,
-    "name": "Nate Ament",
-    "current_team": "Tennessee",
+    "name": "Gradey Dick",
+    "current_team": "Kansas",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 14,
-    "name": "Hannes Steinbach",
-    "current_team": "Washington",
+    "name": "Jordan Hawkins",
+    "current_team": "UConn",
     "tier": "lottery",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 15,
-    "name": "Dailyn Swain",
-    "current_team": "Texas",
+    "name": "Kobe Bufkin",
+    "current_team": "Michigan",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 16,
-    "name": "Bennett Stirtz",
-    "current_team": "Iowa",
+    "name": "Keyonte George",
+    "current_team": "Baylor",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 17,
-    "name": "Ebuka Okorie",
-    "current_team": "Stanford",
+    "name": "Jalen Hood-Schifino",
+    "current_team": "Indiana",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 18,
-    "name": "Christian Anderson",
-    "current_team": "Texas Tech",
+    "name": "Jaime Jaquez Jr.",
+    "current_team": "UCLA",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 19,
-    "name": "Allen Graves",
+    "name": "Brandin Podziemski",
     "current_team": "Santa Clara",
     "tier": "1st-round",
     "source": "tankathon",
@@ -153,161 +158,95 @@
   },
   {
     "rank": 20,
-    "name": "Jayden Quaintance",
-    "current_team": "Kentucky",
+    "name": "Cam Whitmore",
+    "current_team": "Villanova",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 21,
-    "name": "Karim L\u00f3pez",
-    "current_team": "International",
-    "class_year": "International",
-    "tier": "1st-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 22,
-    "name": "Labaron Philon Jr.",
+    "name": "Noah Clowney",
     "current_team": "Alabama",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
+    "rank": 22,
+    "name": "Dariq Whitehead",
+    "current_team": "Duke",
+    "tier": "1st-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
     "rank": 23,
-    "name": "Zuby Ejiofor",
-    "current_team": "St. John's",
+    "name": "Kris Murray",
+    "current_team": "Iowa",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 24,
-    "name": "Cameron Carr",
-    "current_team": "Baylor",
+    "name": "Olivier-Maxence Prosper",
+    "current_team": "Marquette",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 25,
-    "name": "Sergio de Larrea",
-    "current_team": "International",
-    "class_year": "International",
+    "name": "Marcus Sasser",
+    "current_team": "Houston",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 26,
-    "name": "Tarris Reed Jr.",
-    "current_team": "UConn",
+    "name": "Ben Sheppard",
+    "current_team": "Belmont",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 27,
-    "name": "Chris Cenac Jr.",
-    "current_team": "Houston",
+    "name": "Nick Smith Jr.",
+    "current_team": "Arkansas",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 28,
-    "name": "Joshua Jefferson",
-    "current_team": "Iowa State",
+    "name": "Brice Sensabaugh",
+    "current_team": "Ohio State",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 29,
-    "name": "Alex Karaban",
-    "current_team": "UConn",
+    "name": "Julian Strawther",
+    "current_team": "Gonzaga",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 30,
-    "name": "Koa Peat",
-    "current_team": "Arizona",
+    "name": "Kobe Brown",
+    "current_team": "Missouri",
     "tier": "1st-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 31,
-    "name": "Bruce Thornton",
-    "current_team": "Ohio State",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 32,
-    "name": "Richie Saunders",
-    "current_team": "BYU",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 33,
-    "name": "Isaiah Evans",
-    "current_team": "Duke",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 34,
-    "name": "Meleek Thomas",
-    "current_team": "Arkansas",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 35,
-    "name": "Trevon Brazile",
-    "current_team": "Arkansas",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 36,
-    "name": "Baba Miller",
-    "current_team": "Cincinnati",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 37,
-    "name": "Ryan Conwell",
-    "current_team": "Louisville",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 38,
-    "name": "Braden Smith",
-    "current_team": "Purdue",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 39,
-    "name": "Jack Kayil",
+    "name": "James Nnaji",
     "current_team": "International",
     "class_year": "International",
     "tier": "2nd-round",
@@ -315,136 +254,205 @@
     "as_of": "2026-06-01"
   },
   {
+    "rank": 32,
+    "name": "Jalen Pickett",
+    "current_team": "Penn State",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 33,
+    "name": "Leonard Miller",
+    "current_team": "International",
+    "class_year": "International",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 34,
+    "name": "Colby Jones",
+    "current_team": "Xavier",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 35,
+    "name": "Julian Phillips",
+    "current_team": "Tennessee",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 36,
+    "name": "Andre Jackson Jr.",
+    "current_team": "UConn",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 37,
+    "name": "Hunter Tyson",
+    "current_team": "Clemson",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 38,
+    "name": "Jordan Walsh",
+    "current_team": "Arkansas",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 39,
+    "name": "Mouhamed Gueye",
+    "current_team": "Washington State",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
     "rank": 40,
-    "name": "Dillon Mitchell",
-    "current_team": "St. John's",
+    "name": "Maxwell Lewis",
+    "current_team": "Pepperdine",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 41,
-    "name": "Otega Oweh",
-    "current_team": "Kentucky",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 42,
-    "name": "Ja'Kobi Gillespie",
-    "current_team": "Tennessee",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 43,
-    "name": "Tyler Bilodeau",
+    "name": "Amari Bailey",
     "current_team": "UCLA",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
+    "rank": 42,
+    "name": "Tristan Vukcevic",
+    "current_team": "International",
+    "class_year": "International",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
+    "rank": 43,
+    "name": "Rayan Rupert",
+    "current_team": "International",
+    "class_year": "International",
+    "tier": "2nd-round",
+    "source": "tankathon",
+    "as_of": "2026-06-01"
+  },
+  {
     "rank": 44,
-    "name": "Maliq Brown",
-    "current_team": "Duke",
+    "name": "Sidy Cissoko",
+    "current_team": "International",
+    "class_year": "International",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 45,
-    "name": "Emanuel Sharp",
-    "current_team": "Houston",
+    "name": "GG Jackson",
+    "current_team": "South Carolina",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 46,
-    "name": "Felix Okpara",
-    "current_team": "Tennessee",
+    "name": "Seth Lundy",
+    "current_team": "Penn State",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 47,
-    "name": "Tyler Nickel",
-    "current_team": "Vanderbilt",
+    "name": "Mojave King",
+    "current_team": "International",
+    "class_year": "International",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 48,
-    "name": "Tobi Lawal",
-    "current_team": "Virginia Tech",
+    "name": "Jordan Miller",
+    "current_team": "Miami",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 49,
-    "name": "Bryce Hopkins",
-    "current_team": "St. John's",
+    "name": "Emoni Bates",
+    "current_team": "Eastern Michigan",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 50,
-    "name": "Jaden Bradley",
-    "current_team": "Arizona",
+    "name": "Keyontae Johnson",
+    "current_team": "Kansas State",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 51,
-    "name": "Izaiyah Nelson",
-    "current_team": "South Florida",
+    "name": "Jalen Wilson",
+    "current_team": "Kansas",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 52,
-    "name": "Henri Veesaar",
-    "current_team": "North Carolina",
+    "name": "Toumani Camara",
+    "current_team": "Dayton",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 53,
-    "name": "Ugonna Onyenso",
-    "current_team": "Virginia",
+    "name": "Jaylen Clark",
+    "current_team": "UCLA",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 54,
-    "name": "Lajae Jones",
-    "current_team": "Florida State",
+    "name": "Jalen Slawson",
+    "current_team": "Furman",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 55,
-    "name": "Nick Martinelli",
-    "current_team": "Northwestern",
+    "name": "Isaiah Wong",
+    "current_team": "Miami",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 56,
-    "name": "Vsevolod Ishchenko",
+    "name": "Tarik Biberovic",
     "current_team": "International",
     "class_year": "International",
     "tier": "2nd-round",
@@ -453,34 +461,16 @@
   },
   {
     "rank": 57,
-    "name": "Narcisse Ngoy",
-    "current_team": "International",
-    "class_year": "International",
+    "name": "Trayce Jackson-Davis",
+    "current_team": "Indiana",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
   },
   {
     "rank": 58,
-    "name": "Jaron Pierre Jr.",
-    "current_team": "SMU",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 59,
-    "name": "Trey Kaufman-Renn",
-    "current_team": "Purdue",
-    "tier": "2nd-round",
-    "source": "tankathon",
-    "as_of": "2026-06-01"
-  },
-  {
-    "rank": 60,
-    "name": "Malique Lewis",
-    "current_team": "International",
-    "class_year": "International",
+    "name": "Chris Livingston",
+    "current_team": "Kentucky",
     "tier": "2nd-round",
     "source": "tankathon",
     "as_of": "2026-06-01"
