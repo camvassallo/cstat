@@ -14,15 +14,16 @@ import type { PlayerRow } from '../api/client';
  *  rest of the share header. */
 export const GAME_TITLE = 'CamPom · Portle';
 
-export type GameMode = 'p5' | 'starters' | 'all';
+export type GameMode = 'p5' | 'starters' | 'campom10' | 'all';
 
 export const MODE_LABELS: Record<GameMode, string> = {
   p5: 'Power 5',
   starters: 'Starters',
+  campom10: 'CamPom 10+',
   all: 'All D-I',
 };
 
-export const MODE_ORDER: readonly GameMode[] = ['p5', 'starters', 'all'];
+export const MODE_ORDER: readonly GameMode[] = ['p5', 'starters', 'campom10', 'all'];
 
 export const MAX_GUESSES = 10;
 
@@ -36,6 +37,10 @@ const P5_CONFERENCES = new Set(['ACC', 'BIG10', 'BIG12', 'SEC', 'BIGEAST']);
 // Starters lifts it further to genuine starter minutes.
 const P5_MIN_MPG = 20;
 const STARTER_MIN_MPG = 24;
+
+// CamPom floor for the "CamPom 10+" pool — impact players only, regardless of
+// conference or minutes. Answers are the genuine standouts of the season.
+const CAMPOM_MIN = 10;
 
 /** A player is answerable only if we have the fields the grid + reveal lean
  *  on: a CamPom value and a primary archetype. (Guesses aren't restricted —
@@ -58,6 +63,10 @@ export function filterPool(pool: PlayerRow[], mode: GameMode): PlayerRow[] {
     }
     if (mode === 'starters') {
       return p.minutes_per_game != null && p.minutes_per_game >= STARTER_MIN_MPG;
+    }
+    if (mode === 'campom10') {
+      // isAnswerable already guarantees campom != null.
+      return p.campom! > CAMPOM_MIN;
     }
     return true;
   });
