@@ -100,10 +100,10 @@ describe('localDateKey', () => {
 
 describe('filterPool / isAnswerable', () => {
   const pool = [
-    player({ player_id: 'acc-starter', conference: 'ACC', minutes_per_game: 30 }),
-    player({ player_id: 'acc-bench', conference: 'ACC', minutes_per_game: 14 }),
-    player({ player_id: 'mid-bench', conference: 'A-10', minutes_per_game: 12 }),
-    player({ player_id: 'bigeast', conference: 'BIGEAST', minutes_per_game: 26 }),
+    player({ player_id: 'acc-starter', conference: 'ACC', minutes_per_game: 30, campom: 8 }),
+    player({ player_id: 'acc-bench', conference: 'ACC', minutes_per_game: 14, campom: 12 }),
+    player({ player_id: 'mid-bench', conference: 'A-10', minutes_per_game: 12, campom: 2 }),
+    player({ player_id: 'bigeast', conference: 'BIGEAST', minutes_per_game: 26, campom: 15 }),
     player({ player_id: 'no-campom', campom: null }),
     player({ player_id: 'no-class', primary_class: null }),
   ];
@@ -112,7 +112,7 @@ describe('filterPool / isAnswerable', () => {
     const byId = (id: string) => pool.find((p) => p.player_id === id)!;
     expect(isAnswerable(byId('no-campom'))).toBe(false);
     expect(isAnswerable(byId('no-class'))).toBe(false);
-    for (const mode of ['all', 'p5', 'starters'] as const) {
+    for (const mode of ['all', 'p5', 'starters', 'campom10'] as const) {
       const ids = filterPool(pool, mode).map((p) => p.player_id);
       expect(ids).not.toContain('no-campom');
       expect(ids).not.toContain('no-class');
@@ -132,6 +132,14 @@ describe('filterPool / isAnswerable', () => {
     expect(ids).toContain('acc-starter');
     expect(ids).toContain('bigeast');
     expect(ids).not.toContain('mid-bench');
+  });
+
+  it('campom10 keeps only campom > 10, ignoring conference and minutes', () => {
+    const ids = filterPool(pool, 'campom10').map((p) => p.player_id);
+    expect(ids).toContain('bigeast'); // campom 15
+    expect(ids).toContain('acc-bench'); // campom 12, sub-20 mpg but high impact
+    expect(ids).not.toContain('acc-starter'); // campom 8
+    expect(ids).not.toContain('mid-bench'); // campom 2
   });
 });
 
