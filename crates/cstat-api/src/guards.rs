@@ -148,40 +148,61 @@ pub async fn static_asset_cache(req: Request, next: Next) -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// #errors-api alerting: a 5xx response tap + a process panic hook, both sharing
-// one in-process throttle so they can't flood the channel.
+// #errors-api alerting: a 5xx response tap + a process panic hook. Each alert
+// source gets its OWN throttle instance so a burst on one (e.g. transient 5xx)
+// can't swallow the alert for a distinct, more severe fault (a panic).
 // ---------------------------------------------------------------------------
 
-/// Monotonic origin for the alert throttle. Wall-clock isn't needed — we only
-/// measure *spacing* between alerts, so an `Instant` baseline is enough (and
-/// immune to clock jumps).
-fn alert_epoch() -> Instant {
-    static START: OnceLock<Instant> = OnceLock::new();
-    *START.get_or_init(Instant::now)
+/// A lock-free "admit at most once per cooldown" gate, shared by every alert
+/// source (5xx tap, panic hook, and the `#errors-web` client-error sink) so the
+/// subtle throttle mechanism lives in exactly one place. Construct one `static`
+/// per independent budget.
+///
+/// Stores millis-since-first-use of the last admitted alert in an atomic; a CAS
+/// makes racing callers agree on who wins the window. `u64::MAX` is the "never
+/// admitted" sentinel — `0` can't be, since the first call's elapsed-millis is
+/// legitimately `0` in the first millisecond after start.
+pub(crate) struct AlertThrottle {
+    epoch: OnceLock<Instant>,
+    last_ms: AtomicU64,
+    cooldown: Duration,
 }
 
-/// Admit an alert at most once per [`ERROR_ALERT_COOLDOWN`]. Stores millis-since-
-/// [`alert_epoch`] of the last admitted alert in an atomic; a CAS makes racing
-/// callers agree on who wins the window. `u64::MAX` is the "never alerted"
-/// sentinel — `0` can't be, since `now_ms` is legitimately `0` in the first
-/// millisecond after startup.
-fn error_alert_allowed() -> bool {
-    static LAST_MS: AtomicU64 = AtomicU64::new(u64::MAX);
-    let now_ms = alert_epoch().elapsed().as_millis() as u64;
-    let cooldown_ms = ERROR_ALERT_COOLDOWN.as_millis() as u64;
-    loop {
-        let last = LAST_MS.load(Ordering::Relaxed);
-        if last != u64::MAX && now_ms.saturating_sub(last) < cooldown_ms {
-            return false;
+impl AlertThrottle {
+    pub(crate) const fn new(cooldown: Duration) -> Self {
+        Self {
+            epoch: OnceLock::new(),
+            last_ms: AtomicU64::new(u64::MAX),
+            cooldown,
         }
-        if LAST_MS
-            .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return true;
+    }
+
+    /// Returns true at most once per `cooldown`; false while inside the window.
+    pub(crate) fn allow(&self) -> bool {
+        let now_ms = self.epoch.get_or_init(Instant::now).elapsed().as_millis() as u64;
+        let cooldown_ms = self.cooldown.as_millis() as u64;
+        loop {
+            let last = self.last_ms.load(Ordering::Relaxed);
+            if last != u64::MAX && now_ms.saturating_sub(last) < cooldown_ms {
+                return false;
+            }
+            if self
+                .last_ms
+                .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
         }
     }
 }
+
+/// Throttle for the 5xx response tap.
+static ERROR_5XX_THROTTLE: AlertThrottle = AlertThrottle::new(ERROR_ALERT_COOLDOWN);
+/// Separate throttle for panics, so a panic is never suppressed by an unrelated
+/// 5xx that happened to fire within the cooldown (a panic is the more severe
+/// signal and must get through).
+static PANIC_THROTTLE: AlertThrottle = AlertThrottle::new(ERROR_ALERT_COOLDOWN);
 
 /// Tap responses and alert `#errors-api` on a 5xx — a genuine server fault.
 /// Deliberately ignores 4xx (client errors: bad params, 404s) and the two
@@ -189,19 +210,24 @@ fn error_alert_allowed() -> bool {
 /// load-shed (this file) is deliberate, and 408 timeout is a 4xx anyway. The
 /// post is spawned + throttled so it never adds latency to the request path and
 /// a flood can't spam Slack. No-op unless `SLACK_WEBHOOK_ERRORS_API` is set.
+///
+/// The method + URI are cheap to clone (small enum / refcounted `Bytes`); the
+/// path string is only materialized on the rare 5xx branch, so the >99.9%
+/// success path allocates nothing here.
 pub async fn error_alert(req: Request, next: Next) -> Response {
     let method = req.method().clone();
-    let path = req.uri().path().to_string();
+    let uri = req.uri().clone();
     let resp = next.run(req).await;
     let status = resp.status();
     if status.is_server_error()
         && status != StatusCode::SERVICE_UNAVAILABLE
-        && error_alert_allowed()
+        && ERROR_5XX_THROTTLE.allow()
     {
         let msg = format!(
             ":rotating_light: *cstat-api {status}* on `{method} {path}` \
              _(further error alerts throttled for {}s)_",
-            ERROR_ALERT_COOLDOWN.as_secs()
+            ERROR_ALERT_COOLDOWN.as_secs(),
+            path = uri.path(),
         );
         tokio::spawn(async move { notify::post_slack(SlackChannel::ErrorsApi, &msg).await });
     }
@@ -210,13 +236,14 @@ pub async fn error_alert(req: Request, next: Next) -> Response {
 
 /// Install a panic hook that forwards an unexpected panic (in a request handler
 /// or anywhere) to `#errors-api`, in addition to the default backtrace logging.
-/// Shares the 5xx throttle. Call once at startup, before serving.
+/// Uses its own throttle (see [`PANIC_THROTTLE`]). Call once at startup, before
+/// serving.
 pub fn install_panic_alert_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Keep the default behaviour (backtrace → stderr/logs) first.
         prev(info);
-        if !error_alert_allowed() {
+        if !PANIC_THROTTLE.allow() {
             return;
         }
         let location = info
@@ -277,16 +304,26 @@ mod tests {
     }
 
     #[test]
-    fn error_alert_throttle_admits_first_then_suppresses() {
+    fn alert_throttle_admits_first_then_suppresses() {
         // First candidate in a fresh window is admitted; an immediate follow-up
-        // is suppressed (they land inside the same cooldown). The throttle uses
-        // process-global state, so this test asserts the "second call within the
-        // window is denied" contract rather than exact counts.
-        assert!(error_alert_allowed(), "first alert should be admitted");
+        // (inside the cooldown) is suppressed.
+        let throttle = AlertThrottle::new(Duration::from_secs(60));
+        assert!(throttle.allow(), "first alert should be admitted");
         assert!(
-            !error_alert_allowed(),
+            !throttle.allow(),
             "a second alert inside the cooldown must be suppressed"
         );
+    }
+
+    #[test]
+    fn alert_throttle_instances_have_independent_budgets() {
+        // A burst on one source must not suppress an alert on another (the panic-
+        // vs-5xx separation): distinct instances don't share a window.
+        let a = AlertThrottle::new(Duration::from_secs(60));
+        let b = AlertThrottle::new(Duration::from_secs(60));
+        assert!(a.allow());
+        assert!(!a.allow());
+        assert!(b.allow(), "a separate throttle has its own budget");
     }
 
     #[test]

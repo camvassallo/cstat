@@ -144,12 +144,18 @@ pub async fn purge_edge_cache() {
 }
 
 /// Ping an external dead-man's-switch monitor (healthchecks.io / Cronitor /
-/// Better Uptime "heartbeat" URL) at the end of a nightly run. Unlike the Slack
-/// pings — which only fire *when a run runs* — this lets an external service
-/// alert on the run that **never happened** (cron service dead, schedule
-/// silently stopped): the monitor expects a ping each morning and pages when one
-/// is missing. `success=false` appends `/fail` (the healthchecks.io convention)
-/// so a degraded run can signal failure without waiting out the grace period.
+/// Better Uptime "heartbeat" URL). Unlike the Slack pings — which only fire
+/// *when a run runs* — this lets an external service alert on the run that
+/// **never happened** (cron service dead, schedule silently stopped): the
+/// monitor expects a ping each morning and pages when one is missing.
+///
+/// Call convention (see `SeasonIngester::nightly`): `success=true` on any run
+/// that **completes** its served-critical chain — including a *degraded* run,
+/// since best-effort feed failures are surfaced in `#cron-job-alerts` and must
+/// not page the dead-man's-switch. `success=false` appends `/fail` (the
+/// healthchecks.io convention) and is reserved for a **hard abort**, so the
+/// monitor pages immediately instead of waiting out its grace period. Net: the
+/// monitor pages on exactly a missing ping (never ran) or a `/fail` (aborted).
 ///
 /// No-op when `HEARTBEAT_URL` is unset. Fail-soft — a monitor we can't reach must
 /// never affect the ingest it observes.

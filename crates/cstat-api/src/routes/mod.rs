@@ -36,5 +36,8 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(projections::router())
         .merge(recruits::router())
         .merge(draft::router())
-        .merge(client_error::router())
+    // NOTE: client_error::router() is deliberately NOT merged here — it is
+    // mounted un-guarded in main.rs (alongside the health routes) so a browser
+    // error-storm can't consume the data routes' load-shed budget and 503 real
+    // reads. See `client_error`'s module docs.
 }

@@ -11,12 +11,16 @@ use std::io::Read;
 use std::time::Duration;
 use tracing::{info, warn};
 
-/// How many times to attempt a Torvik fetch before giving up.
-const FETCH_MAX_ATTEMPTS: usize = 3;
+/// How many times to attempt a Torvik fetch before giving up. Kept at 2 (one
+/// retry) so a *full* barttorvik outage — where each attempt burns the whole
+/// 120s request timeout — can't add more than ~one extra timeout per fetch to
+/// the nightly. The failure we actually retry for (a mid-regeneration truncated
+/// body) fails fast, not on timeout, so one retry after the backoff is enough.
+const FETCH_MAX_ATTEMPTS: usize = 2;
 /// Delay between Torvik fetch attempts. barttorvik regenerates its nightly data
-/// files in a window of seconds-to-minutes; a short backoff lets a run started
-/// mid-regeneration retry onto the finished file instead of degrading the day.
-const FETCH_BACKOFF: Duration = Duration::from_secs(20);
+/// files in a window of seconds; this backoff lets a run started mid-regeneration
+/// retry onto the finished file instead of degrading the day.
+const FETCH_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Retry an async Torvik fetch that may transiently fail. Retries on **any**
 /// error — network *or* parse — because the regeneration race shows up as a

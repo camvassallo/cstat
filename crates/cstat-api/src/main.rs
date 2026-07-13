@@ -156,6 +156,11 @@ async fn boot_and_serve() -> Result<()> {
         .route("/api/health", get(health_check))
         .route("/api/health/ingest", get(routes::health::ingest_health))
         .route("/api/status", get(api_status))
+        // Un-guarded like the health routes: the client-error sink must NOT
+        // share the data routes' load-shed budget, or a browser error-storm
+        // (its exact reason to exist) could 503 real reads. It self-throttles
+        // its Slack forwarding instead.
+        .merge(routes::client_error::router())
         // SEO: sitemap index + child sitemaps (DB-generated), and per-page social
         // meta injected into the SPA's index.html for entity document routes.
         // These are non-/api paths that would otherwise fall through to the SPA.
