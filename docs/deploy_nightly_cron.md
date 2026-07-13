@@ -125,13 +125,21 @@ unhealthy and restart it, coupling the live site's uptime to the ingest cadence.
 
 `/api/health/ingest` catches a *stale* pipeline, but it only helps if something
 polls it, and it can't distinguish "cron ran and did nothing" from "cron never
-ran." The complementary signal is a **heartbeat**: at the end of each run the
-nightly pings `HEARTBEAT_URL` (`notify::ping_heartbeat`) — the base URL on
-success, `…/fail` on a degraded run (the healthchecks.io convention). Point it at
-a dead-man's-switch monitor (healthchecks.io, Cronitor, Better Stack Heartbeats)
-configured to expect a ping each morning; the monitor pages when a ping is
-**missing** — the one failure mode the in-run Slack alerts structurally can't
-cover, because a run that never starts can't post. No-op when unset; fail-soft.
+ran." The complementary signal is a **heartbeat**: the nightly pings
+`HEARTBEAT_URL` (`notify::ping_heartbeat`) with these semantics —
+
+- **success ping** (base URL) when the run **completes** its served-critical
+  chain, *including a degraded run* — best-effort feed failures show up in
+  `#cron-job-alerts` and shouldn't page the dead-man's-switch;
+- **`…/fail`** (the healthchecks.io convention) only on a **hard abort**
+  (`games`/`perfs`/`compute` failed), so the monitor pages immediately instead of
+  waiting out its grace period.
+
+Point it at a dead-man's-switch monitor (healthchecks.io, Cronitor, Better Stack
+Heartbeats) set to expect a ping each morning; it pages on exactly two things: a
+**missing** ping (the cron never ran — the one failure mode the in-run Slack
+alerts structurally can't cover) or a **`/fail`** ping (the run aborted). No-op
+when unset; fail-soft.
 
 Pick one or both: `/api/health/ingest` needs an HTTP poller but reports per-step
 detail; `HEARTBEAT_URL` needs no poller and directly catches a skipped run.

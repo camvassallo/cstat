@@ -10,19 +10,30 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// True if `date` (a `YYYY-MM-DD` string) falls in the men's-college-basketball
-/// core season, when essentially every night has D1 games — used to decide
-/// whether a zero-row box-score ingest is an anomaly (in-season) or expected
-/// (off-season). Window: Nov 1 through Apr 10 (regular season + tournaments,
-/// through the national title game's first-week-of-April slot). An unparseable
-/// date is treated as *out* of season so a bad date string can't spuriously
-/// degrade a run.
+/// True if `date` (a `YYYY-MM-DD` string) falls in the **dense** part of the
+/// men's-college-basketball season, when essentially every night has D1 games —
+/// used to decide whether a zero-row box-score ingest is an anomaly (in-season)
+/// or expected (off-season).
+///
+/// Conservatively trims the nights that reliably have NO D1 games so a legit
+/// gameless night isn't mistaken for a broken feed: the pre-tip ramp (Nov 1–5),
+/// the **Dec 24–25 holiday break**, and the post-title tail (after ~Apr 7).
+/// Mid-window off-nights still exist and are *not* excluded, so this is a coarse
+/// false-positive guard, not a schedule — a schedule-aware check (cross-ref the
+/// NatStat schedule for the window) is the real fix, tracked as a follow-up.
+/// An unparseable date is treated as *out* of season so a bad date string can't
+/// spuriously degrade a run.
 fn is_core_season_date(date: &str) -> bool {
     let Ok(d) = NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
         return false;
     };
-    let (m, day) = (d.month(), d.day());
-    matches!(m, 11 | 12 | 1 | 2 | 3) || (m == 4 && day <= 10)
+    match d.month() {
+        11 => d.day() >= 6,
+        12 => !matches!(d.day(), 24 | 25),
+        1..=3 => true,
+        4 => d.day() <= 7,
+        _ => false,
+    }
 }
 
 /// Orchestrates full-season data ingestion.
@@ -347,6 +358,9 @@ impl<'a> SeasonIngester<'a> {
                     ledger.run_id()
                 ))
                 .await;
+                // Signal the dead-man's-switch immediately on a hard abort so the
+                // monitor pages now rather than after its full grace period.
+                notify::ping_heartbeat(false).await;
                 return Err(e);
             }
         }
@@ -379,6 +393,7 @@ impl<'a> SeasonIngester<'a> {
                     ledger.run_id()
                 ))
                 .await;
+                notify::ping_heartbeat(false).await;
                 return Err(e);
             }
         }
@@ -411,6 +426,7 @@ impl<'a> SeasonIngester<'a> {
                     ledger.run_id()
                 ))
                 .await;
+                notify::ping_heartbeat(false).await;
                 return Err(e);
             }
         }
@@ -557,6 +573,7 @@ impl<'a> SeasonIngester<'a> {
                         ledger.run_id()
                     ))
                     .await;
+                    notify::ping_heartbeat(false).await;
                     return Err(NatStatError::Database(e));
                 }
             }
@@ -729,12 +746,17 @@ impl<'a> SeasonIngester<'a> {
         }
 
         // --- Dead-man's-switch heartbeat ---
-        // Ping an external monitor (healthchecks.io / Cronitor) so the failure
-        // mode the Slack pings *structurally can't* cover — a run that never
-        // happened (cron dead, schedule stopped) — is caught by the monitor
-        // paging on a missing heartbeat. A degraded run signals `success=false`.
-        // No-op unless HEARTBEAT_URL is set. Fail-soft.
-        notify::ping_heartbeat(failures.is_empty()).await;
+        // Reaching here means the served-critical chain (games/perfs/compute)
+        // completed — the run did its core job — so this is a SUCCESS ping even
+        // when `failures` is non-empty (a best-effort feed degraded, or the
+        // advisory empty-box heuristic tripped; those are visible in
+        // #cron-job-alerts and must not page the dead-man's-switch). The `/fail`
+        // ping is reserved for the hard-abort paths above, which page the monitor
+        // immediately instead of waiting out its grace period. So the external
+        // monitor pages on exactly two things: a run that never pinged (never
+        // ran), or a run that pinged `/fail` (aborted). No-op unless HEARTBEAT_URL
+        // is set. Fail-soft.
+        notify::ping_heartbeat(true).await;
 
         info!(
             season = self.season,
@@ -953,9 +975,10 @@ mod tests {
 
     #[test]
     fn core_season_window_covers_nov_through_early_april() {
-        // In-season: essentially every night has D1 games.
-        assert!(is_core_season_date("2025-11-04")); // opening week
+        // Dense nights: essentially every one has D1 games.
+        assert!(is_core_season_date("2025-11-10")); // season underway
         assert!(is_core_season_date("2025-12-20"));
+        assert!(is_core_season_date("2025-12-26")); // games resume after the break
         assert!(is_core_season_date("2026-01-15"));
         assert!(is_core_season_date("2026-02-28"));
         assert!(is_core_season_date("2026-03-30")); // tournament
@@ -963,11 +986,20 @@ mod tests {
     }
 
     #[test]
-    fn off_season_and_edges_are_excluded() {
-        assert!(!is_core_season_date("2026-04-11")); // just past the window
+    fn predictable_gameless_nights_are_excluded() {
+        // The false-positive cases the heuristic must NOT flag as a broken feed:
+        assert!(!is_core_season_date("2025-11-02")); // pre-tip ramp
+        assert!(!is_core_season_date("2025-12-24")); // holiday break
+        assert!(!is_core_season_date("2025-12-25")); // holiday break
+        assert!(!is_core_season_date("2026-04-09")); // after the title game
+    }
+
+    #[test]
+    fn off_season_is_excluded() {
+        assert!(!is_core_season_date("2026-04-30"));
         assert!(!is_core_season_date("2026-05-01"));
         assert!(!is_core_season_date("2026-07-12")); // deep off-season
-        assert!(!is_core_season_date("2025-10-31")); // day before tip window
+        assert!(!is_core_season_date("2025-10-31")); // before the tip window
     }
 
     #[test]

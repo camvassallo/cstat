@@ -11,9 +11,7 @@
 //! looping client can't flood Slack). No-op unless `SLACK_WEBHOOK_ERRORS_WEB` is
 //! set, so it's silent locally.
 
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::{Router, http::StatusCode, response::IntoResponse, routing::post};
 use cstat_ingest::notify::{self, SlackChannel};
@@ -21,6 +19,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::guards::AlertThrottle;
 
 /// Minimum spacing between forwarded client-error alerts. Browser errors arrive
 /// in bursts (one bad deploy hits every visitor at once), so we forward at most
@@ -64,7 +63,7 @@ async fn report(body: Option<axum::Json<ClientErrorReport>>) -> impl IntoRespons
     if r.message.trim().is_empty() && r.stack.trim().is_empty() {
         return StatusCode::NO_CONTENT;
     }
-    if !client_error_allowed() {
+    if !WEB_ERROR_THROTTLE.allow() {
         return StatusCode::NO_CONTENT;
     }
 
@@ -107,28 +106,9 @@ fn cap(s: &str) -> String {
     }
 }
 
-/// Admit a forwarded client error at most once per [`CLIENT_ERROR_COOLDOWN`].
-/// Same monotonic-atomic scheme as the API error tap in `guards.rs`, kept
-/// separate so a web-error burst and an API-error burst don't share a budget.
-fn client_error_allowed() -> bool {
-    static START: OnceLock<Instant> = OnceLock::new();
-    // u64::MAX = "never" — 0 is a legitimate now_ms in the first ms after start.
-    static LAST_MS: AtomicU64 = AtomicU64::new(u64::MAX);
-    let now_ms = START.get_or_init(Instant::now).elapsed().as_millis() as u64;
-    let cooldown_ms = CLIENT_ERROR_COOLDOWN.as_millis() as u64;
-    loop {
-        let last = LAST_MS.load(Ordering::Relaxed);
-        if last != u64::MAX && now_ms.saturating_sub(last) < cooldown_ms {
-            return false;
-        }
-        if LAST_MS
-            .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return true;
-        }
-    }
-}
+/// Forwarding budget for `#errors-web`, kept separate from the API-error
+/// throttles so a web-error burst and an API-error burst don't share a window.
+static WEB_ERROR_THROTTLE: AlertThrottle = AlertThrottle::new(CLIENT_ERROR_COOLDOWN);
 
 #[cfg(test)]
 mod tests {
@@ -145,14 +125,5 @@ mod tests {
         // Multi-byte chars must not be split mid-codepoint.
         let emoji = "🏀".repeat(MAX_FIELD_LEN + 10);
         let _ = cap(&emoji); // must not panic
-    }
-
-    #[test]
-    fn throttle_admits_first_then_suppresses() {
-        assert!(client_error_allowed(), "first report admitted");
-        assert!(
-            !client_error_allowed(),
-            "second report inside cooldown suppressed"
-        );
     }
 }
