@@ -946,3 +946,35 @@ impl std::fmt::Display for TeamReport {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_core_season_date;
+
+    #[test]
+    fn core_season_window_covers_nov_through_early_april() {
+        // In-season: essentially every night has D1 games.
+        assert!(is_core_season_date("2025-11-04")); // opening week
+        assert!(is_core_season_date("2025-12-20"));
+        assert!(is_core_season_date("2026-01-15"));
+        assert!(is_core_season_date("2026-02-28"));
+        assert!(is_core_season_date("2026-03-30")); // tournament
+        assert!(is_core_season_date("2026-04-06")); // title-game week
+    }
+
+    #[test]
+    fn off_season_and_edges_are_excluded() {
+        assert!(!is_core_season_date("2026-04-11")); // just past the window
+        assert!(!is_core_season_date("2026-05-01"));
+        assert!(!is_core_season_date("2026-07-12")); // deep off-season
+        assert!(!is_core_season_date("2025-10-31")); // day before tip window
+    }
+
+    #[test]
+    fn unparseable_date_is_treated_as_off_season() {
+        // A bad date string must not spuriously degrade a run.
+        assert!(!is_core_season_date(""));
+        assert!(!is_core_season_date("not-a-date"));
+        assert!(!is_core_season_date("2026-13-40"));
+    }
+}
