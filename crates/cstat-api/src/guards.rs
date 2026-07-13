@@ -204,6 +204,37 @@ static ERROR_5XX_THROTTLE: AlertThrottle = AlertThrottle::new(ERROR_ALERT_COOLDO
 /// signal and must get through).
 static PANIC_THROTTLE: AlertThrottle = AlertThrottle::new(ERROR_ALERT_COOLDOWN);
 
+/// Query-param keys whose *values* are redacted before an error alert is posted,
+/// so a secret that rode in on the URL (e.g. the alert self-test `token`) never
+/// lands in Slack. Matched case-insensitively.
+const REDACT_QUERY_KEYS: &[&str] = &["token", "key", "secret", "password", "jwt", "apikey"];
+
+/// The request target (path + query) for an error alert, so the failing request
+/// is reproducible from the message — with sensitive query values redacted (see
+/// [`REDACT_QUERY_KEYS`]). Returns just the path when there's no query.
+fn alert_target(uri: &axum::http::Uri) -> String {
+    let path = uri.path();
+    let Some(query) = uri.query() else {
+        return path.to_string();
+    };
+    let redacted = query
+        .split('&')
+        .map(|pair| {
+            let key = pair.split_once('=').map(|(k, _)| k).unwrap_or(pair);
+            if REDACT_QUERY_KEYS
+                .iter()
+                .any(|s| key.eq_ignore_ascii_case(s))
+            {
+                format!("{key}=<redacted>")
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{path}?{redacted}")
+}
+
 /// Tap responses and alert `#errors-api` on a 5xx — a genuine server fault.
 /// Deliberately ignores 4xx (client errors: bad params, 404s) and the two
 /// *intentional* backpressure statuses that are technically 5xx-adjacent: 503
@@ -211,9 +242,11 @@ static PANIC_THROTTLE: AlertThrottle = AlertThrottle::new(ERROR_ALERT_COOLDOWN);
 /// post is spawned + throttled so it never adds latency to the request path and
 /// a flood can't spam Slack. No-op unless `SLACK_WEBHOOK_ERRORS_API` is set.
 ///
-/// The method + URI are cheap to clone (small enum / refcounted `Bytes`); the
-/// path string is only materialized on the rare 5xx branch, so the >99.9%
-/// success path allocates nothing here.
+/// The alert includes the full request target (`{method} {path}?{query}`,
+/// secrets redacted) so the failing request is reproducible. The method + URI
+/// are cheap to clone (small enum / refcounted `Bytes`); the target string is
+/// only built on the rare 5xx branch, so the >99.9% success path allocates
+/// nothing here.
 pub async fn error_alert(req: Request, next: Next) -> Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
@@ -224,10 +257,10 @@ pub async fn error_alert(req: Request, next: Next) -> Response {
         && ERROR_5XX_THROTTLE.allow()
     {
         let msg = format!(
-            ":rotating_light: *cstat-api {status}* on `{method} {path}` \
+            ":rotating_light: *cstat-api {status}* on `{method} {target}` \
              _(further error alerts throttled for {}s)_",
             ERROR_ALERT_COOLDOWN.as_secs(),
-            path = uri.path(),
+            target = alert_target(&uri),
         );
         tokio::spawn(async move { notify::post_slack(SlackChannel::ErrorsApi, &msg).await });
     }
@@ -312,6 +345,23 @@ mod tests {
         assert!(
             !throttle.allow(),
             "a second alert inside the cooldown must be suppressed"
+        );
+    }
+
+    #[test]
+    fn alert_target_includes_query_and_redacts_secrets() {
+        let uri = |s: &str| s.parse::<axum::http::Uri>().unwrap();
+        // Query is kept so the failing request is reproducible.
+        assert_eq!(
+            alert_target(&uri("/api/predict?home=Gonzaga&away=Utah+Tech&season=2021")),
+            "/api/predict?home=Gonzaga&away=Utah+Tech&season=2021"
+        );
+        // No query → just the path.
+        assert_eq!(alert_target(&uri("/api/health")), "/api/health");
+        // Secret values are redacted (case-insensitive key), non-secrets kept.
+        assert_eq!(
+            alert_target(&uri("/api/alert-selftest?channel=api&Token=abc123")),
+            "/api/alert-selftest?channel=api&Token=<redacted>"
         );
     }
 

@@ -188,6 +188,15 @@ Two error buckets are wired and set on the **API service** (not the cron):
 
 Unset webhook → no posts (message still logged). Both are fail-soft.
 
+**Verifying the pipeline stays healthy** — `GET /api/alert-selftest?token=…&channel=api|web`
+posts a labelled synthetic message to the chosen error channel on demand, so you
+can confirm alerting works without waiting for a real fault (important once known
+bugs are fixed). Token-gated by **`ALERT_SELFTEST_TOKEN`** on the API service;
+returns **404** when the token is unset or wrong (so the endpoint isn't
+discoverable), and a JSON body with `webhook_configured` so a monitor can assert
+the env var is actually set. Point a scheduled check at it (e.g. weekly) if you
+want continuous assurance.
+
 ### Adding a further alert channel
 
 Because a webhook is bound to one channel, a new bucket is a new webhook + a new
