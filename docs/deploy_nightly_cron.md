@@ -75,6 +75,7 @@ cron service reuses it — no separate build.
    - `NATSTAT_MAX_PER_HOUR` — `2500` on the API+ tier (matches the API service)
    - `SLACK_WEBHOOK_CRON` — Slack incoming-webhook URL for `#cron-job-alerts`
      (see Alerting; legacy name `INGEST_ALERT_WEBHOOK` still works)
+   - `HEARTBEAT_URL` — optional dead-man's-switch ping (see below).
    - `MODEL_DIR` is **not** needed (the nightly job runs no ONNX inference).
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
 
@@ -120,6 +121,21 @@ actually runs. The endpoint is un-guarded (never load-shed). Do **not** wire it
 as the API service's Railway healthcheck — a stale cron would then mark the API
 unhealthy and restart it, coupling the live site's uptime to the ingest cadence.
 
+## Dead-man's-switch heartbeat — `HEARTBEAT_URL`
+
+`/api/health/ingest` catches a *stale* pipeline, but it only helps if something
+polls it, and it can't distinguish "cron ran and did nothing" from "cron never
+ran." The complementary signal is a **heartbeat**: at the end of each run the
+nightly pings `HEARTBEAT_URL` (`notify::ping_heartbeat`) — the base URL on
+success, `…/fail` on a degraded run (the healthchecks.io convention). Point it at
+a dead-man's-switch monitor (healthchecks.io, Cronitor, Better Stack Heartbeats)
+configured to expect a ping each morning; the monitor pages when a ping is
+**missing** — the one failure mode the in-run Slack alerts structurally can't
+cover, because a run that never starts can't post. No-op when unset; fail-soft.
+
+Pick one or both: `/api/health/ingest` needs an HTTP poller but reports per-step
+detail; `HEARTBEAT_URL` needs no poller and directly catches a skipped run.
+
 ## Alerting (Slack)
 
 `SLACK_WEBHOOK_CRON` is a Slack incoming-webhook URL for the `#cron-job-alerts`
@@ -145,17 +161,35 @@ Slack outage never affects the ingest. Create the webhook at
 noise, mute the channel rather than unsetting the var — you still want the
 degraded/critical posts.
 
-### Adding a new alert channel
+### Error channels — `#errors-api` and `#errors-web`
 
-Because a webhook is bound to one channel, a new bucket (e.g. `#errors-api`,
-`#errors-web`) is a new webhook + a new env var, registered in one place:
+Two error buckets are wired and set on the **API service** (not the cron):
+
+- **`SLACK_WEBHOOK_ERRORS_API`** → `#errors-api`. Fires on a cstat-api
+  **boot/serve failure** (bad `DATABASE_URL`, migration mismatch, missing
+  `NATSTAT_API_KEY`, or an ONNX export whose meta drifted — otherwise a silent
+  Railway crash-loop), on any **5xx** response, and on a **panic** in a handler.
+  The 5xx tap and panic hook share one in-process throttle (one alert / 60s) so a
+  crash loop can't flood the channel. Load-shed 503s and 408 timeouts are
+  deliberate backpressure and are excluded.
+- **`SLACK_WEBHOOK_ERRORS_WEB`** → `#errors-web`. Fires when the SPA's global
+  `error` / `unhandledrejection` reporter (`web/src/lib/errorReporter.ts`) posts
+  an uncaught browser error to `POST /api/client-error`, which relays it. Both
+  the client and the server throttle/cap so a bad deploy hitting every visitor
+  can't spam Slack. Untrusted fields are length-capped server-side.
+
+Unset webhook → no posts (message still logged). Both are fail-soft.
+
+### Adding a further alert channel
+
+Because a webhook is bound to one channel, a new bucket is a new webhook + a new
+env var, registered in one place:
 
 1. In Slack, create the channel and add an Incoming Webhook to it; copy the URL.
 2. In `crates/cstat-ingest/src/notify.rs`, add a `SlackChannel` variant and map
    it to a `SLACK_WEBHOOK_*` env var in `SlackChannel::env_var` (the file's
-   doc-comment spells this out). Document the var in `.env.example`.
-3. Set that env var on whichever service produces those messages (API errors →
-   the API service, not the cron).
+   doc-comment spells this out).
+3. Set that env var on whichever service produces those messages.
 4. Call `notify::post_slack(SlackChannel::TheNewOne, &msg)` from the producer.
 
 No central wiring to touch — the registry is the single source of truth.

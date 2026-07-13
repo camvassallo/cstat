@@ -40,8 +40,33 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    // Install the panic hook so an unexpected panic in a request handler (or
+    // anywhere) is surfaced to #errors-api rather than only landing in the logs.
+    guards::install_panic_alert_hook();
+
+    // A boot or serve failure would otherwise be a silent process exit — on
+    // Railway that's a crash-restart loop with nothing in Slack. Alert
+    // #errors-api (no-op if its webhook is unset) before propagating the error.
+    if let Err(e) = boot_and_serve().await {
+        tracing::error!(error = format!("{e:#}"), "cstat-api boot/serve failed");
+        cstat_ingest::notify::post_slack(
+            cstat_ingest::notify::SlackChannel::ErrorsApi,
+            &format!(":rotating_light: *cstat-api boot/serve failed* — `{e:#}`"),
+        )
+        .await;
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Boot the API (DB, migrations, NatStat client, ONNX models, routes) and serve
+/// forever. Split out from `main` so any startup failure — bad `DATABASE_URL`,
+/// migration mismatch, missing NatStat key, or an ONNX export whose meta drifted
+/// — is caught by the caller and alerted instead of crash-looping silently.
+async fn boot_and_serve() -> Result<()> {
     // Connect to database
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url =
+        std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
     let db = Database::connect_api(&database_url).await?;
     info!("connected to database");
 
@@ -49,7 +74,8 @@ async fn main() -> Result<()> {
     info!("migrations complete");
 
     // NatStat client
-    let natstat_api_key = std::env::var("NATSTAT_API_KEY").expect("NATSTAT_API_KEY must be set");
+    let natstat_api_key = std::env::var("NATSTAT_API_KEY")
+        .map_err(|_| anyhow::anyhow!("NATSTAT_API_KEY must be set"))?;
     let natstat = NatStatClient::new(
         db.pool.clone(),
         natstat_api_key,
@@ -145,6 +171,8 @@ async fn main() -> Result<()> {
         .merge(data_api)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        // Outermost app layer: tap 5xx responses to #errors-api (throttled).
+        .layer(from_fn(guards::error_alert))
         .with_state(state)
         .fallback_service(spa);
 
