@@ -9,7 +9,47 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
+
+/// How many times to attempt a Torvik fetch before giving up.
+const FETCH_MAX_ATTEMPTS: usize = 3;
+/// Delay between Torvik fetch attempts. barttorvik regenerates its nightly data
+/// files in a window of seconds-to-minutes; a short backoff lets a run started
+/// mid-regeneration retry onto the finished file instead of degrading the day.
+const FETCH_BACKOFF: Duration = Duration::from_secs(20);
+
+/// Retry an async Torvik fetch that may transiently fail. Retries on **any**
+/// error — network *or* parse — because the regeneration race shows up as a
+/// malformed body (truncated CSV, non-gzip bytes, HTML error page), not a
+/// transport error, so retrying only on `reqwest` errors would miss the exact
+/// failure mode we see. The final error is returned unchanged so the caller's
+/// ledger/degraded-summary message is identical to the no-retry behaviour.
+async fn with_retry<T, F, Fut>(what: &str, mut op: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=FETCH_MAX_ATTEMPTS {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                warn!(
+                    what,
+                    attempt,
+                    max = FETCH_MAX_ATTEMPTS,
+                    error = %e,
+                    "Torvik fetch attempt failed"
+                );
+                last_err = Some(e);
+                if attempt < FETCH_MAX_ATTEMPTS {
+                    tokio::time::sleep(FETCH_BACKOFF).await;
+                }
+            }
+        }
+    }
+    Err(last_err.expect("loop runs at least once"))
+}
 
 /// Raw player season stats from the Torvik CSV endpoint.
 #[derive(Debug, Clone)]
@@ -166,43 +206,52 @@ impl TorkvikClient {
         }
     }
 
-    /// Fetch player season stats CSV for a given year.
+    /// Fetch player season stats CSV for a given year. Retries a transient
+    /// barttorvik hiccup (see [`with_retry`]).
     pub async fn fetch_player_stats(&self, year: i32) -> anyhow::Result<Vec<TorkvikPlayerSeason>> {
-        let url = format!("https://barttorvik.com/getadvstats.php?year={year}&csv=1");
-        info!(year, "fetching Torvik player stats");
-        let body = self.http.get(&url).send().await?.text().await?;
-        let players = parse_player_csv(&body)?;
-        info!(year, count = players.len(), "parsed Torvik player stats");
-        Ok(players)
+        with_retry("player_stats", || async move {
+            let url = format!("https://barttorvik.com/getadvstats.php?year={year}&csv=1");
+            info!(year, "fetching Torvik player stats");
+            let body = self.http.get(&url).send().await?.text().await?;
+            let players = parse_player_csv(&body)?;
+            info!(year, count = players.len(), "parsed Torvik player stats");
+            Ok(players)
+        })
+        .await
     }
 
-    /// Fetch per-game player stats (gzip JSON) for a given year.
+    /// Fetch per-game player stats (gzip JSON) for a given year. Retries a
+    /// transient barttorvik hiccup (see [`with_retry`]).
     pub async fn fetch_game_stats(&self, year: i32) -> anyhow::Result<Vec<TorkvikGameRow>> {
-        let url = format!("https://barttorvik.com/{year}_all_advgames.json.gz");
-        info!(year, "fetching Torvik game stats (gzip)");
-        let bytes = self.http.get(&url).send().await?.bytes().await?;
+        with_retry("game_stats", || async move {
+            let url = format!("https://barttorvik.com/{year}_all_advgames.json.gz");
+            info!(year, "fetching Torvik game stats (gzip)");
+            let bytes = self.http.get(&url).send().await?.bytes().await?;
 
-        // The server may send Content-Encoding: gzip (auto-decompressed by reqwest)
-        // or raw gzip bytes. Try parsing as JSON first, fall back to gzip decompress.
-        let json_str = match serde_json::from_slice::<Vec<Vec<Value>>>(&bytes) {
-            Ok(rows) => {
-                let games: Vec<TorkvikGameRow> =
-                    rows.iter().filter_map(|r| parse_game_row(r)).collect();
-                info!(year, count = games.len(), "parsed Torvik game stats");
-                return Ok(games);
-            }
-            Err(_) => {
-                let mut decoder = GzDecoder::new(&bytes[..]);
-                let mut s = String::new();
-                decoder.read_to_string(&mut s)?;
-                s
-            }
-        };
+            // The server may send Content-Encoding: gzip (auto-decompressed by reqwest)
+            // or raw gzip bytes. Try parsing as JSON first, fall back to gzip decompress.
+            let json_str = match serde_json::from_slice::<Vec<Vec<Value>>>(&bytes) {
+                Ok(rows) => {
+                    let games: Vec<TorkvikGameRow> =
+                        rows.iter().filter_map(|r| parse_game_row(r)).collect();
+                    info!(year, count = games.len(), "parsed Torvik game stats");
+                    return Ok(games);
+                }
+                Err(_) => {
+                    let mut decoder = GzDecoder::new(&bytes[..]);
+                    let mut s = String::new();
+                    decoder.read_to_string(&mut s)?;
+                    s
+                }
+            };
 
-        let rows: Vec<Vec<Value>> = serde_json::from_str(&json_str)?;
-        let games: Vec<TorkvikGameRow> = rows.iter().filter_map(|r| parse_game_row(r)).collect();
-        info!(year, count = games.len(), "parsed Torvik game stats");
-        Ok(games)
+            let rows: Vec<Vec<Value>> = serde_json::from_str(&json_str)?;
+            let games: Vec<TorkvikGameRow> =
+                rows.iter().filter_map(|r| parse_game_row(r)).collect();
+            info!(year, count = games.len(), "parsed Torvik game stats");
+            Ok(games)
+        })
+        .await
     }
 
     /// Fetch the head-coach dictionary: every season in one file, mapping

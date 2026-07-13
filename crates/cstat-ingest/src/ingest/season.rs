@@ -4,11 +4,26 @@ use crate::notify;
 use crate::run_ledger::{RunLedger, StepStatus};
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
-use chrono::Utc;
+use chrono::{Datelike, NaiveDate, Utc};
 use cstat_core::compute::{ComputeReport, compute_all};
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
+
+/// True if `date` (a `YYYY-MM-DD` string) falls in the men's-college-basketball
+/// core season, when essentially every night has D1 games — used to decide
+/// whether a zero-row box-score ingest is an anomaly (in-season) or expected
+/// (off-season). Window: Nov 1 through Apr 10 (regular season + tournaments,
+/// through the national title game's first-week-of-April slot). An unparseable
+/// date is treated as *out* of season so a bad date string can't spuriously
+/// degrade a run.
+fn is_core_season_date(date: &str) -> bool {
+    let Ok(d) = NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
+        return false;
+    };
+    let (m, day) = (d.month(), d.day());
+    matches!(m, 11 | 12 | 1 | 2 | 3) || (m == 4 && day <= 10)
+}
 
 /// Orchestrates full-season data ingestion.
 pub struct SeasonIngester<'a> {
@@ -615,6 +630,33 @@ impl<'a> SeasonIngester<'a> {
             );
         }
 
+        // --- In-season empty-ingest sanity check ---
+        // A run where the load-bearing `games`/`player_perfs`/`team_perfs` steps
+        // all succeeded (no hard-fail abort above) but returned *zero* rows is
+        // fine in the off-season — but during the core season it means the box-
+        // score feed silently handed us an empty result on a night that had
+        // games. That's the "OK run, actually broken" case the per-step failure
+        // handling can't catch (an empty success is still a success), so we flag
+        // it as degraded. Heuristic: gated to the core-season window on the run's
+        // end date (see `is_core_season_date`) to avoid firing on legitimate
+        // off-season quiet nights. A schedule-aware version (cross-check against
+        // the NatStat schedule for the window) is a possible follow-up.
+        let empty_box = report.ingest.games == 0
+            && report.ingest.player_performances == 0
+            && report.ingest.team_performances == 0;
+        if empty_box && is_core_season_date(end_date) {
+            warn!(
+                season = self.season,
+                start_date,
+                end_date,
+                "in-season nightly ingested zero box scores — feed may be empty/broken"
+            );
+            failures.push(format!(
+                "empty box-score ingest for {start_date}..{end_date} during the season \
+                 (0 games / 0 player perfs / 0 team perfs) — feed may be silently empty"
+            ));
+        }
+
         // --- Run-completion notification (2.4) ---
         // Hard-fail steps already alerted-and-aborted above. A run that reaches
         // here either completed clean (success heartbeat) or completed with a
@@ -685,6 +727,14 @@ impl<'a> SeasonIngester<'a> {
         if report.compute.is_some() {
             notify::purge_edge_cache().await;
         }
+
+        // --- Dead-man's-switch heartbeat ---
+        // Ping an external monitor (healthchecks.io / Cronitor) so the failure
+        // mode the Slack pings *structurally can't* cover — a run that never
+        // happened (cron dead, schedule stopped) — is caught by the monitor
+        // paging on a missing heartbeat. A degraded run signals `success=false`.
+        // No-op unless HEARTBEAT_URL is set. Fail-soft.
+        notify::ping_heartbeat(failures.is_empty()).await;
 
         info!(
             season = self.season,

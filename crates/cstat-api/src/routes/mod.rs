@@ -1,4 +1,5 @@
 pub mod archetypes;
+pub mod client_error;
 pub mod coaches;
 pub mod draft;
 pub mod games;
@@ -35,4 +36,5 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(projections::router())
         .merge(recruits::router())
         .merge(draft::router())
+        .merge(client_error::router())
 }

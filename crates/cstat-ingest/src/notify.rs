@@ -36,9 +36,13 @@ pub enum SlackChannel {
     /// `#cron-job-alerts` — nightly ingest run notifications (success heartbeat /
     /// degraded / aborted). Set on the Railway cron service.
     Cron,
-    // Future buckets, wired the day their producer exists:
-    //   ErrorsApi,  // #errors-api — cstat-api runtime errors  → SLACK_WEBHOOK_ERRORS_API
-    //   ErrorsWeb,  // #errors-web — frontend error reports     → SLACK_WEBHOOK_ERRORS_WEB
+    /// `#errors-api` — cstat-api runtime failures: boot/startup aborts (bad ONNX
+    /// export, missing config, migration failure) and 5xx/panic taps. Set on the
+    /// API service.
+    ErrorsApi,
+    /// `#errors-web` — frontend error reports forwarded from the browser via
+    /// `POST /api/client-error`. Set on the API service (the sink lives there).
+    ErrorsWeb,
 }
 
 impl SlackChannel {
@@ -46,6 +50,8 @@ impl SlackChannel {
     pub fn env_var(self) -> &'static str {
         match self {
             SlackChannel::Cron => "SLACK_WEBHOOK_CRON",
+            SlackChannel::ErrorsApi => "SLACK_WEBHOOK_ERRORS_API",
+            SlackChannel::ErrorsWeb => "SLACK_WEBHOOK_ERRORS_WEB",
         }
     }
 
@@ -55,6 +61,7 @@ impl SlackChannel {
     fn webhook(self) -> Option<String> {
         non_empty_env(self.env_var()).or_else(|| match self {
             SlackChannel::Cron => non_empty_env("INGEST_ALERT_WEBHOOK"),
+            _ => None,
         })
     }
 }
@@ -136,6 +143,44 @@ pub async fn purge_edge_cache() {
     }
 }
 
+/// Ping an external dead-man's-switch monitor (healthchecks.io / Cronitor /
+/// Better Uptime "heartbeat" URL) at the end of a nightly run. Unlike the Slack
+/// pings — which only fire *when a run runs* — this lets an external service
+/// alert on the run that **never happened** (cron service dead, schedule
+/// silently stopped): the monitor expects a ping each morning and pages when one
+/// is missing. `success=false` appends `/fail` (the healthchecks.io convention)
+/// so a degraded run can signal failure without waiting out the grace period.
+///
+/// No-op when `HEARTBEAT_URL` is unset. Fail-soft — a monitor we can't reach must
+/// never affect the ingest it observes.
+pub async fn ping_heartbeat(success: bool) {
+    let Some(base) = non_empty_env("HEARTBEAT_URL") else {
+        info!("HEARTBEAT_URL unset; skipping dead-man's-switch ping");
+        return;
+    };
+    let url = if success {
+        base
+    } else {
+        format!("{}/fail", base.trim_end_matches('/'))
+    };
+
+    let client = match reqwest::Client::builder().timeout(NOTIFY_TIMEOUT).build() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "failed to build heartbeat HTTP client; skipping ping");
+            return;
+        }
+    };
+
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => info!(success, "pinged heartbeat monitor"),
+        Ok(resp) => {
+            warn!(status = %resp.status(), "heartbeat ping returned non-success; continuing")
+        }
+        Err(e) => warn!(error = %e, "failed to ping heartbeat monitor; continuing"),
+    }
+}
+
 /// Read an env var, treating a present-but-empty value as absent. Railway and
 /// other platforms sometimes inject empty strings for unset config.
 fn non_empty_env(key: &str) -> Option<String> {
@@ -151,5 +196,13 @@ mod tests {
         // These names are a contract with the deployed Railway env config — a
         // silent rename here stops prod alerts from posting. Pin them.
         assert_eq!(SlackChannel::Cron.env_var(), "SLACK_WEBHOOK_CRON");
+        assert_eq!(
+            SlackChannel::ErrorsApi.env_var(),
+            "SLACK_WEBHOOK_ERRORS_API"
+        );
+        assert_eq!(
+            SlackChannel::ErrorsWeb.env_var(),
+            "SLACK_WEBHOOK_ERRORS_WEB"
+        );
     }
 }

@@ -5,8 +5,9 @@
 //! `/api/health` so a saturated server can still pass its platform
 //! healthcheck (and get restarted rather than silently wedged).
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Request, State},
@@ -14,8 +15,15 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Json, Response},
 };
+use cstat_ingest::notify::{self, SlackChannel};
 use serde_json::json;
 use tokio::sync::Semaphore;
+
+/// Minimum spacing between `#errors-api` alerts. A crash loop or a burst of 5xx
+/// would otherwise flood the channel; one alert per window is enough to prompt a
+/// look at the logs, and the throttle is shared across the 5xx tap and the panic
+/// hook so a panic that also produces a 5xx doesn't double-post.
+const ERROR_ALERT_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Default seconds a single request may run before it's abandoned with 408.
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -139,6 +147,98 @@ pub async fn static_asset_cache(req: Request, next: Next) -> Response {
     resp
 }
 
+// ---------------------------------------------------------------------------
+// #errors-api alerting: a 5xx response tap + a process panic hook, both sharing
+// one in-process throttle so they can't flood the channel.
+// ---------------------------------------------------------------------------
+
+/// Monotonic origin for the alert throttle. Wall-clock isn't needed — we only
+/// measure *spacing* between alerts, so an `Instant` baseline is enough (and
+/// immune to clock jumps).
+fn alert_epoch() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
+/// Admit an alert at most once per [`ERROR_ALERT_COOLDOWN`]. Stores millis-since-
+/// [`alert_epoch`] of the last admitted alert in an atomic; a CAS makes racing
+/// callers agree on who wins the window. `u64::MAX` is the "never alerted"
+/// sentinel — `0` can't be, since `now_ms` is legitimately `0` in the first
+/// millisecond after startup.
+fn error_alert_allowed() -> bool {
+    static LAST_MS: AtomicU64 = AtomicU64::new(u64::MAX);
+    let now_ms = alert_epoch().elapsed().as_millis() as u64;
+    let cooldown_ms = ERROR_ALERT_COOLDOWN.as_millis() as u64;
+    loop {
+        let last = LAST_MS.load(Ordering::Relaxed);
+        if last != u64::MAX && now_ms.saturating_sub(last) < cooldown_ms {
+            return false;
+        }
+        if LAST_MS
+            .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+/// Tap responses and alert `#errors-api` on a 5xx — a genuine server fault.
+/// Deliberately ignores 4xx (client errors: bad params, 404s) and the two
+/// *intentional* backpressure statuses that are technically 5xx-adjacent: 503
+/// load-shed (this file) is deliberate, and 408 timeout is a 4xx anyway. The
+/// post is spawned + throttled so it never adds latency to the request path and
+/// a flood can't spam Slack. No-op unless `SLACK_WEBHOOK_ERRORS_API` is set.
+pub async fn error_alert(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let resp = next.run(req).await;
+    let status = resp.status();
+    if status.is_server_error()
+        && status != StatusCode::SERVICE_UNAVAILABLE
+        && error_alert_allowed()
+    {
+        let msg = format!(
+            ":rotating_light: *cstat-api {status}* on `{method} {path}` \
+             _(further error alerts throttled for {}s)_",
+            ERROR_ALERT_COOLDOWN.as_secs()
+        );
+        tokio::spawn(async move { notify::post_slack(SlackChannel::ErrorsApi, &msg).await });
+    }
+    resp
+}
+
+/// Install a panic hook that forwards an unexpected panic (in a request handler
+/// or anywhere) to `#errors-api`, in addition to the default backtrace logging.
+/// Shares the 5xx throttle. Call once at startup, before serving.
+pub fn install_panic_alert_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Keep the default behaviour (backtrace → stderr/logs) first.
+        prev(info);
+        if !error_alert_allowed() {
+            return;
+        }
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+        let msg = format!(":rotating_light: *cstat-api panic* at `{location}` — {payload}");
+        // The hook is sync; hand the post to the runtime if one is live (it is,
+        // during request handling). Best-effort — a panic during shutdown may
+        // have no runtime to spawn onto, which is fine.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move { notify::post_slack(SlackChannel::ErrorsApi, &msg).await });
+        }
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +274,19 @@ mod tests {
         assert!(!is_immutable_asset_path("/favicon.svg"));
         // API paths carry their own short-TTL header, not the immutable one.
         assert!(!is_immutable_asset_path("/api/teams/rankings"));
+    }
+
+    #[test]
+    fn error_alert_throttle_admits_first_then_suppresses() {
+        // First candidate in a fresh window is admitted; an immediate follow-up
+        // is suppressed (they land inside the same cooldown). The throttle uses
+        // process-global state, so this test asserts the "second call within the
+        // window is denied" contract rather than exact counts.
+        assert!(error_alert_allowed(), "first alert should be admitted");
+        assert!(
+            !error_alert_allowed(),
+            "a second alert inside the cooldown must be suppressed"
+        );
     }
 
     #[test]
