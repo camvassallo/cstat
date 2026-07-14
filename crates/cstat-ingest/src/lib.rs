@@ -57,7 +57,20 @@ pub fn today_utc() -> NaiveDate {
     }
     if let Ok(s) = std::env::var("CSTAT_SIMULATED_DATE") {
         match NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-            Ok(d) => return d,
+            Ok(d) => {
+                // Warn once per process: a *lingering* override on a real
+                // service (API or cron) is the dangerous case, and a silent
+                // one would never be caught.
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    warn!(
+                        simulated_date = %d,
+                        "CSTAT_SIMULATED_DATE override active — all date-sensitive behavior \
+                         uses the simulated clock"
+                    );
+                });
+                return d;
+            }
             Err(_) => warn!(
                 value = %s,
                 "CSTAT_SIMULATED_DATE is not a valid YYYY-MM-DD date; using the real clock"

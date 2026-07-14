@@ -519,6 +519,53 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // A leftover simulated clock is dangerous on a real service: the nightly
+    // window pins to one past date forever while every monitor stays green,
+    // and predict blends live forecasts against a stale "today". Every run of
+    // this binary announces it loudly; the nightly additionally marks the run
+    // degraded so the Slack summary surfaces it in prod.
+    if let Ok(sim_date) = std::env::var("CSTAT_SIMULATED_DATE") {
+        warn!(
+            sim_date,
+            "CSTAT_SIMULATED_DATE is set — all date-sensitive defaults (season, nightly window) \
+             use the simulated clock. Unset it on any real service."
+        );
+    }
+
+    // Simulate dispatches BEFORE the shared main-DB setup below: an isolated,
+    // offline sim run must not connect to (or migrate!) the main DATABASE_URL
+    // database, must not require NATSTAT_API_KEY, and `--no-cache` must never
+    // clear the main DB's api_cache as a side effect.
+    if let Commands::Simulate {
+        year,
+        from,
+        to,
+        step_days,
+        reset,
+        database_url,
+        csv_dir,
+        no_compute,
+    } = cli.command
+    {
+        let sim_url = database_url
+            .or_else(|| std::env::var("CSTAT_SIM_DATABASE_URL").ok())
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_else(|| "postgres://cstat:cstat@localhost:5433/cstat_sim".to_string());
+        let opts = cstat_ingest::simulate::SimulateOptions {
+            season: year,
+            from: chrono::NaiveDate::parse_from_str(&from, "%Y-%m-%d")
+                .map_err(|e| anyhow::anyhow!("--from {from}: {e}"))?,
+            to: chrono::NaiveDate::parse_from_str(&to, "%Y-%m-%d")
+                .map_err(|e| anyhow::anyhow!("--to {to}: {e}"))?,
+            step_days,
+            reset,
+            csv_dir,
+            database_url: sim_url,
+            no_compute,
+        };
+        return cstat_ingest::simulate::run(opts).await;
+    }
+
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let api_key = std::env::var("NATSTAT_API_KEY").expect("NATSTAT_API_KEY must be set");
 
@@ -726,37 +773,10 @@ async fn main() -> Result<()> {
             print!("{report}");
         }
 
-        Commands::Simulate {
-            year,
-            from,
-            to,
-            step_days,
-            reset,
-            database_url,
-            csv_dir,
-            no_compute,
-        } => {
-            // Deliberately ignores the main-DB `db`/`client` connected above:
-            // simulate builds its own pool + fixture-backed client against the
-            // isolated sim database (and refuses to run if they alias).
-            let sim_url = database_url
-                .or_else(|| std::env::var("CSTAT_SIM_DATABASE_URL").ok())
-                .filter(|u| !u.trim().is_empty())
-                .unwrap_or_else(|| "postgres://cstat:cstat@localhost:5433/cstat_sim".to_string());
-            let opts = cstat_ingest::simulate::SimulateOptions {
-                season: year,
-                from: chrono::NaiveDate::parse_from_str(&from, "%Y-%m-%d")
-                    .map_err(|e| anyhow::anyhow!("--from {from}: {e}"))?,
-                to: chrono::NaiveDate::parse_from_str(&to, "%Y-%m-%d")
-                    .map_err(|e| anyhow::anyhow!("--to {to}: {e}"))?,
-                step_days,
-                reset,
-                csv_dir,
-                database_url: sim_url,
-                no_compute,
-            };
-            cstat_ingest::simulate::run(opts).await?;
-        }
+        // Simulate is dispatched before the main-DB setup at the top of
+        // main() — an isolated sim run never touches DATABASE_URL. This arm
+        // is unreachable but keeps the match exhaustive.
+        Commands::Simulate { .. } => unreachable!("simulate dispatches before main-DB setup"),
 
         Commands::Status => {
             let remaining = client.rate_limit_remaining().await;

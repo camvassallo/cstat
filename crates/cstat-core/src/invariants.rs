@@ -64,11 +64,11 @@ pub async fn check_season(
 /// Every team with at least one *solver-eligible* box score must come out of
 /// compute with a `team_season_stats` row carrying a non-NULL AdjEM. The
 /// eligibility filter mirrors `compute_adjusted_efficiency`'s input exactly
-/// (resolved opponent + points/fga present): a team whose only games so far
-/// are vs non-D1 opponents (`opponent_id` NULL — common in the season's first
-/// week) legitimately has no AdjEM yet and must not trip the gate. A
-/// violation therefore means the solver skipped a team it should have rated,
-/// and the rankings/predict surfaces would serve holes.
+/// (resolved opponent, points/fga present, and estimated possessions > 0): a
+/// team whose only games so far are vs non-D1 opponents (`opponent_id` NULL —
+/// common in the season's first week) legitimately has no AdjEM yet and must
+/// not trip the gate. A violation therefore means the solver skipped a team
+/// it should have rated, and the rankings/predict surfaces would serve holes.
 async fn team_with_games_missing_adjem(
     pool: &PgPool,
     season: i32,
@@ -81,7 +81,10 @@ async fn team_with_games_missing_adjem(
           AND EXISTS (SELECT 1 FROM team_game_stats tgs
                       WHERE tgs.team_id = t.id AND tgs.season = $1
                         AND tgs.opponent_id IS NOT NULL
-                        AND tgs.points IS NOT NULL AND tgs.fga IS NOT NULL)
+                        AND tgs.points IS NOT NULL AND tgs.fga IS NOT NULL
+                        AND (tgs.fga - COALESCE(tgs.off_rebounds, 0)
+                             + COALESCE(tgs.turnovers, 0)
+                             + 0.44 * COALESCE(tgs.fta, 0)) > 0)
           AND NOT EXISTS (SELECT 1 FROM team_season_stats tss
                           WHERE tss.team_id = t.id AND tss.season = $1
                             AND tss.adj_efficiency_margin IS NOT NULL)
@@ -160,8 +163,9 @@ async fn wl_record_mismatch(
 
 /// No fully-swapped game may survive compute — the same bidirectional
 /// cross-tag detector `compute::correct_swapped_games` uses (issue #119),
-/// season-scoped. Kept in sync with `tests/swapped_games.rs`.
-async fn fully_swapped_games_remain(
+/// season-scoped. `pub` so `tests/swapped_games.rs` asserts through this
+/// exact query instead of carrying its own copy.
+pub async fn fully_swapped_games_remain(
     pool: &PgPool,
     season: i32,
 ) -> Result<Option<InvariantViolation>, sqlx::Error> {
@@ -207,8 +211,9 @@ async fn fully_swapped_games_remain(
 
 /// No phantom-swapped game may survive compute — the same gate
 /// `compute::repair_phantom_swapped_games` uses (issue #140), season-scoped.
-/// Kept in sync with `tests/swapped_games.rs`.
-async fn phantom_swapped_games_remain(
+/// `pub` so `tests/swapped_games.rs` asserts through this exact query
+/// instead of carrying its own copy.
+pub async fn phantom_swapped_games_remain(
     pool: &PgPool,
     season: i32,
 ) -> Result<Option<InvariantViolation>, sqlx::Error> {

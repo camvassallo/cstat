@@ -64,6 +64,19 @@ async fn main() -> Result<()> {
 /// migration mismatch, missing NatStat key, or an ONNX export whose meta drifted
 /// — is caught by the caller and alerted instead of crash-looping silently.
 async fn boot_and_serve() -> Result<()> {
+    // A lingering simulated clock on the serving API is a silent hazard: the
+    // predict future-check, the early-season preseason blend, and every
+    // route's default season all read `cstat_ingest::today_utc()`, which
+    // honors this env var. Legitimate only for local out-of-season testing —
+    // announce it loudly so it can never linger unnoticed on a real service.
+    if let Ok(sim_date) = std::env::var("CSTAT_SIMULATED_DATE") {
+        tracing::warn!(
+            sim_date,
+            "CSTAT_SIMULATED_DATE is set — the API is serving on a SIMULATED clock \
+             (default season, predict future-check, preseason blend). Unset it in prod."
+        );
+    }
+
     // Connect to database
     let database_url =
         std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;

@@ -1261,12 +1261,12 @@ function ResultHeadline({
     preseason: {
       label: 'Preseason',
       cls: 'bg-sky-900/60 text-sky-300',
-      title: `Preseason-weighted blend as of ${result.as_of_date ?? 'today'}. This early, in-game data is thin, so the forecast leans on the preseason roster projection (r≈0.88) — ~70/30 preseason/point-in-time at tip-off, decaying as games accrue.`,
+      title: `Preseason-weighted blend as of ${result.as_of_date ?? 'today'}. This early, in-game data is thin, so the forecast leans on the preseason roster projection (r≈0.88) — ~70/30 preseason/${result.as_of_date ? 'point-in-time form' : 'current form'} at tip-off, decaying as games accrue.`,
     },
     blended: {
       label: 'Blended',
       cls: 'bg-teal-900/60 text-teal-300',
-      title: `Blend of the preseason roster projection and point-in-time form as of ${result.as_of_date ?? 'today'}. Preseason weight decays from Nov 1 (peak 0.70) to zero by ~mid-December as in-season data accumulates.`,
+      title: `Blend of the preseason roster projection and ${result.as_of_date ? 'point-in-time form' : 'current form'} as of ${result.as_of_date ?? 'today'}. Preseason weight decays from Nov 1 (peak 0.70) to zero by ~mid-December as in-season data accumulates.`,
     },
     pit: {
       label: 'Point-in-time',

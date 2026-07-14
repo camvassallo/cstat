@@ -74,6 +74,18 @@ pub struct SimulateOptions {
     pub no_compute: bool,
 }
 
+/// Restores the process globals a sim run mutates — the simulated clock and
+/// the notification mute — on drop, so every exit path (including early `?`
+/// error returns) leaves the process in its real-clock, alerts-on state.
+struct SimGlobalsGuard;
+
+impl Drop for SimGlobalsGuard {
+    fn drop(&mut self) {
+        set_simulated_today(None);
+        notify::set_suppressed(false);
+    }
+}
+
 /// Per-window outcome for the final report.
 struct WindowOutcome {
     start: NaiveDate,
@@ -96,10 +108,14 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
     }
     assert_isolated(&opts.database_url)?;
 
-    // Mute Slack / Cloudflare / heartbeat for the whole process: a simulated
-    // nightly must never post to the real alert channels, even with a fully
-    // configured operator .env.
+    // Mute Slack / Cloudflare / heartbeat and take ownership of the simulated
+    // clock for the whole process: a simulated nightly must never post to the
+    // real alert channels, even with a fully configured operator .env. The
+    // guard's Drop restores both globals on EVERY exit path — early `?`
+    // returns included — so a failed sim can't leave a long-lived caller
+    // (tests) with a pinned clock or muted alerts.
     notify::set_suppressed(true);
+    let _globals = SimGlobalsGuard;
 
     info!(
         season = opts.season,
@@ -255,9 +271,6 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
         }
     }
 
-    set_simulated_today(None);
-    notify::set_suppressed(false);
-
     render_report(&opts, &outcomes, &hard_failures, &idempotency_drift);
 
     let violation_windows = outcomes.iter().filter(|o| !o.violations.is_empty()).count();
@@ -273,9 +286,12 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
     Ok(())
 }
 
-/// Refuse to run against the main or prod database. Compares resolved
-/// host/port/database triples, not raw strings, so credential or query-param
-/// differences can't sneak an alias through.
+/// Refuse to run against the main or prod database. Compares
+/// host/port/database triples parsed out of the URLs (so credential or
+/// query-param differences can't sneak an alias through), with hosts
+/// compared by **resolved IP overlap** — `localhost`, `127.0.0.1`, `::1`,
+/// and a DNS name for the same machine must all count as the same host, or
+/// a port typo plus `--reset` could `DROP SCHEMA` on the real database.
 fn assert_isolated(sim_url: &str) -> Result<()> {
     let sim = PgConnectOptions::from_str(sim_url)
         .with_context(|| format!("invalid sim database URL: {sim_url}"))?;
@@ -292,10 +308,7 @@ fn assert_isolated(sim_url: &str) -> Result<()> {
         let Ok(other) = PgConnectOptions::from_str(&other_url) else {
             continue;
         };
-        if sim.get_host() == other.get_host()
-            && sim.get_port() == other.get_port()
-            && sim.get_database() == other.get_database()
-        {
+        if urls_conflict(&sim, &other) {
             bail!(
                 "refusing to simulate against the {label} database: the sim URL resolves to \
                  the same host/port/database as {var}. Point CSTAT_SIM_DATABASE_URL (or \
@@ -306,6 +319,38 @@ fn assert_isolated(sim_url: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Two connect targets collide when port and database match and the hosts
+/// are the same machine (textually, or by any shared resolved IP).
+fn urls_conflict(sim: &PgConnectOptions, other: &PgConnectOptions) -> bool {
+    sim.get_port() == other.get_port()
+        && sim.get_database() == other.get_database()
+        && same_host(sim.get_host(), other.get_host())
+}
+
+/// Host equality with alias handling: exact (case-insensitive) match, or a
+/// non-empty intersection of resolved IPs. Resolution failures fall back to
+/// the textual comparison — the guard errs toward refusing only what it can
+/// prove, but `localhost`/`127.0.0.1`/`::1` always resolve locally. IPv6
+/// URL brackets (`[::1]`) are stripped before comparing/resolving.
+fn same_host(a: &str, b: &str) -> bool {
+    let a = a.trim_start_matches('[').trim_end_matches(']');
+    let b = b.trim_start_matches('[').trim_end_matches(']');
+    if a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    let ips_a = resolve_host(a);
+    let ips_b = resolve_host(b);
+    !ips_a.is_empty() && ips_a.iter().any(|ip| ips_b.contains(ip))
+}
+
+fn resolve_host(host: &str) -> Vec<std::net::IpAddr> {
+    use std::net::ToSocketAddrs;
+    (host, 0u16)
+        .to_socket_addrs()
+        .map(|addrs| addrs.map(|sa| sa.ip()).collect())
+        .unwrap_or_default()
 }
 
 /// Drop and recreate the `public` schema — returns the sim DB to the same
@@ -475,12 +520,12 @@ fn teamcodes_payload(id_map: &HashMap<String, String>) -> Value {
 // flag at `game.loc` and the game id at `game-code`; teamperfs nest stats
 // under `stats` with the home flag at `game.location` and the game id at
 // `game.id`. Stat cells pass through as strings — the parse helpers accept
-// string-encoded numbers, matching NatStat v3's encoding.
+// string-encoded numbers, matching NatStat v3's encoding. The `cell`/`pct`
+// CSV helpers are shared with `bootstrap_csv` so both consumers of these
+// files parse identically.
 // ---------------------------------------------------------------------------
 
-fn cell(row: &csv::StringRecord, idx: usize) -> &str {
-    row.get(idx).unwrap_or("").trim()
-}
+use bootstrap_csv::{cell, parse_i32, pct};
 
 /// Insert `key: value` only when the CSV cell is non-empty (missing keys →
 /// NULL columns, same as a real API payload omitting the field).
@@ -490,17 +535,11 @@ fn put(map: &mut Map<String, Value>, key: &str, cell: &str) {
     }
 }
 
-/// (made, attempts) → 0–100-scale percentage string, matching the API's
+/// (made, attempts) → 0–100-scale percentage, matching the API's
 /// `fgpct`-style fields (the JSON ingest path stores them as-is and never
 /// derives them from makes/attempts, so the fixture must supply them).
 fn pct_cell(row: &csv::StringRecord, made_idx: usize, att_idx: usize) -> Option<f64> {
-    let made: f64 = cell(row, made_idx).parse().ok()?;
-    let att: f64 = cell(row, att_idx).parse().ok()?;
-    if att > 0.0 {
-        Some(100.0 * made / att)
-    } else {
-        None
-    }
+    pct(parse_i32(cell(row, made_idx)), parse_i32(cell(row, att_idx)))
 }
 
 /// Games.csv: ID(0) GameDay(1) GameTime(2) Home(3) HomeID(4) Visitor(5)
@@ -693,5 +732,59 @@ fn render_report(
                 println!("  {d}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(url: &str) -> PgConnectOptions {
+        PgConnectOptions::from_str(url).unwrap()
+    }
+
+    #[test]
+    fn guard_catches_loopback_aliases() {
+        // localhost vs 127.0.0.1 vs ::1 are the same machine — a port typo
+        // must not slip past the guard on a hostname-spelling difference.
+        for (a, b) in [
+            ("localhost", "localhost"),
+            ("localhost", "127.0.0.1"),
+            ("127.0.0.1", "localhost"),
+            ("localhost", "[::1]"),
+        ] {
+            assert!(
+                urls_conflict(
+                    &opts(&format!("postgres://cstat:cstat@{a}:5432/cstat")),
+                    &opts(&format!("postgres://cstat:cstat@{b}:5432/cstat")),
+                ),
+                "{a} vs {b} on same port+db should conflict"
+            );
+        }
+    }
+
+    #[test]
+    fn guard_allows_genuinely_isolated_targets() {
+        let main = opts("postgres://cstat:cstat@localhost:5432/cstat");
+        // Different port (the compose sim service).
+        assert!(!urls_conflict(
+            &opts("postgres://cstat:cstat@127.0.0.1:5433/cstat_sim"),
+            &main
+        ));
+        // Same port, different database.
+        assert!(!urls_conflict(
+            &opts("postgres://cstat:cstat@localhost:5432/cstat_sim"),
+            &main
+        ));
+    }
+
+    #[test]
+    fn guard_ignores_credential_and_param_differences() {
+        // Same host/port/db with different creds or query params still
+        // conflicts — the triple is what identifies the database.
+        assert!(urls_conflict(
+            &opts("postgres://other:pw@127.0.0.1:5432/cstat?sslmode=disable"),
+            &opts("postgres://cstat:cstat@localhost:5432/cstat"),
+        ));
     }
 }

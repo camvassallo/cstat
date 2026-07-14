@@ -179,7 +179,9 @@ pub(crate) fn find_csv(dir: &Path, year: i32, kind: &str) -> Result<PathBuf> {
 // Cell parsers — CSV strings are all quoted; missing values are empty strings.
 // ---------------------------------------------------------------------------
 
-fn cell(row: &csv::StringRecord, idx: usize) -> &str {
+/// `pub(crate)`: shared with the `simulate` fixture synthesizer, which reads
+/// the same CSVs.
+pub(crate) fn cell(row: &csv::StringRecord, idx: usize) -> &str {
     row.get(idx).unwrap_or("").trim()
 }
 
@@ -187,7 +189,8 @@ fn cell_owned(row: &csv::StringRecord, idx: usize) -> String {
     cell(row, idx).to_string()
 }
 
-fn parse_i32(s: &str) -> Option<i32> {
+/// `pub(crate)`: shared with the `simulate` fixture synthesizer.
+pub(crate) fn parse_i32(s: &str) -> Option<i32> {
     let s = s.trim();
     if s.is_empty() { None } else { s.parse().ok() }
 }
@@ -212,7 +215,9 @@ fn maybe(s: &str) -> Option<&str> {
 /// pipeline and frontends key off this scale — using fractions here would
 /// shift CSV-loaded seasons into a different range and break percentiles
 /// + rankings across the cohort.
-fn pct(made: Option<i32>, attempts: Option<i32>) -> Option<f64> {
+/// `pub(crate)`: shared with the `simulate` fixture synthesizer so both
+/// CSV consumers apply the identical percentage convention.
+pub(crate) fn pct(made: Option<i32>, attempts: Option<i32>) -> Option<f64> {
     match (made, attempts) {
         (Some(m), Some(a)) if a > 0 => Some(100.0 * m as f64 / a as f64),
         _ => None,
