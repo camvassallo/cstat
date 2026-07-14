@@ -155,12 +155,25 @@ async fn predict(
         // A missing-data error (a team with no stats for this season) is a
         // client error → 404, so it doesn't 500 and page #errors-api on a bad
         // team/season combo. Genuine failures keep their 500.
-        let status = if e.starts_with(NO_PREDICTION_DATA_PREFIX) {
-            StatusCode::NOT_FOUND
+        if e.starts_with(NO_PREDICTION_DATA_PREFIX) {
+            // Still log it: this same signal would fire if a *real* program lost
+            // its stats row to a compute regression (a data gap), which no longer
+            // pages #errors-api. The log line keeps that case detectable; a
+            // games-aware distinction (page only when the team actually played)
+            // is a possible follow-up.
+            tracing::warn!(
+                home = %params.home,
+                away = %params.away,
+                season,
+                "predict: no prediction data for this matchup — returning 404"
+            );
+            (StatusCode::NOT_FOUND, Json(json!({ "error": e })))
         } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        (status, Json(json!({ "error": e })))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e })),
+            )
+        }
     })?;
 
     // Early-season preseason × pit blend (ROADMAP §6). Only on the honest

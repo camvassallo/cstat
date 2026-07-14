@@ -204,14 +204,31 @@ static ERROR_5XX_THROTTLE: AlertThrottle = AlertThrottle::new(ERROR_ALERT_COOLDO
 /// signal and must get through).
 static PANIC_THROTTLE: AlertThrottle = AlertThrottle::new(ERROR_ALERT_COOLDOWN);
 
-/// Query-param keys whose *values* are redacted before an error alert is posted,
-/// so a secret that rode in on the URL (e.g. the alert self-test `token`) never
-/// lands in Slack. Matched case-insensitively.
-const REDACT_QUERY_KEYS: &[&str] = &["token", "key", "secret", "password", "jwt", "apikey"];
+/// Substrings that, if present in a query-param **key** (case-insensitive), cause
+/// its value to be redacted before an error alert is posted — so a secret that
+/// rode in on the URL never lands in Slack. Substring (not exact) match so
+/// compound keys like `access_token` / `api_key` / `x-auth-token` are caught.
+/// Erring toward over-redaction is deliberate: dropping a benign value from an
+/// alert is harmless, leaking a credential is not.
+const REDACT_QUERY_SUBSTRINGS: &[&str] = &[
+    "token",
+    "key",
+    "secret",
+    "password",
+    "passwd",
+    "pwd",
+    "apikey",
+    "jwt",
+    "credential",
+    "bearer",
+    "session",
+    "auth",
+    "sig",
+];
 
 /// The request target (path + query) for an error alert, so the failing request
 /// is reproducible from the message — with sensitive query values redacted (see
-/// [`REDACT_QUERY_KEYS`]). Returns just the path when there's no query.
+/// [`REDACT_QUERY_SUBSTRINGS`]). Returns just the path when there's no query.
 fn alert_target(uri: &axum::http::Uri) -> String {
     let path = uri.path();
     let Some(query) = uri.query() else {
@@ -221,10 +238,8 @@ fn alert_target(uri: &axum::http::Uri) -> String {
         .split('&')
         .map(|pair| {
             let key = pair.split_once('=').map(|(k, _)| k).unwrap_or(pair);
-            if REDACT_QUERY_KEYS
-                .iter()
-                .any(|s| key.eq_ignore_ascii_case(s))
-            {
+            let lower = key.to_ascii_lowercase();
+            if REDACT_QUERY_SUBSTRINGS.iter().any(|s| lower.contains(s)) {
                 format!("{key}=<redacted>")
             } else {
                 pair.to_string()
@@ -362,6 +377,13 @@ mod tests {
         assert_eq!(
             alert_target(&uri("/api/alert-selftest?channel=api&Token=abc123")),
             "/api/alert-selftest?channel=api&Token=<redacted>"
+        );
+        // Compound / aliased credential keys are caught by substring match.
+        assert_eq!(
+            alert_target(&uri(
+                "/x?access_token=a&api_key=b&authorization=c&home=Duke"
+            )),
+            "/x?access_token=<redacted>&api_key=<redacted>&authorization=<redacted>&home=Duke"
         );
     }
 

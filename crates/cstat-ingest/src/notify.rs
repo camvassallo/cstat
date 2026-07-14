@@ -72,22 +72,43 @@ impl SlackChannel {
     }
 }
 
+/// Outcome of a Slack post, for callers that must know whether it actually
+/// landed rather than fire-and-forget (the alert self-test endpoint). Ordinary
+/// alert call sites use [`post_slack`] and ignore this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlackPostOutcome {
+    /// Posted and Slack returned 2xx.
+    Sent,
+    /// This channel's webhook env var is unset — nothing was sent.
+    NotConfigured,
+    /// The webhook is set but the POST failed (non-2xx or a transport error).
+    Failed,
+}
+
 /// Post a message to a Slack channel (used for success heartbeats as well as
 /// failure alerts). No-op when that channel's webhook env var is unset. Never
 /// panics, never propagates an error — a failed post is logged and swallowed.
 pub async fn post_slack(channel: SlackChannel, text: &str) {
+    let _ = post_slack_checked(channel, text).await;
+}
+
+/// Like [`post_slack`] but returns whether the message actually landed. Callers
+/// that report on the alert pipeline's health (the self-test) need this — a
+/// fire-and-forget `post_slack` would let them claim success on a silently
+/// failed POST. Still never panics or propagates an error.
+pub async fn post_slack_checked(channel: SlackChannel, text: &str) -> SlackPostOutcome {
     let Some(webhook) = channel.webhook() else {
         // No webhook configured (e.g. local runs) — surface the would-be message
-        // in the logs so it isn't lost, then return.
+        // in the logs so it isn't lost, then report it.
         info!(message = %text, env = channel.env_var(), "Slack webhook unset; skipping post");
-        return;
+        return SlackPostOutcome::NotConfigured;
     };
 
     let client = match reqwest::Client::builder().timeout(NOTIFY_TIMEOUT).build() {
         Ok(c) => c,
         Err(e) => {
             warn!(error = %e, "failed to build Slack HTTP client; skipping post");
-            return;
+            return SlackPostOutcome::Failed;
         }
     };
 
@@ -99,12 +120,15 @@ pub async fn post_slack(channel: SlackChannel, text: &str) {
     {
         Ok(resp) if resp.status().is_success() => {
             info!(channel = ?channel, "posted notification to Slack");
+            SlackPostOutcome::Sent
         }
         Ok(resp) => {
             warn!(status = %resp.status(), "Slack post returned non-success; continuing");
+            SlackPostOutcome::Failed
         }
         Err(e) => {
             warn!(error = %e, "failed to post to Slack; continuing");
+            SlackPostOutcome::Failed
         }
     }
 }
