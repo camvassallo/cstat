@@ -24,11 +24,10 @@ use sqlx::postgres::PgPoolOptions;
 async fn pool_and_seasons() -> (PgPool, Vec<i32>) {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
     let pool = PgPoolOptions::new().connect(&url).await.unwrap();
-    let seasons: Vec<i32> =
-        sqlx::query_scalar("SELECT DISTINCT season FROM games ORDER BY season")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let seasons: Vec<i32> = sqlx::query_scalar("SELECT DISTINCT season FROM games ORDER BY season")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
     (pool, seasons)
 }
 
