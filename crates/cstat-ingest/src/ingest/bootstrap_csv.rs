@@ -214,7 +214,8 @@ fn maybe(s: &str) -> Option<&str> {
 /// fractions, and the API ingester stores them as-is). Downstream compute
 /// pipeline and frontends key off this scale — using fractions here would
 /// shift CSV-loaded seasons into a different range and break percentiles
-/// + rankings across the cohort.
+/// and rankings across the cohort.
+///
 /// `pub(crate)`: shared with the `simulate` fixture synthesizer so both
 /// CSV consumers apply the identical percentage convention.
 pub(crate) fn pct(made: Option<i32>, attempts: Option<i32>) -> Option<f64> {
