@@ -27,10 +27,17 @@ use axum::{
     routing::get,
 };
 use cstat_ingest::notify::{self, SlackChannel, SlackPostOutcome};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
 use crate::AppState;
+
+#[derive(Debug, Deserialize)]
+struct SelfTestParams {
+    /// `api` (default) or `web` — which error channel to exercise.
+    channel: Option<String>,
+}
 
 /// Env var holding the shared secret required to invoke the self-test. Unset →
 /// the endpoint is effectively disabled (always 404).
@@ -42,14 +49,17 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/alert-selftest", get(selftest))
 }
 
-/// Extract the `channel` value from a raw query string. Parsed by hand (rather
-/// than a typed `Query` extractor) so a malformed query can't produce a 400
-/// *before* the token gate — an unauthorized caller must always get the same
-/// 404 regardless of query, never a 400 that confirms the route exists.
+/// Extract the `channel` value from a raw query string. Parsed here (rather than
+/// via a typed `Query` extractor in the handler signature) so a malformed query
+/// can't produce a 400 *before* the token gate — an unauthorized caller must
+/// always get the same 404, never a 400 that confirms the route exists. Uses
+/// `serde_urlencoded` so percent-encoded values decode correctly (a hand-rolled
+/// substring match would send `%77eb` to the wrong channel); a parse error just
+/// yields `None` (→ default channel), never an error to the caller.
 fn channel_from_query(raw: Option<&str>) -> Option<String> {
-    raw?.split('&')
-        .find_map(|kv| kv.strip_prefix("channel="))
-        .map(|v| v.to_string())
+    serde_urlencoded::from_str::<SelfTestParams>(raw?)
+        .ok()?
+        .channel
 }
 
 /// Constant-time byte comparison — avoids leaking the token via response-timing
@@ -144,11 +154,13 @@ mod tests {
         );
         assert_eq!(channel_from_query(Some("nothing=here")), None);
         assert_eq!(channel_from_query(None), None);
-        // Malformed query never panics/errors (it can't 400 the request).
+        // Percent-encoded values decode correctly (not sent to the wrong channel).
         assert_eq!(
-            channel_from_query(Some("%ZZ&channel=web")).as_deref(),
+            channel_from_query(Some("channel=%77eb")).as_deref(),
             Some("web")
         );
+        // A malformed query yields None (default channel), never a 400.
+        assert_eq!(channel_from_query(Some("%ZZ")), None);
     }
 
     #[test]

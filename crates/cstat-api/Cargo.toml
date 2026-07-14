@@ -16,6 +16,10 @@ sqlx = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Decode the alert-selftest `channel` query param from RawQuery (axum's own Query
+# extractor uses this crate; already in the lock graph). Kept out of the handler
+# signature so a malformed query can't 400 before the token gate.
+serde_urlencoded = "0.7.1"
 chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
@@ -29,6 +33,3 @@ dotenvy = { workspace = true }
 # `system-fonts` (OS font scan), `memmap-fonts`, and `raster-images`
 # (gif/webp/jpeg decoders) are all dead weight on the build.
 resvg = { version = "0.45", default-features = false, features = ["text"] }
-
-[dev-dependencies]
-serde_urlencoded = "0.7.1"
