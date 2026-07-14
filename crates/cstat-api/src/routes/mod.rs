@@ -1,3 +1,4 @@
+pub mod alert_selftest;
 pub mod archetypes;
 pub mod client_error;
 pub mod coaches;

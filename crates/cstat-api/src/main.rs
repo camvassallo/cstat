@@ -161,6 +161,8 @@ async fn boot_and_serve() -> Result<()> {
         // (its exact reason to exist) could 503 real reads. It self-throttles
         // its Slack forwarding instead.
         .merge(routes::client_error::router())
+        // Un-guarded ops endpoint (token-gated) to verify the alert pipeline.
+        .merge(routes::alert_selftest::router())
         // SEO: sitemap index + child sitemaps (DB-generated), and per-page social
         // meta injected into the SPA's index.html for entity document routes.
         // These are non-/api paths that would otherwise fall through to the SPA.

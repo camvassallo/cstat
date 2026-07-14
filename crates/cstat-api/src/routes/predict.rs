@@ -152,10 +152,27 @@ async fn predict(
     )
     .await
     .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e })),
-        )
+        // Missing feature-extraction data → 404 (client error): we can't predict
+        // this matchup. Covers a not-yet-D1 program, a typo, AND the routine
+        // ingest-before-compute window. Deliberately never 500/pages: the request
+        // path can't reliably tell a typo from a real data outage, so any attempt
+        // to page here false-fires on normal states, DB blips, and bad input.
+        // Detecting a genuine data gap (a team that played but lost its stats /
+        // roster rows) is the compute pipeline's job — its post-run invariant
+        // checks (ROADMAP M5), which have full context and no typo noise. We log
+        // it so it's at least visible in server logs in the meantime.
+        if e.starts_with(NO_PREDICTION_DATA_PREFIX) {
+            tracing::warn!(
+                home = %params.home, away = %params.away, season,
+                "predict: no prediction data for this matchup — returning 404"
+            );
+            (StatusCode::NOT_FOUND, Json(json!({ "error": e })))
+        } else {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e })),
+            )
+        }
     })?;
 
     // Early-season preseason × pit blend (ROADMAP §6). Only on the honest
@@ -582,6 +599,26 @@ pub async fn predict_projection(
     })
 }
 
+/// Prefix marking a "we have no prediction inputs for this team/season" error —
+/// a `RowNotFound` out of feature extraction, which means one of the teams has no
+/// stats row for the requested season (e.g. a program that hadn't reached D1
+/// yet, like Utah Tech in 2021). That's a **client** error (a bad team/season
+/// combo), not a server fault, so the route maps it to 404 rather than 500 — a
+/// 500 here would page `#errors-api` on what is effectively a user typo. Any
+/// other sqlx error is a genuine failure and keeps its 500.
+const NO_PREDICTION_DATA_PREFIX: &str = "no prediction data";
+
+/// Turn a feature-extraction sqlx error into the route-facing message, tagging
+/// the missing-data case with [`NO_PREDICTION_DATA_PREFIX`] (see there).
+fn classify_feature_error(e: sqlx::Error, season: i32, what: &str) -> String {
+    match e {
+        sqlx::Error::RowNotFound => format!(
+            "{NO_PREDICTION_DATA_PREFIX}: one or both teams have no data for season {season}"
+        ),
+        other => format!("{what} failed: {other}"),
+    }
+}
+
 async fn run_predict(
     state: &Arc<AppState>,
     home_team_id: Uuid,
@@ -612,7 +649,7 @@ async fn run_predict(
             d,
         )
         .await
-        .map_err(|e| format!("pit feature extraction failed: {e}"))?,
+        .map_err(|e| classify_feature_error(e, season, "pit feature extraction"))?,
         None => cstat_core::features::build_all_features(
             &state.db.pool,
             home_team_id,
@@ -622,7 +659,7 @@ async fn run_predict(
             is_conference,
         )
         .await
-        .map_err(|e| format!("feature extraction failed: {e}"))?,
+        .map_err(|e| classify_feature_error(e, season, "feature extraction"))?,
     };
 
     // Margin + TreeSHAP from the diff vector; totals from the diff+sum
@@ -931,6 +968,21 @@ async fn find_team(pool: &PgPool, query: &str, season: i32) -> Result<TeamLookup
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_data_is_tagged_for_404_other_errors_are_not() {
+        // A RowNotFound (team has no stats for the season) is tagged so the
+        // route returns 404 instead of 500 (and so it doesn't page #errors-api).
+        let missing = classify_feature_error(sqlx::Error::RowNotFound, 2021, "feature extraction");
+        assert!(
+            missing.starts_with(NO_PREDICTION_DATA_PREFIX),
+            "RowNotFound must be tagged as missing-data, got: {missing}"
+        );
+        // A genuine failure keeps the plain message → stays a 500.
+        let real = classify_feature_error(sqlx::Error::PoolTimedOut, 2021, "feature extraction");
+        assert!(!real.starts_with(NO_PREDICTION_DATA_PREFIX));
+        assert!(real.contains("feature extraction failed"));
+    }
 
     fn params(venue: Option<&str>, neutral: bool) -> PredictParams {
         let venue = venue.map(|v| match v {

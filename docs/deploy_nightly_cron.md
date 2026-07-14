@@ -188,6 +188,26 @@ Two error buckets are wired and set on the **API service** (not the cron):
 
 Unset webhook → no posts (message still logged). Both are fail-soft.
 
+**Verifying the pipeline stays healthy** — `GET /api/alert-selftest?channel=api|web`
+posts a labelled synthetic message to the chosen error channel on demand, so you
+can confirm alerting works without waiting for a real fault (important once known
+bugs are fixed). Token-gated by **`ALERT_SELFTEST_TOKEN`** on the API service; the
+token goes in the **`X-Selftest-Token` header** (not the URL, so it isn't logged),
+compared in constant time. Returns **404** when the token is unset or wrong (so
+the endpoint isn't discoverable), and always **200** on an authorized call with a
+JSON body — assert on **`posted: true`** (it reflects whether the Slack POST
+actually landed, not just that the webhook var is set; `webhook_configured` and
+`detail` disambiguate a miss). Example:
+
+```bash
+curl -H "X-Selftest-Token: $ALERT_SELFTEST_TOKEN" \
+  "https://campom.org/api/alert-selftest?channel=api"
+# → {"posted":true,"channel":"errors-api","webhook_configured":true,"detail":"sent"}
+```
+
+Point a scheduled check at it (e.g. weekly, asserting `posted:true`) for
+continuous assurance.
+
 ### Adding a further alert channel
 
 Because a webhook is bound to one channel, a new bucket is a new webhook + a new
