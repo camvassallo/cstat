@@ -46,7 +46,7 @@ use crate::ingest::SeasonIngester;
 use crate::ingest::bootstrap_csv;
 use crate::{NatStatClient, notify, set_simulated_today};
 use cstat_core::Database;
-use cstat_core::invariants::{self, InvariantViolation};
+use cstat_core::invariants::{self, InvariantViolation, Severity};
 
 /// Fixture rows are chunked into pages of this size, and `meta.results-max`
 /// advertises it — it must equal the pagination stride `get_all_pages` uses
@@ -230,7 +230,10 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
                     invariants::check_season(&db.pool, opts.season).await?
                 };
                 for v in &violations {
-                    warn!(window = %range, "INVARIANT VIOLATED — {v}");
+                    match v.severity {
+                        Severity::Error => warn!(window = %range, "INVARIANT VIOLATED — {v}"),
+                        Severity::Warning => info!(window = %range, "invariant warning — {v}"),
+                    }
                 }
                 outcomes.push(WindowOutcome {
                     start: window_start,
@@ -273,7 +276,13 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
 
     render_report(&opts, &outcomes, &hard_failures, &idempotency_drift);
 
-    let violation_windows = outcomes.iter().filter(|o| !o.violations.is_empty()).count();
+    // Warnings (source-data gaps the pipeline faithfully reflects, e.g. a
+    // game whose statlines the CSV export never contained) are reported but
+    // don't fail the run — only Error-severity violations do.
+    let violation_windows = outcomes
+        .iter()
+        .filter(|o| o.violations.iter().any(|v| v.severity == Severity::Error))
+        .count();
     if !hard_failures.is_empty() || violation_windows > 0 || !idempotency_drift.is_empty() {
         bail!(
             "simulate FAILED: {} hard-failed window(s), {} window(s) with invariant violations, {} idempotency drift(s)",
@@ -539,7 +548,10 @@ fn put(map: &mut Map<String, Value>, key: &str, cell: &str) {
 /// `fgpct`-style fields (the JSON ingest path stores them as-is and never
 /// derives them from makes/attempts, so the fixture must supply them).
 fn pct_cell(row: &csv::StringRecord, made_idx: usize, att_idx: usize) -> Option<f64> {
-    pct(parse_i32(cell(row, made_idx)), parse_i32(cell(row, att_idx)))
+    pct(
+        parse_i32(cell(row, made_idx)),
+        parse_i32(cell(row, att_idx)),
+    )
 }
 
 /// Games.csv: ID(0) GameDay(1) GameTime(2) Home(3) HomeID(4) Visitor(5)

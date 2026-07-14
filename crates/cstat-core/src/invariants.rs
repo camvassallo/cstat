@@ -17,18 +17,38 @@ use sqlx::{PgPool, Row};
 /// mirrors `compute::correct_swapped_games` / the `swapped_games.rs` tests.
 const MIN_CROSS_SHARE: f64 = 0.80;
 
+/// How bad a violated check is.
+///
+/// `Error` = the pipeline produced something wrong from the data it had —
+/// always actionable, fails a simulate run. `Warning` = the *source* data has
+/// a hole the pipeline faithfully reflects (e.g. NatStat never delivered a
+/// team's box rows for a final game — the main DB carries ~26 such games
+/// across 2015–2026, and the 2020 CSV export lacks statlines for some games
+/// outright). Worth surfacing, but failing every run on a static source gap
+/// is alarm fatigue, not signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
 /// One failed invariant: `count` offending rows for `check`, with up to a
 /// handful of identifying `samples` for the report.
 #[derive(Debug, Clone)]
 pub struct InvariantViolation {
     pub check: &'static str,
+    pub severity: Severity,
     pub count: i64,
     pub samples: Vec<String>,
 }
 
 impl std::fmt::Display for InvariantViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {} violation(s)", self.check, self.count)?;
+        let tag = match self.severity {
+            Severity::Error => "",
+            Severity::Warning => " [warning]",
+        };
+        write!(f, "{}{}: {} violation(s)", self.check, tag, self.count)?;
         if !self.samples.is_empty() {
             write!(f, " (e.g. {})", self.samples.join(", "))?;
         }
@@ -97,6 +117,7 @@ async fn team_with_games_missing_adjem(
 
     Ok(violation(
         "team_with_games_missing_adjem",
+        Severity::Error,
         rows.iter().map(|r| r.get::<String, _>("natstat_id")),
     ))
 }
@@ -125,6 +146,7 @@ async fn completed_game_missing_team_stats(
 
     Ok(violation(
         "completed_game_missing_team_stats",
+        Severity::Warning,
         rows.iter().map(|r| r.get::<String, _>("natstat_id")),
     ))
 }
@@ -157,6 +179,7 @@ async fn wl_record_mismatch(
 
     Ok(violation(
         "wl_record_mismatch",
+        Severity::Error,
         rows.iter().map(|r| r.get::<String, _>("natstat_id")),
     ))
 }
@@ -205,6 +228,7 @@ pub async fn fully_swapped_games_remain(
 
     Ok(violation(
         "fully_swapped_games_remain",
+        Severity::Error,
         rows.iter().map(|r| r.get::<String, _>("natstat_id")),
     ))
 }
@@ -270,19 +294,25 @@ pub async fn phantom_swapped_games_remain(
 
     Ok(violation(
         "phantom_swapped_games_remain",
+        Severity::Error,
         rows.iter().map(|r| r.get::<String, _>("natstat_id")),
     ))
 }
 
 /// Fold a list of offending ids into a violation (None when clean),
 /// keeping the first few as samples.
-fn violation(check: &'static str, ids: impl Iterator<Item = String>) -> Option<InvariantViolation> {
+fn violation(
+    check: &'static str,
+    severity: Severity,
+    ids: impl Iterator<Item = String>,
+) -> Option<InvariantViolation> {
     let ids: Vec<String> = ids.collect();
     if ids.is_empty() {
         return None;
     }
     Some(InvariantViolation {
         check,
+        severity,
         count: ids.len() as i64,
         samples: ids.into_iter().take(5).collect(),
     })
