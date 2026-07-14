@@ -141,7 +141,7 @@ async fn predict(
     // answer. The returned `Explained` carries both the headline numbers
     // and per-feature ablation deltas + the input feature vector itself
     // (already sign-flipped to the home perspective for the Away venue).
-    let explained = predict_with_venue(
+    let explained = match predict_with_venue(
         &state,
         home_team.id,
         away_team.id,
@@ -151,30 +151,36 @@ async fn predict(
         params.as_of_date,
     )
     .await
-    .map_err(|e| {
-        // A missing-data error (a team with no stats for this season) is a
-        // client error → 404, so it doesn't 500 and page #errors-api on a bad
-        // team/season combo. Genuine failures keep their 500.
-        if e.starts_with(NO_PREDICTION_DATA_PREFIX) {
-            // Still log it: this same signal would fire if a *real* program lost
-            // its stats row to a compute regression (a data gap), which no longer
-            // pages #errors-api. The log line keeps that case detectable; a
-            // games-aware distinction (page only when the team actually played)
-            // is a possible follow-up.
-            tracing::warn!(
-                home = %params.home,
-                away = %params.away,
-                season,
-                "predict: no prediction data for this matchup — returning 404"
-            );
-            (StatusCode::NOT_FOUND, Json(json!({ "error": e })))
-        } else {
-            (
+    {
+        Ok(e) => e,
+        Err(e) if e.starts_with(NO_PREDICTION_DATA_PREFIX) => {
+            // Missing feature-extraction data. Distinguish two cases so we don't
+            // page on typos *or* silently swallow a real outage:
+            //   - a team that never played this season → benign bad team/season
+            //     combo → 404 (no alert);
+            //   - a team that DID play but is missing its stats row (a compute
+            //     regression dropped it) → a real data gap → keep the 500 so
+            //     #errors-api pages.
+            if missing_data_is_real_gap(&state.db.pool, [home_team.id, away_team.id], season).await
+            {
+                tracing::error!(
+                    home = %params.home, away = %params.away, season,
+                    "predict: a team that played this season is missing its stats row (data gap)"
+                );
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e })),
+                ));
+            }
+            return Err((StatusCode::NOT_FOUND, Json(json!({ "error": e }))));
+        }
+        Err(e) => {
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": e })),
-            )
+            ));
         }
-    })?;
+    };
 
     // Early-season preseason × pit blend (ROADMAP §6). Only on the honest
     // pit path (`as_of_date` set); the leaky full-state path is untouched.
@@ -618,6 +624,42 @@ fn classify_feature_error(e: sqlx::Error, season: i32, what: &str) -> String {
         ),
         other => format!("{what} failed: {other}"),
     }
+}
+
+/// Given a missing-prediction-data error, decide whether it's a **real data gap**
+/// (a team that actually played the season but is missing its `team_season_stats`
+/// row — e.g. a compute regression dropped it) vs a **benign** bad team/season
+/// combo (a team that never played that season, like a not-yet-D1 program). Only
+/// the former should keep the 500 that pages `#errors-api`.
+///
+/// `team_game_stats.team_id` is the season-scoped team UUID, so `EXISTS` there is
+/// "did this team play this season". Any query error returns `true` (treat as a
+/// real gap → 500) so a transient DB blip can't silently downgrade a genuine
+/// failure to a 404.
+async fn missing_data_is_real_gap(pool: &PgPool, teams: [Uuid; 2], season: i32) -> bool {
+    for team_id in teams {
+        let has_stats = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM team_season_stats WHERE team_id = $1 AND season = $2)",
+        )
+        .bind(team_id)
+        .bind(season)
+        .fetch_one(pool)
+        .await;
+        let played = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM team_game_stats WHERE team_id = $1)",
+        )
+        .bind(team_id)
+        .fetch_one(pool)
+        .await;
+        match (has_stats, played) {
+            // Played but no stats row → a real gap worth paging on.
+            (Ok(false), Ok(true)) => return true,
+            // A query itself failed → don't downgrade a possible real failure.
+            (Err(_), _) | (_, Err(_)) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 async fn run_predict(

@@ -10,8 +10,9 @@
 //! - **Token via the `X-Selftest-Token` header, not the URL** — a query token
 //!   would be logged verbatim by `TraceLayer` on every call. Compared in
 //!   constant time so response latency can't leak the secret byte-by-byte.
-//! - Returns **404** (not 401/403) when the token is unset or wrong, so the
-//!   endpoint's existence isn't leaked to an unauthenticated prober.
+//! - Returns a uniform **404** (never a 400/401) when the token is unset or
+//!   wrong, regardless of query — an unauthorized caller always gets the same
+//!   response, giving away nothing beyond that `/api/*` is handled here.
 //! - **Always responds 200** on an authorized call (outcome is in the body, not
 //!   the status): a 5xx here would itself trip the `#errors-api` 5xx tap and
 //!   alert on the self-test. A monitor should assert on `posted == true`.
@@ -20,13 +21,12 @@
 
 use axum::{
     Router,
-    extract::Query,
+    extract::RawQuery,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::get,
 };
 use cstat_ingest::notify::{self, SlackChannel, SlackPostOutcome};
-use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -38,15 +38,18 @@ const TOKEN_ENV: &str = "ALERT_SELFTEST_TOKEN";
 /// Header carrying the caller's token (kept out of the URL so it isn't logged).
 const TOKEN_HEADER: &str = "x-selftest-token";
 
-#[derive(Debug, Deserialize)]
-struct SelfTestParams {
-    /// `api` (default) or `web` — which error channel to exercise. Non-secret,
-    /// so it's fine in the query string.
-    channel: Option<String>,
-}
-
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/alert-selftest", get(selftest))
+}
+
+/// Extract the `channel` value from a raw query string. Parsed by hand (rather
+/// than a typed `Query` extractor) so a malformed query can't produce a 400
+/// *before* the token gate — an unauthorized caller must always get the same
+/// 404 regardless of query, never a 400 that confirms the route exists.
+fn channel_from_query(raw: Option<&str>) -> Option<String> {
+    raw?.split('&')
+        .find_map(|kv| kv.strip_prefix("channel="))
+        .map(|v| v.to_string())
 }
 
 /// Constant-time byte comparison — avoids leaking the token via response-timing
@@ -63,12 +66,15 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-async fn selftest(headers: HeaderMap, Query(p): Query<SelfTestParams>) -> impl IntoResponse {
-    // Gate on the configured token; 404 on any miss so we never confirm the
-    // endpoint exists to an unauthenticated caller.
+async fn selftest(headers: HeaderMap, RawQuery(raw_query): RawQuery) -> impl IntoResponse {
+    // Gate on the configured token; 404 on any miss so an unauthorized caller
+    // gets a uniform response. Trim the env value so a secret set with a trailing
+    // newline (common with file/secret-manager injection) still matches the token
+    // the caller sends — the enabled-check trims, so the compare must too.
     let configured_token = std::env::var(TOKEN_ENV)
         .ok()
-        .filter(|v| !v.trim().is_empty());
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
     let presented = headers.get(TOKEN_HEADER).and_then(|v| v.to_str().ok());
     let authorized = match (configured_token.as_deref(), presented) {
         (Some(expected), Some(got)) => constant_time_eq(expected.as_bytes(), got.as_bytes()),
@@ -78,7 +84,7 @@ async fn selftest(headers: HeaderMap, Query(p): Query<SelfTestParams>) -> impl I
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     }
 
-    let (channel, name) = match p.channel.as_deref() {
+    let (channel, name) = match channel_from_query(raw_query.as_deref()).as_deref() {
         Some("web") => (SlackChannel::ErrorsWeb, "errors-web"),
         _ => (SlackChannel::ErrorsApi, "errors-api"),
     };
@@ -95,11 +101,16 @@ async fn selftest(headers: HeaderMap, Query(p): Query<SelfTestParams>) -> impl I
     )
     .await;
 
-    let (posted, detail) = match outcome {
-        SlackPostOutcome::Sent => (true, "sent"),
-        SlackPostOutcome::NotConfigured => (false, "webhook env var not set for this channel"),
+    // Derive both flags from the single source of truth (the post outcome) rather
+    // than re-reading the env — avoids a redundant lookup and a possible disagree.
+    let (posted, webhook_configured, detail) = match outcome {
+        SlackPostOutcome::Sent => (true, true, "sent"),
+        SlackPostOutcome::NotConfigured => {
+            (false, false, "webhook env var not set for this channel")
+        }
         SlackPostOutcome::Failed => (
             false,
+            true,
             "webhook is set but the post failed — see server logs",
         ),
     };
@@ -111,7 +122,7 @@ async fn selftest(headers: HeaderMap, Query(p): Query<SelfTestParams>) -> impl I
         Json(json!({
             "posted": posted,
             "channel": name,
-            "webhook_configured": channel.is_configured(),
+            "webhook_configured": webhook_configured,
             "detail": detail,
         })),
     )
@@ -120,6 +131,25 @@ async fn selftest(headers: HeaderMap, Query(p): Query<SelfTestParams>) -> impl I
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_parsed_from_raw_query() {
+        assert_eq!(
+            channel_from_query(Some("channel=web")).as_deref(),
+            Some("web")
+        );
+        assert_eq!(
+            channel_from_query(Some("foo=1&channel=api&bar=2")).as_deref(),
+            Some("api")
+        );
+        assert_eq!(channel_from_query(Some("nothing=here")), None);
+        assert_eq!(channel_from_query(None), None);
+        // Malformed query never panics/errors (it can't 400 the request).
+        assert_eq!(
+            channel_from_query(Some("%ZZ&channel=web")).as_deref(),
+            Some("web")
+        );
+    }
 
     #[test]
     fn constant_time_eq_matches_std_equality() {

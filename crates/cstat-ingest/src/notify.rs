@@ -55,12 +55,6 @@ impl SlackChannel {
         }
     }
 
-    /// Whether this channel's webhook is configured in the environment. Lets an
-    /// ops self-test report "the env var isn't even set" without leaking the URL.
-    pub fn is_configured(self) -> bool {
-        self.webhook().is_some()
-    }
-
     /// Resolve the webhook URL for this channel from env, if configured.
     /// `Cron` also honours the legacy `INGEST_ALERT_WEBHOOK` name so an existing
     /// deployment keeps working after the rename.

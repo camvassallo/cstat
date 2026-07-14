@@ -224,6 +224,9 @@ const REDACT_QUERY_SUBSTRINGS: &[&str] = &[
     "session",
     "auth",
     "sig",
+    "otp",
+    "passphrase",
+    // Deliberately NOT "code" — it's a common benign param here (team/conf codes).
 ];
 
 /// The request target (path + query) for an error alert, so the failing request
