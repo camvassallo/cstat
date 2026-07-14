@@ -9,6 +9,7 @@ pub mod preflight;
 pub mod projections_backtest;
 pub mod rate_limiter;
 pub mod run_ledger;
+pub mod simulate;
 pub mod tfs;
 pub mod tfs_recruits;
 pub mod torvik;
@@ -18,17 +19,64 @@ pub use tfs::{AuthProbe, TfsClient, TfsError};
 pub use tfs_recruits::{InstitutionGroup, Recruit247Client, RecruitError};
 pub use torvik::TorkvikClient;
 
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicI32, Ordering};
+use tracing::warn;
 use uuid::Uuid;
+
+/// Process-wide simulated-date override, as days-from-CE (0 = unset). Set by
+/// the `simulate` replay driver between windows; wins over the env var so a
+/// single process can advance the clock without racy mid-run env mutation.
+static SIMULATED_TODAY: AtomicI32 = AtomicI32::new(0);
+
+/// Override "today" for every date-sensitive default in this process
+/// (season resolution, the nightly window, the predict future-check).
+/// `None` restores the real clock / env-var behavior.
+pub fn set_simulated_today(date: Option<NaiveDate>) {
+    SIMULATED_TODAY.store(
+        date.map(|d| d.num_days_from_ce()).unwrap_or(0),
+        Ordering::Relaxed,
+    );
+}
+
+/// Today's date (UTC) — the single wall-clock read for the pipeline.
+///
+/// Honors two overrides so the whole pipeline can run "as if today is
+/// 2025-12-15" (season-simulation harness, M4): the in-process
+/// [`set_simulated_today`] override first, then the `CSTAT_SIMULATED_DATE`
+/// env var (`YYYY-MM-DD`; anything unparsable warns and falls through to the
+/// real clock).
+pub fn today_utc() -> NaiveDate {
+    let days = SIMULATED_TODAY.load(Ordering::Relaxed);
+    if days != 0
+        && let Some(d) = NaiveDate::from_num_days_from_ce_opt(days)
+    {
+        return d;
+    }
+    if let Ok(s) = std::env::var("CSTAT_SIMULATED_DATE") {
+        match NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+            Ok(d) => return d,
+            Err(_) => warn!(
+                value = %s,
+                "CSTAT_SIMULATED_DATE is not a valid YYYY-MM-DD date; using the real clock"
+            ),
+        }
+    }
+    Utc::now().naive_utc().date()
+}
 
 /// Season the NCAA basketball calendar is currently in. November rolls
 /// forward to the next year's season (e.g. November 2025 → 2026 season).
 /// Used as the default for CLI commands so the binary doesn't go stale at
-/// season rollover.
+/// season rollover. Respects the simulated-date overrides via [`today_utc`].
 pub fn current_natstat_season() -> i32 {
-    let today = Utc::now().naive_utc().date();
+    season_for_date(today_utc())
+}
+
+/// [`current_natstat_season`]'s date→season rule, factored out for testing.
+fn season_for_date(today: NaiveDate) -> i32 {
     if today.month() >= 11 {
         today.year() + 1
     } else {
@@ -144,5 +192,26 @@ mod tests {
         let response = json!(null);
         let results = extract_results(&response);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_season_for_date_rolls_forward_in_november() {
+        let nov = NaiveDate::from_ymd_opt(2025, 11, 3).unwrap();
+        assert_eq!(season_for_date(nov), 2026);
+        let mar = NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+        assert_eq!(season_for_date(mar), 2026);
+        let jul = NaiveDate::from_ymd_opt(2026, 7, 13).unwrap();
+        assert_eq!(season_for_date(jul), 2026);
+    }
+
+    #[test]
+    fn test_simulated_today_override_wins_and_clears() {
+        let sim = NaiveDate::from_ymd_opt(2025, 12, 15).unwrap();
+        set_simulated_today(Some(sim));
+        assert_eq!(today_utc(), sim);
+        assert_eq!(current_natstat_season(), 2026);
+        set_simulated_today(None);
+        // Real clock again — just sanity-check it's nowhere near the override.
+        assert_ne!(today_utc(), sim);
     }
 }

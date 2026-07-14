@@ -82,7 +82,7 @@ async fn predict(
     // labelled as honest. Reject loudly instead — the alternative is the
     // user shipping a confidently-labelled garbage forecast.
     if let Some(d) = params.as_of_date {
-        let today = chrono::Utc::now().date_naive();
+        let today = cstat_ingest::today_utc();
         if d > today {
             return Err((
                 StatusCode::BAD_REQUEST,

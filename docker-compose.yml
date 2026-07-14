@@ -11,5 +11,24 @@ services:
     volumes:
       - cstat-pgdata:/var/lib/postgresql/data
 
+  # Isolated simulation database for `cstat-ingest simulate` (M4 replay
+  # harness). Deliberately behind a profile so a plain `docker compose up -d`
+  # never starts it, and on its own volume so the main DB — the source of
+  # truth for sync_to_prod.sh — can never be touched by a sim run.
+  # Start with: docker compose --profile sim up -d postgres-sim
+  postgres-sim:
+    image: postgres:17
+    container_name: cstat-postgres-sim
+    profiles: ["sim"]
+    environment:
+      POSTGRES_USER: cstat
+      POSTGRES_PASSWORD: cstat
+      POSTGRES_DB: cstat_sim
+    ports:
+      - "5433:5432"
+    volumes:
+      - cstat-pgdata-sim:/var/lib/postgresql/data
+
 volumes:
   cstat-pgdata:
+  cstat-pgdata-sim:

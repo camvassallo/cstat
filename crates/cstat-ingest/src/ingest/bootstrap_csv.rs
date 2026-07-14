@@ -139,7 +139,7 @@ pub async fn load_pbp_only(pool: &PgPool, year: i32, dir: &Path) -> Result<u64> 
 /// Tries both `dir/` and `dir/{year}/` so the caller can pass either the
 /// per-season subdir or the parent collection root. Errors when zero or
 /// >1 file matches.
-fn find_csv(dir: &Path, year: i32, kind: &str) -> Result<PathBuf> {
+pub(crate) fn find_csv(dir: &Path, year: i32, kind: &str) -> Result<PathBuf> {
     let prefix = format!("NatStat-MBB{year}-{kind}-");
     let search_dirs = [dir.to_path_buf(), dir.join(year.to_string())];
     for d in &search_dirs {
@@ -224,7 +224,10 @@ fn pct(made: Option<i32>, attempts: Option<i32>) -> Option<f64> {
 // ---------------------------------------------------------------------------
 
 /// Columns: TeamID, Name, Nickname, FullName, Abbrev (5 cols).
-async fn load_teams(
+/// `pub(crate)`: the `simulate` harness reuses this as its "season bootstrap
+/// already happened" premise — teams (+ seeded `team_season_stats` rows) are
+/// reference data the nightly path never creates.
+pub(crate) async fn load_teams(
     pool: &PgPool,
     year: i32,
     path: &Path,

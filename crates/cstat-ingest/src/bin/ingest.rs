@@ -17,7 +17,7 @@ fn default_season() -> i32 {
 /// covers the prior night's games plus any corrections from NatStat's overnight
 /// re-tabulation. Returns `(from, to)` as `YYYY-MM-DD`.
 fn default_nightly_window() -> (String, String) {
-    let today = chrono::Utc::now().date_naive();
+    let today = cstat_ingest::today_utc();
     let yesterday = today - chrono::Duration::days(1);
     (
         yesterday.format("%Y-%m-%d").to_string(),
@@ -196,6 +196,49 @@ enum Commands {
         to: Option<String>,
 
         /// Skip the compute pipeline at the end.
+        #[arg(long)]
+        no_compute: bool,
+    },
+
+    /// Offline season-replay harness (M4): replay a historical season's CSVs
+    /// through the REAL nightly orchestrator, window by window, against an
+    /// isolated sim database — synthesized NatStat fixtures in api_cache, no
+    /// live API calls, no rate budget, invariant checks after every window,
+    /// and an idempotency re-run at the end. Refuses to run against the main
+    /// or prod database. Start the sim DB with:
+    /// `docker compose --profile sim up -d postgres-sim`
+    Simulate {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Replay start date (YYYY-MM-DD), e.g. the season's opening day.
+        #[arg(long)]
+        from: String,
+
+        /// Replay end date (YYYY-MM-DD).
+        #[arg(long)]
+        to: String,
+
+        /// Days per simulated nightly window (1 = the production daily
+        /// cadence; 7 ≈ a weekly catch-up / self-heal window).
+        #[arg(long, default_value_t = 1)]
+        step_days: i64,
+
+        /// Drop + recreate the sim DB schema before replaying.
+        #[arg(long)]
+        reset: bool,
+
+        /// Sim database URL. Defaults to $CSTAT_SIM_DATABASE_URL, then the
+        /// docker-compose sim service (postgres://cstat:cstat@localhost:5433/cstat_sim).
+        #[arg(long)]
+        database_url: Option<String>,
+
+        /// Directory holding the season CSV exports.
+        #[arg(long, default_value = "data/natstat_csv")]
+        csv_dir: std::path::PathBuf,
+
+        /// Ingest-only replay: skip compute (and the compute-dependent
+        /// invariant checks) in each window.
         #[arg(long)]
         no_compute: bool,
     },
@@ -681,6 +724,38 @@ async fn main() -> Result<()> {
             let ingester = SeasonIngester::new(&client, &db.pool, year);
             let report = ingester.nightly(&from, &to, !no_compute).await?;
             print!("{report}");
+        }
+
+        Commands::Simulate {
+            year,
+            from,
+            to,
+            step_days,
+            reset,
+            database_url,
+            csv_dir,
+            no_compute,
+        } => {
+            // Deliberately ignores the main-DB `db`/`client` connected above:
+            // simulate builds its own pool + fixture-backed client against the
+            // isolated sim database (and refuses to run if they alias).
+            let sim_url = database_url
+                .or_else(|| std::env::var("CSTAT_SIM_DATABASE_URL").ok())
+                .filter(|u| !u.trim().is_empty())
+                .unwrap_or_else(|| "postgres://cstat:cstat@localhost:5433/cstat_sim".to_string());
+            let opts = cstat_ingest::simulate::SimulateOptions {
+                season: year,
+                from: chrono::NaiveDate::parse_from_str(&from, "%Y-%m-%d")
+                    .map_err(|e| anyhow::anyhow!("--from {from}: {e}"))?,
+                to: chrono::NaiveDate::parse_from_str(&to, "%Y-%m-%d")
+                    .map_err(|e| anyhow::anyhow!("--to {to}: {e}"))?,
+                step_days,
+                reset,
+                csv_dir,
+                database_url: sim_url,
+                no_compute,
+            };
+            cstat_ingest::simulate::run(opts).await?;
         }
 
         Commands::Status => {

@@ -152,7 +152,9 @@ impl NatStatClient {
     }
 
     /// Cache key for a request (excludes API key for safety).
-    fn cache_key(endpoint: &str, range: Option<&str>, offset: Option<u64>) -> String {
+    /// `pub(crate)` so the offline `simulate` harness can seed `api_cache`
+    /// fixture rows under exactly the keys `get_inner` will look up.
+    pub(crate) fn cache_key(endpoint: &str, range: Option<&str>, offset: Option<u64>) -> String {
         format!(
             "{}/{}:{}/{}",
             SERVICE,

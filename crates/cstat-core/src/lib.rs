@@ -3,6 +3,7 @@ pub mod db;
 pub mod features;
 pub mod freshman_model;
 pub mod inference;
+pub mod invariants;
 pub mod models;
 pub mod pbp_replay;
 pub mod pit_campom;
