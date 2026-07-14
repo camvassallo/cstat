@@ -175,14 +175,21 @@ async fn predict(
         }
     })?;
 
-    // Early-season preseason × pit blend (ROADMAP §6). Only on the honest
-    // pit path (`as_of_date` set); the leaky full-state path is untouched.
-    // While the in-season pit cohort is thin (early Nov), anchor partly on the
-    // preseason projection (r=0.88), decaying to pure pit by mid-December. Output
-    // blend: scalar mix of the already-venue-resolved margins, so neutral
-    // symmetry and away-flip are preserved (both legs are antisymmetric
-    // under team swap). Totals stay pit — the preseason model has no totals
-    // (ROADMAP defers the totals blend).
+    // Early-season preseason × pit blend (ROADMAP §6). While in-season data
+    // is thin (early Nov), anchor partly on the preseason projection (r=0.88),
+    // decaying to pure in-season by mid-December. Output blend: scalar mix of
+    // the already-venue-resolved margins, so neutral symmetry and away-flip
+    // are preserved (both legs are antisymmetric under team swap). Totals
+    // stay un-blended — the preseason model has no totals (ROADMAP defers
+    // the totals blend).
+    //
+    // The weight date: an explicit `as_of_date` uses that date (honest
+    // historical predictions); the LIVE path (no `as_of_date`) uses *today*,
+    // so opening-week live predictions lean on the preseason anchor instead
+    // of a 1-2 game sample. For an unplayed game "today's full state" is
+    // already point-in-time — no leakage — and outside the 42-day decay
+    // window today's weight is 0 and this is a no-op, so off-season and
+    // mid/late-season behavior is unchanged.
     let pit_margin = explained.prediction.predicted_margin;
     let mut blended_margin = pit_margin;
     let mut prediction_basis = if params.as_of_date.is_some() {
@@ -190,11 +197,10 @@ async fn predict(
     } else {
         "leaky"
     };
-    // Weight on the preseason leg (0.0 when no as_of_date, or post-decay).
-    let w = params
-        .as_of_date
-        .map(|asof| preseason_blend_weight(asof, season))
-        .unwrap_or(0.0);
+    let w = preseason_blend_weight(
+        params.as_of_date.unwrap_or_else(cstat_ingest::today_utc),
+        season,
+    );
     let pre_margin = if w > 0.0 {
         fetch_preseason_margin(&state.db.pool, season, home_team.id, away_team.id, venue).await
     } else {
@@ -569,12 +575,14 @@ pub async fn predict_projection(
     // the Predict page on the same matchup (ROADMAP §6). `home_team_id` is
     // always the host here, so the venue is Home (or Neutral); the blend is
     // a scalar mix of the venue-resolved margin, preserving neutral symmetry.
+    // Like the handler, the LIVE path (upcoming games pass `as_of_date =
+    // None`) computes the weight from *today*, so opening-week schedule
+    // projections and ticker tiles anchor on the preseason projection too;
+    // past the 42-day decay window the weight is 0 and this is a no-op.
     let pit_margin = explained.prediction.predicted_margin;
     let mut blended_margin = pit_margin;
     let mut home_win_prob = explained.prediction.home_win_probability;
-    let w = as_of_date
-        .map(|d| preseason_blend_weight(d, season))
-        .unwrap_or(0.0);
+    let w = preseason_blend_weight(as_of_date.unwrap_or_else(cstat_ingest::today_utc), season);
     if w > 0.0 {
         let venue = if is_neutral {
             Venue::Neutral
