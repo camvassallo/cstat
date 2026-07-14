@@ -523,10 +523,12 @@ async fn main() -> Result<()> {
     // window pins to one past date forever while every monitor stays green,
     // and predict blends live forecasts against a stale "today". Every run of
     // this binary announces it loudly; the nightly additionally marks the run
-    // degraded so the Slack summary surfaces it in prod.
-    if let Ok(sim_date) = std::env::var("CSTAT_SIMULATED_DATE") {
+    // degraded so the Slack summary surfaces it in prod. Uses the same parse
+    // as `today_utc` so an empty/unparsable value (ignored by the clock)
+    // doesn't warn about a pin that isn't happening.
+    if let Some(sim_date) = cstat_ingest::env_simulated_date() {
         warn!(
-            sim_date,
+            %sim_date,
             "CSTAT_SIMULATED_DATE is set — all date-sensitive defaults (season, nightly window) \
              use the simulated clock. Unset it on any real service."
         );

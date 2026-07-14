@@ -13,10 +13,6 @@
 
 use sqlx::{PgPool, Row};
 
-/// Cross-tag share above which a 2-team game counts as fully swapped —
-/// mirrors `compute::correct_swapped_games` / the `swapped_games.rs` tests.
-const MIN_CROSS_SHARE: f64 = 0.80;
-
 /// How bad a violated check is.
 ///
 /// `Error` = the pipeline produced something wrong from the data it had —
@@ -188,6 +184,12 @@ async fn wl_record_mismatch(
 /// cross-tag detector `compute::correct_swapped_games` uses (issue #119),
 /// season-scoped. `pub` so `tests/swapped_games.rs` asserts through this
 /// exact query instead of carrying its own copy.
+///
+/// Season scoping anchors on **`games.season`**, not the box rows' own
+/// `season` stamps: NatStat's cross-season game_id collisions can stamp a
+/// game's `player_game_stats`/`team_game_stats` rows with disagreeing
+/// seasons, and stamp-based scoping would drop such a game from every
+/// per-season pass (invisible to the invariant entirely).
 pub async fn fully_swapped_games_remain(
     pool: &PgPool,
     season: i32,
@@ -198,12 +200,13 @@ pub async fn fully_swapped_games_remain(
             SELECT pgs.game_id, pgs.team_id AS labeled, pl.team_id AS real_team, COUNT(*) AS n
             FROM player_game_stats pgs
             JOIN players pl ON pl.id = pgs.player_id
-            WHERE pgs.season = $2
+            JOIN games g ON g.id = pgs.game_id AND g.season = $2
             GROUP BY pgs.game_id, pgs.team_id, pl.team_id
         ),
         two_team AS (
-            SELECT game_id FROM team_game_stats WHERE season = $2
-            GROUP BY game_id HAVING COUNT(DISTINCT team_id) = 2
+            SELECT tgs.game_id FROM team_game_stats tgs
+            JOIN games g ON g.id = tgs.game_id AND g.season = $2
+            GROUP BY tgs.game_id HAVING COUNT(DISTINCT tgs.team_id) = 2
         ),
         sides AS (
             SELECT game_id, labeled,
@@ -221,7 +224,7 @@ pub async fn fully_swapped_games_remain(
         ORDER BY g.natstat_id
         "#,
     )
-    .bind(MIN_CROSS_SHARE)
+    .bind(crate::compute::SWAPPED_GAME_MIN_CROSS_SHARE)
     .bind(season)
     .fetch_all(pool)
     .await?;
@@ -237,6 +240,14 @@ pub async fn fully_swapped_games_remain(
 /// `compute::repair_phantom_swapped_games` uses (issue #140), season-scoped.
 /// `pub` so `tests/swapped_games.rs` asserts through this exact query
 /// instead of carrying its own copy.
+///
+/// Two robustness notes: game membership anchors on `games.season` (see
+/// [`fully_swapped_games_remain`] — box-row season stamps can disagree on
+/// NatStat's cross-season game_id collisions), and the opponent-roster
+/// resolution uses `IN` over the game's *other* team ids rather than a
+/// scalar `=` subquery — a box row labeled with a third team (neither of the
+/// game's two `team_game_stats` sides) would make the scalar form return two
+/// rows and turn the whole check into a Postgres error instead of a finding.
 pub async fn phantom_swapped_games_remain(
     pool: &PgPool,
     season: i32,
@@ -256,16 +267,17 @@ pub async fn phantom_swapped_games_remain(
             WHERE p.season = $2
         ),
         games2 AS (
-            SELECT game_id FROM team_game_stats WHERE season = $2
-            GROUP BY game_id HAVING count(DISTINCT team_id) = 2
+            SELECT tgs.game_id FROM team_game_stats tgs
+            JOIN games g ON g.id = tgs.game_id AND g.season = $2
+            GROUP BY tgs.game_id HAVING count(DISTINCT tgs.team_id) = 2
         ),
         resolved AS (
             SELECT pgs.id AS pgs_id, pgs.game_id,
                    (SELECT EXISTS (
                        SELECT 1 FROM np r
                        WHERE r.gp > 1
-                         AND r.team_id = (SELECT tg.team_id FROM team_game_stats tg
-                                          WHERE tg.game_id = pgs.game_id AND tg.team_id <> pgs.team_id)
+                         AND r.team_id IN (SELECT tg.team_id FROM team_game_stats tg
+                                           WHERE tg.game_id = pgs.game_id AND tg.team_id <> pgs.team_id)
                          AND (r.nn = np.nn OR r.ln = np.ln))) AS resolves
             FROM player_game_stats pgs
             JOIN np ON np.id = pgs.player_id
@@ -287,7 +299,7 @@ pub async fn phantom_swapped_games_remain(
         ORDER BY g.natstat_id
         "#,
     )
-    .bind(MIN_CROSS_SHARE)
+    .bind(crate::compute::PHANTOM_SWAP_MIN_RESOLVE_SHARE)
     .bind(season)
     .fetch_all(pool)
     .await?;

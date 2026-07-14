@@ -253,7 +253,7 @@ pub async fn reconcile_player_teams(pool: &PgPool, season: i32) -> Result<u64, s
 /// game before we treat it as a fully-swapped game. The clean Duke/Kentucky and
 /// Yale/California swaps are 100%; 0.80 tolerates a stray unresolved/over-merged
 /// player on one side without admitting a partial mistag.
-const SWAPPED_GAME_MIN_CROSS_SHARE: f64 = 0.80;
+pub(crate) const SWAPPED_GAME_MIN_CROSS_SHARE: f64 = 0.80;
 
 /// Correct games whose two teams' identities are swapped at the SOURCE (issue
 /// #119). NatStat occasionally labels a game's two rosters, scores, and box rows
@@ -394,7 +394,7 @@ pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sq
 /// Minimum share of EACH side's box rows that must resolve to an opponent player
 /// before a game is treated as a phantom-swap. Mirrors `SWAPPED_GAME_MIN_CROSS_SHARE`;
 /// 0.80 tolerates a genuine 1-game walk-on or a stray non-phantom row on a side.
-const PHANTOM_SWAP_MIN_RESOLVE_SHARE: f64 = 0.80;
+pub(crate) const PHANTOM_SWAP_MIN_RESOLVE_SHARE: f64 = 0.80;
 
 /// Repair fully-swapped games that NatStat delivered with brand-new "phantom"
 /// player ids (issue #140). A worse variant of [[correct_swapped_games]]: NatStat

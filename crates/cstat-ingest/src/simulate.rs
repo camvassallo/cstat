@@ -152,6 +152,32 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
         "loaded season CSVs"
     );
 
+    // Guard the easy off-by-a-year slip (end-year season numbering: season
+    // 2026's games run Nov 2025 – Apr 2026, so `--year 2026 --from 2026-11-02`
+    // selects nothing). Without this, every window replays zero games, the
+    // invariants trivially pass, and the harness prints PASSED — green CI
+    // while the pipeline was never exercised, the exact false confidence M4
+    // exists to prevent.
+    let span = games_rows
+        .first()
+        .zip(games_rows.last())
+        .map(|((lo, _), (hi, _))| (*lo, *hi));
+    let window_has_games = games_rows
+        .iter()
+        .any(|(d, _)| *d >= opts.from && *d <= opts.to);
+    if !window_has_games {
+        let span_msg = span
+            .map(|(lo, hi)| format!("{lo}..{hi}"))
+            .unwrap_or_else(|| "EMPTY".to_string());
+        bail!(
+            "no season-{} CSV games fall inside {}..{} (the season's games span {span_msg}) — \
+             check --year vs --from/--to: season YYYY runs Nov (YYYY-1) through Apr YYYY",
+            opts.season,
+            opts.from,
+            opts.to,
+        );
+    }
+
     // --- season-wide fixtures ---
     let cache = ApiCache::new(db.pool.clone());
     let season_range = opts.season.to_string();
@@ -338,11 +364,15 @@ fn urls_conflict(sim: &PgConnectOptions, other: &PgConnectOptions) -> bool {
         && same_host(sim.get_host(), other.get_host())
 }
 
-/// Host equality with alias handling: exact (case-insensitive) match, or a
-/// non-empty intersection of resolved IPs. Resolution failures fall back to
-/// the textual comparison — the guard errs toward refusing only what it can
-/// prove, but `localhost`/`127.0.0.1`/`::1` always resolve locally. IPv6
-/// URL brackets (`[::1]`) are stripped before comparing/resolving.
+/// Host equality with alias handling: exact (case-insensitive) match, a
+/// shared **loopback class** (any loopback host equals any other — a
+/// dual-stack local Postgres answers on `127.0.0.1` AND `::1`, and resolver
+/// configs differ on whether `localhost` maps to both: stock Ubuntu maps
+/// `::1` to `ip6-localhost` only, so pure IP-intersection would let
+/// `[::1]` slip past a `localhost` main URL), or a non-empty intersection
+/// of resolved IPs. Resolution failures fall back to the textual comparison
+/// — the guard errs toward refusing only what it can prove. IPv6 URL
+/// brackets (`[::1]`) are stripped before comparing/resolving.
 fn same_host(a: &str, b: &str) -> bool {
     let a = a.trim_start_matches('[').trim_end_matches(']');
     let b = b.trim_start_matches('[').trim_end_matches(']');
@@ -351,7 +381,19 @@ fn same_host(a: &str, b: &str) -> bool {
     }
     let ips_a = resolve_host(a);
     let ips_b = resolve_host(b);
+    if is_loopback_host(a, &ips_a) && is_loopback_host(b, &ips_b) {
+        return true;
+    }
     !ips_a.is_empty() && ips_a.iter().any(|ip| ips_b.contains(ip))
+}
+
+/// A host names the local machine: the well-known loopback spellings, or any
+/// of its resolved IPs is a loopback address.
+fn is_loopback_host(host: &str, ips: &[std::net::IpAddr]) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || host == "::1"
+        || ips.iter().any(|ip| ip.is_loopback())
 }
 
 fn resolve_host(host: &str) -> Vec<std::net::IpAddr> {

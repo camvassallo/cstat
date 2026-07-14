@@ -69,9 +69,11 @@ async fn boot_and_serve() -> Result<()> {
     // route's default season all read `cstat_ingest::today_utc()`, which
     // honors this env var. Legitimate only for local out-of-season testing —
     // announce it loudly so it can never linger unnoticed on a real service.
-    if let Ok(sim_date) = std::env::var("CSTAT_SIMULATED_DATE") {
+    // Same parse as `today_utc` (`env_simulated_date`), so an empty or
+    // unparsable value the clock ignores doesn't warn about a phantom pin.
+    if let Some(sim_date) = cstat_ingest::env_simulated_date() {
         tracing::warn!(
-            sim_date,
+            %sim_date,
             "CSTAT_SIMULATED_DATE is set — the API is serving on a SIMULATED clock \
              (default season, predict future-check, preseason blend). Unset it in prod."
         );

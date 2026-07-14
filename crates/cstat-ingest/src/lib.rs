@@ -41,13 +41,38 @@ pub fn set_simulated_today(date: Option<NaiveDate>) {
     );
 }
 
+/// The `CSTAT_SIMULATED_DATE` env override, if it is set to a **valid**
+/// `YYYY-MM-DD` date. This is the single parse every consumer must share —
+/// the boot warnings and the nightly's degraded-marking key off the same
+/// predicate as [`today_utc`], so a present-but-empty value (Railway injects
+/// empty strings for unset config) or an unparsable typo can never be
+/// *ignored* by the clock yet *alerted on* as if it pinned the window.
+/// Empty/whitespace values are silently absent; a non-empty unparsable value
+/// warns and counts as absent.
+pub fn env_simulated_date() -> Option<NaiveDate> {
+    let s = std::env::var("CSTAT_SIMULATED_DATE").ok()?;
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    match NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        Ok(d) => Some(d),
+        Err(_) => {
+            warn!(
+                value = %s,
+                "CSTAT_SIMULATED_DATE is not a valid YYYY-MM-DD date; using the real clock"
+            );
+            None
+        }
+    }
+}
+
 /// Today's date (UTC) — the single wall-clock read for the pipeline.
 ///
 /// Honors two overrides so the whole pipeline can run "as if today is
 /// 2025-12-15" (season-simulation harness, M4): the in-process
 /// [`set_simulated_today`] override first, then the `CSTAT_SIMULATED_DATE`
-/// env var (`YYYY-MM-DD`; anything unparsable warns and falls through to the
-/// real clock).
+/// env var (via [`env_simulated_date`]).
 pub fn today_utc() -> NaiveDate {
     let days = SIMULATED_TODAY.load(Ordering::Relaxed);
     if days != 0
@@ -55,27 +80,19 @@ pub fn today_utc() -> NaiveDate {
     {
         return d;
     }
-    if let Ok(s) = std::env::var("CSTAT_SIMULATED_DATE") {
-        match NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-            Ok(d) => {
-                // Warn once per process: a *lingering* override on a real
-                // service (API or cron) is the dangerous case, and a silent
-                // one would never be caught.
-                static WARNED: std::sync::Once = std::sync::Once::new();
-                WARNED.call_once(|| {
-                    warn!(
-                        simulated_date = %d,
-                        "CSTAT_SIMULATED_DATE override active — all date-sensitive behavior \
-                         uses the simulated clock"
-                    );
-                });
-                return d;
-            }
-            Err(_) => warn!(
-                value = %s,
-                "CSTAT_SIMULATED_DATE is not a valid YYYY-MM-DD date; using the real clock"
-            ),
-        }
+    if let Some(d) = env_simulated_date() {
+        // Warn once per process: a *lingering* override on a real service
+        // (API or cron) is the dangerous case, and a silent one would never
+        // be caught.
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            warn!(
+                simulated_date = %d,
+                "CSTAT_SIMULATED_DATE override active — all date-sensitive behavior \
+                 uses the simulated clock"
+            );
+        });
+        return d;
     }
     Utc::now().naive_utc().date()
 }
