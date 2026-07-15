@@ -321,12 +321,13 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
     Ok(())
 }
 
-/// Refuse to run against the main or prod database. Compares
-/// host/port/database triples parsed out of the URLs (so credential or
-/// query-param differences can't sneak an alias through), with hosts
-/// compared by **resolved IP overlap** — `localhost`, `127.0.0.1`, `::1`,
-/// and a DNS name for the same machine must all count as the same host, or
-/// a port typo plus `--reset` could `DROP SCHEMA` on the real database.
+/// Refuse to run against the main or prod database. Compares the
+/// port + effective-database + host triples parsed out of the URLs (so
+/// credential or query-param differences can't sneak an alias through) and
+/// **fails closed** on every ambiguity — a missing dbname (which Postgres
+/// resolves to the role name) or a host that can't be proven distinct both
+/// count as a collision, because the alternative is `--reset` running
+/// `DROP SCHEMA` on the real database. See [`urls_conflict`].
 fn assert_isolated(sim_url: &str) -> Result<()> {
     let sim = PgConnectOptions::from_str(sim_url)
         .with_context(|| format!("invalid sim database URL: {sim_url}"))?;
