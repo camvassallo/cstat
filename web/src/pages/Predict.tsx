@@ -1261,12 +1261,12 @@ function ResultHeadline({
     preseason: {
       label: 'Preseason',
       cls: 'bg-sky-900/60 text-sky-300',
-      title: `Preseason-weighted blend as of ${result.as_of_date}. This early, in-game data is thin, so the forecast leans on the preseason roster projection (r≈0.88) — ~70/30 preseason/point-in-time at tip-off, decaying as games accrue.`,
+      title: `Preseason-weighted blend as of ${result.as_of_date ?? 'today'}. This early, in-game data is thin, so the forecast leans on the preseason roster projection (r≈0.88) — ~70/30 preseason/${result.as_of_date ? 'point-in-time form' : 'current form'} at tip-off, decaying as games accrue.`,
     },
     blended: {
       label: 'Blended',
       cls: 'bg-teal-900/60 text-teal-300',
-      title: `Blend of the preseason roster projection and point-in-time form as of ${result.as_of_date}. Preseason weight decays from Nov 1 (peak 0.70) to zero by ~mid-December as in-season data accumulates.`,
+      title: `Blend of the preseason roster projection and ${result.as_of_date ? 'point-in-time form' : 'current form'} as of ${result.as_of_date ?? 'today'}. Preseason weight decays from Nov 1 (peak 0.70) to zero by ~mid-December as in-season data accumulates.`,
     },
     pit: {
       label: 'Point-in-time',
@@ -1274,7 +1274,11 @@ function ResultHeadline({
       title: `Point-in-time CamPom v3 as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`,
     },
   };
-  const meta = result.as_of_date ? basisMeta[result.prediction_basis] : undefined;
+  // Keyed on the server-confirmed basis alone (not as_of_date): the live
+  // early-season path blends with no as_of_date on the request, and the
+  // chip must still tell the user the number is preseason-anchored. The
+  // "leaky" basis has no entry, so ordinary live requests show no chip.
+  const meta = basisMeta[result.prediction_basis];
   const basisChip = meta ? (
     <span
       className={`ml-2 inline-flex items-center text-[10px] font-medium uppercase tracking-wide ${meta.cls} px-1.5 py-0.5 rounded`}

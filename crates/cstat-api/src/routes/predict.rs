@@ -82,7 +82,7 @@ async fn predict(
     // labelled as honest. Reject loudly instead — the alternative is the
     // user shipping a confidently-labelled garbage forecast.
     if let Some(d) = params.as_of_date {
-        let today = chrono::Utc::now().date_naive();
+        let today = cstat_ingest::today_utc();
         if d > today {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -175,42 +175,39 @@ async fn predict(
         }
     })?;
 
-    // Early-season preseason × pit blend (ROADMAP §6). Only on the honest
-    // pit path (`as_of_date` set); the leaky full-state path is untouched.
-    // While the in-season pit cohort is thin (early Nov), anchor partly on the
-    // preseason projection (r=0.88), decaying to pure pit by mid-December. Output
-    // blend: scalar mix of the already-venue-resolved margins, so neutral
-    // symmetry and away-flip are preserved (both legs are antisymmetric
-    // under team swap). Totals stay pit — the preseason model has no totals
-    // (ROADMAP defers the totals blend).
+    // Early-season preseason × pit blend (ROADMAP §6) — see
+    // [`apply_preseason_blend`] for the full semantics (weight schedule,
+    // live-path gating, σ choice).
     let pit_margin = explained.prediction.predicted_margin;
-    let mut blended_margin = pit_margin;
     let mut prediction_basis = if params.as_of_date.is_some() {
         "pit"
     } else {
         "leaky"
     };
-    // Weight on the preseason leg (0.0 when no as_of_date, or post-decay).
-    let w = params
-        .as_of_date
-        .map(|asof| preseason_blend_weight(asof, season))
-        .unwrap_or(0.0);
-    let pre_margin = if w > 0.0 {
-        fetch_preseason_margin(&state.db.pool, season, home_team.id, away_team.id, venue).await
-    } else {
-        None
-    };
-    if let Some(pre_margin) = pre_margin {
-        blended_margin = w * pre_margin + (1.0 - w) * pit_margin;
-        // Peak weight is now 0.70 (never pure preseason), so the chip labels the
+    let blend = apply_preseason_blend(
+        &state.db.pool,
+        season,
+        home_team.id,
+        away_team.id,
+        venue,
+        params.as_of_date,
+        pit_margin,
+    )
+    .await;
+    let blended_margin = blend.map(|b| b.margin).unwrap_or(pit_margin);
+    if let Some(b) = blend {
+        // Peak weight is 0.70 (never pure preseason), so the chip labels the
         // *dominant* leg: "preseason" while the preseason weight is the majority
         // (the first ~12 days), "blended" through the decay tail to pure pit.
-        prediction_basis = if w >= 0.5 { "preseason" } else { "blended" };
+        prediction_basis = if b.weight >= 0.5 {
+            "preseason"
+        } else {
+            "blended"
+        };
     }
-    let blended_win_prob = if (blended_margin - pit_margin).abs() < f32::EPSILON {
-        explained.prediction.home_win_probability
-    } else {
-        margin_to_win_prob(blended_margin, params.as_of_date.is_some())
+    let blended_win_prob = match blend {
+        Some(b) => b.win_prob,
+        None => explained.prediction.home_win_probability,
     };
 
     let predicted_winner = if blended_margin > 0.0 {
@@ -564,30 +561,33 @@ pub async fn predict_projection(
         )
         .await?
     };
-    // Same early-season preseason × pit blend as the `/api/predict` handler,
-    // so TeamDetail's Projected column and the ScoreTicker tiles agree with
-    // the Predict page on the same matchup (ROADMAP §6). `home_team_id` is
-    // always the host here, so the venue is Home (or Neutral); the blend is
-    // a scalar mix of the venue-resolved margin, preserving neutral symmetry.
+    // Same early-season preseason × pit blend as the `/api/predict` handler
+    // (shared [`apply_preseason_blend`]), so TeamDetail's Projected column and
+    // the ScoreTicker tiles agree with the Predict page on the same matchup
+    // (ROADMAP §6). `home_team_id` is always the host here, so the venue is
+    // Home (or Neutral); the blend is a scalar mix of the venue-resolved
+    // margin, preserving neutral symmetry.
     let pit_margin = explained.prediction.predicted_margin;
-    let mut blended_margin = pit_margin;
-    let mut home_win_prob = explained.prediction.home_win_probability;
-    let w = as_of_date
-        .map(|d| preseason_blend_weight(d, season))
-        .unwrap_or(0.0);
-    if w > 0.0 {
-        let venue = if is_neutral {
-            Venue::Neutral
-        } else {
-            Venue::Home
-        };
-        if let Some(pre_margin) =
-            fetch_preseason_margin(&state.db.pool, season, home_team_id, away_team_id, venue).await
-        {
-            blended_margin = w * pre_margin + (1.0 - w) * pit_margin;
-            home_win_prob = margin_to_win_prob(blended_margin, as_of_date.is_some());
-        }
-    }
+    let venue = if is_neutral {
+        Venue::Neutral
+    } else {
+        Venue::Home
+    };
+    let blend = apply_preseason_blend(
+        &state.db.pool,
+        season,
+        home_team_id,
+        away_team_id,
+        venue,
+        as_of_date,
+        pit_margin,
+    )
+    .await;
+    let blended_margin = blend.map(|b| b.margin).unwrap_or(pit_margin);
+    let home_win_prob = match blend {
+        Some(b) => b.win_prob,
+        None => explained.prediction.home_win_probability,
+    };
 
     let total = explained.prediction.predicted_total as f64;
     let margin = blended_margin as f64;
@@ -881,6 +881,82 @@ fn preseason_blend_weight(as_of: NaiveDate, season: i32) -> f32 {
     }
     (PRESEASON_PEAK_WEIGHT * (1.0 - d as f32 / PRESEASON_DECAY_DAYS as f32))
         .clamp(0.0, PRESEASON_PEAK_WEIGHT)
+}
+
+/// Outcome of an engaged preseason blend: the mixed margin, the win
+/// probability derived from it, and the preseason weight (for basis labels).
+#[derive(Clone, Copy)]
+struct BlendedPrediction {
+    margin: f32,
+    win_prob: f64,
+    weight: f32,
+}
+
+/// The early-season preseason × pit blend, shared by the `/api/predict`
+/// handler and `predict_projection` so every surface (Predict page,
+/// TeamDetail Projected column, ScoreTicker) mixes identically — this block
+/// previously lived as two hand-synced copies and each fix had to be applied
+/// twice.
+///
+/// Semantics:
+/// - **Explicit `as_of_date`** — the weight comes from that date. Pre-open
+///   dates get the 0.70 peak (deliberate preseason probing, floor-guarded to
+///   Sep 1 by the handler's validation).
+/// - **Live path (`as_of_date = None`)** — the weight comes from *today*,
+///   but ONLY inside the in-season window (Nov 1 open onward): opening-week
+///   live predictions anchor on the preseason projection instead of a 1–2
+///   game sample, while a pre-open live request (e.g. browsing next season's
+///   matchups in October) stays un-blended — its non-preseason leg would be
+///   the degenerate empty-season model output, which would dilute the
+///   preseason forecast rather than sharpen it. Past the 42-day decay the
+///   weight is 0 either way, so off-season behavior is untouched.
+/// - Returns `None` when the blend is inactive (weight 0, or either team has
+///   no `team_preseason_projection` row) — callers fall back to the pure
+///   model prediction.
+/// - The win probability converts the blended margin with the σ of the
+///   **model bundle that produced the margin leg**: pit σ on the explicit
+///   `as_of_date` path (the leg is the honest pit model), prod σ on the live
+///   path (the leg is the prod/leaky model). This keeps each path
+///   self-consistent with its own bundle's calibration, and keeps the live
+///   win% continuous across the Dec-13 decay boundary, where the blend turns
+///   off and the response reverts to the prod bundle.
+async fn apply_preseason_blend(
+    pool: &PgPool,
+    season: i32,
+    home_id: Uuid,
+    away_id: Uuid,
+    venue: Venue,
+    as_of_date: Option<NaiveDate>,
+    pit_margin: f32,
+) -> Option<BlendedPrediction> {
+    let weight = match as_of_date {
+        Some(d) => preseason_blend_weight(d, season),
+        None => live_blend_weight(cstat_ingest::today_utc(), season),
+    };
+    if weight <= 0.0 {
+        return None;
+    }
+    let pre_margin = fetch_preseason_margin(pool, season, home_id, away_id, venue).await?;
+    let margin = weight * pre_margin + (1.0 - weight) * pit_margin;
+    Some(BlendedPrediction {
+        margin,
+        win_prob: margin_to_win_prob(margin, as_of_date.is_some()),
+        weight,
+    })
+}
+
+/// LIVE-path blend weight (`as_of_date` absent): today's decay weight, but
+/// **zero before the season's Nov 1 open**. The explicit-`as_of_date` path
+/// deliberately allows pre-open probing; the live path must not — see
+/// [`apply_preseason_blend`].
+fn live_blend_weight(today: NaiveDate, season: i32) -> f32 {
+    let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
+        return 0.0;
+    };
+    if today < open {
+        return 0.0;
+    }
+    preseason_blend_weight(today, season)
 }
 
 /// Preseason game margin (home-team perspective) from the two teams'
@@ -1222,5 +1298,31 @@ mod tests {
             PRESEASON_PEAK_WEIGHT
         );
         assert_eq!(preseason_blend_weight(d(2024, 12, 13), 2025), 0.0);
+    }
+
+    #[test]
+    fn live_blend_weight_gates_pre_open_dates() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+
+        // Pre-open live requests must NOT blend: preseason_blend_weight
+        // returns the 0.70 peak for any date at-or-before the open, which is
+        // fine for deliberate as_of_date probing but would blend a September
+        // request for next season against a degenerate empty-season margin.
+        assert_eq!(live_blend_weight(d(2026, 9, 15), 2027), 0.0);
+        assert_eq!(live_blend_weight(d(2026, 10, 31), 2027), 0.0);
+
+        // From the open onward, live matches the explicit-date schedule.
+        assert_eq!(
+            live_blend_weight(d(2026, 11, 1), 2027),
+            PRESEASON_PEAK_WEIGHT
+        );
+        assert_eq!(
+            live_blend_weight(d(2026, 11, 8), 2027),
+            preseason_blend_weight(d(2026, 11, 8), 2027)
+        );
+
+        // Off-season / mid-season: no-op, matching the pre-live-blend world.
+        assert_eq!(live_blend_weight(d(2026, 7, 14), 2026), 0.0);
+        assert_eq!(live_blend_weight(d(2026, 2, 1), 2026), 0.0);
     }
 }

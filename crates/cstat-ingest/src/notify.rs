@@ -15,10 +15,22 @@
 //!     token. Both absent → no purge (the 5-min `Cache-Control` TTL still makes
 //!     fresh data land within minutes; the purge just makes it instant).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
 use tracing::{info, warn};
+
+/// Process-global mute for every outbound notification (Slack, Cloudflare
+/// purge, heartbeat). Set by the `simulate` replay harness so a sim run of the
+/// nightly orchestrator can never post to the real alert channels or ping the
+/// real dead-man's-switch, even when the operator's `.env` has them configured.
+static SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Mute (or unmute) all outbound notifications for this process.
+pub fn set_suppressed(suppressed: bool) {
+    SUPPRESSED.store(suppressed, Ordering::Relaxed);
+}
 
 /// HTTP timeout for every notification call. Notifications are best-effort, so
 /// we never want a stalled Slack/Cloudflare socket to hold the run open.
@@ -213,7 +225,15 @@ pub async fn ping_heartbeat(success: bool) {
 
 /// Read an env var, treating a present-but-empty value as absent. Railway and
 /// other platforms sometimes inject empty strings for unset config.
+///
+/// Every outbound notification resolves its config exclusively through this
+/// helper, so the [`SUPPRESSED`] mute (returning `None` unconditionally)
+/// neutralizes Slack, the Cloudflare purge, and the heartbeat in one place —
+/// each call site then takes its existing, well-tested "not configured" path.
 fn non_empty_env(key: &str) -> Option<String> {
+    if SUPPRESSED.load(Ordering::Relaxed) {
+        return None;
+    }
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 

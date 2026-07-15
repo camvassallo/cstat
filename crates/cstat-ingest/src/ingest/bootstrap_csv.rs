@@ -139,7 +139,7 @@ pub async fn load_pbp_only(pool: &PgPool, year: i32, dir: &Path) -> Result<u64> 
 /// Tries both `dir/` and `dir/{year}/` so the caller can pass either the
 /// per-season subdir or the parent collection root. Errors when zero or
 /// >1 file matches.
-fn find_csv(dir: &Path, year: i32, kind: &str) -> Result<PathBuf> {
+pub(crate) fn find_csv(dir: &Path, year: i32, kind: &str) -> Result<PathBuf> {
     let prefix = format!("NatStat-MBB{year}-{kind}-");
     let search_dirs = [dir.to_path_buf(), dir.join(year.to_string())];
     for d in &search_dirs {
@@ -179,7 +179,9 @@ fn find_csv(dir: &Path, year: i32, kind: &str) -> Result<PathBuf> {
 // Cell parsers — CSV strings are all quoted; missing values are empty strings.
 // ---------------------------------------------------------------------------
 
-fn cell(row: &csv::StringRecord, idx: usize) -> &str {
+/// `pub(crate)`: shared with the `simulate` fixture synthesizer, which reads
+/// the same CSVs.
+pub(crate) fn cell(row: &csv::StringRecord, idx: usize) -> &str {
     row.get(idx).unwrap_or("").trim()
 }
 
@@ -187,7 +189,8 @@ fn cell_owned(row: &csv::StringRecord, idx: usize) -> String {
     cell(row, idx).to_string()
 }
 
-fn parse_i32(s: &str) -> Option<i32> {
+/// `pub(crate)`: shared with the `simulate` fixture synthesizer.
+pub(crate) fn parse_i32(s: &str) -> Option<i32> {
     let s = s.trim();
     if s.is_empty() { None } else { s.parse().ok() }
 }
@@ -211,8 +214,11 @@ fn maybe(s: &str) -> Option<&str> {
 /// fractions, and the API ingester stores them as-is). Downstream compute
 /// pipeline and frontends key off this scale — using fractions here would
 /// shift CSV-loaded seasons into a different range and break percentiles
-/// + rankings across the cohort.
-fn pct(made: Option<i32>, attempts: Option<i32>) -> Option<f64> {
+/// and rankings across the cohort.
+///
+/// `pub(crate)`: shared with the `simulate` fixture synthesizer so both
+/// CSV consumers apply the identical percentage convention.
+pub(crate) fn pct(made: Option<i32>, attempts: Option<i32>) -> Option<f64> {
     match (made, attempts) {
         (Some(m), Some(a)) if a > 0 => Some(100.0 * m as f64 / a as f64),
         _ => None,
@@ -224,7 +230,10 @@ fn pct(made: Option<i32>, attempts: Option<i32>) -> Option<f64> {
 // ---------------------------------------------------------------------------
 
 /// Columns: TeamID, Name, Nickname, FullName, Abbrev (5 cols).
-async fn load_teams(
+/// `pub(crate)`: the `simulate` harness reuses this as its "season bootstrap
+/// already happened" premise — teams (+ seeded `team_season_stats` rows) are
+/// reference data the nightly path never creates.
+pub(crate) async fn load_teams(
     pool: &PgPool,
     year: i32,
     path: &Path,

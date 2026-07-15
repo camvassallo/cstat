@@ -285,6 +285,26 @@ impl<'a> SeasonIngester<'a> {
         // immediately (with this context) before aborting.
         let mut failures: Vec<String> = Vec::new();
 
+        // A leftover CSTAT_SIMULATED_DATE pins the default window to one past
+        // date forever while every monitor stays green (fresh ledger rows,
+        // green heartbeat, happy /api/health/ingest) — the site would go
+        // silently stale. Mark the run degraded so the Slack summary surfaces
+        // it. `env_simulated_date` applies the same parse as `today_utc`, so
+        // this only fires when the clock is actually pinned — an empty or
+        // unparsable value (which the clock ignores) can't false-alarm every
+        // night. The simulate harness advances the clock programmatically
+        // (`set_simulated_today`), not via env, so replay windows stay clean.
+        if let Some(sim_date) = crate::env_simulated_date() {
+            warn!(
+                %sim_date,
+                "nightly running with CSTAT_SIMULATED_DATE set — window defaults are simulated"
+            );
+            failures.push(format!(
+                "clock override active: CSTAT_SIMULATED_DATE={sim_date} — the nightly window \
+                 is pinned to a simulated date; unset this on the cron service"
+            ));
+        }
+
         // Rate-budget headroom (2.5): snapshot tokens before the run so we can
         // log consumption and warn if a busy night eats most of the budget.
         let budget = crate::rate_budget_from_env();
