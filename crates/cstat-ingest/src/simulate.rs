@@ -356,35 +356,53 @@ fn assert_isolated(sim_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Two connect targets collide when port and database match and the hosts
-/// are the same machine (textually, or by any shared resolved IP).
+/// Two connect targets collide when port and effective database match and
+/// the hosts are not provably different machines. Every comparison **fails
+/// closed**: an ambiguity (a URL that omits the dbname, a host that won't
+/// resolve) counts as a conflict, because the alternative is `--reset`
+/// running `DROP SCHEMA` against the real database.
 fn urls_conflict(sim: &PgConnectOptions, other: &PgConnectOptions) -> bool {
     sim.get_port() == other.get_port()
-        && sim.get_database() == other.get_database()
-        && same_host(sim.get_host(), other.get_host())
+        && effective_db(sim) == effective_db(other)
+        && !provably_different_host(sim.get_host(), other.get_host())
 }
 
-/// Host equality with alias handling: exact (case-insensitive) match, a
-/// shared **loopback class** (any loopback host equals any other — a
-/// dual-stack local Postgres answers on `127.0.0.1` AND `::1`, and resolver
-/// configs differ on whether `localhost` maps to both: stock Ubuntu maps
-/// `::1` to `ip6-localhost` only, so pure IP-intersection would let
-/// `[::1]` slip past a `localhost` main URL), or a non-empty intersection
-/// of resolved IPs. Resolution failures fall back to the textual comparison
-/// — the guard errs toward refusing only what it can prove. IPv6 URL
-/// brackets (`[::1]`) are stripped before comparing/resolving.
-fn same_host(a: &str, b: &str) -> bool {
+/// The database a connection actually opens. Postgres defaults a URL with no
+/// dbname to the **role name**, so `postgres://cstat@host:5432` and
+/// `postgres://cstat@host:5432/cstat` hit the same database — comparing the
+/// raw `get_database()` (`None` vs `Some("cstat")`) would miss that and let
+/// the guard pass.
+fn effective_db(opts: &PgConnectOptions) -> String {
+    opts.get_database()
+        .unwrap_or_else(|| opts.get_username())
+        .to_string()
+}
+
+/// True only when the two hosts can be **positively proven** to be different
+/// machines: both resolve to non-empty, disjoint IP sets. Everything else —
+/// a textual/case match, a shared loopback class, any resolved-IP overlap,
+/// OR a resolution failure on either side — returns false so the caller
+/// treats them as potentially the same host and refuses. Loopback spellings
+/// (`localhost`/`127.0.0.1`/`::1`, dual-stack) are never "provably different"
+/// because resolver configs disagree on which loopbacks `localhost` maps to.
+/// IPv6 URL brackets (`[::1]`) are stripped before comparing/resolving.
+fn provably_different_host(a: &str, b: &str) -> bool {
     let a = a.trim_start_matches('[').trim_end_matches(']');
     let b = b.trim_start_matches('[').trim_end_matches(']');
     if a.eq_ignore_ascii_case(b) {
-        return true;
+        return false;
     }
     let ips_a = resolve_host(a);
     let ips_b = resolve_host(b);
     if is_loopback_host(a, &ips_a) && is_loopback_host(b, &ips_b) {
-        return true;
+        return false;
     }
-    !ips_a.is_empty() && ips_a.iter().any(|ip| ips_b.contains(ip))
+    // Fail closed: only call them different when BOTH resolved and the IP
+    // sets are disjoint. Any empty resolution → not proven different.
+    if ips_a.is_empty() || ips_b.is_empty() {
+        return false;
+    }
+    !ips_a.iter().any(|ip| ips_b.contains(ip))
 }
 
 /// A host names the local machine: the well-known loopback spellings, or any
@@ -839,6 +857,34 @@ mod tests {
         assert!(urls_conflict(
             &opts("postgres://other:pw@127.0.0.1:5432/cstat?sslmode=disable"),
             &opts("postgres://cstat:cstat@localhost:5432/cstat"),
+        ));
+    }
+
+    #[test]
+    fn guard_catches_dbname_less_url() {
+        // A sim URL that omits the dbname connects to the ROLE-named database
+        // (Postgres default), so it collides with an explicit `/cstat` main
+        // URL even though get_database() is None vs Some.
+        assert!(urls_conflict(
+            &opts("postgres://cstat:cstat@localhost:5432"),
+            &opts("postgres://cstat:cstat@localhost:5432/cstat"),
+        ));
+        // Both dbname-less → both default to the role name → conflict.
+        assert!(urls_conflict(
+            &opts("postgres://cstat:cstat@localhost:5432"),
+            &opts("postgres://cstat:cstat@127.0.0.1:5432"),
+        ));
+    }
+
+    #[test]
+    fn guard_fails_closed_on_unresolvable_hosts() {
+        // Two different unresolvable spellings of the same server, same
+        // port+db: the guard cannot prove they differ, so it must REFUSE
+        // rather than DROP SCHEMA on a maybe-main DB. (`.invalid` is the
+        // reserved never-resolves TLD, RFC 2606.)
+        assert!(urls_conflict(
+            &opts("postgres://cstat:cstat@db.invalid:5432/cstat"),
+            &opts("postgres://cstat:cstat@db-alias.invalid:5432/cstat"),
         ));
     }
 }

@@ -913,11 +913,13 @@ struct BlendedPrediction {
 /// - Returns `None` when the blend is inactive (weight 0, or either team has
 ///   no `team_preseason_projection` row) — callers fall back to the pure
 ///   model prediction.
-/// - The win probability always converts the blended margin with the **pit
-///   σ**: the blend backtest calibrated early-season margins against the
-///   wider pit residuals, and using the prod σ on the live path made the
-///   same blended margin report a sharper win probability than the identical
-///   explicit-`as_of_date` request.
+/// - The win probability converts the blended margin with the σ of the
+///   **model bundle that produced the margin leg**: pit σ on the explicit
+///   `as_of_date` path (the leg is the honest pit model), prod σ on the live
+///   path (the leg is the prod/leaky model). This keeps each path
+///   self-consistent with its own bundle's calibration, and keeps the live
+///   win% continuous across the Dec-13 decay boundary, where the blend turns
+///   off and the response reverts to the prod bundle.
 async fn apply_preseason_blend(
     pool: &PgPool,
     season: i32,
@@ -938,7 +940,7 @@ async fn apply_preseason_blend(
     let margin = weight * pre_margin + (1.0 - weight) * pit_margin;
     Some(BlendedPrediction {
         margin,
-        win_prob: margin_to_win_prob(margin, true),
+        win_prob: margin_to_win_prob(margin, as_of_date.is_some()),
         weight,
     })
 }

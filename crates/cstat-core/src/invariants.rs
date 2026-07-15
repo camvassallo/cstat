@@ -185,11 +185,14 @@ async fn wl_record_mismatch(
 /// season-scoped. `pub` so `tests/swapped_games.rs` asserts through this
 /// exact query instead of carrying its own copy.
 ///
-/// Season scoping anchors on **`games.season`**, not the box rows' own
-/// `season` stamps: NatStat's cross-season game_id collisions can stamp a
-/// game's `player_game_stats`/`team_game_stats` rows with disagreeing
-/// seasons, and stamp-based scoping would drop such a game from every
-/// per-season pass (invisible to the invariant entirely).
+/// Season scoping mirrors `compute::correct_swapped_games` **exactly** — the
+/// box rows' own `season` column (`player_game_stats.season` /
+/// `team_game_stats.season`), not a `games.season` join. The invariant's job
+/// is "did compute's repair leave a swap behind?", so it must select the same
+/// game set compute operated on; a `games.season` anchor would (a) count
+/// `DISTINCT team_id` across all seasons' box rows on a cross-season
+/// game_id collision, breaking the `= 2` gate, and (b) diverge from what
+/// compute actually processed.
 pub async fn fully_swapped_games_remain(
     pool: &PgPool,
     season: i32,
@@ -200,13 +203,12 @@ pub async fn fully_swapped_games_remain(
             SELECT pgs.game_id, pgs.team_id AS labeled, pl.team_id AS real_team, COUNT(*) AS n
             FROM player_game_stats pgs
             JOIN players pl ON pl.id = pgs.player_id
-            JOIN games g ON g.id = pgs.game_id AND g.season = $2
+            WHERE pgs.season = $2
             GROUP BY pgs.game_id, pgs.team_id, pl.team_id
         ),
         two_team AS (
-            SELECT tgs.game_id FROM team_game_stats tgs
-            JOIN games g ON g.id = tgs.game_id AND g.season = $2
-            GROUP BY tgs.game_id HAVING COUNT(DISTINCT tgs.team_id) = 2
+            SELECT game_id FROM team_game_stats WHERE season = $2
+            GROUP BY game_id HAVING COUNT(DISTINCT team_id) = 2
         ),
         sides AS (
             SELECT game_id, labeled,
@@ -241,13 +243,14 @@ pub async fn fully_swapped_games_remain(
 /// `pub` so `tests/swapped_games.rs` asserts through this exact query
 /// instead of carrying its own copy.
 ///
-/// Two robustness notes: game membership anchors on `games.season` (see
-/// [`fully_swapped_games_remain`] — box-row season stamps can disagree on
-/// NatStat's cross-season game_id collisions), and the opponent-roster
-/// resolution uses `IN` over the game's *other* team ids rather than a
-/// scalar `=` subquery — a box row labeled with a third team (neither of the
-/// game's two `team_game_stats` sides) would make the scalar form return two
-/// rows and turn the whole check into a Postgres error instead of a finding.
+/// Two robustness notes: game membership mirrors
+/// `compute::repair_phantom_swapped_games` — the box rows' own `season`
+/// column (see [`fully_swapped_games_remain`] for why matching compute's
+/// scoping matters), and the opponent-roster resolution uses `IN` over the
+/// game's *other* team ids rather than a scalar `=` subquery — a box row
+/// labeled with a third team (neither of the game's two `team_game_stats`
+/// sides) would make the scalar form return two rows and turn the whole
+/// check into a Postgres error instead of a finding.
 pub async fn phantom_swapped_games_remain(
     pool: &PgPool,
     season: i32,
@@ -267,9 +270,8 @@ pub async fn phantom_swapped_games_remain(
             WHERE p.season = $2
         ),
         games2 AS (
-            SELECT tgs.game_id FROM team_game_stats tgs
-            JOIN games g ON g.id = tgs.game_id AND g.season = $2
-            GROUP BY tgs.game_id HAVING count(DISTINCT tgs.team_id) = 2
+            SELECT game_id FROM team_game_stats WHERE season = $2
+            GROUP BY game_id HAVING count(DISTINCT team_id) = 2
         ),
         resolved AS (
             SELECT pgs.id AS pgs_id, pgs.game_id,

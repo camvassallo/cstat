@@ -58,10 +58,17 @@ pub fn env_simulated_date() -> Option<NaiveDate> {
     match NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         Ok(d) => Some(d),
         Err(_) => {
-            warn!(
-                value = %s,
-                "CSTAT_SIMULATED_DATE is not a valid YYYY-MM-DD date; using the real clock"
-            );
+            // Warn once per process, not per call: `today_utc` runs this on
+            // every miss, and `today_utc` is on the API's per-request path
+            // (default season resolution), so an unthrottled warn on a
+            // persistently-malformed value would flood the logs.
+            static WARNED_INVALID: std::sync::Once = std::sync::Once::new();
+            WARNED_INVALID.call_once(|| {
+                warn!(
+                    value = %s,
+                    "CSTAT_SIMULATED_DATE is not a valid YYYY-MM-DD date; using the real clock"
+                );
+            });
             None
         }
     }
