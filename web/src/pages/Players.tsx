@@ -177,7 +177,7 @@ function buildColumns(
         p.value ? conferenceLabel(p.value) : '',
     },
     {
-      headerName: 'Class',
+      headerName: 'Archetype',
       colId: 'archetype',
       // Wider than the previous 110 so "Barbarian / Sorcerer"–length combos
       // render in full without truncation.

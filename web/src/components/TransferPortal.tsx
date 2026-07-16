@@ -122,7 +122,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
       },
     },
     {
-      headerName: 'Class',
+      headerName: 'Archetype',
       colId: 'archetype',
       // Mirrors the Players page column so users see the same primary /
       // secondary archetype combo for each transfer.

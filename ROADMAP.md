@@ -1117,6 +1117,25 @@ Captured during the 2026-05-03 ingestion-pipeline checkup. These are
 deferred-but-considered items — not blocking, but worth picking up the next
 time someone is in the relevant area.
 
+- [ ] **Rename `class` → `archetype` in the backend (DB/API/Rust/TS field names).** The
+  player-archetype fields are named `primary_class` / `secondary_class` everywhere below
+  the UI — a D&D-metaphor holdover (the 12 archetypes are named after D&D classes:
+  Wizard, Rogue, …). This is now purely an internal-naming inconsistency: the **user-facing
+  labels already say "Archetype"** (renamed 2026-07-15 — TeamDetail roster header, Players
+  grid, Transfer Portal grid, the ArchetypeFilter "secondary archetype" toggle). Deliberately
+  **kept as "Class" in the UI**: the class-*year* column in Portle (genuinely Fr/So/Jr/Sr) and
+  the "Class Quiz" / "Which Class Are You?" mini-game (whose whole conceit is the D&D-class
+  metaphor). Renaming the *data* fields is a larger, riskier change and is why it's deferred:
+  it touches the `player_archetypes` columns `primary_class` / `secondary_class` + the
+  `idx_player_archetypes_class` index (new migration — never edit the applied `013`), every
+  SQL/struct reference across `compute.rs` / `trajectory.rs` / `roster_impact.rs` /
+  `roster_fit.rs`, the **`/api/*` JSON keys** (a breaking API-contract change — the frontend
+  reads `primary_class` / `secondary_class` in ~8 `client.ts` types), and the ML
+  training/serving code. Worth doing only as a dedicated cleanup PR (or never — the display
+  is already correct). **The `class` = `archetype` linkage is documented in
+  `docs/archetypes_methodology.md`** (see "Naming") and mirrored by a comment on the API
+  types in `web/src/api/client.ts` so the next reader isn't misled.
+
 ### Application health — long-term (added 2026-06-10, scoped at the Tier-2 lineups kickoff)
 
 Conventions and infrastructure that keep the app trustworthy as the data footprint and

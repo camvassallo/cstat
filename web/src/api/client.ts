@@ -133,6 +133,10 @@ export interface RosterEntry {
   drb_pct_pct: number | null;
   stl_pct_pct: number | null;
   blk_pct_pct: number | null;
+  // `*_class` is the player's ARCHETYPE (the 12 D&D-class profiles: Wizard,
+  // Rogue, …), not the class year. UI labels it "Archetype"; the field keeps
+  // the legacy `class` name from the DB/API. See docs/archetypes_methodology.md
+  // "Naming" and the ROADMAP rename item.
   primary_class: string | null;
   secondary_class: string | null;
   /// Torvik shot-zone volumes — drive the team aggregate shot-diet

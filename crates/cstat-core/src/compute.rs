@@ -2087,14 +2087,19 @@ const TORVIK_TEAM_NAME_ALIASES: &[(&str, &str)] = &[
 pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     // Torvik-authoritative conference: overwrite always where Torvik matches.
     // VALUES built from the trusted internal consts (no injection surface).
+    // Escape single quotes so an apostrophe in a future entry (e.g. "Saint
+    // Mary's") can't break the literal, even though today's constants have none.
+    let sql_lit = |s: &str| s.replace('\'', "''");
     let conf_values = TORVIK_CONF_TO_CSTAT
         .iter()
-        .map(|(t, c)| format!("('{t}','{c}')"))
+        .map(|(t, c)| format!("('{}','{}')", sql_lit(t), sql_lit(c)))
         .collect::<Vec<_>>()
         .join(",");
     let alias_values = TORVIK_TEAM_NAME_ALIASES
         .iter()
-        .map(|(cstat_name, torvik_name)| format!("('{cstat_name}','{torvik_name}')"))
+        .map(|(cstat_name, torvik_name)| {
+            format!("('{}','{}')", sql_lit(cstat_name), sql_lit(torvik_name))
+        })
         .collect::<Vec<_>>()
         .join(",");
     // Effective Torvik name for a team: an alias if one exists, else its own

@@ -877,7 +877,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
               onSort={onSort}
               className="left-0 z-20 border-r border-gray-700"
             />
-            <StickyHeader>Class</StickyHeader>
+            <StickyHeader>Archetype</StickyHeader>
               <SortHeader
                 label="CamPom"
                 sortKey="campom"
