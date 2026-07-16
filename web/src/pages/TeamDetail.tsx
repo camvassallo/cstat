@@ -877,7 +877,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
               onSort={onSort}
               className="left-0 z-20 border-r border-gray-700"
             />
-            <StickyHeader className="hidden sm:table-cell">Class</StickyHeader>
+            <StickyHeader>Class</StickyHeader>
               <SortHeader
                 label="CamPom"
                 sortKey="campom"
@@ -982,7 +982,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     {p.name}
                   </SeasonLink>
                 </td>
-                <td className="hidden sm:table-cell py-2 px-2">
+                <td className="py-2 px-2">
                   {p.primary_class ? (
                     <span className="inline-flex items-center gap-1">
                       <ClassTooltip cls={p.primary_class}>
