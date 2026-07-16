@@ -505,7 +505,11 @@ fn predict_team(
     // team with a strong freshman class (e.g. Duke with 4 incoming
     // 5-stars) is no longer "too thin to project". The roster-impact model
     // sees them via build_roster_impact_features just like returners.
-    let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
+    // Only the ranked composite cohort counts, matching the scored roster —
+    // display-only commits-feed recruits (#175) are excluded so the gate and
+    // `for_scenario` agree.
+    let qualifying =
+        p.returning.len() + p.arrivals.len() + p.projecting_recruits_count();
 
     // Per-cohort Σ CamPom for the UI's roster-flow columns. Returning
     // uses prior-season production; recruits use the synthesized

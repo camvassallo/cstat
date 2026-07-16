@@ -161,6 +161,16 @@ pub struct Recruit247Client {
     rate_limiter: RateLimiter,
 }
 
+/// Self-imposed request rate from `TFS_247_RATE_PER_HOUR`, falling back to
+/// [`DEFAULT_RATE_PER_HOUR`]. Shared by both constructors so the authenticated
+/// and cookie-free clients can't drift to different limits.
+fn rate_from_env() -> u32 {
+    std::env::var("TFS_247_RATE_PER_HOUR")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_RATE_PER_HOUR)
+}
+
 impl Recruit247Client {
     /// Build a client from env. Prefers `TFS_247_COOKIE` (the full
     /// `Cookie:` header string from DevTools Copy-as-cURL); falls back to
@@ -176,11 +186,7 @@ impl Recruit247Client {
                     .map(|j| format!("JWT={j}"))
             })
             .ok_or(RecruitError::MissingJwt)?;
-        let rate = std::env::var("TFS_247_RATE_PER_HOUR")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(DEFAULT_RATE_PER_HOUR);
-        Ok(Self::new(cookie_header, rate))
+        Ok(Self::new(cookie_header, rate_from_env()))
     }
 
     /// Build a cookie-free client for the public national commits feed
@@ -189,11 +195,7 @@ impl Recruit247Client {
     /// [`Self::fetch_commits_page`]. The empty cookie header is simply not
     /// sent (see [`Self::fetch_commits_page`]).
     pub fn public() -> Self {
-        let rate = std::env::var("TFS_247_RATE_PER_HOUR")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(DEFAULT_RATE_PER_HOUR);
-        Self::new(String::new(), rate)
+        Self::new(String::new(), rate_from_env())
     }
 
     /// Build with an explicit cookie header + rate (handy for tests).
@@ -309,13 +311,20 @@ impl Recruit247Client {
             };
 
             let status = response.status();
-            if status.as_u16() == 401 || status.as_u16() == 403 {
+            // Authenticated composite endpoint: a 401/403 means the subscriber
+            // cookie expired and won't self-heal, so fail fast with a clear
+            // message. The cookie-free commits feed sends no cookie, so a 403
+            // there is a transient edge/WAF bot-block, not an auth failure —
+            // let it fall through to the retryable branch below instead of
+            // aborting the whole run with a misleading "JWT expired".
+            if !self.cookie_header.is_empty() && (status.as_u16() == 401 || status.as_u16() == 403)
+            {
                 return Err(RecruitError::JwtExpired {
                     status: status.as_u16(),
                 });
             }
 
-            if status.as_u16() == 429 || status.is_server_error() {
+            if status.as_u16() == 429 || status.as_u16() == 403 || status.is_server_error() {
                 let body = response.text().await.unwrap_or_default();
                 if attempt >= MAX_RETRIES {
                     return Err(RecruitError::HttpStatus {
