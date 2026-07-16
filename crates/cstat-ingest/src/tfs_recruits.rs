@@ -466,17 +466,23 @@ pub fn parse_recruits_html(body: &str) -> Vec<RecruitRow> {
 ///
 /// Same per-row layout as the composite rankings, so it shares
 /// [`parse_items`] with a different selector set. Two things differ from the
-/// rankings feed and are handled downstream, not here:
+/// rankings feed:
 /// * The `.score` shown is 247's proprietary 0–100 rating, NOT the 0–1
-///   composite — the ingest deliberately does not persist it as
-///   `composite_rating` (see `ingest::recruits::upsert_commit`).
+///   composite. It is **cleared here** (`composite_rating = None`) so nothing
+///   downstream — including the forensic `raw_player` JSONB — mistakes the
+///   0–100 value for a 0–1 composite. `composite_rank` (a real national rank
+///   when the feed shows one) and `star_rating` are left intact.
 /// * The committed school is a bare `.status > img` (never an `a.img-link`),
 ///   which [`parse_commit`]'s bare-img branch already handles.
 ///
 /// Empty/terminal fragment (247 serves a 2-row nav sentinel with no
 /// `a.ri-page__name-link` past the last data page) returns `vec![]`.
 pub fn parse_commits_html(body: &str) -> Vec<RecruitRow> {
-    parse_items(body, commit_selectors())
+    let mut rows = parse_items(body, commit_selectors());
+    for r in &mut rows {
+        r.composite_rating = None;
+    }
+    rows
 }
 
 /// Shared per-row extraction for both 247 layouts. `sel` selects which class
@@ -493,8 +499,10 @@ fn parse_items(body: &str, sel: &Selectors) -> Vec<RecruitRow> {
         }
 
         let Some(profile_url) = first_attr(&item, &sel.name_link, "href") else {
-            // No profile link → no stable key → skip with a warning.
-            warn!("recruit row has no `a.rankings-page__name-link href` — skipping");
+            // No profile link → no stable key → skip with a warning. Fires on
+            // the commits feed's terminal nav sentinel (expected) — kept
+            // layout-agnostic since `parse_items` serves both feeds.
+            warn!("recruit row has no name-link href — skipping");
             continue;
         };
         let Some(recruit_key) = recruit_key_from_url(&profile_url) else {

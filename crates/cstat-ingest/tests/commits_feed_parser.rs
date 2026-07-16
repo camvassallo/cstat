@@ -72,10 +72,9 @@ fn ranked_five_star_commit_parses() {
     assert_eq!(r.city.as_deref(), Some("Dallas"));
     assert_eq!(r.state.as_deref(), Some("TX"));
     // The feed's `.score` is 247's 0–100 rating, a different metric from the
-    // 0–1 composite — the ingest deliberately drops it, but the parser still
-    // exposes the raw parse. `composite_rating` here is the "98" parsed as a
-    // float; downstream `upsert_commit` does not persist it.
-    assert_eq!(r.composite_rating, Some(98.0));
+    // 0–1 composite, so `parse_commits_html` clears it to avoid a mis-scaled
+    // value leaking into `raw_player`. `star_rating` still captures the tier.
+    assert_eq!(r.composite_rating, None);
 }
 
 #[test]
