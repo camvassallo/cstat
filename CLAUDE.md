@@ -10,6 +10,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `pr.md` is a gitignored local scratch file for drafting PR descriptions. **The input is a plaintext bullet list of changes** — the user (or you, from the diff) drops a flat list of what changed into it, and you expand that into a full PR description in place. Expanded form: a `# Title`, then `## Summary`, `## Changes` (the bullets, fleshed out), and `## Verification` if applicable. Keep it Markdown; never stage or commit it.
 
+## Documentation Style
+
+**No pictographic emoji in docs or doc-like prose** (README, ROADMAP, `docs/`, `pr.md`, code comments). Use plain **bold** for banners/callouts instead of emoji like ⚠️/🚀/✅. Plain arrows (`→`) and check/cross markers (`✓`/`✗`) are fine.
+
 ## Build & Development Commands
 
 ```bash
