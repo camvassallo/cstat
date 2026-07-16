@@ -425,6 +425,19 @@ enum Commands {
         #[arg(long, value_delimiter = ',', default_value = "highschool")]
         groups: Vec<String>,
 
+        /// Ingest the public national commits feed
+        /// (`/season/{year}-basketball/commits/`) instead of the composite
+        /// rankings. This is the cookie-free path (no `TFS_247_*` needed) and
+        /// captures every commit — unranked / international / prep / G-League —
+        /// that the ranked composite omits (issue #175). Rows land tagged
+        /// `institution_group='commits'` and never clobber composite-owned
+        /// rows, so run it alongside the normal composite ingest (two
+        /// invocations) for full coverage. Mutually exclusive with the
+        /// composite-only `--bootstrap-from` / `--dump-snapshot`; `--groups`
+        /// is ignored in this mode (the feed has no per-cohort split).
+        #[arg(long, conflicts_with_all = ["bootstrap_from", "dump_snapshot", "resolve_only"])]
+        commits_feed: bool,
+
         /// Load from a local snapshot file instead of hitting the live API.
         #[arg(long)]
         bootstrap_from: Option<std::path::PathBuf>,
@@ -991,6 +1004,7 @@ async fn main() -> Result<()> {
         Commands::Recruits {
             year,
             groups,
+            commits_feed,
             bootstrap_from,
             dump_snapshot,
             resolve_only,
@@ -1014,7 +1028,11 @@ async fn main() -> Result<()> {
                     println!("recruits {year}: cstat_player_id resolved on {n} row(s)");
                 }
             } else {
-                let report = if let Some(path) = bootstrap_from {
+                let report = if commits_feed {
+                    info!(year, "ingesting 247 national commits feed (cookie-free)");
+                    let client = cstat_ingest::Recruit247Client::public();
+                    cstat_ingest::ingest::recruits::ingest_commits(&client, &db.pool, year).await?
+                } else if let Some(path) = bootstrap_from {
                     info!("bootstrapping recruits from {}", path.display());
                     cstat_ingest::ingest::recruits::bootstrap_from_snapshot(&db.pool, year, &path)
                         .await?

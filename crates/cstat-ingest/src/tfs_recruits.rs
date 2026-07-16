@@ -183,6 +183,19 @@ impl Recruit247Client {
         Ok(Self::new(cookie_header, rate))
     }
 
+    /// Build a cookie-free client for the public national commits feed
+    /// (`/season/{year}-basketball/commits/`), which — unlike the composite
+    /// rankings endpoint — needs no subscriber session. Use with
+    /// [`Self::fetch_commits_page`]. The empty cookie header is simply not
+    /// sent (see [`Self::fetch_commits_page`]).
+    pub fn public() -> Self {
+        let rate = std::env::var("TFS_247_RATE_PER_HOUR")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_RATE_PER_HOUR);
+        Self::new(String::new(), rate)
+    }
+
     /// Build with an explicit cookie header + rate (handy for tests).
     /// Prefer [`Self::from_env`] in production code. The string is sent
     /// verbatim as the `Cookie:` header value, so callers pass either a
@@ -200,7 +213,8 @@ impl Recruit247Client {
         }
     }
 
-    /// Fetch a single page of recruit rankings. Page is 1-indexed.
+    /// Fetch a single page of composite recruit rankings. Page is 1-indexed.
+    /// Requires the subscriber cookie (see [`Self::from_env`]).
     pub async fn fetch_page(
         &self,
         year: i32,
@@ -217,35 +231,71 @@ impl Recruit247Client {
             "https://247sports.com/season/{year}-basketball/compositerecruitrankings/?InstitutionGroup={}",
             group.as_url_param()
         );
+        let body = self.fetch_html(&url, &referer, year, page).await?;
+        let players = parse_recruits_html(&body);
+        Ok(RecruitPage {
+            is_last_page: players.is_empty(),
+            players,
+        })
+    }
 
+    /// Fetch a single page of the national commits feed
+    /// (`/season/{year}-basketball/commits/?Page=N`). Page is 1-indexed.
+    ///
+    /// Unlike [`Self::fetch_page`], this endpoint is public — build the client
+    /// with [`Self::public`] (cookie-free). It lists every commit including
+    /// unranked/international/G-League players the composite rankings omit,
+    /// each row carrying its committed school in the `.status` img. 247 serves
+    /// a nav-only sentinel (no recruit rows) past the last data page, which
+    /// [`parse_commits_html`] returns empty — the caller's stop signal.
+    pub async fn fetch_commits_page(
+        &self,
+        year: i32,
+        page: u32,
+    ) -> Result<RecruitPage, RecruitError> {
+        let url = format!("{RECRUITS_URL_BASE}/{year}-basketball/commits/?Page={page}");
+        let referer = format!("https://247sports.com/season/{year}-basketball/commits/");
+        let body = self.fetch_html(&url, &referer, year, page).await?;
+        let players = parse_commits_html(&body);
+        Ok(RecruitPage {
+            is_last_page: players.is_empty(),
+            players,
+        })
+    }
+
+    /// Shared GET-with-retry for both feeds. Returns the response body on
+    /// success. The `Cookie` header is sent only when the client carries one
+    /// (empty for [`Self::public`]), so the cookie-free commits feed doesn't
+    /// send a stray blank cookie. `year`/`page` are for log context only.
+    async fn fetch_html(
+        &self,
+        url: &str,
+        referer: &str,
+        year: i32,
+        page: u32,
+    ) -> Result<String, RecruitError> {
         let mut attempt: u32 = 0;
         loop {
             self.rate_limiter.acquire().await;
 
             if attempt > 0 {
                 let backoff_secs = 2u64.pow(attempt);
-                info!(
-                    year,
-                    ?group,
-                    page,
-                    attempt,
-                    backoff_secs,
-                    "retrying 247 recruits request"
-                );
+                info!(year, page, attempt, backoff_secs, "retrying 247 request");
             } else {
-                info!(year, ?group, page, "fetching 247 recruits page");
+                info!(year, page, url, "fetching 247 page");
             }
 
-            let response = match self
+            let mut req = self
                 .http
-                .get(&url)
-                .header("Cookie", &self.cookie_header)
-                .header("Referer", &referer)
+                .get(url)
+                .header("Referer", referer)
                 .header("X-Requested-With", "XMLHttpRequest")
-                .header("Accept", "*/*")
-                .send()
-                .await
-            {
+                .header("Accept", "*/*");
+            if !self.cookie_header.is_empty() {
+                req = req.header("Cookie", &self.cookie_header);
+            }
+
+            let response = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt >= MAX_RETRIES {
@@ -295,12 +345,7 @@ impl Recruit247Client {
                 });
             }
 
-            let body = response.text().await?;
-            let players = parse_recruits_html(&body);
-            return Ok(RecruitPage {
-                is_last_page: players.is_empty(),
-                players,
-            });
+            return Ok(response.text().await?);
         }
     }
 }
@@ -347,21 +392,25 @@ struct Selectors {
     photo_img: Selector,
 }
 
-fn selectors() -> &'static Selectors {
-    static SEL: OnceLock<Selectors> = OnceLock::new();
-    SEL.get_or_init(|| Selectors {
+/// Build a [`Selectors`] set. The two 247 layouts (composite rankings vs the
+/// national commits feed) differ only in the `{prefix}__list-item` /
+/// `{prefix}__name-link` / `{prefix}__star-and-score` class prefix — everything
+/// else (`.recruit .meta`, `.metrics`, `.status …`, `.circle-image-block img`)
+/// is shared — so both callers funnel through here with their prefix.
+fn make_selectors(list_item: &str, name_link: &str, star_score_container: &str) -> Selectors {
+    Selectors {
         // Exclude the trailing "show more" sentinel <li> 247 appends to each page.
-        item: Selector::parse("li.rankings-page__list-item:not(.showmore_blk)").unwrap(),
+        item: Selector::parse(list_item).unwrap(),
         showmore: Selector::parse("li.showmore_blk").unwrap(),
         rank_primary: Selector::parse(".rank-column .primary").unwrap(),
         rank_other: Selector::parse(".rank-column .other").unwrap(),
-        name_link: Selector::parse("a.rankings-page__name-link").unwrap(),
+        name_link: Selector::parse(name_link).unwrap(),
         meta: Selector::parse(".recruit .meta").unwrap(),
         position: Selector::parse(".position").unwrap(),
         metrics: Selector::parse(".metrics").unwrap(),
-        star_yellow: Selector::parse(".rankings-page__star-and-score .icon-starsolid.yellow")
+        star_yellow: Selector::parse(&format!("{star_score_container} .icon-starsolid.yellow"))
             .unwrap(),
-        score: Selector::parse(".rankings-page__star-and-score .score").unwrap(),
+        score: Selector::parse(&format!("{star_score_container} .score")).unwrap(),
         natrank: Selector::parse(".rank .natrank").unwrap(),
         posrank: Selector::parse(".rank .posrank").unwrap(),
         sttrank: Selector::parse(".rank .sttrank").unwrap(),
@@ -370,11 +419,37 @@ fn selectors() -> &'static Selectors {
         // Direct-child `<img>` of `.status` — fires for schools without a 247
         // college landing page (e.g. small D-I programs like California
         // Baptist) where 247 renders just `<img alt="..." title="...">` with
-        // no surrounding `<a class="img-link">`.
+        // no surrounding `<a class="img-link">`. The national commits feed
+        // uses this bare-img form for *every* row.
         status_bare_img: Selector::parse(".status > img").unwrap(),
         status_checkmark: Selector::parse(".status b.checkmark").unwrap(),
         status_crystal_ball: Selector::parse(".status .rankings-page__crystal-ball").unwrap(),
         photo_img: Selector::parse(".circle-image-block img").unwrap(),
+    }
+}
+
+/// Selectors for the composite-rankings HTML (`compositerecruitrankings`).
+fn selectors() -> &'static Selectors {
+    static SEL: OnceLock<Selectors> = OnceLock::new();
+    SEL.get_or_init(|| {
+        make_selectors(
+            "li.rankings-page__list-item:not(.showmore_blk)",
+            "a.rankings-page__name-link",
+            ".rankings-page__star-and-score",
+        )
+    })
+}
+
+/// Selectors for the national commits feed (`/season/{year}-basketball/commits/`).
+/// Same row layout as the rankings page but with an `ri-page__` class prefix.
+fn commit_selectors() -> &'static Selectors {
+    static SEL: OnceLock<Selectors> = OnceLock::new();
+    SEL.get_or_init(|| {
+        make_selectors(
+            "li.ri-page__list-item:not(.showmore_blk)",
+            "a.ri-page__name-link",
+            ".ri-page__star-and-score",
+        )
     })
 }
 
@@ -383,8 +458,31 @@ fn selectors() -> &'static Selectors {
 /// Empty fragment (or fragment past the last data page) returns `vec![]` —
 /// the caller uses that as the stop-paging signal.
 pub fn parse_recruits_html(body: &str) -> Vec<RecruitRow> {
+    parse_items(body, selectors())
+}
+
+/// Parse a 247 national commits-feed HTML fragment
+/// (`/season/{year}-basketball/commits/?Page=N`) into recruit rows.
+///
+/// Same per-row layout as the composite rankings, so it shares
+/// [`parse_items`] with a different selector set. Two things differ from the
+/// rankings feed and are handled downstream, not here:
+/// * The `.score` shown is 247's proprietary 0–100 rating, NOT the 0–1
+///   composite — the ingest deliberately does not persist it as
+///   `composite_rating` (see `ingest::recruits::upsert_commit`).
+/// * The committed school is a bare `.status > img` (never an `a.img-link`),
+///   which [`parse_commit`]'s bare-img branch already handles.
+///
+/// Empty/terminal fragment (247 serves a 2-row nav sentinel with no
+/// `a.ri-page__name-link` past the last data page) returns `vec![]`.
+pub fn parse_commits_html(body: &str) -> Vec<RecruitRow> {
+    parse_items(body, commit_selectors())
+}
+
+/// Shared per-row extraction for both 247 layouts. `sel` selects which class
+/// prefix (`rankings-page__` vs `ri-page__`) to key off.
+fn parse_items(body: &str, sel: &Selectors) -> Vec<RecruitRow> {
     let doc = Html::parse_fragment(body);
-    let sel = selectors();
 
     let mut out = Vec::new();
     for item in doc.select(&sel.item) {
@@ -521,7 +619,10 @@ fn parse_commit(
 /// the capture stays inside the player segment regardless of trailing path.
 pub fn recruit_key_from_url(url: &str) -> Option<i64> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"/player/[^/]*-(\d+)").unwrap());
+    // Case-insensitive: the composite-rankings feed emits lowercase
+    // `/player/…`, but the national commits feed emits protocol-relative
+    // `//247sports.com/Player/…` with a capital `P`.
+    let re = RE.get_or_init(|| Regex::new(r"(?i)/player/[^/]*-(\d+)").unwrap());
     re.captures(url)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<i64>().ok())

@@ -295,6 +295,142 @@ pub async fn upsert_player(
     Ok(())
 }
 
+/// Ingest one class year of commits from the public national commits feed
+/// (`/season/{year}-basketball/commits/`).
+///
+/// This is the gap-filler for the composite-rankings ingest ([`ingest_live`]),
+/// which only sees ranked players. The commits feed lists every commit —
+/// unranked, international, prep, G-League — each carrying its committed school
+/// (issue #175). The feed is public, so `client` should be built with
+/// [`Recruit247Client::public`] (no subscriber cookie).
+///
+/// Rows land tagged `institution_group = 'commits'` and are upserted via
+/// [`upsert_commit`], which never clobbers a composite-owned row (see there).
+/// Run the resolution passes ([`resolve_team_joins`] / [`resolve_player_joins`])
+/// afterward exactly as the composite path does.
+pub async fn ingest_commits(
+    client: &Recruit247Client,
+    pool: &PgPool,
+    year: i32,
+) -> Result<RecruitIngestReport, RecruitIngestError> {
+    let mut rows: Vec<RecruitRow> = Vec::new();
+    let mut total_pages = 0u32;
+    for page in 1..=MAX_PAGES_PER_GROUP {
+        let p = client.fetch_commits_page(year, page).await?;
+        if p.is_last_page {
+            info!(year, page, "reached commits sentinel page — stopping");
+            break;
+        }
+        total_pages += 1;
+        rows.extend(p.players);
+    }
+
+    for row in &rows {
+        upsert_commit(row, pool, year).await?;
+    }
+    let upserts = rows.len() as u64;
+
+    let mut by_group = BTreeMap::new();
+    by_group.insert("commits".to_string(), upserts);
+    info!(year, upserts, total_pages, "commits-feed ingest complete");
+    Ok(RecruitIngestReport {
+        year,
+        total_pages,
+        upserts,
+        by_group,
+    })
+}
+
+/// Upsert one row from the national commits feed.
+///
+/// Provenance-scoped so the commits and composite passes converge without a
+/// fight (issue #175):
+///
+/// * New rows insert with `institution_group = 'commits'`.
+/// * `ON CONFLICT … DO UPDATE` is gated `WHERE recruits.institution_group =
+///   'commits'` — so a conflict against a **composite-owned** row (any other
+///   group) is a no-op and the richer composite data is preserved untouched.
+///   Once the composite pass promotes a player, it owns the row for good.
+///
+/// The composite ranking columns (`composite_rank` / `composite_rating` /
+/// `previous_rank` / `position_rank` / `state_rank`) are deliberately **not**
+/// written: the commits feed's visible `.score` is 247's proprietary 0–100
+/// rating, a different metric from the 0–1 composite, and its ranks read "NA"
+/// for the unranked players that are the whole point here. `star_rating` (an
+/// unambiguous 1–5 solid-star count) is persisted when present.
+pub async fn upsert_commit(
+    row: &RecruitRow,
+    pool: &PgPool,
+    year: i32,
+) -> Result<(), RecruitIngestError> {
+    let raw_player = serde_json::to_value(row)?;
+    // Parser reports 0 solid stars for unranked players; store NULL rather than
+    // a misleading "0-star".
+    let star_rating = row.star_rating.filter(|&s| s > 0);
+
+    sqlx::query(
+        r#"
+        INSERT INTO recruits (
+            year, recruit_key, institution_group,
+            first_name, last_name,
+            position, height, weight,
+            city, state, high_school,
+            star_rating,
+            committed_school, committed_school_slug, commit_status,
+            profile_url, photo_url,
+            raw_player
+        ) VALUES (
+            $1, $2, 'commits',
+            $3, $4,
+            $5, $6, $7,
+            $8, $9, $10,
+            $11,
+            $12, $13, $14,
+            $15, $16,
+            $17
+        )
+        ON CONFLICT (year, recruit_key) DO UPDATE SET
+            first_name = EXCLUDED.first_name,
+            last_name = EXCLUDED.last_name,
+            position = EXCLUDED.position,
+            height = EXCLUDED.height,
+            weight = EXCLUDED.weight,
+            city = EXCLUDED.city,
+            state = EXCLUDED.state,
+            high_school = EXCLUDED.high_school,
+            star_rating = EXCLUDED.star_rating,
+            committed_school = EXCLUDED.committed_school,
+            committed_school_slug = EXCLUDED.committed_school_slug,
+            commit_status = EXCLUDED.commit_status,
+            profile_url = EXCLUDED.profile_url,
+            photo_url = EXCLUDED.photo_url,
+            raw_player = EXCLUDED.raw_player,
+            fetched_at = NOW()
+        WHERE recruits.institution_group = 'commits'
+        "#,
+    )
+    .bind(year)
+    .bind(row.recruit_key)
+    .bind(&row.first_name)
+    .bind(&row.last_name)
+    .bind(&row.position)
+    .bind(&row.height)
+    .bind(row.weight)
+    .bind(&row.city)
+    .bind(&row.state)
+    .bind(&row.high_school)
+    .bind(star_rating)
+    .bind(&row.committed_school)
+    .bind(&row.committed_school_slug)
+    .bind(&row.commit_status)
+    .bind(&row.profile_url)
+    .bind(&row.photo_url)
+    .bind(&raw_player)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Pass 1: resolve `committed_school` text → `teams.id`.
 ///
 /// Matching is done in Rust (not SQL) so we can reuse the same
