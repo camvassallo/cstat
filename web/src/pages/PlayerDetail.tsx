@@ -22,6 +22,7 @@ import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
 import { campomTier, campomTierColor, campomSplit } from '../components/campom';
 import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
+import { conferenceLabel } from '../lib/conferences';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { SeasonLink } from '../components/SeasonLink';
@@ -532,7 +533,9 @@ export default function PlayerDetail() {
             ) : (
               <span>{player.team_name ?? 'Unknown'}</span>
             )}
-            {player.conference && <span className="text-gray-500">({player.conference})</span>}
+            {player.conference && (
+              <span className="text-gray-500">({conferenceLabel(player.conference)})</span>
+            )}
             {stats && <><span>&middot;</span><span>{stats.games_played} GP</span></>}
             {torvik?.hometown && <><span>&middot;</span><span>{torvik.hometown}</span></>}
           </div>

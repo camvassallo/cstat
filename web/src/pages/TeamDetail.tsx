@@ -21,6 +21,7 @@ import {
   type TeamCoachCard,
 } from '../api/client';
 import { caeColor, fmtCae, tenureSpan } from '../components/cae';
+import { conferenceLabel } from '../lib/conferences';
 import { classColor, classTagline, textOnClass } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
@@ -369,7 +370,7 @@ function HistoricalTeamDetail() {
       <div>
         <h1 className="text-3xl font-bold">{team.name}</h1>
         <div className="text-gray-400">
-          {team.conference ?? 'Independent'} &middot; {team.wins ?? 0}-{team.losses ?? 0}
+          {conferenceLabel(team.conference)} &middot; {team.wins ?? 0}-{team.losses ?? 0}
         </div>
       </div>
 

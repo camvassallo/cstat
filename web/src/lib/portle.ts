@@ -4,6 +4,7 @@
 // everything deterministic lives here.
 
 import type { PlayerRow } from '../api/client';
+import { conferenceLabel } from './conferences';
 
 // ---------------------------------------------------------------------------
 // Config / eligibility
@@ -195,16 +196,19 @@ function classOrdinal(cy: string | null): number | null {
   return CLASS_ORDINAL[k] ?? null;
 }
 
-/** Exact-match categorical cell (team / conference / position). */
+/** Exact-match categorical cell (team / conference / position). Comparison is
+ *  always on the raw stored value; `format` only affects what's displayed. */
 function categoricalCell(
   key: string,
   label: string,
   guessVal: string | null,
   answerVal: string | null,
+  format?: (v: string) => string,
 ): GuessCell {
   const state: CellState =
     guessVal != null && answerVal != null && guessVal === answerVal ? 'hit' : 'miss';
-  return { key, label, display: guessVal ?? '—', state, arrow: null };
+  const display = guessVal == null ? '—' : format ? format(guessVal) : guessVal;
+  return { key, label, display, state, arrow: null };
 }
 
 /** Numeric cell with a "close" band and a direction arrow toward the answer. */
@@ -280,7 +284,7 @@ export const GUESS_COLUMNS: ReadonlyArray<{ key: string; label: string }> = [
 export function compareGuess(guess: PlayerRow, answer: PlayerRow): GuessCell[] {
   return [
     categoricalCell('team', 'Team', guess.team_name, answer.team_name),
-    categoricalCell('conference', 'Conf', guess.conference, answer.conference),
+    categoricalCell('conference', 'Conf', guess.conference, answer.conference, conferenceLabel),
     classYearCell(guess, answer),
     numericCell('height', 'Height', guess.height_inches, answer.height_inches, {
       // Within 1 inch = hit, within 3 = close.

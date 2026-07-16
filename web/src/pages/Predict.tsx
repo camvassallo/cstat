@@ -12,6 +12,7 @@ import {
   type Venue,
 } from '../api/client';
 import { useSeason, seasonHref } from '../components/season';
+import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { usePageTitle } from '../components/usePageTitle';
 import { campomTier, campomTierColor, campomTitle } from '../components/campom';
 import { classColor, classTitle } from '../components/archetypeColors';
@@ -1390,7 +1391,7 @@ function TeamPicker({
       .filter(
         (t) =>
           t.name.toLowerCase().includes(q) ||
-          (t.conference?.toLowerCase().includes(q) ?? false),
+          conferenceSearchText(t.conference).includes(q),
       )
       .slice(0, 10);
   }, [teams, value]);
@@ -1433,7 +1434,7 @@ function TeamPicker({
             >
               <span className="truncate">{t.name}</span>
               <span className="text-xs text-gray-500 truncate">
-                {t.conference ?? '—'}
+                {t.conference ? conferenceLabel(t.conference) : '—'}
                 {t.adj_efficiency_margin != null && (
                   <>
                     {' · '}
