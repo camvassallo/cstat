@@ -155,6 +155,14 @@ pub struct RecruitMeta {
     /// Upper bound (q90) of the freshman-model projection. Pairs with
     /// `projected_campom_lower`; both `None` together on fallback.
     pub projected_campom_upper: Option<f32>,
+    /// Whether this recruit feeds the scored roster (`for_scenario`) that the
+    /// roster-impact AdjEM calibrator sees. `false` for commits-feed-sourced
+    /// rows (`institution_group='commits'`) — they surface on the Future page
+    /// but stay out of the projection, because the calibrator was trained only
+    /// on the ranked composite cohort (issue #175). Serving-internal; not part
+    /// of the API payload.
+    #[serde(skip)]
+    pub feeds_projection: bool,
 }
 
 /// Replacement-level CamPom for a freshman we can't project per-recruit.
@@ -281,17 +289,41 @@ impl ProjectedRoster {
     /// Materialize the player list the model should see under a given
     /// scenario. Returning + arrivals + recruits always; uncertain only
     /// under ceiling.
+    ///
+    /// Recruits with `feeds_projection == false` — the commits-feed cohort
+    /// (`institution_group='commits'`, issue #175) — are **excluded** from the
+    /// scored roster: they surface on the Future page but stay out of the
+    /// roster-impact AdjEM calibrator, which was trained only on the ranked
+    /// composite cohort. This keeps served projections identical to before the
+    /// commits feed existed. (Wiring unranked commits into the projection is a
+    /// deliberate follow-up gated on a roster-impact retrain.)
     pub fn for_scenario(&self, scenario: DraftScenario) -> Vec<PlayerRow> {
         let mut out: Vec<PlayerRow> = Vec::with_capacity(
             self.returning.len() + self.arrivals.len() + self.recruits.len() + self.uncertain.len(),
         );
         out.extend(self.returning.iter().cloned());
         out.extend(self.arrivals.iter().cloned());
-        out.extend(self.recruits.iter().map(|(p, _)| p.clone()));
+        out.extend(
+            self.recruits
+                .iter()
+                .filter(|(_, m)| m.feeds_projection)
+                .map(|(p, _)| p.clone()),
+        );
         if scenario == DraftScenario::Ceiling {
             out.extend(self.uncertain.iter().map(|(p, _)| p.clone()));
         }
         out
+    }
+
+    /// Count of recruits that feed the scored roster — i.e. excluding the
+    /// display-only commits-feed cohort. Use this (not `recruits.len()`) for
+    /// the qualifying-size gate so the gate matches what `for_scenario`
+    /// actually scores.
+    pub fn projecting_recruits_count(&self) -> usize {
+        self.recruits
+            .iter()
+            .filter(|(_, m)| m.feeds_projection)
+            .count()
     }
 }
 
@@ -489,6 +521,12 @@ struct TransferLink {
 struct RecruitRow {
     recruit_id: Uuid,
     full_name: String,
+    // Ingest provenance: 'highschool'/'juco'/'prep' = 247 composite rankings
+    // (the ranked cohort the roster-impact calibrator was trained on);
+    // 'commits' = the national commits feed (unranked/international/prep/
+    // G-League, issue #175). Commits-sourced rows are displayed but kept OUT
+    // of the scored roster — see `RecruitMeta::feeds_projection`.
+    institution_group: String,
     composite_rank: Option<i32>,
     star_rating: Option<i16>,
     // Resolved cstat player (set once the recruit's freshman season ingests).
@@ -676,6 +714,7 @@ pub async fn compose_all_projections(
         SELECT
             r.id            AS recruit_id,
             r.full_name,
+            r.institution_group,
             r.composite_rank,
             r.star_rating,
             r.cstat_player_id,
@@ -922,6 +961,8 @@ pub async fn compose_all_projections(
             position: r.position,
             projected_campom_lower: pred.as_ref().map(|p| p.lower),
             projected_campom_upper: pred.as_ref().map(|p| p.upper),
+            // Commits-feed rows display but don't feed the AdjEM calibrator.
+            feeds_projection: r.institution_group != "commits",
         };
         recruits_by_team
             .entry(team_id)
@@ -1344,7 +1385,7 @@ pub fn score_projection_adj_em(
     p_return: f32,
     projected_cam: &HashMap<Uuid, f64>,
 ) -> Option<(f32, f32, f32)> {
-    let qualifying = p.returning.len() + p.arrivals.len() + p.recruits.len();
+    let qualifying = p.returning.len() + p.arrivals.len() + p.projecting_recruits_count();
     if qualifying < MIN_QUALIFYING_FOR_PROJECTION {
         return None;
     }
@@ -1514,6 +1555,7 @@ mod tests {
                     position: None,
                     projected_campom_lower: None,
                     projected_campom_upper: None,
+                    feeds_projection: true,
                 },
             ),
             (
@@ -1526,6 +1568,7 @@ mod tests {
                     position: None,
                     projected_campom_lower: None,
                     projected_campom_upper: None,
+                    feeds_projection: true,
                 },
             ),
         ];
@@ -1554,6 +1597,51 @@ mod tests {
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);
         // Ceiling: 4 + 1 uncertain = 5
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 5);
+    }
+
+    #[test]
+    fn commits_feed_recruit_displays_but_is_excluded_from_scored_roster() {
+        // A commits-feed recruit (`feeds_projection == false`, issue #175)
+        // stays in `recruits` for display but must NOT enter `for_scenario`
+        // or the qualifying count — so served projections match the pre-feed
+        // ranked-only calibration.
+        let meta = |name: &str, feeds: bool| RecruitMeta {
+            recruit_id: Uuid::new_v4(),
+            name: name.into(),
+            composite_rank: None,
+            star_rating: None,
+            position: None,
+            projected_campom_lower: None,
+            projected_campom_upper: None,
+            feeds_projection: feeds,
+        };
+        let r = ProjectedRoster {
+            team_id: Uuid::new_v4(),
+            team_name: "Foo".into(),
+            team_full_name: "Foo Bar".into(),
+            returning: vec![pr(28.0, Some(4.0))],
+            arrivals: vec![],
+            recruits: vec![
+                (
+                    freshman_row(Uuid::new_v4(), Some(6.0)),
+                    meta("ranked", true),
+                ),
+                (
+                    freshman_row(Uuid::new_v4(), Some(1.0)),
+                    meta("intl commit", false),
+                ),
+            ],
+            uncertain: vec![],
+            departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum: 0.0,
+        };
+        // Both recruits are present for display.
+        assert_eq!(r.recruits.len(), 2);
+        // Only the ranked one feeds the scored roster: 1 returning + 1 ranked.
+        assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
+        assert_eq!(r.projecting_recruits_count(), 1);
     }
 
     #[test]
