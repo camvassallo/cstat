@@ -170,20 +170,20 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
               title="The coach's most recently coached team." />
             <SortHeader label="CAE" sortKey="cae_shrunk" current={sort} onSort={onSort} align="right"
               title="Shrunk Coach-Above-Expectation (AdjEM points above roster projection). The headline rating." />
-            <StickyHeader align="right" className="hidden sm:table-cell">95% CI</StickyHeader>
-            <SortHeader label="Adj" sortKey="cae_adj_shrunk" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <StickyHeader align="right">95% CI</StickyHeader>
+            <SortHeader label="Adj" sortKey="cae_adj_shrunk" current={sort} onSort={onSort} align="right"
               title="Prestige-adjusted CAE (projection-quartile-de-biased) — a conservative lower bound that strips the program component." />
-            <SortHeader label="Era±" sortKey="cae_centered_shrunk" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="Era±" sortKey="cae_centered_shrunk" current={sort} onSort={onSort} align="right"
               title="Season-centered CAE — each season's mean residual removed for era-neutral COMPARISON between coaches. Use to rank coaches on equal footing across eras; it deliberately discards season-level signal, so it is not a 'how much' measure like the headline CAE." />
-            <SortHeader label="AdjEM" sortKey="career_adj_em" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="AdjEM" sortKey="career_adj_em" current={sort} onSort={onSort} align="right"
               title="Career-mean team AdjEM (adjusted efficiency margin) across scored seasons — how strong the coach's teams actually were. Opponent-adjusted, so it already rewards hard schedules. Descriptive context, NOT an input to any projection." />
-            <SortHeader label="AdjO" sortKey="career_adj_o" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="AdjO" sortKey="career_adj_o" current={sort} onSort={onSort} align="right"
               title="Career-mean team adjusted offensive efficiency (points per 100 possessions, opponent-adjusted)." />
-            <SortHeader label="AdjD" sortKey="career_adj_d" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="AdjD" sortKey="career_adj_d" current={sort} onSort={onSort} align="right"
               title="Career-mean team adjusted defensive efficiency (points allowed per 100 possessions; lower is better)." />
-            <SortHeader label="Blend" sortKey="blend" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="Blend" sortKey="blend" current={sort} onSort={onSort} align="right"
               title="Evaluative composite: z(CAE) + z(career AdjEM) over this board — rewards coaches who field strong, tough-schedule teams AND squeeze extra out of the roster. A lens for human comparison, not a rigorous metric, and never fed back into forecasts." />
-            <SortHeader label="Rel." sortKey="reliability" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="Rel." sortKey="reliability" current={sort} onSort={onSort} align="right"
               title="Reliability = n / (n + k). Shrinkage weight; low = thin tenure, treat the rating as soft." />
             <SortHeader label="Tenure" sortKey="last_team_season" current={sort} onSort={onSort} align="right"
               title="Coaching tenure — first scored season to most recent. 'active' = still coaching this season (from the coachdict mapping, so it's right even when the latest season isn't scored yet). Sorts by recency; hover a cell for the scored-season count." />
@@ -207,18 +207,18 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
               <td className="py-1.5 px-2 text-right tabular-nums font-semibold" style={{ color: caeColor(c.cae_shrunk) }}>
                 {fmtCae(c.cae_shrunk)}
               </td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-[11px] text-gray-500">
+              <td className="py-1.5 px-2 text-right tabular-nums text-[11px] text-gray-500">
                 {fmtCae(c.ci_low)} – {fmtCae(c.ci_high)}
               </td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_adj_shrunk)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_centered_shrunk)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-300">{fmtStrength(c.career_adj_em)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.career_adj_o)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.career_adj_d)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums font-medium" style={{ color: caeColor(c.blend) }}>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_adj_shrunk)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtCae(c.cae_centered_shrunk)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-300">{fmtStrength(c.career_adj_em)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.career_adj_o)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.career_adj_d)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums font-medium" style={{ color: caeColor(c.blend) }}>
                 {c.blend == null ? '—' : fmtCae(c.blend, 2)}
               </td>
-              <td className="hidden sm:table-cell py-1.5 px-2"><ReliabilityBar value={c.reliability} /></td>
+              <td className="py-1.5 px-2"><ReliabilityBar value={c.reliability} /></td>
               <td className="py-1.5 px-2 text-right text-gray-300">
                 <TenureCell first={c.first_season} last={c.last_team_season ?? c.last_season}
                   current={currentSeason} nSeasons={c.n_seasons} />
@@ -290,15 +290,15 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
             <SortHeader label="Team" sortKey="team_name" current={sort} onSort={onSort} />
             <SortHeader label="AdjEM" sortKey="actual_adjem" current={sort} onSort={onSort} align="right"
               title="The team's actual AdjEM that season." />
-            <SortHeader label="AdjO" sortKey="adj_offense" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="AdjO" sortKey="adj_offense" current={sort} onSort={onSort} align="right"
               title="Team adjusted offensive efficiency that season (points per 100 possessions, opponent-adjusted)." />
-            <SortHeader label="AdjD" sortKey="adj_defense" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="AdjD" sortKey="adj_defense" current={sort} onSort={onSort} align="right"
               title="Team adjusted defensive efficiency that season (points allowed per 100 possessions; lower is better)." />
-            <SortHeader label="Proj" sortKey="projection" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="Proj" sortKey="projection" current={sort} onSort={onSort} align="right"
               title="Roster-only projected AdjEM (what the talent on hand was worth)." />
             <SortHeader label="CAE" sortKey="cae_raw" current={sort} onSort={onSort} align="right"
               title="Single-season Coach-Above-Expectation = actual − projection. Noisy; the career view shrinks this." />
-            <SortHeader label="Blend" sortKey="blend" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+            <SortHeader label="Blend" sortKey="blend" current={sort} onSort={onSort} align="right"
               title="Evaluative composite: z(CAE) + z(AdjEM) over this season's board — strong team AND beat the roster. A lens for human comparison, not a rigorous metric, and never fed back into forecasts." />
           </tr>
         </thead>
@@ -318,13 +318,13 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
                 {c.is_new_hc && NEW_BADGE}
               </td>
               <td className="py-1.5 px-2 text-right tabular-nums">{c.actual_adjem.toFixed(1)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_offense)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_defense)}</td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">{c.projection.toFixed(1)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_offense)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_defense)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{c.projection.toFixed(1)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums font-semibold" style={{ color: caeColor(c.cae_raw) }}>
                 {fmtCae(c.cae_raw)}
               </td>
-              <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums font-medium" style={{ color: caeColor(c.blend) }}>
+              <td className="py-1.5 px-2 text-right tabular-nums font-medium" style={{ color: caeColor(c.blend) }}>
                 {c.blend == null ? '—' : fmtCae(c.blend, 2)}
               </td>
             </tr>

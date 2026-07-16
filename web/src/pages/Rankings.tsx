@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
+import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import { ScoreTicker } from '../components/ScoreTicker';
@@ -116,7 +117,7 @@ function buildColumns(
     {
       field: 'rank',
       headerName: 'Rk',
-      width: 50,
+      width: 64,
       pinned: 'left',
       wrapHeaderText: false,
     },
@@ -138,7 +139,16 @@ function buildColumns(
         );
       },
     },
-    { field: 'conference', headerName: 'Conf', ...flexCol(120) },
+    {
+      field: 'conference',
+      headerName: 'Conf',
+      ...flexCol(100, 96),
+      // Full conference names; the longest ("Missouri Valley") wraps onto a
+      // second line at the 48px row height rather than widening the column.
+      wrapText: true,
+      valueFormatter: (p: { value: string | null }) => conferenceLabel(p.value),
+      getQuickFilterText: (p: { value: string | null }) => conferenceSearchText(p.value),
+    },
     {
       headerName: 'Record',
       ...flexCol(80),

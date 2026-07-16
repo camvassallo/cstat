@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SeasonLink } from '../components/SeasonLink';
+import { conferenceLabel } from '../lib/conferences';
 import { useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import {
@@ -231,7 +232,9 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
           ) : (
             player.team_name ?? 'Unknown'
           )}
-          {player.conference && <span className="text-gray-500"> · {player.conference}</span>}
+          {player.conference && (
+            <span className="text-gray-500"> · {conferenceLabel(player.conference)}</span>
+          )}
         </div>
         <div className="text-xs text-gray-500 mt-0.5 truncate">
           {[

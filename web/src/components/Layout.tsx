@@ -39,7 +39,7 @@ const FORECAST_ITEMS: NavItem[] = [
 ];
 const PLAY_ITEMS: NavItem[] = [
   { to: '/portle', label: 'Portle' },
-  { to: '/which-class', label: 'Class Quiz' },
+  { to: '/which-class', label: 'Archetype Quiz' },
 ];
 
 // Desktop hover-dropdown for a nav group. Opens on mouse-enter (and on

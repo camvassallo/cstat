@@ -13,7 +13,7 @@ import {
 } from '../lib/whichClass';
 
 export default function WhichClass() {
-  usePageTitle('Which Class Are You?');
+  usePageTitle('Which Archetype Are You?');
   const { season } = useSeason();
 
   const [answers, setAnswers] = useState<Array<number | null>>(() =>
@@ -76,12 +76,12 @@ export default function WhichClass() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-gray-100">Which Class Are You?</h1>
+        <h1 className="text-2xl font-bold text-gray-100">Which Archetype Are You?</h1>
         <p className="text-sm text-gray-400">
           Answer {QUIZ.length} questions to find your basketball archetype — one of the 12
           D&amp;D-inspired{' '}
           <SeasonLink to="/archetypes" className="text-blue-400 hover:underline">
-            player classes
+            player archetypes
           </SeasonLink>
           .
         </p>
@@ -141,7 +141,7 @@ export default function WhichClass() {
         />
       ) : (
         <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-4 text-sm text-gray-400">
-          Answer every question to reveal your class.
+          Answer every question to reveal your archetype.
         </div>
       )}
     </div>
@@ -219,7 +219,9 @@ function ResultCard({
       {exemplars.length > 0 && (
         <div className="mt-4">
           <div className="mb-2 text-xs uppercase tracking-wide text-gray-500">
-            {bothMatch ? 'Players who share both your classes' : 'Players who share your class'}
+            {bothMatch
+              ? 'Players who share both your archetypes'
+              : 'Players who share your archetype'}
           </div>
           <div className="flex flex-wrap gap-2">
             {exemplars.map((ex) => (

@@ -4,6 +4,10 @@ Player archetypes cluster every qualified D-I player-season into one of 12 D&D-c
 
 This doc describes the system, the stability story behind the current design, and the **playbook for what to check when retraining** as we add seasons. Pair with `training/archetypes.py` for the running implementation; signatures and class names live there.
 
+## Naming: "class" = "archetype"
+
+**In the data layer, an archetype is called a `class`** — a D&D-metaphor holdover, since the 12 archetypes are named after D&D classes (Wizard, Rogue, Paladin, …). The DB columns are `player_archetypes.primary_class` / `secondary_class` (with `idx_player_archetypes_class`), and that name propagates through the Rust structs, the `/api/*` JSON keys, and the `web/src/api/client.ts` types as `primary_class` / `secondary_class`. **The user-facing UI says "Archetype"**, not "Class" (renamed 2026-07-15). The one genuine "Class" still shown to users is the player's class *year* (Fr/So/Jr/Sr — a different field entirely), plus the deliberately-D&D-themed "Class Quiz" mini-game. Renaming the data fields to `archetype` is tracked as a deferred cleanup in ROADMAP "Refactor Backlog" (it's a breaking API-contract change touching a migration, the ML pipeline, and the frontend types).
+
 ## Pipeline at a glance
 
 ```

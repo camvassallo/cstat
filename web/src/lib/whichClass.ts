@@ -137,6 +137,6 @@ export function quizResult(answers: Array<number | null>): QuizResult {
 
 /** Shareable one-liner (no spoilers to spoil — it's the user's own result). */
 export function buildQuizShare(result: QuizResult, url?: string): string {
-  const line = `CamPom · Which Class Are You? — I'm a ${result.primary} / ${result.secondary}.`;
+  const line = `CamPom · Which Archetype Are You? — I'm a ${result.primary} / ${result.secondary}.`;
   return url ? `${line}\n${url}` : line;
 }

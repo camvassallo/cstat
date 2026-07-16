@@ -2021,10 +2021,144 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     Ok(r1.rows_affected())
 }
 
+/// Torvik conference codes → cstat's (NatStat-style) conference labels.
+///
+/// Torvik carries a season-scoped, realignment-accurate conference for every
+/// team/season (2015+), which we treat as authoritative over NatStat's field:
+/// NatStat mislabels realignment (e.g. Utah as `BIG10` after its 2024-25 move
+/// to the Big 12) and leaves historical seasons null (rendered "Independent").
+/// We keep the target labels in NatStat's vocabulary so the frontend's P5
+/// filter and existing display are unaffected. See issues #171 and #122.
+const TORVIK_CONF_TO_CSTAT: &[(&str, &str)] = &[
+    ("A10", "A-10"),
+    ("ACC", "ACC"),
+    ("AE", "A-EAST"),
+    ("Amer", "AMER"),
+    ("ASun", "A-SUN"),
+    ("B10", "BIG10"),
+    ("B12", "BIG12"),
+    ("BE", "BIGEAST"),
+    ("BSky", "BIGSKY"),
+    ("BSth", "BIGSOUTH"),
+    ("BW", "BIGWEST"),
+    ("CAA", "CAA"),
+    ("CUSA", "C-USA"),
+    ("Horz", "HL"),
+    ("ind", "IND"),
+    ("Ind", "IND"),
+    ("Ivy", "IVY"),
+    ("MAAC", "MAAC"),
+    ("MAC", "MAC"),
+    ("MEAC", "MEAC"),
+    ("MVC", "MVC"),
+    ("MWC", "MWC"),
+    ("NEC", "NEC"),
+    ("OVC", "OVC"),
+    ("P12", "PAC-12"),
+    ("Pat", "PL"),
+    ("SB", "SUNBELT"),
+    ("SC", "SOCON"),
+    ("SEC", "SEC"),
+    ("Slnd", "SLC"),
+    ("Sum", "SUMMIT"),
+    ("SWAC", "SWAC"),
+    ("WAC", "WAC"),
+    ("WCC", "WCC"),
+];
+
+/// cstat `short_name` → Torvik `team_name`, for the few teams whose names don't
+/// match across sources (Torvik renames or truncates). Join-key only — this
+/// never changes what's displayed, just which Torvik row supplies the
+/// conference. Without these, the affected teams keep a null conference for the
+/// historical seasons NatStat also left blank.
+const TORVIK_TEAM_NAME_ALIASES: &[(&str, &str)] = &[
+    ("Houston Baptist", "Houston Christian"),
+    ("Texas A&M Corpus Christi", "Texas A&M Corpus Chris"),
+];
+
 /// Derive is_conference flag on games where both teams share a conference.
 /// Also backfill point_diff on team_season_stats from team_game_stats.
+///
+/// Conference correction runs first: Torvik's per-season conf is authoritative
+/// (see [`TORVIK_CONF_TO_CSTAT`]) and overwrites both `teams.conference` and
+/// `team_season_stats.conference` for every team it matches (joined by
+/// short_name). Teams Torvik can't match (a handful of name-spelling gaps per
+/// season) fall through to the legacy team_game_stats.league backfill below.
 pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Torvik-authoritative conference: overwrite always where Torvik matches.
+    // VALUES built from the trusted internal consts (no injection surface).
+    // Escape single quotes so an apostrophe in a future entry (e.g. "Saint
+    // Mary's") can't break the literal, even though today's constants have none.
+    let sql_lit = |s: &str| s.replace('\'', "''");
+    let conf_values = TORVIK_CONF_TO_CSTAT
+        .iter()
+        .map(|(t, c)| format!("('{}','{}')", sql_lit(t), sql_lit(c)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let alias_values = TORVIK_TEAM_NAME_ALIASES
+        .iter()
+        .map(|(cstat_name, torvik_name)| {
+            format!("('{}','{}')", sql_lit(cstat_name), sql_lit(torvik_name))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    // Effective Torvik name for a team: an alias if one exists, else its own
+    // short_name. Applied via a correlated lookup so the alias list stays tiny.
+    let effective_name = "lower(COALESCE(\
+            (SELECT na.torvik_name FROM name_alias na WHERE na.cstat_name = t.short_name), \
+            t.short_name))";
+    let r_conf_teams = sqlx::query(&format!(
+        "WITH conf_map(torvik, cstat) AS (VALUES {conf_values}),
+              name_alias(cstat_name, torvik_name) AS (VALUES {alias_values}),
+              tv AS (
+                  SELECT DISTINCT season, lower(team_name) AS team_lc, conf
+                  FROM torvik_player_stats
+                  WHERE conf IS NOT NULL
+              )
+         UPDATE teams t
+            SET conference = m.cstat, updated_at = now()
+           FROM tv
+           JOIN conf_map m ON m.torvik = tv.conf
+          WHERE tv.season = t.season
+            AND tv.team_lc = {effective_name}
+            AND t.season = $1
+            AND t.conference IS DISTINCT FROM m.cstat"
+    ))
+    .bind(season)
+    .execute(pool)
+    .await?;
+    let r_conf_tss = sqlx::query(&format!(
+        "WITH conf_map(torvik, cstat) AS (VALUES {conf_values}),
+              name_alias(cstat_name, torvik_name) AS (VALUES {alias_values}),
+              tv AS (
+                  SELECT DISTINCT season, lower(team_name) AS team_lc, conf
+                  FROM torvik_player_stats
+                  WHERE conf IS NOT NULL
+              )
+         UPDATE team_season_stats tss
+            SET conference = m.cstat, updated_at = now()
+           FROM teams t
+           JOIN tv ON tv.season = t.season AND tv.team_lc = {effective_name}
+           JOIN conf_map m ON m.torvik = tv.conf
+          WHERE tss.team_id = t.id
+            AND tss.season = $1
+            AND tss.conference IS DISTINCT FROM m.cstat"
+    ))
+    .bind(season)
+    .execute(pool)
+    .await?;
+    if r_conf_teams.rows_affected() > 0 || r_conf_tss.rows_affected() > 0 {
+        info!(
+            teams = r_conf_teams.rows_affected(),
+            team_season_stats = r_conf_tss.rows_affected(),
+            season,
+            "corrected team conferences from Torvik"
+        );
+    }
+
     // Backfill teams.conference from the most common league in team_game_stats
+    // (fallback for teams Torvik couldn't match; NULL-only so it never
+    // overrides the Torvik correction above).
     let r0 = sqlx::query(
         "UPDATE teams t SET conference = sub.league, updated_at = now()
         FROM (
@@ -2044,17 +2178,24 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
         info!(count = r0.rows_affected(), "backfilled team conferences");
     }
 
-    // is_conference: both teams in same conference
+    // is_conference: both teams in same conference. Derived unconditionally
+    // from the (Torvik-corrected) conference above — NOT null-guarded — so it
+    // stays consistent after a realignment or historical-conference fix. A
+    // null-only guard would strand games computed before their teams had a
+    // correct conference: e.g. every 2015-2020 conference game got flagged
+    // non-conference when conference was still null, and NatStat's own flag
+    // wrongly marked Utah's post-2025 Big 12 games non-conference (it still
+    // has Utah in the Big Ten). Equality matches NatStat's definition where
+    // both are correct (0 mismatches in clean seasons), so this loses nothing.
     let r1 = sqlx::query(
-        "UPDATE games g SET is_conference = (
-            SELECT ht.conference = at.conference AND ht.conference IS NOT NULL
-            FROM teams ht, teams at
-            WHERE ht.id = g.home_team_id AND at.id = g.away_team_id
-        )
-        WHERE g.season = $1
-          AND g.home_team_id IS NOT NULL
-          AND g.away_team_id IS NOT NULL
-          AND g.is_conference IS NULL",
+        "UPDATE games g
+            SET is_conference = (ht.conference = at.conference AND ht.conference IS NOT NULL)
+           FROM teams ht, teams at
+          WHERE ht.id = g.home_team_id
+            AND at.id = g.away_team_id
+            AND g.season = $1
+            AND g.is_conference IS DISTINCT FROM
+                (ht.conference = at.conference AND ht.conference IS NOT NULL)",
     )
     .bind(season)
     .execute(pool)
@@ -3316,5 +3457,32 @@ mod tests {
         assert!(s.contains("0 pbp aggregates"));
         assert!(s.contains("0 pbp lineups"));
         assert!(s.contains("0 percentiles"));
+    }
+
+    #[test]
+    fn torvik_conf_map_is_well_formed() {
+        use std::collections::HashMap;
+        // Torvik codes are the join key, so each must be unique.
+        let mut by_torvik: HashMap<&str, &str> = HashMap::new();
+        for (torvik, cstat) in TORVIK_CONF_TO_CSTAT {
+            assert!(
+                by_torvik.insert(torvik, cstat).is_none(),
+                "duplicate Torvik code {torvik}"
+            );
+            // Target label must be an uppercase-ish NatStat code, never a raw
+            // Torvik code, and never empty.
+            assert!(!cstat.is_empty(), "empty target for {torvik}");
+        }
+        // Realignment spot-checks: the exact cases from issues #171 / #122.
+        assert_eq!(by_torvik.get("B12"), Some(&"BIG12")); // Utah 2025+
+        assert_eq!(by_torvik.get("P12"), Some(&"PAC-12")); // pre-realignment
+        assert_eq!(by_torvik.get("ACC"), Some(&"ACC")); // Duke, historical
+        // The frontend's P5 filter keys on these exact labels.
+        for p5 in ["ACC", "BIG10", "BIG12", "SEC", "BIGEAST"] {
+            assert!(
+                by_torvik.values().any(|v| *v == p5),
+                "no Torvik code maps to P5 label {p5}"
+            );
+        }
     }
 }

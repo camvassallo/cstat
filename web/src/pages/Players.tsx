@@ -7,6 +7,7 @@ import {
   type ColDef,
 } from 'ag-grid-community';
 import { fetchPlayers, type PlayerRow } from '../api/client';
+import { conferenceLabel } from '../lib/conferences';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
 import { agNullsBottom } from '../components/tableSort';
@@ -167,11 +168,16 @@ function buildColumns(
     {
       field: 'conference',
       headerName: 'Conf',
-      width: 80,
+      width: 110,
       sortable: false,
+      // Long names wrap to a second line at the 44px row height instead of
+      // forcing a wide column.
+      wrapText: true,
+      valueFormatter: (p: { value: string | null }) =>
+        p.value ? conferenceLabel(p.value) : '',
     },
     {
-      headerName: 'Class',
+      headerName: 'Archetype',
       colId: 'archetype',
       // Wider than the previous 110 so "Barbarian / Sorcerer"–length combos
       // render in full without truncation.

@@ -21,6 +21,7 @@ import {
   type TeamCoachCard,
 } from '../api/client';
 import { caeColor, fmtCae, tenureSpan } from '../components/cae';
+import { conferenceLabel } from '../lib/conferences';
 import { classColor, classTagline, textOnClass } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
@@ -369,7 +370,7 @@ function HistoricalTeamDetail() {
       <div>
         <h1 className="text-3xl font-bold">{team.name}</h1>
         <div className="text-gray-400">
-          {team.conference ?? 'Independent'} &middot; {team.wins ?? 0}-{team.losses ?? 0}
+          {conferenceLabel(team.conference)} &middot; {team.wins ?? 0}-{team.losses ?? 0}
         </div>
       </div>
 
@@ -876,7 +877,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
               onSort={onSort}
               className="left-0 z-20 border-r border-gray-700"
             />
-            <StickyHeader className="hidden sm:table-cell">Class</StickyHeader>
+            <StickyHeader>Archetype</StickyHeader>
               <SortHeader
                 label="CamPom"
                 sortKey="campom"
@@ -886,7 +887,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 title="Composite player valuation."
                 className="border-l border-gray-800"
               />
-              <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell" />
+              <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" />
               <SortHeader label="MPG" sortKey="minutes_per_game" current={sort} onSort={onSort} align="right" />
               <SortHeader label="USG%" sortKey="usage_rate" current={sort} onSort={onSort} align="right" />
               <SortHeader label="TS%" sortKey="true_shooting_pct" current={sort} onSort={onSort} align="right" />
@@ -981,7 +982,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     {p.name}
                   </SeasonLink>
                 </td>
-                <td className="hidden sm:table-cell py-2 px-2">
+                <td className="py-2 px-2">
                   {p.primary_class ? (
                     <span className="inline-flex items-center gap-1">
                       <ClassTooltip cls={p.primary_class}>
@@ -1022,7 +1023,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="text-gray-600">—</span>
                   )}
                 </td>
-                <td className="hidden sm:table-cell py-2 px-2 text-right">{p.games_played}</td>
+                <td className="py-2 px-2 text-right">{p.games_played}</td>
                 <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
                 <td className="py-2 px-2 text-right">
                   <ValueWithPctile value={fracPct(p.usage_rate)} pctile={p.usage_rate_pct} />
@@ -1158,7 +1159,7 @@ function ScheduleTable({
               <StickyHeader>Opponent</StickyHeader>
               <StickyHeader align="center">Result</StickyHeader>
               <StickyHeader align="center">Score</StickyHeader>
-              <StickyHeader align="center" className="hidden sm:table-cell">Projected</StickyHeader>
+              <StickyHeader align="center">Projected</StickyHeader>
             </tr>
           </thead>
           <tbody>
@@ -1318,7 +1319,7 @@ function ScheduleRow({
           '—'
         )}
       </td>
-      <td className="hidden sm:table-cell py-2 px-2 text-center">
+      <td className="py-2 px-2 text-center">
         {predictTo ? (
           <SeasonLink to={predictTo} className="hover:underline">
             {projected ?? <span className="text-gray-500">—</span>}

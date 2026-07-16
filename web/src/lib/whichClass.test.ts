@@ -84,7 +84,7 @@ describe('buildQuizShare', () => {
       { primary: 'Wizard', secondary: 'Bard', ranking: [] },
       'https://x/which-class',
     );
-    expect(out).toContain('CamPom · Which Class Are You?');
+    expect(out).toContain('CamPom · Which Archetype Are You?');
     expect(out).toContain("I'm a Wizard / Bard.");
     expect(out).toContain('https://x/which-class');
   });

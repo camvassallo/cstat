@@ -185,7 +185,7 @@ export default function ArchetypeFilter({
                   onChange={onToggleIncludeSecondary}
                   className="rounded"
                 />
-                Include secondary class
+                Include secondary archetype
               </label>
             )}
             <button
