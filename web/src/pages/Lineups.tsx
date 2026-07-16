@@ -243,11 +243,11 @@ export function Lineups() {
                 <SortHeader label="Team" sortKey="team_name" current={sort} onSort={onSort} />
                 <SortHeader label="Min" sortKey="minutes" current={sort} onSort={onSort} align="right"
                   title="Shared on-floor minutes (replay-reconstructed)." />
-                <SortHeader label="+/−" sortKey="plus_minus" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell"
+                <SortHeader label="+/−" sortKey="plus_minus" current={sort} onSort={onSort} align="right"
                   title="Raw point differential while the group was on the floor." />
-                <SortHeader label="AdjO" sortKey="adj_ortg" current={sort} onSort={onSort} align="right" className="hidden md:table-cell"
+                <SortHeader label="AdjO" sortKey="adj_ortg" current={sort} onSort={onSort} align="right"
                   title="Opponent-adjusted offensive rating: points scored per 100 possessions with the group on, corrected for schedule (KenPom scale, like the team rankings)." />
-                <SortHeader label="AdjD" sortKey="adj_drtg" current={sort} onSort={onSort} align="right" className="hidden md:table-cell"
+                <SortHeader label="AdjD" sortKey="adj_drtg" current={sort} onSort={onSort} align="right"
                   title="Opponent-adjusted defensive rating: points allowed per 100 possessions with the group on (lower is better)." />
                 <SortHeader label="AdjEM" sortKey="adj_net" current={sort} onSort={onSort} align="right"
                   title="Opponent-adjusted efficiency margin (AdjO − AdjD): net points per 100 possessions, schedule-corrected. The ranking metric — same scale as the team rankings' AdjEM. Hover a value for the raw → adjusted breakdown." />
@@ -266,11 +266,11 @@ export function Lineups() {
                     </SeasonLink>
                   </td>
                   <td className="py-2 px-2 text-right tabular-nums text-gray-300">{r.minutes.toFixed(0)}</td>
-                  <td className={`hidden sm:table-cell py-2 px-2 text-right tabular-nums font-medium ${netColor(r.plus_minus)}`}>
+                  <td className={`py-2 px-2 text-right tabular-nums font-medium ${netColor(r.plus_minus)}`}>
                     {signed(r.plus_minus, 0)}
                   </td>
-                  <td className="hidden md:table-cell py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.adj_ortg, 0)}</td>
-                  <td className="hidden md:table-cell py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.adj_drtg, 0)}</td>
+                  <td className="py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.adj_ortg, 0)}</td>
+                  <td className="py-2 px-2 text-right tabular-nums text-gray-400">{fmt(r.adj_drtg, 0)}</td>
                   <td
                     className={`py-2 px-2 text-right tabular-nums font-semibold ${netColor(r.adj_net)}`}
                     title={adjTitle(r)}

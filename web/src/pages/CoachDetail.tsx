@@ -228,10 +228,10 @@ export function CoachDetail() {
                   <th className="py-2 px-2 text-right" title="The team's actual AdjEM that season.">
                     AdjEM
                   </th>
-                  <th className="hidden sm:table-cell py-2 px-2 text-right" title="Team adjusted offensive efficiency that season.">
+                  <th className="py-2 px-2 text-right" title="Team adjusted offensive efficiency that season.">
                     AdjO
                   </th>
-                  <th className="hidden sm:table-cell py-2 px-2 text-right" title="Team adjusted defensive efficiency that season (lower is better).">
+                  <th className="py-2 px-2 text-right" title="Team adjusted defensive efficiency that season (lower is better).">
                     AdjD
                   </th>
                   <th className="py-2 px-2 text-right">Projected</th>
@@ -274,10 +274,10 @@ export function CoachDetail() {
                       <td className="py-1.5 px-2 text-right tabular-nums">
                         {s.actual_adjem != null ? s.actual_adjem.toFixed(1) : '—'}
                       </td>
-                      <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">
+                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
                         {s.adj_offense != null ? s.adj_offense.toFixed(1) : '—'}
                       </td>
-                      <td className="hidden sm:table-cell py-1.5 px-2 text-right tabular-nums text-gray-400">
+                      <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">
                         {s.adj_defense != null ? s.adj_defense.toFixed(1) : '—'}
                       </td>
                       {graded ? (

@@ -766,14 +766,14 @@ function GameLogTable({
               <SortHeader label="Opponent" sortKey="opponent_name" current={sort} onSort={onSort} />
               <SortHeader label="MIN" sortKey="minutes" current={sort} onSort={onSort} align="right" />
               <SortHeader label="PTS" sortKey="points" current={sort} onSort={onSort} align="right" />
-              <StickyHeader align="right" className="hidden sm:table-cell">FG</StickyHeader>
-              <StickyHeader align="right" className="hidden sm:table-cell">3P</StickyHeader>
+              <StickyHeader align="right">FG</StickyHeader>
+              <StickyHeader align="right">3P</StickyHeader>
               <SortHeader label="REB" sortKey="total_rebounds" current={sort} onSort={onSort} align="right" />
               <SortHeader label="AST" sortKey="assists" current={sort} onSort={onSort} align="right" />
-              <SortHeader label="STL" sortKey="steals" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell" />
-              <SortHeader label="BLK" sortKey="blocks" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell" />
-              <SortHeader label="TO" sortKey="turnovers" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell" />
-              <SortHeader label="GmSc" sortKey="game_score" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell" />
+              <SortHeader label="STL" sortKey="steals" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="BLK" sortKey="blocks" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="TO" sortKey="turnovers" current={sort} onSort={onSort} align="right" />
+              <SortHeader label="GmSc" sortKey="game_score" current={sort} onSort={onSort} align="right" />
             </tr>
           </thead>
           <tbody>
@@ -799,14 +799,14 @@ function GameLogTable({
                   <td className={`py-1.5 px-2 text-right font-medium ${ptsHot ? 'text-green-400' : ''}`}>
                     {g.points ?? '—'}
                   </td>
-                  <td className="hidden sm:table-cell py-1.5 px-2 text-right">{g.fgm != null ? `${g.fgm}-${g.fga}` : '—'}</td>
-                  <td className="hidden sm:table-cell py-1.5 px-2 text-right">{g.tpm != null ? `${g.tpm}-${g.tpa}` : '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.fgm != null ? `${g.fgm}-${g.fga}` : '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.tpm != null ? `${g.tpm}-${g.tpa}` : '—'}</td>
                   <td className="py-1.5 px-2 text-right">{g.total_rebounds ?? '—'}</td>
                   <td className="py-1.5 px-2 text-right">{g.assists ?? '—'}</td>
-                  <td className="hidden sm:table-cell py-1.5 px-2 text-right">{g.steals ?? '—'}</td>
-                  <td className="hidden sm:table-cell py-1.5 px-2 text-right">{g.blocks ?? '—'}</td>
-                  <td className="hidden sm:table-cell py-1.5 px-2 text-right">{g.turnovers ?? '—'}</td>
-                  <td className={`hidden sm:table-cell py-1.5 px-2 text-right ${gmscHot ? 'text-green-400' : ''}`}>
+                  <td className="py-1.5 px-2 text-right">{g.steals ?? '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.blocks ?? '—'}</td>
+                  <td className="py-1.5 px-2 text-right">{g.turnovers ?? '—'}</td>
+                  <td className={`py-1.5 px-2 text-right ${gmscHot ? 'text-green-400' : ''}`}>
                     {fmt(g.game_score)}
                   </td>
                 </tr>

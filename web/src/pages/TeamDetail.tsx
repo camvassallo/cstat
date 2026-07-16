@@ -887,7 +887,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 title="Composite player valuation."
                 className="border-l border-gray-800"
               />
-              <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" className="hidden sm:table-cell" />
+              <SortHeader label="GP" sortKey="games_played" current={sort} onSort={onSort} align="right" />
               <SortHeader label="MPG" sortKey="minutes_per_game" current={sort} onSort={onSort} align="right" />
               <SortHeader label="USG%" sortKey="usage_rate" current={sort} onSort={onSort} align="right" />
               <SortHeader label="TS%" sortKey="true_shooting_pct" current={sort} onSort={onSort} align="right" />
@@ -1023,7 +1023,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     <span className="text-gray-600">—</span>
                   )}
                 </td>
-                <td className="hidden sm:table-cell py-2 px-2 text-right">{p.games_played}</td>
+                <td className="py-2 px-2 text-right">{p.games_played}</td>
                 <td className="py-2 px-2 text-right">{fmt(p.minutes_per_game)}</td>
                 <td className="py-2 px-2 text-right">
                   <ValueWithPctile value={fracPct(p.usage_rate)} pctile={p.usage_rate_pct} />
@@ -1159,7 +1159,7 @@ function ScheduleTable({
               <StickyHeader>Opponent</StickyHeader>
               <StickyHeader align="center">Result</StickyHeader>
               <StickyHeader align="center">Score</StickyHeader>
-              <StickyHeader align="center" className="hidden sm:table-cell">Projected</StickyHeader>
+              <StickyHeader align="center">Projected</StickyHeader>
             </tr>
           </thead>
           <tbody>
@@ -1319,7 +1319,7 @@ function ScheduleRow({
           '—'
         )}
       </td>
-      <td className="hidden sm:table-cell py-2 px-2 text-center">
+      <td className="py-2 px-2 text-center">
         {predictTo ? (
           <SeasonLink to={predictTo} className="hover:underline">
             {projected ?? <span className="text-gray-500">—</span>}
