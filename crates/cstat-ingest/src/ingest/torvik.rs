@@ -14,6 +14,12 @@ pub async fn ingest_torvik_player_stats(
     season: i32,
 ) -> anyhow::Result<(u64, u64)> {
     let players = client.fetch_player_stats(season).await?;
+    // Build the season's cstat player index once and match in-process. Both the
+    // Torvik name and the cstat name go through the same `normalize_name`, so
+    // accented cstat rows (Dörries, Kostić) and NatStat's German romanizations
+    // (Grünloh→Gruenloh, issue #170) meet symmetrically — a formerly SQL-side
+    // match couldn't fold diacritics the same way on both sides.
+    let name_index = build_player_name_index(pool, season).await?;
     let mut upserted: u64 = 0;
     let mut matched: u64 = 0;
 
@@ -23,9 +29,9 @@ pub async fn ingest_torvik_player_stats(
             None => continue,
         };
 
-        // Try to match to an existing cstat player by name + team + season.
-        // Torvik team names differ from NatStat, so we normalize and fuzzy-match.
-        let player_id = match_player(pool, &p.player_name, &p.team, season).await?;
+        // Torvik team names differ from NatStat, so we fuzzy-match the team to
+        // disambiguate same-name players, falling back to a name-only match.
+        let player_id = match_player(&name_index, &p.player_name, &p.team);
         if player_id.is_some() {
             matched += 1;
         }
@@ -414,13 +420,21 @@ pub async fn apply_rebound_backfill(
 // ---------------------------------------------------------------------------
 
 /// Normalize a player name for matching across data sources.
-/// Strips suffixes (Jr, Sr, II, III, IV, V), collapses whitespace,
-/// removes periods/apostrophes, and lowercases.
+/// Folds diacritics, strips suffixes (Jr, Sr, II, III, IV, V), drops
+/// punctuation/apostrophes, collapses whitespace, and lowercases.
+///
+/// German umlauts expand to their digraph romanization (ä→ae, ö→oe, ü→ue,
+/// ß→ss) rather than folding to a bare vowel, because NatStat romanizes some
+/// German names that way — e.g. Torvik's "Johann Grünloh" is stored by NatStat
+/// as "Johann Gruenloh" (issue #170). Torvik keeps the native umlaut, so both
+/// sides must expand to the same digraph to meet. Every other diacritic folds
+/// to its base letter. Both sides of a Torvik↔cstat match are run through this
+/// function, so accented cstat names (Dörries, Kostić) normalize identically.
 fn normalize_name(name: &str) -> String {
-    let s = name.replace(['.', '\'', '\u{2019}'], "").to_lowercase();
+    let folded = fold_diacritics(name);
 
     // Split into tokens and strip trailing suffix tokens
-    let tokens: Vec<&str> = s.split_whitespace().collect();
+    let tokens: Vec<&str> = folded.split_whitespace().collect();
     let suffixes = ["jr", "sr", "ii", "iii", "iv", "v"];
 
     let end = if tokens.last().is_some_and(|t| suffixes.contains(t)) {
@@ -432,60 +446,129 @@ fn normalize_name(name: &str) -> String {
     tokens[..end].join(" ")
 }
 
+/// Lowercase a name and fold its diacritics to ASCII, dropping punctuation
+/// (periods, apostrophes — including the curly `’` U+2019 and the Windows-1252
+/// mojibake control char U+0092 we see in a few DB rows). German umlauts and
+/// ß expand to digraphs; all other Latin diacritics fold to their base letter.
+/// Alphabetic characters with no mapping pass through lowercased; everything
+/// else (punctuation, control chars) is dropped.
+fn fold_diacritics(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        match c {
+            // German umlauts / eszett → digraph romanization
+            'ä' | 'Ä' | 'æ' | 'Æ' => out.push_str("ae"),
+            'ö' | 'Ö' | 'œ' | 'Œ' => out.push_str("oe"),
+            'ü' | 'Ü' => out.push_str("ue"),
+            'ß' => out.push_str("ss"),
+            'þ' | 'Þ' => out.push_str("th"),
+            // Latin diacritics → base letter
+            'á' | 'à' | 'â' | 'ã' | 'å' | 'ā' | 'ă' | 'ą' | 'Á' | 'À' | 'Â' | 'Ã' | 'Å' | 'Ā'
+            | 'Ă' | 'Ą' => out.push('a'),
+            'ç' | 'ć' | 'č' | 'ĉ' | 'ċ' | 'Ç' | 'Ć' | 'Č' | 'Ĉ' | 'Ċ' => out.push('c'),
+            'đ' | 'ď' | 'ð' | 'Đ' | 'Ď' | 'Ð' => out.push('d'),
+            'é' | 'è' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' | 'É' | 'È' | 'Ê' | 'Ë' | 'Ē'
+            | 'Ĕ' | 'Ė' | 'Ę' | 'Ě' => out.push('e'),
+            'ğ' | 'ĝ' | 'ġ' | 'ģ' | 'Ğ' | 'Ĝ' | 'Ġ' | 'Ģ' => out.push('g'),
+            'í' | 'ì' | 'î' | 'ï' | 'ī' | 'ĭ' | 'į' | 'ı' | 'Í' | 'Ì' | 'Î' | 'Ï' | 'Ī' | 'Ĭ'
+            | 'Į' | 'İ' => out.push('i'),
+            'ł' | 'ĺ' | 'ļ' | 'ľ' | 'Ł' | 'Ĺ' | 'Ļ' | 'Ľ' => out.push('l'),
+            'ñ' | 'ń' | 'ņ' | 'ň' | 'Ñ' | 'Ń' | 'Ņ' | 'Ň' => out.push('n'),
+            'ó' | 'ò' | 'ô' | 'õ' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ø' | 'Ō'
+            | 'Ŏ' | 'Ő' => out.push('o'),
+            'ŕ' | 'ř' | 'Ŕ' | 'Ř' => out.push('r'),
+            'ś' | 'š' | 'ş' | 'ŝ' | 'ș' | 'Ś' | 'Š' | 'Ş' | 'Ŝ' | 'Ș' => out.push('s'),
+            'ţ' | 'ť' | 'ț' | 'Ţ' | 'Ť' | 'Ț' => out.push('t'),
+            'ú' | 'ù' | 'û' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'Ú' | 'Ù' | 'Û' | 'Ū' | 'Ŭ' | 'Ů'
+            | 'Ű' | 'Ų' => out.push('u'),
+            'ý' | 'ÿ' | 'Ý' | 'Ÿ' => out.push('y'),
+            'ź' | 'ž' | 'ż' | 'Ź' | 'Ž' | 'Ż' => out.push('z'),
+            _ if c.is_alphabetic() || c.is_whitespace() => {
+                out.extend(c.to_lowercase());
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Player matching
 // ---------------------------------------------------------------------------
 
-/// Match a Torvik player to a cstat player by name + team + season.
-/// Uses normalized name matching and fuzzy team name matching.
-async fn match_player(
+/// A cstat player candidate in the season name index.
+struct PlayerCandidate {
+    id: Uuid,
+    /// The player's cstat team name (e.g. "Virginia Cavaliers"), if teamed.
+    team_name: Option<String>,
+    /// The team's short name (e.g. "Virginia"), if teamed.
+    short_name: Option<String>,
+}
+
+/// Build a `normalized_name -> candidates` index of every player in the season.
+/// Teams are LEFT-joined so unteamed players (no `team_id`) still appear for the
+/// name-only fallback, mirroring the old two-tier SQL match.
+async fn build_player_name_index(
     pool: &PgPool,
+    season: i32,
+) -> anyhow::Result<HashMap<String, Vec<PlayerCandidate>>> {
+    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<String>)>(
+        r#"SELECT p.id, p.name, t.name AS team_name, t.short_name
+           FROM players p
+           LEFT JOIN teams t ON t.id = p.team_id AND t.season = p.season
+           WHERE p.season = $1"#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::with_capacity(rows.len());
+    for (id, name, team_name, short_name) in rows {
+        index
+            .entry(normalize_name(&name))
+            .or_default()
+            .push(PlayerCandidate {
+                id,
+                team_name,
+                short_name,
+            });
+    }
+    Ok(index)
+}
+
+/// Match a Torvik player to a cstat player using the pre-built season index.
+/// Prefers a candidate whose cstat team fuzzy-matches the Torvik team name;
+/// otherwise falls back to the first same-name candidate (the old name-only
+/// tier). Both names are normalized identically, so accents and German
+/// umlaut romanizations meet (issue #170).
+fn match_player(
+    index: &HashMap<String, Vec<PlayerCandidate>>,
     name: &str,
     torvik_team: &str,
-    season: i32,
-) -> anyhow::Result<Option<Uuid>> {
-    let normalized = normalize_name(name);
+) -> Option<Uuid> {
+    let candidates = index.get(&normalize_name(name))?;
+    candidates
+        .iter()
+        .find(|c| team_matches(c, torvik_team))
+        .or_else(|| candidates.first())
+        .map(|c| c.id)
+}
 
-    // First try normalized name match + team within the season.
-    // SQL-side: TRANSLATE strips . ' ' (apostrophes), then REGEXP_REPLACE strips suffixes.
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        r#"SELECT p.id FROM players p
-           JOIN teams t ON t.id = p.team_id AND t.season = p.season
-           WHERE p.season = $1
-             AND LOWER(TRIM(REGEXP_REPLACE(
-                   TRANSLATE(p.name, E'.\x27\u2019', ''),
-                   E'\\s+(Jr|Sr|II|III|IV|V)$', '', 'i'
-                 ))) = $2
-             AND (LOWER(t.name) LIKE '%' || LOWER($3) || '%'
-                  OR LOWER($3) LIKE '%' || LOWER(t.short_name) || '%')
-           LIMIT 1"#,
-    )
-    .bind(season)
-    .bind(&normalized)
-    .bind(torvik_team)
-    .fetch_optional(pool)
-    .await?;
-
-    if let Some((id,)) = row {
-        return Ok(Some(id));
-    }
-
-    // Fallback: normalized name only within season
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        r#"SELECT p.id FROM players p
-           WHERE p.season = $1
-             AND LOWER(TRIM(REGEXP_REPLACE(
-                   TRANSLATE(p.name, E'.\x27\u2019', ''),
-                   E'\\s+(Jr|Sr|II|III|IV|V)$', '', 'i'
-                 ))) = $2
-           LIMIT 1"#,
-    )
-    .bind(season)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row.map(|(id,)| id))
+/// Fuzzy team match mirroring the old SQL predicate: the cstat team name
+/// contains the Torvik team, or the Torvik team contains the cstat short name.
+/// Case-insensitive; empty short names never match (SQL `LIKE '%%'` would).
+fn team_matches(candidate: &PlayerCandidate, torvik_team: &str) -> bool {
+    let torvik = torvik_team.to_lowercase();
+    let name_hit = candidate
+        .team_name
+        .as_deref()
+        .is_some_and(|t| t.to_lowercase().contains(&torvik));
+    let short_hit = candidate
+        .short_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .is_some_and(|s| torvik.contains(&s.to_lowercase()));
+    name_hit || short_hit
 }
 
 /// Parse height string like "6-5" to inches.
@@ -552,6 +635,105 @@ mod tests {
     fn normalize_v_suffix_stripped() {
         // "V" is treated as a suffix (Roman numeral 5)
         assert_eq!(normalize_name("Someone V"), "someone");
+    }
+
+    // Diacritic folding (issue #170)
+
+    #[test]
+    fn normalize_expands_german_umlaut_to_digraph() {
+        // Torvik keeps the umlaut, NatStat romanizes it as "ue" — both must
+        // land on the same "gruenloh" for the match to fire.
+        assert_eq!(normalize_name("Johann Grünloh"), "johann gruenloh");
+        assert_eq!(normalize_name("Johann Gruenloh"), "johann gruenloh");
+    }
+
+    #[test]
+    fn normalize_expands_all_german_umlauts_and_eszett() {
+        assert_eq!(normalize_name("Amon Dörries"), "amon doerries");
+        assert_eq!(normalize_name("Carlos Jürgens"), "carlos juergens");
+        assert_eq!(normalize_name("Jäger"), "jaeger");
+        assert_eq!(normalize_name("Weiß"), "weiss");
+        // æ ligature folds like ä.
+        assert_eq!(normalize_name("Sivert Wærstad"), "sivert waerstad");
+    }
+
+    #[test]
+    fn normalize_folds_latin_diacritics_to_base_letter() {
+        assert_eq!(normalize_name("Aleksej Kostić"), "aleksej kostic");
+        assert_eq!(normalize_name("Fedor Žugić"), "fedor zugic");
+        assert_eq!(normalize_name("Francis Lācis"), "francis lacis");
+        assert_eq!(normalize_name("Javonté Johnson"), "javonte johnson");
+        assert_eq!(normalize_name("Josué Grullon"), "josue grullon");
+    }
+
+    #[test]
+    fn normalize_drops_windows1252_apostrophe_mojibake() {
+        // "D\u{0092}Angelo Allen" — a Windows-1252 curly apostrophe stored raw.
+        assert_eq!(normalize_name("D\u{0092}Angelo Allen"), "dangelo allen");
+    }
+
+    // match_player tests
+
+    fn candidate(id: Uuid, team: &str, short: &str) -> PlayerCandidate {
+        PlayerCandidate {
+            id,
+            team_name: Some(team.to_string()),
+            short_name: Some(short.to_string()),
+        }
+    }
+
+    #[test]
+    fn match_player_matches_across_umlaut_romanization() {
+        // cstat stores the NatStat romanization; Torvik supplies the umlaut.
+        let id = Uuid::from_u128(1);
+        let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
+        index
+            .entry(normalize_name("Johann Gruenloh"))
+            .or_default()
+            .push(candidate(id, "Virginia Cavaliers", "Virginia"));
+
+        assert_eq!(match_player(&index, "Johann Grünloh", "Virginia"), Some(id));
+    }
+
+    #[test]
+    fn match_player_prefers_team_match_for_same_name() {
+        let illinois = Uuid::from_u128(1);
+        let cal_poly = Uuid::from_u128(2);
+        let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
+        let entry = index.entry(normalize_name("Jake Davis")).or_default();
+        entry.push(candidate(illinois, "Illinois Fighting Illini", "Illinois"));
+        entry.push(candidate(cal_poly, "Cal Poly Mustangs", "Cal Poly"));
+
+        assert_eq!(
+            match_player(&index, "Jake Davis", "Cal Poly"),
+            Some(cal_poly)
+        );
+        assert_eq!(
+            match_player(&index, "Jake Davis", "Illinois"),
+            Some(illinois)
+        );
+    }
+
+    #[test]
+    fn match_player_falls_back_to_name_only() {
+        // No team match → first same-name candidate, mirroring the old tier-2.
+        let id = Uuid::from_u128(1);
+        let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
+        index
+            .entry(normalize_name("Cooper Flagg"))
+            .or_default()
+            .push(candidate(id, "Duke Blue Devils", "Duke"));
+
+        assert_eq!(
+            match_player(&index, "Cooper Flagg", "Some Other School"),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn match_player_returns_none_when_absent() {
+        let index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
+        assert_eq!(match_player(&index, "Nobody Here", "Nowhere"), None);
     }
 
     // parse_height tests
