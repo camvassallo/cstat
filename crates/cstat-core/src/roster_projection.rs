@@ -320,7 +320,10 @@ impl ProjectedRoster {
     /// the qualifying-size gate so the gate matches what `for_scenario`
     /// actually scores.
     pub fn projecting_recruits_count(&self) -> usize {
-        self.recruits.iter().filter(|(_, m)| m.feeds_projection).count()
+        self.recruits
+            .iter()
+            .filter(|(_, m)| m.feeds_projection)
+            .count()
     }
 }
 
@@ -1619,7 +1622,10 @@ mod tests {
             returning: vec![pr(28.0, Some(4.0))],
             arrivals: vec![],
             recruits: vec![
-                (freshman_row(Uuid::new_v4(), Some(6.0)), meta("ranked", true)),
+                (
+                    freshman_row(Uuid::new_v4(), Some(6.0)),
+                    meta("ranked", true),
+                ),
                 (
                     freshman_row(Uuid::new_v4(), Some(1.0)),
                     meta("intl commit", false),
