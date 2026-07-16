@@ -24,6 +24,24 @@ interface ClientErrorReport {
 let sent = 0
 const seen = new Set<string>()
 
+// Errors thrown by third-party scripts we don't ship or control — Cloudflare's
+// RUM beacon (static.cloudflareinsights.com), browser extensions, injected
+// analytics — are pure noise: we can't fix them and they crowd out real app
+// crashes in #errors-web. A cross-origin script filename is the tell. Same-origin
+// (our bundle) and empty filenames (inline/opaque) still report.
+//
+// Concrete case this guards: issue #173, where Cloudflare's beacon.min.js called
+// Array.prototype.at() on a Chrome 79 client that predates it, and we forwarded
+// the third-party crash as if it were ours.
+function isThirdPartyScript(filename: string): boolean {
+  if (!filename) return false
+  try {
+    return new URL(filename).origin !== window.location.origin
+  } catch {
+    return false
+  }
+}
+
 function report(r: ClientErrorReport): void {
   try {
     if (sent >= MAX_REPORTS_PER_LOAD) return
@@ -61,6 +79,7 @@ export function installErrorReporter(): void {
   window.addEventListener('error', (e: ErrorEvent) => {
     // Resource-load errors (img/script 404) don't bubble to window without a
     // capture-phase listener, so anything we see here is a real script error.
+    if (isThirdPartyScript(e.filename)) return
     report({
       kind: 'error',
       message: e.message || (e.error ? String(e.error) : 'Unknown error'),
