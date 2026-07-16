@@ -2173,17 +2173,24 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
         info!(count = r0.rows_affected(), "backfilled team conferences");
     }
 
-    // is_conference: both teams in same conference
+    // is_conference: both teams in same conference. Derived unconditionally
+    // from the (Torvik-corrected) conference above — NOT null-guarded — so it
+    // stays consistent after a realignment or historical-conference fix. A
+    // null-only guard would strand games computed before their teams had a
+    // correct conference: e.g. every 2015-2020 conference game got flagged
+    // non-conference when conference was still null, and NatStat's own flag
+    // wrongly marked Utah's post-2025 Big 12 games non-conference (it still
+    // has Utah in the Big Ten). Equality matches NatStat's definition where
+    // both are correct (0 mismatches in clean seasons), so this loses nothing.
     let r1 = sqlx::query(
-        "UPDATE games g SET is_conference = (
-            SELECT ht.conference = at.conference AND ht.conference IS NOT NULL
-            FROM teams ht, teams at
-            WHERE ht.id = g.home_team_id AND at.id = g.away_team_id
-        )
-        WHERE g.season = $1
-          AND g.home_team_id IS NOT NULL
-          AND g.away_team_id IS NOT NULL
-          AND g.is_conference IS NULL",
+        "UPDATE games g
+            SET is_conference = (ht.conference = at.conference AND ht.conference IS NOT NULL)
+           FROM teams ht, teams at
+          WHERE ht.id = g.home_team_id
+            AND at.id = g.away_team_id
+            AND g.season = $1
+            AND g.is_conference IS DISTINCT FROM
+                (ht.conference = at.conference AND ht.conference IS NOT NULL)",
     )
     .bind(season)
     .execute(pool)
