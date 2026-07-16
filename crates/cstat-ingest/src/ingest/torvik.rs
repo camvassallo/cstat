@@ -506,7 +506,7 @@ struct PlayerCandidate {
 }
 
 /// Build a `normalized_name -> candidates` index of every player in the season.
-/// Teams are LEFT-joined so untamed players (no `team_id`) still appear for the
+/// Teams are LEFT-joined so unteamed players (no `team_id`) still appear for the
 /// name-only fallback, mirroring the old two-tier SQL match.
 async fn build_player_name_index(
     pool: &PgPool,
