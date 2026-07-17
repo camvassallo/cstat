@@ -737,7 +737,12 @@ fn playerperf_json(row: &csv::StringRecord, id_map: &HashMap<String, String>) ->
 
 /// Row counts of the tables the nightly writes — compared before/after the
 /// idempotency re-run.
-async fn table_counts(pool: &PgPool) -> Result<Vec<(&'static str, i64)>> {
+///
+/// `#[doc(hidden)] pub` so the offline ingest-replay integration test
+/// (`crates/cstat-ingest/tests/ingest_replay.rs`) can reuse the exact same
+/// idempotency-drift snapshot rather than duplicating the table list.
+#[doc(hidden)]
+pub async fn table_counts(pool: &PgPool) -> Result<Vec<(&'static str, i64)>> {
     let mut counts = Vec::new();
     for table in [
         "teams",
@@ -755,6 +760,60 @@ async fn table_counts(pool: &PgPool) -> Result<Vec<(&'static str, i64)>> {
         counts.push((table, n));
     }
     Ok(counts)
+}
+
+// ---------------------------------------------------------------------------
+// Test support (M4c) — offline ingest-replay integration test.
+//
+// These `#[doc(hidden)] pub` helpers let `tests/ingest_replay.rs` drive the
+// SAME box-score ingest + seeding code paths as the `simulate` CLI, so the CI
+// test and the harness can't drift on the two subtle contracts: the api_cache
+// key/pagination shape (`seed_rows`) and which ingest functions the nightly
+// window runs. The test deliberately drives only the box-score ingest +
+// `compute_all` (not full `nightly`) so it stays fully offline — no live
+// Torvik / preflight / ELO / forecasts network on every push.
+// ---------------------------------------------------------------------------
+
+/// Seed one date-range window's three box-score endpoints into `cache` from
+/// already-built NatStat-v4 objects (see [`game_json`] / [`teamperf_json`] /
+/// [`playerperf_json`] for the field shape the ingest reads). `range` must be
+/// `format!("{start},{end}")` — the exact cache key `ingest_*_by_date_range`
+/// looks up. Reuses [`seed_rows`] so the pagination + terminal-empty-page +
+/// cache-key contract is shared with the CLI harness.
+#[doc(hidden)]
+pub async fn seed_window_objects(
+    cache: &ApiCache,
+    range: &str,
+    games: Vec<Value>,
+    teamperfs: Vec<Value>,
+    playerperfs: Vec<Value>,
+) -> Result<()> {
+    seed_rows(cache, "games", range, "games", games).await?;
+    seed_rows(cache, "teamperfs", range, "teamperfs", teamperfs).await?;
+    seed_rows(cache, "playerperfs", range, "playerperfs", playerperfs).await?;
+    Ok(())
+}
+
+/// Run the box-score ingest for one nightly window — the same three
+/// `ingest_*_by_date_range` calls `SeasonIngester::nightly` makes for its
+/// games / player-perfs / team-perfs steps, against pre-seeded fixtures.
+/// Returns `(games, player_perfs, team_perfs)` upsert counts. Excludes the
+/// external-feed steps (Torvik / ELO / forecasts / preflight) so the replay is
+/// deterministic and offline.
+#[doc(hidden)]
+pub async fn ingest_box_score_window(
+    client: &NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    from: &str,
+    to: &str,
+) -> Result<(u64, u64, u64)> {
+    use crate::ingest::games;
+    let g = games::ingest_games_by_date_range(client, pool, season, from, to).await?;
+    let pp =
+        games::ingest_player_performances_by_date_range(client, pool, season, from, to).await?;
+    let tp = games::ingest_team_performances_by_date_range(client, pool, season, from, to).await?;
+    Ok((g, pp, tp))
 }
 
 /// Human-readable end-of-run report (also the artifact a weekly wrapper can
