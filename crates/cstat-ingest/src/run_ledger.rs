@@ -23,6 +23,13 @@ pub const ROW_COUNT_TABLES: &[&str] = &[
     "player_season_stats",
 ];
 
+/// The window-scoped, load-bearing box-score steps. A date only counts as
+/// "covered" for the self-heal frontier once **all** of these succeeded for a
+/// run — each is a hard-abort step, and they are the only ones whose work is
+/// scoped to the run's date window (`elo`/`torvik`/`compute` are season-wide,
+/// so they say nothing about which dates were ingested).
+pub const BOX_SCORE_STEPS: &[&str] = &["games", "player_perfs", "team_perfs"];
+
 /// A tracked table must drop by more than BOTH thresholds vs the prior run to
 /// count as a regression: a relative floor (guards against normal churn) AND an
 /// absolute floor (guards against noise on small early-season tables, and lets a
@@ -55,6 +62,11 @@ pub struct RunLedger<'a> {
     pool: &'a PgPool,
     run_id: Uuid,
     season: i32,
+    /// The date window this run's ingest covers, stamped onto every step row
+    /// (migration 043). Set once via [`set_window`](RunLedger::set_window) after
+    /// the self-heal has settled the final window. `None` until then — the
+    /// frontier query ignores NULL windows.
+    window: Option<(NaiveDate, NaiveDate)>,
 }
 
 impl<'a> RunLedger<'a> {
@@ -64,7 +76,17 @@ impl<'a> RunLedger<'a> {
             pool,
             run_id: Uuid::new_v4(),
             season,
+            window: None,
         }
+    }
+
+    /// Stamp the date window this run covers onto every subsequent step row.
+    /// Call once, after the self-heal has settled the final window and before
+    /// the first [`record`](RunLedger::record) — this is what makes
+    /// [`last_covered_ingest_date`] an exact coverage frontier rather than a
+    /// wall-clock guess.
+    pub fn set_window(&mut self, start: NaiveDate, end: NaiveDate) {
+        self.window = Some((start, end));
     }
 
     /// The grouping id shared by every step row of this run.
@@ -83,10 +105,15 @@ impl<'a> RunLedger<'a> {
         error: Option<&str>,
     ) {
         let ended_at = Utc::now();
+        let (window_start, window_end) = match self.window {
+            Some((s, e)) => (Some(s), Some(e)),
+            None => (None, None),
+        };
         let res = sqlx::query(
             "INSERT INTO ingest_runs \
-             (run_id, season, step, status, rows_touched, started_at, ended_at, error) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             (run_id, season, step, status, rows_touched, started_at, ended_at, error, \
+              window_start, window_end) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(self.run_id)
         .bind(self.season)
@@ -96,6 +123,8 @@ impl<'a> RunLedger<'a> {
         .bind(started_at)
         .bind(ended_at)
         .bind(error)
+        .bind(window_start)
+        .bind(window_end)
         .execute(self.pool)
         .await;
 
@@ -139,9 +168,10 @@ impl<'a> RunLedger<'a> {
     ///
     /// **Only call this for counts that passed the gate.** Persisting a
     /// regressed snapshot would make the corruption the new normal: the next run
-    /// would compare corrupt-to-corrupt, see no drop, and report green — so the
-    /// gate would alert exactly once and then actively assert health over a
-    /// broken table. Holding the last-known-good baseline instead keeps it
+    /// would compare corrupt-to-corrupt, see no drop, and post the green SUCCESS
+    /// Slack summary — so the gate would alert exactly once and then actively
+    /// assert health over a broken table. (The dead-man's-switch heartbeat is
+    /// green on a degraded run either way; the summary is what changes.) Holding the last-known-good baseline instead keeps it
     /// firing every night until the counts actually recover.
     ///
     /// Fail-soft: a per-table insert error is logged and skipped.
@@ -194,29 +224,105 @@ impl<'a> RunLedger<'a> {
     }
 }
 
-/// Date of the most recent run whose load-bearing `games` step succeeded — the
-/// signal the nightly self-heal (M5b) uses to detect a skipped night. Fail-soft:
-/// any query error / no prior success yields `None` (self-heal simply no-ops).
-/// Excludes `exclude_run_id` so the in-flight run can't match itself.
+/// The **coverage frontier**: the latest game date any successful `games` step
+/// has actually ingested (`MAX(window_end)`, migration 043) — the signal the
+/// nightly self-heal (M5b) uses to detect a skipped night. Fail-soft: any query
+/// error / no prior success yields `None` (self-heal simply no-ops). Excludes
+/// `exclude_run_id` so the in-flight run can't match itself.
 ///
-/// Deliberately **not** season-scoped. The question this answers is "when did
-/// the cron last successfully run", which is a property of the scheduler, not of
-/// a season. Scoping it by season would make the self-heal structurally dead
-/// across the Nov 1 rollover ([`season_for_date`](crate::season_for_date) flips
-/// there): the new season has no ledger history, so a cron outage spanning the
-/// rollover would return `None` and silently skip the healing — losing the
-/// season's opening games, the single highest-stakes gap of the year.
-pub async fn last_successful_ingest_date(pool: &PgPool, exclude_run_id: Uuid) -> Option<NaiveDate> {
-    let ts: Option<DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT MAX(ended_at) FROM ingest_runs \
-         WHERE step = 'games' AND status = 'ok' AND run_id <> $1",
+/// Reads the **recorded window**, not `ended_at` (the run's wall-clock finish).
+/// The wall-clock proxy only holds for default-window runs; it breaks exactly
+/// when a human is involved, which is the expected state during an outage. A
+/// manual `nightly --from <old> --to <old>` backfill finishes *today*, so under
+/// the old proxy it stamped today over the frontier and disarmed the next
+/// night's heal — silently stranding the very games the operator was trying to
+/// recover. Keyed on the window, that same backfill contributes its own (older)
+/// `window_end` and the frontier stays honest.
+///
+/// Deliberately **not** season-scoped: "how far have we ingested" is a property
+/// of the schedule, not a season. Scoping it would make the self-heal
+/// structurally dead across the Nov 1 rollover
+/// ([`season_for_date`](crate::season_for_date) flips there) — the new season
+/// has no ledger history, so an outage spanning the rollover would return `None`
+/// and skip healing, losing the season's opening games.
+///
+/// `as_of` bounds the frontier so a typo'd future `--to` (e.g. `--to 2030-01-01`)
+/// can't pin it ahead of reality and disable healing forever.
+///
+/// The **earliest game date we have not fully ingested**, searching back
+/// `lookback_days` from `before` — the signal the nightly self-heal (M5b) uses
+/// to widen a defaulted window over skipped nights. `None` = nothing to heal.
+/// Fail-soft: any query error yields `None` (the heal simply no-ops).
+///
+/// This is a true gap scan, not a high-water mark. A `MAX(window_end)` frontier
+/// assumes coverage is *contiguous*, which breaks on the most likely operator
+/// move during an outage: cron dies after 11-05 leaving 11-06/07 skipped, the
+/// operator runs `nightly --from 11-07 --to 11-08` (a range ending **today** —
+/// the natural thing to type), and the high-water mark jumps to 11-08. No gap is
+/// visible and 11-06 is lost forever, silently. Scanning for the first uncovered
+/// date finds 11-06 regardless of what landed after it.
+///
+/// A date counts as covered only when **every** window-scoped box-score step
+/// succeeded for some run ([`BOX_SCORE_STEPS`]). `games` is step 1 and records
+/// `ok` before `player_perfs` can abort the run, so keying on `games` alone
+/// would let a half-finished run mark its window covered: the games rows land
+/// with final scores, the statlines never do, and no later run re-ingests them.
+/// That hole is self-perpetuating — the invariant gate would report "completed
+/// game missing a `team_game_stats` side" every night forever.
+///
+/// Two floors keep the scan honest:
+/// - **`window_end <= as_of`** discards absurd future windows. A typo'd
+///   `--to 2030-01-01` would otherwise mark every date covered and disable
+///   healing permanently.
+/// - **`MIN(window_start)`** stops the scan from looking back before the first
+///   window we ever recorded. Without it, the run right after migration 043
+///   (when all prior rows have NULL windows) would see the whole lookback as
+///   uncovered and pull `lookback_days` of NatStat for nothing.
+///
+/// `lookback_days` bounds how far back a hole stays visible. It must exceed the
+/// caller's heal cap, or [`heal_window`] could never report an unrecoverable
+/// shortfall; past it, an un-backfilled hole ages out rather than degrading
+/// every run forever.
+pub async fn first_uncovered_ingest_date(
+    pool: &PgPool,
+    exclude_run_id: Uuid,
+    before: NaiveDate,
+    as_of: NaiveDate,
+    lookback_days: i64,
+) -> Option<NaiveDate> {
+    let horizon = before - chrono::Duration::days(lookback_days);
+    let last = before - chrono::Duration::days(1);
+    sqlx::query_scalar(
+        "WITH complete AS ( \
+             SELECT run_id, MIN(window_start) AS ws, MAX(window_end) AS we \
+             FROM ingest_runs \
+             WHERE step = ANY($1) AND status = 'ok' AND run_id <> $2 \
+               AND window_start IS NOT NULL AND window_end IS NOT NULL \
+               AND window_end <= $3 \
+             GROUP BY run_id \
+             HAVING COUNT(DISTINCT step) = $4 \
+         ), \
+         horizon AS ( \
+             SELECT CASE WHEN MIN(ws) IS NULL THEN NULL \
+                         ELSE GREATEST($5::date, MIN(ws)) END AS lo \
+             FROM complete \
+         ) \
+         SELECT MIN(d)::date \
+         FROM horizon, generate_series(horizon.lo, $6::date, INTERVAL '1 day') AS d \
+         WHERE NOT EXISTS ( \
+             SELECT 1 FROM complete c WHERE d::date BETWEEN c.ws AND c.we \
+         )",
     )
+    .bind(BOX_SCORE_STEPS)
     .bind(exclude_run_id)
+    .bind(as_of)
+    .bind(BOX_SCORE_STEPS.len() as i64)
+    .bind(horizon)
+    .bind(last)
     .fetch_one(pool)
     .await
     .ok()
-    .flatten();
-    ts.map(|t| t.date_naive())
+    .flatten()
 }
 
 /// A self-heal window widening (M5b) — the result of [`heal_window`].
@@ -224,7 +330,7 @@ pub async fn last_successful_ingest_date(pool: &PgPool, exclude_run_id: Uuid) ->
 pub struct HealPlan {
     /// The widened window start.
     pub from: NaiveDate,
-    /// Days between the last success and [`from`](HealPlan::from) that the
+    /// Days between the gap start and [`from`](HealPlan::from) that the
     /// `max_heal_days` cap refused to re-ingest. `0` = the gap is fully healed.
     /// **Non-zero means the heal is only PARTIAL**: those game dates stay
     /// un-ingested and need a manual `nightly --from <last success>` backfill.
@@ -233,26 +339,26 @@ pub struct HealPlan {
     pub unrecovered_days: i64,
 }
 
-/// Given a defaulted `[default_from, default_to]` window and the date of the
-/// last successful nightly, return the widened window when a night was skipped,
-/// or `None` when the window already covers the gap. The widened `from` is the
-/// last success date (re-covering it is a harmless idempotent overlap), floored
-/// at `default_to − max_heal_days` so a long off-season silence can't trigger a
-/// huge NatStat pull — when that floor bites, the plan reports the days it could
+/// Given a defaulted `[default_from, default_to]` window and `gap_start` — the
+/// earliest un-ingested date, from [`first_uncovered_ingest_date`] — return the
+/// widened window, or `None` when the default window already covers the gap.
+/// The widened `from` is `gap_start` itself, floored at
+/// `default_to − max_heal_days` so a long off-season silence can't trigger a
+/// huge NatStat pull. When that floor bites, the plan reports the days it could
 /// not recover rather than pretending the gap is closed. Pure — unit-tested.
 pub fn heal_window(
     default_from: NaiveDate,
     default_to: NaiveDate,
-    last_success: Option<NaiveDate>,
+    gap_start: Option<NaiveDate>,
     max_heal_days: i64,
 ) -> Option<HealPlan> {
-    let last = last_success?;
-    // Last success is same-day-or-later than the default start → no gap.
-    if last >= default_from {
+    let gap_start = gap_start?;
+    // The gap begins at/after the default start → the default window covers it.
+    if gap_start >= default_from {
         return None;
     }
     let floor = default_to - chrono::Duration::days(max_heal_days);
-    let healed = last.max(floor);
+    let healed = gap_start.max(floor);
     // The floor may pull `healed` back up to (or past) default_from — then
     // there's nothing to widen.
     if healed >= default_from {
@@ -260,7 +366,7 @@ pub fn heal_window(
     }
     Some(HealPlan {
         from: healed,
-        unrecovered_days: (healed - last).num_days(),
+        unrecovered_days: (healed - gap_start).num_days(),
     })
 }
 
@@ -304,13 +410,13 @@ mod tests {
     }
 
     #[test]
-    fn heal_window_no_gap_when_last_success_is_recent() {
-        // Ran yesterday (== default_from) → the default window already covers it.
+    fn heal_window_no_gap_when_gap_starts_inside_default_window() {
+        // Gap starts at default_from → the default window already covers it.
         assert_eq!(
             heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-11-07")), 14),
             None
         );
-        // Last success later than default_from (e.g. a same-day re-run) → no gap.
+        // Gap starts after default_from → still inside the default window.
         assert_eq!(
             heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-11-08")), 14),
             None
@@ -319,8 +425,8 @@ mod tests {
 
     #[test]
     fn heal_window_widens_to_cover_skipped_nights() {
-        // Last success 3 days back → widen `from` back to that date, gap fully
-        // closed (well inside the cap).
+        // Gap opened 3 days back → widen `from` to it; fully closed (well
+        // inside the cap).
         assert_eq!(
             heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-11-04")), 14),
             Some(HealPlan {
@@ -332,8 +438,9 @@ mod tests {
 
     #[test]
     fn heal_window_floors_a_long_silence() {
-        // Months-old last success → clamp to default_to − max_heal_days, not the
-        // stale date (bounds the NatStat pull).
+        // Ancient gap start → clamp to default_to − max_heal_days rather than
+        // the stale date (bounds the NatStat pull). In production the lookback
+        // keeps `gap_start` far tighter than this; the math must still hold.
         assert_eq!(
             heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-06-01")), 14),
             Some(HealPlan {
@@ -347,10 +454,10 @@ mod tests {
 
     #[test]
     fn heal_window_reports_days_the_cap_could_not_recover() {
-        // In-season outage just past the cap: resuming 12-01 after a last
-        // success on 11-11 heals back to 11-17, leaving 11-11..11-17 (6 days of
-        // real games) permanently un-ingested. The plan must surface that so the
-        // run degrades instead of reporting a green "gap healed".
+        // In-season outage just past the cap: resuming 12-01 with the gap open
+        // since 11-11 heals back only to 11-17, leaving 11-11..11-17 (6 days of
+        // real games) un-ingested. The plan must surface that so the run degrades
+        // instead of reporting a green "gap healed".
         let plan =
             heal_window(d("2026-11-30"), d("2026-12-01"), Some(d("2026-11-11")), 14).unwrap();
         assert_eq!(plan.from, d("2026-11-17"));
@@ -358,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn heal_window_none_without_prior_success() {
+    fn heal_window_none_when_no_gap_found() {
         assert_eq!(
             heal_window(d("2026-11-07"), d("2026-11-08"), None, 14),
             None

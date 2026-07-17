@@ -43,28 +43,46 @@ routes to the DEGRADED Slack summary rather than aborting:
   degrades the run. A **regressed snapshot is deliberately not persisted**, so
   the baseline stays at the last known-good and the gate re-fires every night
   until the counts recover; only a clean snapshot becomes the new baseline.
+  If a *deliberate* shrink (e.g. an off-season rebuild pushed by
+  `sync_to_prod.sh`) leaves the gate wedged — off-season counts never grow back,
+  so it would degrade every night until November — rebaseline explicitly:
+  `DELETE FROM ingest_run_table_counts WHERE season = <season>;` on prod, and the
+  next run records a fresh baseline.
 
 **Backfill-gap self-heal (M5).** When the window is the default (no explicit
-`--from`), the run first checks the ledger for the last successful `games` step.
-If the cron missed one or more nights, it widens the window start back to that
-date so the gap heals automatically on the next run — the re-covered dates are a
-harmless idempotent overlap. A fully-healed run stays a SUCCESS and notes the
-widening in its Slack summary. An operator-supplied `--from` is never
-auto-widened.
+`--from`), the run scans the ledger for the **earliest game date it has not
+fully ingested**, looking back 30 days, and widens the window start to it. Every
+run stamps the window it covered onto its step rows, so this is a real coverage
+scan rather than a guess — the re-covered dates are a harmless idempotent
+overlap. A fully-healed run stays a SUCCESS and notes the widening in its Slack
+summary. An operator-supplied `--from` is never auto-widened.
+
+A date counts as covered only once **all three** box-score steps
+(`games` → `player_perfs` → `team_perfs`) succeeded for some run. `games`
+records `ok` before `player_perfs` can abort the run, so a run that died
+half-way must not mark its window covered — otherwise its games would sit there
+with final scores and no statlines, and no later run would fix them.
+
+Because it scans for gaps rather than tracking a high-water mark, a manual
+backfill can't hide an older hole behind it: `--from 11-07 --to 11-08` run on
+11-08 still leaves 11-06 visible, and the next nightly heals it. Poking at a
+broken cron is safe.
 
 The widening is **capped at 14 days** so a long off-season silence can't trigger
 a months-wide NatStat pull. When an outage runs past that cap the heal is only
-*partial* — the dates between the last success and the capped window start are
-**not** re-ingested and will never be picked up automatically. That case
-**degrades the run** with a `self-heal only PARTIAL` line naming the exact
-backfill to run, e.g.:
+*partial* — the dates between the gap start and the capped window start are
+**not** re-ingested, and once they fall outside the 30-day lookback nothing will
+pick them up. That case **degrades the run** with a `self-heal only PARTIAL`
+line naming the exact backfill to run, e.g.:
 
 ```
 cstat-ingest nightly --year 2027 --from 2026-11-11 --to 2026-11-17
 ```
 
 Run it (an explicit `--from` is never auto-widened, so it does exactly that
-range), then confirm the next nightly is green.
+range), then confirm the next nightly is green. Until you do, the run will keep
+degrading nightly and re-pulling the capped window — that noise is deliberate:
+it's a real hole in the served box scores.
 
 ## Railway setup
 

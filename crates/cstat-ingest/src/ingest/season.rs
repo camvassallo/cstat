@@ -2,7 +2,7 @@ use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::notify;
 use crate::run_ledger::{
-    RunLedger, StepStatus, detect_count_regressions, heal_window, last_successful_ingest_date,
+    RunLedger, StepStatus, detect_count_regressions, first_uncovered_ingest_date, heal_window,
 };
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
@@ -278,18 +278,25 @@ impl<'a> SeasonIngester<'a> {
         // long off-season silence can't trigger a months-wide NatStat pull. A
         // genuine multi-night in-season outage is comfortably inside this.
         const MAX_HEAL_DAYS: i64 = 14;
+        // How far back the gap scan looks. Deliberately wider than
+        // MAX_HEAL_DAYS: the band between the two is what lets a run *report* a
+        // gap it cannot itself recover (see `HealPlan::unrecovered_days`) — if
+        // the scan stopped at the cap, an over-cap outage would silently look
+        // fully healed. Past this, an un-backfilled hole ages out instead of
+        // degrading every run forever.
+        const HEAL_LOOKBACK_DAYS: i64 = 30;
 
-        let ledger = RunLedger::start(self.pool, self.season);
+        let mut ledger = RunLedger::start(self.pool, self.season);
 
         // --- backfill-gap self-heal (M5b) ---
         // If the cron missed one or more nights, a plain yesterday..today window
         // would leave those game dates permanently un-ingested. When enabled
         // (the CLI passes this only for a DEFAULT window, never an operator's
-        // explicit --from), widen the start back to the last successful run's
-        // date so the gap heals on the next run with no manual intervention. The
-        // re-covered dates are a harmless idempotent overlap. Off for `simulate`
-        // (it drives its own clock) and for an explicit operator window. A
-        // parse failure or absent ledger history simply no-ops.
+        // explicit --from), widen the start back to the earliest date we have
+        // not fully ingested so the gap heals on the next run with no manual
+        // intervention. The re-covered dates are a harmless idempotent overlap.
+        // Off for `simulate` (it drives its own clock) and for an explicit
+        // operator window. A parse failure or an absent/covered scan no-ops.
         let mut heal_note: Option<String> = None;
         // Set when the MAX_HEAL_DAYS cap left game dates un-ingested — pushed to
         // `failures` (declared below) so a partial heal degrades the run.
@@ -301,8 +308,15 @@ impl<'a> SeasonIngester<'a> {
                     NaiveDate::parse_from_str(end_date, "%Y-%m-%d"),
                 ) {
                     (Ok(df), Ok(dt)) => {
-                        let last = last_successful_ingest_date(self.pool, ledger.run_id()).await;
-                        heal_window(df, dt, last, MAX_HEAL_DAYS).map(|h| (h, last))
+                        let gap = first_uncovered_ingest_date(
+                            self.pool,
+                            ledger.run_id(),
+                            df,
+                            dt,
+                            HEAL_LOOKBACK_DAYS,
+                        )
+                        .await;
+                        heal_window(df, dt, gap, MAX_HEAL_DAYS).map(|h| (h, gap))
                     }
                     _ => None,
                 }
@@ -310,28 +324,32 @@ impl<'a> SeasonIngester<'a> {
                 None
             };
             match widened {
-                Some((plan, last)) => {
+                Some((plan, gap)) => {
                     let healed_str = plan.from.format("%Y-%m-%d").to_string();
-                    let last_str = last
+                    // `gap` is the first date we have NOT fully ingested — not
+                    // the date a run last executed. Say so: an operator reading
+                    // this while debugging must not confuse the two.
+                    let gap_str = gap
                         .map(|d| d.to_string())
                         .unwrap_or_else(|| "?".to_string());
                     warn!(
                         season = self.season,
                         original_from = start_date,
                         healed_from = %healed_str,
-                        last_success = %last_str,
+                        gap_start = %gap_str,
                         unrecovered_days = plan.unrecovered_days,
                         "self-heal: widening nightly window to recover skipped night(s)"
                     );
                     heal_note = Some(format!(
                         "self-heal widened window start {start_date} → {healed_str} \
-                         (last successful run {last_str})"
+                         (first un-ingested date {gap_str})"
                     ));
-                    // The cap bit: dates between the last success and the healed
-                    // start are NOT re-ingested by this run and will never be
-                    // picked up automatically. A silently-permanent hole in the
-                    // served box scores is worse than a noisy alert — degrade the
-                    // run and tell the operator the exact backfill to run.
+                    // The cap bit: dates between the gap start and the healed
+                    // start are NOT re-ingested by this run, and once they fall
+                    // outside HEAL_LOOKBACK_DAYS nothing will pick them up. A
+                    // silently-permanent hole in the served box scores is worse
+                    // than a noisy alert — degrade the run and hand the operator
+                    // the exact backfill command.
                     if plan.unrecovered_days > 0 {
                         warn!(
                             season = self.season,
@@ -341,8 +359,8 @@ impl<'a> SeasonIngester<'a> {
                         heal_shortfall = Some(format!(
                             "self-heal only PARTIAL: capped at {MAX_HEAL_DAYS}d, so \
                              {days} day(s) before {healed_str} were not re-ingested \
-                             (last successful run {last_str}) — backfill manually with \
-                             `cstat-ingest nightly --year {season} --from {last_str} --to {healed_str}`",
+                             (gap opens {gap_str}) — backfill manually with \
+                             `cstat-ingest nightly --year {season} --from {gap_str} --to {healed_str}`",
                             days = plan.unrecovered_days,
                             season = self.season,
                         ));
@@ -352,6 +370,21 @@ impl<'a> SeasonIngester<'a> {
                 None => (start_date.to_string(), end_date.to_string()),
             }
         };
+
+        // Stamp the settled window (post-heal) onto every step row this run
+        // writes — this is what lets the next run's `first_uncovered_ingest_date`
+        // scan real coverage instead of guessing from wall-clock finish times.
+        // Must happen before the first `ledger.record` below. Recording it for
+        // operator windows too is the point: a manual backfill contributes the
+        // dates it actually covered, so a range that misses the gap no longer
+        // hides it.
+        if let (Ok(ws), Ok(we)) = (
+            NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
+            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
+        ) {
+            ledger.set_window(ws, we);
+        }
+
         let mut report = NightlyReport {
             ingest: IngestReport::default(),
             torvik: None,
@@ -782,9 +815,9 @@ impl<'a> SeasonIngester<'a> {
             } else {
                 // Deliberately do NOT persist a regressed snapshot: it would
                 // become the baseline, the next run would compare corrupt to
-                // corrupt, see no drop, and post a green heartbeat over a still-
-                // broken table. Keeping the last-known-good baseline makes the
-                // gate re-fire every night until the counts recover.
+                // corrupt, see no drop, and post the green SUCCESS summary over
+                // a still-broken table. Keeping the last-known-good baseline
+                // makes the gate re-fire every night until the counts recover.
                 let summary = regressions.join("; ");
                 warn!(
                     season = self.season,
