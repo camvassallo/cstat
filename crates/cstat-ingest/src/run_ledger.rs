@@ -104,12 +104,14 @@ impl<'a> RunLedger<'a> {
         }
     }
 
-    /// Snapshot the season-scoped row count of every [`ROW_COUNT_TABLES`] table
-    /// and persist each under this run's id (M5a). Fail-soft: a per-table query
-    /// or insert error is logged and skipped so the gate can never abort the
-    /// otherwise-complete run. Returns the counts it managed to read (for the
-    /// immediate comparison against the prior run).
-    pub async fn snapshot_and_persist_counts(&self) -> Vec<(&'static str, i64)> {
+    /// Read the season-scoped row count of every [`ROW_COUNT_TABLES`] table
+    /// (M5a). Pure read — persisting is a separate step ([`persist_counts`]) so
+    /// the caller can compare *before* deciding whether these counts deserve to
+    /// become the next run's baseline. Fail-soft: a per-table query error is
+    /// logged and that table is skipped, never aborting the run it observes.
+    ///
+    /// [`persist_counts`]: RunLedger::persist_counts
+    pub async fn snapshot_counts(&self) -> Vec<(&'static str, i64)> {
         let mut counts = Vec::new();
         for &table in ROW_COUNT_TABLES {
             // `table` is a compile-time constant from ROW_COUNT_TABLES, never
@@ -127,6 +129,26 @@ impl<'a> RunLedger<'a> {
                     continue;
                 }
             };
+            counts.push((table, n));
+        }
+        counts
+    }
+
+    /// Persist a [`snapshot_counts`] result under this run's id, making it the
+    /// baseline the next run compares against.
+    ///
+    /// **Only call this for counts that passed the gate.** Persisting a
+    /// regressed snapshot would make the corruption the new normal: the next run
+    /// would compare corrupt-to-corrupt, see no drop, and report green — so the
+    /// gate would alert exactly once and then actively assert health over a
+    /// broken table. Holding the last-known-good baseline instead keeps it
+    /// firing every night until the counts actually recover.
+    ///
+    /// Fail-soft: a per-table insert error is logged and skipped.
+    ///
+    /// [`snapshot_counts`]: RunLedger::snapshot_counts
+    pub async fn persist_counts(&self, counts: &[(&'static str, i64)]) {
+        for (table, n) in counts {
             let res = sqlx::query(
                 "INSERT INTO ingest_run_table_counts (run_id, season, table_name, row_count) \
                  VALUES ($1, $2, $3, $4)",
@@ -140,9 +162,7 @@ impl<'a> RunLedger<'a> {
             if let Err(e) = res {
                 warn!(table, error = %e, "failed to persist run table count; continuing");
             }
-            counts.push((table, n));
         }
-        counts
     }
 
     /// Load the most recent *prior* run's row-count snapshot for this season
@@ -178,16 +198,19 @@ impl<'a> RunLedger<'a> {
 /// signal the nightly self-heal (M5b) uses to detect a skipped night. Fail-soft:
 /// any query error / no prior success yields `None` (self-heal simply no-ops).
 /// Excludes `exclude_run_id` so the in-flight run can't match itself.
-pub async fn last_successful_ingest_date(
-    pool: &PgPool,
-    season: i32,
-    exclude_run_id: Uuid,
-) -> Option<NaiveDate> {
+///
+/// Deliberately **not** season-scoped. The question this answers is "when did
+/// the cron last successfully run", which is a property of the scheduler, not of
+/// a season. Scoping it by season would make the self-heal structurally dead
+/// across the Nov 1 rollover ([`season_for_date`](crate::season_for_date) flips
+/// there): the new season has no ledger history, so a cron outage spanning the
+/// rollover would return `None` and silently skip the healing — losing the
+/// season's opening games, the single highest-stakes gap of the year.
+pub async fn last_successful_ingest_date(pool: &PgPool, exclude_run_id: Uuid) -> Option<NaiveDate> {
     let ts: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT MAX(ended_at) FROM ingest_runs \
-         WHERE season = $1 AND step = 'games' AND status = 'ok' AND run_id <> $2",
+         WHERE step = 'games' AND status = 'ok' AND run_id <> $1",
     )
-    .bind(season)
     .bind(exclude_run_id)
     .fetch_one(pool)
     .await
@@ -196,18 +219,33 @@ pub async fn last_successful_ingest_date(
     ts.map(|t| t.date_naive())
 }
 
+/// A self-heal window widening (M5b) — the result of [`heal_window`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HealPlan {
+    /// The widened window start.
+    pub from: NaiveDate,
+    /// Days between the last success and [`from`](HealPlan::from) that the
+    /// `max_heal_days` cap refused to re-ingest. `0` = the gap is fully healed.
+    /// **Non-zero means the heal is only PARTIAL**: those game dates stay
+    /// un-ingested and need a manual `nightly --from <last success>` backfill.
+    /// The caller degrades the run on this, because silently serving a
+    /// permanent hole is exactly what the gate exists to prevent.
+    pub unrecovered_days: i64,
+}
+
 /// Given a defaulted `[default_from, default_to]` window and the date of the
-/// last successful nightly, return a widened `from` when a night was skipped, or
-/// `None` when the window already covers the gap. The widened `from` is the last
-/// success date (re-covering it is a harmless idempotent overlap), floored at
-/// `default_to − max_heal_days` so a long off-season silence can't trigger a
-/// huge NatStat pull. Pure — unit-tested.
+/// last successful nightly, return the widened window when a night was skipped,
+/// or `None` when the window already covers the gap. The widened `from` is the
+/// last success date (re-covering it is a harmless idempotent overlap), floored
+/// at `default_to − max_heal_days` so a long off-season silence can't trigger a
+/// huge NatStat pull — when that floor bites, the plan reports the days it could
+/// not recover rather than pretending the gap is closed. Pure — unit-tested.
 pub fn heal_window(
     default_from: NaiveDate,
     default_to: NaiveDate,
     last_success: Option<NaiveDate>,
     max_heal_days: i64,
-) -> Option<NaiveDate> {
+) -> Option<HealPlan> {
     let last = last_success?;
     // Last success is same-day-or-later than the default start → no gap.
     if last >= default_from {
@@ -218,10 +256,12 @@ pub fn heal_window(
     // The floor may pull `healed` back up to (or past) default_from — then
     // there's nothing to widen.
     if healed >= default_from {
-        None
-    } else {
-        Some(healed)
+        return None;
     }
+    Some(HealPlan {
+        from: healed,
+        unrecovered_days: (healed - last).num_days(),
+    })
 }
 
 /// Compare a prior run's snapshot against the current counts and return a human
@@ -279,10 +319,14 @@ mod tests {
 
     #[test]
     fn heal_window_widens_to_cover_skipped_nights() {
-        // Last success 3 days back → widen `from` back to that date.
+        // Last success 3 days back → widen `from` back to that date, gap fully
+        // closed (well inside the cap).
         assert_eq!(
             heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-11-04")), 14),
-            Some(d("2026-11-04"))
+            Some(HealPlan {
+                from: d("2026-11-04"),
+                unrecovered_days: 0,
+            })
         );
     }
 
@@ -292,8 +336,25 @@ mod tests {
         // stale date (bounds the NatStat pull).
         assert_eq!(
             heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-06-01")), 14),
-            Some(d("2026-10-25"))
+            Some(HealPlan {
+                from: d("2026-10-25"),
+                // 06-01 → 10-25 is beyond the cap and stays un-ingested — the
+                // heal is partial and must NOT read as a clean recovery.
+                unrecovered_days: 146,
+            })
         );
+    }
+
+    #[test]
+    fn heal_window_reports_days_the_cap_could_not_recover() {
+        // In-season outage just past the cap: resuming 12-01 after a last
+        // success on 11-11 heals back to 11-17, leaving 11-11..11-17 (6 days of
+        // real games) permanently un-ingested. The plan must surface that so the
+        // run degrades instead of reporting a green "gap healed".
+        let plan =
+            heal_window(d("2026-11-30"), d("2026-12-01"), Some(d("2026-11-11")), 14).unwrap();
+        assert_eq!(plan.from, d("2026-11-17"));
+        assert_eq!(plan.unrecovered_days, 6);
     }
 
     #[test]

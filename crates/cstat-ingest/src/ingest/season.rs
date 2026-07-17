@@ -291,6 +291,9 @@ impl<'a> SeasonIngester<'a> {
         // (it drives its own clock) and for an explicit operator window. A
         // parse failure or absent ledger history simply no-ops.
         let mut heal_note: Option<String> = None;
+        // Set when the MAX_HEAL_DAYS cap left game dates un-ingested — pushed to
+        // `failures` (declared below) so a partial heal degrades the run.
+        let mut heal_shortfall: Option<String> = None;
         let (start_date, end_date): (String, String) = {
             let widened = if self_heal {
                 match (
@@ -298,9 +301,7 @@ impl<'a> SeasonIngester<'a> {
                     NaiveDate::parse_from_str(end_date, "%Y-%m-%d"),
                 ) {
                     (Ok(df), Ok(dt)) => {
-                        let last =
-                            last_successful_ingest_date(self.pool, self.season, ledger.run_id())
-                                .await;
+                        let last = last_successful_ingest_date(self.pool, ledger.run_id()).await;
                         heal_window(df, dt, last, MAX_HEAL_DAYS).map(|h| (h, last))
                     }
                     _ => None,
@@ -309,8 +310,8 @@ impl<'a> SeasonIngester<'a> {
                 None
             };
             match widened {
-                Some((healed, last)) => {
-                    let healed_str = healed.format("%Y-%m-%d").to_string();
+                Some((plan, last)) => {
+                    let healed_str = plan.from.format("%Y-%m-%d").to_string();
                     let last_str = last
                         .map(|d| d.to_string())
                         .unwrap_or_else(|| "?".to_string());
@@ -319,12 +320,33 @@ impl<'a> SeasonIngester<'a> {
                         original_from = start_date,
                         healed_from = %healed_str,
                         last_success = %last_str,
+                        unrecovered_days = plan.unrecovered_days,
                         "self-heal: widening nightly window to recover skipped night(s)"
                     );
                     heal_note = Some(format!(
                         "self-heal widened window start {start_date} → {healed_str} \
                          (last successful run {last_str})"
                     ));
+                    // The cap bit: dates between the last success and the healed
+                    // start are NOT re-ingested by this run and will never be
+                    // picked up automatically. A silently-permanent hole in the
+                    // served box scores is worse than a noisy alert — degrade the
+                    // run and tell the operator the exact backfill to run.
+                    if plan.unrecovered_days > 0 {
+                        warn!(
+                            season = self.season,
+                            unrecovered_days = plan.unrecovered_days,
+                            "self-heal capped — earlier skipped dates need a manual backfill"
+                        );
+                        heal_shortfall = Some(format!(
+                            "self-heal only PARTIAL: capped at {MAX_HEAL_DAYS}d, so \
+                             {days} day(s) before {healed_str} were not re-ingested \
+                             (last successful run {last_str}) — backfill manually with \
+                             `cstat-ingest nightly --year {season} --from {last_str} --to {healed_str}`",
+                            days = plan.unrecovered_days,
+                            season = self.season,
+                        ));
+                    }
                     (healed_str, end_date.to_string())
                 }
                 None => (start_date.to_string(), end_date.to_string()),
@@ -343,6 +365,12 @@ impl<'a> SeasonIngester<'a> {
         // of the run fires a single summary Slack alert. Hard-fail steps alert
         // immediately (with this context) before aborting.
         let mut failures: Vec<String> = Vec::new();
+
+        // A self-heal that hit the MAX_HEAL_DAYS cap recovered only part of the
+        // gap — surface it as a degraded run (see the heal block above).
+        if let Some(shortfall) = heal_shortfall {
+            failures.push(shortfall);
+        }
 
         // A leftover CSTAT_SIMULATED_DATE pins the default window to one past
         // date forever while every monitor stays green (fresh ledger rows,
@@ -736,10 +764,12 @@ impl<'a> SeasonIngester<'a> {
         // the baseline.
         if report.compute.is_some() {
             let t0 = Utc::now();
-            let current = ledger.snapshot_and_persist_counts().await;
+            let current = ledger.snapshot_counts().await;
             let prior = ledger.prior_run_table_counts().await;
             let regressions = detect_count_regressions(&prior, &current);
             if regressions.is_empty() {
+                // Clean → these counts become the next run's baseline.
+                ledger.persist_counts(&current).await;
                 ledger
                     .record(
                         "row_counts",
@@ -750,6 +780,11 @@ impl<'a> SeasonIngester<'a> {
                     )
                     .await;
             } else {
+                // Deliberately do NOT persist a regressed snapshot: it would
+                // become the baseline, the next run would compare corrupt to
+                // corrupt, see no drop, and post a green heartbeat over a still-
+                // broken table. Keeping the last-known-good baseline makes the
+                // gate re-fire every night until the counts recover.
                 let summary = regressions.join("; ");
                 warn!(
                     season = self.season,

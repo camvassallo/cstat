@@ -37,17 +37,34 @@ routes to the DEGRADED Slack summary rather than aborting:
   holes the pipeline faithfully reflects) only log.
 - **`row_counts`** — snapshots the season-scoped row count of each served table
   (`games`, `team_game_stats`, `player_game_stats`, `team_season_stats`,
-  `player_season_stats`) into `ingest_run_table_counts` and compares against the
-  prior run. In-season these only grow, so a material shrink (>5% **and** >25
-  rows) means a truncated feed or a compute that wiped rows — degrades the run.
+  `player_season_stats`) and compares against the prior run's snapshot in
+  `ingest_run_table_counts`. In-season these only grow, so a material shrink
+  (>5% **and** >25 rows) means a truncated feed or a compute that wiped rows —
+  degrades the run. A **regressed snapshot is deliberately not persisted**, so
+  the baseline stays at the last known-good and the gate re-fires every night
+  until the counts recover; only a clean snapshot becomes the new baseline.
 
 **Backfill-gap self-heal (M5).** When the window is the default (no explicit
 `--from`), the run first checks the ledger for the last successful `games` step.
 If the cron missed one or more nights, it widens the window start back to that
-date (capped at 14 days) so the gap heals automatically on the next run — the
-re-covered dates are a harmless idempotent overlap. A healed run stays a SUCCESS
-and notes the widening in its Slack summary. An operator-supplied `--from` is
-never auto-widened.
+date so the gap heals automatically on the next run — the re-covered dates are a
+harmless idempotent overlap. A fully-healed run stays a SUCCESS and notes the
+widening in its Slack summary. An operator-supplied `--from` is never
+auto-widened.
+
+The widening is **capped at 14 days** so a long off-season silence can't trigger
+a months-wide NatStat pull. When an outage runs past that cap the heal is only
+*partial* — the dates between the last success and the capped window start are
+**not** re-ingested and will never be picked up automatically. That case
+**degrades the run** with a `self-heal only PARTIAL` line naming the exact
+backfill to run, e.g.:
+
+```
+cstat-ingest nightly --year 2027 --from 2026-11-11 --to 2026-11-17
+```
+
+Run it (an explicit `--from` is never auto-widened, so it does exactly that
+range), then confirm the next nightly is green.
 
 ## Railway setup
 
