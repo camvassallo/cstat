@@ -103,17 +103,12 @@ export function puzzleKey(mode: GameMode, season: number, dateKey: string): stri
   return `${mode}:${season}:${dateKey}`;
 }
 
-/** Pick the daily answer: seed an index into the mode-filtered pool sorted by
- *  a per-player rendezvous hash (min of `hash32(salt:natstat_id)`).
- *  Returns null when the eligible pool is empty. */
-export function dailyAnswer(
-  pool: PlayerRow[],
-  mode: GameMode,
-  season: number,
-  dateKey: string,
-): PlayerRow | null {
-  return pickByHash(filterPool(pool, mode), puzzleKey(mode, season, dateKey));
-}
+// NOTE: the DAILY answer is chosen and frozen server-side (issue #181) — see
+// `GET /api/portle/daily` and `queries::pick_or_pin_daily_puzzle`. The client
+// fetches the pinned `natstat_id` and resolves it in the pool; it does NOT pick
+// the daily locally, so there is no client-side `dailyAnswer`. `puzzleKey` stays
+// as the per-day localStorage state key; `pickByHash` still drives PRACTICE mode
+// (a per-user roll where cross-client consistency is irrelevant).
 
 /** Pick a random answer for practice mode. `rng` is injectable for tests;
  *  defaults to Math.random. Returns null when the eligible pool is empty. */

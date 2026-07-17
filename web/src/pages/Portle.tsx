@@ -8,7 +8,7 @@ import {
   PolarRadiusAxis,
   ResponsiveContainer,
 } from 'recharts';
-import { fetchPlayers, fetchPlayerDetail, type PlayerRow } from '../api/client';
+import { fetchPlayers, fetchPlayerDetail, fetchPortleDaily, type PlayerRow } from '../api/client';
 import { useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
@@ -23,7 +23,6 @@ import {
   MODE_ORDER,
   buildShare,
   compareGuess,
-  dailyAnswer,
   isCorrect,
   localDateKey,
   poolHasSeedKeys,
@@ -89,6 +88,16 @@ export default function Portle() {
 
   const [stats, setStats] = useState<MbStats>(() => loadJson(STATS_KEY, EMPTY_STATS));
 
+  // The daily answer is chosen and frozen SERVER-side (issue #181), so every
+  // client plays the identical puzzle and it never moves once pinned. We only
+  // fetch the pinned `natstat_id` and resolve it in the already-loaded pool.
+  // Each result is tagged with the `key` (mode:season:date) it belongs to, so a
+  // stale in-flight response for a previous puzzle is ignored by comparison
+  // rather than cleared with an in-effect setState (repo bans set-state-in-effect).
+  // `{ natstat_id: null }` = no eligible players for that pool.
+  const [dailyPin, setDailyPin] = useState<{ key: string; natstat_id: string | null } | null>(null);
+  const [dailyPinErrorKey, setDailyPinErrorKey] = useState<string | null>(null);
+
   // ----- pool load (per season) -----
   useEffect(() => {
     let cancelled = false;
@@ -104,21 +113,41 @@ export default function Portle() {
     };
   }, [season]);
 
-  const poolReady = poolSeason === season && pool.length > 0;
-  // The pick is only seedable when every row carries the stable `natstat_id`
-  // (issue #181). If the API is mid-deploy and hasn't started serving it, fail
-  // closed rather than compute a divergent/degenerate answer everyone would see
-  // differently — a shared daily must never render off an inconsistent seed.
-  const seedReady = poolReady && poolHasSeedKeys(pool);
-
   const dailyKey = useMemo(() => puzzleKey(mode, season, dateKey), [mode, season, dateKey]);
+
+  // ----- daily pin fetch (daily mode only; practice is a local random roll) -----
+  useEffect(() => {
+    if (practice) return;
+    let cancelled = false;
+    fetchPortleDaily(mode, season, dateKey)
+      .then((r) => {
+        if (!cancelled) setDailyPin({ key: dailyKey, natstat_id: r.natstat_id });
+      })
+      .catch(() => {
+        if (!cancelled) setDailyPinErrorKey(dailyKey);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [practice, mode, season, dateKey, dailyKey]);
+
+  const poolReady = poolSeason === season && pool.length > 0;
+  // The daily answer is resolved by `natstat_id`, so the pool must carry it. If
+  // the API is mid-deploy and hasn't started serving it (issue #181), fail closed
+  // rather than render off an inconsistent pool.
+  const seedReady = poolReady && poolHasSeedKeys(pool);
+  // Only trust a pin/error tagged with the CURRENT puzzle key (ignore stale ones).
+  const pinForToday = !practice && dailyPin?.key === dailyKey ? dailyPin : null;
+  const pinErrorForToday = !practice && dailyPinErrorKey === dailyKey;
+  const dailyReady = practice || pinForToday !== null;
 
   const answer = useMemo(() => {
     if (!seedReady) return null;
-    return practice
-      ? practiceAnswerByNonce(pool, mode, practiceSeed)
-      : dailyAnswer(pool, mode, season, dateKey);
-  }, [seedReady, practice, pool, mode, practiceSeed, season, dateKey]);
+    if (practice) return practiceAnswerByNonce(pool, mode, practiceSeed);
+    // Daily: resolve the server-pinned id against the loaded pool.
+    if (!pinForToday || pinForToday.natstat_id == null) return null;
+    return pool.find((p) => p.natstat_id === pinForToday.natstat_id) ?? null;
+  }, [seedReady, practice, pool, mode, practiceSeed, pinForToday]);
 
   // Remounts the game (fresh state) whenever the puzzle identity changes.
   // Practice includes `mode` + the random seed so switching pools or rolling a
@@ -217,6 +246,12 @@ export default function Portle() {
         <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-400">
           The player data is refreshing — today's puzzle will be here in a minute. Reload shortly.
         </div>
+      ) : pinErrorForToday ? (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-400">
+          Couldn't load today's puzzle. Please reload in a moment.
+        </div>
+      ) : !dailyReady ? (
+        <div className="text-sm text-gray-500">Loading today's puzzle…</div>
       ) : !answer ? (
         <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-400">
           Not enough players in this pool for {MODE_LABELS[mode]} · {season}. Try another mode

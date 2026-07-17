@@ -9,6 +9,7 @@ pub mod lineups;
 pub mod meta;
 pub mod og_image;
 pub mod players;
+pub mod portle;
 pub mod predict;
 pub mod projections;
 pub mod recruits;
@@ -26,6 +27,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
         .merge(teams::router())
         .merge(players::router())
+        .merge(portle::router())
         .merge(lineups::router())
         .merge(games::router())
         .merge(predict::router())

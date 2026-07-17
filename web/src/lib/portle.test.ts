@@ -3,7 +3,6 @@ import type { PlayerRow } from '../api/client';
 import {
   buildShare,
   compareGuess,
-  dailyAnswer,
   filterPool,
   hash32,
   isAnswerable,
@@ -147,61 +146,20 @@ describe('filterPool / isAnswerable', () => {
   });
 });
 
-describe('dailyAnswer', () => {
+// The DAILY answer is now chosen server-side (issue #181); the client only
+// resolves the pinned id. `pickByHash` remains the PRACTICE-mode picker, so its
+// rendezvous properties are exercised here via `practiceAnswerByNonce`.
+describe('practice rendezvous (pickByHash)', () => {
   const pool = Array.from({ length: 10 }, (_, i) =>
     player({ player_id: `p${i}`, conference: 'ACC', minutes_per_game: 30 }),
   );
 
   it('is stable regardless of pool order', () => {
-    const a = dailyAnswer(pool, 'p5', 2026, '2026-07-01');
-    const shuffled = [...pool].reverse();
-    const b = dailyAnswer(shuffled, 'p5', 2026, '2026-07-01');
-    expect(a?.player_id).toBe(b?.player_id);
+    const a = practiceAnswerByNonce(pool, 'p5', 7);
+    const b = practiceAnswerByNonce([...pool].reverse(), 'p5', 7);
+    expect(a?.natstat_id).toBe(b?.natstat_id);
   });
 
-  it('varies by date', () => {
-    const a = dailyAnswer(pool, 'p5', 2026, '2026-07-01');
-    const b = dailyAnswer(pool, 'p5', 2026, '2026-07-02');
-    // Not a hard guarantee, but with 10 candidates these two seeds differ.
-    expect(a?.player_id).not.toBe(b?.player_id);
-  });
-
-  it('returns null on an empty eligible pool', () => {
-    expect(dailyAnswer([], 'p5', 2026, '2026-07-01')).toBeNull();
-  });
-
-  // Regression for #181: a data rebuild/resync re-mints every player_id UUID but
-  // leaves natstat_id untouched. The daily pick must key on natstat_id so the
-  // date→player mapping survives — seeding on player_id reset the whole sequence.
-  it('is stable when player_id UUIDs churn but natstat_id is preserved', () => {
-    const before = dailyAnswer(pool, 'p5', 2026, '2026-07-01');
-    const rebuilt = pool.map((p) => ({ ...p, player_id: `uuid-${p.natstat_id}-v2` }));
-    const after = dailyAnswer(rebuilt, 'p5', 2026, '2026-07-01');
-    expect(after?.natstat_id).toBe(before?.natstat_id);
-    expect(after?.player_id).not.toBe(before?.player_id);
-  });
-
-  // Deploy-skew guard (issue #181 tail): a natstat_id-seeding frontend hitting an
-  // older API that hasn't started serving natstat_id sees every key undefined —
-  // all hashes collapse and pickByHash pins to eligible[0] (the pool's sort head,
-  // top CamPom) every day, which is how "always the best player" showed up. The
-  // fix is to detect that at the pool boundary and fail closed, NOT to fall back
-  // to the unstable player_id (which stays divergent from up-to-date clients).
-  it('poolHasSeedKeys is false when natstat_id is missing, true when present', () => {
-    expect(poolHasSeedKeys(pool)).toBe(true);
-    const skew = pool.map((p) => ({ ...p, natstat_id: undefined as unknown as string }));
-    expect(poolHasSeedKeys(skew)).toBe(false);
-    // A partial gap (one row missing the key) must also fail closed.
-    const partial = [{ ...pool[0], natstat_id: undefined as unknown as string }, ...pool.slice(1)];
-    expect(poolHasSeedKeys(partial)).toBe(false);
-    expect(poolHasSeedKeys([])).toBe(false);
-  });
-});
-
-describe('practiceAnswerByNonce', () => {
-  const pool = Array.from({ length: 8 }, (_, i) =>
-    player({ player_id: `p${i}`, conference: 'ACC', minutes_per_game: 30 }),
-  );
   it('is deterministic per nonce and changes across nonces', () => {
     expect(practiceAnswerByNonce(pool, 'p5', 1)?.player_id).toBe(
       practiceAnswerByNonce(pool, 'p5', 1)?.player_id,
@@ -209,6 +167,41 @@ describe('practiceAnswerByNonce', () => {
     expect(practiceAnswerByNonce(pool, 'p5', 1)?.player_id).not.toBe(
       practiceAnswerByNonce(pool, 'p5', 2)?.player_id,
     );
+  });
+
+  // Keys on natstat_id, not player_id (#181): a data rebuild re-mints every UUID
+  // but leaves natstat_id untouched, so the pick must not move.
+  it('keys on natstat_id, so a player_id UUID churn does not move the pick', () => {
+    const before = practiceAnswerByNonce(pool, 'p5', 3);
+    const rebuilt = pool.map((p) => ({ ...p, player_id: `uuid-${p.natstat_id}-v2` }));
+    const after = practiceAnswerByNonce(rebuilt, 'p5', 3);
+    expect(after?.natstat_id).toBe(before?.natstat_id);
+    expect(after?.player_id).not.toBe(before?.player_id);
+  });
+
+  it('returns null on an empty eligible pool', () => {
+    expect(practiceAnswerByNonce([], 'p5', 1)).toBeNull();
+  });
+});
+
+// Fail-closed guard for the DAILY resolve path (issue #181 tail): the client
+// resolves the server-pinned id by natstat_id, so the pool must carry it. A
+// frontend deployed ahead of the API that serves natstat_id would see it
+// undefined; `poolHasSeedKeys` catches that so the page shows a "refreshing"
+// state instead of rendering off an inconsistent pool.
+describe('poolHasSeedKeys', () => {
+  const pool = Array.from({ length: 10 }, (_, i) =>
+    player({ player_id: `p${i}`, conference: 'ACC', minutes_per_game: 30 }),
+  );
+
+  it('is false when natstat_id is missing, true when present', () => {
+    expect(poolHasSeedKeys(pool)).toBe(true);
+    const skew = pool.map((p) => ({ ...p, natstat_id: undefined as unknown as string }));
+    expect(poolHasSeedKeys(skew)).toBe(false);
+    // A partial gap (one row missing the key) must also fail closed.
+    const partial = [{ ...pool[0], natstat_id: undefined as unknown as string }, ...pool.slice(1)];
+    expect(poolHasSeedKeys(partial)).toBe(false);
+    expect(poolHasSeedKeys([])).toBe(false);
   });
 });
 
