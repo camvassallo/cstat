@@ -4,7 +4,7 @@ import type { ColDef } from 'ag-grid-community';
 import { fetchDraft, type DraftProspect } from '../api/client';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomHalfColor } from './campom';
-import { classColor } from './archetypeColors';
+import { classColor, provisionalMeta } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
 
@@ -141,16 +141,24 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
         const cls = p.data?.primary_archetype;
         if (!cls) return <span className="text-gray-600 text-xs">—</span>;
         const sec = p.data?.secondary_archetype;
+        const prov = provisionalMeta(p.data);
         return (
           <span
-            className="text-xs font-bold uppercase tracking-wide whitespace-nowrap"
+            className={`text-xs font-bold uppercase tracking-wide whitespace-nowrap ${
+              prov.provisional ? 'opacity-70' : ''
+            }`}
             style={{ color: classColor(cls) }}
-            title={sec ? `${cls} / ${sec}` : cls}
+            title={(sec ? `${cls} / ${sec}` : cls) + (prov.note ? ` · ${prov.note}` : '')}
           >
             {cls}
             {sec && (
               <span className="ml-1 opacity-70" style={{ color: classColor(sec) }}>
                 / {sec}
+              </span>
+            )}
+            {prov.shortYear && (
+              <span className="ml-1 text-gray-500 lowercase font-normal tracking-normal">
+                {prov.shortYear}
               </span>
             )}
           </span>

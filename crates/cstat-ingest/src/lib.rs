@@ -169,6 +169,38 @@ fn season_for_date(today: NaiveDate) -> i32 {
     }
 }
 
+/// True when the college-basketball calendar says games are actively being
+/// played — November through March, plus April 1–15 (through the Final Four).
+/// Mirrors `scripts/sync_to_prod.sh::in_season_now`. Respects the simulated
+/// clock via [`today_utc`], so the replay harness sees the right regime.
+///
+/// Used to gate the archetype nightly's **live newcomer inference** (tier 3):
+/// inferring an archetype from a player's thin, partial current-season sample
+/// only makes sense while that season is still accumulating games. Off-season
+/// and historical recomputes leave sub-gate newcomers unlabelled instead.
+pub fn in_season_now() -> bool {
+    in_season_on(today_utc())
+}
+
+/// [`in_season_now`]'s date rule, factored out for testing.
+fn in_season_on(today: NaiveDate) -> bool {
+    match today.month() {
+        11 | 12 | 1 | 2 | 3 => true,
+        4 => today.day() <= 15,
+        _ => false,
+    }
+}
+
+/// Whether an archetype recompute of `season` should run tier-3 live newcomer
+/// inference: true only when `season` is the current NatStat season AND the
+/// calendar says games are being played. The single gate every compute path
+/// uses (nightly / `update` / bootstrap), so a manual in-season recompute never
+/// clobbers the tier-3 rows the nightly wrote. Respects the simulated clock, so
+/// the replay harness exercises tier-3 when its simulated date is in-season.
+pub fn should_infer_newcomers(season: i32) -> bool {
+    in_season_now() && season == current_natstat_season()
+}
+
 /// Resolve a NatStat team code to its cstat `teams.id` for a specific season.
 /// Returns `None` if the code is missing or the team isn't in the DB for that
 /// season. Centralized so every ingest path uses the same `(natstat_id, season)`
@@ -287,6 +319,18 @@ mod tests {
         assert_eq!(season_for_date(mar), 2026);
         let jul = NaiveDate::from_ymd_opt(2026, 7, 13).unwrap();
         assert_eq!(season_for_date(jul), 2026);
+    }
+
+    #[test]
+    fn test_in_season_on() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        assert!(in_season_on(d(2025, 11, 1))); // opening week
+        assert!(in_season_on(d(2026, 1, 15))); // deep winter
+        assert!(in_season_on(d(2026, 3, 31))); // tournament
+        assert!(in_season_on(d(2026, 4, 15))); // Final Four edge (inclusive)
+        assert!(!in_season_on(d(2026, 4, 16))); // day after the cutoff
+        assert!(!in_season_on(d(2026, 7, 13))); // deep off-season
+        assert!(!in_season_on(d(2026, 10, 31))); // eve of the season
     }
 
     #[test]

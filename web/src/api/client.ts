@@ -535,6 +535,10 @@ export interface DraftProspect {
   // Null when unmatched or the player didn't cluster that season.
   primary_archetype: string | null;
   secondary_archetype: string | null;
+  // Cold-start (PR 3c): prior-season seed flag + the year it came from (present
+  // only if the matched player's season is in-progress and they're sub-gate).
+  provisional?: boolean | null;
+  source_season?: number | null;
 }
 
 export function fetchDraft(year: number) {

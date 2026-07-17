@@ -159,9 +159,13 @@ impl<'a> SeasonIngester<'a> {
 
         let compute = if opts.compute {
             Some(
-                compute_all(self.pool, self.season)
-                    .await
-                    .map_err(NatStatError::Database)?,
+                compute_all(
+                    self.pool,
+                    self.season,
+                    crate::should_infer_newcomers(self.season),
+                )
+                .await
+                .map_err(NatStatError::Database)?,
             )
         } else {
             None
@@ -231,9 +235,13 @@ impl<'a> SeasonIngester<'a> {
 
         let compute = if run_compute {
             Some(
-                compute_all(self.pool, self.season)
-                    .await
-                    .map_err(NatStatError::Database)?,
+                compute_all(
+                    self.pool,
+                    self.season,
+                    crate::should_infer_newcomers(self.season),
+                )
+                .await
+                .map_err(NatStatError::Database)?,
             )
         } else {
             None
@@ -780,7 +788,13 @@ impl<'a> SeasonIngester<'a> {
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
-            match compute_all(self.pool, self.season).await {
+            match compute_all(
+                self.pool,
+                self.season,
+                crate::should_infer_newcomers(self.season),
+            )
+            .await
+            {
                 Ok(c) => {
                     ledger
                         .record("compute", StepStatus::Ok, None, t0, None)

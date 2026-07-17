@@ -637,7 +637,12 @@ async fn main() -> Result<()> {
             print!("{report}");
             if also_compute {
                 info!(year, "running compute_all after team ingest");
-                let report = cstat_core::compute::compute_all(&db.pool, year).await?;
+                let report = cstat_core::compute::compute_all(
+                    &db.pool,
+                    year,
+                    cstat_ingest::should_infer_newcomers(year),
+                )
+                .await?;
                 println!("{report}");
             }
         }
@@ -729,7 +734,12 @@ async fn main() -> Result<()> {
         }
 
         Commands::Compute { year } => {
-            let report = cstat_core::compute::compute_all(&db.pool, year).await?;
+            let report = cstat_core::compute::compute_all(
+                &db.pool,
+                year,
+                cstat_ingest::should_infer_newcomers(year),
+            )
+            .await?;
             println!("{report}");
         }
 
@@ -758,7 +768,12 @@ async fn main() -> Result<()> {
             }
             if also_compute {
                 info!(year, "running compute_all after CSV bootstrap");
-                let compute = cstat_core::compute::compute_all(&db.pool, year).await?;
+                let compute = cstat_core::compute::compute_all(
+                    &db.pool,
+                    year,
+                    cstat_ingest::should_infer_newcomers(year),
+                )
+                .await?;
                 println!("{compute}");
             }
         }

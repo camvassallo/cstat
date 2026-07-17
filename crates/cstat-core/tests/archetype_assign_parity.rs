@@ -256,11 +256,15 @@ async fn compute_archetypes_write_is_idempotent() {
         .unwrap()
     };
 
-    let written1 = compute::compute_archetypes(&pool, season).await.unwrap();
+    let written1 = compute::compute_archetypes(&pool, season, false)
+        .await
+        .unwrap();
     let fp1 = fingerprint(pool.clone()).await;
     let (real, seeded) = counts(pool.clone()).await;
 
-    let written2 = compute::compute_archetypes(&pool, season).await.unwrap();
+    let written2 = compute::compute_archetypes(&pool, season, false)
+        .await
+        .unwrap();
     let fp2 = fingerprint(pool.clone()).await;
 
     eprintln!("season {season}: wrote {written1} rows ({real} real, {seeded} seeded)");
@@ -286,7 +290,9 @@ async fn prior_season_seed_is_well_formed() {
     let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     let season = *seasons.last().expect("a season with a fit");
-    compute::compute_archetypes(&pool, season).await.unwrap();
+    compute::compute_archetypes(&pool, season, false)
+        .await
+        .unwrap();
 
     // No player has both a real row and a seed row in the same season.
     let dupes: i64 = sqlx::query_scalar(
@@ -340,7 +346,9 @@ async fn aggregates_exclude_provisional_seeds() {
     let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     let season = *seasons.last().expect("a season with a fit");
-    compute::compute_archetypes(&pool, season).await.unwrap();
+    compute::compute_archetypes(&pool, season, false)
+        .await
+        .unwrap();
 
     // The test is only meaningful if seeds exist to (wrongly) leak.
     let seeded: i64 = sqlx::query_scalar(
@@ -392,4 +400,65 @@ async fn aggregates_exclude_provisional_seeds() {
         summary_total, real,
         "class-summary counts include provisional seeds ({summary_total} vs {real} real)"
     );
+}
+
+/// Tier-3 live newcomer inference (`infer_newcomers = true`): sub-gate players
+/// with no prior label get a `source = 'current_partial'` provisional row built
+/// from their partial current-season sample, and it never collides with a real
+/// or carry-over row. Runs against the newest fitted season (all local seasons
+/// are complete, so we force the flag rather than rely on the calendar gate).
+#[tokio::test]
+#[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes"]
+async fn tier3_infers_newcomers_when_enabled() {
+    let _serial = DB_SERIAL.lock().await;
+    let (pool, seasons) = pool_and_seasons().await;
+    let season = *seasons.last().expect("a season with a fit");
+
+    compute::compute_archetypes(&pool, season, true)
+        .await
+        .unwrap();
+
+    // Well-formed tier-3 rows: provisional, source='current_partial', no source
+    // year, and a genuinely sub-gate but playing sample (>=3 GP, >=10 MPG, <10 GP).
+    let bad: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM player_archetypes pa \
+         JOIN player_season_stats pss ON pss.player_id = pa.player_id AND pss.season = pa.season \
+         WHERE pa.season = $1 AND pa.source = 'current_partial' \
+           AND (pa.provisional = FALSE OR pa.source_season IS NOT NULL \
+                OR pss.games_played < 3 OR pss.games_played >= 10 OR pss.minutes_per_game < 10)",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(bad, 0, "a tier-3 row is malformed or not actually sub-gate");
+
+    // No player carries more than one archetype row.
+    let dupes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT player_id FROM player_archetypes WHERE season = $1 \
+         GROUP BY player_id HAVING count(*) > 1) x",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(dupes, 0, "tier-3 collided with a real or carry-over row");
+
+    let (infer, carry, real): (i64, i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE source = 'current_partial'), \
+                count(*) FILTER (WHERE source = 'prior_season'), \
+                count(*) FILTER (WHERE NOT provisional) \
+         FROM player_archetypes WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    eprintln!("season {season}: {real} real, {carry} carry-over, {infer} live-inferred");
+
+    // Restore the non-inferred state so this test doesn't leave tier-3 rows for
+    // the completed season behind (the calendar would never have enabled them).
+    compute::compute_archetypes(&pool, season, false)
+        .await
+        .unwrap();
 }

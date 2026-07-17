@@ -96,13 +96,21 @@ export function provisionalMeta(
 ): { provisional: boolean; sourceSeason: number | null; shortYear: string | null; note: string | null } {
   const provisional = row?.provisional === true;
   const sourceSeason = row?.source_season ?? null;
+  // Two provisional flavors, told apart by source_season:
+  //   carry-over  (source_season set)  → their most-recent-known real label.
+  //   live-infer  (source_season null) → assigned from this season's partial data.
+  const note = !provisional
+    ? null
+    : sourceSeason
+      ? `Most recent archetype (${sourceSeason}) — too few games this season to reclassify yet.`
+      : `Provisional — an early-season read from a partial sample; firms up at 10 games.`;
   return {
     provisional,
     sourceSeason,
+    // Only carry-over carries a source year to tag; a live-inference label has no
+    // prior year, so it shows the muted/dashed styling without a year suffix.
     shortYear: provisional && sourceSeason ? `'${String(sourceSeason).slice(2)}` : null,
-    note: provisional
-      ? `${sourceSeason ? `Last season's archetype (${sourceSeason})` : 'Provisional archetype'} — updates once they reach 10 games this season.`
-      : null,
+    note,
   };
 }
 

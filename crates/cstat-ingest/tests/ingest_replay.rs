@@ -195,14 +195,14 @@ async fn replay_clean_body(pool: &PgPool) -> anyhow::Result<ReplayReport> {
 
     // --- first replay: ingest + compute + invariants ---
     let ingest_counts = ingest_box_score_window(&client, pool, SEASON, FROM, TO).await?;
-    compute_all(pool, SEASON).await?;
+    compute_all(pool, SEASON, false).await?;
 
     let error_violations = error_violations(pool).await?;
 
     // --- idempotency: re-run the same window; derived-table counts must hold ---
     let before = table_counts(pool).await?;
     ingest_box_score_window(&client, pool, SEASON, FROM, TO).await?;
-    compute_all(pool, SEASON).await?;
+    compute_all(pool, SEASON, false).await?;
     let after = table_counts(pool).await?;
     let idempotency_drift: Vec<String> = before
         .iter()
@@ -346,7 +346,7 @@ async fn cancelled_body(pool: &PgPool) -> anyhow::Result<(i64, i64, Vec<String>)
     )
     .await?;
     ingest_box_score_window(&client, pool, SEASON, "2027-11-03", "2027-11-03").await?;
-    compute_all(pool, SEASON).await?;
+    compute_all(pool, SEASON, false).await?;
 
     let game_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM games WHERE natstat_id = 'CG1'")
         .fetch_one(pool)
@@ -408,7 +408,7 @@ async fn conference_body(pool: &PgPool) -> anyhow::Result<(Option<bool>, Option<
     )
     .await?;
     ingest_box_score_window(&client, pool, SEASON, "2027-11-03", "2027-11-03").await?;
-    compute_all(pool, SEASON).await?;
+    compute_all(pool, SEASON, false).await?;
     let same_conf: Option<bool> =
         sqlx::query_scalar("SELECT is_conference FROM games WHERE natstat_id = 'CFG1'")
             .fetch_one(pool)
@@ -421,7 +421,7 @@ async fn conference_body(pool: &PgPool) -> anyhow::Result<(Option<bool>, Option<
     .bind(SEASON)
     .execute(pool)
     .await?;
-    compute_all(pool, SEASON).await?;
+    compute_all(pool, SEASON, false).await?;
     let after_reclass: Option<bool> =
         sqlx::query_scalar("SELECT is_conference FROM games WHERE natstat_id = 'CFG1'")
             .fetch_one(pool)
