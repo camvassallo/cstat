@@ -130,6 +130,12 @@ EXCLUDED_QUOTED="${EXCLUDED_QUOTED%,}"
 # sequences an excluded table OWNS is exact, needs no naming convention to hold,
 # and follows how TABLE_LIST is already discovered rather than hardcoded.
 #
+# `deptype = 'a'` is deliberate, and narrower than it looks — do not "fix" it to
+# IN ('a','i') without re-testing. Only a SERIAL sequence (auto dependency, 'a')
+# survives its table's -T and leaks; an IDENTITY sequence (internal dependency,
+# 'i') is dropped along with its table automatically, so naming it would be dead
+# code implying a leak that cannot happen. Verified against pg_dump 17.
+#
 # Note this can only ever withhold a sequence belonging to an already-excluded
 # table: pg_dump re-attaches owned sequences of dumped tables, so a sequence
 # whose owning table is INCLUDED is dumped regardless of any -T naming it.
