@@ -131,9 +131,16 @@ cron service reuses it — no separate build.
    > until ~07:30 UTC the next morning, so an earlier run fetches them mid-flight
    > — partial box scores, and a coverage claim that stops the self-heal from
    > ever re-fetching them. The run checks this itself (`GAMES_SETTLE_HOUR_UTC`)
-   > and **degrades** with a `fired before the settle time` line rather than
-   > failing silently, but the fix is to schedule it later. Later is free; the
-   > 09:30 slot only needs to beat the first visitors of the day.
+   > and **degrades** rather than failing silently, with a Slack line reading
+   > `ran at 02:xx UTC, before the ~08:00 UTC settle time — …`. The fix is to
+   > schedule it later; later is free, since the 09:30 slot only needs to beat
+   > the first visitors of the day.
+   >
+   > The same check fires for a **manual** run that claims yesterday before
+   > 08:00 UTC — including the `--from … --to <yesterday>` backfill shape this
+   > runbook hands you below. That's not a false alarm: yesterday's games may
+   > still be in flight, so the run's box scores would be partial. Re-run the
+   > backfill after 08:00 UTC.
 3. **Shared variables** (reference the same Postgres plugin + key as the API):
    - `DATABASE_URL` — **use the PRIVATE Postgres URL** (`${{Postgres.DATABASE_PRIVATE_URL}}`
      / the `…railway.internal` host), **not** the public `…proxy.rlwy.net` one,
