@@ -11,7 +11,7 @@ import { conferenceLabel } from '../lib/conferences';
 import { gridTheme } from '../theme';
 import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
 import { agNullsBottom } from '../components/tableSort';
-import { classColor, CLASS_ORDER } from '../components/archetypeColors';
+import { classColor, CLASS_ORDER, provisionalMeta } from '../components/archetypeColors';
 import ArchetypeFilter from '../components/ArchetypeFilter';
 import { useArchetypeFilter } from '../components/useArchetypeFilter';
 import { pctileTextColor } from '../components/pctile';
@@ -188,11 +188,16 @@ function buildColumns(
         if (!cls) return <span className="text-gray-600 text-xs">—</span>;
         const c = classColor(cls);
         const sec = p.data?.secondary_class;
+        const prov = provisionalMeta(p.data);
         return (
           <span
-            className="text-xs font-bold uppercase tracking-wide whitespace-nowrap"
+            className={`text-xs font-bold uppercase tracking-wide whitespace-nowrap ${
+              prov.provisional ? 'opacity-70' : ''
+            }`}
             style={{ color: c }}
-            title={sec ? `${cls} / ${sec}` : cls}
+            title={
+              (sec ? `${cls} / ${sec}` : cls) + (prov.note ? ` · ${prov.note}` : '')
+            }
           >
             {cls}
             {sec && (
@@ -201,6 +206,11 @@ function buildColumns(
                 style={{ color: classColor(sec) }}
               >
                 / {sec}
+              </span>
+            )}
+            {prov.shortYear && (
+              <span className="ml-1 text-gray-500 lowercase font-normal tracking-normal">
+                {prov.shortYear}
               </span>
             )}
           </span>

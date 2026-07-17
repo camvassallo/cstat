@@ -21,7 +21,15 @@ use cstat_core::compute;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
+use std::sync::LazyLock;
+use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
+
+/// The tests below mutate and read the same `player_archetypes` rows, so a
+/// parallel `cargo test` run would race (a writer's DELETE+INSERT interleaving
+/// with another's read). Each test holds this lock for its whole body, keeping
+/// them order- and thread-independent without requiring `--test-threads=1`.
+static DB_SERIAL: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
 
 /// The stored (Python-written) archetype row we compare each assignment against.
 struct StoredRow {
@@ -89,6 +97,7 @@ async fn stored_rows(pool: &PgPool, season: i32) -> HashMap<Uuid, StoredRow> {
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data"]
 async fn rust_assign_matches_python_rows() {
+    let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     assert!(
         !seasons.is_empty(),
@@ -215,6 +224,7 @@ async fn rust_assign_matches_python_rows() {
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes (idempotently)"]
 async fn compute_archetypes_write_is_idempotent() {
+    let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     // Newest season with a fit — the one the nightly actually recomputes.
     let season = *seasons.last().expect("a season with a fit");
@@ -273,6 +283,7 @@ async fn compute_archetypes_write_is_idempotent() {
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes"]
 async fn prior_season_seed_is_well_formed() {
+    let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     let season = *seasons.last().expect("a season with a fit");
     compute::compute_archetypes(&pool, season).await.unwrap();

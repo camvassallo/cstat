@@ -22,7 +22,7 @@ import {
 } from '../api/client';
 import { caeColor, fmtCae, tenureSpan } from '../components/cae';
 import { conferenceLabel } from '../lib/conferences';
-import { classColor, classTagline, textOnClass } from '../components/archetypeColors';
+import { classColor, classTagline, textOnClass, provisionalMeta } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
@@ -984,29 +984,45 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 </td>
                 <td className="py-2 px-2">
                   {p.primary_class ? (
-                    <span className="inline-flex items-center gap-1">
-                      <ClassTooltip cls={p.primary_class}>
-                        <span
-                          className="text-xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
-                          style={{
-                            color: classColor(p.primary_class),
-                            background: classColor(p.primary_class) + '22',
-                          }}
-                        >
-                          {p.primary_class}
+                    (() => {
+                      const prov = provisionalMeta(p);
+                      return (
+                        <span className="inline-flex items-center gap-1">
+                          <ClassTooltip cls={p.primary_class} extra={prov.note ?? undefined}>
+                            <span
+                              className={`text-xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                                prov.provisional ? 'border border-dashed' : ''
+                              }`}
+                              style={{
+                                color: classColor(p.primary_class),
+                                background:
+                                  classColor(p.primary_class) + (prov.provisional ? '14' : '22'),
+                                borderColor: prov.provisional
+                                  ? classColor(p.primary_class) + '99'
+                                  : undefined,
+                              }}
+                            >
+                              {p.primary_class}
+                            </span>
+                          </ClassTooltip>
+                          {p.secondary_class && (
+                            <ClassTooltip cls={p.secondary_class}>
+                              <span
+                                className="text-xs uppercase tracking-wide opacity-75"
+                                style={{ color: classColor(p.secondary_class) }}
+                              >
+                                / {p.secondary_class}
+                              </span>
+                            </ClassTooltip>
+                          )}
+                          {prov.shortYear && (
+                            <span className="text-[10px] text-gray-500 lowercase">
+                              {prov.shortYear}
+                            </span>
+                          )}
                         </span>
-                      </ClassTooltip>
-                      {p.secondary_class && (
-                        <ClassTooltip cls={p.secondary_class}>
-                          <span
-                            className="text-xs uppercase tracking-wide opacity-75"
-                            style={{ color: classColor(p.secondary_class) }}
-                          >
-                            / {p.secondary_class}
-                          </span>
-                        </ClassTooltip>
-                      )}
-                    </span>
+                      );
+                    })()
                   ) : (
                     <span className="text-gray-600 text-xs">—</span>
                   )}

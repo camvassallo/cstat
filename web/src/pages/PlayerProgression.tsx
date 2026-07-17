@@ -22,7 +22,7 @@ import {
   type PlayerTrajectory,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
-import { classColor } from '../components/archetypeColors';
+import { classColor, provisionalMeta } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
 import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
 import { pctileTextColor } from '../components/pctile';
@@ -161,26 +161,38 @@ export default function PlayerProgression() {
         <div>
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-3xl font-bold">{latest.name}</h1>
-            {latest.archetype?.primary_class && (
-              <ClassTooltip
-                cls={latest.archetype.primary_class}
-                extra={
-                  latest.archetype.secondary_class
-                    ? `Secondary: ${latest.archetype.secondary_class}`
-                    : undefined
-                }
-              >
-                <span
-                  className="text-xs font-bold uppercase tracking-wide px-2 py-0.5 rounded border"
-                  style={{
-                    color: classColor(latest.archetype.primary_class),
-                    borderColor: classColor(latest.archetype.primary_class),
-                  }}
-                >
-                  {latest.archetype.primary_class}
-                </span>
-              </ClassTooltip>
-            )}
+            {latest.archetype?.primary_class &&
+              (() => {
+                const a = latest.archetype!;
+                const prov = provisionalMeta(a);
+                const extra =
+                  [
+                    a.secondary_class ? `Secondary: ${a.secondary_class}` : null,
+                    prov.note,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || undefined;
+                return (
+                  <span className="inline-flex items-center gap-1">
+                    <ClassTooltip cls={a.primary_class} extra={extra}>
+                      <span
+                        className={`text-xs font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${
+                          prov.provisional ? 'border-dashed opacity-80' : ''
+                        }`}
+                        style={{
+                          color: classColor(a.primary_class),
+                          borderColor: classColor(a.primary_class),
+                        }}
+                      >
+                        {a.primary_class}
+                      </span>
+                    </ClassTooltip>
+                    {prov.shortYear && (
+                      <span className="text-[10px] text-gray-500 lowercase">{prov.shortYear}</span>
+                    )}
+                  </span>
+                );
+              })()}
             {data.trajectory && (() => {
               const t = data.trajectory;
               const tier = campomTier(t.projected_mean);
@@ -486,11 +498,22 @@ function SeasonCard({ entry, isMobile }: { entry: ProgressionSeason; isMobile: b
         <div className="flex items-center gap-2 text-xs">
           {entry.archetype?.primary_class && (
             <span
-              className="font-bold uppercase tracking-wide"
+              className={`font-bold uppercase tracking-wide ${
+                provisionalMeta(entry.archetype).provisional ? 'opacity-70' : ''
+              }`}
               style={{ color: classColor(entry.archetype.primary_class) }}
-              title={entry.archetype.secondary_class ?? undefined}
+              title={
+                [entry.archetype.secondary_class, provisionalMeta(entry.archetype).note]
+                  .filter(Boolean)
+                  .join(' · ') || undefined
+              }
             >
               {entry.archetype.primary_class}
+              {provisionalMeta(entry.archetype).shortYear && (
+                <span className="ml-1 text-gray-500 lowercase font-normal">
+                  {provisionalMeta(entry.archetype).shortYear}
+                </span>
+              )}
             </span>
           )}
           {entry.torvik_stats?.campom != null && tier && (

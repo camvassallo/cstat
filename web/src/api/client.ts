@@ -139,6 +139,11 @@ export interface RosterEntry {
   // "Naming" and the ROADMAP rename item.
   primary_class: string | null;
   secondary_class: string | null;
+  // Cold-start (PR 3a/3b): true when the archetype is a prior-season seed held
+  // until the player clears this season's >=10 GP gate; source_season is the
+  // year it was carried over from.
+  provisional?: boolean | null;
+  source_season?: number | null;
   /// Torvik shot-zone volumes — drive the team aggregate shot-diet
   /// panel on TeamDetail. `null` when the player has no Torvik row.
   rim_attempted: number | null;
@@ -305,6 +310,9 @@ export interface PlayerRow {
   blk_pct_pct: number | null;
   primary_class: string | null;
   secondary_class: string | null;
+  // Cold-start (PR 3a/3b): prior-season seed flag + the year it came from.
+  provisional?: boolean | null;
+  source_season?: number | null;
   // PBP on/off (team net per 100 poss with vs without the player). See onoff.ts.
   net_on_off: number | null;
   on_net_rtg: number | null;
@@ -914,6 +922,9 @@ export interface SimilarPlayer {
   team_name: string | null;
   primary_class: string;
   secondary_class: string | null;
+  // Cold-start (PR 3a/3b): prior-season seed flag + the year it came from.
+  provisional?: boolean | null;
+  source_season?: number | null;
   distance: number;
   similarity: number;
 }

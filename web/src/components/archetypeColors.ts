@@ -87,6 +87,25 @@ export function classTitle(cls: string | null | undefined): string {
   return tag ? `${cls} — ${tag}` : cls;
 }
 
+/// Cold-start presentation (PR 3a/3b): given any archetype-bearing row, derive
+/// the shared "provisional" affordances so every surface marks a prior-season
+/// seed the same way — a short `'25` year tag and an explanatory tooltip note.
+/// A real current-season label returns `provisional: false` and null extras.
+export function provisionalMeta(
+  row: { provisional?: boolean | null; source_season?: number | null } | null | undefined,
+): { provisional: boolean; sourceSeason: number | null; shortYear: string | null; note: string | null } {
+  const provisional = row?.provisional === true;
+  const sourceSeason = row?.source_season ?? null;
+  return {
+    provisional,
+    sourceSeason,
+    shortYear: provisional && sourceSeason ? `'${String(sourceSeason).slice(2)}` : null,
+    note: provisional
+      ? `${sourceSeason ? `Last season's archetype (${sourceSeason})` : 'Provisional archetype'} — updates once they reach 10 games this season.`
+      : null,
+  };
+}
+
 /// Readable text color (near-black or near-white) to lay over an archetype
 /// pill's fill, chosen by the fill's luminance. Shared by every surface that
 /// renders solid archetype-colored rectangles (TeamDetail waffle, Lineups page)
