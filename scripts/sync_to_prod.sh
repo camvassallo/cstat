@@ -111,9 +111,24 @@ else
 fi
 
 # Build pg_dump -T flags from the EXCLUDED list.
+#
+# Two patterns per table, not one. `-T <table>` matches the TABLE only, but a
+# serial/identity column's OWNED sequence is a separate relation with its own
+# name (`<table>_<column>_seq`) — it sails past a bare `-T <table>` and its
+# state still reaches the dump as a `SEQUENCE SET` entry. On restore that
+# setval() rewinds prod's sequence to THIS machine's value, and every insert on
+# prod then fails with a duplicate key until the sequence climbs back past
+# max(id) — silently, because the nightly ledger writer is fail-soft. That is
+# exactly what hit `ingest_runs` on 2026-07-16 (issue #186): the rows were
+# correctly held back, the sequence was not.
+#
+# `_*_seq` rather than `_*`: the narrow pattern can only swallow a relation
+# whose name ends in `_seq`, whereas `_*` would also silently exclude a real
+# table that happens to share an excluded table's prefix. The post-dump guard
+# below asserts nothing escaped regardless.
 EXCLUDE_FLAGS=()
 for t in "${EXCLUDED[@]}"; do
-  EXCLUDE_FLAGS+=("-T" "$t")
+  EXCLUDE_FLAGS+=("-T" "$t" "-T" "${t}_*_seq")
 done
 
 # Discover the live table list from local; new tables get picked up
@@ -209,11 +224,33 @@ DUMP_SIZE=$(du -h "$TMPFILE" | cut -f1 | tr -d '[:space:]')
 echo "  → ${DUMP_SIZE} (compressed binary)"
 echo
 
+# Guard (issue #186): assert no EXCLUDED table's sequence state rode along in
+# the dump. An escaped `SEQUENCE SET` would setval() prod's sequence down to
+# this machine's value and silently break inserts on the live pipeline, so it
+# is worth failing the sync over rather than discovering it in the prod logs a
+# day later. Reads only the dump's table-of-contents, so this stays cheap even
+# on a multi-GB dump. Runs before the dry-run exit — a dry run should surface
+# the same problem a real sync would.
+TOC=$("${PG_RESTORE[@]}" --list < "$TMPFILE")
+SEQ_LEAKS=""
+for t in "${EXCLUDED[@]}"; do
+  leaked=$(grep -oE "SEQUENCE SET public ${t}_[A-Za-z0-9_]+" <<<"$TOC" | awk '{print $NF}' || true)
+  [[ -n "$leaked" ]] && SEQ_LEAKS="${SEQ_LEAKS:+$SEQ_LEAKS }$leaked"
+done
+if [[ -n "$SEQ_LEAKS" ]]; then
+  echo "  ✗ Dump carries sequence state for EXCLUDED tables: ${SEQ_LEAKS}"
+  echo "    Restoring this would rewind prod's sequence to this machine's value,"
+  echo "    breaking prod inserts until it catches up (issue #186)."
+  echo "    Fix: widen the -T patterns in EXCLUDE_FLAGS to cover the sequence."
+  exit 1
+fi
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "→ Dry run — would TRUNCATE the tables above CASCADE on prod and restore via COPY."
+  echo "  ✓ No excluded-table sequence state in dump"
   echo "  Dump table-of-contents (data sections):"
   # Read dump from stdin so this works across the docker exec boundary.
-  "${PG_RESTORE[@]}" --list < "$TMPFILE" | grep "TABLE DATA" | sed 's/^/    /' || true
+  "${PG_RESTORE[@]}" --list < "$TMPFILE" | grep -E "TABLE DATA|SEQUENCE SET" | sed 's/^/    /' || true
   exit 0
 fi
 
