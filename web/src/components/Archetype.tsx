@@ -94,15 +94,24 @@ export function ArchetypeBadge({
   const ranked = Object.entries(archetype.affinity_scores)
     .sort((a, b) => b[1] - a[1]);
 
+  // Cold-start: a prior-season seed held until the player clears this season's
+  // >=10 GP gate. Rendered muted + dashed with the source year, so it never
+  // reads as a settled current-season label.
+  const provisional = archetype.provisional === true;
+  const sourceSeason = archetype.source_season ?? null;
+  const shortYear = sourceSeason ? `'${String(sourceSeason).slice(2)}` : null;
+
   // Compact pill + hover popover with full affinity ranking.
   const sizing =
     size === 'sm'
       ? 'text-[10px] px-2 py-0.5'
       : 'text-xs px-2.5 py-1';
 
-  const titleStr = archetype.secondary_class
-    ? `${classTitle(archetype.primary_class)} / ${classTitle(archetype.secondary_class)}`
-    : classTitle(archetype.primary_class);
+  const titleStr =
+    (archetype.secondary_class
+      ? `${classTitle(archetype.primary_class)} / ${classTitle(archetype.secondary_class)}`
+      : classTitle(archetype.primary_class)) +
+    (provisional && sourceSeason ? ` · provisional, carried over from ${sourceSeason}` : '');
 
   const [open, setOpen] = useState(false);
   const ref = useDismissOnOutside(open, () => setOpen(false));
@@ -123,19 +132,22 @@ export function ArchetypeBadge({
           e.stopPropagation();
           setOpen((v) => !v);
         }}
-        className={`inline-flex items-center gap-1.5 ${sizing} rounded-full font-bold uppercase tracking-wide ring-1 cursor-pointer`}
+        className={`inline-flex items-center gap-1.5 ${sizing} rounded-full font-bold uppercase tracking-wide cursor-pointer ${
+          provisional ? 'border border-dashed' : 'ring-1'
+        }`}
         style={{
-          background: primaryColor + '22',
-          color: primaryColor,
-          // ring color via inline style (Tailwind ring-color uses DEFAULT)
-          boxShadow: `inset 0 0 0 1px ${primaryColor}66`,
+          background: primaryColor + (provisional ? '14' : '22'),
+          color: provisional ? primaryColor + 'cc' : primaryColor,
+          // ring/border color via inline style (Tailwind uses DEFAULT).
+          boxShadow: provisional ? undefined : `inset 0 0 0 1px ${primaryColor}66`,
+          borderColor: provisional ? primaryColor + '99' : undefined,
         }}
         title={titleStr}
         aria-expanded={open}
       >
         <span
           className="inline-block w-1.5 h-1.5 rounded-full"
-          style={{ background: primaryColor }}
+          style={{ background: primaryColor, opacity: provisional ? 0.6 : 1 }}
         />
         {archetype.primary_class}
         {archetype.secondary_class && (
@@ -144,6 +156,11 @@ export function ArchetypeBadge({
             style={{ color: classColor(archetype.secondary_class) }}
           >
             / {archetype.secondary_class}
+          </span>
+        )}
+        {provisional && shortYear && (
+          <span className="font-normal opacity-70 lowercase tracking-normal text-[0.85em] ml-0.5">
+            {shortYear}
           </span>
         )}
       </button>
@@ -156,6 +173,15 @@ export function ArchetypeBadge({
           <div className="text-xs font-bold mb-1" style={{ color: primaryColor }}>
             {archetype.primary_class}
             <span className="font-normal text-gray-400"> — {primaryTagline}</span>
+          </div>
+        )}
+        {provisional && (
+          <div className="flex items-start gap-1.5 mb-2 rounded bg-amber-500/10 px-2 py-1.5">
+            <span className="mt-px text-amber-400 text-xs leading-none">◐</span>
+            <span className="text-[10px] text-amber-200/90 normal-case font-normal tracking-normal leading-snug">
+              {sourceSeason ? `Provisional — last season's archetype (${sourceSeason}).` : 'Provisional archetype.'}{' '}
+              Updates to this season once they reach 10 games.
+            </span>
           </div>
         )}
         <div className="text-[10px] font-bold text-gray-500 mb-2 uppercase tracking-wider">

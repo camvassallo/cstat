@@ -3354,7 +3354,10 @@ struct ClusterCentroid {
     vector: Vec<f64>,
 }
 
-/// One assigned player, mirroring a `player_archetypes` row (pre-write).
+/// One assigned player, mirroring a `player_archetypes` row (pre-write). Covers
+/// both a real current-season assignment (`provisional == false`) and a
+/// prior-season seed carried over during the cold-start window
+/// (`provisional == true`, `source_season` = the season copied from).
 pub struct ArchetypeAssignment {
     pub player_id: Uuid,
     pub cluster_id: i32,
@@ -3367,6 +3370,13 @@ pub struct ArchetypeAssignment {
     /// Standardized (z-scored) feature vector, aligned to the model's
     /// `feature_names`. Stored as f32 to match Python's `astype(np.float32)`.
     pub feature_vector: Vec<f32>,
+    /// TRUE for a prior-season seed, FALSE for a real current-season assignment.
+    pub provisional: bool,
+    /// `"current"` or `"prior_season"`.
+    pub source: &'static str,
+    /// For a seed, the season the label was copied from; `None` for a real
+    /// current-season assignment.
+    pub source_season: Option<i32>,
 }
 
 /// Load the frozen model row for `season`. `None` when no fit exists yet (a
@@ -3534,6 +3544,9 @@ fn assign_from_standardized(
         secondary_score,
         affinity_scores,
         feature_vector: z.iter().map(|&v| v as f32).collect(),
+        provisional: false,
+        source: "current",
+        source_season: None,
     }
 }
 
@@ -3692,22 +3705,172 @@ pub async fn assign_archetypes(
     Ok(out)
 }
 
-/// Assign player archetypes for `season` against the frozen `archetype_models`
-/// fit and replace the season's `player_archetypes` rows. No-ops (returns 0)
-/// when no fit exists yet. Season-scoped clean recompute, mirroring the Python
-/// writer's DELETE-then-INSERT.
+/// A prior-season archetype payload keyed by cross-season identity, used to
+/// seed the cold-start window.
+#[derive(Clone)]
+struct PriorArchetype {
+    from_season: i32,
+    cluster_id: i32,
+    primary_class: String,
+    secondary_class: String,
+    primary_score: f64,
+    secondary_score: f64,
+    affinity_scores: serde_json::Value,
+    feature_vector: Vec<f32>,
+}
+
+/// Cold-start seed: for every current-season player who has played but has NOT
+/// earned a real assignment this season (`qualified` excludes them), carry over
+/// their most-recent prior-season archetype as a PROVISIONAL label. Returns the
+/// seed rows (not written here). Empty when nothing seeds.
+///
+/// This is what gives day-0/day-1 rosters real, stable labels: a returner's
+/// prior-season archetype is a completed-season fact — an early off-night can't
+/// flip it — so we hold it until they clear this season's gate. Cross-season
+/// identity uses `natstat_id` (non-transfers) OR `torvik_pid` (transfers, which
+/// get a fresh `natstat_id` per school). True freshmen (no prior D-I season)
+/// have no seed and stay unlabelled — the honest gap.
+///
+/// Independent of the current season's model: it copies prior REAL labels
+/// (`provisional = false`), so it works even before a new season's annual
+/// retrain exists — exactly the Nov window where no `archetype_models` row does.
+async fn seed_prior_season_archetypes(
+    pool: &PgPool,
+    season: i32,
+    qualified: &HashSet<Uuid>,
+) -> Result<Vec<ArchetypeAssignment>, sqlx::Error> {
+    // All REAL prior-season labels with their cross-season identity keys. Only
+    // provisional=false rows seed forward, so a seed never chains off a seed.
+    let prior_rows = sqlx::query(
+        "SELECT pa.season AS from_season, pa.cluster_id, pa.primary_class, \
+                pa.secondary_class, pa.primary_score, pa.secondary_score, \
+                pa.affinity_scores::text AS affinity, pa.feature_vector, \
+                p.natstat_id AS natstat_id, \
+                (SELECT t.torvik_pid FROM torvik_player_stats t \
+                 WHERE t.player_id = pa.player_id LIMIT 1) AS torvik_pid \
+         FROM player_archetypes pa \
+         JOIN players p ON p.id = pa.player_id \
+         WHERE pa.season < $1 AND pa.provisional = FALSE \
+         ORDER BY pa.season ASC",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    // Map each identity key to its most-recent prior label. Rows are ordered by
+    // season ASC, so a later insert (newer season) wins.
+    let mut by_natstat: HashMap<String, PriorArchetype> = HashMap::new();
+    let mut by_torvik: HashMap<i32, PriorArchetype> = HashMap::new();
+    for row in &prior_rows {
+        let secondary_class: Option<String> = row.get("secondary_class");
+        let Some(secondary_class) = secondary_class else {
+            continue; // secondary is NOT NULL in practice; skip the odd null
+        };
+        let affinity_str: String = row.get("affinity");
+        let prior = PriorArchetype {
+            from_season: row.get("from_season"),
+            cluster_id: row.get("cluster_id"),
+            primary_class: row.get("primary_class"),
+            secondary_class,
+            primary_score: row.get("primary_score"),
+            secondary_score: row.get::<Option<f64>, _>("secondary_score").unwrap_or(0.0),
+            affinity_scores: serde_json::from_str(&affinity_str).unwrap_or(serde_json::Value::Null),
+            feature_vector: row.get("feature_vector"),
+        };
+        let natstat_id: String = row.get("natstat_id");
+        by_natstat.insert(natstat_id, prior.clone());
+        if let Some(tp) = row.get::<Option<i32>, _>("torvik_pid") {
+            by_torvik.insert(tp, prior);
+        }
+    }
+
+    if by_natstat.is_empty() && by_torvik.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Current-season players who have played this season, with their identity
+    // keys. Excludes the qualified set in Rust below.
+    let current_rows = sqlx::query(
+        "SELECT DISTINCT pss.player_id AS player_id, p.natstat_id AS natstat_id, \
+                (SELECT t.torvik_pid FROM torvik_player_stats t \
+                 WHERE t.player_id = pss.player_id LIMIT 1) AS torvik_pid \
+         FROM player_season_stats pss \
+         JOIN players p ON p.id = pss.player_id \
+         WHERE pss.season = $1 AND pss.games_played >= 1",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    let mut seeds = Vec::new();
+    for row in &current_rows {
+        let player_id: Uuid = row.get("player_id");
+        if qualified.contains(&player_id) {
+            continue; // already has a real current-season label
+        }
+        let natstat_id: String = row.get("natstat_id");
+        let torvik_pid: Option<i32> = row.get("torvik_pid");
+
+        // Prefer the most-recent prior label across the two identity paths.
+        let nat = by_natstat.get(&natstat_id);
+        let tor = torvik_pid.and_then(|tp| by_torvik.get(&tp));
+        let prior = match (nat, tor) {
+            (Some(n), Some(t)) => {
+                if t.from_season >= n.from_season {
+                    t
+                } else {
+                    n
+                }
+            }
+            (Some(n), None) => n,
+            (None, Some(t)) => t,
+            (None, None) => continue, // true freshman — no seed
+        };
+
+        seeds.push(ArchetypeAssignment {
+            player_id,
+            cluster_id: prior.cluster_id,
+            primary_class: prior.primary_class.clone(),
+            secondary_class: prior.secondary_class.clone(),
+            primary_score: prior.primary_score,
+            secondary_score: prior.secondary_score,
+            affinity_scores: prior.affinity_scores.clone(),
+            feature_vector: prior.feature_vector.clone(),
+            provisional: true,
+            source: "prior_season",
+            source_season: Some(prior.from_season),
+        });
+    }
+
+    Ok(seeds)
+}
+
+/// Assign player archetypes for `season` and replace the season's
+/// `player_archetypes` rows from two sources in one clean recompute: real
+/// current-season assignments against the frozen model (when one exists), and
+/// prior-season seeds for sub-gate players who've played but not qualified (the
+/// cold-start window, immune to the current model's absence). No-ops (returns 0)
+/// only when there is nothing of either kind. Mirrors the Python writer's
+/// DELETE-then-INSERT, additively; a real assignment always wins over a seed for
+/// the same player, since seeds exclude the qualified set.
 pub async fn compute_archetypes(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     let assignments = assign_archetypes(pool, season).await?;
-    if assignments.is_empty() {
-        // Either no model yet (new season pre-retrain) or no qualified players
-        // (early season, nobody at >=10 GP). Leave existing rows untouched so a
-        // recompute before the annual fit doesn't wipe last push's labels.
+    let qualified: HashSet<Uuid> = assignments.iter().map(|a| a.player_id).collect();
+    let seeds = seed_prior_season_archetypes(pool, season, &qualified).await?;
+
+    if assignments.is_empty() && seeds.is_empty() {
+        // No model AND no seedable returners (or nobody has played yet). Leave
+        // existing rows untouched so a recompute before the annual fit doesn't
+        // wipe the last push's labels.
         info!(
             season,
-            "archetype assign: no model or no qualified players — leaving player_archetypes unchanged"
+            "archetype assign: nothing to assign or seed — leaving player_archetypes unchanged"
         );
         return Ok(0);
     }
+
+    let total = assignments.len() + seeds.len();
+    let all = assignments.into_iter().chain(seeds);
 
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM player_archetypes WHERE season = $1")
@@ -3715,11 +3878,13 @@ pub async fn compute_archetypes(pool: &PgPool, season: i32) -> Result<u64, sqlx:
         .execute(&mut *tx)
         .await?;
 
-    for chunk in assignments.chunks(1000) {
+    let rows: Vec<ArchetypeAssignment> = all.collect();
+    for chunk in rows.chunks(1000) {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO player_archetypes \
              (player_id, season, cluster_id, primary_class, secondary_class, \
-              primary_score, secondary_score, affinity_scores, feature_vector) ",
+              primary_score, secondary_score, affinity_scores, feature_vector, \
+              provisional, source, source_season) ",
         );
         qb.push_values(chunk, |mut b, a| {
             b.push_bind(a.player_id)
@@ -3731,13 +3896,16 @@ pub async fn compute_archetypes(pool: &PgPool, season: i32) -> Result<u64, sqlx:
                 .push_bind(a.secondary_score)
                 .push_bind(a.affinity_scores.to_string())
                 .push_unseparated("::jsonb")
-                .push_bind(&a.feature_vector);
+                .push_bind(&a.feature_vector)
+                .push_bind(a.provisional)
+                .push_bind(a.source)
+                .push_bind(a.source_season);
         });
         qb.build().execute(&mut *tx).await?;
     }
     tx.commit().await?;
 
-    Ok(assignments.len() as u64)
+    Ok(total as u64)
 }
 
 pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {

@@ -900,6 +900,11 @@ export interface PlayerArchetype {
   secondary_score: number | null;
   affinity_scores: Record<string, number>;
   cluster_id: number;
+  // Cold-start (PR 3a): true when this label is a prior-season seed held until
+  // the player clears this season's >=10 GP gate; source_season is the year it
+  // was carried over from. Optional so older/other payloads stay compatible.
+  provisional?: boolean;
+  source_season?: number | null;
 }
 
 export interface SimilarPlayer {
