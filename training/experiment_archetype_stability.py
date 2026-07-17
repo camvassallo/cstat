@@ -31,9 +31,14 @@ pipeline at N=all-games: it isolates reconstruction error (mostly the ogbpm
 approximation) from genuine early-season instability. An N-game agreement of 80%
 against a 93% control means 86% of the achievable signal, not 80%.
 
-Usage:
+Usage (summary artifacts are tracked under eval_history/ by convention -- do not
+write them to the repo root, which is not gitignored for this name):
   cd training && ./.venv/bin/python experiment_archetype_stability.py \
-      --seasons 2023,2024,2025,2026 [--out ../pr_archetype_stability.json]
+      --seasons 2022,2023,2024,2025,2026 \
+      --out eval_history/archetype_stability_YYYYMMDD_summary.json
+
+Re-run after any retrain: the curve is a property of the fitted model, not a
+constant. ~30s for five seasons.
 """
 
 import argparse

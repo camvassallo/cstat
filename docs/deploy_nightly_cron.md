@@ -315,8 +315,27 @@ tripwire, not an expected condition.
 ## Local heavy jobs → targeted sync
 
 The serving nightly writes prod directly, so the laptop must **not** run a full
-`sync_to_prod.sh` (its `TRUNCATE` would clobber what the cron just wrote). Push
-only the derived tables the heavy local jobs produce:
+`sync_to_prod.sh` (its `TRUNCATE` would clobber what the cron just wrote). **This
+is now enforced, not just advised** (2026-07-17): a full sync aborts with exit 3
+when prod looks live — either a served-critical step succeeded within 36h, or the
+calendar says in-season. `--force-full` overrides it; `--dry-run` reports the
+verdict without blocking; `--tables` is never gated. If a full sync refuses and
+you did not expect it, that is the guard doing its job — read the reason it
+prints before reaching for the override, because a full replace in-season rolls
+the live site back to whatever this laptop last computed.
+
+To inspect prod without writing anything — no transaction, no TRUNCATE, safe at
+any time, and it works even with the local DB down:
+
+```bash
+./scripts/sync_to_prod.sh --prod-status
+```
+
+It prints per-step ledger freshness, recent failed/skipped steps, exact row
+counts, and what the full-sync guard would decide. Reach for this first when
+answering "is the cron alive?" or "did something clobber prod?".
+
+Push only the derived tables the heavy local jobs produce:
 
 ```bash
 # after a local RAPM refit / lineup rebuild / archetype retrain:

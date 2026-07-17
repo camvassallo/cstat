@@ -57,7 +57,11 @@ A sync leaves no trace in `ingest_runs` and posts no Slack notice. If a full syn
 
 Design goal: make the safe in-season path (targeted sync only, serialized with the cron) the **default that requires no thought**, and make every dangerous path require an explicit, informed override.
 
-### P0 — Refuse full sync when prod is live, without explicit override *(closes R1)*
+### P0 — Refuse full sync when prod is live, without explicit override *(closes R1)* — **SHIPPED 2026-07-17**
+**Implemented as specified below**, plus a read-only `--prod-status` inspector (per-step ledger freshness, recent failures, exact row counts, guard verdict; writes nothing and works with the local DB down). Both signals landed; `--force-full` overrides; `--dry-run` reports without blocking; `--tables` is not gated. The guard runs *before* the dump, so it costs nothing to hit. Verified across 10 scenarios including the one that matters: **in-season + dead cron still blocks** — that is signal 1 going quiet for a bad reason, and exactly when an operator is most tempted to "fix" prod with a full sync. Note the threshold reuses `STALE_AFTER_HOURS = 36` from `health.rs` rather than inventing a second staleness rule; keep the two in sync.
+
+Original specification, retained as the record of intent:
+
 Add a guard to `sync_to_prod.sh` that fires when `REQUESTED_TABLES` is empty (full mode). Two complementary signals, both cheap:
 1. **Data-driven (primary, robust):** query prod `ingest_runs` for the most recent successful serving step — `SELECT max(ended_at) FROM ingest_runs WHERE status='ok' AND step IN ('games','compute')`. If that is within ~36h, prod is actively cron-fed; abort a full sync. This is preferable to a pure calendar check because it self-adjusts to tournament runs, early/late tip, and the `simulate` harness.
 2. **Calendar (secondary, zero-dependency):** in-season window from the same rule as `season_for_date` (`lib.rs:116`) — treat month ∈ {11,12,1,2,3} and early April as in-season.
