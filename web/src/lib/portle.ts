@@ -138,6 +138,16 @@ export function practiceAnswerByNonce(
   return pickByHash(filterPool(pool, mode), `practice:${nonce}`);
 }
 
+/** True when every row carries the stable seed key (`natstat_id`). The daily is
+ *  a SHARED puzzle, so it must only be seeded from data every client sees the
+ *  same way. If the API is mid-deploy and hasn't started serving `natstat_id`
+ *  yet, the rows arrive with it `undefined`; callers must treat the pool as
+ *  not-ready and fail closed rather than compute a divergent/degenerate answer
+ *  (see `pickByHash`). Empty pool → false (nothing to seed). */
+export function poolHasSeedKeys(pool: PlayerRow[]): boolean {
+  return pool.length > 0 && pool.every((p) => p.natstat_id != null);
+}
+
 /** Rendezvous ("highest random weight") selection: hash `salt:natstat_id` for
  *  every candidate and keep the minimum, tie-broken by `natstat_id`. Unlike
  *  `hash(salt) % length`, adding/removing OTHER candidates doesn't change the
@@ -148,7 +158,17 @@ export function practiceAnswerByNonce(
  *  surrogate that gets re-minted whenever a season is rebuilt from scratch and
  *  re-COPY'd to prod by `sync_to_prod.sh`; seeding on it made the whole daily
  *  sequence reset on a data update (issue #181). `natstat_id` comes from NatStat
- *  and never regenerates, so the date→player mapping survives re-ingests. */
+ *  and never regenerates, so the date→player mapping survives re-ingests.
+ *
+ *  Precondition: callers must have confirmed `poolHasSeedKeys(pool)`. If
+ *  `natstat_id` is `undefined` for the whole pool (a frontend deployed ahead of
+ *  the API that serves the field), every hash collapses to `hash32("salt:undefined")`
+ *  and the tie-break (`undefined < undefined`) never advances — pinning the
+ *  answer to `eligible[0]`, i.e. the pool's default sort head (top CamPom), the
+ *  same day for everyone regardless of date. That is issue #181's "always the
+ *  best player." We do NOT paper over it with a `player_id` fallback: that keeps
+ *  the game playable but still divergent from up-to-date clients (and re-seeds on
+ *  the unstable key #181 removed). Fail closed at the pool boundary instead. */
 function pickByHash(eligible: PlayerRow[], salt: string): PlayerRow | null {
   if (eligible.length === 0) return null;
   let best = eligible[0];

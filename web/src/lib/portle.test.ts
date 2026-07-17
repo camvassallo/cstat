@@ -8,6 +8,7 @@ import {
   hash32,
   isAnswerable,
   localDateKey,
+  poolHasSeedKeys,
   practiceAnswerByNonce,
   recordResult,
   EMPTY_STATS,
@@ -178,6 +179,22 @@ describe('dailyAnswer', () => {
     const after = dailyAnswer(rebuilt, 'p5', 2026, '2026-07-01');
     expect(after?.natstat_id).toBe(before?.natstat_id);
     expect(after?.player_id).not.toBe(before?.player_id);
+  });
+
+  // Deploy-skew guard (issue #181 tail): a natstat_id-seeding frontend hitting an
+  // older API that hasn't started serving natstat_id sees every key undefined —
+  // all hashes collapse and pickByHash pins to eligible[0] (the pool's sort head,
+  // top CamPom) every day, which is how "always the best player" showed up. The
+  // fix is to detect that at the pool boundary and fail closed, NOT to fall back
+  // to the unstable player_id (which stays divergent from up-to-date clients).
+  it('poolHasSeedKeys is false when natstat_id is missing, true when present', () => {
+    expect(poolHasSeedKeys(pool)).toBe(true);
+    const skew = pool.map((p) => ({ ...p, natstat_id: undefined as unknown as string }));
+    expect(poolHasSeedKeys(skew)).toBe(false);
+    // A partial gap (one row missing the key) must also fail closed.
+    const partial = [{ ...pool[0], natstat_id: undefined as unknown as string }, ...pool.slice(1)];
+    expect(poolHasSeedKeys(partial)).toBe(false);
+    expect(poolHasSeedKeys([])).toBe(false);
   });
 });
 

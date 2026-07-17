@@ -26,6 +26,7 @@ import {
   dailyAnswer,
   isCorrect,
   localDateKey,
+  poolHasSeedKeys,
   practiceAnswerByNonce,
   puzzleKey,
   recordResult,
@@ -104,15 +105,20 @@ export default function Portle() {
   }, [season]);
 
   const poolReady = poolSeason === season && pool.length > 0;
+  // The pick is only seedable when every row carries the stable `natstat_id`
+  // (issue #181). If the API is mid-deploy and hasn't started serving it, fail
+  // closed rather than compute a divergent/degenerate answer everyone would see
+  // differently — a shared daily must never render off an inconsistent seed.
+  const seedReady = poolReady && poolHasSeedKeys(pool);
 
   const dailyKey = useMemo(() => puzzleKey(mode, season, dateKey), [mode, season, dateKey]);
 
   const answer = useMemo(() => {
-    if (!poolReady) return null;
+    if (!seedReady) return null;
     return practice
       ? practiceAnswerByNonce(pool, mode, practiceSeed)
       : dailyAnswer(pool, mode, season, dateKey);
-  }, [poolReady, practice, pool, mode, practiceSeed, season, dateKey]);
+  }, [seedReady, practice, pool, mode, practiceSeed, season, dateKey]);
 
   // Remounts the game (fresh state) whenever the puzzle identity changes.
   // Practice includes `mode` + the random seed so switching pools or rolling a
@@ -207,6 +213,10 @@ export default function Portle() {
 
       {!poolReady ? (
         <div className="text-sm text-gray-500">Loading players…</div>
+      ) : !seedReady ? (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-400">
+          The player data is refreshing — today's puzzle will be here in a minute. Reload shortly.
+        </div>
       ) : !answer ? (
         <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-400">
           Not enough players in this pool for {MODE_LABELS[mode]} · {season}. Try another mode
