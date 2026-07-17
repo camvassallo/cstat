@@ -246,6 +246,8 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
                 &window_start.to_string(),
                 &window_end.to_string(),
                 !opts.no_compute,
+                // No self-heal: the harness drives the clock and windows itself.
+                false,
             )
             .await
         {
@@ -289,6 +291,7 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
                 &last_start.to_string(),
                 &last_end.to_string(),
                 !opts.no_compute,
+                false,
             )
             .await
             .map_err(|e| anyhow!("idempotency re-run hard-failed: {e}"))?;

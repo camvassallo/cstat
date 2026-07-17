@@ -1,10 +1,12 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::notify;
-use crate::run_ledger::{RunLedger, StepStatus};
+use crate::run_ledger::{
+    RunLedger, StepStatus, detect_count_regressions, first_uncovered_ingest_date, heal_window,
+};
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Timelike, Utc};
 use cstat_core::compute::{ComputeReport, compute_all};
 use cstat_core::invariants::{self, Severity};
 use sqlx::PgPool;
@@ -270,8 +272,199 @@ impl<'a> SeasonIngester<'a> {
         start_date: &str,
         end_date: &str,
         run_compute: bool,
+        self_heal: bool,
     ) -> Result<NightlyReport, NatStatError> {
-        let ledger = RunLedger::start(self.pool, self.season);
+        // Cap on how far back the self-heal will widen a defaulted window, so a
+        // long off-season silence can't trigger a months-wide NatStat pull. A
+        // genuine multi-night in-season outage is comfortably inside this.
+        const MAX_HEAL_DAYS: i64 = 14;
+        // How far back the gap scan looks. Deliberately wider than
+        // MAX_HEAL_DAYS: the band between the two is what lets a run *report* a
+        // gap it cannot itself recover (see `HealPlan::unrecovered_days`) — if
+        // the scan stopped at the cap, an over-cap outage would silently look
+        // fully healed. Past this, an un-backfilled hole ages out instead of
+        // degrading every run forever.
+        const HEAL_LOOKBACK_DAYS: i64 = 30;
+        // The relation between the two is load-bearing, not incidental: at
+        // lookback <= cap the scan could never surface a gap the cap can't
+        // reach, `unrecovered_days` would always be 0, and the PARTIAL alert
+        // would quietly stop existing — a gate that reports green over a real
+        // hole, which is the exact failure this milestone is built to prevent.
+        // Fail the build rather than let a future tweak inverting them ship.
+        const _: () = assert!(HEAL_LOOKBACK_DAYS > MAX_HEAL_DAYS);
+
+        let mut ledger = RunLedger::start(self.pool, self.season);
+
+        // --- backfill-gap self-heal (M5b) ---
+        // If the cron missed one or more nights, a plain yesterday..today window
+        // would leave those game dates permanently un-ingested. When enabled
+        // (the CLI passes this only for a DEFAULT window, never an operator's
+        // explicit --from), widen the start back to the earliest date we have
+        // not fully ingested so the gap heals on the next run with no manual
+        // intervention. The re-covered dates are a harmless idempotent overlap.
+        // Off for `simulate` (it drives its own clock) and for an explicit
+        // operator window. A parse failure or an absent/covered scan no-ops.
+        let mut heal_note: Option<String> = None;
+        // Set when the MAX_HEAL_DAYS cap left game dates un-ingested — pushed to
+        // `failures` (declared below) so a partial heal degrades the run.
+        let mut heal_shortfall: Option<String> = None;
+        // Set when the run fired before games settle — likewise pushed to
+        // `failures` below (see the settle-hour check after the heal block).
+        let mut early_run_note: Option<String> = None;
+        let (start_date, end_date): (String, String) = {
+            let widened = if self_heal {
+                match (
+                    NaiveDate::parse_from_str(start_date, "%Y-%m-%d"),
+                    NaiveDate::parse_from_str(end_date, "%Y-%m-%d"),
+                ) {
+                    (Ok(df), Ok(dt)) => {
+                        let gap = first_uncovered_ingest_date(
+                            self.pool,
+                            ledger.run_id(),
+                            df,
+                            dt,
+                            HEAL_LOOKBACK_DAYS,
+                        )
+                        .await;
+                        heal_window(df, dt, gap, MAX_HEAL_DAYS).map(|h| (h, gap))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            match widened {
+                Some((plan, gap)) => {
+                    let healed_str = plan.from.format("%Y-%m-%d").to_string();
+                    // `gap` is the first date we have NOT fully ingested — not
+                    // the date a run last executed. Say so: an operator reading
+                    // this while debugging must not confuse the two.
+                    let gap_str = gap
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    warn!(
+                        season = self.season,
+                        original_from = start_date,
+                        healed_from = %healed_str,
+                        gap_start = %gap_str,
+                        unrecovered_days = plan.unrecovered_days,
+                        "self-heal: widening nightly window to recover skipped night(s)"
+                    );
+                    heal_note = Some(format!(
+                        "self-heal widened window start {start_date} → {healed_str} \
+                         (first un-ingested date {gap_str})"
+                    ));
+                    // The cap bit: dates between the gap start and the healed
+                    // start are NOT re-ingested by this run, and once they fall
+                    // outside HEAL_LOOKBACK_DAYS nothing will pick them up. A
+                    // silently-permanent hole in the served box scores is worse
+                    // than a noisy alert — degrade the run and hand the operator
+                    // the exact backfill command.
+                    if plan.unrecovered_days > 0 {
+                        warn!(
+                            season = self.season,
+                            unrecovered_days = plan.unrecovered_days,
+                            "self-heal capped — earlier skipped dates need a manual backfill"
+                        );
+                        heal_shortfall = Some(format!(
+                            "self-heal only PARTIAL: capped at {MAX_HEAL_DAYS}d, so \
+                             {days} day(s) before {healed_str} were not re-ingested \
+                             (gap opens {gap_str}) — backfill manually with \
+                             `cstat-ingest nightly --year {season} --from {gap_str} --to {healed_str}`",
+                            days = plan.unrecovered_days,
+                            season = self.season,
+                        ));
+                    }
+                    (healed_str, end_date.to_string())
+                }
+                None => (start_date.to_string(), end_date.to_string()),
+            }
+        };
+
+        // Stamp the settled window (post-heal) onto every step row this run
+        // writes — this is what lets the next run's `first_uncovered_ingest_date`
+        // scan real coverage instead of guessing from wall-clock finish times.
+        // Must happen before the first `ledger.record` below. Recording it for
+        // operator windows too is the point: a manual backfill contributes the
+        // dates it actually covered, so a range that misses the gap no longer
+        // hides it.
+        //
+        // Claim only dates whose games had actually FINISHED when we fetched
+        // them. The default window runs yesterday..today, but the cron fires
+        // 09:30 UTC and date D's games don't tip until ~D 23:00 UTC — so a run
+        // on D ingests exactly none of D's games. Stamping `window_end = D`
+        // would claim D covered, and the next scan would skip it forever: every
+        // outage would silently drop exactly one date (the last good run's own
+        // day), with no alert, while the pre-tip `games` rows sat there scoreless
+        // and statline-less. Clamping to yesterday costs nothing on the happy
+        // path — the run on D+1 claims D, which is precisely when D's games were
+        // ingested.
+        //
+        // A window with nothing complete in it (e.g. an operator's `--from today
+        // --to today`) claims no coverage at all rather than an inverted range.
+        let stamped: Option<(NaiveDate, NaiveDate)> = match (
+            NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
+            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
+        ) {
+            (Ok(ws), Ok(we)) => {
+                let ce = we.min(crate::today_utc() - chrono::Duration::days(1));
+                (ws <= ce).then_some((ws, ce))
+            }
+            _ => None,
+        };
+        if let Some((ws, ce)) = stamped {
+            ledger.set_window(ws, ce);
+        }
+
+        // The clamp above is only sound because the cron fires *after* last
+        // night's games finish (09:30 UTC vs a ~08:00 settle). Nothing in the
+        // code enforces that — the schedule lives in `railway.cron.json`, one
+        // character away from `"0 2 * * *"`. At 02:00 UTC the run would fetch
+        // last night's games mid-flight, record partial box scores, and still
+        // claim their date covered, so no later run would ever re-fetch them:
+        // the exact silent loss the clamp exists to prevent, reintroduced by a
+        // config edit. Deriving the clamp from the instant instead does NOT
+        // rescue this — an early run then claims nothing at all, leaving the
+        // scan with no complete runs and killing the self-heal just as quietly.
+        // An early cron is a broken pipeline either way, so say so out loud.
+        //
+        // Gate on what we actually CLAIMED, not on the requested range. Only the
+        // newest claimable date — yesterday — is ever contentious; everything
+        // older settled long ago. Keying off the requested `end_date` instead
+        // would miss `--from X --to yesterday` (the shape the runbook's own
+        // backfill instructions hand you) run before 08:00, which claims
+        // yesterday while its games are still in flight — the very hole this
+        // guard exists to close. It would also false-fire on `--from today --to
+        // today`, which claims nothing at all. Skipped under a simulated clock,
+        // which injects a date but no time-of-day for this to read.
+        if crate::simulated_today().is_none()
+            && let Some((_, ce)) = stamped
+        {
+            let now = Utc::now();
+            if ce == now.date_naive() - chrono::Duration::days(1)
+                && now.hour() < crate::GAMES_SETTLE_HOUR_UTC
+            {
+                warn!(
+                    hour_utc = now.hour(),
+                    settle_hour_utc = crate::GAMES_SETTLE_HOUR_UTC,
+                    "nightly fired before games settle — box scores may be mid-flight"
+                );
+                // Deliberately doesn't assume the cron ran this: the same check
+                // fires for a hand-run live window at 03:00, where "fix the cron
+                // schedule" would be nonsense advice. Name both remedies and let
+                // the reader pick.
+                early_run_note = Some(format!(
+                    "ran at {hour:02}:xx UTC, before the ~{settle:02}:00 UTC settle time — \
+                     last night's games may still have been in progress, so this run's box \
+                     scores can be partial and its coverage claim too optimistic. If this \
+                     was the cron, move its schedule later (`railway.cron.json`; production \
+                     is 09:30 UTC); if it was manual, re-run it after {settle:02}:00 UTC.",
+                    hour = now.hour(),
+                    settle = crate::GAMES_SETTLE_HOUR_UTC,
+                ));
+            }
+        }
+
         let mut report = NightlyReport {
             ingest: IngestReport::default(),
             torvik: None,
@@ -285,6 +478,17 @@ impl<'a> SeasonIngester<'a> {
         // of the run fires a single summary Slack alert. Hard-fail steps alert
         // immediately (with this context) before aborting.
         let mut failures: Vec<String> = Vec::new();
+
+        // A self-heal that hit the MAX_HEAL_DAYS cap recovered only part of the
+        // gap — surface it as a degraded run (see the heal block above).
+        if let Some(shortfall) = heal_shortfall {
+            failures.push(shortfall);
+        }
+
+        // The run fired before last night's games had settled (see above).
+        if let Some(note) = early_run_note {
+            failures.push(note);
+        }
 
         // A leftover CSTAT_SIMULATED_DATE pins the default window to one past
         // date forever while every monitor stays green (fresh ledger rows,
@@ -313,8 +517,8 @@ impl<'a> SeasonIngester<'a> {
 
         info!(
             season = self.season,
-            start_date,
-            end_date,
+            start_date = start_date.as_str(),
+            end_date = end_date.as_str(),
             run_id = %ledger.run_id(),
             rate_budget = budget,
             rate_tokens_available = tokens_before,
@@ -357,8 +561,8 @@ impl<'a> SeasonIngester<'a> {
             self.client,
             self.pool,
             self.season,
-            start_date,
-            end_date,
+            &start_date,
+            &end_date,
         )
         .await
         {
@@ -392,8 +596,8 @@ impl<'a> SeasonIngester<'a> {
             self.client,
             self.pool,
             self.season,
-            start_date,
-            end_date,
+            &start_date,
+            &end_date,
         )
         .await
         {
@@ -425,8 +629,8 @@ impl<'a> SeasonIngester<'a> {
             self.client,
             self.pool,
             self.season,
-            start_date,
-            end_date,
+            &start_date,
+            &end_date,
         )
         .await
         {
@@ -666,6 +870,57 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // --- 10. row-count sanity vs the prior run (M5a) ---
+        // Snapshot the season-scoped row count of every served table, persist it
+        // under this run's id, and compare against the most recent prior run's
+        // snapshot. In-season these tables only ever grow or hold flat, so a
+        // material shrink (see `detect_count_regressions`) means a feed handed us
+        // a truncated payload or compute wiped rows it shouldn't have — degraded,
+        // not fatal (the served-critical chain already completed). Gated on a
+        // compute having run, so the counts reflect freshly-written derived
+        // tables. The first-ever snapshotting run has no prior and simply records
+        // the baseline.
+        if report.compute.is_some() {
+            let t0 = Utc::now();
+            let current = ledger.snapshot_counts().await;
+            let prior = ledger.prior_run_table_counts().await;
+            let regressions = detect_count_regressions(&prior, &current);
+            if regressions.is_empty() {
+                // Clean → these counts become the next run's baseline.
+                ledger.persist_counts(&current).await;
+                ledger
+                    .record(
+                        "row_counts",
+                        StepStatus::Ok,
+                        Some(current.len() as i64),
+                        t0,
+                        None,
+                    )
+                    .await;
+            } else {
+                // Deliberately do NOT persist a regressed snapshot: it would
+                // become the baseline, the next run would compare corrupt to
+                // corrupt, see no drop, and post the green SUCCESS summary over
+                // a still-broken table. Keeping the last-known-good baseline
+                // makes the gate re-fire every night until the counts recover.
+                let summary = regressions.join("; ");
+                warn!(
+                    season = self.season,
+                    "row-count regression vs prior run — {summary}"
+                );
+                ledger
+                    .record(
+                        "row_counts",
+                        StepStatus::Failed,
+                        Some(regressions.len() as i64),
+                        t0,
+                        Some(&summary),
+                    )
+                    .await;
+                failures.push(format!("row-count regression vs prior run: {summary}"));
+            }
+        }
+
         // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
         // The client silently downgrades to the v3 host on a persistent v4
         // timeout/5xx (it only logs a warning). A downgrade means v4 was failing
@@ -748,11 +1003,11 @@ impl<'a> SeasonIngester<'a> {
         let empty_box = report.ingest.games == 0
             && report.ingest.player_performances == 0
             && report.ingest.team_performances == 0;
-        if empty_box && is_core_season_date(end_date) {
+        if empty_box && is_core_season_date(&end_date) {
             warn!(
                 season = self.season,
-                start_date,
-                end_date,
+                start_date = start_date.as_str(),
+                end_date = end_date.as_str(),
                 "in-season nightly ingested zero box scores — feed may be empty/broken"
             );
             failures.push(format!(
@@ -766,6 +1021,12 @@ impl<'a> SeasonIngester<'a> {
         // here either completed clean (success heartbeat) or completed with a
         // best-effort feed down (degraded warning). The success ping doubles as
         // a "the cron fired and finished" heartbeat.
+        // A self-heal widened the window this run — surface it in whichever
+        // summary posts (a healed run is still a SUCCESS: it recovered the gap).
+        let heal_line = match &heal_note {
+            Some(n) => format!("\n_:arrows_counterclockwise: {n}_"),
+            None => String::new(),
+        };
         if failures.is_empty() {
             let torvik_line = match &report.torvik {
                 Some(t) => format!(
@@ -786,7 +1047,7 @@ impl<'a> SeasonIngester<'a> {
                      *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
                      *Feeds:*  {elo} ELO · {fc} forecasts\n\
                      {torvik_line}\n\
-                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}\n\
+                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}{heal_line}\n\
                      _run {run_id}_",
                     season = self.season,
                     games = report.ingest.games,
@@ -798,6 +1059,7 @@ impl<'a> SeasonIngester<'a> {
                     compute_str = compute_str,
                     remaining = tokens_after,
                     budget = budget,
+                    heal_line = heal_line,
                     run_id = ledger.run_id(),
                 ),
             )
@@ -813,11 +1075,12 @@ impl<'a> SeasonIngester<'a> {
                 &format!(
                     ":warning: *Nightly ingest DEGRADED* — season {season}\n\
                      Completed with {n} issue(s):\n\
-                     {issues}\n\
+                     {issues}{heal_line}\n\
                      _run {run_id}_",
                     season = self.season,
                     n = failures.len(),
                     issues = issues,
+                    heal_line = heal_line,
                     run_id = ledger.run_id(),
                 ),
             )

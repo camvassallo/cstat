@@ -781,10 +781,14 @@ async fn main() -> Result<()> {
             no_compute,
         } => {
             let (default_from, default_to) = default_nightly_window();
+            // Self-heal only a DEFAULTED window (the production cron path). An
+            // operator who passes an explicit --from wants exactly that range,
+            // so a manual backfill is never silently widened.
+            let self_heal = from.is_none();
             let from = from.unwrap_or(default_from);
             let to = to.unwrap_or(default_to);
             let ingester = SeasonIngester::new(&client, &db.pool, year);
-            let report = ingester.nightly(&from, &to, !no_compute).await?;
+            let report = ingester.nightly(&from, &to, !no_compute, self_heal).await?;
             print!("{report}");
         }
 

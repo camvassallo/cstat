@@ -74,6 +74,53 @@ pub fn env_simulated_date() -> Option<NaiveDate> {
     }
 }
 
+/// The override precedence, as a pure function of the two sources: the
+/// in-process [`set_simulated_today`] atomic (as days-from-CE, `0` = unset)
+/// wins, then the `CSTAT_SIMULATED_DATE` env value. An `atomic_days` that isn't
+/// a representable date falls through to `env` rather than pinning a bogus day.
+///
+/// **Both** [`today_utc`] and [`simulated_today`] resolve through this, so they
+/// cannot disagree about whether the clock is faked — the guard in
+/// `SeasonIngester::nightly` skips on `simulated_today()` while inspecting a
+/// window built from `today_utc()`, and a divergence would have it compare a
+/// real wall-clock hour against a simulated date. Sharing one resolver makes
+/// that structurally impossible instead of merely tested: the env arm can't be
+/// exercised through the public fns without `set_var`, which is `unsafe` in
+/// edition 2024 and races the parallel test runner.
+fn simulated_override(atomic_days: i32, env: Option<NaiveDate>) -> Option<NaiveDate> {
+    if atomic_days != 0
+        && let Some(d) = NaiveDate::from_num_days_from_ce_opt(atomic_days)
+    {
+        return Some(d);
+    }
+    env
+}
+
+/// The simulated date, if either override is active — the in-process
+/// [`set_simulated_today`] first, then `CSTAT_SIMULATED_DATE`.
+///
+/// [`today_utc`] answers "what date is it"; this answers "is the clock fake at
+/// all", which callers need when they reason about the *time of day* (something
+/// the overrides don't model — they inject a date, not an instant). Silent by
+/// design: [`today_utc`] owns the warn-once for a lingering override, and this
+/// must be callable without doubling that log.
+pub fn simulated_today() -> Option<NaiveDate> {
+    simulated_override(
+        SIMULATED_TODAY.load(Ordering::Relaxed),
+        env_simulated_date(),
+    )
+}
+
+/// Hour (UTC) by which a game date's slate has reliably finished. A US
+/// college-basketball date D's games tip ~D 23:00 UTC and the latest end around
+/// D+1 07:30 UTC, so a run after ~08:00 UTC on D+1 sees D final.
+///
+/// The production cron fires 09:30 UTC (`railway.cron.json`), clearing this by
+/// ~2h. `SeasonIngester::nightly` checks it rather than assuming it: the
+/// coverage clamp's correctness depends on the schedule, and nothing else ties
+/// the two together.
+pub const GAMES_SETTLE_HOUR_UTC: u32 = 8;
+
 /// Today's date (UTC) — the single wall-clock read for the pipeline.
 ///
 /// Honors two overrides so the whole pipeline can run "as if today is
@@ -82,15 +129,17 @@ pub fn env_simulated_date() -> Option<NaiveDate> {
 /// env var (via [`env_simulated_date`]).
 pub fn today_utc() -> NaiveDate {
     let days = SIMULATED_TODAY.load(Ordering::Relaxed);
-    if days != 0
-        && let Some(d) = NaiveDate::from_num_days_from_ce_opt(days)
-    {
-        return d;
-    }
-    if let Some(d) = env_simulated_date() {
-        // Warn once per process: a *lingering* override on a real service
-        // (API or cron) is the dangerous case, and a silent one would never
-        // be caught.
+    let env = env_simulated_date();
+    let Some(d) = simulated_override(days, env) else {
+        return Utc::now().naive_utc().date();
+    };
+    // Warn once per process, and only when the *env var* is what pinned us: a
+    // lingering override on a real service (API or cron) is the dangerous case,
+    // and a silent one would never be caught. The in-process override is the
+    // replay harness deliberately driving its own clock, so it stays quiet.
+    // `simulated_override` prefers the atomic, so "the env won" is exactly "the
+    // atomic arm yielded nothing".
+    if simulated_override(days, None).is_none() {
         static WARNED: std::sync::Once = std::sync::Once::new();
         WARNED.call_once(|| {
             warn!(
@@ -99,9 +148,8 @@ pub fn today_utc() -> NaiveDate {
                  uses the simulated clock"
             );
         });
-        return d;
     }
-    Utc::now().naive_utc().date()
+    d
 }
 
 /// Season the NCAA basketball calendar is currently in. November rolls
@@ -247,8 +295,39 @@ mod tests {
         set_simulated_today(Some(sim));
         assert_eq!(today_utc(), sim);
         assert_eq!(current_natstat_season(), 2026);
+        // Both public fns route through `simulated_override`, so this only has
+        // to confirm the atomic reaches them; the precedence itself is pinned by
+        // `simulated_override_precedence` below.
+        assert_eq!(simulated_today(), Some(sim));
         set_simulated_today(None);
         // Real clock again — just sanity-check it's nowhere near the override.
         assert_ne!(today_utc(), sim);
+    }
+
+    #[test]
+    fn simulated_override_precedence() {
+        // Tested on the pure resolver, not through `simulated_today()`, because
+        // reaching the env arm through the public fn needs `set_var` — `unsafe`
+        // in edition 2024 and racy under the parallel test runner. Going direct
+        // covers the arm that a real cron actually hits (a lingering
+        // CSTAT_SIMULATED_DATE) and that an atomic-only test can never reach.
+        let atomic = NaiveDate::from_ymd_opt(2025, 12, 15).unwrap();
+        let env = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+
+        // In-process override wins over the env var.
+        assert_eq!(
+            simulated_override(atomic.num_days_from_ce(), Some(env)),
+            Some(atomic)
+        );
+        // Env var is the fallback when the atomic is unset — drop this arm and
+        // a lingering override on a real service stops being visible to
+        // `simulated_today`, silently un-skipping the settle guard.
+        assert_eq!(simulated_override(0, Some(env)), Some(env));
+        // Neither set => not simulated => callers use the real clock.
+        assert_eq!(simulated_override(0, None), None);
+        // A stored value that isn't a representable date must fall through to
+        // env rather than pin a bogus day.
+        assert_eq!(simulated_override(i32::MAX, Some(env)), Some(env));
+        assert_eq!(simulated_override(i32::MAX, None), None);
     }
 }
