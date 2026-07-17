@@ -6,6 +6,7 @@ use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
 use chrono::{Datelike, NaiveDate, Utc};
 use cstat_core::compute::{ComputeReport, compute_all};
+use cstat_core::invariants::{self, Severity};
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -595,6 +596,72 @@ impl<'a> SeasonIngester<'a> {
                     .await;
                     notify::ping_heartbeat(false).await;
                     return Err(NatStatError::Database(e));
+                }
+            }
+        }
+
+        // --- 9. post-compute invariant gates (M5 quality gates) ---
+        // Structural "did compute do its job" checks against the just-written
+        // derived tables (`cstat_core::invariants` — the same set the `simulate`
+        // harness runs per window). `Error`-severity violations mean the pipeline
+        // produced something wrong from the data it had, so they go into
+        // `failures` and fire the DEGRADED Slack summary; `Warning`s are source-
+        // data holes the pipeline faithfully reflects (see `Severity` docs) and
+        // only log. This never hard-aborts: the served-critical chain already
+        // completed above, so a gate failure alerts rather than kills the run.
+        // Gated on a compute having actually run (the checks assume fresh
+        // derived tables).
+        if report.compute.is_some() {
+            let t0 = Utc::now();
+            match invariants::check_season(self.pool, self.season).await {
+                Ok(violations) => {
+                    let mut errors = 0i64;
+                    for v in &violations {
+                        match v.severity {
+                            Severity::Error => {
+                                errors += 1;
+                                warn!(season = self.season, "INVARIANT VIOLATED — {v}");
+                            }
+                            Severity::Warning => {
+                                info!(season = self.season, "invariant warning — {v}");
+                            }
+                        }
+                    }
+                    if errors > 0 {
+                        let summary = violations
+                            .iter()
+                            .filter(|v| v.severity == Severity::Error)
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        ledger
+                            .record(
+                                "invariants",
+                                StepStatus::Failed,
+                                Some(errors),
+                                t0,
+                                Some(&summary),
+                            )
+                            .await;
+                        failures.push(format!(
+                            "invariant gate: {errors} error-severity violation(s) — {summary}"
+                        ));
+                    } else {
+                        ledger
+                            .record("invariants", StepStatus::Ok, Some(0), t0, None)
+                            .await;
+                    }
+                }
+                Err(e) => {
+                    // The gate query itself failed to run — surface it as degraded
+                    // (a check that can't execute is worth an alert) without
+                    // aborting the otherwise-complete run.
+                    let msg = e.to_string();
+                    warn!(season = self.season, error = %msg, "invariant gate query failed to run");
+                    ledger
+                        .record("invariants", StepStatus::Failed, None, t0, Some(&msg))
+                        .await;
+                    failures.push(format!("invariant gate failed to run: {msg}"));
                 }
             }
         }
