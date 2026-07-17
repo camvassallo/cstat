@@ -104,7 +104,7 @@ export function puzzleKey(mode: GameMode, season: number, dateKey: string): stri
 }
 
 /** Pick the daily answer: seed an index into the mode-filtered pool sorted by
- *  a per-player rendezvous hash (min of `hash32(salt:player_id)`).
+ *  a per-player rendezvous hash (min of `hash32(salt:natstat_id)`).
  *  Returns null when the eligible pool is empty. */
 export function dailyAnswer(
   pool: PlayerRow[],
