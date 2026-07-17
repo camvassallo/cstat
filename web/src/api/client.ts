@@ -245,6 +245,10 @@ export function fetchTeamDetail(id: string, season?: number) {
 // Players
 export interface PlayerRow {
   player_id: string;
+  /** Stable per-season NatStat key. `player_id` is a surrogate UUID that can be
+   *  re-minted by a data rebuild + resync, so anything that must stay put across
+   *  data updates (e.g. Portle's daily seed, issue #181) keys on this instead. */
+  natstat_id: string;
   name: string;
   team_id: string | null;
   team_name: string | null;

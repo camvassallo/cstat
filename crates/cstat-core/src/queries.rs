@@ -335,6 +335,11 @@ pub struct RosterEntry {
 #[derive(Debug, Serialize, FromRow)]
 pub struct PlayerRow {
     pub player_id: Uuid,
+    /// Stable per-season NatStat key. Unlike `player_id` (a `gen_random_uuid`
+    /// surrogate that is re-minted on any full rebuild and re-COPY'd to prod by
+    /// `sync_to_prod.sh`), this comes from NatStat and never regenerates, so
+    /// Portle seeds its daily pick on it (issue #181).
+    pub natstat_id: String,
     pub name: String,
     pub team_id: Option<Uuid>,
     pub team_name: Option<String>,
@@ -1479,6 +1484,7 @@ pub async fn search_players(
         r#"
         SELECT
             p.id AS player_id,
+            p.natstat_id,
             p.name,
             p.team_id,
             COALESCE(t.short_name, t.name) AS team_name,

@@ -104,7 +104,7 @@ export function puzzleKey(mode: GameMode, season: number, dateKey: string): stri
 }
 
 /** Pick the daily answer: seed an index into the mode-filtered pool sorted by
- *  a per-player rendezvous hash (min of `hash32(salt:player_id)`).
+ *  a per-player rendezvous hash (min of `hash32(salt:natstat_id)`).
  *  Returns null when the eligible pool is empty. */
 export function dailyAnswer(
   pool: PlayerRow[],
@@ -138,19 +138,25 @@ export function practiceAnswerByNonce(
   return pickByHash(filterPool(pool, mode), `practice:${nonce}`);
 }
 
-/** Rendezvous ("highest random weight") selection: hash `salt:player_id` for
- *  every candidate and keep the minimum, tie-broken by `player_id`. Unlike
+/** Rendezvous ("highest random weight") selection: hash `salt:natstat_id` for
+ *  every candidate and keep the minimum, tie-broken by `natstat_id`. Unlike
  *  `hash(salt) % length`, adding/removing OTHER candidates doesn't change the
  *  winner — only the winner entering/leaving the pool does — so the daily answer
- *  stays put across filter tweaks and roster churn. Order-independent. */
+ *  stays put across filter tweaks and roster churn. Order-independent.
+ *
+ *  The key is `natstat_id`, NOT `player_id`. `player_id` is a `gen_random_uuid`
+ *  surrogate that gets re-minted whenever a season is rebuilt from scratch and
+ *  re-COPY'd to prod by `sync_to_prod.sh`; seeding on it made the whole daily
+ *  sequence reset on a data update (issue #181). `natstat_id` comes from NatStat
+ *  and never regenerates, so the date→player mapping survives re-ingests. */
 function pickByHash(eligible: PlayerRow[], salt: string): PlayerRow | null {
   if (eligible.length === 0) return null;
   let best = eligible[0];
-  let bestH = hash32(`${salt}:${best.player_id}`);
+  let bestH = hash32(`${salt}:${best.natstat_id}`);
   for (let i = 1; i < eligible.length; i++) {
     const p = eligible[i];
-    const h = hash32(`${salt}:${p.player_id}`);
-    if (h < bestH || (h === bestH && p.player_id < best.player_id)) {
+    const h = hash32(`${salt}:${p.natstat_id}`);
+    if (h < bestH || (h === bestH && p.natstat_id < best.natstat_id)) {
       best = p;
       bestH = h;
     }
