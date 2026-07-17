@@ -165,7 +165,7 @@ Every external feed now degrades gracefully; a single dead dependency can't hang
 
 **Acceptance met:** revoke the JWT → `transfers` falls back to snapshot + `preflight` reports `247 down`; block Torvik / 500 from NatStat v4 → preflight `down` / v3-fallback ledger row + degraded alert, and the serving-critical chain still completes on the feeds that are up. Remaining before opening night: M4 (offline replay + CI fixtures) and M5 (quality gates + runbook).
 
-## M4 status — offline replay harness shipped 2026-07-13 (3.1 + 3.2; 3.3/3.4 remaining)
+## M4 status — offline replay harness shipped 2026-07-13 (3.1 + 3.2); CI fixture test shipped 2026-07-16 (3.3); 3.4 remaining
 
 The pipeline can now be proven out-of-season, offline, against an isolated database — no live NatStat calls, no rate budget, and no way to touch the main DB (the `sync_to_prod.sh` source of truth).
 
@@ -177,7 +177,9 @@ The pipeline can now be proven out-of-season, offline, against an isolated datab
 
 **Verified:** 2026 season opening week (2025-11-02 → 2025-11-09, daily windows — includes the 166-game opening night and a zero-game pre-opening day) replays clean end-to-end against the sim DB: all windows ingest + compute, invariants clean, idempotency re-run drift-free, main DB row counts byte-identical before/after.
 
-**Remaining in M4:** **(3.3)** committed synthetic-fixture tests in `crates/cstat-ingest/tests/` running the ingest path green in CI on every push (the fixture synthesizer now exists to generate the corpus), and **(3.4)** the dedicated edge-case smokes — postponed→final score overwrite, cancelled game writes no phantom row, conference re-class recomputes `is_conference` (mid-season player adds and empty `/elo`/`/forecasts` are already exercised by every replay window). Plus the operating cadence: *run the replay weekly from now to tipoff.*
+**(3.3) shipped 2026-07-16** — `crates/cstat-ingest/tests/ingest_replay.rs` runs the ingest path green in CI on every push, fully offline: it seeds a tiny hand-authored NatStat-v4 corpus (4 teams, a 6-game round-robin, 36 player lines) into a **throwaway database it creates and drops itself** (so it never touches whatever `DATABASE_URL` names — critically not a dev's real local DB — and skips cleanly when `DATABASE_URL` is unset), replays it through the real by-date-range ingest fns + `compute_all`, and asserts `invariants::check_season` is clean **and** a second replay is idempotent. It drives only the box-score ingest + compute (not full `nightly`), so there's no live NatStat/Torvik/ELO/forecasts network. The seeding + ingest paths are shared with the simulate harness (`seed_window_objects` / `ingest_box_score_window` / `table_counts`, `#[doc(hidden)] pub`) so the CI test and the CLI can't drift. CI's existing Postgres-17 service + `cargo test --workspace` runs it on every push.
+
+**Remaining in M4:** **(3.4)** the dedicated edge-case smokes — postponed→final score overwrite, cancelled game writes no phantom row, conference re-class recomputes `is_conference` (mid-season player adds and empty `/elo`/`/forecasts` are already exercised by every replay window). Plus the operating cadence: *run the replay weekly from now to tipoff.*
 
 ## Decisions (resolved 2026-06-29)
 
