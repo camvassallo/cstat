@@ -234,8 +234,13 @@ echo
 TOC=$("${PG_RESTORE[@]}" --list < "$TMPFILE")
 SEQ_LEAKS=""
 for t in "${EXCLUDED[@]}"; do
-  leaked=$(grep -oE "SEQUENCE SET public ${t}_[A-Za-z0-9_]+" <<<"$TOC" | awk '{print $NF}' || true)
-  [[ -n "$leaked" ]] && SEQ_LEAKS="${SEQ_LEAKS:+$SEQ_LEAKS }$leaked"
+  leaked=$(grep -oE "SEQUENCE SET public ${t}_[A-Za-z0-9_]+" <<<"$TOC" | awk '{print $NF}' | tr '\n' ' ' || true)
+  # Explicit `if` rather than `[[ … ]] && …`: under `set -e` an AND-list whose
+  # test fails yields a non-zero status for the whole list, which is a footgun
+  # a future edit could easily trip. Not worth the terseness in a prod guard.
+  if [[ -n "$leaked" ]]; then
+    SEQ_LEAKS="${SEQ_LEAKS:+$SEQ_LEAKS }${leaked% }"
+  fi
 done
 if [[ -n "$SEQ_LEAKS" ]]; then
   echo "  ✗ Dump carries sequence state for EXCLUDED tables: ${SEQ_LEAKS}"
@@ -249,8 +254,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "→ Dry run — would TRUNCATE the tables above CASCADE on prod and restore via COPY."
   echo "  ✓ No excluded-table sequence state in dump"
   echo "  Dump table-of-contents (data sections):"
-  # Read dump from stdin so this works across the docker exec boundary.
-  "${PG_RESTORE[@]}" --list < "$TMPFILE" | grep -E "TABLE DATA|SEQUENCE SET" | sed 's/^/    /' || true
+  # Reuses the TOC already read for the guard above.
+  grep -E "TABLE DATA|SEQUENCE SET" <<<"$TOC" | sed 's/^/    /' || true
   exit 0
 fi
 
