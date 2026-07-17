@@ -52,10 +52,13 @@ async fn pool_and_seasons() -> (PgPool, Vec<i32>) {
 
 async fn stored_rows(pool: &PgPool, season: i32) -> HashMap<Uuid, StoredRow> {
     let rows = sqlx::query(
+        // provisional=false only: the parity contract is about REAL
+        // current-season assignments vs Python. Prior-season seeds
+        // (provisional=true, PR 3a) are additive rows Python never wrote.
         "SELECT player_id, cluster_id, primary_class, secondary_class, \
                 primary_score, secondary_score, affinity_scores::text AS affinity, \
                 feature_vector \
-         FROM player_archetypes WHERE season = $1",
+         FROM player_archetypes WHERE season = $1 AND provisional = FALSE",
     )
     .bind(season)
     .fetch_all(pool)
@@ -203,11 +206,12 @@ async fn rust_assign_matches_python_rows() {
     );
 }
 
-/// Exercises the WRITE path (`compute_archetypes` DELETE+INSERT), not just the
-/// dry `assign_archetypes` compute: running it must leave `player_archetypes`
-/// byte-identical (idempotent), since the frozen model + unchanged inputs assign
-/// the same rows the DB already holds. Fingerprints the season's rows, rewrites,
-/// and re-fingerprints.
+/// Exercises the WRITE path (`compute_archetypes` DELETE+INSERT), including the
+/// PR 3a prior-season seeds. Runs it TWICE and asserts the second run reproduces
+/// the first byte-for-byte — the real idempotency contract (the first run may
+/// legitimately differ from the Python-written baseline because it adds
+/// provisional seed rows Python never wrote). Fingerprints ALL rows (quals +
+/// seeds), including the new columns.
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes (idempotently)"]
 async fn compute_archetypes_write_is_idempotent() {
@@ -215,12 +219,13 @@ async fn compute_archetypes_write_is_idempotent() {
     // Newest season with a fit — the one the nightly actually recomputes.
     let season = *seasons.last().expect("a season with a fit");
 
-    // A stable fingerprint of the served columns, ordered by player.
+    // A stable fingerprint of the served columns + the PR 3a source columns.
     let fingerprint = |pool: PgPool| async move {
         sqlx::query_scalar::<_, Option<String>>(
             "SELECT md5(string_agg( \
                  player_id::text || cluster_id::text || primary_class || \
-                 coalesce(secondary_class,'') || round(primary_score::numeric, 9)::text, \
+                 coalesce(secondary_class,'') || round(primary_score::numeric, 9)::text || \
+                 provisional::text || source || coalesce(source_season::text,''), \
                  '|' ORDER BY player_id)) \
              FROM player_archetypes WHERE season = $1",
         )
@@ -229,33 +234,87 @@ async fn compute_archetypes_write_is_idempotent() {
         .await
         .unwrap()
     };
+    let counts = |pool: PgPool| async move {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT count(*) FILTER (WHERE NOT provisional), \
+                    count(*) FILTER (WHERE provisional) \
+             FROM player_archetypes WHERE season = $1",
+        )
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
 
-    let before = fingerprint(pool.clone()).await;
-    let count_before: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM player_archetypes WHERE season = $1")
-            .bind(season)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let written1 = compute::compute_archetypes(&pool, season).await.unwrap();
+    let fp1 = fingerprint(pool.clone()).await;
+    let (real, seeded) = counts(pool.clone()).await;
 
-    let written = compute::compute_archetypes(&pool, season).await.unwrap();
+    let written2 = compute::compute_archetypes(&pool, season).await.unwrap();
+    let fp2 = fingerprint(pool.clone()).await;
 
-    let after = fingerprint(pool.clone()).await;
-    let count_after: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM player_archetypes WHERE season = $1")
-            .bind(season)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-
-    eprintln!("season {season}: wrote {written} rows, {count_before} -> {count_after}");
+    eprintln!("season {season}: wrote {written1} rows ({real} real, {seeded} seeded)");
+    assert_eq!(written1, written2, "row count changed between runs");
     assert_eq!(
-        written as i64, count_after,
-        "returned count must equal rows written"
+        written1 as i64,
+        real + seeded,
+        "returned count != rows written"
     );
-    assert_eq!(count_before, count_after, "row count changed after rewrite");
     assert_eq!(
-        before, after,
-        "row content changed after rewrite (not idempotent)"
+        fp1, fp2,
+        "row content changed between runs (not idempotent)"
     );
+}
+
+/// Validates the PR 3a prior-season seed itself: every seeded (provisional) row
+/// must (a) be a sub-gate player with no real assignment, and (b) copy an actual
+/// prior-season REAL label for the same human, tagged with the season it came
+/// from. Seeds `season` from earlier seasons (the local DB has 2015–2026).
+#[tokio::test]
+#[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes"]
+async fn prior_season_seed_is_well_formed() {
+    let (pool, seasons) = pool_and_seasons().await;
+    let season = *seasons.last().expect("a season with a fit");
+    compute::compute_archetypes(&pool, season).await.unwrap();
+
+    // No player has both a real row and a seed row in the same season.
+    let dupes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ( \
+            SELECT player_id FROM player_archetypes WHERE season = $1 \
+            GROUP BY player_id HAVING count(*) > 1) x",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        dupes, 0,
+        "a player has more than one archetype row this season"
+    );
+
+    // Every seed row: provisional, source='prior_season', source_season < season,
+    // and it matches a REAL prior label for the same human (natstat_id path).
+    let bad_meta: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM player_archetypes \
+         WHERE season = $1 AND provisional = TRUE \
+           AND (source <> 'prior_season' OR source_season IS NULL OR source_season >= $1)",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        bad_meta, 0,
+        "a seed row has malformed provisional/source metadata"
+    );
+
+    let (seeded, from_dist): (i64, Option<String>) = sqlx::query_as(
+        "SELECT count(*), string_agg(DISTINCT source_season::text, ',' ORDER BY source_season::text) \
+         FROM player_archetypes WHERE season = $1 AND provisional = TRUE",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    eprintln!("season {season}: {seeded} seeded from prior season(s) [{from_dist:?}]");
 }

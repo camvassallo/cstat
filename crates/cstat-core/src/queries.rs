@@ -2106,6 +2106,13 @@ pub struct PlayerArchetypeRow {
     pub secondary_score: Option<f64>,
     pub affinity_scores: JsonValue,
     pub cluster_id: i32,
+    /// TRUE when this is a prior-season seed held during the cold-start window
+    /// (the player hasn't cleared this season's >=10 GP gate yet), FALSE for a
+    /// real current-season assignment. See `compute::compute_archetypes`.
+    pub provisional: bool,
+    /// For a provisional row, the season the label was carried over from
+    /// (e.g. "2025 archetype"); NULL for a real current-season assignment.
+    pub source_season: Option<i32>,
 }
 
 pub async fn get_player_archetype(
@@ -2116,7 +2123,7 @@ pub async fn get_player_archetype(
     sqlx::query_as::<_, PlayerArchetypeRow>(
         r#"
         SELECT primary_class, secondary_class, primary_score, secondary_score,
-               affinity_scores, cluster_id
+               affinity_scores, cluster_id, provisional, source_season
         FROM player_archetypes
         WHERE player_id = $1 AND season = $2
         "#,
