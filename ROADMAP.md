@@ -549,13 +549,15 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - **So the PBP-on-prod decision is a product call, not a correctness one:** a PBP-less prod loses three display surfaces and 3/60 trajectory features (to sentinel). It keeps rankings, CamPom, game predictions and preseason projections intact.
   - [x] **P0 — Quantify the Railway storage cost — ANSWERED 2026-07-17. The "DB cap" does not exist.** It was asserted in `docs/pbp_methodology.md:239` and §"storage split" here and quantified in neither; priced against a real invoice ($16.06/mo) it is **~$3.78/month**. Decoding Railway's "minutely GB" (÷43,200 min; cross-checked — implied volume 2.54 GB vs the ~2.6 GB actually measured on prod, so the units are right):
 
-    | Line | Avg held | Effective rate | Cost | Share |
+    | Line | Avg held | Effective rate | Cost *(as invoiced)* | Share |
     |---|---|---|---|---|
-    | **Memory** | 1.50 GB | **$9.98/GB/mo** | **$14.93** | **93%** |
+    | **Memory** | 1.50 GB | **~$10.00/GB/mo** | **$14.96** | **93%** |
     | Egress | 8.25 GB total | $0.05/GB | $0.41 | 3% |
     | Volume | 2.54 GB | **$0.15/GB/mo** | $0.38 | 2% |
     | Backup | 1.66 GB (66% of volume) | $0.15/GB/mo | $0.25 | 2% |
     | CPU | — | — | $0.05 | <1% |
+
+    *(Costs are the invoice's own figures. The published per-minute rates are rounded — $0.000231 × 64,641.16 gives $14.93, not the $14.9632 billed, so the true memory rate is ~$0.0002315/GB/min ≈ $10.00/GB/mo. The volume rate reconciles exactly at $0.15/GB/mo, which is the number every conclusion below depends on.)*
 
     Storage runs **$0.15/GB/month**, so the 9.6 GB raw PBP table — the thing the entire local-only architecture was built to avoid — costs **$1.44/month**. Full fidelity (`play_by_play` + `lineup_stints` + `natstat_lineups` = 15.25 GB) is **+$3.78/mo → ~$19.84 total, a 24% increase.** Memory should not move: the API never queries PBP (0 refs in `features.rs`, not served), so steady-state RAM is unchanged; the nightly's compute spike is ~0.7% of the month and prices at **<$1/mo** worst-case. Egress is unaffected — raw PBP is never served and ingest is inbound.
 
