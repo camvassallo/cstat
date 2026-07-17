@@ -1,0 +1,499 @@
+{
+  "per_season": [
+    {
+      "season": 2022,
+      "n": 1,
+      "players": 2317,
+      "pct_primary": 31.4,
+      "pct_top2": 49.1
+    },
+    {
+      "season": 2022,
+      "n": 2,
+      "players": 2927,
+      "pct_primary": 38.7,
+      "pct_top2": 57.5
+    },
+    {
+      "season": 2022,
+      "n": 3,
+      "players": 3024,
+      "pct_primary": 43.0,
+      "pct_top2": 63.4
+    },
+    {
+      "season": 2022,
+      "n": 4,
+      "players": 3031,
+      "pct_primary": 48.7,
+      "pct_top2": 68.6
+    },
+    {
+      "season": 2022,
+      "n": 5,
+      "players": 3034,
+      "pct_primary": 52.4,
+      "pct_top2": 72.8
+    },
+    {
+      "season": 2022,
+      "n": 6,
+      "players": 3035,
+      "pct_primary": 56.0,
+      "pct_top2": 76.9
+    },
+    {
+      "season": 2022,
+      "n": 8,
+      "players": 3035,
+      "pct_primary": 61.3,
+      "pct_top2": 81.6
+    },
+    {
+      "season": 2022,
+      "n": 10,
+      "players": 3036,
+      "pct_primary": 65.4,
+      "pct_top2": 84.7
+    },
+    {
+      "season": 2022,
+      "n": 12,
+      "players": 3036,
+      "pct_primary": 70.2,
+      "pct_top2": 88.5
+    },
+    {
+      "season": 2022,
+      "n": 15,
+      "players": 3036,
+      "pct_primary": 74.8,
+      "pct_top2": 92.0
+    },
+    {
+      "season": 2022,
+      "n": 20,
+      "players": 3036,
+      "pct_primary": 81.9,
+      "pct_top2": 95.2
+    },
+    {
+      "season": 2022,
+      "n": 9999,
+      "players": 3036,
+      "pct_primary": 93.2,
+      "pct_top2": 99.3
+    },
+    {
+      "season": 2023,
+      "n": 1,
+      "players": 2339,
+      "pct_primary": 29.5,
+      "pct_top2": 48.3
+    },
+    {
+      "season": 2023,
+      "n": 2,
+      "players": 3016,
+      "pct_primary": 36.4,
+      "pct_top2": 55.0
+    },
+    {
+      "season": 2023,
+      "n": 3,
+      "players": 3071,
+      "pct_primary": 41.9,
+      "pct_top2": 62.3
+    },
+    {
+      "season": 2023,
+      "n": 4,
+      "players": 3085,
+      "pct_primary": 47.8,
+      "pct_top2": 68.9
+    },
+    {
+      "season": 2023,
+      "n": 5,
+      "players": 3088,
+      "pct_primary": 52.6,
+      "pct_top2": 73.8
+    },
+    {
+      "season": 2023,
+      "n": 6,
+      "players": 3088,
+      "pct_primary": 56.7,
+      "pct_top2": 77.2
+    },
+    {
+      "season": 2023,
+      "n": 8,
+      "players": 3088,
+      "pct_primary": 61.2,
+      "pct_top2": 82.1
+    },
+    {
+      "season": 2023,
+      "n": 10,
+      "players": 3088,
+      "pct_primary": 66.5,
+      "pct_top2": 85.9
+    },
+    {
+      "season": 2023,
+      "n": 12,
+      "players": 3088,
+      "pct_primary": 70.8,
+      "pct_top2": 88.7
+    },
+    {
+      "season": 2023,
+      "n": 15,
+      "players": 3088,
+      "pct_primary": 75.4,
+      "pct_top2": 91.6
+    },
+    {
+      "season": 2023,
+      "n": 20,
+      "players": 3088,
+      "pct_primary": 81.3,
+      "pct_top2": 95.3
+    },
+    {
+      "season": 2023,
+      "n": 9999,
+      "players": 3088,
+      "pct_primary": 92.6,
+      "pct_top2": 99.2
+    },
+    {
+      "season": 2024,
+      "n": 1,
+      "players": 2270,
+      "pct_primary": 30.4,
+      "pct_top2": 48.5
+    },
+    {
+      "season": 2024,
+      "n": 2,
+      "players": 3000,
+      "pct_primary": 35.9,
+      "pct_top2": 56.8
+    },
+    {
+      "season": 2024,
+      "n": 3,
+      "players": 3087,
+      "pct_primary": 43.2,
+      "pct_top2": 65.1
+    },
+    {
+      "season": 2024,
+      "n": 4,
+      "players": 3093,
+      "pct_primary": 48.7,
+      "pct_top2": 70.7
+    },
+    {
+      "season": 2024,
+      "n": 5,
+      "players": 3098,
+      "pct_primary": 53.0,
+      "pct_top2": 75.1
+    },
+    {
+      "season": 2024,
+      "n": 6,
+      "players": 3101,
+      "pct_primary": 56.0,
+      "pct_top2": 77.6
+    },
+    {
+      "season": 2024,
+      "n": 8,
+      "players": 3101,
+      "pct_primary": 62.1,
+      "pct_top2": 83.6
+    },
+    {
+      "season": 2024,
+      "n": 10,
+      "players": 3101,
+      "pct_primary": 65.7,
+      "pct_top2": 86.2
+    },
+    {
+      "season": 2024,
+      "n": 12,
+      "players": 3101,
+      "pct_primary": 70.0,
+      "pct_top2": 89.0
+    },
+    {
+      "season": 2024,
+      "n": 15,
+      "players": 3101,
+      "pct_primary": 75.2,
+      "pct_top2": 92.0
+    },
+    {
+      "season": 2024,
+      "n": 20,
+      "players": 3101,
+      "pct_primary": 83.1,
+      "pct_top2": 96.2
+    },
+    {
+      "season": 2024,
+      "n": 9999,
+      "players": 3101,
+      "pct_primary": 93.4,
+      "pct_top2": 99.2
+    },
+    {
+      "season": 2025,
+      "n": 1,
+      "players": 2313,
+      "pct_primary": 32.3,
+      "pct_top2": 50.5
+    },
+    {
+      "season": 2025,
+      "n": 2,
+      "players": 3117,
+      "pct_primary": 36.2,
+      "pct_top2": 54.9
+    },
+    {
+      "season": 2025,
+      "n": 3,
+      "players": 3175,
+      "pct_primary": 43.3,
+      "pct_top2": 64.1
+    },
+    {
+      "season": 2025,
+      "n": 4,
+      "players": 3189,
+      "pct_primary": 47.5,
+      "pct_top2": 69.3
+    },
+    {
+      "season": 2025,
+      "n": 5,
+      "players": 3193,
+      "pct_primary": 51.6,
+      "pct_top2": 73.4
+    },
+    {
+      "season": 2025,
+      "n": 6,
+      "players": 3195,
+      "pct_primary": 55.6,
+      "pct_top2": 77.4
+    },
+    {
+      "season": 2025,
+      "n": 8,
+      "players": 3195,
+      "pct_primary": 62.0,
+      "pct_top2": 83.1
+    },
+    {
+      "season": 2025,
+      "n": 10,
+      "players": 3195,
+      "pct_primary": 66.6,
+      "pct_top2": 86.1
+    },
+    {
+      "season": 2025,
+      "n": 12,
+      "players": 3195,
+      "pct_primary": 70.5,
+      "pct_top2": 89.3
+    },
+    {
+      "season": 2025,
+      "n": 15,
+      "players": 3195,
+      "pct_primary": 74.7,
+      "pct_top2": 92.1
+    },
+    {
+      "season": 2025,
+      "n": 20,
+      "players": 3195,
+      "pct_primary": 81.8,
+      "pct_top2": 96.0
+    },
+    {
+      "season": 2025,
+      "n": 9999,
+      "players": 3195,
+      "pct_primary": 93.2,
+      "pct_top2": 99.3
+    },
+    {
+      "season": 2026,
+      "n": 1,
+      "players": 2338,
+      "pct_primary": 30.1,
+      "pct_top2": 49.2
+    },
+    {
+      "season": 2026,
+      "n": 2,
+      "players": 3091,
+      "pct_primary": 36.4,
+      "pct_top2": 56.5
+    },
+    {
+      "season": 2026,
+      "n": 3,
+      "players": 3214,
+      "pct_primary": 42.1,
+      "pct_top2": 62.4
+    },
+    {
+      "season": 2026,
+      "n": 4,
+      "players": 3218,
+      "pct_primary": 48.0,
+      "pct_top2": 68.6
+    },
+    {
+      "season": 2026,
+      "n": 5,
+      "players": 3221,
+      "pct_primary": 52.2,
+      "pct_top2": 72.7
+    },
+    {
+      "season": 2026,
+      "n": 6,
+      "players": 3221,
+      "pct_primary": 55.3,
+      "pct_top2": 77.0
+    },
+    {
+      "season": 2026,
+      "n": 8,
+      "players": 3221,
+      "pct_primary": 60.0,
+      "pct_top2": 81.7
+    },
+    {
+      "season": 2026,
+      "n": 10,
+      "players": 3221,
+      "pct_primary": 64.2,
+      "pct_top2": 85.3
+    },
+    {
+      "season": 2026,
+      "n": 12,
+      "players": 3221,
+      "pct_primary": 69.0,
+      "pct_top2": 87.9
+    },
+    {
+      "season": 2026,
+      "n": 15,
+      "players": 3221,
+      "pct_primary": 74.1,
+      "pct_top2": 91.2
+    },
+    {
+      "season": 2026,
+      "n": 20,
+      "players": 3221,
+      "pct_primary": 81.6,
+      "pct_top2": 95.3
+    },
+    {
+      "season": 2026,
+      "n": 9999,
+      "players": 3221,
+      "pct_primary": 93.4,
+      "pct_top2": 99.4
+    }
+  ],
+  "pooled": [
+    {
+      "n": 1,
+      "players": 2315.0,
+      "pct_primary": 30.7,
+      "pct_top2": 49.1
+    },
+    {
+      "n": 2,
+      "players": 3030.0,
+      "pct_primary": 36.7,
+      "pct_top2": 56.1
+    },
+    {
+      "n": 3,
+      "players": 3114.0,
+      "pct_primary": 42.7,
+      "pct_top2": 63.5
+    },
+    {
+      "n": 4,
+      "players": 3123.0,
+      "pct_primary": 48.1,
+      "pct_top2": 69.2
+    },
+    {
+      "n": 5,
+      "players": 3126.0,
+      "pct_primary": 52.4,
+      "pct_top2": 73.6
+    },
+    {
+      "n": 6,
+      "players": 3128.0,
+      "pct_primary": 55.9,
+      "pct_top2": 77.2
+    },
+    {
+      "n": 8,
+      "players": 3128.0,
+      "pct_primary": 61.3,
+      "pct_top2": 82.4
+    },
+    {
+      "n": 10,
+      "players": 3128.0,
+      "pct_primary": 65.7,
+      "pct_top2": 85.6
+    },
+    {
+      "n": 12,
+      "players": 3128.0,
+      "pct_primary": 70.1,
+      "pct_top2": 88.7
+    },
+    {
+      "n": 15,
+      "players": 3128.0,
+      "pct_primary": 74.8,
+      "pct_top2": 91.8
+    },
+    {
+      "n": 20,
+      "players": 3128.0,
+      "pct_primary": 81.9,
+      "pct_top2": 95.6
+    },
+    {
+      "n": 9999,
+      "players": 3128.0,
+      "pct_primary": 93.2,
+      "pct_top2": 99.3
+    }
+  ],
+  "ceiling_pct_primary": 93.2
+}
