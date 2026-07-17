@@ -30,8 +30,20 @@
 # Usage:
 #   ./scripts/sync_to_prod.sh                          # full run (all tables)
 #   ./scripts/sync_to_prod.sh --dry-run                # preview without applying
+#   ./scripts/sync_to_prod.sh --prod-status            # READ-ONLY prod inspection
 #   ./scripts/sync_to_prod.sh --tables a,b,c           # push only these tables
 #   ./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
+#   ./scripts/sync_to_prod.sh --force-full             # override the in-season guard
+#
+# IN-SEASON RULE (enforced, not just documented — see the P0 guard below and
+# docs/intraseason_data_safety_plan.md): while prod is cron-fed, a FULL sync is
+# a silent rollback of the live site and is refused. Use --tables to push the
+# heavy local-only derived tables, which is the intended in-season path. A full
+# replace is an off-season/bootstrap operation.
+#
+# --prod-status is read-only: it opens no transaction and writes nothing. Use it
+# to answer "is the cron alive, and did something clobber prod?" without any
+# risk of touching data.
 #
 # --tables restricts the dump/TRUNCATE/restore to a comma-separated subset
 # (intersected with the live, non-excluded local tables). This is the targeted
@@ -67,16 +79,54 @@ LOCAL_URL="${LOCAL_DATABASE_URL:-postgres://cstat:cstat@localhost:5432/cstat}"
 PROD_URL="${PROD_DATABASE_URL:?Set PROD_DATABASE_URL in .env or your shell to the Railway prod connection string}"
 DRY_RUN=0
 REQUESTED_TABLES=""   # empty = all (full sync); set by --tables for targeted mode
+FORCE_FULL=0          # --force-full: override the in-season full-sync guard
+PROD_STATUS=0         # --prod-status: read-only prod inspection, then exit
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run|-n) DRY_RUN=1; shift ;;
     --tables) REQUESTED_TABLES="${2:?--tables needs a comma-separated list}"; shift 2 ;;
     --tables=*) REQUESTED_TABLES="${1#--tables=}"; shift ;;
+    --force-full) FORCE_FULL=1; shift ;;
+    --prod-status) PROD_STATUS=1; shift ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "Unknown arg: $1"; exit 2 ;;
   esac
 done
+
+mask_url() { sed -E 's|://[^@]+@|://***@|' <<<"$1"; }
+
+# Staleness threshold for "is prod still being fed by the cron?", mirroring
+# STALE_AFTER_HOURS in crates/cstat-api/src/routes/health.rs. One missed nightly
+# is still fresh; two in a row is not. Keep the two in sync.
+STALE_AFTER_HOURS=36
+
+# True when the calendar says college basketball is being played, using the same
+# Nov-rollover boundary as `season_for_date` (crates/cstat-ingest/src/lib.rs).
+# Deliberately crude: it is the *secondary* signal, and only has to hold when
+# the ledger can't be read (see the P0 guard).
+in_season_now() {
+  local m d
+  m=$((10#$(date -u +%m)))   # 10# forces base-10: "08"/"09" are invalid octal
+  d=$((10#$(date -u +%d)))
+  case "$m" in
+    11|12|1|2|3) return 0 ;;
+    4) [[ "$d" -le 15 ]] && return 0 ;;   # through the Final Four
+  esac
+  return 1
+}
+
+# Hours since prod last recorded a SUCCESSFUL served-critical step, or "" if the
+# ledger is empty/unreadable. Read-only. `|| true` so an unreachable prod or a
+# missing table degrades to "unknown" rather than killing the script under
+# `set -e` — the caller decides what unknown means.
+prod_nightly_age_hours() {
+  "${PSQL[@]}" "$PROD_URL" -t -A -c "
+    SELECT coalesce(round(extract(epoch FROM (now() - max(ended_at))) / 3600)::text, '')
+    FROM ingest_runs
+    WHERE status = 'ok' AND step IN ('games', 'compute')
+  " 2>/dev/null | tr -d '[:space:]' || true
+}
 
 # Tables to skip on both dump and truncate sides. See the header comment for
 # the rationale on each (api_cache / _sqlx_migrations: managed elsewhere;
@@ -108,6 +158,76 @@ else
   echo "Need either local psql/pg_dump/pg_restore (brew install postgresql@17)"
   echo "or the '${DOCKER_PG}' container running (docker compose up -d)."
   exit 1
+fi
+
+# --prod-status: read-only prod inspection, then exit. Answers "is the cron
+# alive, and has anything clobbered prod?" — the two questions worth asking
+# before reaching for a sync at all. Deliberately placed before every local
+# query so it still works when the local DB is down, and deliberately writes
+# nothing: no transaction, no TRUNCATE, no restore. It is safe to run at any
+# time, in-season included.
+if [[ "$PROD_STATUS" -eq 1 ]]; then
+  echo "→ Prod: $(mask_url "$PROD_URL")  (read-only — this mode writes nothing)"
+  echo
+  if ! "${PSQL[@]}" "$PROD_URL" -t -A -c "SELECT 1" >/dev/null 2>&1; then
+    echo "  ✗ Cannot connect to prod. Check PROD_DATABASE_URL."
+    exit 1
+  fi
+  echo "→ Last SUCCESSFUL nightly step (from the ingest_runs ledger):"
+  "${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
+    SELECT rpad(step, 14),
+           to_char(max(ended_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') || ' UTC',
+           '(' || round(extract(epoch FROM (now() - max(ended_at))) / 3600) || 'h ago)'
+    FROM ingest_runs
+    WHERE status = 'ok'
+    GROUP BY step
+    ORDER BY max(ended_at) DESC
+  " | sed 's/^/    /' || true
+  echo
+  echo "→ Recent FAILED / SKIPPED steps (last 7d):"
+  FAILS=$("${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
+    SELECT to_char(ended_at AT TIME ZONE 'UTC', 'MM-DD HH24:MI'), rpad(step, 14), status,
+           coalesce(left(error, 60), '')
+    FROM ingest_runs
+    WHERE status <> 'ok' AND ended_at > now() - interval '7 days'
+    ORDER BY ended_at DESC LIMIT 10
+  " || true)
+  if [[ -n "$FAILS" ]]; then sed 's/^/    /' <<<"$FAILS"; else echo "    (none)"; fi
+  echo
+  # Exact counts, deliberately — NOT n_live_tup or reltuples. Those are only
+  # populated by ANALYZE/autovacuum, so a never-analyzed or freshly-restored
+  # table reports 0 while holding millions of rows (verified locally:
+  # play_by_play reports n_live_tup = 0 at 32.8M actual rows, last_analyze
+  # NULL). This tool exists to answer "did something wipe prod?", and a table
+  # that just got restored is precisely the case where autovacuum hasn't caught
+  # up — so the estimate would false-alarm exactly when it matters most.
+  #
+  # One round trip via query_to_xml rather than a count per table: prod is
+  # high-latency and N+1 against it is a known stall (docs/in_season_ingest_plan.md).
+  # Measured at ~4.5s across the whole non-excluded set, which is fine for a
+  # diagnostic you run on purpose.
+  echo "→ Prod row counts (exact — takes a few seconds):"
+  "${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
+    SELECT rpad(relname, 28), to_char(cnt, 'FM999,999,999')
+    FROM (
+      SELECT relname,
+             (xpath('/row/c/text()',
+                    query_to_xml(format('SELECT count(*) AS c FROM public.%I', relname),
+                                 false, true, '')))[1]::text::bigint AS cnt
+      FROM pg_stat_user_tables
+    ) x
+    ORDER BY cnt DESC
+  " | sed 's/^/    /' || true
+  echo
+  AGE_H=$(prod_nightly_age_hours)
+  if [[ "$AGE_H" =~ ^[0-9]+$ ]] && [[ "$AGE_H" -lt "$STALE_AFTER_HOURS" ]]; then
+    echo "→ Full-sync guard: WOULD BLOCK — prod is cron-fed (last success ${AGE_H}h ago)."
+  elif in_season_now; then
+    echo "→ Full-sync guard: WOULD BLOCK — the calendar says in-season."
+  else
+    echo "→ Full-sync guard: would allow (prod looks idle and it is off-season)."
+  fi
+  exit 0
 fi
 
 EXCLUDED_QUOTED=$(printf "'%s'," "${EXCLUDED[@]}")
@@ -200,8 +320,6 @@ if [[ -n "$REQUESTED_TABLES" ]]; then
   done
 fi
 
-mask_url() { sed -E 's|://[^@]+@|://***@|' <<<"$1"; }
-
 echo "→ Local:    $(mask_url "$LOCAL_URL")"
 echo "→ Prod:     $(mask_url "$PROD_URL")"
 if [[ -n "$REQUESTED_TABLES" ]]; then
@@ -219,6 +337,66 @@ if ! "${PSQL[@]}" "$PROD_URL" -t -A -c "SELECT 1" >/dev/null 2>&1; then
 fi
 echo "  ✓ reachable"
 echo
+
+# ---------------------------------------------------------------------------
+# P0 guard — refuse a full replace while prod is live.
+# (docs/intraseason_data_safety_plan.md R1; issue #187.)
+#
+# A full sync TRUNCATEs and replaces every serving table with this laptop's
+# copy. In-season that is a silent rollback: the Railway cron (`cstat-ingest
+# nightly`, 09:30 UTC) owns those tables on prod and upserts them nightly, so it
+# is fresher than local *by construction*. A reflexive full sync regresses box
+# scores, forecasts, AdjEM and CamPom on the live site, and leaves no trace
+# anywhere (R5) — the first signal would be the M5a row-count gate firing the
+# NEXT night, or a user noticing. Before this guard, the only thing standing
+# between that and a live site was prose in a doc header.
+#
+# Two independent signals, either of which blocks:
+#   1. Prod is actively cron-fed — a served-critical step succeeded within
+#      STALE_AFTER_HOURS. PRIMARY, because it is data-driven: it self-adjusts
+#      to tournament runs, early/late tip, and the simulate harness.
+#   2. The calendar says in-season. SECONDARY and zero-dependency: it still
+#      fires when the ledger is unreadable or the cron has been failing — i.e.
+#      exactly when signal 1 goes quiet for a bad reason rather than a good one.
+#
+# Targeted mode is NOT gated: --tables is the intended in-season path, and is
+# how the heavy local-only derived tables (PBP/RAPM/archetype outputs, which
+# prod cannot compute — it holds no play_by_play) legitimately reach prod.
+if [[ -z "$REQUESTED_TABLES" ]]; then
+  BLOCK_REASONS=()
+  AGE_H=$(prod_nightly_age_hours)
+  if [[ "$AGE_H" =~ ^[0-9]+$ ]] && [[ "$AGE_H" -lt "$STALE_AFTER_HOURS" ]]; then
+    BLOCK_REASONS+=("prod recorded a successful nightly step ${AGE_H}h ago — the cron owns the serving tables and is fresher than this laptop")
+  fi
+  if in_season_now; then
+    BLOCK_REASONS+=("today ($(date -u +%Y-%m-%d)) is in-season by the calendar")
+  fi
+
+  if [[ ${#BLOCK_REASONS[@]} -gt 0 ]]; then
+    echo "  ! FULL SYNC BLOCKED — prod looks live:"
+    for r in "${BLOCK_REASONS[@]}"; do echo "      - $r"; done
+    echo
+    echo "    A full sync replaces EVERY serving table with this machine's copy,"
+    echo "    rolling the live site back to whatever local last computed."
+    echo
+    echo "    Instead:"
+    echo "      - push only what you regenerated:  --tables <leaf,tables>"
+    echo "      - inspect prod without writing:    --prod-status"
+    echo "      - if you truly mean a full replace: --force-full"
+    echo
+    if [[ "$FORCE_FULL" -eq 1 ]]; then
+      echo "  ! --force-full given — proceeding with a FULL REPLACE of prod anyway."
+      echo
+    elif [[ "$DRY_RUN" -eq 1 ]]; then
+      # Report but don't block: a dry run writes nothing, and its job is to show
+      # what a real run would do — including that a real run would refuse.
+      echo "  → --dry-run: continuing to preview (a real run would abort here)."
+      echo
+    else
+      exit 3
+    fi
+  fi
+fi
 
 echo "→ Local row counts:"
 for t in ${TABLE_LIST//,/ }; do
