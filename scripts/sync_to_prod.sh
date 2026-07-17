@@ -132,7 +132,16 @@ prod_nightly_age_hours() {
 # the rationale on each (api_cache / _sqlx_migrations: managed elsewhere;
 # play_by_play / lineup_stints: local-only raw PBP, never shipped to prod;
 # natstat_lineups / natstat_lineup_games: local-only lineups-object capture,
-# prod serves only the derived lineup_aggregates / player_on_off;
+# prod serves only the derived lineup_aggregates / player_on_off.
+#   R4 INVARIANT (docs/intraseason_data_safety_plan.md §R4): keeping these four
+#   source tables local-only is LOAD-BEARING, not just a size optimization. It is
+#   the sole reason the in-season targeted push (--tables lineup_aggregates,
+#   player_on_off) can safely own those rollups on prod: with no PBP/lineup rows
+#   on prod, the nightly's compute_pbp_lineups no-ops (early-returns) instead of
+#   rebuilding them. Ship any of the four to prod and the nightly starts wiping
+#   and rebuilding the rollups every night, clobbering the operator's push.
+#   Enforced by crates/cstat-core/tests/sync_prod_r4_invariant.rs — do not remove
+#   any of the four without reading that coupling first.
 # ingest_runs / ingest_run_table_counts: runtime ledger + row-count snapshots
 # written directly by the prod nightly job — a local full-sync must not truncate
 # them out from under the live pipeline (the row-count gate compares against the
