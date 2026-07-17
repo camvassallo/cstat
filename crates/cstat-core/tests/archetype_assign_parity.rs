@@ -17,11 +17,19 @@
 //! Run:
 //!   DATABASE_URL=... cargo test -p cstat-core --test archetype_assign_parity -- --ignored --nocapture
 
-use cstat_core::compute;
+use cstat_core::{compute, queries};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
+use std::sync::LazyLock;
+use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
+
+/// The tests below mutate and read the same `player_archetypes` rows, so a
+/// parallel `cargo test` run would race (a writer's DELETE+INSERT interleaving
+/// with another's read). Each test holds this lock for its whole body, keeping
+/// them order- and thread-independent without requiring `--test-threads=1`.
+static DB_SERIAL: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
 
 /// The stored (Python-written) archetype row we compare each assignment against.
 struct StoredRow {
@@ -89,6 +97,7 @@ async fn stored_rows(pool: &PgPool, season: i32) -> HashMap<Uuid, StoredRow> {
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data"]
 async fn rust_assign_matches_python_rows() {
+    let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     assert!(
         !seasons.is_empty(),
@@ -215,6 +224,7 @@ async fn rust_assign_matches_python_rows() {
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes (idempotently)"]
 async fn compute_archetypes_write_is_idempotent() {
+    let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     // Newest season with a fit — the one the nightly actually recomputes.
     let season = *seasons.last().expect("a season with a fit");
@@ -273,6 +283,7 @@ async fn compute_archetypes_write_is_idempotent() {
 #[tokio::test]
 #[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes"]
 async fn prior_season_seed_is_well_formed() {
+    let _serial = DB_SERIAL.lock().await;
     let (pool, seasons) = pool_and_seasons().await;
     let season = *seasons.last().expect("a season with a fit");
     compute::compute_archetypes(&pool, season).await.unwrap();
@@ -317,4 +328,68 @@ async fn prior_season_seed_is_well_formed() {
     .await
     .unwrap();
     eprintln!("season {season}: {seeded} seeded from prior season(s) [{from_dist:?}]");
+}
+
+/// PR 3b: the class-level aggregate serve paths must exclude prior-season seeds
+/// (real current-season members only) — a seed must never become a class
+/// exemplar or inflate the glossary counts. Seeds `season`, then checks the two
+/// served aggregates against the DB's own real/seed split.
+#[tokio::test]
+#[ignore = "needs local DB with a Python archetype fit on the current data; mutates player_archetypes"]
+async fn aggregates_exclude_provisional_seeds() {
+    let _serial = DB_SERIAL.lock().await;
+    let (pool, seasons) = pool_and_seasons().await;
+    let season = *seasons.last().expect("a season with a fit");
+    compute::compute_archetypes(&pool, season).await.unwrap();
+
+    // The test is only meaningful if seeds exist to (wrongly) leak.
+    let seeded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM player_archetypes WHERE season = $1 AND provisional",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        seeded > 0,
+        "expected some seeds this season to exercise exclusion"
+    );
+
+    // Exemplars: none may be a provisional (seed) player.
+    let exemplars = queries::get_archetype_exemplars(&pool, season, 5)
+        .await
+        .unwrap();
+    assert!(!exemplars.is_empty(), "no exemplars returned");
+    for e in &exemplars {
+        let is_prov: bool = sqlx::query_scalar(
+            "SELECT provisional FROM player_archetypes WHERE player_id = $1 AND season = $2",
+        )
+        .bind(e.player_id)
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !is_prov,
+            "exemplar {} ({}) is a provisional seed",
+            e.name, e.player_id
+        );
+    }
+
+    // Class summary total must equal the real (non-provisional) row count.
+    let summary = queries::get_archetype_class_summary(&pool, season)
+        .await
+        .unwrap();
+    let summary_total: i64 = summary.iter().map(|s| s.count).sum();
+    let real: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM player_archetypes WHERE season = $1 AND NOT provisional",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        summary_total, real,
+        "class-summary counts include provisional seeds ({summary_total} vs {real} real)"
+    );
 }

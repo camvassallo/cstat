@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { PlayerArchetype, SimilarPlayer } from '../api/client';
-import { classColor, classTagline, classTitle } from './archetypeColors';
+import { classColor, classTagline, classTitle, provisionalMeta } from './archetypeColors';
 import { SeasonLink } from './SeasonLink';
 import { seasonHref, useSeason } from './season';
 import { useDismissOnOutside } from './useDismissOnOutside';
@@ -266,6 +266,7 @@ export function SimilarPlayers({
         {players.map((p) => {
           const c = classColor(p.primary_class);
           const simPct = Math.round(p.similarity * 100);
+          const prov = provisionalMeta(p);
           const isSelected = selected.has(p.player_id);
           const atCap =
             !isSelected && selected.size >= MAX_SIMILAR_COMPARE_SELECTIONS;
@@ -277,9 +278,11 @@ export function SimilarPlayers({
                 {p.team_name ?? '—'}
               </div>
               <div className="flex items-center gap-2 mt-2">
-                <ClassTooltip cls={p.primary_class}>
+                <ClassTooltip cls={p.primary_class} extra={prov.note ?? undefined}>
                   <span
-                    className="text-xs font-bold uppercase tracking-wide"
+                    className={`text-xs font-bold uppercase tracking-wide ${
+                      prov.provisional ? 'opacity-70' : ''
+                    }`}
                     style={{ color: c }}
                   >
                     {p.primary_class}
@@ -294,6 +297,9 @@ export function SimilarPlayers({
                       / {p.secondary_class}
                     </span>
                   </ClassTooltip>
+                )}
+                {prov.shortYear && (
+                  <span className="text-[10px] text-gray-500 lowercase">{prov.shortYear}</span>
                 )}
               </div>
               <div className="mt-2 flex items-center gap-2">

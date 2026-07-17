@@ -299,6 +299,11 @@ pub struct RosterEntry {
     pub blk_pct_pct: Option<f64>,
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
+    /// Cold-start: TRUE when the archetype is a prior-season seed (player under
+    /// this season's >=10 GP gate); NULL when the player has no archetype row.
+    pub provisional: Option<bool>,
+    /// The season a provisional label was carried over from; NULL otherwise.
+    pub source_season: Option<i32>,
     /// Torvik shot-zone volumes (attempts) — drive the team
     /// aggregate shot diet panel on TeamDetail. `NULL` when the
     /// player has no Torvik row.
@@ -400,6 +405,11 @@ pub struct PlayerRow {
     // Archetype — surfaced when the page filters by class.
     pub primary_class: Option<String>,
     pub secondary_class: Option<String>,
+    /// Cold-start: TRUE when the archetype is a prior-season seed (player under
+    /// this season's >=10 GP gate); NULL when the player has no archetype row.
+    pub provisional: Option<bool>,
+    /// The season a provisional label was carried over from; NULL otherwise.
+    pub source_season: Option<i32>,
     // PBP on/off (from `player_on_off`): team net per 100 poss with vs without
     // the player + the swing. NULL when the player has no PBP-derived row.
     pub net_on_off: Option<f64>,
@@ -1398,7 +1408,7 @@ pub async fn get_team_roster(
             pp.usage_rate_pct,
             pp.ast_pct_pct, pp.tov_pct_pct,
             pp.orb_pct_pct, pp.drb_pct_pct, pp.stl_pct_pct, pp.blk_pct_pct,
-            pa.primary_class, pa.secondary_class,
+            pa.primary_class, pa.secondary_class, pa.provisional, pa.source_season,
             tps.rim_attempted, tps.mid_attempted, tps.tpa, tps.fta,
             tps.rim_made, tps.mid_made, tps.tpm, tps.ftm,
             oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
@@ -1514,7 +1524,7 @@ pub async fn search_players(
             pp.mpg_pct, pp.usage_rate_pct, pp.true_shooting_pct_pct,
             pp.ast_pct_pct, pp.tov_pct_pct, pp.orb_pct_pct, pp.drb_pct_pct,
             pp.stl_pct_pct, pp.blk_pct_pct,
-            pa.primary_class, pa.secondary_class,
+            pa.primary_class, pa.secondary_class, pa.provisional, pa.source_season,
             oo.net_on_off, oo.on_net_rtg, oo.off_net_rtg,
             oo.source AS on_off_source,
             (oo.off_possessions_for + oo.off_possessions_against) AS on_off_off_poss,
@@ -2142,6 +2152,10 @@ pub struct SimilarPlayerRow {
     pub team_name: Option<String>,
     pub primary_class: String,
     pub secondary_class: Option<String>,
+    /// Cold-start: TRUE when this candidate's label is a prior-season seed.
+    pub provisional: bool,
+    /// The season a provisional label was carried over from; NULL otherwise.
+    pub source_season: Option<i32>,
     /// Euclidean distance in standardized feature space (0 = identical).
     pub distance: f64,
     /// Convenience: 1 / (1 + distance) — 1.0 is identical, decays smoothly.
@@ -2166,12 +2180,14 @@ pub async fn get_similar_players(
                 pa.player_id,
                 pa.primary_class,
                 pa.secondary_class,
+                pa.provisional,
+                pa.source_season,
                 sqrt(SUM(POWER(pa_v::double precision - tg_v::double precision, 2))) AS distance
             FROM player_archetypes pa
             CROSS JOIN target
             CROSS JOIN LATERAL unnest(pa.feature_vector, target.fv) AS u(pa_v, tg_v)
             WHERE pa.season = $2 AND pa.player_id <> $1
-            GROUP BY pa.player_id, pa.primary_class, pa.secondary_class
+            GROUP BY pa.player_id, pa.primary_class, pa.secondary_class, pa.provisional, pa.source_season
         )
         SELECT
             c.player_id,
@@ -2180,6 +2196,8 @@ pub async fn get_similar_players(
             COALESCE(t.short_name, t.name) AS team_name,
             c.primary_class,
             c.secondary_class,
+            c.provisional,
+            c.source_season,
             c.distance,
             (1.0 / (1.0 + c.distance)) AS similarity
         FROM candidates c
@@ -2256,7 +2274,9 @@ pub async fn get_archetype_exemplars(
             JOIN players p ON p.id = pa.player_id
             LEFT JOIN teams t ON t.id = p.team_id AND t.season = pa.season
             LEFT JOIN torvik_dedup tps ON tps.player_id = p.id
-            WHERE pa.season = $1
+            -- Real current-season labels only: a prior-season seed
+            -- (provisional) must never surface as a class exemplar.
+            WHERE pa.season = $1 AND pa.provisional = FALSE
         )
         SELECT primary_class, player_id, name, team_id, team_name, primary_score
         FROM ranked
@@ -2300,7 +2320,9 @@ pub async fn get_archetype_class_summary(
             AVG(tps.campom) AS mean_campom
         FROM player_archetypes pa
         LEFT JOIN torvik_dedup tps ON tps.player_id = pa.player_id
-        WHERE pa.season = $1
+        -- Real current-season labels only; prior-season seeds are excluded
+        -- from the glossary class counts/means.
+        WHERE pa.season = $1 AND pa.provisional = FALSE
         GROUP BY pa.primary_class
         ORDER BY mean_campom DESC NULLS LAST
         "#,
@@ -2354,7 +2376,9 @@ pub async fn get_team_archetype_index(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            WHERE pa.season = $2
+            -- Real current-season labels only: aggregate distributions exclude
+            -- prior-season seeds (day-0 seed value lives on per-player surfaces).
+            WHERE pa.season = $2 AND pa.provisional = FALSE
         ),
         weighted AS (
             SELECT player_id, primary_class AS class, team_id,
@@ -2474,7 +2498,9 @@ pub async fn get_archetype_distributions_for_teams(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            WHERE pa.season = $2
+            -- Real current-season labels only: aggregate distributions exclude
+            -- prior-season seeds (day-0 seed value lives on per-player surfaces).
+            WHERE pa.season = $2 AND pa.provisional = FALSE
         ),
         weighted AS (
             SELECT player_id, primary_class AS class, team_id,
@@ -2593,7 +2619,8 @@ pub async fn get_d1_archetype_shares(
                 ON pss.player_id = p.id
                AND pss.season = pa.season
                AND pss.team_id = p.team_id
-            WHERE pa.season = $1
+            -- Real current-season labels only (prior-season seeds excluded).
+            WHERE pa.season = $1 AND pa.provisional = FALSE
         ),
         weighted AS (
             SELECT primary_class AS class, minutes AS weighted_minutes

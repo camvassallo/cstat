@@ -27,7 +27,7 @@ import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { PlayerPicker } from '../components/PlayerPicker';
 import { campomTier, campomTierColor, campomHalfPctile } from '../components/campom';
 import { ClassTooltip } from '../components/Archetype';
-import { classColor } from '../components/archetypeColors';
+import { classColor, provisionalMeta } from '../components/archetypeColors';
 import { useIsMobile } from '../components/useIsMobile';
 import { resolveAxes } from '../components/radarAxes';
 import { RadarAxisTooltip } from '../components/RadarAxisTooltip';
@@ -248,8 +248,12 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {arch && (
-            <span className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide">
-              <ClassTooltip cls={arch.primary_class}>
+            <span
+              className={`inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide ${
+                provisionalMeta(arch).provisional ? 'opacity-70' : ''
+              }`}
+            >
+              <ClassTooltip cls={arch.primary_class} extra={provisionalMeta(arch).note ?? undefined}>
                 <span style={{ color: primaryClassColor ?? undefined }}>
                   {arch.primary_class}
                 </span>
@@ -263,6 +267,11 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
                     / {arch.secondary_class}
                   </span>
                 </ClassTooltip>
+              )}
+              {provisionalMeta(arch).shortYear && (
+                <span className="text-gray-500 lowercase font-normal tracking-normal">
+                  {provisionalMeta(arch).shortYear}
+                </span>
               )}
             </span>
           )}
