@@ -275,8 +275,21 @@ mod tests {
         set_simulated_today(Some(sim));
         assert_eq!(today_utc(), sim);
         assert_eq!(current_natstat_season(), 2026);
+        // `simulated_today` must agree with `today_utc` on *whether* the clock
+        // is faked: the nightly's settle-hour guard skips on `simulated_today()`
+        // being `Some`, while the window it inspects comes from `today_utc()`.
+        // The two duplicate the override precedence, so pin the agreement — add
+        // an override to one only and the guard would silently compare a real
+        // wall-clock hour against a simulated date.
+        assert_eq!(simulated_today(), Some(sim));
         set_simulated_today(None);
         // Real clock again — just sanity-check it's nowhere near the override.
         assert_ne!(today_utc(), sim);
+        // Only meaningful with no env override in the ambient environment;
+        // asserting unconditionally would false-fail for a dev who happens to
+        // have CSTAT_SIMULATED_DATE exported.
+        if env_simulated_date().is_none() {
+            assert_eq!(simulated_today(), None, "no override => not simulated");
+        }
     }
 }

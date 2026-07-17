@@ -402,14 +402,17 @@ impl<'a> SeasonIngester<'a> {
         //
         // A window with nothing complete in it (e.g. an operator's `--from today
         // --to today`) claims no coverage at all rather than an inverted range.
-        let covered_end = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
-            .ok()
-            .map(|we| we.min(crate::today_utc() - chrono::Duration::days(1)));
-        if let (Ok(ws), Some(ce)) = (
+        let stamped: Option<(NaiveDate, NaiveDate)> = match (
             NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
-            covered_end,
-        ) && ws <= ce
-        {
+            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
+        ) {
+            (Ok(ws), Ok(we)) => {
+                let ce = we.min(crate::today_utc() - chrono::Duration::days(1));
+                (ws <= ce).then_some((ws, ce))
+            }
+            _ => None,
+        };
+        if let Some((ws, ce)) = stamped {
             ledger.set_window(ws, ce);
         }
 
@@ -425,26 +428,37 @@ impl<'a> SeasonIngester<'a> {
         // scan with no complete runs and killing the self-heal just as quietly.
         // An early cron is a broken pipeline either way, so say so out loud.
         //
-        // Only checked for a window reaching today (the live/default path); an
-        // operator backfilling long-settled dates at 03:00 is perfectly fine.
-        // Skipped under a simulated clock, which injects a date but no
-        // time-of-day for this to read.
-        if crate::simulated_today().is_none() {
+        // Gate on what we actually CLAIMED, not on the requested range. Only the
+        // newest claimable date — yesterday — is ever contentious; everything
+        // older settled long ago. Keying off the requested `end_date` instead
+        // would miss `--from X --to yesterday` (the shape the runbook's own
+        // backfill instructions hand you) run before 08:00, which claims
+        // yesterday while its games are still in flight — the very hole this
+        // guard exists to close. It would also false-fire on `--from today --to
+        // today`, which claims nothing at all. Skipped under a simulated clock,
+        // which injects a date but no time-of-day for this to read.
+        if crate::simulated_today().is_none()
+            && let Some((_, ce)) = stamped
+        {
             let now = Utc::now();
-            let live_window = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
-                .is_ok_and(|we| we >= now.date_naive());
-            if live_window && now.hour() < crate::GAMES_SETTLE_HOUR_UTC {
+            if ce == now.date_naive() - chrono::Duration::days(1)
+                && now.hour() < crate::GAMES_SETTLE_HOUR_UTC
+            {
                 warn!(
                     hour_utc = now.hour(),
                     settle_hour_utc = crate::GAMES_SETTLE_HOUR_UTC,
                     "nightly fired before games settle — box scores may be mid-flight"
                 );
+                // Deliberately doesn't assume the cron ran this: the same check
+                // fires for a hand-run live window at 03:00, where "fix the cron
+                // schedule" would be nonsense advice. Name both remedies and let
+                // the reader pick.
                 early_run_note = Some(format!(
-                    "nightly fired at {hour:02}:xx UTC, before the ~{settle:02}:00 UTC \
-                     settle time — last night's games may still have been in progress, so \
-                     this run's box scores can be partial and its coverage claim too \
-                     optimistic. Move the cron schedule later (`railway.cron.json`; \
-                     production is 09:30 UTC).",
+                    "ran at {hour:02}:xx UTC, before the ~{settle:02}:00 UTC settle time — \
+                     last night's games may still have been in progress, so this run's box \
+                     scores can be partial and its coverage claim too optimistic. If this \
+                     was the cron, move its schedule later (`railway.cron.json`; production \
+                     is 09:30 UTC); if it was manual, re-run it after {settle:02}:00 UTC.",
                     hour = now.hour(),
                     settle = crate::GAMES_SETTLE_HOUR_UTC,
                 ));
