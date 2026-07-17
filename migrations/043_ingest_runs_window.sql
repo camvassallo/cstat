@@ -24,6 +24,14 @@
 -- team_perfs) succeeded for that run: `games` records ok before `player_perfs`
 -- can abort the run, so a half-finished run must not mark its window covered.
 --
+-- These record what a run actually COVERED, which is not the same as the range
+-- it was asked for. The cron fires 09:30 UTC with a yesterday..today window, but
+-- date D's games don't tip until ~D 23:00 UTC — a run on D ingests none of D's
+-- games. So the writer clamps the stamped end to `today_utc() - 1`; a run with
+-- nothing complete in its range (e.g. `--from today --to today`) stamps no
+-- window at all. Without that clamp every run claims its own run-day, and every
+-- outage silently drops exactly one date: the last good run's day.
+--
 -- Nullable: rows written before this migration have no window. They are ignored
 -- rather than treated as covering nothing — the scan floors at the earliest
 -- window it knows about, so a ledger of only legacy rows simply yields "no gap"

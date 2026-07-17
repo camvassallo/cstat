@@ -57,6 +57,12 @@ scan rather than a guess — the re-covered dates are a harmless idempotent
 overlap. A fully-healed run stays a SUCCESS and notes the widening in its Slack
 summary. An operator-supplied `--from` is never auto-widened.
 
+A run records only the dates it actually covered — the stamped window end is
+clamped to *yesterday*, because the cron fires 09:30 UTC and a given date's games
+don't tip until ~23:00 UTC that day. (Without the clamp a run would claim its own
+run-day, whose games hadn't been played, and every outage would silently drop
+exactly one date.)
+
 A date counts as covered only once **all three** box-score steps
 (`games` → `player_perfs` → `team_perfs`) succeeded for some run. `games`
 records `ok` before `player_perfs` can abort the run, so a run that died

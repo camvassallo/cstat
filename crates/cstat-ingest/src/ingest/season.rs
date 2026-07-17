@@ -285,6 +285,13 @@ impl<'a> SeasonIngester<'a> {
         // fully healed. Past this, an un-backfilled hole ages out instead of
         // degrading every run forever.
         const HEAL_LOOKBACK_DAYS: i64 = 30;
+        // The relation between the two is load-bearing, not incidental: at
+        // lookback <= cap the scan could never surface a gap the cap can't
+        // reach, `unrecovered_days` would always be 0, and the PARTIAL alert
+        // would quietly stop existing — a gate that reports green over a real
+        // hole, which is the exact failure this milestone is built to prevent.
+        // Fail the build rather than let a future tweak inverting them ship.
+        const _: () = assert!(HEAL_LOOKBACK_DAYS > MAX_HEAL_DAYS);
 
         let mut ledger = RunLedger::start(self.pool, self.season);
 
@@ -378,11 +385,29 @@ impl<'a> SeasonIngester<'a> {
         // operator windows too is the point: a manual backfill contributes the
         // dates it actually covered, so a range that misses the gap no longer
         // hides it.
-        if let (Ok(ws), Ok(we)) = (
+        //
+        // Claim only dates whose games had actually FINISHED when we fetched
+        // them. The default window runs yesterday..today, but the cron fires
+        // 09:30 UTC and date D's games don't tip until ~D 23:00 UTC — so a run
+        // on D ingests exactly none of D's games. Stamping `window_end = D`
+        // would claim D covered, and the next scan would skip it forever: every
+        // outage would silently drop exactly one date (the last good run's own
+        // day), with no alert, while the pre-tip `games` rows sat there scoreless
+        // and statline-less. Clamping to yesterday costs nothing on the happy
+        // path — the run on D+1 claims D, which is precisely when D's games were
+        // ingested.
+        //
+        // A window with nothing complete in it (e.g. an operator's `--from today
+        // --to today`) claims no coverage at all rather than an inverted range.
+        let covered_end = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+            .ok()
+            .map(|we| we.min(crate::today_utc() - chrono::Duration::days(1)));
+        if let (Ok(ws), Some(ce)) = (
             NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
-            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
-        ) {
-            ledger.set_window(ws, we);
+            covered_end,
+        ) && ws <= ce
+        {
+            ledger.set_window(ws, ce);
         }
 
         let mut report = NightlyReport {
