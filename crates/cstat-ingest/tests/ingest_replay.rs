@@ -310,7 +310,12 @@ async fn cancelled_game_writes_no_phantom_row() {
     let outcome = cancelled_body(&db.pool).await;
     db.cleanup().await;
 
-    let (team_stat_rows, error_violations) = outcome.expect("cancelled body failed");
+    let (game_rows, team_stat_rows, error_violations) = outcome.expect("cancelled body failed");
+    assert_eq!(
+        game_rows, 1,
+        "the cancelled game itself must be ingested — otherwise the zero-team-stats \
+         assertion below would pass vacuously (game dropped, not 'no phantom rows')"
+    );
     assert_eq!(
         team_stat_rows, 0,
         "a cancelled game with no statlines must not write any team_game_stats"
@@ -321,7 +326,7 @@ async fn cancelled_game_writes_no_phantom_row() {
     );
 }
 
-async fn cancelled_body(pool: &PgPool) -> anyhow::Result<(i64, Vec<String>)> {
+async fn cancelled_body(pool: &PgPool) -> anyhow::Result<(i64, i64, Vec<String>)> {
     seed_teams(pool, &[("TA", "Team Alpha"), ("TB", "Team Bravo")]).await?;
     let client = test_client(pool);
     let cache = ApiCache::new(pool.clone());
@@ -343,10 +348,13 @@ async fn cancelled_body(pool: &PgPool) -> anyhow::Result<(i64, Vec<String>)> {
     ingest_box_score_window(&client, pool, SEASON, "2027-11-03", "2027-11-03").await?;
     compute_all(pool, SEASON).await?;
 
+    let game_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM games WHERE natstat_id = 'CG1'")
+        .fetch_one(pool)
+        .await?;
     let team_stat_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_game_stats")
         .fetch_one(pool)
         .await?;
-    Ok((team_stat_rows, error_violations(pool).await?))
+    Ok((game_rows, team_stat_rows, error_violations(pool).await?))
 }
 
 /// `compute_derived_game_fields` derives `is_conference` unconditionally from
