@@ -56,6 +56,10 @@ struct DbCandidate {
     /// `player_archetypes`. `None` when the player didn't cluster this season.
     primary_archetype: Option<String>,
     secondary_archetype: Option<String>,
+    /// Cold-start: TRUE when the archetype is a prior-season seed (the prospect
+    /// is under this season's >=10 GP gate); NULL when unmatched/unclustered.
+    provisional: Option<bool>,
+    source_season: Option<i32>,
 }
 
 /// Subset of a `teams` row — enough to resolve a board school name to a
@@ -96,6 +100,10 @@ struct Prospect {
     /// (`player_archetypes`). `None` when unmatched or unclustered.
     primary_archetype: Option<String>,
     secondary_archetype: Option<String>,
+    /// Cold-start: prior-season seed flag + the year it came from (`None` when
+    /// unmatched or a real current-season label).
+    provisional: Option<bool>,
+    source_season: Option<i32>,
 }
 
 async fn draft_board(
@@ -143,7 +151,9 @@ async fn draft_board(
             CASE WHEN abs(tps.cam_o_gbpm_v3_psos) <= 30 AND abs(tps.cam_d_gbpm_v3_psos) <= 30
                  THEN tps.cam_d_gbpm_v3_psos END AS campom_d,
             pa.primary_class         AS primary_archetype,
-            pa.secondary_class       AS secondary_archetype
+            pa.secondary_class       AS secondary_archetype,
+            pa.provisional           AS provisional,
+            pa.source_season         AS source_season
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
@@ -241,6 +251,8 @@ async fn draft_board(
                 campom_d: best.and_then(|c| c.campom_d),
                 primary_archetype: best.and_then(|c| c.primary_archetype.clone()),
                 secondary_archetype: best.and_then(|c| c.secondary_archetype.clone()),
+                provisional: best.and_then(|c| c.provisional),
+                source_season: best.and_then(|c| c.source_season),
             }
         })
         .collect();

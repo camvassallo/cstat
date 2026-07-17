@@ -15,7 +15,7 @@ import { useSeason, seasonHref } from '../components/season';
 import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { usePageTitle } from '../components/usePageTitle';
 import { campomTier, campomTierColor, campomTitle } from '../components/campom';
-import { classColor, classTitle } from '../components/archetypeColors';
+import { classColor, classTitle, provisionalMeta } from '../components/archetypeColors';
 import { shortDate } from '../components/format';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
@@ -497,15 +497,24 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
         >
           {p.name}
         </Link>
-        {p.primary_class && (
-          <span
-            title={classTitle(p.primary_class)}
-            className="ml-1.5 text-[10px] uppercase tracking-wide font-semibold"
-            style={{ color: classColor(p.primary_class) }}
-          >
-            {p.primary_class.slice(0, 3)}
-          </span>
-        )}
+        {p.primary_class &&
+          (() => {
+            const prov = provisionalMeta(p);
+            return (
+              <span
+                title={classTitle(p.primary_class) + (prov.note ? ` · ${prov.note}` : '')}
+                className={`ml-1.5 text-[10px] uppercase tracking-wide font-semibold ${
+                  prov.provisional ? 'opacity-70' : ''
+                }`}
+                style={{ color: classColor(p.primary_class) }}
+              >
+                {p.primary_class.slice(0, 3)}
+                {prov.shortYear && (
+                  <span className="ml-0.5 text-gray-500 lowercase">{prov.shortYear}</span>
+                )}
+              </span>
+            );
+          })()}
       </div>
       <div className="text-[11px] text-gray-500 font-mono whitespace-nowrap">
         {mpg} mpg · {p.games_played} gp
