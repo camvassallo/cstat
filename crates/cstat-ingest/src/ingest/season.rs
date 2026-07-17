@@ -1,7 +1,9 @@
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::notify;
-use crate::run_ledger::{RunLedger, StepStatus};
+use crate::run_ledger::{
+    RunLedger, StepStatus, detect_count_regressions, heal_window, last_successful_ingest_date,
+};
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
 use chrono::{Datelike, NaiveDate, Utc};
@@ -270,8 +272,64 @@ impl<'a> SeasonIngester<'a> {
         start_date: &str,
         end_date: &str,
         run_compute: bool,
+        self_heal: bool,
     ) -> Result<NightlyReport, NatStatError> {
+        // Cap on how far back the self-heal will widen a defaulted window, so a
+        // long off-season silence can't trigger a months-wide NatStat pull. A
+        // genuine multi-night in-season outage is comfortably inside this.
+        const MAX_HEAL_DAYS: i64 = 14;
+
         let ledger = RunLedger::start(self.pool, self.season);
+
+        // --- backfill-gap self-heal (M5b) ---
+        // If the cron missed one or more nights, a plain yesterday..today window
+        // would leave those game dates permanently un-ingested. When enabled
+        // (the CLI passes this only for a DEFAULT window, never an operator's
+        // explicit --from), widen the start back to the last successful run's
+        // date so the gap heals on the next run with no manual intervention. The
+        // re-covered dates are a harmless idempotent overlap. Off for `simulate`
+        // (it drives its own clock) and for an explicit operator window. A
+        // parse failure or absent ledger history simply no-ops.
+        let mut heal_note: Option<String> = None;
+        let (start_date, end_date): (String, String) = {
+            let widened = if self_heal {
+                match (
+                    NaiveDate::parse_from_str(start_date, "%Y-%m-%d"),
+                    NaiveDate::parse_from_str(end_date, "%Y-%m-%d"),
+                ) {
+                    (Ok(df), Ok(dt)) => {
+                        let last =
+                            last_successful_ingest_date(self.pool, self.season, ledger.run_id())
+                                .await;
+                        heal_window(df, dt, last, MAX_HEAL_DAYS).map(|h| (h, last))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            match widened {
+                Some((healed, last)) => {
+                    let healed_str = healed.format("%Y-%m-%d").to_string();
+                    let last_str = last
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    warn!(
+                        season = self.season,
+                        original_from = start_date,
+                        healed_from = %healed_str,
+                        last_success = %last_str,
+                        "self-heal: widening nightly window to recover skipped night(s)"
+                    );
+                    heal_note = Some(format!(
+                        "self-heal widened window start {start_date} → {healed_str} \
+                         (last successful run {last_str})"
+                    ));
+                    (healed_str, end_date.to_string())
+                }
+                None => (start_date.to_string(), end_date.to_string()),
+            }
+        };
         let mut report = NightlyReport {
             ingest: IngestReport::default(),
             torvik: None,
@@ -313,8 +371,8 @@ impl<'a> SeasonIngester<'a> {
 
         info!(
             season = self.season,
-            start_date,
-            end_date,
+            start_date = start_date.as_str(),
+            end_date = end_date.as_str(),
             run_id = %ledger.run_id(),
             rate_budget = budget,
             rate_tokens_available = tokens_before,
@@ -357,8 +415,8 @@ impl<'a> SeasonIngester<'a> {
             self.client,
             self.pool,
             self.season,
-            start_date,
-            end_date,
+            &start_date,
+            &end_date,
         )
         .await
         {
@@ -392,8 +450,8 @@ impl<'a> SeasonIngester<'a> {
             self.client,
             self.pool,
             self.season,
-            start_date,
-            end_date,
+            &start_date,
+            &end_date,
         )
         .await
         {
@@ -425,8 +483,8 @@ impl<'a> SeasonIngester<'a> {
             self.client,
             self.pool,
             self.season,
-            start_date,
-            end_date,
+            &start_date,
+            &end_date,
         )
         .await
         {
@@ -666,6 +724,50 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // --- 10. row-count sanity vs the prior run (M5a) ---
+        // Snapshot the season-scoped row count of every served table, persist it
+        // under this run's id, and compare against the most recent prior run's
+        // snapshot. In-season these tables only ever grow or hold flat, so a
+        // material shrink (see `detect_count_regressions`) means a feed handed us
+        // a truncated payload or compute wiped rows it shouldn't have — degraded,
+        // not fatal (the served-critical chain already completed). Gated on a
+        // compute having run, so the counts reflect freshly-written derived
+        // tables. The first-ever snapshotting run has no prior and simply records
+        // the baseline.
+        if report.compute.is_some() {
+            let t0 = Utc::now();
+            let current = ledger.snapshot_and_persist_counts().await;
+            let prior = ledger.prior_run_table_counts().await;
+            let regressions = detect_count_regressions(&prior, &current);
+            if regressions.is_empty() {
+                ledger
+                    .record(
+                        "row_counts",
+                        StepStatus::Ok,
+                        Some(current.len() as i64),
+                        t0,
+                        None,
+                    )
+                    .await;
+            } else {
+                let summary = regressions.join("; ");
+                warn!(
+                    season = self.season,
+                    "row-count regression vs prior run — {summary}"
+                );
+                ledger
+                    .record(
+                        "row_counts",
+                        StepStatus::Failed,
+                        Some(regressions.len() as i64),
+                        t0,
+                        Some(&summary),
+                    )
+                    .await;
+                failures.push(format!("row-count regression vs prior run: {summary}"));
+            }
+        }
+
         // --- NatStat v4→v3 fallback visibility (M3 1.4) ---
         // The client silently downgrades to the v3 host on a persistent v4
         // timeout/5xx (it only logs a warning). A downgrade means v4 was failing
@@ -748,11 +850,11 @@ impl<'a> SeasonIngester<'a> {
         let empty_box = report.ingest.games == 0
             && report.ingest.player_performances == 0
             && report.ingest.team_performances == 0;
-        if empty_box && is_core_season_date(end_date) {
+        if empty_box && is_core_season_date(&end_date) {
             warn!(
                 season = self.season,
-                start_date,
-                end_date,
+                start_date = start_date.as_str(),
+                end_date = end_date.as_str(),
                 "in-season nightly ingested zero box scores — feed may be empty/broken"
             );
             failures.push(format!(
@@ -766,6 +868,12 @@ impl<'a> SeasonIngester<'a> {
         // here either completed clean (success heartbeat) or completed with a
         // best-effort feed down (degraded warning). The success ping doubles as
         // a "the cron fired and finished" heartbeat.
+        // A self-heal widened the window this run — surface it in whichever
+        // summary posts (a healed run is still a SUCCESS: it recovered the gap).
+        let heal_line = match &heal_note {
+            Some(n) => format!("\n_:arrows_counterclockwise: {n}_"),
+            None => String::new(),
+        };
         if failures.is_empty() {
             let torvik_line = match &report.torvik {
                 Some(t) => format!(
@@ -786,7 +894,7 @@ impl<'a> SeasonIngester<'a> {
                      *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
                      *Feeds:*  {elo} ELO · {fc} forecasts\n\
                      {torvik_line}\n\
-                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}\n\
+                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}{heal_line}\n\
                      _run {run_id}_",
                     season = self.season,
                     games = report.ingest.games,
@@ -798,6 +906,7 @@ impl<'a> SeasonIngester<'a> {
                     compute_str = compute_str,
                     remaining = tokens_after,
                     budget = budget,
+                    heal_line = heal_line,
                     run_id = ledger.run_id(),
                 ),
             )
@@ -813,11 +922,12 @@ impl<'a> SeasonIngester<'a> {
                 &format!(
                     ":warning: *Nightly ingest DEGRADED* — season {season}\n\
                      Completed with {n} issue(s):\n\
-                     {issues}\n\
+                     {issues}{heal_line}\n\
                      _run {run_id}_",
                     season = self.season,
                     n = failures.len(),
                     issues = issues,
+                    heal_line = heal_line,
                     run_id = ledger.run_id(),
                 ),
             )

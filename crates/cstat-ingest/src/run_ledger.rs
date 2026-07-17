@@ -6,10 +6,29 @@
 //! Ledger writes are intentionally **fail-soft**: a failure to record a step
 //! must never abort the ingest it is observing — we log a warning and move on.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use tracing::warn;
 use uuid::Uuid;
+
+/// Season-scoped served tables the row-count sanity gate (M5a) snapshots after
+/// each successful compute. In-season these only ever grow or hold flat, so a
+/// material shrink vs the prior run is a red flag (a truncated feed, a botched
+/// compute wiping rows). Kept deliberately tight to the load-bearing served set.
+pub const ROW_COUNT_TABLES: &[&str] = &[
+    "games",
+    "team_game_stats",
+    "player_game_stats",
+    "team_season_stats",
+    "player_season_stats",
+];
+
+/// A tracked table must drop by more than BOTH thresholds vs the prior run to
+/// count as a regression: a relative floor (guards against normal churn) AND an
+/// absolute floor (guards against noise on small early-season tables, and lets a
+/// few phantom-player/dup-game repair deletions pass without alarm).
+const REGRESSION_REL_FLOOR: f64 = 0.05; // >5% drop
+const REGRESSION_ABS_FLOOR: i64 = 25; // and >25 rows
 
 /// Outcome of a single pipeline step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +103,147 @@ impl<'a> RunLedger<'a> {
             warn!(step, error = %e, "failed to record ingest_runs step; continuing");
         }
     }
+
+    /// Snapshot the season-scoped row count of every [`ROW_COUNT_TABLES`] table
+    /// and persist each under this run's id (M5a). Fail-soft: a per-table query
+    /// or insert error is logged and skipped so the gate can never abort the
+    /// otherwise-complete run. Returns the counts it managed to read (for the
+    /// immediate comparison against the prior run).
+    pub async fn snapshot_and_persist_counts(&self) -> Vec<(&'static str, i64)> {
+        let mut counts = Vec::new();
+        for &table in ROW_COUNT_TABLES {
+            // `table` is a compile-time constant from ROW_COUNT_TABLES, never
+            // user input — safe to interpolate into the count query.
+            let n: i64 = match sqlx::query_scalar(&format!(
+                "SELECT COUNT(*) FROM {table} WHERE season = $1"
+            ))
+            .bind(self.season)
+            .fetch_one(self.pool)
+            .await
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(table, error = %e, "row-count snapshot query failed; skipping table");
+                    continue;
+                }
+            };
+            let res = sqlx::query(
+                "INSERT INTO ingest_run_table_counts (run_id, season, table_name, row_count) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(self.run_id)
+            .bind(self.season)
+            .bind(table)
+            .bind(n)
+            .execute(self.pool)
+            .await;
+            if let Err(e) = res {
+                warn!(table, error = %e, "failed to persist run table count; continuing");
+            }
+            counts.push((table, n));
+        }
+        counts
+    }
+
+    /// Load the most recent *prior* run's row-count snapshot for this season
+    /// (excludes the current run). Empty if this is the first snapshotting run.
+    /// Fail-soft: a query error yields an empty vec (no prior data → no gate).
+    pub async fn prior_run_table_counts(&self) -> Vec<(String, i64)> {
+        let prior_run: Option<Uuid> = sqlx::query_scalar(
+            "SELECT run_id FROM ingest_run_table_counts \
+             WHERE season = $1 AND run_id <> $2 \
+             ORDER BY recorded_at DESC LIMIT 1",
+        )
+        .bind(self.season)
+        .bind(self.run_id)
+        .fetch_optional(self.pool)
+        .await
+        .unwrap_or(None);
+
+        let Some(prior_run) = prior_run else {
+            return Vec::new();
+        };
+
+        sqlx::query_as::<_, (String, i64)>(
+            "SELECT table_name, row_count FROM ingest_run_table_counts WHERE run_id = $1",
+        )
+        .bind(prior_run)
+        .fetch_all(self.pool)
+        .await
+        .unwrap_or_default()
+    }
+}
+
+/// Date of the most recent run whose load-bearing `games` step succeeded — the
+/// signal the nightly self-heal (M5b) uses to detect a skipped night. Fail-soft:
+/// any query error / no prior success yields `None` (self-heal simply no-ops).
+/// Excludes `exclude_run_id` so the in-flight run can't match itself.
+pub async fn last_successful_ingest_date(
+    pool: &PgPool,
+    season: i32,
+    exclude_run_id: Uuid,
+) -> Option<NaiveDate> {
+    let ts: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT MAX(ended_at) FROM ingest_runs \
+         WHERE season = $1 AND step = 'games' AND status = 'ok' AND run_id <> $2",
+    )
+    .bind(season)
+    .bind(exclude_run_id)
+    .fetch_one(pool)
+    .await
+    .ok()
+    .flatten();
+    ts.map(|t| t.date_naive())
+}
+
+/// Given a defaulted `[default_from, default_to]` window and the date of the
+/// last successful nightly, return a widened `from` when a night was skipped, or
+/// `None` when the window already covers the gap. The widened `from` is the last
+/// success date (re-covering it is a harmless idempotent overlap), floored at
+/// `default_to − max_heal_days` so a long off-season silence can't trigger a
+/// huge NatStat pull. Pure — unit-tested.
+pub fn heal_window(
+    default_from: NaiveDate,
+    default_to: NaiveDate,
+    last_success: Option<NaiveDate>,
+    max_heal_days: i64,
+) -> Option<NaiveDate> {
+    let last = last_success?;
+    // Last success is same-day-or-later than the default start → no gap.
+    if last >= default_from {
+        return None;
+    }
+    let floor = default_to - chrono::Duration::days(max_heal_days);
+    let healed = last.max(floor);
+    // The floor may pull `healed` back up to (or past) default_from — then
+    // there's nothing to widen.
+    if healed >= default_from {
+        None
+    } else {
+        Some(healed)
+    }
+}
+
+/// Compare a prior run's snapshot against the current counts and return a human
+/// line per *material* regression (a tracked table that shrank by more than both
+/// [`REGRESSION_REL_FLOOR`] and [`REGRESSION_ABS_FLOOR`]). Tables absent from the
+/// prior snapshot (first run, or a newly-tracked table) are skipped. Pure —
+/// unit-tested.
+pub fn detect_count_regressions(
+    prior: &[(String, i64)],
+    current: &[(&'static str, i64)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (table, cur) in current {
+        let Some((_, prev)) = prior.iter().find(|(t, _)| t == table) else {
+            continue;
+        };
+        let drop = prev - cur;
+        if drop > REGRESSION_ABS_FLOOR && (drop as f64) > (*prev as f64) * REGRESSION_REL_FLOOR {
+            out.push(format!("{table}: {prev} → {cur} (−{drop})"));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -97,5 +257,85 @@ mod tests {
         assert_eq!(StepStatus::Ok.as_str(), "ok");
         assert_eq!(StepStatus::Failed.as_str(), "failed");
         assert_eq!(StepStatus::Skipped.as_str(), "skipped");
+    }
+
+    fn d(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn heal_window_no_gap_when_last_success_is_recent() {
+        // Ran yesterday (== default_from) → the default window already covers it.
+        assert_eq!(
+            heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-11-07")), 14),
+            None
+        );
+        // Last success later than default_from (e.g. a same-day re-run) → no gap.
+        assert_eq!(
+            heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-11-08")), 14),
+            None
+        );
+    }
+
+    #[test]
+    fn heal_window_widens_to_cover_skipped_nights() {
+        // Last success 3 days back → widen `from` back to that date.
+        assert_eq!(
+            heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-11-04")), 14),
+            Some(d("2026-11-04"))
+        );
+    }
+
+    #[test]
+    fn heal_window_floors_a_long_silence() {
+        // Months-old last success → clamp to default_to − max_heal_days, not the
+        // stale date (bounds the NatStat pull).
+        assert_eq!(
+            heal_window(d("2026-11-07"), d("2026-11-08"), Some(d("2026-06-01")), 14),
+            Some(d("2026-10-25"))
+        );
+    }
+
+    #[test]
+    fn heal_window_none_without_prior_success() {
+        assert_eq!(
+            heal_window(d("2026-11-07"), d("2026-11-08"), None, 14),
+            None
+        );
+    }
+
+    #[test]
+    fn regressions_flag_only_material_drops() {
+        let prior = vec![
+            ("games".to_string(), 1000i64),
+            ("player_game_stats".to_string(), 40_000),
+            ("team_season_stats".to_string(), 360),
+        ];
+        // games cratered (−300, 30%) → flagged; player_game_stats grew → not;
+        // team_season_stats lost 3 rows (<5% and <25) → not.
+        let current = vec![
+            ("games", 700i64),
+            ("player_game_stats", 41_000),
+            ("team_season_stats", 357),
+        ];
+        let out = detect_count_regressions(&prior, &current);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].starts_with("games:"), "{out:?}");
+    }
+
+    #[test]
+    fn regressions_respect_absolute_floor() {
+        // A 20-row drop on a 100-row table is 20% (over the rel floor) but under
+        // the 25-row absolute floor → not flagged (early-season noise).
+        let prior = vec![("team_season_stats".to_string(), 100i64)];
+        let current = vec![("team_season_stats", 80i64)];
+        assert!(detect_count_regressions(&prior, &current).is_empty());
+    }
+
+    #[test]
+    fn regressions_skip_tables_absent_from_prior() {
+        let prior: Vec<(String, i64)> = vec![];
+        let current = vec![("games", 10i64)];
+        assert!(detect_count_regressions(&prior, &current).is_empty());
     }
 }

@@ -14,15 +14,40 @@ served-critical input set in dependency order and records every step to the
 `ingest_runs` ledger:
 
 ```
+preflight   (connectivity probe — records a step, never gates control flow)
 games → player_perfs → team_perfs   (load-bearing — a failure aborts the run)
 forecasts → elo → torvik → torvik_games   (best-effort — logged, run continues)
 compute_all   (load-bearing)
+invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
 
 Window defaults to **yesterday..today (UTC)** so NatStat's overnight stat
 corrections are picked up. Torvik + `/elo` refresh **before** `compute_all`, so
 `cam_gbpm_v3` / `pit_cam_v3` and the served `diff_elo_rating` feature don't
 recompute from stale inputs (the M1 correctness fix).
+
+**Post-compute quality gates (M5).** After a successful compute the run adds two
+non-fatal gates — the served-critical chain already finished, so a gate failure
+routes to the DEGRADED Slack summary rather than aborting:
+
+- **`invariants`** — `cstat_core::invariants::check_season` (the same set the
+  offline `simulate` harness runs): teams with games but NULL AdjEM, completed
+  games missing a `team_game_stats` side, W-L drift, and both swapped-game
+  detectors. `Error`-severity violations degrade the run; `Warning`s (source-data
+  holes the pipeline faithfully reflects) only log.
+- **`row_counts`** — snapshots the season-scoped row count of each served table
+  (`games`, `team_game_stats`, `player_game_stats`, `team_season_stats`,
+  `player_season_stats`) into `ingest_run_table_counts` and compares against the
+  prior run. In-season these only grow, so a material shrink (>5% **and** >25
+  rows) means a truncated feed or a compute that wiped rows — degrades the run.
+
+**Backfill-gap self-heal (M5).** When the window is the default (no explicit
+`--from`), the run first checks the ledger for the last successful `games` step.
+If the cron missed one or more nights, it widens the window start back to that
+date (capped at 14 days) so the gap heals automatically on the next run — the
+re-covered dates are a harmless idempotent overlap. A healed run stays a SUCCESS
+and notes the widening in its Slack summary. An operator-supplied `--from` is
+never auto-widened.
 
 ## Railway setup
 
@@ -251,12 +276,56 @@ for leaf/derived tables**: the restore is `TRUNCATE … CASCADE`, so targeting a
 though they aren't in your list. The confirmation prompt flags this in targeted
 mode.
 
-## First-night checklist (opening week)
+## Secret & token rotation
 
-1. Confirm the cron service ran (Railway logs show "nightly ingestion complete").
-2. `curl https://<host>/api/health/ingest` → `healthy: true`, fresh timestamps.
-3. Spot-check a fresh box score and `GET /api/predict` on an opening-night game
-   (expect the thin-sample `preseason`/`blended` regime for the first ~2 weeks
-   before AdjEM converges — see `prediction_basis`).
-4. Force a failure once (e.g. temporarily bad `NATSTAT_API_KEY` on a throwaway
-   run) to confirm the Slack alert fires, then restore.
+Every secret the nightly and API depend on, where it lives, and how to rotate it.
+All are set as Railway service variables (cron service unless noted); rotating one
+is: update the value → redeploy that service → verify.
+
+| Secret | Service | Rotation cadence | Runbook |
+| --- | --- | --- | --- |
+| `NATSTAT_API_KEY` | cron + API | On provider reissue only | Paste the new key, redeploy. A bad key hard-aborts the nightly (step `games`) with a Slack alert. |
+| `TFS_247_JWT` | (transfers job only) | ~6–12h expiry — offseason roster work | **Auto-fetched guest token by default**; only needed for subscriber-only fields. See [`247_jwt_recapture.md`](247_jwt_recapture.md). Fail-soft: an expired token skips 247 and keeps the last snapshot. |
+| `SLACK_WEBHOOK_CRON` | cron | On channel/webhook reissue | Recreate the incoming webhook for `#cron-job-alerts`, paste, redeploy. Unset = silent (fail-soft). |
+| `SLACK_WEBHOOK_ERRORS_API` / `_WEB` | API | On channel/webhook reissue | Same, for `#errors-api` / `#errors-web`. |
+| `ALERT_SELFTEST_TOKEN` | API | On demand | Rotate the value, redeploy, re-verify with `GET /api/alert-selftest`. |
+| `HEARTBEAT_URL` | cron | On monitor reissue | Update the dead-man's-switch URL, redeploy. |
+| `CF_ZONE_ID` / `CF_CACHE_PURGE_TOKEN` | cron | On Cloudflare token reissue | Update both, redeploy. Unset = the 5-min edge TTL handles freshness. |
+
+**Operator hazard — `CSTAT_SIMULATED_DATE` must be UNSET on the cron and API
+services.** A lingering value pins the serving clock: the nightly window freezes
+on one past date while every monitor stays green. The nightly marks itself
+degraded when it sees the var, but the safe posture is to never set it on a real
+service (it's for local `simulate`/testing only).
+
+## First-day-of-season checklist (opening week)
+
+Run through this the morning after the season's first slate of games.
+
+1. **Cron fired and finished.** Railway logs show `nightly ingestion complete`;
+   `#cron-job-alerts` has a green `Nightly ingest OK` post (or a DEGRADED post you
+   understand — a self-heal note or an empty-off-season feed is benign).
+2. **Health route is green.** `curl https://<host>/api/health/ingest` →
+   `healthy: true` with fresh (`< 36h`) `last_ok_at` on every served-critical
+   step. A `503` means a step is stale — check which and why.
+3. **Fresh data landed.** Spot-check an opening-night box score in the DB/UI and
+   confirm `games`/`player_perfs` counts on the run are non-zero for a night that
+   had games (the empty-box heuristic would have degraded the run otherwise).
+4. **Predict works on live games.** `GET /api/predict?home=…&away=…` on an
+   opening-night matchup returns a margin + win prob. Expect the thin-sample
+   `preseason`/`blended` regime for the first ~2 weeks before AdjEM converges —
+   check `prediction_basis` is one of those, not `leaky`.
+5. **Quality gates are clean.** In `ingest_runs`, the run's `invariants` and
+   `row_counts` steps are `ok`. A `row_counts` failure on the *first* in-season
+   run is expected-absent (no prior snapshot to compare) — it just records the
+   baseline; the gate engages from the second run on.
+6. **Alerting is live.** Confirm the Slack pipeline end-to-end with
+   `GET /api/alert-selftest?channel=api` (`X-Selftest-Token` header) →
+   `{"posted":true}`. Optionally force one real failure (temporarily bad
+   `NATSTAT_API_KEY` on a throwaway run) to see the abort alert, then restore.
+7. **No leftover sim clock.** Grep the cron + API env for `CSTAT_SIMULATED_DATE`
+   — it must be unset (see the hazard above).
+
+**Weekly until tipoff:** keep running `cstat-ingest simulate --reset` against the
+sim DB (`docs/in_season_ingest_plan.md`) so an ingest/compute regression surfaces
+now, not on opening night.
