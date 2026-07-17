@@ -1562,6 +1562,125 @@ pub async fn search_players(
     Ok((rows, total))
 }
 
+/// Portle daily-puzzle pool scopes. These mirror `web/src/lib/portle.ts`'s
+/// `filterPool` EXACTLY — the pinned answer must belong to the same eligible set
+/// the client renders, or the client can't display it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortleMode {
+    P5,
+    Starters,
+    Campom10,
+    All,
+}
+
+impl PortleMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "p5" => Some(Self::P5),
+            "starters" => Some(Self::Starters),
+            "campom10" => Some(Self::Campom10),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::P5 => "p5",
+            Self::Starters => "starters",
+            Self::Campom10 => "campom10",
+            Self::All => "all",
+        }
+    }
+
+    /// Extra SQL predicate this mode layers on the answerable base. Literal
+    /// constants (no user input), safe to interpolate. Kept in lockstep with
+    /// `filterPool`: P5 = power-conf set + MPG>=20; Starters = MPG>=24;
+    /// CamPom 10+ = CamPom>10; All = none.
+    fn sql_predicate(self) -> &'static str {
+        match self {
+            Self::P5 => {
+                "AND t.conference IN ('ACC','BIG10','BIG12','SEC','BIGEAST') \
+                 AND pss.minutes_per_game >= 20"
+            }
+            Self::Starters => "AND pss.minutes_per_game >= 24",
+            Self::Campom10 => "AND tps.cam_gbpm_v3_psos > 10",
+            Self::All => "",
+        }
+    }
+}
+
+/// Pick — and permanently pin — Portle's daily answer for (mode, season, date).
+///
+/// The answer is the eligible player whose `md5(salt:natstat_id)` sorts first
+/// (salt = `mode:season:date`), deterministic over the stable `natstat_id`. The
+/// first request for a day INSERTs the pin; every later request — and every
+/// other client — reads the same frozen row via the PK, so the puzzle is
+/// identical for everyone and never moves once set, even if the eligible pool
+/// later shifts. Returns the pinned `natstat_id`, or `None` when nobody is
+/// eligible for that mode/season (empty pool → no pin, no row written).
+///
+/// The eligible set mirrors `filterPool` on the same base the `/api/players`
+/// list uses (season, GP>=5, MPG>=10, answerable = has CamPom + an archetype),
+/// so the pinned id is always in the pool the client already loaded.
+pub async fn pick_or_pin_daily_puzzle(
+    pool: &PgPool,
+    mode: PortleMode,
+    season: i32,
+    date: NaiveDate,
+) -> Result<Option<String>, sqlx::Error> {
+    // First request pins; concurrent first-requests collapse via ON CONFLICT.
+    let insert_sql = format!(
+        r#"
+        WITH eligible AS (
+            SELECT p.natstat_id AS natstat_id
+            FROM player_season_stats pss
+            JOIN players p ON p.id = pss.player_id AND p.season = pss.season
+            LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
+            LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pss.season
+            LEFT JOIN player_archetypes pa ON pa.player_id = pss.player_id AND pa.season = pss.season
+            WHERE pss.season = $2
+              AND pss.games_played >= 5
+              AND pss.minutes_per_game >= 10
+              AND tps.cam_gbpm_v3_psos IS NOT NULL
+              AND pa.primary_class IS NOT NULL
+              {mode_pred}
+        )
+        INSERT INTO portle_daily_puzzle (mode, season, puzzle_date, natstat_id)
+        SELECT $1, $2, $3, e.natstat_id
+        FROM eligible e
+        ORDER BY md5($1 || ':' || $2::text || ':' || $3::text || ':' || e.natstat_id), e.natstat_id
+        LIMIT 1
+        ON CONFLICT (mode, season, puzzle_date) DO NOTHING
+        RETURNING natstat_id
+        "#,
+        mode_pred = mode.sql_predicate(),
+    );
+
+    let inserted: Option<(String,)> = sqlx::query_as(&insert_sql)
+        .bind(mode.as_str())
+        .bind(season)
+        .bind(date)
+        .fetch_optional(pool)
+        .await?;
+    if let Some((natstat_id,)) = inserted {
+        return Ok(Some(natstat_id));
+    }
+
+    // No RETURNING row → either an existing pin (ON CONFLICT) or an empty pool.
+    // Read the frozen row; absent → genuinely no puzzle for this pool.
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT natstat_id FROM portle_daily_puzzle \
+         WHERE mode = $1 AND season = $2 AND puzzle_date = $3",
+    )
+    .bind(mode.as_str())
+    .bind(season)
+    .bind(date)
+    .fetch_optional(pool)
+    .await?;
+    Ok(existing.map(|(natstat_id,)| natstat_id))
+}
+
 pub async fn get_player_by_id(
     pool: &PgPool,
     player_id: Uuid,

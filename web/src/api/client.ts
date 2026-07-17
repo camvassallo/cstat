@@ -436,6 +436,19 @@ export function fetchPlayers(params: {
   );
 }
 
+/** Server-authoritative Portle daily answer (issue #181). The backend pins one
+ *  player per (mode, season, local date) and freezes it, so every client fetches
+ *  the identical puzzle and it never moves once set. Returns the stable
+ *  `natstat_id` of the answer (or null when no player is eligible for that pool),
+ *  which the caller resolves against the already-loaded player pool. `date` is
+ *  the player's LOCAL calendar date (YYYY-MM-DD), matching the Wordle convention. */
+export function fetchPortleDaily(mode: string, season: number, date: string) {
+  return fetchJson<{ mode: string; season: number; date: string; natstat_id: string | null }>(
+    '/portle/daily',
+    { mode, season: season.toString(), date },
+  );
+}
+
 // Transfer portal — one row per ranked 247Sports transfer, enriched with our
 // CamPom value when we can match the player to a row in the prior season.
 export interface TransferRow {
