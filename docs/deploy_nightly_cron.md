@@ -126,6 +126,14 @@ cron service reuses it — no separate build.
    so the cron service gets the right command, the schedule (09:30 UTC ≈ **04:30
    ET**, after NatStat's ~3 AM re-tabulation), and **no healthcheck** — all from
    code, nothing to hand-set per deploy.
+
+   > **Do not move the schedule earlier than ~08:00 UTC.** A date's games run
+   > until ~07:30 UTC the next morning, so an earlier run fetches them mid-flight
+   > — partial box scores, and a coverage claim that stops the self-heal from
+   > ever re-fetching them. The run checks this itself (`GAMES_SETTLE_HOUR_UTC`)
+   > and **degrades** with a `fired before the settle time` line rather than
+   > failing silently, but the fix is to schedule it later. Later is free; the
+   > 09:30 slot only needs to beat the first visitors of the day.
 3. **Shared variables** (reference the same Postgres plugin + key as the API):
    - `DATABASE_URL` — **use the PRIVATE Postgres URL** (`${{Postgres.DATABASE_PRIVATE_URL}}`
      / the `…railway.internal` host), **not** the public `…proxy.rlwy.net` one,

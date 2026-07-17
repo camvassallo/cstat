@@ -74,6 +74,34 @@ pub fn env_simulated_date() -> Option<NaiveDate> {
     }
 }
 
+/// The simulated date, if either override is active — the in-process
+/// [`set_simulated_today`] first, then `CSTAT_SIMULATED_DATE`.
+///
+/// [`today_utc`] answers "what date is it"; this answers "is the clock fake at
+/// all", which callers need when they reason about the *time of day* (something
+/// the overrides don't model — they inject a date, not an instant). Silent by
+/// design: [`today_utc`] owns the warn-once for a lingering override, and this
+/// must be callable without doubling that log.
+pub fn simulated_today() -> Option<NaiveDate> {
+    let days = SIMULATED_TODAY.load(Ordering::Relaxed);
+    if days != 0
+        && let Some(d) = NaiveDate::from_num_days_from_ce_opt(days)
+    {
+        return Some(d);
+    }
+    env_simulated_date()
+}
+
+/// Hour (UTC) by which a game date's slate has reliably finished. A US
+/// college-basketball date D's games tip ~D 23:00 UTC and the latest end around
+/// D+1 07:30 UTC, so a run after ~08:00 UTC on D+1 sees D final.
+///
+/// The production cron fires 09:30 UTC (`railway.cron.json`), clearing this by
+/// ~2h. `SeasonIngester::nightly` checks it rather than assuming it: the
+/// coverage clamp's correctness depends on the schedule, and nothing else ties
+/// the two together.
+pub const GAMES_SETTLE_HOUR_UTC: u32 = 8;
+
 /// Today's date (UTC) — the single wall-clock read for the pipeline.
 ///
 /// Honors two overrides so the whole pipeline can run "as if today is

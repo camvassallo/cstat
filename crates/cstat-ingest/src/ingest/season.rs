@@ -6,7 +6,7 @@ use crate::run_ledger::{
 };
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Timelike, Utc};
 use cstat_core::compute::{ComputeReport, compute_all};
 use cstat_core::invariants::{self, Severity};
 use sqlx::PgPool;
@@ -308,6 +308,9 @@ impl<'a> SeasonIngester<'a> {
         // Set when the MAX_HEAL_DAYS cap left game dates un-ingested — pushed to
         // `failures` (declared below) so a partial heal degrades the run.
         let mut heal_shortfall: Option<String> = None;
+        // Set when the run fired before games settle — likewise pushed to
+        // `failures` below (see the settle-hour check after the heal block).
+        let mut early_run_note: Option<String> = None;
         let (start_date, end_date): (String, String) = {
             let widened = if self_heal {
                 match (
@@ -410,6 +413,44 @@ impl<'a> SeasonIngester<'a> {
             ledger.set_window(ws, ce);
         }
 
+        // The clamp above is only sound because the cron fires *after* last
+        // night's games finish (09:30 UTC vs a ~08:00 settle). Nothing in the
+        // code enforces that — the schedule lives in `railway.cron.json`, one
+        // character away from `"0 2 * * *"`. At 02:00 UTC the run would fetch
+        // last night's games mid-flight, record partial box scores, and still
+        // claim their date covered, so no later run would ever re-fetch them:
+        // the exact silent loss the clamp exists to prevent, reintroduced by a
+        // config edit. Deriving the clamp from the instant instead does NOT
+        // rescue this — an early run then claims nothing at all, leaving the
+        // scan with no complete runs and killing the self-heal just as quietly.
+        // An early cron is a broken pipeline either way, so say so out loud.
+        //
+        // Only checked for a window reaching today (the live/default path); an
+        // operator backfilling long-settled dates at 03:00 is perfectly fine.
+        // Skipped under a simulated clock, which injects a date but no
+        // time-of-day for this to read.
+        if crate::simulated_today().is_none() {
+            let now = Utc::now();
+            let live_window = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+                .is_ok_and(|we| we >= now.date_naive());
+            if live_window && now.hour() < crate::GAMES_SETTLE_HOUR_UTC {
+                warn!(
+                    hour_utc = now.hour(),
+                    settle_hour_utc = crate::GAMES_SETTLE_HOUR_UTC,
+                    "nightly fired before games settle — box scores may be mid-flight"
+                );
+                early_run_note = Some(format!(
+                    "nightly fired at {hour:02}:xx UTC, before the ~{settle:02}:00 UTC \
+                     settle time — last night's games may still have been in progress, so \
+                     this run's box scores can be partial and its coverage claim too \
+                     optimistic. Move the cron schedule later (`railway.cron.json`; \
+                     production is 09:30 UTC).",
+                    hour = now.hour(),
+                    settle = crate::GAMES_SETTLE_HOUR_UTC,
+                ));
+            }
+        }
+
         let mut report = NightlyReport {
             ingest: IngestReport::default(),
             torvik: None,
@@ -428,6 +469,11 @@ impl<'a> SeasonIngester<'a> {
         // gap — surface it as a degraded run (see the heal block above).
         if let Some(shortfall) = heal_shortfall {
             failures.push(shortfall);
+        }
+
+        // The run fired before last night's games had settled (see above).
+        if let Some(note) = early_run_note {
+            failures.push(note);
         }
 
         // A leftover CSTAT_SIMULATED_DATE pins the default window to one past

@@ -248,9 +248,12 @@ impl<'a> RunLedger<'a> {
 /// game missing a `team_game_stats` side" every night forever.
 ///
 /// Two floors keep the scan honest:
-/// - **`window_end <= as_of`** discards absurd future windows. A typo'd
-///   `--to 2030-01-01` would otherwise mark every date covered and disable
-///   healing permanently.
+/// - **`window_end <= as_of`** discards absurd future windows — a typo'd
+///   `--to 2030-01-01` marking every date covered and disabling healing
+///   permanently. Belt-and-braces since the writer's clamp
+///   (`min(window_end, today - 1)`) already stops a future date being stamped;
+///   kept so the scan is safe against any row the ledger happens to hold,
+///   including ones written before that clamp existed.
 /// - **`MIN(window_start)`** stops the scan from looking back before the first
 ///   window we ever recorded. Without it, the run right after migration 043
 ///   (when all prior rows have NULL windows) would see the whole lookback as
