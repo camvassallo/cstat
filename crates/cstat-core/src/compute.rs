@@ -2705,6 +2705,17 @@ struct StintRow {
 ///
 /// `lineup_stints` is local-only (per-stint detail); `lineup_aggregates` and the
 /// `plus_minus_pbp` column ship to prod. Season-scoped clean recompute.
+///
+/// R4 INVARIANT (see `docs/intraseason_data_safety_plan.md` §R4): on prod this
+/// function early-returns at the `games.is_empty() && covered_pairs.is_empty()`
+/// check below, because `play_by_play` / `natstat_lineups` /
+/// `natstat_lineup_games` / `lineup_stints` are EXCLUDED from `sync_to_prod.sh`,
+/// so prod holds zero PBP/lineup source rows. That no-op is the ONLY reason the
+/// targeted `--tables lineup_aggregates,player_on_off` sync can safely own those
+/// two rollups on prod. Ship any of those four source tables to prod and this
+/// function would DELETE+rebuild the rollups every nightly run, colliding with
+/// the operator's push. Guarded by
+/// `tests/sync_prod_r4_invariant.rs` — don't break the coupling silently.
 pub async fn compute_pbp_lineups(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
     // Build everything in memory first (read-only), then swap it in atomically
     // at the end — see the transaction below. Lets a mid-run failure leave the
@@ -3301,6 +3312,434 @@ async fn insert_lineup_stints(
     Ok(())
 }
 
+// ===================== Archetype assignment (Rust assign port) =====================
+//
+// A deterministic Rust port of the *assign* half of `training/archetypes.py`.
+// The *fit* (combined-cohort k-means + Hungarian cluster->class matching, with
+// the signature-alignment guardrail) stays offline and annual in Python — it is
+// a deliberate, diagnostics-reviewed operation, and refitting in-season would
+// churn every season's labels (combined-cohort stability is load-bearing). This
+// port only reads the frozen model from `archetype_models` and assigns players:
+// standardize -> nearest centroid -> map to class -> softmax affinities. Being
+// deterministic given the frozen model, it must reproduce Python's labels
+// exactly on the same inputs (guarded by `tests/archetype_assign_parity.rs`).
+//
+// Running it nightly (in `compute_all`) is the self-sufficiency win: labels
+// refresh off `torvik_player_stats` season-to-date as the sample grows, instead
+// of freezing at the last manual `python -m archetypes` push, and prod no longer
+// needs Python at all for the assign path. See ROADMAP "Prod self-sufficiency"
+// (P1 — Archetype assign in Rust).
+
+/// Softmax temperature for affinity scores. MUST match `archetypes.py`
+/// (`temperature = 1.5`) or affinity magnitudes drift from the Python writer.
+const ARCHETYPE_SOFTMAX_TEMPERATURE: f64 = 1.5;
+
+/// The frozen archetype model for a season, loaded from `archetype_models`.
+struct ArchetypeModel {
+    /// Feature order the centroids/means/stds are aligned to. Authoritative —
+    /// read from the model row, never hardcoded, so a re-fit that changes the
+    /// feature set can't silently misalign this port.
+    feature_names: Vec<String>,
+    /// Per-feature standardization params, aligned to `feature_names`.
+    feature_means: Vec<f64>,
+    feature_stds: Vec<f64>,
+    /// One per cluster, ordered by cluster id 0..K.
+    clusters: Vec<ClusterCentroid>,
+}
+
+struct ClusterCentroid {
+    cluster_id: i32,
+    class: String,
+    /// Centroid in standardized space, aligned to `ArchetypeModel::feature_names`.
+    vector: Vec<f64>,
+}
+
+/// One assigned player, mirroring a `player_archetypes` row (pre-write).
+pub struct ArchetypeAssignment {
+    pub player_id: Uuid,
+    pub cluster_id: i32,
+    pub primary_class: String,
+    pub secondary_class: String,
+    pub primary_score: f64,
+    pub secondary_score: f64,
+    /// class-name -> affinity, sums to ~1 (softmax over -distance).
+    pub affinity_scores: serde_json::Value,
+    /// Standardized (z-scored) feature vector, aligned to the model's
+    /// `feature_names`. Stored as f32 to match Python's `astype(np.float32)`.
+    pub feature_vector: Vec<f32>,
+}
+
+/// Load the frozen model row for `season`. `None` when no fit exists yet (a
+/// brand-new season before its annual retrain, or an off-season bootstrap) —
+/// the caller then no-ops rather than inventing labels.
+async fn load_archetype_model(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<ArchetypeModel>, sqlx::Error> {
+    // JSONB read as text + serde_json parse: this crate's sqlx has no `json`
+    // feature, so a `::text` cast is the portable way to pull JSONB out.
+    let row = sqlx::query(
+        "SELECT feature_names::text  AS feature_names, \
+                cluster_to_class::text AS cluster_to_class, \
+                centroids::text        AS centroids, \
+                feature_means::text    AS feature_means, \
+                feature_stds::text     AS feature_stds \
+         FROM archetype_models WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let parse = |col: &str| -> serde_json::Value {
+        let s: String = row.get(col);
+        serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
+    };
+
+    let feature_names: Vec<String> = parse("feature_names")
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let means_obj = parse("feature_means");
+    let stds_obj = parse("feature_stds");
+    let feature_means: Vec<f64> = feature_names
+        .iter()
+        .map(|n| means_obj.get(n).and_then(|v| v.as_f64()).unwrap_or(0.0))
+        .collect();
+    let feature_stds: Vec<f64> = feature_names
+        .iter()
+        .map(|n| stds_obj.get(n).and_then(|v| v.as_f64()).unwrap_or(1.0))
+        .collect();
+
+    // centroids: { "<cluster_id>": { "class": <name>, "vector": [f64; F] }, ... }
+    let centroids_obj = parse("centroids");
+    let mut clusters: Vec<ClusterCentroid> = centroids_obj
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(cid, entry)| {
+                    let cluster_id = cid.parse::<i32>().ok()?;
+                    let class = entry.get("class")?.as_str()?.to_string();
+                    let vector = entry
+                        .get("vector")?
+                        .as_array()?
+                        .iter()
+                        .map(|v| v.as_f64().unwrap_or(0.0))
+                        .collect::<Vec<f64>>();
+                    Some(ClusterCentroid {
+                        cluster_id,
+                        class,
+                        vector,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    clusters.sort_by_key(|c| c.cluster_id);
+
+    if feature_names.is_empty() || clusters.is_empty() {
+        warn!(
+            season,
+            "archetype_models row for {season} is malformed (empty feature_names or centroids); skipping assign",
+        );
+        return Ok(None);
+    }
+
+    Ok(Some(ArchetypeModel {
+        feature_names,
+        feature_means,
+        feature_stds,
+        clusters,
+    }))
+}
+
+/// Assign a single player from their standardized feature vector `z` (aligned to
+/// `model.feature_names`). Pure math — mirrors `write_results` in `archetypes.py`
+/// exactly: nearest centroid is the cluster id, affinities are softmax over
+/// -distance re-keyed by class, and primary/secondary come from a *stable* sort
+/// by affinity descending in cluster order (so ties break identically to
+/// Python's insertion-ordered dict).
+fn assign_from_standardized(
+    model: &ArchetypeModel,
+    player_id: Uuid,
+    z: &[f64],
+) -> ArchetypeAssignment {
+    // Euclidean distance to each cluster centroid, in cluster-id order.
+    let dists: Vec<f64> = model
+        .clusters
+        .iter()
+        .map(|c| {
+            c.vector
+                .iter()
+                .zip(z)
+                .map(|(cj, zj)| (zj - cj) * (zj - cj))
+                .sum::<f64>()
+                .sqrt()
+        })
+        .collect();
+
+    // Softmax over -distance / T (max-shifted for stability; result identical
+    // to scipy.special.softmax).
+    let neg: Vec<f64> = dists
+        .iter()
+        .map(|d| -d / ARCHETYPE_SOFTMAX_TEMPERATURE)
+        .collect();
+    let m = neg.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let exps: Vec<f64> = neg.iter().map(|n| (n - m).exp()).collect();
+    let sum: f64 = exps.iter().sum();
+    let affs: Vec<f64> = exps.iter().map(|e| e / sum).collect();
+
+    // Re-key affinity by class and stable-sort desc, built in cluster order so
+    // ties resolve as Python's `sorted(dict.items(), reverse=True)` does.
+    let mut ranked: Vec<(&str, f64, i32)> = model
+        .clusters
+        .iter()
+        .enumerate()
+        .map(|(j, c)| (c.class.as_str(), affs[j], c.cluster_id))
+        .collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let (primary_class, primary_score, cluster_id) = ranked[0];
+    let (secondary_class, secondary_score, _) = ranked[1];
+
+    let affinity_scores = serde_json::Value::Object(
+        model
+            .clusters
+            .iter()
+            .enumerate()
+            .map(|(j, c)| {
+                (
+                    c.class.clone(),
+                    serde_json::Number::from_f64(affs[j])
+                        .map(serde_json::Value::Number)
+                        .unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect(),
+    );
+
+    ArchetypeAssignment {
+        player_id,
+        cluster_id,
+        primary_class: primary_class.to_string(),
+        secondary_class: secondary_class.to_string(),
+        primary_score,
+        secondary_score,
+        affinity_scores,
+        feature_vector: z.iter().map(|&v| v as f32).collect(),
+    }
+}
+
+/// Raw (pre-standardization) feature row for one qualified player, mirroring
+/// `fetch_player_features` in `archetypes.py`.
+struct RawFeatureRow {
+    player_id: Uuid,
+    rim_attempted: f64,
+    mid_attempted: f64,
+    tpa: f64,
+    ogbpm: f64,
+    dgbpm: f64,
+    ast_pct: Option<f64>,
+    tov_pct: Option<f64>,
+    usage_rate: Option<f64>,
+    orb_pct: Option<f64>,
+    drb_pct: Option<f64>,
+    stl_pct: Option<f64>,
+    blk_pct: Option<f64>,
+    ft_rate: Option<f64>,
+    minutes_per_game: f64,
+}
+
+/// Build the raw feature map for a player (feature name -> value), or `None` if
+/// any feature is missing/NaN — matching Python's `dropna(subset=FEATURE_NAMES)`
+/// (usually a shot-zone player with 0 FGA, or a NULL rate stat).
+fn raw_feature_map(r: &RawFeatureRow) -> Option<HashMap<&'static str, f64>> {
+    let fga = r.rim_attempted + r.mid_attempted + r.tpa;
+    if fga == 0.0 {
+        return None; // shares would be NaN — Python drops these
+    }
+    let mut m = HashMap::new();
+    m.insert("rim_share", r.rim_attempted / fga);
+    m.insert("mid_share", r.mid_attempted / fga);
+    m.insert("three_share", r.tpa / fga);
+    m.insert("ast_pct", r.ast_pct?);
+    m.insert("tov_pct", r.tov_pct?);
+    m.insert("usage_rate", r.usage_rate?);
+    m.insert("orb_pct", r.orb_pct?);
+    m.insert("drb_pct", r.drb_pct?);
+    m.insert("stl_pct", r.stl_pct?);
+    m.insert("blk_pct", r.blk_pct?);
+    m.insert("ft_rate", r.ft_rate?);
+    m.insert("ogbpm", r.ogbpm);
+    m.insert("dgbpm", r.dgbpm);
+    m.insert("min_share", r.minutes_per_game / 40.0);
+    Some(m)
+}
+
+/// Fetch qualified players and assign each against the frozen model, WITHOUT
+/// writing. Returns an empty vec when no model exists for the season. Exposed
+/// for the parity test, which compares these against the Python-written rows.
+pub async fn assign_archetypes(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<ArchetypeAssignment>, sqlx::Error> {
+    let Some(model) = load_archetype_model(pool, season).await? else {
+        return Ok(Vec::new());
+    };
+
+    // Same qualified-cohort SQL as `fetch_player_features`: gate on
+    // >=10 GP / >=10 MPG, require the Torvik shot-zone + GBPM columns, and pick
+    // the dominant stint per (player, season) on each side.
+    let rows: Vec<RawFeatureRow> = sqlx::query(
+        "WITH pss_ranked AS ( \
+             SELECT pss.player_id, pss.season, \
+                    pss.ast_pct, pss.tov_pct, pss.usage_rate, pss.orb_pct, \
+                    pss.drb_pct, pss.stl_pct, pss.blk_pct, pss.ft_rate, \
+                    pss.minutes_per_game, \
+                    ROW_NUMBER() OVER ( \
+                        PARTITION BY pss.player_id, pss.season \
+                        ORDER BY (pss.games_played * pss.minutes_per_game) DESC NULLS LAST \
+                    ) AS rn \
+             FROM player_season_stats pss \
+             WHERE pss.season = $1 AND pss.games_played >= 10 AND pss.minutes_per_game >= 10 \
+         ), \
+         torvik_ranked AS ( \
+             SELECT t.player_id, t.season, t.rim_attempted, t.mid_attempted, t.tpa, \
+                    t.ogbpm, t.dgbpm, \
+                    ROW_NUMBER() OVER ( \
+                        PARTITION BY t.player_id, t.season \
+                        ORDER BY t.total_minutes DESC NULLS LAST \
+                    ) AS rn \
+             FROM torvik_player_stats t \
+             WHERE t.season = $1 AND t.player_id IS NOT NULL \
+               AND t.ogbpm IS NOT NULL AND t.dgbpm IS NOT NULL \
+               AND t.rim_attempted IS NOT NULL AND t.mid_attempted IS NOT NULL \
+               AND t.tpa IS NOT NULL \
+         ) \
+         SELECT t.player_id AS player_id, \
+                t.rim_attempted::double precision  AS rim_attempted, \
+                t.mid_attempted::double precision  AS mid_attempted, \
+                t.tpa::double precision            AS tpa, \
+                t.ogbpm::double precision          AS ogbpm, \
+                t.dgbpm::double precision          AS dgbpm, \
+                pss.ast_pct::double precision      AS ast_pct, \
+                pss.tov_pct::double precision      AS tov_pct, \
+                pss.usage_rate::double precision   AS usage_rate, \
+                pss.orb_pct::double precision      AS orb_pct, \
+                pss.drb_pct::double precision      AS drb_pct, \
+                pss.stl_pct::double precision      AS stl_pct, \
+                pss.blk_pct::double precision      AS blk_pct, \
+                pss.ft_rate::double precision      AS ft_rate, \
+                pss.minutes_per_game::double precision AS minutes_per_game \
+         FROM torvik_ranked t \
+         JOIN pss_ranked pss ON pss.player_id = t.player_id AND pss.season = t.season AND pss.rn = 1 \
+         JOIN players p ON p.id = t.player_id \
+         WHERE t.rn = 1",
+    )
+    .bind(season)
+    .map(|row: sqlx::postgres::PgRow| RawFeatureRow {
+        player_id: row.get("player_id"),
+        rim_attempted: row.get("rim_attempted"),
+        mid_attempted: row.get("mid_attempted"),
+        tpa: row.get("tpa"),
+        ogbpm: row.get("ogbpm"),
+        dgbpm: row.get("dgbpm"),
+        ast_pct: row.get("ast_pct"),
+        tov_pct: row.get("tov_pct"),
+        usage_rate: row.get("usage_rate"),
+        orb_pct: row.get("orb_pct"),
+        drb_pct: row.get("drb_pct"),
+        stl_pct: row.get("stl_pct"),
+        blk_pct: row.get("blk_pct"),
+        ft_rate: row.get("ft_rate"),
+        minutes_per_game: row.get("minutes_per_game"),
+    })
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let Some(fmap) = raw_feature_map(r) else {
+            continue;
+        };
+        // Project onto the model's feature order and standardize. Skip if the
+        // model expects a feature we couldn't build (guards against a re-fit
+        // that adds a feature this port doesn't know how to compute).
+        let mut z = Vec::with_capacity(model.feature_names.len());
+        let mut complete = true;
+        for (i, name) in model.feature_names.iter().enumerate() {
+            let Some(&raw) = fmap.get(name.as_str()) else {
+                complete = false;
+                break;
+            };
+            let std = model.feature_stds[i];
+            let std = if std.abs() < 1e-12 { 1.0 } else { std };
+            z.push((raw - model.feature_means[i]) / std);
+        }
+        if !complete {
+            continue;
+        }
+        out.push(assign_from_standardized(&model, r.player_id, &z));
+    }
+
+    Ok(out)
+}
+
+/// Assign player archetypes for `season` against the frozen `archetype_models`
+/// fit and replace the season's `player_archetypes` rows. No-ops (returns 0)
+/// when no fit exists yet. Season-scoped clean recompute, mirroring the Python
+/// writer's DELETE-then-INSERT.
+pub async fn compute_archetypes(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    let assignments = assign_archetypes(pool, season).await?;
+    if assignments.is_empty() {
+        // Either no model yet (new season pre-retrain) or no qualified players
+        // (early season, nobody at >=10 GP). Leave existing rows untouched so a
+        // recompute before the annual fit doesn't wipe last push's labels.
+        info!(
+            season,
+            "archetype assign: no model or no qualified players — leaving player_archetypes unchanged"
+        );
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM player_archetypes WHERE season = $1")
+        .bind(season)
+        .execute(&mut *tx)
+        .await?;
+
+    for chunk in assignments.chunks(1000) {
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO player_archetypes \
+             (player_id, season, cluster_id, primary_class, secondary_class, \
+              primary_score, secondary_score, affinity_scores, feature_vector) ",
+        );
+        qb.push_values(chunk, |mut b, a| {
+            b.push_bind(a.player_id)
+                .push_bind(season)
+                .push_bind(a.cluster_id)
+                .push_bind(&a.primary_class)
+                .push_bind(&a.secondary_class)
+                .push_bind(a.primary_score)
+                .push_bind(a.secondary_score)
+                .push_bind(a.affinity_scores.to_string())
+                .push_unseparated("::jsonb")
+                .push_bind(&a.feature_vector);
+        });
+        qb.build().execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+
+    Ok(assignments.len() as u64)
+}
+
 pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {
     let mut report = ComputeReport::default();
 
@@ -3318,77 +3757,83 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
         );
     }
 
-    info!("step 1/19: deduplicating players");
+    info!("step 1/20: deduplicating players");
     report.deduplicated_players = deduplicate_players(pool, season).await?;
 
     // Runs right after dedup (so it sees post-merge box rows) and before any
     // step that joins players on team_id. Corrects first-write-wins team_id
     // poisoning from source roster swaps (issue #119).
-    info!("step 2/19: reconciling player team_id to box-score majority");
+    info!("step 2/20: reconciling player team_id to box-score majority");
     report.reconciled_player_teams = reconcile_player_teams(pool, season).await?;
 
     // Uses the reconciled team_id to find fully-swapped games and relabel them
     // (games/team_game_stats/player_game_stats) so the four-factors / W-L / AdjEM
     // steps below recompute from the corrected box rows (issue #119).
-    info!("step 3/19: correcting source-swapped games");
+    info!("step 3/20: correcting source-swapped games");
     report.corrected_swapped_games = correct_swapped_games(pool, season).await?;
 
     // Repairs the harder swap variant where NatStat minted fresh per-game phantom
     // ids that defeat the cross-tag detector above: re-identifies each phantom
     // against the opponent roster, relabels the game + play-by-play, and deletes
     // the phantom duplicates (issue #140).
-    info!("step 4/19: repairing phantom-swapped games");
+    info!("step 4/20: repairing phantom-swapped games");
     report.repaired_phantom_swaps = repair_phantom_swapped_games(pool, season).await?;
 
     // Uses the reconciled team_id to move box rows that NatStat stamped with the
     // wrong same-name player's id onto the real human, so season stats don't emit
     // a spurious second per-team row (issue #138).
-    info!("step 5/19: reattaching misidentified same-name players");
+    info!("step 5/20: reattaching misidentified same-name players");
     report.reattached_misidentified = reattach_misidentified_players(pool, season).await?;
 
-    info!("step 6/19: backfilling derived game stats");
+    info!("step 6/20: backfilling derived game stats");
     report.backfilled = backfill_game_stats(pool).await?;
 
-    info!("step 7/19: estimating missing team defensive rebounds");
+    info!("step 7/20: estimating missing team defensive rebounds");
     report.estimated_rebounds = estimate_missing_team_rebounds(pool, season).await?;
 
-    info!("step 8/19: computing player season stats (with rate stats)");
+    info!("step 8/20: computing player season stats (with rate stats)");
     report.player_season_stats = compute_player_season_stats(pool, season).await?;
 
     // PBP steps run after season stats and before team/CamPom steps. Both no-op
     // for seasons with no play_by_play rows loaded (pre-2012 / not ingested).
-    info!("step 9/19: computing play-by-play per-player aggregates");
+    info!("step 9/20: computing play-by-play per-player aggregates");
     report.pbp_aggregates = compute_pbp_aggregates(pool, season).await?;
 
-    info!("step 10/19: computing play-by-play lineups & stints");
+    info!("step 10/20: computing play-by-play lineups & stints");
     report.pbp_lineups = compute_pbp_lineups(pool, season).await?;
 
-    info!("step 11/19: computing team four factors");
+    info!("step 11/20: computing team four factors");
     report.team_four_factors = compute_team_four_factors(pool, season).await?;
 
-    info!("step 12/19: computing adjusted efficiency (KenPom-style)");
+    info!("step 12/20: computing adjusted efficiency (KenPom-style)");
     report.adjusted_efficiency = compute_adjusted_efficiency(pool, season).await?;
 
-    info!("step 13/19: computing individual ORTG/DRTG (Torvik passthrough)");
+    info!("step 13/20: computing individual ORTG/DRTG (Torvik passthrough)");
     report.individual_ratings = compute_individual_ratings(pool, season).await?;
 
-    info!("step 14/19: computing player SOS");
+    info!("step 14/20: computing player SOS");
     report.player_sos = compute_player_sos(pool, season).await?;
 
-    info!("step 15/19: computing CamPom composites");
+    info!("step 15/20: computing CamPom composites");
     report.campom = compute_campom(pool, season).await?;
 
-    info!("step 16/19: computing rolling averages");
+    info!("step 16/20: computing rolling averages");
     report.rolling_averages = compute_rolling_averages(pool, season).await?;
 
-    info!("step 17/19: computing derived game fields");
+    info!("step 17/20: computing derived game fields");
     report.derived_fields = compute_derived_game_fields(pool, season).await?;
 
-    info!("step 18/19: computing schedules");
+    info!("step 18/20: computing schedules");
     report.schedules = compute_schedules(pool, season).await?;
 
-    info!("step 19/19: computing player percentiles");
+    info!("step 19/20: computing player percentiles");
     report.percentiles = compute_player_percentiles(pool, season).await?;
+
+    // Runs last: reads season-to-date player_season_stats (rate stats) +
+    // torvik_player_stats (shot zones / GBPM), both fresh by now. No-ops when no
+    // annual fit exists yet (new season) or nobody has reached the >=10 GP gate.
+    info!("step 20/20: assigning player archetypes (frozen-model assign)");
+    report.archetypes = compute_archetypes(pool, season).await?;
 
     info!(season, "compute pipeline complete");
     Ok(report)
@@ -3415,13 +3860,14 @@ pub struct ComputeReport {
     pub derived_fields: u64,
     pub schedules: u64,
     pub percentiles: u64,
+    pub archetypes: u64,
 }
 
 impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} phantom swaps repaired, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles",
+            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} phantom swaps repaired, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles, {} archetypes",
             self.deduplicated_players,
             self.reconciled_player_teams,
             self.corrected_swapped_games,
@@ -3440,7 +3886,8 @@ impl std::fmt::Display for ComputeReport {
             self.rolling_averages,
             self.derived_fields,
             self.schedules,
-            self.percentiles
+            self.percentiles,
+            self.archetypes
         )
     }
 }
@@ -3457,6 +3904,7 @@ mod tests {
         assert!(s.contains("0 pbp aggregates"));
         assert!(s.contains("0 pbp lineups"));
         assert!(s.contains("0 percentiles"));
+        assert!(s.contains("0 archetypes"));
     }
 
     #[test]

@@ -40,6 +40,14 @@ The 14 features fed to k-means: `rim_share`, `mid_share`, `three_share`, `ast_pc
 
 **Run it:** `cd training && python -m archetypes --seasons 2022,2023,2024,2025,2026 [--diagnostics]` — `training/` has no `__init__.py`, so the `training.archetypes` form fails; run from inside the dir. The signature-alignment guardrail blocks the DB write on any sign or ordering mismatch between cluster centroids and signatures; bypass with `--no-verify` only when intentionally rebalancing.
 
+### Fit is Python and annual; *assign* is Rust and nightly
+
+The diagram above is the **fit** — k-means, Hungarian matching, the signature guardrail. It stays in Python and runs **once a year** (a deliberate, diagnostics-reviewed operation; refitting in-season would churn every season's labels — see *Why combined-cohort training*). The fit is authoritative for `archetype_models` (the frozen centroids / scaler / cluster→class map).
+
+The **assign** half — standardize a player's 14-feature vector against the frozen model, take the nearest centroid, map to its class, softmax the affinities — was ported to Rust (`cstat_core::compute::compute_archetypes`) and runs **every nightly** as `compute_all`'s last step (2026-07-17). It reads `player_season_stats` + `torvik_player_stats` season-to-date, so in-season labels refresh as each player's sample grows, instead of freezing at the last manual `python -m archetypes` push. This is what lets prod produce archetypes with no laptop (ROADMAP *Prod self-sufficiency*, S3/P1). The Rust assign is byte-exact with this Python writer — guarded by `crates/cstat-core/tests/archetype_assign_parity.rs`, which reproduces every stored row across all fitted seasons — so recomputing a season in Rust yields the same labels the annual Python fit-and-assign did. When no `archetype_models` row exists yet (a new season before its retrain) or nobody has cleared the ≥10 GP gate, the assign step no-ops and leaves `player_archetypes` untouched.
+
+**Consequence for prod ownership:** with the nightly assigning archetypes, **prod now owns the daily `player_archetypes` write.** The only surviving laptop→prod archetype write is the **annual** `archetype_models` refit (pushed via `sync_to_prod.sh --tables archetype_models`). A `--tables player_archetypes` laptop push would be overwritten by the next nightly — which is correct.
+
 ## Why combined-cohort training
 
 The script clusters the **union of all configured seasons** in a single k-means fit and assigns every player-season against those shared centroids. This is the load-bearing design choice and the one most likely to be tempted into a "fix" by future-you.
