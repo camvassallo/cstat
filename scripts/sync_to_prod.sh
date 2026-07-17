@@ -110,31 +110,49 @@ else
   exit 1
 fi
 
-# Build pg_dump -T flags from the EXCLUDED list.
+EXCLUDED_QUOTED=$(printf "'%s'," "${EXCLUDED[@]}")
+EXCLUDED_QUOTED="${EXCLUDED_QUOTED%,}"
+
+# An excluded table's OWNED sequence has to be held back alongside its rows.
+# `-T <table>` matches the TABLE only: a serial/identity sequence is a separate
+# relation with its own name (`<table>_<column>_seq`), so it sails past the
+# table's exclusion and its state still reaches the dump as a `SEQUENCE SET`
+# entry. On restore that setval() rewinds prod's sequence to THIS machine's
+# value, and every insert on prod then fails with a duplicate key until the
+# sequence climbs back past max(id) — silently, because the nightly ledger
+# writer is fail-soft. That is what hit `ingest_runs` on 2026-07-16 (issue
+# #186): the rows were correctly held back, the sequence was not.
 #
-# Two patterns per table, not one. `-T <table>` matches the TABLE only, but a
-# serial/identity column's OWNED sequence is a separate relation with its own
-# name (`<table>_<column>_seq`) — it sails past a bare `-T <table>` and its
-# state still reaches the dump as a `SEQUENCE SET` entry. On restore that
-# setval() rewinds prod's sequence to THIS machine's value, and every insert on
-# prod then fails with a duplicate key until the sequence climbs back past
-# max(id) — silently, because the nightly ledger writer is fail-soft. That is
-# exactly what hit `ingest_runs` on 2026-07-16 (issue #186): the rows were
-# correctly held back, the sequence was not.
+# Derive the names from the catalog rather than pattern-matching them. A
+# `<table>_*_seq` pattern would cover every serial/identity sequence (Postgres
+# names them `<table>_<column>_seq`) but silently miss a hand-named one, which
+# is the same class of near-miss that caused #186. Asking the catalog which
+# sequences an excluded table OWNS is exact, needs no naming convention to hold,
+# and follows how TABLE_LIST is already discovered rather than hardcoded.
 #
-# `_*_seq` rather than `_*`: the narrow pattern can only swallow a relation
-# whose name ends in `_seq`, whereas `_*` would also silently exclude a real
-# table that happens to share an excluded table's prefix. The post-dump guard
-# below asserts nothing escaped regardless.
+# Note this can only ever withhold a sequence belonging to an already-excluded
+# table: pg_dump re-attaches owned sequences of dumped tables, so a sequence
+# whose owning table is INCLUDED is dumped regardless of any -T naming it.
+EXCLUDED_SEQS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+  SELECT string_agg(s.relname, ',' ORDER BY s.relname)
+  FROM pg_class s
+  JOIN pg_depend d ON d.objid = s.oid AND d.deptype = 'a'
+  JOIN pg_class t ON t.oid = d.refobjid
+  WHERE s.relkind = 'S'
+    AND t.relname IN ($EXCLUDED_QUOTED)
+" | tr -d '[:space:]')
+
+# Build pg_dump -T flags: every excluded table, plus every sequence they own.
 EXCLUDE_FLAGS=()
 for t in "${EXCLUDED[@]}"; do
-  EXCLUDE_FLAGS+=("-T" "$t" "-T" "${t}_*_seq")
+  EXCLUDE_FLAGS+=("-T" "$t")
+done
+for s in ${EXCLUDED_SEQS//,/ }; do
+  EXCLUDE_FLAGS+=("-T" "$s")
 done
 
 # Discover the live table list from local; new tables get picked up
 # automatically without needing to edit this script.
-EXCLUDED_QUOTED=$(printf "'%s'," "${EXCLUDED[@]}")
-EXCLUDED_QUOTED="${EXCLUDED_QUOTED%,}"
 TABLE_LIST=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
   SELECT string_agg(tablename, ',' ORDER BY tablename)
   FROM pg_tables
@@ -224,29 +242,30 @@ DUMP_SIZE=$(du -h "$TMPFILE" | cut -f1 | tr -d '[:space:]')
 echo "  → ${DUMP_SIZE} (compressed binary)"
 echo
 
-# Guard (issue #186): assert no EXCLUDED table's sequence state rode along in
-# the dump. An escaped `SEQUENCE SET` would setval() prod's sequence down to
-# this machine's value and silently break inserts on the live pipeline, so it
-# is worth failing the sync over rather than discovering it in the prod logs a
-# day later. Reads only the dump's table-of-contents, so this stays cheap even
-# on a multi-GB dump. Runs before the dry-run exit — a dry run should surface
-# the same problem a real sync would.
+# Guard (issue #186): assert none of the excluded tables' sequences actually
+# rode along in the dump. Belt-and-braces over the -T flags above — it verifies
+# pg_dump honoured them, so a version or quoting change can't quietly reopen
+# #186. An escaped `SEQUENCE SET` would setval() prod's sequence down to this
+# machine's value and silently break inserts on the live pipeline, which is
+# worth failing the sync over rather than finding in the prod logs a day later.
+# Reads only the dump's table-of-contents, so it stays cheap on a multi-GB
+# dump. Runs before the dry-run exit — a dry run should surface what a real
+# sync would.
 TOC=$("${PG_RESTORE[@]}" --list < "$TMPFILE")
 SEQ_LEAKS=""
-for t in "${EXCLUDED[@]}"; do
-  leaked=$(grep -oE "SEQUENCE SET public ${t}_[A-Za-z0-9_]+" <<<"$TOC" | awk '{print $NF}' | tr '\n' ' ' || true)
+for s in ${EXCLUDED_SEQS//,/ }; do
   # Explicit `if` rather than `[[ … ]] && …`: under `set -e` an AND-list whose
   # test fails yields a non-zero status for the whole list, which is a footgun
   # a future edit could easily trip. Not worth the terseness in a prod guard.
-  if [[ -n "$leaked" ]]; then
-    SEQ_LEAKS="${SEQ_LEAKS:+$SEQ_LEAKS }${leaked% }"
+  if grep -qE "SEQUENCE SET public ${s}( |\$)" <<<"$TOC"; then
+    SEQ_LEAKS="${SEQ_LEAKS:+$SEQ_LEAKS }$s"
   fi
 done
 if [[ -n "$SEQ_LEAKS" ]]; then
   echo "  ✗ Dump carries sequence state for EXCLUDED tables: ${SEQ_LEAKS}"
   echo "    Restoring this would rewind prod's sequence to this machine's value,"
   echo "    breaking prod inserts until it catches up (issue #186)."
-  echo "    Fix: widen the -T patterns in EXCLUDE_FLAGS to cover the sequence."
+  echo "    Fix: ensure EXCLUDE_FLAGS covers the sequence above."
   exit 1
 fi
 
