@@ -3381,20 +3381,31 @@ pub struct ArchetypeAssignment {
 
 /// Load the frozen model row for `season`. `None` when no fit exists yet (a
 /// brand-new season before its annual retrain, or an off-season bootstrap) —
-/// the caller then no-ops rather than inventing labels.
+/// falls back to the **most recent available** model, because the shipped fit is
+/// combined-cohort: every season's `archetype_models` row shares one identical
+/// centroid/scaler set, so the latest is an exact stand-in. This is what lets a
+/// brand-new live season (no `archetype_models` row until its ~Nov retrain)
+/// assign real + tier-3 labels against last season's frozen centroids; the
+/// eventual retrain re-fits and refreshes them. `None` only when the table is
+/// completely empty (a fresh DB).
 async fn load_archetype_model(
     pool: &PgPool,
     season: i32,
 ) -> Result<Option<ArchetypeModel>, sqlx::Error> {
     // JSONB read as text + serde_json parse: this crate's sqlx has no `json`
     // feature, so a `::text` cast is the portable way to pull JSONB out.
+    // Exact-season row first, else the latest — the `(season = $1) DESC` key
+    // floats an exact match to the top; ties fall to the newest season.
     let row = sqlx::query(
         "SELECT feature_names::text  AS feature_names, \
                 cluster_to_class::text AS cluster_to_class, \
                 centroids::text        AS centroids, \
                 feature_means::text    AS feature_means, \
-                feature_stds::text     AS feature_stds \
-         FROM archetype_models WHERE season = $1",
+                feature_stds::text     AS feature_stds, \
+                season                 AS model_season \
+         FROM archetype_models \
+         ORDER BY (season = $1) DESC, season DESC \
+         LIMIT 1",
     )
     .bind(season)
     .fetch_optional(pool)
@@ -3460,6 +3471,18 @@ async fn load_archetype_model(
             "archetype_models row for {season} is malformed (empty feature_names or centroids); skipping assign",
         );
         return Ok(None);
+    }
+
+    // Observe the combined-cohort fallback: assigning `season` against a
+    // different season's frozen centroids (correct, since they're shared, but
+    // worth a breadcrumb until `season` gets its own retrain).
+    let model_season: i32 = row.get("model_season");
+    if model_season != season {
+        info!(
+            season,
+            model_season,
+            "no archetype_models row for {season}; assigning against the latest frozen model ({model_season}) — combined-cohort centroids are shared",
+        );
     }
 
     Ok(Some(ArchetypeModel {
@@ -3596,20 +3619,25 @@ fn raw_feature_map(r: &RawFeatureRow) -> Option<HashMap<&'static str, f64>> {
     Some(m)
 }
 
-/// Fetch qualified players and assign each against the frozen model, WITHOUT
-/// writing. Returns an empty vec when no model exists for the season. Exposed
-/// for the parity test, which compares these against the Python-written rows.
-pub async fn assign_archetypes(
+/// Games-played floor for tier-3 live newcomer inference — a sub-gate player
+/// needs at least this many current-season games before we'll infer a
+/// (provisional) archetype from their partial sample. Below this the label is
+/// near coin-flip (N=1 ≈ 31% primary / 49% top-2), so blank is more honest.
+const TIER3_INFER_MIN_GP: i32 = 3;
+
+/// Fetch players clearing `min_gp` games (and the standard >=10 MPG floor) with
+/// complete Torvik features, and assign each against `model`. Returns real
+/// assignments (`provisional = false`); sub-gate callers (tier 3) re-tag the
+/// result. `min_gp = 10` reproduces the qualified cohort exactly.
+async fn assign_players_over_gate(
     pool: &PgPool,
     season: i32,
+    model: &ArchetypeModel,
+    min_gp: i32,
 ) -> Result<Vec<ArchetypeAssignment>, sqlx::Error> {
-    let Some(model) = load_archetype_model(pool, season).await? else {
-        return Ok(Vec::new());
-    };
-
-    // Same qualified-cohort SQL as `fetch_player_features`: gate on
-    // >=10 GP / >=10 MPG, require the Torvik shot-zone + GBPM columns, and pick
-    // the dominant stint per (player, season) on each side.
+    // Same cohort SQL as `fetch_player_features`, gate parametrized: require the
+    // Torvik shot-zone + GBPM columns and pick the dominant stint per
+    // (player, season) on each side.
     let rows: Vec<RawFeatureRow> = sqlx::query(
         "WITH pss_ranked AS ( \
              SELECT pss.player_id, pss.season, \
@@ -3621,7 +3649,7 @@ pub async fn assign_archetypes(
                         ORDER BY (pss.games_played * pss.minutes_per_game) DESC NULLS LAST \
                     ) AS rn \
              FROM player_season_stats pss \
-             WHERE pss.season = $1 AND pss.games_played >= 10 AND pss.minutes_per_game >= 10 \
+             WHERE pss.season = $1 AND pss.games_played >= $2 AND pss.minutes_per_game >= 10 \
          ), \
          torvik_ranked AS ( \
              SELECT t.player_id, t.season, t.rim_attempted, t.mid_attempted, t.tpa, \
@@ -3657,6 +3685,7 @@ pub async fn assign_archetypes(
          WHERE t.rn = 1",
     )
     .bind(season)
+    .bind(min_gp)
     .map(|row: sqlx::postgres::PgRow| RawFeatureRow {
         player_id: row.get("player_id"),
         rim_attempted: row.get("rim_attempted"),
@@ -3699,10 +3728,53 @@ pub async fn assign_archetypes(
         if !complete {
             continue;
         }
-        out.push(assign_from_standardized(&model, r.player_id, &z));
+        out.push(assign_from_standardized(model, r.player_id, &z));
     }
 
     Ok(out)
+}
+
+/// Fetch qualified players (>=10 GP / >=10 MPG) and assign each against the
+/// frozen model, WITHOUT writing. Empty when no model exists. Exposed for the
+/// parity test, which compares these against the Python-written rows.
+pub async fn assign_archetypes(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<ArchetypeAssignment>, sqlx::Error> {
+    let Some(model) = load_archetype_model(pool, season).await? else {
+        return Ok(Vec::new());
+    };
+    assign_players_over_gate(pool, season, &model, 10).await
+}
+
+/// Tier-3 live cold-start inference. Sub-gate players who cleared
+/// `TIER3_INFER_MIN_GP` games (and the 10-MPG floor) but have NO real assignment
+/// and NO prior-season carry-over — `covered` is the union of the qualified and
+/// carried-over sets — get assigned from their partial current-season sample.
+/// They are marked provisional with `source = "current_partial"` and a NULL
+/// `source_season` (there is no prior year; it's this season's own thin data),
+/// and the noisy early label firms up to a real one once they reach 10 games.
+/// Live-season only: the caller gates on `in_season_now()`, because inferring
+/// off a partial sample only makes sense while the season is still accumulating
+/// games. See ROADMAP archetype cold-start.
+async fn infer_newcomer_archetypes(
+    pool: &PgPool,
+    season: i32,
+    covered: &HashSet<Uuid>,
+) -> Result<Vec<ArchetypeAssignment>, sqlx::Error> {
+    let Some(model) = load_archetype_model(pool, season).await? else {
+        return Ok(Vec::new());
+    };
+    let mut assigned = assign_players_over_gate(pool, season, &model, TIER3_INFER_MIN_GP).await?;
+    // Keep only true newcomers: not qualified (that's a real label) and not
+    // carried over (that's their stable prior label, preferred over this thin one).
+    assigned.retain(|a| !covered.contains(&a.player_id));
+    for a in &mut assigned {
+        a.provisional = true;
+        a.source = "current_partial";
+        a.source_season = None;
+    }
+    Ok(assigned)
 }
 
 /// A prior-season archetype payload keyed by cross-season identity, used to
@@ -3846,31 +3918,49 @@ async fn seed_prior_season_archetypes(
 }
 
 /// Assign player archetypes for `season` and replace the season's
-/// `player_archetypes` rows from two sources in one clean recompute: real
-/// current-season assignments against the frozen model (when one exists), and
-/// prior-season seeds for sub-gate players who've played but not qualified (the
-/// cold-start window, immune to the current model's absence). No-ops (returns 0)
-/// only when there is nothing of either kind. Mirrors the Python writer's
-/// DELETE-then-INSERT, additively; a real assignment always wins over a seed for
-/// the same player, since seeds exclude the qualified set.
-pub async fn compute_archetypes(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+/// `player_archetypes` rows from a three-tier priority ladder in one clean
+/// recompute. Tier 1 (real) is the qualified 10-GP / 10-MPG current-season
+/// assignments. Tier 2 (carry-over) gives sub-gate players who have a prior real
+/// label their most-recent-known archetype — immune to an early off-night, and
+/// applied in every season. Tier 3 (live inference) assigns sub-gate players
+/// with no prior from their partial current-season sample, but only when
+/// `infer_newcomers` is set (the season is actively in-progress; see
+/// `in_season_now`). Each tier falls back to the next and they never overlap — a
+/// real label wins over carry-over, which wins over inference — so no player
+/// gets two rows. No-ops (returns 0) only when all three are empty. Mirrors the
+/// Python writer's DELETE-then-INSERT, additively.
+pub async fn compute_archetypes(
+    pool: &PgPool,
+    season: i32,
+    infer_newcomers: bool,
+) -> Result<u64, sqlx::Error> {
     let assignments = assign_archetypes(pool, season).await?;
     let qualified: HashSet<Uuid> = assignments.iter().map(|a| a.player_id).collect();
     let seeds = seed_prior_season_archetypes(pool, season, &qualified).await?;
 
-    if assignments.is_empty() && seeds.is_empty() {
-        // No model AND no seedable returners (or nobody has played yet). Leave
-        // existing rows untouched so a recompute before the annual fit doesn't
-        // wipe the last push's labels.
+    // Tier 3 only runs in a live season, and only for players not already
+    // covered by a real label or a carry-over seed.
+    let inferred = if infer_newcomers {
+        let mut covered = qualified.clone();
+        covered.extend(seeds.iter().map(|s| s.player_id));
+        infer_newcomer_archetypes(pool, season, &covered).await?
+    } else {
+        Vec::new()
+    };
+
+    if assignments.is_empty() && seeds.is_empty() && inferred.is_empty() {
+        // No model AND no seedable/inferable players. Leave existing rows
+        // untouched so a recompute before the annual fit doesn't wipe the last
+        // push's labels.
         info!(
             season,
-            "archetype assign: nothing to assign or seed — leaving player_archetypes unchanged"
+            "archetype assign: nothing to assign, seed, or infer — leaving player_archetypes unchanged"
         );
         return Ok(0);
     }
 
-    let total = assignments.len() + seeds.len();
-    let all = assignments.into_iter().chain(seeds);
+    let total = assignments.len() + seeds.len() + inferred.len();
+    let all = assignments.into_iter().chain(seeds).chain(inferred);
 
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM player_archetypes WHERE season = $1")
@@ -3908,7 +3998,16 @@ pub async fn compute_archetypes(pool: &PgPool, season: i32) -> Result<u64, sqlx:
     Ok(total as u64)
 }
 
-pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sqlx::Error> {
+/// `infer_newcomers` enables tier-3 live archetype inference in step 20 — pass
+/// `true` only for a genuinely in-progress season (the nightly gates on
+/// `cstat_ingest::in_season_now()` AND `season == current_natstat_season()`);
+/// historical recomputes, bootstraps, the offline replay, and the sim pass
+/// `false` so completed seasons stay carry-over-only.
+pub async fn compute_all(
+    pool: &PgPool,
+    season: i32,
+    infer_newcomers: bool,
+) -> Result<ComputeReport, sqlx::Error> {
     let mut report = ComputeReport::default();
 
     info!(season, "starting compute pipeline");
@@ -3998,10 +4097,10 @@ pub async fn compute_all(pool: &PgPool, season: i32) -> Result<ComputeReport, sq
     report.percentiles = compute_player_percentiles(pool, season).await?;
 
     // Runs last: reads season-to-date player_season_stats (rate stats) +
-    // torvik_player_stats (shot zones / GBPM), both fresh by now. No-ops when no
-    // annual fit exists yet (new season) or nobody has reached the >=10 GP gate.
-    info!("step 20/20: assigning player archetypes (frozen-model assign)");
-    report.archetypes = compute_archetypes(pool, season).await?;
+    // torvik_player_stats (shot zones / GBPM), both fresh by now. Real + carry-over
+    // always; tier-3 live inference only when `infer_newcomers` (in-progress season).
+    info!("step 20/20: assigning player archetypes (real + carry-over + tier-3 inference)");
+    report.archetypes = compute_archetypes(pool, season, infer_newcomers).await?;
 
     info!(season, "compute pipeline complete");
     Ok(report)

@@ -1654,6 +1654,11 @@ pub async fn pick_or_pin_daily_puzzle(
               AND pss.minutes_per_game >= 10
               AND tps.cam_gbpm_v3_psos IS NOT NULL
               AND pa.primary_class IS NOT NULL
+              -- Real archetypes only: a provisional label (prior-season carry-over
+              -- or partial-sample inference) is not stable ground truth, so it
+              -- must never be the pinned daily answer. See the archetype
+              -- cold-start work; Portle's own early-season handling is separate.
+              AND pa.provisional = FALSE
               {mode_pred}
         )
         INSERT INTO portle_daily_puzzle (mode, season, puzzle_date, natstat_id)
