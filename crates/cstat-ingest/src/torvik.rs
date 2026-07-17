@@ -213,7 +213,7 @@ impl TorkvikClient {
     /// Fetch player season stats CSV for a given year. Retries a transient
     /// barttorvik hiccup (see [`with_retry`]).
     pub async fn fetch_player_stats(&self, year: i32) -> anyhow::Result<Vec<TorkvikPlayerSeason>> {
-        with_retry("player_stats", || async move {
+        let players = with_retry("player_stats", || async move {
             let url = format!("https://barttorvik.com/getadvstats.php?year={year}&csv=1");
             info!(year, "fetching Torvik player stats");
             let body = self.http.get(&url).send().await?.text().await?;
@@ -221,7 +221,14 @@ impl TorkvikClient {
             info!(year, count = players.len(), "parsed Torvik player stats");
             Ok(players)
         })
-        .await
+        .await?;
+
+        // Year guard runs *after* the retry loop: a wrong-season payload is
+        // deterministic (barttorvik keeps serving the same fallback), so retrying
+        // it would only waste attempts. A transient network/parse hiccup still
+        // retries inside `with_retry` above.
+        validate_requested_year(&players, year)?;
+        Ok(players)
     }
 
     /// Fetch per-game player stats (gzip JSON) for a given year. Retries a
@@ -429,6 +436,42 @@ fn validate_player_csv_schema(rec: &csv::StringRecord) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Guard against barttorvik's silent future-year fallback. `getadvstats.php?year=N`
+/// returns HTTP 200 with the *latest available* season's rows when season N hasn't
+/// started yet — e.g. a 2027 request today serves the byte-identical 2026 file
+/// (verified 2026-07-16). The [`validate_player_csv_schema`] guard only checks
+/// column *shape*, so it waves this through: the rows are structurally valid, just
+/// for the wrong season. Compare the rows' embedded year (col 31, parsed into
+/// [`TorkvikPlayerSeason::year`]) against what was requested and refuse a mismatch,
+/// so an early-bootstrap `torvik --year 2027` can't quietly persist last season's
+/// players stamped as this one. (The per-game path `{year}_all_advgames.json.gz`
+/// 404s on a not-yet-started year, so it fails loudly on its own and needs no guard.)
+fn validate_requested_year(players: &[TorkvikPlayerSeason], requested: i32) -> anyhow::Result<()> {
+    // Modal year among the rows that carry one. A single-season CSV is
+    // homogeneous, but a stray null/parse-miss shouldn't get a vote.
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for p in players {
+        if let Some(y) = p.year {
+            *counts.entry(y).or_default() += 1;
+        }
+    }
+    let Some((&modal, &modal_n)) = counts.iter().max_by_key(|(_, n)| **n) else {
+        // No row carried a year (empty or degenerate fetch) — nothing to
+        // contradict the request; that case surfaces elsewhere.
+        return Ok(());
+    };
+    if modal != requested {
+        anyhow::bail!(
+            "Torvik player CSV year mismatch — requested {requested} but the feed returned \
+             season {modal} data ({modal_n} of {} rows). barttorvik silently serves the latest \
+             available season for a not-yet-started year; refusing to persist {modal} players \
+             stamped as {requested}.",
+            players.len()
+        );
+    }
+    Ok(())
+}
+
 fn parse_f64(rec: &csv::StringRecord, idx: usize) -> Option<f64> {
     rec.get(idx)?.trim().parse().ok()
 }
@@ -571,6 +614,45 @@ mod tests {
         let csv = "a,b,c\n"; // only 3 columns
         let players = parse_player_csv(csv).unwrap();
         assert!(players.is_empty());
+    }
+
+    // -- Requested-year guard ----------------------------------------------
+
+    /// Build a minimal valid player row stamped with `year` in col 31.
+    fn row_for_year(name: &str, year: i32) -> String {
+        let mut cols = vec![String::new(); 64];
+        cols[0] = name.to_string();
+        cols[1] = "Duke".to_string();
+        cols[2] = "ACC".to_string();
+        cols[3] = "30".to_string(); // gp
+        cols[31] = year.to_string(); // year
+        cols[32] = "12345".to_string(); // pid
+        cols.join(",")
+    }
+
+    #[test]
+    fn year_guard_accepts_matching_season() {
+        let csv = format!("{}\n{}", row_for_year("A", 2026), row_for_year("B", 2026));
+        let players = parse_player_csv(&csv).unwrap();
+        assert!(validate_requested_year(&players, 2026).is_ok());
+    }
+
+    #[test]
+    fn year_guard_rejects_future_year_fallback() {
+        // barttorvik serves 2026 rows for a 2027 request; the guard must catch it.
+        let csv = format!("{}\n{}", row_for_year("A", 2026), row_for_year("B", 2026));
+        let players = parse_player_csv(&csv).unwrap();
+        let err = validate_requested_year(&players, 2027).unwrap_err();
+        assert!(
+            err.to_string().contains("year mismatch"),
+            "expected a year-mismatch error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn year_guard_ignores_empty_fetch() {
+        // No rows → nothing to contradict the request; other checks handle empties.
+        assert!(validate_requested_year(&[], 2027).is_ok());
     }
 
     #[test]
