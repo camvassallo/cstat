@@ -17,6 +17,9 @@ import {
 // override just what they exercise.
 function player(over: Partial<PlayerRow> & { player_id: string }): PlayerRow {
   return {
+    // Default the stable seed key to player_id so tests that only set player_id
+    // still get distinct, deterministic answers (the daily seeds on natstat_id).
+    natstat_id: over.player_id,
     name: over.player_id,
     team_id: null,
     team_name: null,
@@ -164,6 +167,17 @@ describe('dailyAnswer', () => {
 
   it('returns null on an empty eligible pool', () => {
     expect(dailyAnswer([], 'p5', 2026, '2026-07-01')).toBeNull();
+  });
+
+  // Regression for #181: a data rebuild/resync re-mints every player_id UUID but
+  // leaves natstat_id untouched. The daily pick must key on natstat_id so the
+  // date→player mapping survives — seeding on player_id reset the whole sequence.
+  it('is stable when player_id UUIDs churn but natstat_id is preserved', () => {
+    const before = dailyAnswer(pool, 'p5', 2026, '2026-07-01');
+    const rebuilt = pool.map((p) => ({ ...p, player_id: `uuid-${p.natstat_id}-v2` }));
+    const after = dailyAnswer(rebuilt, 'p5', 2026, '2026-07-01');
+    expect(after?.natstat_id).toBe(before?.natstat_id);
+    expect(after?.player_id).not.toBe(before?.player_id);
   });
 });
 
