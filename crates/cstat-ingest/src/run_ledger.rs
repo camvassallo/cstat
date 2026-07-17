@@ -24,7 +24,7 @@ pub const ROW_COUNT_TABLES: &[&str] = &[
 ];
 
 /// The window-scoped, load-bearing box-score steps. A date only counts as
-/// "covered" for the self-heal frontier once **all** of these succeeded for a
+/// "covered" for the self-heal scan once **all** of these succeeded for a
 /// run — each is a hard-abort step, and they are the only ones whose work is
 /// scoped to the run's date window (`elo`/`torvik`/`compute` are season-wide,
 /// so they say nothing about which dates were ingested).
@@ -65,7 +65,7 @@ pub struct RunLedger<'a> {
     /// The date window this run's ingest covers, stamped onto every step row
     /// (migration 043). Set once via [`set_window`](RunLedger::set_window) after
     /// the self-heal has settled the final window. `None` until then — the
-    /// frontier query ignores NULL windows.
+    /// coverage scan ignores NULL windows.
     window: Option<(NaiveDate, NaiveDate)>,
 }
 
@@ -82,9 +82,9 @@ impl<'a> RunLedger<'a> {
 
     /// Stamp the date window this run covers onto every subsequent step row.
     /// Call once, after the self-heal has settled the final window and before
-    /// the first [`record`](RunLedger::record) — this is what makes
-    /// [`last_covered_ingest_date`] an exact coverage frontier rather than a
-    /// wall-clock guess.
+    /// the first [`record`](RunLedger::record) — this is what lets
+    /// [`first_uncovered_ingest_date`] scan real coverage rather than guess it
+    /// from wall-clock finish times.
     pub fn set_window(&mut self, start: NaiveDate, end: NaiveDate) {
         self.window = Some((start, end));
     }
@@ -171,8 +171,9 @@ impl<'a> RunLedger<'a> {
     /// would compare corrupt-to-corrupt, see no drop, and post the green SUCCESS
     /// Slack summary — so the gate would alert exactly once and then actively
     /// assert health over a broken table. (The dead-man's-switch heartbeat is
-    /// green on a degraded run either way; the summary is what changes.) Holding the last-known-good baseline instead keeps it
-    /// firing every night until the counts actually recover.
+    /// green on a degraded run either way; the Slack summary is what changes.)
+    /// Holding the last-known-good baseline instead keeps the gate firing every
+    /// night until the counts actually recover.
     ///
     /// Fail-soft: a per-table insert error is logged and skipped.
     ///
@@ -224,35 +225,11 @@ impl<'a> RunLedger<'a> {
     }
 }
 
-/// The **coverage frontier**: the latest game date any successful `games` step
-/// has actually ingested (`MAX(window_end)`, migration 043) — the signal the
-/// nightly self-heal (M5b) uses to detect a skipped night. Fail-soft: any query
-/// error / no prior success yields `None` (self-heal simply no-ops). Excludes
-/// `exclude_run_id` so the in-flight run can't match itself.
-///
-/// Reads the **recorded window**, not `ended_at` (the run's wall-clock finish).
-/// The wall-clock proxy only holds for default-window runs; it breaks exactly
-/// when a human is involved, which is the expected state during an outage. A
-/// manual `nightly --from <old> --to <old>` backfill finishes *today*, so under
-/// the old proxy it stamped today over the frontier and disarmed the next
-/// night's heal — silently stranding the very games the operator was trying to
-/// recover. Keyed on the window, that same backfill contributes its own (older)
-/// `window_end` and the frontier stays honest.
-///
-/// Deliberately **not** season-scoped: "how far have we ingested" is a property
-/// of the schedule, not a season. Scoping it would make the self-heal
-/// structurally dead across the Nov 1 rollover
-/// ([`season_for_date`](crate::season_for_date) flips there) — the new season
-/// has no ledger history, so an outage spanning the rollover would return `None`
-/// and skip healing, losing the season's opening games.
-///
-/// `as_of` bounds the frontier so a typo'd future `--to` (e.g. `--to 2030-01-01`)
-/// can't pin it ahead of reality and disable healing forever.
-///
 /// The **earliest game date we have not fully ingested**, searching back
 /// `lookback_days` from `before` — the signal the nightly self-heal (M5b) uses
 /// to widen a defaulted window over skipped nights. `None` = nothing to heal.
-/// Fail-soft: any query error yields `None` (the heal simply no-ops).
+/// Fail-soft: any query error yields `None` (the heal simply no-ops). Excludes
+/// `exclude_run_id` so the in-flight run can't match itself.
 ///
 /// This is a true gap scan, not a high-water mark. A `MAX(window_end)` frontier
 /// assumes coverage is *contiguous*, which breaks on the most likely operator
