@@ -203,6 +203,70 @@ if [[ "$PROD_STATUS" -eq 1 ]]; then
   " || true)
   if [[ -n "$FAILS" ]]; then sed 's/^/    /' <<<"$FAILS"; else echo "    (none)"; fi
   echo
+  # Sequence skew — a sequence sitting at or below its table's max(id) makes the
+  # NEXT insert a duplicate-key violation, and keeps doing so until nextval
+  # climbs past max(id). That is issue #186's actual damage, and it is invisible
+  # in every other panel here: the ledger writer is fail-soft, so a dead sequence
+  # looks exactly like a cron that stopped running (every step reads "76h ago",
+  # "Recent FAILED: (none)") while the nightly is in fact running fine.
+  #
+  # Checked for EVERY sequence, not just the excluded-table ones the dump guard
+  # covers. That guard enforces "excluded table's sequence must not leak"; the
+  # real invariant is "prod-written table must be excluded", whose other half
+  # nothing enforces. A future prod-written SERIAL table that someone forgets to
+  # add to EXCLUDED would be dumped legitimately, rewind prod, and never trip
+  # SEQ_LEAKS. This check is the detective control for that gap — it reports the
+  # damage regardless of which path caused it. (Today the schema has exactly one
+  # sequence, ingest_runs_id_seq; everything else is UUID- or natural-keyed.)
+  # Fully catalog-driven: pg_depend resolves each sequence to its owning
+  # table+column, and query_to_xml runs the per-column max() that a static join
+  # can't express (same trick as the row-count panel below — one round trip, no
+  # N+1 against a high-latency prod). A sequence added by a future migration is
+  # covered automatically; nothing here needs updating by hand.
+  echo "→ Sequence health (last_value vs max(id) — skew breaks the NEXT insert):"
+  # Captured rather than streamed so an empty result can be reported as such.
+  # This check exists BECAUSE a silent no-op looked like health for three nights;
+  # printing a bare header on error would reproduce exactly that failure mode
+  # (reads as "no sequences, nothing to worry about"). Needs Postgres 10+ for
+  # pg_sequence_last_value.
+  SEQ_HEALTH=$("${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
+    WITH owned AS (
+      SELECT c.oid AS seqoid, c.relname AS seqname, t.relname AS tblname, a.attname AS colname
+      FROM pg_class c
+      JOIN pg_depend d  ON d.objid = c.oid AND d.classid = 'pg_class'::regclass
+                       AND d.deptype IN ('a','i')
+      JOIN pg_class t   ON t.oid = d.refobjid
+      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid
+      WHERE c.relkind = 'S' AND c.relnamespace = 'public'::regnamespace
+    ), probed AS (
+      SELECT o.seqname, o.tblname, o.colname,
+             pg_sequence_last_value(o.seqoid) AS last_value,
+             (xpath('/row/m/text()', query_to_xml(
+                format('SELECT max(%I) AS m FROM public.%I', o.colname, o.tblname),
+                false, true, '')))[1]::text::bigint AS max_id
+      FROM owned o
+    )
+    SELECT rpad(seqname, 24),
+           'seq=' || rpad(coalesce(last_value::text, 'unused'), 10),
+           'max(' || colname || ')=' || rpad(coalesce(max_id::text, '-'), 10),
+           CASE
+             WHEN max_id IS NULL THEN 'ok (table empty)'
+             WHEN last_value IS NULL THEN 'BROKEN — sequence never called but table has rows'
+             WHEN last_value < max_id THEN
+               '*** BROKEN — next ' || (max_id - last_value) || ' insert(s) fail on duplicate key.'
+               || '  Fix: SELECT setval(''' || seqname || ''', (SELECT max(' || colname
+               || ') FROM ' || tblname || ')); ***'
+             ELSE 'ok'
+           END
+    FROM probed
+    ORDER BY (last_value IS NOT NULL AND max_id IS NOT NULL AND last_value < max_id) DESC, seqname
+  " 2>&1) || true
+  if [[ -z "$SEQ_HEALTH" ]]; then
+    echo "    ✗ check returned nothing — could not read sequence state (treat as UNKNOWN, not ok)"
+  else
+    sed 's/^/    /' <<<"$SEQ_HEALTH"
+  fi
+  echo
   # Exact counts, deliberately — NOT n_live_tup or reltuples. Those are only
   # populated by ANALYZE/autovacuum, so a never-analyzed or freshly-restored
   # table reports 0 while holding millions of rows (verified locally:
