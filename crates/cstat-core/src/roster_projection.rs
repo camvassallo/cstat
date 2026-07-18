@@ -689,7 +689,18 @@ pub async fn compose_all_projections(
     let transfers: Vec<TransferLink> = sqlx::query_as::<_, TransferLink>(
         r#"
         SELECT cstat_player_id, destination_institution
-        FROM transfers WHERE year = $1
+        FROM transfers
+        WHERE year = $1
+          -- A `Withdrawn` row is a player who entered the portal and then
+          -- pulled out; they are on their source team's roster, not leaving
+          -- it. Without this filter every withdrawal is subtracted from the
+          -- returning core as an outbound transfer (2026: 25 players, incl.
+          -- NC State's Paul McNeil at 8.9 cam_v3). Withdrawals that really
+          -- did leave went to the NBA, and `draft_entrants` removes those
+          -- via `firm_draft_gone` below — which only gets reached once the
+          -- outbound path stops short-circuiting them. Mirrors the display
+          -- filter in cstat-api `routes/transfers.rs`.
+          AND status <> 'Withdrawn'
         "#,
     )
     .bind(base_season)
