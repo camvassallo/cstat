@@ -42,7 +42,8 @@ use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use crate::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use crate::team_name_match::team_match_score;
 use crate::trajectory::{
-    build_trajectory_features, fetch_player_trajectory_rows, fetch_trajectory_oof,
+    TrajectoryPrediction, build_trajectory_features, fetch_player_trajectory_rows,
+    fetch_trajectory_oof,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -1244,6 +1245,64 @@ pub async fn project_returner_cam_v3(
                         n = feats.len(),
                         "trajectory batch predict failed in project_returner_cam_v3; \
                          affected players keep their current cam_v3",
+                    );
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Banded twin of [`project_returner_cam_v3`]: returns the full trajectory
+/// prediction (mean **and** q10/q90 band) per player, not just the mean.
+/// Used by the per-player projection materializer (`compute-projections`),
+/// which surfaces the floor/ceiling band on the `/players` projected page —
+/// the team-AdjEM callers only need the mean and keep using the scalar fn.
+///
+/// Same source-season semantics as the scalar version: OOF held-out rows for
+/// historical target seasons, live `predict_trajectory_batch` off each player's
+/// own source season otherwise. Players the model can't score are absent from
+/// the map (caller falls back to their frozen base-season cam_v3, no band).
+pub async fn project_returner_cam_v3_banded(
+    pool: &PgPool,
+    predictor: &Predictor,
+    player_ids: &[Uuid],
+    target_season: i32,
+) -> Result<HashMap<Uuid, TrajectoryPrediction>, sqlx::Error> {
+    if player_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // OOF held-out predictions for the historical target seasons.
+    let mut out: HashMap<Uuid, TrajectoryPrediction> =
+        fetch_trajectory_oof(pool, player_ids, target_season).await?;
+
+    // Live inference for everyone without an OOF row.
+    let need_live: Vec<Uuid> = player_ids
+        .iter()
+        .filter(|pid| !out.contains_key(*pid))
+        .copied()
+        .collect();
+    if !need_live.is_empty() {
+        let row_map = fetch_player_trajectory_rows(pool, &need_live).await?;
+        let mut ids: Vec<Uuid> = Vec::with_capacity(row_map.len());
+        let mut feats = Vec::with_capacity(row_map.len());
+        for (pid, (row, src_season)) in row_map {
+            ids.push(pid);
+            feats.push(build_trajectory_features(&row, src_season));
+        }
+        if !feats.is_empty() {
+            match predictor.predict_trajectory_batch(&feats) {
+                Ok(preds) => {
+                    for (pid, pred) in ids.into_iter().zip(preds) {
+                        out.insert(pid, pred);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        n = feats.len(),
+                        "trajectory batch predict failed in project_returner_cam_v3_banded; \
+                         affected players omitted (caller keeps frozen cam_v3)",
                     );
                 }
             }

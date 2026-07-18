@@ -11,6 +11,7 @@ pub mod og_image;
 pub mod players;
 pub mod portle;
 pub mod predict;
+pub mod projected_players;
 pub mod projections;
 pub mod recruits;
 pub mod seasons;
@@ -37,6 +38,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(ticker::router())
         .merge(transfers::router())
         .merge(projections::router())
+        .merge(projected_players::router())
         .merge(recruits::router())
         .merge(draft::router())
     // NOTE: client_error::router() is deliberately NOT merged here — it is

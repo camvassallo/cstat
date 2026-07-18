@@ -21,7 +21,8 @@
 use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_projection::{
-    compose_all_projections, fetch_draft_entrants, project_returner_cam_v3, score_projection_adj_em,
+    compose_all_projections, fetch_draft_entrants, project_returner_cam_v3,
+    project_returner_cam_v3_banded, score_projection_adj_em,
 };
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -76,6 +77,98 @@ async fn resolve_base_to_target(
     Ok(rows.into_iter().collect())
 }
 
+/// Display identity (`name`, `natstat_id`) for every real player projected onto
+/// a roster, keyed by their season-scoped `players.id`. Freshmen aren't here —
+/// their name comes from `RecruitMeta`, and they have no `players` row. Used to
+/// denormalize `player_season_projection` so the `/players` projected page reads
+/// one table with no joins.
+async fn fetch_player_identity(
+    pool: &PgPool,
+    player_ids: &[Uuid],
+) -> Result<HashMap<Uuid, (String, Option<String>)>> {
+    if player_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, String, Option<String>)> =
+        sqlx::query_as("SELECT id, name, natstat_id FROM players WHERE id = ANY($1)")
+            .bind(player_ids)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, natstat_id)| (id, (name, natstat_id)))
+        .collect())
+}
+
+/// One `player_season_projection` row to insert. Grouped into a struct so the
+/// insert helper doesn't trip `clippy::too_many_arguments` (14 columns).
+struct PlayerProjectionRow<'a> {
+    target_season: i32,
+    player_id: Uuid,
+    source: &'a str,
+    name: &'a str,
+    team_id: Uuid,
+    team_name: &'a str,
+    natstat_id: Option<&'a str>,
+    /// Mean projected cam_v3 (stored as REAL; bound as f32).
+    mean: f64,
+    lower: Option<f32>,
+    upper: Option<f32>,
+    class_year: Option<&'a str>,
+    primary_archetype: Option<&'a str>,
+    composite_rank: Option<i32>,
+    star_rating: Option<i16>,
+}
+
+/// Insert one per-player projection row. `ON CONFLICT DO UPDATE` (last write
+/// wins) guards against the rare case of a player appearing on two composed
+/// rosters; the PK is `(target_season, player_id)`.
+async fn insert_player_projection(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    r: PlayerProjectionRow<'_>,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO player_season_projection
+            (target_season, player_id, source, name, team_id, team_name, natstat_id,
+             projected_cam_mean, projected_cam_lower, projected_cam_upper,
+             class_year, primary_archetype, composite_rank, star_rating, computed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+        ON CONFLICT (target_season, player_id) DO UPDATE SET
+            source              = EXCLUDED.source,
+            name                = EXCLUDED.name,
+            team_id             = EXCLUDED.team_id,
+            team_name           = EXCLUDED.team_name,
+            natstat_id          = EXCLUDED.natstat_id,
+            projected_cam_mean  = EXCLUDED.projected_cam_mean,
+            projected_cam_lower = EXCLUDED.projected_cam_lower,
+            projected_cam_upper = EXCLUDED.projected_cam_upper,
+            class_year          = EXCLUDED.class_year,
+            primary_archetype   = EXCLUDED.primary_archetype,
+            composite_rank      = EXCLUDED.composite_rank,
+            star_rating         = EXCLUDED.star_rating,
+            computed_at         = now()
+        "#,
+    )
+    .bind(r.target_season)
+    .bind(r.player_id)
+    .bind(r.source)
+    .bind(r.name)
+    .bind(r.team_id)
+    .bind(r.team_name)
+    .bind(r.natstat_id)
+    .bind(r.mean as f32)
+    .bind(r.lower)
+    .bind(r.upper)
+    .bind(r.class_year)
+    .bind(r.primary_archetype)
+    .bind(r.composite_rank)
+    .bind(r.star_rating)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Compute and persist the preseason projection for each target `year`.
 /// **Replaces** each season's rows in one transaction (delete-then-insert), so a
 /// re-run is authoritative: rows for teams the current logic no longer produces
@@ -109,6 +202,28 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
                 );
                 HashMap::new()
             });
+
+        // Banded (mean + q10/q90) twin of the above, for the per-player
+        // `player_season_projection` materialization below. The team-AdjEM
+        // scoring only needs the mean; the projected-players page wants the band.
+        let projected_cam_banded =
+            project_returner_cam_v3_banded(pool, predictor, &traj_ids, year)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "banded trajectory projection failed; per-player bands omitted"
+                    );
+                    HashMap::new()
+                });
+
+        // Name / natstat_id for every real (non-recruit) player on any roster.
+        let mut real_ids: Vec<Uuid> = Vec::new();
+        for p in &projections {
+            real_ids.extend(p.returning.iter().map(|r| r.player_id));
+            real_ids.extend(p.arrivals.iter().map(|a| a.player_id));
+        }
+        let player_identity = fetch_player_identity(pool, &real_ids).await?;
 
         // Authoritative per-season replace, in one transaction: clear the
         // season, then re-insert what the current logic produces. A plain
@@ -156,11 +271,83 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
             .await?;
             written += 1;
         }
+        // Per-player projected CamPom (migration 045). Independent of the
+        // team-AdjEM qualification gate above — a player on a too-thin team
+        // still has a valid projection — so iterate every roster's members.
+        // Same authoritative replace: clear the season, re-insert the current
+        // composition. team_id is the base-season roster team (destination for
+        // an incoming transfer); the frontend links at `?season=base_season`.
+        sqlx::query("DELETE FROM player_season_projection WHERE target_season = $1")
+            .bind(year)
+            .execute(&mut *tx)
+            .await?;
+        let mut player_rows = 0usize;
+        for p in &projections {
+            for (row, source) in p
+                .returning
+                .iter()
+                .map(|r| (r, "returning"))
+                .chain(p.arrivals.iter().map(|a| (a, "transfer")))
+            {
+                let Some((name, natstat_id)) = player_identity.get(&row.player_id) else {
+                    // No players row (shouldn't happen for a composed roster
+                    // member); skip rather than write an unnamed row.
+                    continue;
+                };
+                let band = projected_cam_banded.get(&row.player_id);
+                let mean = band.map(|b| b.mean as f64).or(row.cam_v3).unwrap_or(0.0);
+                insert_player_projection(
+                    &mut tx,
+                    PlayerProjectionRow {
+                        target_season: year,
+                        player_id: row.player_id,
+                        source,
+                        name,
+                        team_id: p.team_id,
+                        team_name: &p.team_name,
+                        natstat_id: natstat_id.as_deref(),
+                        mean,
+                        lower: band.map(|b| b.lower),
+                        upper: band.map(|b| b.upper),
+                        class_year: row.class_year.as_deref(),
+                        primary_archetype: row.primary_class.as_deref(),
+                        composite_rank: None,
+                        star_rating: None,
+                    },
+                )
+                .await?;
+                player_rows += 1;
+            }
+            for (row, meta) in &p.recruits {
+                insert_player_projection(
+                    &mut tx,
+                    PlayerProjectionRow {
+                        target_season: year,
+                        player_id: meta.recruit_id,
+                        source: "freshman",
+                        name: &meta.name,
+                        team_id: p.team_id,
+                        team_name: &p.team_name,
+                        natstat_id: None,
+                        mean: row.cam_v3.unwrap_or(0.0),
+                        lower: meta.projected_campom_lower,
+                        upper: meta.projected_campom_upper,
+                        class_year: row.class_year.as_deref(),
+                        primary_archetype: None,
+                        composite_rank: meta.composite_rank,
+                        star_rating: meta.star_rating,
+                    },
+                )
+                .await?;
+                player_rows += 1;
+            }
+        }
+
         tx.commit().await?;
         println!(
             "compute-projections {year}: wrote {written} rows \
              (skipped {skipped_thin} too-thin, {skipped_unresolved} unresolved-target; \
-             season replaced)"
+             season replaced); {player_rows} player projections"
         );
     }
     Ok(())

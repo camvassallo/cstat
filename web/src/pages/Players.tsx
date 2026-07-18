@@ -20,8 +20,14 @@ import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import TransferPortal from '../components/TransferPortal';
 import DraftBoard from '../components/DraftBoard';
 import RecruitClass from '../components/RecruitClass';
+import ProjectedPlayers from '../components/ProjectedPlayers';
 import { SeasonLink } from '../components/SeasonLink';
-import { useSeason } from '../components/season';
+import {
+  setPageSeasons,
+  upcomingProjectionSeason,
+  useAvailableSeasons,
+  useSeason,
+} from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -310,6 +316,20 @@ function buildColumns(
 export default function Players() {
   const { season } = useSeason();
   usePageTitle('Players');
+  const { seasons: availableSeasons } = useAvailableSeasons();
+  // The upcoming (not-yet-played) projection year — its own view (projected
+  // CamPom) rather than the observed-stat grid.
+  const upcoming = upcomingProjectionSeason();
+  const isProjected = season === upcoming;
+
+  // Publish the season list to the navbar picker WITH the upcoming projected
+  // year prepended, so `/players` surfaces it (the games-only `/api/seasons`
+  // never carries a not-yet-played year). Same mechanism the `/projected` page
+  // uses. Released on unmount.
+  useEffect(() => {
+    setPageSeasons([upcoming, ...availableSeasons.filter((s) => s !== upcoming)]);
+    return () => setPageSeasons(null);
+  }, [availableSeasons, upcoming]);
   const [searchParams, setSearchParams] = useSearchParams();
   // Multi-archetype filter (shared with the transfer portal) — URL-backed
   // selection + OR/AND mode, applied client-side via `filterRows`.
@@ -398,6 +418,11 @@ export default function Players() {
   // stale-flicker, matches the Rankings page pattern.
   useEffect(() => {
     let cancelled = false;
+    // The projected year has no observed player-season stats; that view
+    // (`ProjectedPlayers`) fetches its own data and is rendered instead of the
+    // box-score grid, so skip the /players call entirely (leave `loading` as-is
+    // — the base grid isn't mounted in projected mode).
+    if (isProjected) return;
     fetchPlayers({
       season,
       limit: PAGE_FETCH_LIMIT,
@@ -415,7 +440,7 @@ export default function Players() {
     return () => {
       cancelled = true;
     };
-  }, [season]);
+  }, [season, isProjected]);
 
   // Top-level page-mode tabs (Players ↔ Transfer Portal). Sits above the
   // mode-specific toolbar so the two grids share a single chrome header.
@@ -496,6 +521,17 @@ export default function Players() {
       <div>
         {modeTabs}
         <DraftBoard year={season} />
+      </div>
+    );
+  }
+
+  if (isProjected) {
+    // Upcoming season has no observed stats — swap the box-score grid for the
+    // projected-CamPom ranking (returners + transfers + freshmen).
+    return (
+      <div>
+        {modeTabs}
+        <ProjectedPlayers year={season} />
       </div>
     );
   }
