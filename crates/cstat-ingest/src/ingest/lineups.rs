@@ -128,6 +128,25 @@ struct RosterSlot {
 /// sweep, which is what the `lineups` CLI subcommand (backfill) wants.
 /// Ordering is `game_date` ascending, so a windowed+limited run processes the
 /// oldest un-covered games in the window first.
+/// The candidate-game query for [`ingest_lineups_for_season`]. Split out as a
+/// pure builder so the load-bearing window filter is unit-testable without a DB:
+/// dropping it silently re-enables the whole-season sweep the nightly relies on
+/// NOT happening (a runaway backfill on prod's empty ledger). `$1` is always the
+/// season; when `has_window` the added `$2::date`/`$3::date` are bound by the
+/// caller in the same branch, keeping placeholder numbering consistent.
+fn candidate_games_sql(has_window: bool) -> String {
+    let date_filter = if has_window {
+        " AND game_date BETWEEN $2::date AND $3::date"
+    } else {
+        ""
+    };
+    format!(
+        "SELECT id, natstat_id, home_team_id, away_team_id FROM games \
+         WHERE season = $1 AND status = 'Final' AND natstat_id IS NOT NULL{date_filter} \
+         ORDER BY game_date, natstat_id"
+    )
+}
+
 pub async fn ingest_lineups_for_season(
     client: &NatStatClient,
     pool: &PgPool,
@@ -153,19 +172,7 @@ pub async fn ingest_lineups_for_season(
             .collect()
     };
 
-    // Date-window filter is optional: `$2::date`/`$3::date` are only referenced
-    // when `window` is Some, and bound in the same branch, so the placeholder
-    // numbering stays consistent with the binds.
-    let date_filter = if window.is_some() {
-        " AND game_date BETWEEN $2::date AND $3::date"
-    } else {
-        ""
-    };
-    let games_sql = format!(
-        "SELECT id, natstat_id, home_team_id, away_team_id FROM games \
-         WHERE season = $1 AND status = 'Final' AND natstat_id IS NOT NULL{date_filter} \
-         ORDER BY game_date, natstat_id"
-    );
+    let games_sql = candidate_games_sql(window.is_some());
     let mut games_q = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, Option<Uuid>)>(&games_sql)
         .bind(season);
     if let Some((from, to)) = window {
@@ -628,6 +635,31 @@ async fn record_status(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn windowed_candidate_query_scopes_by_game_date() {
+        // The nightly passes a window; the sweep MUST bound to it, or the first
+        // prod run (empty `natstat_lineup_games` ledger) backfills a whole season.
+        let sql = candidate_games_sql(true);
+        assert!(
+            sql.contains("game_date BETWEEN $2::date AND $3::date"),
+            "windowed query lost its date filter — nightly would sweep the whole season: {sql}"
+        );
+        // Placeholder numbering must stay consistent with the caller's binds
+        // (season = $1, then from = $2, to = $3).
+        assert!(sql.contains("season = $1"));
+        assert!(sql.contains("$2::date") && sql.contains("$3::date"));
+    }
+
+    #[test]
+    fn unwindowed_candidate_query_is_full_season() {
+        // The `lineups` CLI (backfill) passes None and wants the whole season —
+        // and must NOT reference $2/$3 (nothing is bound for them).
+        let sql = candidate_games_sql(false);
+        assert!(!sql.contains("game_date BETWEEN"), "unexpected date filter: {sql}");
+        assert!(!sql.contains("$2") && !sql.contains("$3"), "stray bind placeholder: {sql}");
+        assert!(sql.contains("season = $1"));
+    }
 
     fn sample_unit() -> Value {
         json!({
