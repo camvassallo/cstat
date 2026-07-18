@@ -16,11 +16,16 @@
 //! healthy ingest. What was missing is that the ledger never noticed its own
 //! silence. These tests pin that it does now.
 //!
-//! Isolation: a `max_connections(1)` pool plus a TEMP `ingest_runs` that shadows
-//! the real table via `search_path` (`pg_temp` precedes `public`). Every
+//! Isolation: a pinned single-connection pool plus a TEMP `ingest_runs` that
+//! shadows the real table via `search_path` (`pg_temp` precedes `public`). Every
 //! `record` call therefore lands on the temp table, which dies with the
 //! connection — nothing whatsoever touches whatever `DATABASE_URL` points at.
-//! Skips cleanly when `DATABASE_URL` is unset, like the other DB-backed tests.
+//! That guarantee is *asserted*, not assumed: setup resolves `ingest_runs` and
+//! refuses to run unless it lands in a `pg_temp*` schema, so a pool that ever
+//! reconnected (dropping the temp table and falling through to the real one)
+//! fails the test loudly instead of quietly writing junk into a developer's
+//! ledger. Skips cleanly when `DATABASE_URL` is unset, like the other DB-backed
+//! tests.
 
 use chrono::Utc;
 use cstat_ingest::run_ledger::{RunLedger, StepStatus};
@@ -48,10 +53,21 @@ const TEMP_LEDGER_DDL: &str = "
     )";
 
 /// Single connection so every `record` reaches the same session's temp table.
+///
+/// `min_connections(1)` + no idle/lifetime recycling pins that one session for
+/// the test's duration. This matters more than it looks: a TEMP table lives and
+/// dies with its connection, so if the pool ever silently reconnected, `record`
+/// would fall through `search_path` to the REAL `public.ingest_runs` and write
+/// junk rows into the developer's actual ledger. The assertion below makes that
+/// unenforceable promise enforced — it resolves `ingest_runs` and fails the test
+/// unless it lands in a `pg_temp*` schema.
 async fn temp_ledger_pool() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect(&url)
         .await
         .expect("connect");
@@ -59,6 +75,21 @@ async fn temp_ledger_pool() -> Option<PgPool> {
         .execute(&pool)
         .await
         .expect("create temp ledger");
+
+    let schema: String = sqlx::query_scalar(
+        "SELECT n.nspname FROM pg_class c \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE c.oid = 'ingest_runs'::regclass",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("resolve ingest_runs");
+    assert!(
+        schema.starts_with("pg_temp"),
+        "refusing to run: `ingest_runs` resolved to schema `{schema}`, not a temp \
+         schema — this test would write to the REAL ledger in DATABASE_URL"
+    );
+
     Some(pool)
 }
 

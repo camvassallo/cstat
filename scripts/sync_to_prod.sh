@@ -224,7 +224,12 @@ if [[ "$PROD_STATUS" -eq 1 ]]; then
   # N+1 against a high-latency prod). A sequence added by a future migration is
   # covered automatically; nothing here needs updating by hand.
   echo "→ Sequence health (last_value vs max(id) — skew breaks the NEXT insert):"
-  "${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
+  # Captured rather than streamed so an empty result can be reported as such.
+  # This check exists BECAUSE a silent no-op looked like health for three nights;
+  # printing a bare header on error would reproduce exactly that failure mode
+  # (reads as "no sequences, nothing to worry about"). Needs Postgres 10+ for
+  # pg_sequence_last_value.
+  SEQ_HEALTH=$("${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
     WITH owned AS (
       SELECT c.oid AS seqoid, c.relname AS seqname, t.relname AS tblname, a.attname AS colname
       FROM pg_class c
@@ -255,7 +260,12 @@ if [[ "$PROD_STATUS" -eq 1 ]]; then
            END
     FROM probed
     ORDER BY (last_value IS NOT NULL AND max_id IS NOT NULL AND last_value < max_id) DESC, seqname
-  " | sed 's/^/    /' || true
+  " 2>&1) || true
+  if [[ -z "$SEQ_HEALTH" ]]; then
+    echo "    ✗ check returned nothing — could not read sequence state (treat as UNKNOWN, not ok)"
+  else
+    sed 's/^/    /' <<<"$SEQ_HEALTH"
+  fi
   echo
   # Exact counts, deliberately — NOT n_live_tup or reltuples. Those are only
   # populated by ANALYZE/autovacuum, so a never-analyzed or freshly-restored
