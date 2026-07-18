@@ -203,7 +203,15 @@ async fn get_roster_agg(
             FROM qualified
         )
         SELECT agg.*, star.*
-        FROM agg CROSS JOIN star
+        -- LEFT JOIN (not CROSS JOIN) so `agg`'s always-present single row
+        -- survives when `star` is empty. `star` yields zero rows whenever no
+        -- player clears the >=5 GP / >=10 MPG gate (every team in the opening
+        -- ~2 weeks of a season), and a CROSS JOIN with an empty side collapses
+        -- to zero rows -> fetch_one RowNotFound -> the whole matchup prediction
+        -- is suppressed even though team_season_stats / rolling-form exist. With
+        -- the LEFT JOIN the star_* columns come back NULL and default to 0.0 in
+        -- build_all_features, leaving the preseason blend to carry early games.
+        FROM agg LEFT JOIN star ON true
         "#,
     )
     .bind(team_id)
@@ -300,7 +308,15 @@ async fn get_roster_agg_pit(
             FROM qualified
         )
         SELECT agg.*, star.*
-        FROM agg CROSS JOIN star
+        -- LEFT JOIN (not CROSS JOIN) so `agg`'s always-present single row
+        -- survives when `star` is empty. `star` yields zero rows whenever no
+        -- player clears the >=5 GP / >=10 MPG gate (every team in the opening
+        -- ~2 weeks of a season), and a CROSS JOIN with an empty side collapses
+        -- to zero rows -> fetch_one RowNotFound -> the whole matchup prediction
+        -- is suppressed even though team_season_stats / rolling-form exist. With
+        -- the LEFT JOIN the star_* columns come back NULL and default to 0.0 in
+        -- build_all_features, leaving the preseason blend to carry early games.
+        FROM agg LEFT JOIN star ON true
         "#,
     )
     .bind(team_id)

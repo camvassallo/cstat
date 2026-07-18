@@ -216,7 +216,20 @@ impl TorkvikClient {
         let players = with_retry("player_stats", || async move {
             let url = format!("https://barttorvik.com/getadvstats.php?year={year}&csv=1");
             info!(year, "fetching Torvik player stats");
-            let body = self.http.get(&url).send().await?.text().await?;
+            // error_for_status() BEFORE reading the body: reqwest's send() only
+            // errors on transport failures, not HTTP 4xx/5xx, so a barttorvik
+            // error page (HTML) would otherwise flow into parse_player_csv, get
+            // skipped row-by-row (< 64 cols), and return Ok(vec![]) — a silent
+            // empty "success" that with_retry never retries. Turning the HTTP
+            // status into an Err lets the retry fire and the ledger record it.
+            let body = self
+                .http
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
             let players = parse_player_csv(&body)?;
             info!(year, count = players.len(), "parsed Torvik player stats");
             Ok(players)
@@ -237,7 +250,17 @@ impl TorkvikClient {
         with_retry("game_stats", || async move {
             let url = format!("https://barttorvik.com/{year}_all_advgames.json.gz");
             info!(year, "fetching Torvik game stats (gzip)");
-            let bytes = self.http.get(&url).send().await?.bytes().await?;
+            // See fetch_player_stats: guard the HTTP status before reading the
+            // body so a 4xx/5xx page becomes a retryable Err rather than a
+            // confusing gzip/JSON parse error on the error page.
+            let bytes = self
+                .http
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
 
             // The server may send Content-Encoding: gzip (auto-decompressed by reqwest)
             // or raw gzip bytes. Try parsing as JSON first, fall back to gzip decompress.
