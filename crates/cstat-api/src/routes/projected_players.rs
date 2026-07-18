@@ -35,8 +35,10 @@ struct ProjectedPlayerRow {
     /// `returning` | `transfer` | `freshman`.
     source: String,
     /// Base-season team the player is projected onto (destination for a
-    /// transfer). Frontend links at `?season=base_season`.
+    /// transfer) — same base-season UUID `/api/projections/{year}` emits, so the
+    /// frontend links it to the team's future page (`?season={year}&view=projected`).
     team_id: Uuid,
+    /// Torvik short name (e.g. "Duke", not "Duke Blue Devils").
     team_name: String,
     natstat_id: Option<String>,
     /// Projected CamPom mean (the ranking key).
