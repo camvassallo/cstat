@@ -797,17 +797,22 @@ async fn projection_team_detail(
     // Look up the team's natstat_id so the frontend can build canonical
     // back-links into the played base season (e.g. clicking the team
     // name on the projection page goes to the actual 2026 page).
-    let team_meta: Option<(String, Option<String>)> =
-        sqlx::query_as(r#"SELECT name, short_name FROM teams WHERE id = $1 LIMIT 1"#)
-            .bind(resolved_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("team meta fetch failed: {e}") })),
-                )
-            })?;
+    // Display name is the Torvik short name ("Duke", not "Duke Blue Devils"),
+    // COALESCE'd to the full NatStat name for the rare team with no short_name —
+    // the same convention every other team-name query uses (issue #172). This
+    // was the last surface still surfacing the full NatStat name.
+    let team_meta: Option<(String, Option<String>)> = sqlx::query_as(
+        r#"SELECT COALESCE(short_name, name) AS name, short_name FROM teams WHERE id = $1 LIMIT 1"#,
+    )
+    .bind(resolved_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("team meta fetch failed: {e}") })),
+        )
+    })?;
 
     let baseline_map = fetch_baseline_adj_em(pool, base_season)
         .await
