@@ -444,6 +444,40 @@ export function fetchPlayers(params: {
   );
 }
 
+// Projected players — per-player projected CamPom for an upcoming (not-yet-
+// played) season, read from the materialized `player_season_projection` table.
+// Returners/transfers link to their base-season detail page; freshmen (recruits)
+// have no player page and are non-linked.
+export type ProjectionSource = 'returning' | 'transfer' | 'freshman';
+
+export interface ProjectedPlayer {
+  player_id: string;
+  name: string;
+  source: ProjectionSource;
+  team_id: string;
+  team_name: string;
+  natstat_id: string | null;
+  /** Projected CamPom mean (the ranking key). */
+  campom: number;
+  campom_lower: number | null;
+  campom_upper: number | null;
+  class_year: string | null;
+  primary_archetype: string | null;
+  composite_rank: number | null;
+  star_rating: number | null;
+}
+
+/** Fetch the projected-player ranking for `year` (e.g. 2027), CamPom-mean
+ *  descending. `base_season` is the season the projection was composed from. */
+export function fetchProjectedPlayers(year: number) {
+  return fetchJson<{
+    target_season: number;
+    base_season: number;
+    count: number;
+    players: ProjectedPlayer[];
+  }>(`/projected-players/${year}`);
+}
+
 /** Server-authoritative Portle daily answer (issue #181). The backend pins one
  *  player per (mode, season, local date) and freezes it, so every client fetches
  *  the identical puzzle and it never moves once set. Returns the stable
