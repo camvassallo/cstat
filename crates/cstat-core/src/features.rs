@@ -58,7 +58,10 @@ impl TeamStats {
 }
 
 /// Minutes-weighted roster aggregates from `player_season_stats`.
-#[derive(Debug, sqlx::FromRow)]
+///
+/// `Default` (all fields `None`) is the *neutral* roster used by
+/// [`comparable_rosters`] — every field maps to 0.0 in the feature vector.
+#[derive(Debug, Default, sqlx::FromRow)]
 struct RosterAgg {
     roster_size: Option<i64>,
     w_ppg: Option<f64>,
@@ -85,6 +88,35 @@ struct RosterAgg {
     star_dgbpm: Option<f64>,
     star_ortg: Option<f64>,
     minutes_stddev: Option<f64>,
+}
+
+/// Neutralize the roster channel when it isn't comparably measured on both
+/// sides of a matchup.
+///
+/// The roster features are diffs (and two sums) between two minutes-weighted
+/// aggregates. Each aggregate is empty — `roster_size == 0` — when no player on
+/// that team has cleared the `>= 5 GP / >= 10 MPG` gate, which is true for a
+/// team in the season's opening ~2 weeks. When *one* side is empty the naive
+/// per-field fill (`unwrap_or(0.0)`) reads that team as league-worst on every
+/// roster metric, injecting a large one-sided signal into an otherwise-valid
+/// prediction. Measured across 2024-2026 that asymmetric case is ~7% of all
+/// games, and the empty (fewer-games-played) team is the genuinely *stronger*
+/// team ~60% of the time (avg +3 to +9.5 AdjEM) — MTEs and early buy games
+/// desync schedules so the front-loaded team is often the weaker mid-major — so
+/// the one-sided fill is wrong-signed more often than not.
+///
+/// Fix: whenever *either* roster is empty, replace *both* with the neutral
+/// (all-zero) aggregate. Every roster diff then contributes 0 and the two
+/// roster sums contribute 0, leaving team stats, rolling form, and the
+/// early-season preseason blend to carry the prediction. This is a no-op for
+/// the common both-empty case (already all-zero) and never fires once both
+/// teams have a qualified rotation.
+fn comparable_rosters(home: RosterAgg, away: RosterAgg) -> (RosterAgg, RosterAgg) {
+    if home.roster_size.unwrap_or(0) > 0 && away.roster_size.unwrap_or(0) > 0 {
+        (home, away)
+    } else {
+        (RosterAgg::default(), RosterAgg::default())
+    }
 }
 
 /// Rolling form aggregates from recent `player_game_stats`.
@@ -209,8 +241,9 @@ async fn get_roster_agg(
         -- ~2 weeks of a season), and a CROSS JOIN with an empty side collapses
         -- to zero rows -> fetch_one RowNotFound -> the whole matchup prediction
         -- is suppressed even though team_season_stats / rolling-form exist. With
-        -- the LEFT JOIN the star_* columns come back NULL and default to 0.0 in
-        -- build_all_features, leaving the preseason blend to carry early games.
+        -- the LEFT JOIN the row survives with roster_size 0 and NULL star_*/w_*
+        -- columns; `comparable_rosters` then neutralizes the roster channel when
+        -- only one side is empty, and the preseason blend carries early games.
         FROM agg LEFT JOIN star ON true
         "#,
     )
@@ -314,8 +347,9 @@ async fn get_roster_agg_pit(
         -- ~2 weeks of a season), and a CROSS JOIN with an empty side collapses
         -- to zero rows -> fetch_one RowNotFound -> the whole matchup prediction
         -- is suppressed even though team_season_stats / rolling-form exist. With
-        -- the LEFT JOIN the star_* columns come back NULL and default to 0.0 in
-        -- build_all_features, leaving the preseason blend to carry early games.
+        -- the LEFT JOIN the row survives with roster_size 0 and NULL star_*/w_*
+        -- columns; `comparable_rosters` then neutralizes the roster channel when
+        -- only one side is empty, and the preseason blend carries early games.
         FROM agg LEFT JOIN star ON true
         "#,
     )
@@ -499,6 +533,10 @@ async fn build_all_features_inner(
         )?,
     };
 
+    // Drop a one-sided roster signal when only one team has a qualified
+    // rotation yet (opening ~2 weeks) — see `comparable_rosters`.
+    let (home_roster, away_roster) = comparable_rosters(home_roster, away_roster);
+
     let d = |home: Option<f64>, away: Option<f64>| -> f32 {
         (home.unwrap_or(0.0) - away.unwrap_or(0.0)) as f32
     };
@@ -595,6 +633,74 @@ async fn build_all_features_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A roster with a real, qualified rotation.
+    fn populated_roster(size: i64, gbpm: f64, star_ppg: f64) -> RosterAgg {
+        RosterAgg {
+            roster_size: Some(size),
+            w_gbpm: Some(gbpm),
+            star_ppg: Some(star_ppg),
+            ..Default::default()
+        }
+    }
+
+    /// The `d` diff a full feature build would compute for one roster field.
+    fn diff(home: Option<f64>, away: Option<f64>) -> f32 {
+        (home.unwrap_or(0.0) - away.unwrap_or(0.0)) as f32
+    }
+
+    #[test]
+    fn comparable_rosters_preserves_when_both_populated() {
+        let (h, a) = comparable_rosters(
+            populated_roster(10, 5.0, 20.0),
+            populated_roster(9, 3.0, 15.0),
+        );
+        assert_eq!(h.roster_size, Some(10));
+        assert_eq!(h.w_gbpm, Some(5.0));
+        assert_eq!(a.star_ppg, Some(15.0));
+        // A real, non-zero roster diff survives.
+        assert_eq!(diff(h.w_gbpm, a.w_gbpm), 2.0);
+    }
+
+    #[test]
+    fn comparable_rosters_neutralizes_asymmetric() {
+        // Home empty (roster_size == 0), away a real rotation — the wrong-signed
+        // case. Both must come back neutral so every roster diff is 0 rather
+        // than reading the empty home team as league-worst.
+        let empty = RosterAgg {
+            roster_size: Some(0),
+            ..Default::default()
+        };
+        let (h, a) = comparable_rosters(empty, populated_roster(10, 5.0, 20.0));
+        assert_eq!(h.roster_size, None);
+        assert_eq!(a.roster_size, None);
+        assert_eq!(a.w_gbpm, None, "away roster must be neutralized too");
+        assert_eq!(diff(h.w_gbpm, a.w_gbpm), 0.0);
+        assert_eq!(diff(h.star_ppg, a.star_ppg), 0.0);
+
+        // Symmetric: away empty instead of home.
+        let empty = RosterAgg {
+            roster_size: Some(0),
+            ..Default::default()
+        };
+        let (h, a) = comparable_rosters(populated_roster(10, 5.0, 20.0), empty);
+        assert_eq!(diff(h.w_gbpm, a.w_gbpm), 0.0);
+    }
+
+    #[test]
+    fn comparable_rosters_both_empty_is_neutral() {
+        let (h, a) = comparable_rosters(
+            RosterAgg {
+                roster_size: Some(0),
+                ..Default::default()
+            },
+            RosterAgg {
+                roster_size: Some(0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(diff(h.w_gbpm, a.w_gbpm), 0.0);
+    }
 
     #[test]
     fn win_pct_even_record() {
