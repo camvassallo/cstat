@@ -5,9 +5,19 @@
 //!
 //! Ledger writes are intentionally **fail-soft**: a failure to record a step
 //! must never abort the ingest it is observing — we log a warning and move on.
+//!
+//! Fail-soft on the *pipeline*, fail-loud on the *reporting*: [`RunLedger`]
+//! counts its own failed writes ([`write_failures`](RunLedger::write_failures))
+//! so the orchestrator can degrade the run summary. Without that counter a
+//! swallowed write is indistinguishable from a healthy one, and the outage hides
+//! for as long as it lasts — prod's ledger went dark for three nights in July
+//! 2026 (a rewound `ingest_runs_id_seq` made every INSERT a duplicate-key
+//! violation) while every run still reported OK, because the only signal was a
+//! `warn!` nobody was tailing. See ROADMAP "ingest_runs sequence rewind".
 
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -79,6 +89,10 @@ pub struct RunLedger<'a> {
     /// the self-heal has settled the final window. `None` until then — the
     /// coverage scan ignores NULL windows.
     window: Option<(NaiveDate, NaiveDate)>,
+    /// Count of [`record`](RunLedger::record) calls whose INSERT failed. Atomic
+    /// rather than a `Cell` so `&RunLedger` stays `Sync` and the nightly future
+    /// remains `Send`.
+    write_failures: AtomicU32,
 }
 
 impl<'a> RunLedger<'a> {
@@ -89,6 +103,7 @@ impl<'a> RunLedger<'a> {
             run_id: Uuid::new_v4(),
             season,
             window: None,
+            write_failures: AtomicU32::new(0),
         }
     }
 
@@ -141,8 +156,18 @@ impl<'a> RunLedger<'a> {
         .await;
 
         if let Err(e) = res {
+            self.write_failures.fetch_add(1, Ordering::Relaxed);
             warn!(step, error = %e, "failed to record ingest_runs step; continuing");
         }
+    }
+
+    /// How many [`record`](RunLedger::record) writes failed this run. Non-zero
+    /// means the audit trail is incomplete — the ingest itself may be perfectly
+    /// healthy, but `/api/health/ingest`, the self-heal coverage scan, and the
+    /// full-sync guard all read this table and will now draw wrong conclusions
+    /// from it. The orchestrator degrades the run summary on this.
+    pub fn write_failures(&self) -> u32 {
+        self.write_failures.load(Ordering::Relaxed)
     }
 
     /// Read the season-scoped row count of every [`ROW_COUNT_TABLES`] table

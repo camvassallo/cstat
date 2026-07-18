@@ -1049,6 +1049,33 @@ impl<'a> SeasonIngester<'a> {
             failures.push("natstat v4→v3 fallback (v4 host was failing)".to_string());
         }
 
+        // --- Ledger self-check (must follow the LAST `ledger.record` above) ---
+        // Ledger writes are fail-soft so an audit failure can't abort a healthy
+        // ingest — but "one write blipped" and "every write has failed for days"
+        // are the same silence, and only the second matters. Surfacing the count
+        // here degrades the Slack summary without touching control flow.
+        //
+        // Not hypothetical: a rewound `ingest_runs_id_seq` (issue #186, second
+        // occurrence) made every INSERT a duplicate-key violation for three
+        // nights in July 2026 while each run reported OK. Everything downstream
+        // that reads the ledger — the 36h staleness route, the M5b coverage
+        // scan, and `sync_to_prod.sh`'s full-sync guard — silently inverted:
+        // the guard in particular reads a dark ledger as "prod is idle" and so
+        // UNBLOCKS the destructive full sync that causes this in the first place.
+        let ledger_write_failures = ledger.write_failures();
+        if ledger_write_failures > 0 {
+            warn!(
+                season = self.season,
+                failures = ledger_write_failures,
+                "ingest_runs ledger writes FAILED — audit trail incomplete; check \
+                 ingest_runs_id_seq vs max(id) (./scripts/sync_to_prod.sh --prod-status)"
+            );
+            failures.push(format!(
+                "ingest_runs ledger: {ledger_write_failures} step write(s) FAILED — \
+                 audit trail incomplete (health/self-heal/sync-guard all read it)"
+            ));
+        }
+
         // --- Rate-budget headroom (2.5) ---
         // The token bucket refills mid-run (~budget/3600 per sec), so `consumed`
         // (before − after) UNDER-reports actual calls on a long run — refill
