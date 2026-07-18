@@ -206,16 +206,15 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
         // Banded (mean + q10/q90) twin of the above, for the per-player
         // `player_season_projection` materialization below. The team-AdjEM
         // scoring only needs the mean; the projected-players page wants the band.
-        let projected_cam_banded =
-            project_returner_cam_v3_banded(pool, predictor, &traj_ids, year)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        error = %e,
-                        "banded trajectory projection failed; per-player bands omitted"
-                    );
-                    HashMap::new()
-                });
+        let projected_cam_banded = project_returner_cam_v3_banded(pool, predictor, &traj_ids, year)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "banded trajectory projection failed; per-player bands omitted"
+                );
+                HashMap::new()
+            });
 
         // Name / natstat_id for every real (non-recruit) player on any roster.
         let mut real_ids: Vec<Uuid> = Vec::new();
