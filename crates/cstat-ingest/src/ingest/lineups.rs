@@ -118,10 +118,21 @@ struct RosterSlot {
 /// the ledger. Restart-safe: the ledger is the done-set. `limit` bounds the
 /// number of API fetches this run (budget control); `retry_errors` re-attempts
 /// games previously recorded as `status='error'`.
+///
+/// `window` scopes the candidate games to `game_date BETWEEN from AND to`
+/// (`YYYY-MM-DD`). The nightly passes its ingest window so the sweep stays
+/// bounded to the night's games — without it, the FIRST nightly against a
+/// season whose `natstat_lineup_games` ledger is empty (e.g. prod, which never
+/// receives this local-only table via `sync_to_prod.sh`) would try to backfill
+/// the ENTIRE season's lineups in one run. `None` restores the full-season
+/// sweep, which is what the `lineups` CLI subcommand (backfill) wants.
+/// Ordering is `game_date` ascending, so a windowed+limited run processes the
+/// oldest un-covered games in the window first.
 pub async fn ingest_lineups_for_season(
     client: &NatStatClient,
     pool: &PgPool,
     season: i32,
+    window: Option<(&str, &str)>,
     limit: Option<u64>,
     retry_errors: bool,
 ) -> Result<LineupsReport, NatStatError> {
@@ -142,14 +153,26 @@ pub async fn ingest_lineups_for_season(
             .collect()
     };
 
-    let games: Vec<(Uuid, String, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+    // Date-window filter is optional: `$2::date`/`$3::date` are only referenced
+    // when `window` is Some, and bound in the same branch, so the placeholder
+    // numbering stays consistent with the binds.
+    let date_filter = if window.is_some() {
+        " AND game_date BETWEEN $2::date AND $3::date"
+    } else {
+        ""
+    };
+    let games_sql = format!(
         "SELECT id, natstat_id, home_team_id, away_team_id FROM games \
-         WHERE season = $1 AND status = 'Final' AND natstat_id IS NOT NULL \
-         ORDER BY game_date, natstat_id",
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await?;
+         WHERE season = $1 AND status = 'Final' AND natstat_id IS NOT NULL{date_filter} \
+         ORDER BY game_date, natstat_id"
+    );
+    let mut games_q = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, Option<Uuid>)>(&games_sql)
+        .bind(season);
+    if let Some((from, to)) = window {
+        games_q = games_q.bind(from).bind(to);
+    }
+    let games: Vec<(Uuid, String, Option<Uuid>, Option<Uuid>)> =
+        games_q.fetch_all(pool).await?;
 
     let teams = team_abbrev_map(pool, season).await?;
     let rosters = game_rosters(pool, season).await?;

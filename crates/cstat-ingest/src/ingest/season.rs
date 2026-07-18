@@ -477,6 +477,8 @@ impl<'a> SeasonIngester<'a> {
             ingest: IngestReport::default(),
             torvik: None,
             torvik_games_persisted: 0,
+            pbp_rows: 0,
+            lineups_fetched: 0,
             torvik_rebounds_updated: 0,
             compute: None,
             run_id: ledger.run_id(),
@@ -785,6 +787,89 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // --- 7b. play-by-play (best-effort — feeds `compute_pbp_lineups`) ---
+        // Date-scoped to the ingest window, so off-season (or any night with no
+        // games in range) it short-circuits to a no-op with ZERO API calls
+        // (`ingest_pbp_scoped` returns early on an empty game scope). Must run
+        // BEFORE `compute_all`: its step-10 `compute_pbp_lineups` reads
+        // `play_by_play` for the season and early-returns when prod holds none —
+        // this is the step that makes prod produce `lineup_aggregates` /
+        // `player_on_off` / `lineup_stints` itself instead of importing them from
+        // a laptop. Best-effort: PBP feeds only display surfaces (duos/trios,
+        // on-off, RAPM) and 3-of-60 trajectory features (which degrade to a
+        // sentinel), so a fetch failure degrades the run rather than aborting the
+        // served-critical chain. Uses the date-range path, never `gamecode`:
+        // NatStat only honours the `range` filter on page 1, so a paginated
+        // gamecode query silently runs away into the global season stream.
+        let t0 = Utc::now();
+        match super::playbyplay::ingest_play_by_play_by_date_range(
+            self.client,
+            self.pool,
+            self.season,
+            &start_date,
+            &end_date,
+        )
+        .await
+        {
+            Ok(pbp) => {
+                report.pbp_rows = pbp.rows;
+                ledger
+                    .record("playbyplay", StepStatus::Ok, Some(pbp.rows as i64), t0, None)
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg, "play-by-play refresh failed; PBP-derived surfaces (lineups/on-off/RAPM) may be stale");
+                ledger
+                    .record("playbyplay", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                failures.push(format!("playbyplay: {msg}"));
+            }
+        }
+
+        // --- 7c. captured NatStat lineups object (best-effort) ---
+        // Supplies EXACT 5-man membership where available; `compute_pbp_lineups`
+        // prefers it over the weaker PBP-reconstructed stints, so a prod without
+        // it would compute different, worse `lineup_aggregates`. Window-scoped
+        // (same reason as PBP: keeps the sweep bounded to the night's games — a
+        // full-season sweep would fire on the first prod run, whose
+        // `natstat_lineup_games` ledger is empty). Fetch-limited as a runaway
+        // backstop even within the window (e.g. a wide self-heal window).
+        // Best-effort like PBP.
+        const NIGHTLY_LINEUPS_FETCH_LIMIT: u64 = 500;
+        let t0 = Utc::now();
+        match super::lineups::ingest_lineups_for_season(
+            self.client,
+            self.pool,
+            self.season,
+            Some((&start_date, &end_date)),
+            Some(NIGHTLY_LINEUPS_FETCH_LIMIT),
+            false,
+        )
+        .await
+        {
+            Ok(l) => {
+                report.lineups_fetched = l.games_fetched;
+                ledger
+                    .record(
+                        "lineups",
+                        StepStatus::Ok,
+                        Some(l.games_fetched as i64),
+                        t0,
+                        None,
+                    )
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg, "lineups capture failed; exact 5-man membership may be stale");
+                ledger
+                    .record("lineups", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                failures.push(format!("lineups: {msg}"));
+            }
+        }
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -1061,6 +1146,7 @@ impl<'a> SeasonIngester<'a> {
                      *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
                      *Feeds:*  {elo} ELO · {fc} forecasts\n\
                      {torvik_line}\n\
+                     *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
                      *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}{heal_line}\n\
                      _run {run_id}_",
                     season = self.season,
@@ -1070,6 +1156,8 @@ impl<'a> SeasonIngester<'a> {
                     elo = report.ingest.elo_ratings,
                     fc = report.ingest.game_forecasts,
                     torvik_line = torvik_line,
+                    pbp = report.pbp_rows,
+                    lu = report.lineups_fetched,
                     compute_str = compute_str,
                     remaining = tokens_after,
                     budget = budget,
@@ -1271,6 +1359,10 @@ pub struct NightlyReport {
     pub torvik: Option<TorvikReport>,
     pub torvik_games_persisted: u64,
     pub torvik_rebounds_updated: u64,
+    /// Play-by-play rows ingested this run (0 off-season / no games in window).
+    pub pbp_rows: u64,
+    /// Games whose NatStat lineups object was captured this run.
+    pub lineups_fetched: u64,
     pub compute: Option<ComputeReport>,
     /// Grouping id for this run's rows in the `ingest_runs` ledger.
     pub run_id: Uuid,
@@ -1302,6 +1394,11 @@ impl std::fmt::Display for NightlyReport {
                 "Torvik: refresh FAILED — served CamPom may be stale (see ingest_runs)"
             )?,
         }
+        writeln!(
+            f,
+            "PBP/lineups: {} play-by-play rows, {} lineup games captured",
+            self.pbp_rows, self.lineups_fetched
+        )?;
         if let Some(c) = &self.compute {
             writeln!(f, "{c}")?;
         }

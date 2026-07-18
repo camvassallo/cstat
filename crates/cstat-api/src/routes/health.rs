@@ -23,8 +23,12 @@ use crate::AppState;
 /// Steps whose staleness makes the served product wrong (predictions/rankings
 /// recompute from these). `forecasts` is intentionally excluded — its payload
 /// is legitimately empty off-season and before NatStat's nightly tabulation, so
-/// gating health on it would false-alarm. Kept in sync with the steps recorded
-/// by `SeasonIngester::nightly`.
+/// gating health on it would false-alarm. `playbyplay`/`lineups` are likewise
+/// excluded: they only feed display surfaces (duos/trios, on-off, RAPM) and 3
+/// gracefully-degrading trajectory features, and are legitimately empty on any
+/// night with no games in the window — gating on them would false-alarm every
+/// off-season night. Kept in sync with the steps recorded by
+/// `SeasonIngester::nightly`.
 const SERVED_CRITICAL: &[&str] = &[
     "games",
     "player_perfs",
