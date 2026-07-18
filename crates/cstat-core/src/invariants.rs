@@ -67,6 +67,7 @@ pub async fn check_season(
         wl_record_mismatch(pool, season).await?,
         fully_swapped_games_remain(pool, season).await?,
         phantom_swapped_games_remain(pool, season).await?,
+        pbp_present_but_lineups_empty(pool, season).await?,
     ]
     .into_iter()
     .flatten()
@@ -315,6 +316,39 @@ pub async fn phantom_swapped_games_remain(
 
 /// Fold a list of offending ids into a violation (None when clean),
 /// keeping the first few as samples.
+/// If a season has any `play_by_play`, `compute_pbp_lineups` must have produced
+/// `lineup_aggregates` from it. An empty rollup despite present PBP means step 10
+/// silently produced nothing — the exact failure this PR's prod-owned PBP path
+/// must never hit. It cannot false-fire on a PBP-less prod (no PBP → no check),
+/// nor in the offline `simulate`/replay harnesses (they seed no PBP fixtures);
+/// it fires only once prod holds PBP but the rollup is empty. Verified to hold
+/// across all 12 ingested seasons. Uses `EXISTS` for the PBP side so it stays
+/// cheap against the multi-million-row table (short-circuits at the first row).
+async fn pbp_present_but_lineups_empty(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT EXISTS(SELECT 1 FROM play_by_play WHERE season = $1) AS has_pbp, \
+                (SELECT count(*) FROM lineup_aggregates WHERE season = $1) AS aggs",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await?;
+    let has_pbp: bool = row.get("has_pbp");
+    let aggs: i64 = row.get("aggs");
+    let sample = (has_pbp && aggs == 0).then(|| {
+        format!(
+            "season {season} has play_by_play but 0 lineup_aggregates — compute_pbp_lineups produced nothing"
+        )
+    });
+    Ok(violation(
+        "pbp_present_but_lineups_empty",
+        Severity::Error,
+        sample.into_iter(),
+    ))
+}
+
 fn violation(
     check: &'static str,
     severity: Severity,
