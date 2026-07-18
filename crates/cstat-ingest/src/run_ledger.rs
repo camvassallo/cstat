@@ -15,12 +15,24 @@ use uuid::Uuid;
 /// each successful compute. In-season these only ever grow or hold flat, so a
 /// material shrink vs the prior run is a red flag (a truncated feed, a botched
 /// compute wiping rows). Kept deliberately tight to the load-bearing served set.
+///
+/// `lineup_aggregates` / `player_on_off` are the PBP-derived rollups now that
+/// prod owns them (the nightly ingests PBP + `compute_pbp_lineups` rebuilds them
+/// season-scoped). Like the rest they only grow in-season — `compute_pbp_lineups`
+/// reprocesses the whole season's accumulated PBP each run, and a best-effort PBP
+/// fetch failure leaves existing rows intact — so a material shrink means step 10
+/// wiped rows it shouldn't have (e.g. PBP got truncated). Safe at the season roll:
+/// the first run of a new season has no prior same-season snapshot, so the gate
+/// only records a baseline (`detect_count_regressions` skips a table absent from
+/// the prior snapshot).
 pub const ROW_COUNT_TABLES: &[&str] = &[
     "games",
     "team_game_stats",
     "player_game_stats",
     "team_season_stats",
     "player_season_stats",
+    "lineup_aggregates",
+    "player_on_off",
 ];
 
 /// The window-scoped, load-bearing box-score steps. A date only counts as

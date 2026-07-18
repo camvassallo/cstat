@@ -714,6 +714,7 @@ async fn main() -> Result<()> {
                 &client,
                 &db.pool,
                 year,
+                None, // CLI = full-season backfill sweep (nightly passes its window)
                 limit,
                 retry_errors,
             )

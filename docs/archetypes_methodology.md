@@ -46,7 +46,29 @@ The diagram above is the **fit** — k-means, Hungarian matching, the signature 
 
 The **assign** half — standardize a player's 14-feature vector against the frozen model, take the nearest centroid, map to its class, softmax the affinities — was ported to Rust (`cstat_core::compute::compute_archetypes`) and runs **every nightly** as `compute_all`'s last step (2026-07-17). It reads `player_season_stats` + `torvik_player_stats` season-to-date, so in-season labels refresh as each player's sample grows, instead of freezing at the last manual `python -m archetypes` push. This is what lets prod produce archetypes with no laptop (ROADMAP *Prod self-sufficiency*, S3/P1). The Rust assign is byte-exact with this Python writer — guarded by `crates/cstat-core/tests/archetype_assign_parity.rs`, which reproduces every stored row across all fitted seasons — so recomputing a season in Rust yields the same labels the annual Python fit-and-assign did. When no `archetype_models` row exists yet (a new season before its retrain) or nobody has cleared the ≥10 GP gate, the assign step no-ops and leaves `player_archetypes` untouched.
 
-**Consequence for prod ownership:** with the nightly assigning archetypes, **prod now owns the daily `player_archetypes` write.** The only surviving laptop→prod archetype write is the **annual** `archetype_models` refit (pushed via `sync_to_prod.sh --tables archetype_models`). A `--tables player_archetypes` laptop push would be overwritten by the next nightly — which is correct.
+**Cold-start tiers (2026-07-17).** Beyond the qualified assign, `compute_archetypes` fills sub-gate players via a priority ladder, each tier falling back to the next and never overlapping:
+1. **real** — qualified (≥10 GP / ≥10 MPG) assignment (`provisional=false`, `source='current'`).
+2. **carry-over** — a sub-gate player *with* a prior real label keeps their most-recent-known archetype, keyed on `natstat_id`/`torvik_pid` (`provisional=true`, `source='prior_season'`, `source_season`=the year). Applies in every season, so a completed injury/redshirt year shows the established label instead of a blank.
+3. **live inference** — a sub-gate player with *no* prior, assigned from their partial current-season sample (≥3 GP, `provisional=true`, `source='current_partial'`, null `source_season`). **Live-season only** — gated by `cstat_ingest::should_infer_newcomers` (`in_season_now()` && current season), because inferring off a thin sample only makes sense while games are still being played.
+
+`load_archetype_model` falls back to the latest available model when a season has none — the combined-cohort fit shares one centroid set across all seasons, so a brand-new live season assigns against last season's frozen centroids before its retrain. Served aggregates (class summary / exemplars / team distribution / D-I shares) filter `provisional=false`; the tier value shows only on per-player surfaces, each marked via the frontend `provisionalMeta` helper.
+
+**Retrain footgun — the annual fit WIPES carry-over/inference.** `write_results` runs `DELETE FROM player_archetypes WHERE season IN :seasons` then re-inserts **real-only** rows, so every `python -m archetypes` retrain silently drops all seasons' tier-2/tier-3 rows, and the nightly only restores the *current* season. **After every retrain, run the Rust all-season carry-over sweep** to repopulate historical carry-over, then push:
+
+```bash
+# 1. retrain the fit (writes archetype_models + real-only player_archetypes)
+cd training && ./.venv/bin/python -m archetypes --seasons 2015,…,2026
+# 2. repopulate carry-over on every season (compute_archetypes(season, false) per season).
+#    Today the only per-season entry point is a FULL recompute (all 20 steps), heavy
+#    across 12 seasons — a dedicated archetype-only all-season sweep is ROADMAP
+#    S3-follow-up (b), which also drops the write from write_results so retrains
+#    stop wiping carry-over in the first place:
+cargo run --bin cstat-ingest -- compute --year 2015   # ... repeat per season, or loop
+# 3. push both tables to prod
+./scripts/sync_to_prod.sh --tables archetype_models,player_archetypes
+```
+
+**Consequence for prod ownership:** with the nightly assigning archetypes, **prod owns the daily `player_archetypes` write** for the current season. The surviving laptop→prod archetype writes are the **annual** `archetype_models` refit and the post-retrain carry-over sweep of *historical* `player_archetypes` (both via `--tables`). A routine in-season `--tables player_archetypes` push of the current season would be overwritten by the next nightly — which is correct.
 
 ## Why combined-cohort training
 
