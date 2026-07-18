@@ -114,20 +114,6 @@ struct RosterSlot {
     id: Uuid,
 }
 
-/// Capture the lineups object for every Final game of a season not already in
-/// the ledger. Restart-safe: the ledger is the done-set. `limit` bounds the
-/// number of API fetches this run (budget control); `retry_errors` re-attempts
-/// games previously recorded as `status='error'`.
-///
-/// `window` scopes the candidate games to `game_date BETWEEN from AND to`
-/// (`YYYY-MM-DD`). The nightly passes its ingest window so the sweep stays
-/// bounded to the night's games — without it, the FIRST nightly against a
-/// season whose `natstat_lineup_games` ledger is empty (e.g. prod, which never
-/// receives this local-only table via `sync_to_prod.sh`) would try to backfill
-/// the ENTIRE season's lineups in one run. `None` restores the full-season
-/// sweep, which is what the `lineups` CLI subcommand (backfill) wants.
-/// Ordering is `game_date` ascending, so a windowed+limited run processes the
-/// oldest un-covered games in the window first.
 /// The candidate-game query for [`ingest_lineups_for_season`]. Split out as a
 /// pure builder so the load-bearing window filter is unit-testable without a DB:
 /// dropping it silently re-enables the whole-season sweep the nightly relies on
@@ -147,6 +133,20 @@ fn candidate_games_sql(has_window: bool) -> String {
     )
 }
 
+/// Capture the lineups object for every Final game of a season not already in
+/// the ledger. Restart-safe: the ledger is the done-set. `limit` bounds the
+/// number of API fetches this run (budget control); `retry_errors` re-attempts
+/// games previously recorded as `status='error'`.
+///
+/// `window` scopes the candidate games to `game_date BETWEEN from AND to`
+/// (`YYYY-MM-DD`). The nightly passes its ingest window so the sweep stays
+/// bounded to the night's games — without it, the FIRST nightly against a
+/// season whose `natstat_lineup_games` ledger is empty (e.g. prod, which never
+/// receives this local-only table via `sync_to_prod.sh`) would try to backfill
+/// the ENTIRE season's lineups in one run. `None` restores the full-season
+/// sweep, which is what the `lineups` CLI subcommand (backfill) wants.
+/// Ordering is `game_date` ascending, so a windowed+limited run processes the
+/// oldest un-covered games in the window first.
 pub async fn ingest_lineups_for_season(
     client: &NatStatClient,
     pool: &PgPool,
@@ -173,13 +173,12 @@ pub async fn ingest_lineups_for_season(
     };
 
     let games_sql = candidate_games_sql(window.is_some());
-    let mut games_q = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, Option<Uuid>)>(&games_sql)
-        .bind(season);
+    let mut games_q =
+        sqlx::query_as::<_, (Uuid, String, Option<Uuid>, Option<Uuid>)>(&games_sql).bind(season);
     if let Some((from, to)) = window {
         games_q = games_q.bind(from).bind(to);
     }
-    let games: Vec<(Uuid, String, Option<Uuid>, Option<Uuid>)> =
-        games_q.fetch_all(pool).await?;
+    let games: Vec<(Uuid, String, Option<Uuid>, Option<Uuid>)> = games_q.fetch_all(pool).await?;
 
     let teams = team_abbrev_map(pool, season).await?;
     let rosters = game_rosters(pool, season).await?;
@@ -656,8 +655,14 @@ mod tests {
         // The `lineups` CLI (backfill) passes None and wants the whole season —
         // and must NOT reference $2/$3 (nothing is bound for them).
         let sql = candidate_games_sql(false);
-        assert!(!sql.contains("game_date BETWEEN"), "unexpected date filter: {sql}");
-        assert!(!sql.contains("$2") && !sql.contains("$3"), "stray bind placeholder: {sql}");
+        assert!(
+            !sql.contains("game_date BETWEEN"),
+            "unexpected date filter: {sql}"
+        );
+        assert!(
+            !sql.contains("$2") && !sql.contains("$3"),
+            "stray bind placeholder: {sql}"
+        );
         assert!(sql.contains("season = $1"));
     }
 

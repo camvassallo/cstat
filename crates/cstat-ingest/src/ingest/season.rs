@@ -814,7 +814,13 @@ impl<'a> SeasonIngester<'a> {
             Ok(pbp) => {
                 report.pbp_rows = pbp.rows;
                 ledger
-                    .record("playbyplay", StepStatus::Ok, Some(pbp.rows as i64), t0, None)
+                    .record(
+                        "playbyplay",
+                        StepStatus::Ok,
+                        Some(pbp.rows as i64),
+                        t0,
+                        None,
+                    )
                     .await;
             }
             Err(e) => {
