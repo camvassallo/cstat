@@ -38,17 +38,27 @@ where
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) => {
+                // A 4xx (403 Forbidden from a Cloudflare / datacenter-IP block,
+                // 401, 404) is not a transient hiccup: retrying only hammers a
+                // host that has already refused us and wastes the 30s backoff.
+                // Retry 5xx / connect / timeout only; bail immediately on 4xx.
+                let client_error = e
+                    .downcast_ref::<reqwest::Error>()
+                    .and_then(reqwest::Error::status)
+                    .is_some_and(|s| s.is_client_error());
                 warn!(
                     what,
                     attempt,
                     max = FETCH_MAX_ATTEMPTS,
                     error = %e,
+                    client_error,
                     "Torvik fetch attempt failed"
                 );
                 last_err = Some(e);
-                if attempt < FETCH_MAX_ATTEMPTS {
-                    tokio::time::sleep(FETCH_BACKOFF).await;
+                if client_error || attempt >= FETCH_MAX_ATTEMPTS {
+                    break;
                 }
+                tokio::time::sleep(FETCH_BACKOFF).await;
             }
         }
     }
@@ -873,5 +883,31 @@ mod tests {
     fn val_i32_from_string() {
         let row = vec![json!("7")];
         assert_eq!(val_i32(&row, 0), Some(7));
+    }
+
+    // -- retry policy -------------------------------------------------------
+
+    /// A 4xx HTTP status is terminal — one attempt, no retry, no 30s backoff.
+    /// Gated on the network: GETs a bogus barttorvik path that 404s. Verifies
+    /// the fix that a 403/404 from a Cloudflare / IP block is not hammered on
+    /// retry (before, `.error_for_status()?` made every 4xx a retryable Err).
+    #[tokio::test]
+    #[ignore = "network: verifies a 4xx is not retried (GET a bogus barttorvik path)"]
+    async fn with_retry_does_not_retry_client_errors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let client = reqwest::Client::new();
+        let calls = AtomicUsize::new(0);
+        let result: anyhow::Result<()> = with_retry("client_error", || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let client = client.clone();
+            async move {
+                let url = "https://barttorvik.com/this-path-does-not-exist-cstat-test";
+                client.get(url).send().await?.error_for_status()?;
+                Ok(())
+            }
+        })
+        .await;
+        assert!(result.is_err(), "a 404 must surface as an error");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "a 4xx must not be retried");
     }
 }

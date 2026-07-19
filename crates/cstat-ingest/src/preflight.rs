@@ -26,6 +26,40 @@ use crate::torvik::TorkvikClient;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
+/// Fail-soft: fetch and log this process's public egress IP.
+///
+/// barttorvik sits behind Cloudflare, which 403s requests from datacenter IP
+/// ranges while a residential IP gets 200 with the byte-identical client. When
+/// the nightly's Torvik step is refused, the one fact we otherwise can't see is
+/// *which* outbound IP Railway used for that run. Logging it at startup lets a
+/// 403 be correlated to an exact egress IP across successive runs — a stable IP
+/// points at "allowlist it with Bart", a rotating one at "route through a proxy
+/// with a fixed IP". Never blocks or fails the run: any error is just logged.
+pub(crate) async fn log_egress_ip() {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "egress-ip probe: could not build client");
+            return;
+        }
+    };
+    match client
+        .get("https://api.ipify.org")
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+    {
+        Ok(resp) => match resp.text().await {
+            Ok(ip) => info!(egress_ip = %ip.trim(), "nightly public egress IP"),
+            Err(e) => warn!(error = %e, "egress-ip probe: could not read body"),
+        },
+        Err(e) => warn!(error = %e, "egress-ip probe failed (non-fatal)"),
+    }
+}
+
 /// Health of a single feed.
 #[derive(Debug, Clone)]
 pub enum FeedHealth {
@@ -224,4 +258,18 @@ pub async fn run(
     }
 
     PreflightReport { feeds }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Smoke: the egress-IP probe completes and logs without panicking.
+    /// Gated on the network (hits api.ipify.org). Run with `--nocapture` and
+    /// `RUST_LOG=info` to eyeball the IP it reports.
+    #[tokio::test]
+    #[ignore = "network: GETs api.ipify.org to log the public egress IP"]
+    async fn egress_ip_probe_runs() {
+        log_egress_ip().await;
+    }
 }

@@ -535,6 +535,11 @@ impl<'a> SeasonIngester<'a> {
             "starting nightly ingestion"
         );
 
+        // Log the public egress IP (fail-soft) so a barttorvik 403 can be tied
+        // to the exact outbound IP Railway used this run — see
+        // `preflight::log_egress_ip`.
+        crate::preflight::log_egress_ip().await;
+
         // --- 0. preflight connectivity check (M3 1.2) ---
         // Probe the serving-critical feeds up front so a dead dependency is
         // diagnosed here rather than surfacing as an opaque mid-run failure. 247
