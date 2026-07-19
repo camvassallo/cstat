@@ -64,8 +64,22 @@ impl Database {
     }
 
     /// Run all pending migrations.
+    ///
+    /// `set_ignore_missing(true)` lets an older binary boot against a DB that a
+    /// newer deploy already migrated forward: without it, `run()` aborts at
+    /// startup ("migration N was previously applied but is missing in the
+    /// resolved migrations") the moment the DB carries a migration this binary
+    /// doesn't ship — which blocks a rollback at exactly the worst time (a bug
+    /// shipped mid-season on top of a new migration, when you most need to
+    /// redeploy the previous image). Only the *missing-migration* case is
+    /// relaxed; an **edited** applied migration still fails the checksum guard,
+    /// as it must. This is safe only while migrations stay additive /
+    /// forward-compatible (a rollback onto a DROP/rename would still break at
+    /// query time) — keep them additive, per the Database notes in CLAUDE.md.
     pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
-        sqlx::migrate!("../../migrations").run(&self.pool).await
+        let mut migrator = sqlx::migrate!("../../migrations");
+        migrator.set_ignore_missing(true);
+        migrator.run(&self.pool).await
     }
 }
 

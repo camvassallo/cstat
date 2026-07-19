@@ -38,17 +38,27 @@ where
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) => {
+                // A 4xx (403 Forbidden from a Cloudflare / datacenter-IP block,
+                // 401, 404) is not a transient hiccup: retrying only hammers a
+                // host that has already refused us and wastes the 30s backoff.
+                // Retry 5xx / connect / timeout only; bail immediately on 4xx.
+                let client_error = e
+                    .downcast_ref::<reqwest::Error>()
+                    .and_then(reqwest::Error::status)
+                    .is_some_and(|s| s.is_client_error());
                 warn!(
                     what,
                     attempt,
                     max = FETCH_MAX_ATTEMPTS,
                     error = %e,
+                    client_error,
                     "Torvik fetch attempt failed"
                 );
                 last_err = Some(e);
-                if attempt < FETCH_MAX_ATTEMPTS {
-                    tokio::time::sleep(FETCH_BACKOFF).await;
+                if client_error || attempt >= FETCH_MAX_ATTEMPTS {
+                    break;
                 }
+                tokio::time::sleep(FETCH_BACKOFF).await;
             }
         }
     }
@@ -180,19 +190,67 @@ impl Default for TorkvikClient {
     }
 }
 
+/// Log Cloudflare's block diagnostics from a non-2xx Torvik response, *without*
+/// consuming it (so the caller can still return the reqwest status error, which
+/// `with_retry` needs to classify a 4xx as terminal). `cf-ray` uniquely
+/// identifies the exact block event — hand it to Bart to look one up;
+/// `cf-mitigated` says *why* (managed-challenge / bot-fight / WAF rule), and
+/// `retry-after` *for how long*. `-` means the header was absent.
+fn log_cf_block(resp: &reqwest::Response, what: &str) {
+    let hdr = |name: &str| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+    };
+    warn!(
+        what,
+        status = %resp.status(),
+        cf_ray = hdr("cf-ray"),
+        cf_mitigated = hdr("cf-mitigated"),
+        server = hdr("server"),
+        retry_after = hdr("retry-after"),
+        "Torvik non-2xx — Cloudflare block diagnostics"
+    );
+}
+
 impl TorkvikClient {
     pub fn new() -> Self {
+        let mut builder = Client::builder()
+            // Deliberately unattributed UA for now. barttorvik blocks by IP, not
+            // UA, so identifying ourselves buys nothing until we choose the
+            // allowlist path — at which point a contactable UA (e.g.
+            // `cstat-ingest/0.1 (+https://campom.org)`) goes in alongside the
+            // email to Bart. Until then, one less targetable signal.
+            .user_agent("cstat/0.1")
+            // Explicit timeouts so a stalled Torvik socket self-aborts instead
+            // of hanging the nightly. The per-game gzip file is several MB
+            // (~30s to fetch), so the request ceiling is looser than NatStat's;
+            // a hard stall still aborts within 120s.
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120));
+
+        // Optional egress proxy. barttorvik (Cloudflare) 403s datacenter IP
+        // ranges, so a deploy that lands on a flagged Railway egress IP can
+        // route Torvik through a fixed residential/allowlisted proxy. Fail-soft:
+        // an unset var is a direct connection, an unparseable one logs and falls
+        // back to direct rather than killing the client.
+        if let Ok(url) = std::env::var("TORVIK_PROXY_URL")
+            && !url.trim().is_empty()
+        {
+            match reqwest::Proxy::all(url.trim()) {
+                Ok(proxy) => {
+                    info!("Torvik client routing through TORVIK_PROXY_URL");
+                    builder = builder.proxy(proxy);
+                }
+                Err(e) => {
+                    warn!(error = %e, "invalid TORVIK_PROXY_URL; using a direct connection")
+                }
+            }
+        }
+
         Self {
-            http: Client::builder()
-                .user_agent("cstat/0.1")
-                // Explicit timeouts so a stalled Torvik socket self-aborts
-                // instead of hanging the nightly. The per-game gzip file is
-                // several MB (~30s to fetch), so the request ceiling is looser
-                // than NatStat's; a hard stall still aborts within 120s.
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("failed to build HTTP client"),
+            http: builder.build().expect("failed to build HTTP client"),
         }
     }
 
@@ -202,10 +260,14 @@ impl TorkvikClient {
     /// host is up and serving 2xx before the nightly commits to the big fetches.
     pub async fn probe(&self) -> anyhow::Result<()> {
         let url = "https://barttorvik.com/coachdict.json";
-        let status = self.http.get(url).send().await?.status();
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
         if status.is_success() {
             Ok(())
         } else {
+            // Surface the Cloudflare block diagnostics (cf-ray, etc.) — this is
+            // the preflight path that fires first on a datacenter-IP block.
+            log_cf_block(&resp, "probe");
             anyhow::bail!("Torvik returned HTTP {}", status.as_u16())
         }
     }
@@ -216,20 +278,17 @@ impl TorkvikClient {
         let players = with_retry("player_stats", || async move {
             let url = format!("https://barttorvik.com/getadvstats.php?year={year}&csv=1");
             info!(year, "fetching Torvik player stats");
-            // error_for_status() BEFORE reading the body: reqwest's send() only
-            // errors on transport failures, not HTTP 4xx/5xx, so a barttorvik
-            // error page (HTML) would otherwise flow into parse_player_csv, get
-            // skipped row-by-row (< 64 cols), and return Ok(vec![]) — a silent
-            // empty "success" that with_retry never retries. Turning the HTTP
-            // status into an Err lets the retry fire and the ledger record it.
-            let body = self
-                .http
-                .get(&url)
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await?;
+            // Guard the HTTP status BEFORE reading the body: reqwest's send()
+            // only errors on transport failures, not HTTP 4xx/5xx, so a
+            // barttorvik error page (HTML) would otherwise flow into
+            // parse_player_csv, get skipped row-by-row (< 64 cols), and return
+            // Ok(vec![]) — a silent empty "success". error_for_status() makes it
+            // a retryable Err; log_cf_block first captures Cloudflare's cf-ray.
+            let resp = self.http.get(&url).send().await?;
+            if !resp.status().is_success() {
+                log_cf_block(&resp, "player_stats");
+            }
+            let body = resp.error_for_status()?.text().await?;
             let players = parse_player_csv(&body)?;
             info!(year, count = players.len(), "parsed Torvik player stats");
             Ok(players)
@@ -252,15 +311,12 @@ impl TorkvikClient {
             info!(year, "fetching Torvik game stats (gzip)");
             // See fetch_player_stats: guard the HTTP status before reading the
             // body so a 4xx/5xx page becomes a retryable Err rather than a
-            // confusing gzip/JSON parse error on the error page.
-            let bytes = self
-                .http
-                .get(&url)
-                .send()
-                .await?
-                .error_for_status()?
-                .bytes()
-                .await?;
+            // confusing gzip/JSON parse error, and capture Cloudflare's cf-ray.
+            let resp = self.http.get(&url).send().await?;
+            if !resp.status().is_success() {
+                log_cf_block(&resp, "game_stats");
+            }
+            let bytes = resp.error_for_status()?.bytes().await?;
 
             // The server may send Content-Encoding: gzip (auto-decompressed by reqwest)
             // or raw gzip bytes. Try parsing as JSON first, fall back to gzip decompress.
@@ -873,5 +929,31 @@ mod tests {
     fn val_i32_from_string() {
         let row = vec![json!("7")];
         assert_eq!(val_i32(&row, 0), Some(7));
+    }
+
+    // -- retry policy -------------------------------------------------------
+
+    /// A 4xx HTTP status is terminal — one attempt, no retry, no 30s backoff.
+    /// Gated on the network: GETs a bogus barttorvik path that 404s. Verifies
+    /// the fix that a 403/404 from a Cloudflare / IP block is not hammered on
+    /// retry (before, `.error_for_status()?` made every 4xx a retryable Err).
+    #[tokio::test]
+    #[ignore = "network: verifies a 4xx is not retried (GET a bogus barttorvik path)"]
+    async fn with_retry_does_not_retry_client_errors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let client = reqwest::Client::new();
+        let calls = AtomicUsize::new(0);
+        let result: anyhow::Result<()> = with_retry("client_error", || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let client = client.clone();
+            async move {
+                let url = "https://barttorvik.com/this-path-does-not-exist-cstat-test";
+                client.get(url).send().await?.error_for_status()?;
+                Ok(())
+            }
+        })
+        .await;
+        assert!(result.is_err(), "a 404 must surface as an error");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "a 4xx must not be retried");
     }
 }
