@@ -636,6 +636,11 @@ export interface ProjectedRecruit {
   name: string;
   composite_rank: number | null;
   star_rating: number | null;
+  /// Committed but never played the (completed) target season — a redshirt /
+  /// non-enrollment. Only ever true for a graded past season; always false on
+  /// the live upcoming projection. Excluded from the projection's scored roster
+  /// and contribution sum; surfaced here so the report card can flag it.
+  did_not_play?: boolean;
 }
 
 export interface ProjectedTeam {
@@ -785,6 +790,11 @@ export interface ProjectedRecruitDetail {
   // fallback path that nulls `projected_cam_v3`.
   projected_campom_lower: number | null;
   projected_campom_upper: number | null;
+  /// Committed but never played the (completed) target season — a redshirt /
+  /// non-enrollment. Only true for a graded past season; always false on the
+  /// live upcoming projection. Excluded from the scored roster + contribution
+  /// sum; the card greys and tags it.
+  did_not_play?: boolean;
 }
 export interface ProjectedDeparture {
   kind: 'senior' | 'transferred' | 'draft_gone';

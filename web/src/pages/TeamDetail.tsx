@@ -2177,8 +2177,16 @@ function PlayerCard({
 }
 
 function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
+  // A redshirt / non-enroll recruit (completed seasons only) contributed
+  // nothing that year and is excluded from the projection's scored roster, so
+  // grey the whole card and tag it — the report card explains why it adds zero.
+  const dnp = r.did_not_play === true;
   return (
-    <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
+    <div
+      className={`flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2 ${
+        dnp ? 'opacity-55' : ''
+      }`}
+    >
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-sm text-gray-200 truncate">{r.name}</span>
         {r.composite_rank != null && (
@@ -2195,19 +2203,33 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
             {r.position}
           </span>
         )}
+        {dnp && (
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-700/50 border border-gray-600 text-gray-300 shrink-0"
+            title="Committed but never played this season (redshirt / non-enrollment) — excluded from the projected roster."
+          >
+            redshirt
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2 text-xs">
         {r.projected_cam_v3 != null && (
           <span
-            className={`px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`}
+            className={
+              dnp
+                ? 'px-1.5 rounded border border-gray-700 text-gray-500 line-through'
+                : `px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`
+            }
             title={
-              r.projected_campom_lower != null && r.projected_campom_upper != null
-                ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}).${
-                    r.projected_cam_v3 >= 10
-                      ? ' Wide bands on elite recruits reflect top-tail uncertainty.'
-                      : ''
-                  }`
-                : `Projected freshman CamPom v3: ${r.projected_cam_v3.toFixed(1)} (model unavailable for this class — replacement-level fallback, no per-player band).`
+              dnp
+                ? `Did not play — the projected freshman CamPom ${r.projected_cam_v3.toFixed(1)} is not counted toward this team's projection.`
+                : r.projected_campom_lower != null && r.projected_campom_upper != null
+                  ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}).${
+                      r.projected_cam_v3 >= 10
+                        ? ' Wide bands on elite recruits reflect top-tail uncertainty.'
+                        : ''
+                    }`
+                  : `Projected freshman CamPom v3: ${r.projected_cam_v3.toFixed(1)} (model unavailable for this class — replacement-level fallback, no per-player band).`
             }
           >
             {r.projected_cam_v3.toFixed(1)}

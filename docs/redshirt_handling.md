@@ -154,25 +154,44 @@ completed classes, 47 (5.3%) actually played (exact-name match) but the Pass-2
 resolver never linked them (name mismatch, or they played for a school other
 than the one they committed to). Those get wrongly zeroed — ~4/year across all of
 D-I, immaterial to any single team's projection, but it is the motivation for
-PR 3. **Pre-merge validation still to run:** `projections-backtest` /
-`measure-blend-accuracy` before/after (expect a small AdjEM grading-MAE
-improvement, largest on low-ranked-heavy classes) and a byte-identical check on
-the live upcoming year.
+PR 3.
 
-### PR 2 — surface `did_not_play` in the report card (frontend)
+**Validation run:** `projections-backtest --years 2024,2025,2026` (base seasons
+2023–2025, all target-complete so the exclusion is active) grades clean — pooled
+roster-impact MAE 6.13, bias +0.22, R² 0.765, consistent with documented
+performance: **no regression**. The grading delta from the exclusion is small by
+construction (redshirts carry near-zero cam_v3, so removing them barely moves a
+team's AdjEM) — the win is correctness, not MAE. An exact before/after delta
+needs the pre-PR-1 binary (a `main` comparison); the live upcoming year is
+untouched by design (gate false).
+
+### PR 2 — surface `did_not_play` in the report card (frontend) — SHIPPED (this PR)
 
 **Goal:** make the retroactive exclusion visible so a completed-season report
 card explains itself. Today `did_not_play` is serving-internal (`#[serde(skip)]`).
 
-**Change:** expose it on the recruits payload (both the list `sorted_recruits`
-and the single-team `recruits_json`), and in `web/src/pages/Projected.tsx` /
-`TeamDetail.tsx` render redshirt/non-enroll commits greyed with a "redshirt /
-did not play" tag in the Recruits cell + tooltip. Display-only.
+**As built:** `did_not_play` is exposed on the recruits payload (list
+`top_recruits` and single-team `recruits_json`) and on the frontend types
+(`ProjectedRecruit`, `ProjectedRecruitDetail`). The Projected page's Recruits
+hover appends ` — redshirt (did not play)` to a flagged commit; TeamDetail's
+`RecruitCard` greys the row (`opacity-55`), adds a `redshirt` tag, and
+strikes-through the projected cam_v3 with a "not counted" tooltip. Display-only.
 
-**Tests:** a `web/` vitest over the Recruits cell renderer (flagged vs normal);
-no backend logic beyond un-skipping the field.
+**Tests:** the tooltip-line formatting (rank / stars / redshirt marker) was
+extracted to a pure helper `web/src/lib/recruitDisplay.ts::recruitTooltipLine`
+and unit-tested (`recruitDisplay.test.ts`, 4 cases) — matching the repo's
+pure-logic vitest convention (`portle`, `whichClass`). The card greying itself is
+presentational; the repo has no jsdom/RTL component-test harness, and adding one
+is a separate infra decision (see below), not bundled here.
 
 **Size:** small, isolated, no model.
+
+**Testing-infra note (raised during this PR):** `web/` has vitest but only
+pure-logic tests — no component rendering. The high-ROI pattern for this
+analytics UI is to keep extracting display/derivation logic into `lib/` helpers
+and unit-testing those (as PR 2 did), rather than adding jsdom + React Testing
+Library for mostly-presentational pages. A component-test harness is worth its
+own PR if/when genuinely interactive, stateful components need regression cover.
 
 ### PR 3 — recruit → player linkage hardening (de-risks PR 1)
 
@@ -191,7 +210,7 @@ completed-class false-null rate stays below a floor. Re-measure the 5.3%.
 
 **Size:** small–medium, ingest-only, no model.
 
-### Parked (deliberately not scoped now)
+### Parked — recruiting pipeline (deliberately not scoped now)
 
 - **Forward redshirt-probability model** — a rank-conditioned `P(play)`
   classifier (the rate runs 3.5% for top-30 recruits to 26.2% for 250+). Clean
@@ -211,6 +230,44 @@ completed-class false-null rate stays below a floor. Re-measure the 5.3%.
   rostered. The *portal* redshirt returner is already handled (`satout_lookup`);
   only the stay-put variant is missing. Scope only if the population proves
   material.
+- **Redshirt flag on the actual-season roster — considered and declined.** The
+  `did_not_play` signal is a projection/recruiting concept; surfacing it on the
+  box-score-derived season roster would be confusing and incomplete: (1) a
+  redshirt has no box-score row, so they aren't on that roster at all — flagging
+  them means injecting phantom entries; (2) we only detect *recruit* redshirts,
+  not returner-redshirts or walk-ons, so the label would mislead by omission;
+  (3) "committed but never appeared" conflates redshirt with non-enroll /
+  reclass / silent transfer — honest as "did not play" on a recruit card, an
+  overclaim as a "redshirt" badge on a roster. The flag stays on the projection's
+  Incoming-recruits card, where it's complete and contextually correct. A real
+  actual-roster redshirt view is the blocked official-roster/eligibility feed
+  above, not this signal.
+
+## Cross-cutting backlog (surfaced during this work, not recruiting-specific)
+
+These came up alongside the redshirt work but belong to other subsystems; parked
+here for continuity and easy to promote into `ROADMAP.md`.
+
+- **Frontend component-test harness (jsdom + React Testing Library).** `web/` has
+  vitest but only pure-logic tests (`portle`, `whichClass`, and now
+  `recruitDisplay`) — no component rendering. The high-ROI pattern for this
+  analytics UI is to keep extracting display/derivation logic into `lib/` helpers
+  and unit-testing those, which this PR did. A jsdom/RTL harness is worth its own
+  infra PR only when genuinely interactive, stateful components need regression
+  cover; not justified for the mostly-presentational pages today.
+- **Coach-data freshness: schedule the weekly `coaches` cron + auto-sync.** The
+  `coaches` ingest (barttorvik coachdict → `coaches` / `coach_seasons`) is
+  **not** in the nightly and has **no cron**, despite `docs/deploy_nightly_cron`
+  / the in-season plan calling for a weekly job. It's a manual
+  `cargo run -- coaches` + `sync_to_prod.sh --tables coaches,coach_seasons`, so
+  new-HC moves (e.g. Michigan → Boynton for 2027) silently go stale until someone
+  reruns it. Wire a weekly Railway cron + prod push.
+- **Coach "arrived from" misses gap-year hires.** `coach_prev_team` is derived
+  from a *base-season* different-program row (`fetch_coach_cae` LATERAL in
+  `projections.rs`), so a coach who sat out a year (e.g. Boynton: Oklahoma St.
+  through 2024 → Michigan 2027, no 2026 row) resolves to NULL and the badge reads
+  "first season" instead of "from Oklahoma St." Widen the lookback a season or
+  two to the coach's most recent prior program.
 
 ## Key files
 

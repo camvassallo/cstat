@@ -588,6 +588,10 @@ fn predict_team(
                 "name": m.name,
                 "composite_rank": m.composite_rank,
                 "star_rating": m.star_rating,
+                // Redshirt / non-enroll (completed seasons only) — the frontend
+                // greys + tags these so a graded report card explains why they
+                // add nothing. Always false for the live upcoming projection.
+                "did_not_play": m.did_not_play,
             })
         })
         .collect();
@@ -1167,6 +1171,9 @@ async fn projection_team_detail(
                 "projected_cam_v3": row.cam_v3,
                 "projected_campom_lower": meta.projected_campom_lower,
                 "projected_campom_upper": meta.projected_campom_upper,
+                // Redshirt / non-enroll (completed seasons only); false on the
+                // live upcoming projection. Frontend greys + tags these.
+                "did_not_play": meta.did_not_play,
             })
         })
         .collect();

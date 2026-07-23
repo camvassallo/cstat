@@ -15,6 +15,7 @@ import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
 import { pctileTextColor } from '../components/pctile';
 import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
+import { recruitTooltipLine } from '../lib/recruitDisplay';
 
 // Projectable-year definitions are shared with the team projection ledger via
 // `season.ts` so both surfaces publish the same list (incl. the upcoming
@@ -461,9 +462,7 @@ function buildColumns(
         const val = t.recruits_cam_v3_sum;
         const pct = pctOfBase(t, t.recruits_cam_v3_sum);
         const pctText = pct != null ? `+${Math.round(pct * 100)}%` : null;
-        const names = t.top_recruits
-          .map((r) => `${r.composite_rank ? `#${r.composite_rank} ` : ''}${r.name} (${r.star_rating ?? '?'}★)`)
-          .join('\n');
+        const names = t.top_recruits.map(recruitTooltipLine).join('\n');
         const tip =
           `${t.recruits_count} recruits · Σ projected CamPom ${fmtSigned(val)}` +
           (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '') +
