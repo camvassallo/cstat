@@ -15,6 +15,7 @@ import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
 import { pctileTextColor } from '../components/pctile';
 import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
+import { recruitTooltipLine } from '../lib/recruitDisplay';
 
 // Projectable-year definitions are shared with the team projection ledger via
 // `season.ts` so both surfaces publish the same list (incl. the upcoming
@@ -110,9 +111,9 @@ function flowCellView(
 // column can read them per row.
 // Per-team rank + color for a single O/D metric (rank 1 = best → greenest).
 type RankCell = { rank: number; color: string };
-// The four O/D columns' rank cells, keyed by metric. Partial — a team with
-// no value for a metric (e.g. 0/0 roster O/D) simply has no cell.
-type EffRank = { ao: RankCell; ad: RankCell; ro: RankCell; rd: RankCell };
+// The projected O/D columns' rank cells, keyed by metric. Partial — a team
+// with no value for a metric (e.g. a too-thin roster) simply has no cell.
+type EffRank = { ao: RankCell; ad: RankCell };
 
 function buildColumns(
   isMobile: boolean,
@@ -245,58 +246,6 @@ function buildColumns(
       ]
     : [];
 
-  // Two prior-season roster-shape columns: Σ CPO / Σ CPD over the known
-  // projected roster (returners + incoming transfers). Descriptive, not a
-  // projection — recruits and undecided draft entrants are excluded (no
-  // prior season / no O/D forecast). Both dash together when the team has
-  // no O/D coverage at all.
-  const rosterHalfCol = (side: 'o' | 'd'): ColDef<ProjectedTeam> => {
-    const long = side === 'o' ? 'offensive' : 'defensive';
-    const tag = side === 'o' ? 'CPO' : 'CPD';
-    const pick = (t: ProjectedTeam) =>
-      side === 'o'
-        ? t.returning_cam_o_sum + t.arrivals_cam_o_sum
-        : t.returning_cam_d_sum + t.arrivals_cam_d_sum;
-    return {
-      headerName: side === 'o' ? 'Roster O' : 'Roster D',
-      colId: side === 'o' ? 'roster_o' : 'roster_d',
-      ...flexCol(1, 90),
-      headerTooltip:
-        `Σ prior-season ${tag} (${long} CamPom) over the known projected roster — returners + incoming transfers. ` +
-        'Recruits and undecided draft entrants are excluded (no prior season). Descriptive, not a projection.',
-      sortingOrder: ['desc', 'asc', null],
-      comparator: (_a, _b, na, nb) => {
-        const v = (t?: ProjectedTeam) => (t ? pick(t) : 0);
-        return (
-          v(na.data as ProjectedTeam | undefined) - v(nb.data as ProjectedTeam | undefined)
-        );
-      },
-      cellRenderer: (p: { data?: ProjectedTeam }) => {
-        const t = p.data;
-        if (!t) return dashCell;
-        const o = t.returning_cam_o_sum + t.arrivals_cam_o_sum;
-        const d = t.returning_cam_d_sum + t.arrivals_cam_d_sum;
-        if (o === 0 && d === 0) return dashCell;
-        const tip =
-          `Σ prior-season ${long} CamPom (${tag}) over returners + transfers in: ${fmtSigned(pick(t))}.` +
-          '\nRecruits + undecided draft entrants excluded (no prior season).';
-        // Value with a "#rank" subscript (higher Σ = more talent = rank 1),
-        // matching the projected-efficiency and Rankings columns.
-        const cell = effRank.get(t.team_id)?.[side === 'o' ? 'ro' : 'rd'];
-        return (
-          <div title={tip} className="leading-tight">
-            <div className="text-xs font-mono text-slate-200">{fmtSigned(pick(t))}</div>
-            {cell && (
-              <div className="text-[10px] font-mono" style={{ color: cell.color }}>
-                #{cell.rank}
-              </div>
-            )}
-          </div>
-        );
-      },
-    };
-  };
-
   return [
     {
       headerName: 'Rank',
@@ -351,7 +300,16 @@ function buildColumns(
         if (p.value == null || baseline == null) return chip;
         const w = p.data?.baseline_weight ?? 0.5;
         const bw = Math.round(w * 100);
-        const leansRoster = w < 0.45; // materially below the stable 0.50
+        // The stable cap is PROJECTION_SHRINK_WEIGHT = 0.45f32 on the backend.
+        // The route returns `Json(json!({... "teams": rows}))`, and building a
+        // serde_json `Value` promotes the f32 to f64 (a `Number` only holds
+        // f64) — so 0.45f32 reaches the client as 0.44999998807907104, NOT
+        // "0.45" (a direct `to_string(&f32)` would ryu-print "0.45", but that's
+        // not this path). A naive `w < 0.45` was therefore TRUE for every team,
+        // including the ~75% pinned at the stable cap, so the badge fired on all
+        // 364. Threshold just under the served cap so only genuine
+        // roster-overhaul teams (retained < ~40%) light up.
+        const leansRoster = w < 0.449;
         const title =
           `${bw}% last year's actual AdjEM (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}) ` +
           `+ ${100 - bw}% the roster model's projection` +
@@ -374,7 +332,7 @@ function buildColumns(
       // roster-only and this column is purely contextual.
       headerName: 'Coach +/-',
       colId: 'coach_cae',
-      ...flexCol(1, 100),
+      ...flexCol(1.4, 130),
       ...divider,
       headerTooltip:
         "Descriptive only — NOT included in the projected AdjEM. The head coach's career Coach-Above-Expectation: how much this program has historically beaten (or missed) its roster-only projection under them, EB-shrunk toward 0 for short tenures. A point-in-time backtest showed this signal is program-level, not coaching, so it never moves the forecast — it's shown for context.",
@@ -401,37 +359,41 @@ function buildColumns(
         // Amber "new" tag flags an incoming HC (display-only — coachdict is_new_hc).
         const newBadge = isNew ? (
           <span
-            className="text-amber-400 text-[10px] font-semibold uppercase tracking-wide mr-1"
+            className="text-amber-400 text-[9px] font-semibold uppercase tracking-wide shrink-0"
             title={from ? `New HC — from ${from}` : 'New head coach'}
           >
             new
           </span>
         ) : null;
-        const body =
-          v == null ? (
-            <span className="text-slate-500 text-xs font-mono" title={tip}>
-              —
-            </span>
-          ) : (
-            <span
-              className="text-xs font-mono font-semibold px-1.5 py-0.5 rounded"
-              style={{ color: caeColor(v), opacity: rel != null ? 0.4 + 0.6 * rel : 1 }}
-              title={tip}
-            >
-              {label}
-            </span>
-          );
+        // Two-line cell (name over the +/- value), matching the Returning /
+        // Proj AdjO convention: the name is now legible without hovering, and
+        // the extra column width has somewhere useful to go.
         const inner = (
-          <span className="inline-flex items-center">
-            {newBadge}
-            {body}
-          </span>
+          <div
+            className="leading-tight text-center flex flex-col justify-center h-full"
+            title={tip}
+          >
+            <div className="text-[11px] text-slate-300 truncate">{t.coach_name}</div>
+            <div className="flex items-center justify-center gap-1">
+              {v == null ? (
+                <span className="text-[10px] font-mono text-slate-500">—</span>
+              ) : (
+                <span
+                  className="text-[10px] font-mono font-semibold"
+                  style={{ color: caeColor(v), opacity: rel != null ? 0.4 + 0.6 * rel : 1 }}
+                >
+                  {label}
+                </span>
+              )}
+              {newBadge}
+            </div>
+          </div>
         );
         return t.coach_id ? (
           <SeasonLink
             to={`/coaches/${t.coach_id}`}
             onClick={(e) => e.stopPropagation()}
-            className="hover:underline"
+            className="hover:underline block h-full"
           >
             {inner}
           </SeasonLink>
@@ -440,8 +402,6 @@ function buildColumns(
         );
       },
     },
-    { ...rosterHalfCol('o'), ...divider },
-    rosterHalfCol('d'),
     {
       headerName: 'Returning',
       colId: 'returning',
@@ -505,9 +465,7 @@ function buildColumns(
         const val = t.recruits_cam_v3_sum;
         const pct = pctOfBase(t, t.recruits_cam_v3_sum);
         const pctText = pct != null ? `+${Math.round(pct * 100)}%` : null;
-        const names = t.top_recruits
-          .map((r) => `${r.composite_rank ? `#${r.composite_rank} ` : ''}${r.name} (${r.star_rating ?? '?'}★)`)
-          .join('\n');
+        const names = t.top_recruits.map(recruitTooltipLine).join('\n');
         const tip =
           `${t.recruits_count} recruits · Σ projected CamPom ${fmtSigned(val)}` +
           (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '') +
@@ -625,11 +583,11 @@ function ProjectionView({ year }: { year: number }) {
     return { projRank, actRank };
   }, [teams]);
 
-  // Field-wide ranks for the four O/D columns — Proj AdjO / Proj AdjD /
-  // Roster O / Roster D — over scored teams, with the better direction as
-  // rank 1 (AdjD lower-is-better, the rest higher). Each cell carries its
-  // 1-based rank and the rank-percentile color (`pctileTextColor`), rendered
-  // as a small "#N" subscript under the value — the Rankings-page convention.
+  // Field-wide ranks for the projected O/D columns — Proj AdjO / Proj AdjD —
+  // over scored teams, with the better direction as rank 1 (AdjD
+  // lower-is-better, AdjO higher). Each cell carries its 1-based rank and the
+  // rank-percentile color (`pctileTextColor`), rendered as a small "#N"
+  // subscript under the value — the Rankings-page convention.
   const effRank = useMemo(() => {
     const m = new Map<string, Partial<EffRank>>();
     const scored = teams?.filter((t) => !t.too_thin && t.projected_adj_o != null) ?? [];
@@ -646,8 +604,6 @@ function ProjectionView({ year }: { year: number }) {
     };
     assign('ao', (t) => t.projected_adj_o, 1);
     assign('ad', (t) => t.projected_adj_d, -1); // lower = better
-    assign('ro', (t) => t.returning_cam_o_sum + t.arrivals_cam_o_sum, 1);
-    assign('rd', (t) => t.returning_cam_d_sum + t.arrivals_cam_d_sum, 1);
     return m;
   }, [teams]);
 

@@ -181,9 +181,15 @@ async fn backtest_year(
         );
     }
 
-    let projections = compose_all_projections(pool, base_season, &entrants, predictor)
-        .await
-        .with_context(|| format!("compose_all_projections base {base_season}"))?;
+    let projections = compose_all_projections(
+        pool,
+        base_season,
+        &entrants,
+        predictor,
+        crate::target_season_retro_complete(year),
+    )
+    .await
+    .with_context(|| format!("compose_all_projections base {base_season}"))?;
     let baseline_map = fetch_adj_em(pool, base_season).await?;
     let actual_map = fetch_actual_adj_em(pool, base_season, year).await?;
 

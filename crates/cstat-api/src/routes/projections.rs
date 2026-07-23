@@ -342,15 +342,20 @@ async fn projection_list(
             )
         })?;
 
-    let projections =
-        compose_all_projections(&state.db.pool, base_season, &entrants, &state.predictor)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
-                )
-            })?;
+    let projections = compose_all_projections(
+        &state.db.pool,
+        base_season,
+        &entrants,
+        &state.predictor,
+        cstat_ingest::target_season_retro_complete(year),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
+        )
+    })?;
 
     // Fetch the base-season AdjEM per team in one batch. Keyed by
     // team_id; missing entries (new D-I, no AdjEM) fall through to
@@ -519,9 +524,17 @@ fn predict_team(
         .iter()
         .map(|r| r.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
+    // Exclude redshirt / did-not-play recruits (completed seasons only) so a
+    // no-show doesn't inflate the displayed recruit contribution, mirroring
+    // their exclusion from the scored AdjEM. NOTE this does not fully equal the
+    // scored roster: the commits-feed cohort (`feeds_projection == false`) is
+    // still summed here, as it always has been — a pre-existing display choice,
+    // not changed by this PR. No-op on the live upcoming projection, where
+    // did_not_play is always false.
     let recruits_cam_v3_sum: f32 = p
         .recruits
         .iter()
+        .filter(|(_, m)| !m.did_not_play)
         .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
 
@@ -584,6 +597,10 @@ fn predict_team(
                 "name": m.name,
                 "composite_rank": m.composite_rank,
                 "star_rating": m.star_rating,
+                // Redshirt / non-enroll (completed seasons only) — the frontend
+                // greys + tags these so a graded report card explains why they
+                // add nothing. Always false for the live upcoming projection.
+                "did_not_play": m.did_not_play,
             })
         })
         .collect();
@@ -626,6 +643,14 @@ fn predict_team(
             arrivals_count: p.arrivals.len(),
             arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
             arrivals_projected_cam_v3_sum,
+            // Total committed recruits, INCLUDING redshirt / did-not-play
+            // commits — this must match the `top_recruits` list (which shows
+            // them greyed) so the Projected tooltip's count agrees with the
+            // names it lists, and the `recruits_count === 0` dash-guard only
+            // fires when a team truly has no commits. `recruits_cam_v3_sum`
+            // separately excludes did_not_play (they contributed zero); the
+            // greyed "— redshirt (did not play)" marker on the excluded name
+            // explains why the count can exceed the summed cohort.
             recruits_count: p.recruits.len(),
             recruits_cam_v3_sum,
             top_recruits: top_recruits.clone(),
@@ -775,14 +800,20 @@ async fn projection_team_detail(
             Json(json!({ "error": format!("fetch_draft_entrants failed: {e}") })),
         )
     })?;
-    let projections = compose_all_projections(pool, base_season, &entrants, &state.predictor)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
-            )
-        })?;
+    let projections = compose_all_projections(
+        pool,
+        base_season,
+        &entrants,
+        &state.predictor,
+        cstat_ingest::target_season_retro_complete(year),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
+        )
+    })?;
     let Some(projection) = projections.into_iter().find(|p| p.team_id == resolved_id) else {
         return Err((
             StatusCode::NOT_FOUND,
@@ -1163,6 +1194,9 @@ async fn projection_team_detail(
                 "projected_cam_v3": row.cam_v3,
                 "projected_campom_lower": meta.projected_campom_lower,
                 "projected_campom_upper": meta.projected_campom_upper,
+                // Redshirt / non-enroll (completed seasons only); false on the
+                // live upcoming projection. Frontend greys + tags these.
+                "did_not_play": meta.did_not_play,
             })
         })
         .collect();

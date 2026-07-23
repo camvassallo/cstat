@@ -201,6 +201,25 @@ pub fn should_infer_newcomers(season: i32) -> bool {
     in_season_now() && season == current_natstat_season()
 }
 
+/// Whether `target_season` is *fully over* — safe to retroactively exclude
+/// no-shows (redshirts / non-enrollments) from that season's graded projection.
+/// True for any season strictly before the current one, and for the current
+/// season once the calendar leaves the playing window (the offseason after it
+/// ends). **Always false for a season still being played or a future/upcoming
+/// one**, so the live projection never retro-excludes a not-yet-debuted
+/// freshman — a game-volume proxy can't make that distinction (it flips true in
+/// the final weeks of an in-progress season). Respects the simulated clock via
+/// [`today_utc`].
+pub fn target_season_retro_complete(target_season: i32) -> bool {
+    retro_complete_on(target_season, today_utc())
+}
+
+/// [`target_season_retro_complete`]'s date rule, factored out for testing.
+fn retro_complete_on(target_season: i32, today: NaiveDate) -> bool {
+    let current = season_for_date(today);
+    target_season < current || (target_season == current && !in_season_on(today))
+}
+
 /// Resolve a NatStat team code to its cstat `teams.id` for a specific season.
 /// Returns `None` if the code is missing or the team isn't in the DB for that
 /// season. Centralized so every ingest path uses the same `(natstat_id, season)`
@@ -331,6 +350,26 @@ mod tests {
         assert!(!in_season_on(d(2026, 4, 16))); // day after the cutoff
         assert!(!in_season_on(d(2026, 7, 13))); // deep off-season
         assert!(!in_season_on(d(2026, 10, 31))); // eve of the season
+    }
+
+    #[test]
+    fn test_retro_complete_on() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        // A season strictly in the past is complete regardless of the date.
+        assert!(retro_complete_on(2025, d(2026, 2, 1))); // 2025 done, mid-2026-season
+        assert!(retro_complete_on(2025, d(2026, 7, 1))); // 2025 done, off-season
+        // The just-ended season becomes complete once we leave the playing
+        // window (off-season), so the graded report card corrects immediately.
+        assert!(retro_complete_on(2026, d(2026, 7, 13))); // 2026 done, summer
+        assert!(retro_complete_on(2026, d(2026, 10, 31))); // 2026 done, pre-tipoff
+        // The current, still-in-progress season is NOT complete — this is the
+        // finding-2 guard: a game-volume proxy would wrongly flip true in the
+        // final weeks. current_natstat_season(Feb 2027) == 2027.
+        assert!(!retro_complete_on(2027, d(2027, 2, 15))); // 2027 being played
+        assert!(!retro_complete_on(2027, d(2027, 3, 31))); // 2027 tournament
+        // A future/upcoming season is never complete.
+        assert!(!retro_complete_on(2027, d(2026, 7, 1))); // 2027 upcoming, off-season
+        assert!(!retro_complete_on(2028, d(2027, 2, 1))); // far future
     }
 
     #[test]
