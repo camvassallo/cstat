@@ -70,12 +70,25 @@ LINEUP_FEATURES = os.environ.get("LINEUP_FEATURES", "0").strip() == "1"
 # the evaluated row set identical to baseline for an apples-to-apples MAE delta.
 # Value: "0"/unset = off; "1" = all rv features; or a comma list of rv names to
 # ablate a subset (e.g. "rv_top1_gbpm,rv_gbpm_gap12").
+# Canonical rv feature names — single source of truth for the subset
+# validation here and the diff wiring in `build_feature_matrix`.
+RV_FEATURE_NAMES = ("rv_top1_gbpm", "rv_top3_gbpm", "rv_gbpm_gap12", "rv_gbpm_std")
 _RV_RAW = os.environ.get("ROSTER_VALUE_FEATURES", "0").strip()
 ROSTER_VALUE_FEATURES = _RV_RAW.lower() not in ("0", "", "false")
 _RV_SUBSET = (
     None if _RV_RAW.lower() in ("0", "1", "", "true", "false")
     else {s.strip() for s in _RV_RAW.split(",") if s.strip()}
 )
+# Fail loud on a typo'd subset name. Otherwise the flag reads ON but the
+# name matches nothing, zero rv features get wired in, and a LOSO ablation
+# silently reports a fake "no effect" — the experiment gets wrongly rejected.
+if _RV_SUBSET is not None:
+    _rv_unknown = _RV_SUBSET - set(RV_FEATURE_NAMES)
+    if _rv_unknown:
+        raise ValueError(
+            f"ROSTER_VALUE_FEATURES lists unknown rv feature(s): {sorted(_rv_unknown)}. "
+            f"Valid: {list(RV_FEATURE_NAMES)} (or '1' for all, '0'/unset for off)."
+        )
 
 
 def completeness_subset(cols: list[str]) -> list[str]:
@@ -932,13 +945,15 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         #   rv_top3_gbpm  mean of the top-3 by value (on-floor elite production)
         #   rv_gbpm_gap12 #1 - #2 value gap (star separation)
         #   rv_gbpm_std   dispersion of value (top-heavy vs balanced)
-        # Always computed (cheap); only enters the vector when ROSTER_VALUE_FEATURES.
-        gv = group["torvik_gbpm"].dropna().sort_values(ascending=False)
-        n_gv = len(gv)
-        row["rv_top1_gbpm"]  = gv.iloc[0] if n_gv >= 1 else np.nan
-        row["rv_top3_gbpm"]  = gv.iloc[:3].mean() if n_gv >= 1 else np.nan
-        row["rv_gbpm_gap12"] = (gv.iloc[0] - gv.iloc[1]) if n_gv >= 2 else np.nan
-        row["rv_gbpm_std"]   = gv.std() if n_gv >= 2 else np.nan
+        # Gated on the flag — the sort+reductions per group are not free, and
+        # the columns are only consumed when ROSTER_VALUE_FEATURES is on.
+        if ROSTER_VALUE_FEATURES:
+            gv = group["torvik_gbpm"].dropna().sort_values(ascending=False)
+            n_gv = len(gv)
+            row["rv_top1_gbpm"]  = gv.iloc[0] if n_gv >= 1 else np.nan
+            row["rv_top3_gbpm"]  = gv.iloc[:3].mean() if n_gv >= 1 else np.nan
+            row["rv_gbpm_gap12"] = (gv.iloc[0] - gv.iloc[1]) if n_gv >= 2 else np.nan
+            row["rv_gbpm_std"]   = gv.std() if n_gv >= 2 else np.nan
 
         return pd.Series(row)
 
@@ -1335,12 +1350,7 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
 
     # Value-weighted roster-shape diffs (gated experiment; see ROSTER_VALUE_FEATURES)
     if ROSTER_VALUE_FEATURES:
-        rv_pairs = {
-            "rv_top1_gbpm": "rv_top1_gbpm",
-            "rv_top3_gbpm": "rv_top3_gbpm",
-            "rv_gbpm_gap12": "rv_gbpm_gap12",
-            "rv_gbpm_std": "rv_gbpm_std",
-        }
+        rv_pairs = {n: n for n in RV_FEATURE_NAMES}
         if _RV_SUBSET is not None:
             rv_pairs = {k: v for k, v in rv_pairs.items() if k in _RV_SUBSET}
         diff_pairs.update(rv_pairs)
