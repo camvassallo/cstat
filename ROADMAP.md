@@ -1488,6 +1488,45 @@ Captured during the 2026-05-03 ingestion-pipeline checkup. These are
 deferred-but-considered items — not blocking, but worth picking up the next
 time someone is in the relevant area.
 
+- [ ] **Recruiting-pipeline & redshirt-handling follow-ups — full roadmap in
+  `docs/redshirt_handling.md`.** The retroactive redshirt-recruit exclusion
+  shipped (PR 1 `did_not_play` gate + PR 2 UI surfacing). Still open, detailed in
+  that doc so it isn't duplicated here: **PR 3 — recruit→player linkage
+  hardening** (extend the Pass-2 `cstat_player_id` resolver with a
+  `torvik_pid`/fuzzy/played-elsewhere fallback to cut the ~5.3% false-exclude
+  that mislabels a played recruit as a redshirt; ingest-only, coverage-regression
+  test); and a **returner-redshirt / projected-returner-attrition exclusion**
+  (the Caden-Pierce case — a projected returner who redshirts the target season
+  is over-credited; harder than the recruit case, needs `torvik_pid` YoY tracking
+  since `natstat_id` breaks on transfers, so gated on PR 3). Deliberately parked
+  (with reasons in the doc): a forward redshirt-`P(play)` model (declined — don't
+  forecast redshirts), transfer-`eligibility_type` wiring (low yield),
+  redshirt-freshman debut projection, and a redshirt "development" boost
+  (declined — redshirt debuts are *weaker*, not elevated). Accepted-known
+  limitations (5.3% false-exclude, boundary `MIN_QUALIFYING` flip, Recruits
+  count-vs-Σ tooltip nit) are logged there too.
+
+- [ ] **Frontend component-test harness (jsdom + React Testing Library).**
+  `web/` has vitest but only *pure-logic* tests (`portle`, `whichClass`,
+  `recruitDisplay`) — no component rendering. The high-ROI pattern for this
+  analytics UI is to keep extracting display/derivation logic into `lib/` helpers
+  and unit-testing those (as the redshirt PR did), rather than adding a jsdom/RTL
+  harness for mostly-presentational pages. Worth its own infra PR only when
+  genuinely interactive, stateful components need regression cover; captured here
+  so the gap is visible rather than implicit.
+
+- [ ] **Coach "arrived from" misses gap-year hires.** `coach_prev_team` is
+  derived from a *base-season* different-program row (`fetch_coach_cae` LATERAL
+  in `crates/cstat-api/src/routes/projections.rs`), so a coach who sat out a year
+  resolves to NULL and the "New HC" badge reads "first season" instead of "from
+  X" — e.g. Mike Boynton (Oklahoma St. through 2024 → Michigan 2027, no 2026 row).
+  Fix: widen the lookback a season or two to the coach's most recent prior
+  program. Display-only; folds naturally into the new-coach work under §"(4)
+  Projections UI regression caveat". (The related coach-data staleness — new-HC
+  moves going stale until a manual `coaches` re-run — is **not** a missing cron:
+  §S5 decided against one; the fix is folding the on-demand refresh into the
+  offseason/carousel checklist.)
+
 - [ ] **Rename `class` → `archetype` in the backend (DB/API/Rust/TS field names).** The
   player-archetype fields are named `primary_class` / `secondary_class` everywhere below
   the UI — a D&D-metaphor holdover (the 12 archetypes are named after D&D classes:

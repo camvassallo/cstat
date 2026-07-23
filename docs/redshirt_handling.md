@@ -253,21 +253,43 @@ completed-class false-null rate stays below a floor. Re-measure the 5.3%.
   ~2.4 seasons later at ~0.149 cam_v3 is invisible to the projection in the debut
   season (no prior stats, recruit link never resolved). Small population and low
   value; needs the PR 3 linkage first.
-- **Returner-redshirt / projected-returner-attrition exclusion (its own PR).**
-  The mirror of PR 1, for the *returning* bucket: a player who played the base
-  season and is projected to return, then redshirts (or otherwise never plays)
-  the target season, is over-credited — e.g. **Caden Pierce** is projected as a
-  Princeton 2026 returner (Jr in 2025) but redshirted 2026, and `did_not_play`
-  (recruit-only) can't flag him. Harder than the recruit case and NOT a clean
-  symmetric add: (a) it needs a *reliable* cross-season key — `torvik_pid`, since
-  `natstat_id` breaks on transfers (a naive "no same-`natstat_id` box score next
-  season" check flags 70.9% of 2025 returners, overwhelmingly transfers-out /
-  grads / draft, **not** redshirts); (b) it must check appearance *for the
-  projected team* and reconcile with the existing portal-departure path so a
-  real transfer-out isn't double-counted; (c) like PR 1 it's only decidable for
-  *completed* target seasons. Scope as a dedicated PR once PR 3's linkage lands
-  (same `torvik_pid` plumbing). The *portal* redshirt returner is already handled
-  (`satout_lookup`); this is the stay-put + true-attrition remainder.
+- **Returner-redshirt exclusion — BUILT, empirically REJECTED, reverted.**
+  The mirror of PR 1 for the *returning* bucket: a player who played the base
+  season and is projected to return, then redshirts the target season, is
+  over-credited (e.g. **Caden Pierce** — Princeton Jr in 2025, redshirted 2026).
+  We implemented it: added `torvik_pid` to the returning query and dropped any
+  returner whose stable `torvik_pid` had no row *anywhere* in a completed target
+  season. It **worked correctly** (Pierce excluded, ~1% false-positive, NBA
+  draftees handled by the draft path first) — but the backtest killed it:
+
+  | | scored 2026 | too-thin 2026 | pooled n | raw MAE | bias |
+  | --- | --- | --- | --- | --- | --- |
+  | with exclusion | 256 | 108 | 885 | 6.20 | +0.54 |
+  | reverted | 310 | 53 | 976 | 6.13 | +0.22 |
+
+  It cost **91 team-seasons of coverage** (returners are the roster core, so
+  removing them pushes thin teams under `MIN_QUALIFYING`) and *worsened* raw MAE
+  and bias, for no gain.
+
+  **Root cause — a train/serve mismatch, and a serving filter is the wrong
+  layer.** `train_roster_impact_model.py`'s `PLAYER_QUERY` builds each training
+  roster from `player_season_stats ... games_played >= 5` = **only players who
+  actually played**, so the model is trained on *clean* rosters with no
+  no-shows. Serving (`compose_all_projections`) carries base-season players
+  forward and *cannot* know who'll redshirt, so it includes them — the mild
+  baseline over-projection (+0.22). Stripping them at serving doesn't
+  reconstruct the played roster (it's missing the walk-on who *replaced* the
+  no-show), and via the cam_v3-rank rotation-minute renormalization, deleting a
+  low-value bench no-show concentrates minutes on the stars → *more* optimistic
+  (+0.54). **The principled fix is train/serve alignment: train the calibrator
+  on the same base-carried-forward rosters we serve (including the ~20% who
+  won't pan out), so it learns to price in expected attrition — a roster-impact
+  retrain, its own validated PR, NOT a serving-side filter.** The `torvik_pid`
+  cross-season resolvers are already solid (`queries::resolve_player_id_for_season`
+  / `get_player_available_seasons`, now covered by
+  `tests/cross_season_resolve.rs`); the gap is the training frame, not the key.
+  The *portal* redshirt returner is already handled (`satout_lookup`).
+  **Full retrain plan + accept/reject gates: `docs/roster_impact_retrain_plan.md`.**
 - **Redshirt "development" boost — considered and declined.** The idea that a
   redshirt/practice year should *raise* a player's debut projection is not
   supported: redshirt/non-enroll recruits who eventually debut do so at ~0.149
@@ -301,13 +323,16 @@ here for continuity and easy to promote into `ROADMAP.md`.
   and unit-testing those, which this PR did. A jsdom/RTL harness is worth its own
   infra PR only when genuinely interactive, stateful components need regression
   cover; not justified for the mostly-presentational pages today.
-- **Coach-data freshness: schedule the weekly `coaches` cron + auto-sync.** The
-  `coaches` ingest (barttorvik coachdict → `coaches` / `coach_seasons`) is
-  **not** in the nightly and has **no cron**, despite `docs/deploy_nightly_cron`
-  / the in-season plan calling for a weekly job. It's a manual
-  `cargo run -- coaches` + `sync_to_prod.sh --tables coaches,coach_seasons`, so
-  new-HC moves (e.g. Michigan → Boynton for 2027) silently go stale until someone
-  reruns it. Wire a weekly Railway cron + prod push.
+- **Coach-data freshness: the on-demand refresh isn't reliably happening.**
+  The `coaches` ingest (barttorvik coachdict → `coaches` / `coach_seasons`) is
+  manual — `cargo run -- coaches` + `sync_to_prod.sh --tables
+  coaches,coach_seasons` — so new-HC moves (e.g. Michigan → Boynton for 2027)
+  silently go stale until someone reruns it. NOTE: ROADMAP §S5 already
+  *decided against* a weekly cron for this (display-only, offseason-computed,
+  ~zero in-season churn) in favour of an offseason/on-demand refresh. So the fix
+  is **not** a cron — it's making the on-demand refresh dependable: fold a
+  `coaches` run + targeted sync into the offseason bootstrap/carousel checklist
+  (the S6 sync-protocol writeup), so it isn't forgotten.
 - **Coach "arrived from" misses gap-year hires.** `coach_prev_team` is derived
   from a *base-season* different-program row (`fetch_coach_cae` LATERAL in
   `projections.rs`), so a coach who sat out a year (e.g. Boynton: Oklahoma St.
@@ -318,9 +343,11 @@ here for continuity and easy to promote into `ROADMAP.md`.
 ## Key files
 
 - `crates/cstat-core/src/roster_projection.rs` — `did_not_play` on `RecruitMeta`,
-  `target_season_complete` gate + `SEASON_COMPLETE_GAME_FRACTION`, `for_scenario`
-  / `projecting_recruits_count` exclusion, recruit pull, returning fetch,
-  `satout_lookup`, `freshman_row`.
+  the `target_season_complete` param + "target has games" EXISTS safety net,
+  `for_scenario` / `projecting_recruits_count` exclusion, recruit pull, returning
+  fetch, `satout_lookup`, `freshman_row`.
+- `crates/cstat-ingest/src/lib.rs` — `target_season_retro_complete` /
+  `retro_complete_on` (the clock gate the callers pass in).
 - `crates/cstat-api/src/routes/projections.rs` — `recruits_cam_v3_sum` exclusion
   (list route); recruits display payload (PR 2 target).
 - `crates/cstat-core/src/roster_features.rs:97-98` — `QUAL_MIN_GAMES_PLAYED`,

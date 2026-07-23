@@ -58,6 +58,38 @@ PBP_FEATURES = os.environ.get("PBP_FEATURES", "0").strip() == "1"
 # keep out of dropna completeness filters.
 LINEUP_FEATURES = os.environ.get("LINEUP_FEATURES", "0").strip() == "1"
 
+# Value-weighted roster-shape features (candidate; experiment). The production
+# roster aggregate is a minutes-weighted MEAN plus a "star" slot keyed off
+# highest MINUTES — both blind to (a) the best player by VALUE when he isn't the
+# minutes leader and (b) value CONCENTRATION (top-heavy vs balanced roster with
+# the same mean). These `rv_*` diffs express that shape. Default OFF: flipping it
+# on changes the margin/win feature count (a wire contract with the Rust
+# Predictor, NUM_FEATURES), so it stays gated until a LOSO backtest accepts it.
+# NaN for a team with no gbpm-carrying qualified player yet — kept OUT of the
+# dropna completeness filter (LightGBM routes missing natively), which also keeps
+# the evaluated row set identical to baseline for an apples-to-apples MAE delta.
+# Value: "0"/unset = off; "1" = all rv features; or a comma list of rv names to
+# ablate a subset (e.g. "rv_top1_gbpm,rv_gbpm_gap12").
+# Canonical rv feature names — single source of truth for the subset
+# validation here and the diff wiring in `build_feature_matrix`.
+RV_FEATURE_NAMES = ("rv_top1_gbpm", "rv_top3_gbpm", "rv_gbpm_gap12", "rv_gbpm_std")
+_RV_RAW = os.environ.get("ROSTER_VALUE_FEATURES", "0").strip()
+ROSTER_VALUE_FEATURES = _RV_RAW.lower() not in ("0", "", "false")
+_RV_SUBSET = (
+    None if _RV_RAW.lower() in ("0", "1", "", "true", "false")
+    else {s.strip() for s in _RV_RAW.split(",") if s.strip()}
+)
+# Fail loud on a typo'd subset name. Otherwise the flag reads ON but the
+# name matches nothing, zero rv features get wired in, and a LOSO ablation
+# silently reports a fake "no effect" — the experiment gets wrongly rejected.
+if _RV_SUBSET is not None:
+    _rv_unknown = _RV_SUBSET - set(RV_FEATURE_NAMES)
+    if _rv_unknown:
+        raise ValueError(
+            f"ROSTER_VALUE_FEATURES lists unknown rv feature(s): {sorted(_rv_unknown)}. "
+            f"Valid: {list(RV_FEATURE_NAMES)} (or '1' for all, '0'/unset for off)."
+        )
+
 
 def completeness_subset(cols: list[str]) -> list[str]:
     """Columns a row must have to count as feature-complete. PBP and lineup
@@ -67,7 +99,7 @@ def completeness_subset(cols: list[str]) -> list[str]:
     whole seasons. LightGBM routes their NaN natively instead. Every consumer
     that dropna-filters the feature matrix must go through this helper, not
     the raw feature list."""
-    return [c for c in cols if not c.startswith(("diff_pbp_", "sum_pbp_", "diff_lu_"))]
+    return [c for c in cols if not c.startswith(("diff_pbp_", "sum_pbp_", "diff_lu_", "diff_rv_"))]
 
 # ELO parameters
 ELO_K = 20.0
@@ -907,6 +939,22 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         # Minutes stddev (depth indicator)
         row["minutes_stddev"] = group["cum_minutes"].std()
 
+        # Value-weighted roster shape (candidate features). Unlike star_* (keyed
+        # off minutes-weight) these key off player VALUE (gbpm) and its spread:
+        #   rv_top1_gbpm  best player by value (not necessarily the minutes star)
+        #   rv_top3_gbpm  mean of the top-3 by value (on-floor elite production)
+        #   rv_gbpm_gap12 #1 - #2 value gap (star separation)
+        #   rv_gbpm_std   dispersion of value (top-heavy vs balanced)
+        # Gated on the flag — the sort+reductions per group are not free, and
+        # the columns are only consumed when ROSTER_VALUE_FEATURES is on.
+        if ROSTER_VALUE_FEATURES:
+            gv = group["torvik_gbpm"].dropna().sort_values(ascending=False)
+            n_gv = len(gv)
+            row["rv_top1_gbpm"]  = gv.iloc[0] if n_gv >= 1 else np.nan
+            row["rv_top3_gbpm"]  = gv.iloc[:3].mean() if n_gv >= 1 else np.nan
+            row["rv_gbpm_gap12"] = (gv.iloc[0] - gv.iloc[1]) if n_gv >= 2 else np.nan
+            row["rv_gbpm_std"]   = gv.std() if n_gv >= 2 else np.nan
+
         return pd.Series(row)
 
     # Group by team_id + game_id + game_date (all players on that team for that game)
@@ -1299,6 +1347,13 @@ def build_feature_matrix(engine, seasons=None) -> tuple[pd.DataFrame, list[str],
             "lu_top_share": "cum_lu_top_share",
             "lu_top_net": "cum_lu_top_net",
         })
+
+    # Value-weighted roster-shape diffs (gated experiment; see ROSTER_VALUE_FEATURES)
+    if ROSTER_VALUE_FEATURES:
+        rv_pairs = {n: n for n in RV_FEATURE_NAMES}
+        if _RV_SUBSET is not None:
+            rv_pairs = {k: v for k, v in rv_pairs.items() if k in _RV_SUBSET}
+        diff_pairs.update(rv_pairs)
 
     for name, col in diff_pairs.items():
         home_col = f"home_{col}"
