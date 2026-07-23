@@ -519,9 +519,13 @@ fn predict_team(
         .iter()
         .map(|r| r.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
+    // Skip redshirt / non-enroll recruits (completed seasons only) so the
+    // displayed recruit contribution matches the scored roster — they added
+    // zero that season. No-op for the live upcoming projection.
     let recruits_cam_v3_sum: f32 = p
         .recruits
         .iter()
+        .filter(|(_, m)| !m.did_not_play)
         .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
 

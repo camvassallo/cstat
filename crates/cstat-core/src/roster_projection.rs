@@ -164,6 +164,19 @@ pub struct RecruitMeta {
     /// of the API payload.
     #[serde(skip)]
     pub feeds_projection: bool,
+    /// The recruit committed but never recorded a box score in the target
+    /// season — a redshirt / non-enrollment / reclassification. Set true ONLY
+    /// once the target season is actually complete (see
+    /// `target_season_complete` in `compose_all_projections`); always false for
+    /// the live upcoming projection, where we deliberately don't forecast who
+    /// will redshirt (every committed freshman is included). When true the
+    /// recruit is dropped from the scored roster (`for_scenario` /
+    /// `projecting_recruits_count`) and from the displayed recruit-contribution
+    /// sum — they contributed zero that season, so counting their projected
+    /// cam_v3 over-credits the team. Retroactive only; changes historical /
+    /// graded projections, never a model's training data. Serving-internal.
+    #[serde(skip)]
+    pub did_not_play: bool,
 }
 
 /// Replacement-level CamPom for a freshman we can't project per-recruit.
@@ -176,6 +189,17 @@ pub struct RecruitMeta {
 /// the served roster-impact model proved it keys only on `cam_v3` /
 /// class / archetype — never the synthesized box-score statline).
 const FRESHMAN_FALLBACK_CAM_V3: f64 = 1.20;
+
+/// Fraction of the base season's game volume the target season must reach
+/// before we trust the "committed recruit never appeared = redshirt" signal
+/// (see `did_not_play`). The base season is always fully ingested (it's the
+/// projection's source), so a target season with >=90% of the base's games is
+/// effectively complete — every freshman who was going to play has. Below
+/// this (an unplayed upcoming season is 0 games) we include every committed
+/// recruit and never retro-exclude. Era-robust: keys off relative game volume,
+/// not an absolute count or the wall clock, so it holds as roster sizes and
+/// schedule lengths drift across seasons.
+const SEASON_COMPLETE_GAME_FRACTION: f64 = 0.90;
 
 /// Build a synthetic PlayerRow from a recruit commit. The row plugs into
 /// `build_roster_impact_features`, which keys *only* on `cam_v3`,
@@ -307,7 +331,7 @@ impl ProjectedRoster {
         out.extend(
             self.recruits
                 .iter()
-                .filter(|(_, m)| m.feeds_projection)
+                .filter(|(_, m)| m.feeds_projection && !m.did_not_play)
                 .map(|(p, _)| p.clone()),
         );
         if scenario == DraftScenario::Ceiling {
@@ -323,7 +347,7 @@ impl ProjectedRoster {
     pub fn projecting_recruits_count(&self) -> usize {
         self.recruits
             .iter()
-            .filter(|(_, m)| m.feeds_projection)
+            .filter(|(_, m)| m.feeds_projection && !m.did_not_play)
             .count()
     }
 }
@@ -867,6 +891,34 @@ pub async fn compose_all_projections(
     // per model); on batch error those rows get `None` and `freshman_row`
     // falls back to `FRESHMAN_FALLBACK_CAM_V3`.
     let target_season = base_season + 1;
+
+    // Redshirt / non-enrollment gate. A committed recruit whose `cstat_player_id`
+    // never resolved has no box-score row in the target season = they didn't play
+    // (redshirt, non-enroll, reclass). We only trust that once the target season
+    // has actually happened, measured by game volume relative to the (fully
+    // ingested) base season — so the live upcoming projection (target = 0 games)
+    // includes every freshman and never retro-excludes, while a completed
+    // season's graded projection drops the non-players from the scored roster.
+    // One tiny aggregate; keeps the whole feature self-contained here rather than
+    // threading a clock-derived bool through every caller.
+    let target_season_complete: bool = {
+        let (base_games, target_games): (i64, i64) = sqlx::query_as(
+            r#"
+            SELECT
+                count(*) FILTER (WHERE season = $1),
+                count(*) FILTER (WHERE season = $2)
+            FROM games
+            WHERE season IN ($1, $2)
+            "#,
+        )
+        .bind(base_season)
+        .bind(target_season)
+        .fetch_one(pool)
+        .await?;
+        base_games > 0
+            && (target_games as f64) >= SEASON_COMPLETE_GAME_FRACTION * (base_games as f64)
+    };
+
     let recruit_cstat_ids: Vec<Uuid> = recruit_rows
         .iter()
         .filter_map(|r| r.cstat_player_id)
@@ -964,6 +1016,10 @@ pub async fn compose_all_projections(
         // whole-batch failure `pred` is None and `freshman_row` falls
         // back to `FRESHMAN_FALLBACK_CAM_V3` with no band.
         let pred_mean = pred.as_ref().map(|p| p.mean as f64);
+        // Redshirt / non-enroll: committed but no target-season box score, and
+        // only once the target season is actually complete. Never fires on the
+        // live upcoming projection (target_season_complete == false there).
+        let did_not_play = target_season_complete && r.cstat_player_id.is_none();
         let row = freshman_row(r.recruit_id, pred_mean);
         let meta = RecruitMeta {
             recruit_id: r.recruit_id,
@@ -975,6 +1031,7 @@ pub async fn compose_all_projections(
             projected_campom_upper: pred.as_ref().map(|p| p.upper),
             // Commits-feed rows display but don't feed the AdjEM calibrator.
             feeds_projection: r.institution_group != "commits",
+            did_not_play,
         };
         recruits_by_team
             .entry(team_id)
@@ -1626,6 +1683,7 @@ mod tests {
                     projected_campom_lower: None,
                     projected_campom_upper: None,
                     feeds_projection: true,
+                    did_not_play: false,
                 },
             ),
             (
@@ -1639,6 +1697,7 @@ mod tests {
                     projected_campom_lower: None,
                     projected_campom_upper: None,
                     feeds_projection: true,
+                    did_not_play: false,
                 },
             ),
         ];
@@ -1684,6 +1743,7 @@ mod tests {
             projected_campom_lower: None,
             projected_campom_upper: None,
             feeds_projection: feeds,
+            did_not_play: false,
         };
         let r = ProjectedRoster {
             team_id: Uuid::new_v4(),
@@ -1710,6 +1770,53 @@ mod tests {
         // Both recruits are present for display.
         assert_eq!(r.recruits.len(), 2);
         // Only the ranked one feeds the scored roster: 1 returning + 1 ranked.
+        assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
+        assert_eq!(r.projecting_recruits_count(), 1);
+    }
+
+    #[test]
+    fn redshirt_recruit_excluded_from_scored_roster_but_still_displayed() {
+        // A ranked recruit who committed but never played the (completed)
+        // target season — did_not_play == true — must stay in `recruits` for
+        // display yet drop out of the scored roster and the qualifying count,
+        // exactly like the commits-feed cohort. A ranked recruit who DID play
+        // (did_not_play == false) still scores.
+        let meta = |name: &str, did_not_play: bool| RecruitMeta {
+            recruit_id: Uuid::new_v4(),
+            name: name.into(),
+            composite_rank: Some(50),
+            star_rating: Some(4),
+            position: None,
+            projected_campom_lower: None,
+            projected_campom_upper: None,
+            feeds_projection: true,
+            did_not_play,
+        };
+        let r = ProjectedRoster {
+            team_id: Uuid::new_v4(),
+            team_name: "Foo".into(),
+            team_full_name: "Foo Bar".into(),
+            returning: vec![pr(28.0, Some(4.0))],
+            arrivals: vec![],
+            recruits: vec![
+                (
+                    freshman_row(Uuid::new_v4(), Some(6.0)),
+                    meta("played", false),
+                ),
+                (
+                    freshman_row(Uuid::new_v4(), Some(5.0)),
+                    meta("redshirt", true),
+                ),
+            ],
+            uncertain: vec![],
+            departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum: 0.0,
+        };
+        // Both recruits are present for display.
+        assert_eq!(r.recruits.len(), 2);
+        // Only the one who played feeds the scored roster: 1 returning + 1 played.
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.projecting_recruits_count(), 1);
     }
