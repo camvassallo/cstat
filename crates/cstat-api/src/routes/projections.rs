@@ -524,9 +524,13 @@ fn predict_team(
         .iter()
         .map(|r| r.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
-    // Skip redshirt / non-enroll recruits (completed seasons only) so the
-    // displayed recruit contribution matches the scored roster — they added
-    // zero that season. No-op for the live upcoming projection.
+    // Exclude redshirt / did-not-play recruits (completed seasons only) so a
+    // no-show doesn't inflate the displayed recruit contribution, mirroring
+    // their exclusion from the scored AdjEM. NOTE this does not fully equal the
+    // scored roster: the commits-feed cohort (`feeds_projection == false`) is
+    // still summed here, as it always has been — a pre-existing display choice,
+    // not changed by this PR. No-op on the live upcoming projection, where
+    // did_not_play is always false.
     let recruits_cam_v3_sum: f32 = p
         .recruits
         .iter()

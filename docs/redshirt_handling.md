@@ -161,7 +161,7 @@ current off-season and false for the upcoming 2027; Sebastian Wilkins (Duke 2025
 class, `cstat_player_id` NULL) is flagged for the 2026 graded projection and
 untouched for the live 2027 forecast.
 
-**Two review findings accepted as known, not fixed here:**
+**Review findings accepted as known, not fixed here:**
 - The ~5.3% false-exclude below (proper fix is PR 3). It is now *visible* — a
   wrongly-flagged recruit shows greyed/"redshirt" on the report card, not a
   silent number change.
@@ -169,6 +169,13 @@ untouched for the live 2027 forecast.
   `MIN_QUALIFYING_FOR_PROJECTION` (7), flipping a previously-graded row to
   `too_thin`/null. Rare, and defensible: if a team's projected class largely
   redshirted, its real roster *was* thin, so declining to grade it is honest.
+- The Projected-page Recruits tooltip shows a total commit count next to a Σ
+  cam_v3 that excludes redshirts, so the two can differ; the greyed "— redshirt"
+  marker explains it *unless* the redshirt is ranked outside the top-5 name
+  list (`top_recruits` is `take(5)`). Marginal — the count and Σ are different
+  quantities (headcount vs projected contribution), no value is wrong, and a
+  low-ranked redshirt moves Σ negligibly. A `redshirt_count` field would make it
+  explicit if it ever matters.
 
 **Known limitation — ~5.3% false-exclude.** Of 882 NULL-id recruits across
 completed classes, 47 (5.3%) actually played (exact-name match) but the Pass-2
