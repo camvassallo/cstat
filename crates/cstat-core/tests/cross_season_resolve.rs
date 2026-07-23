@@ -20,6 +20,8 @@ use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 #[tokio::test]
+#[ignore = "needs a populated local DB (torvik_player_stats + players across seasons); \
+            run: DATABASE_URL=... cargo test -p cstat-core --test cross_season_resolve -- --ignored"]
 async fn torvik_pid_resolves_a_transfer_across_seasons() {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         eprintln!("DATABASE_URL unset; skipping cross-season resolver test");
