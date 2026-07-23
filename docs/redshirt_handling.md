@@ -122,32 +122,48 @@ keeps every PR here well-tested and free of speculative modeling.
 The live upcoming-season projection is untouched.
 
 **As built:**
-1. `compose_all_projections` computes a self-contained `target_season_complete`
-   flag from **relative game volume** — `target_games >= 0.90 * base_games`
-   (`SEASON_COMPLETE_GAME_FRACTION`), one small aggregate query. The base season
-   is always fully ingested, so this is era-robust and needs no clock and no
-   caller signature change. An unplayed upcoming season has 0 target games →
-   `false` → nothing excluded. (The earlier plan to thread a
-   `target_season < current_natstat_season()` bool through every caller was
-   dropped in favour of this — same semantics, less churn, deterministic in
-   tests.)
+1. **Completeness gate = a clock verdict, not game volume.** The caller passes
+   `cstat_ingest::target_season_retro_complete(base_season + 1)` into
+   `compose_all_projections`; it is true only when the target season is *fully
+   over* — any season strictly before the current one, or the current season
+   once the calendar leaves the playing window (`in_season_on`). Inside,
+   `compose_all_projections` ANDs it with a "target season's games are ingested"
+   safety net (else every recruit would look like a no-show). **A game-volume
+   proxy was tried first and rejected in review:** `target_games >= 0.9 *
+   base_games` flips true in the final ~10% of a season *still being played*, so
+   the live in-progress grid would start dropping not-yet-debuted freshmen for
+   weeks each spring — the clock signal is the only one that distinguishes "90%
+   through, in progress" from "over." An unplayed upcoming season → `false` →
+   nothing excluded.
 2. Each recruit gets `RecruitMeta.did_not_play = target_season_complete &&
    cstat_player_id IS NULL`. When true the recruit is dropped from the scored
    roster (`for_scenario`, `projecting_recruits_count`) — mirroring the existing
    `feeds_projection` commits-cohort exclusion — and from the API's
-   `recruits_cam_v3_sum` display, so the graded report card's recruit
-   contribution matches its AdjEM.
+   `recruits_cam_v3_sum` **and** `recruits_count` (so the report card's headline
+   count and Σ agree; a review finding), while still appearing (greyed) in the
+   recruit list.
 3. Recruits stay in the `recruits` payload/list for display (who committed);
    only their *scored* and *summed* contribution is zeroed.
 
 **Tests:** `roster_projection::tests::
-redshirt_recruit_excluded_from_scored_roster_but_still_displayed` (unit), plus
-the existing `commits_feed_*` and `for_scenario_*` tests still green.
+redshirt_recruit_excluded_from_scored_roster_but_still_displayed` and
+`cstat_ingest::tests::test_retro_complete_on` (the clock gate across
+in-progress / off-season / past / future dates), plus the existing
+`commits_feed_*` and `for_scenario_*` tests still green.
 
-**Verified on real data:** gate reads complete for base 2025 → target 2026
-(6280 ≥ 0.9·6294) and incomplete for base 2026 → target 2027 (0 games); Sebastian
-Wilkins (Duke 2025 class, `cstat_player_id` NULL) is flagged for the 2026 graded
-projection and untouched for the live 2027 forecast.
+**Verified on real data:** `target_season_retro_complete` is true for 2026 in the
+current off-season and false for the upcoming 2027; Sebastian Wilkins (Duke 2025
+class, `cstat_player_id` NULL) is flagged for the 2026 graded projection and
+untouched for the live 2027 forecast.
+
+**Two review findings accepted as known, not fixed here:**
+- The ~5.3% false-exclude below (proper fix is PR 3). It is now *visible* — a
+  wrongly-flagged recruit shows greyed/"redshirt" on the report card, not a
+  silent number change.
+- Excluding enough recruits can push a boundary team below
+  `MIN_QUALIFYING_FOR_PROJECTION` (7), flipping a previously-graded row to
+  `too_thin`/null. Rare, and defensible: if a team's projected class largely
+  redshirted, its real roster *was* thin, so declining to grade it is honest.
 
 **Known limitation — ~5.3% false-exclude.** Of 882 NULL-id recruits across
 completed classes, 47 (5.3%) actually played (exact-name match) but the Pass-2
@@ -225,11 +241,29 @@ completed-class false-null rate stays below a floor. Re-measure the 5.3%.
   ~2.4 seasons later at ~0.149 cam_v3 is invisible to the projection in the debut
   season (no prior stats, recruit link never resolved). Small population and low
   value; needs the PR 3 linkage first.
-- **Stay-at-school redshirt *returner*** — blocked on a data source we don't
-  ingest (official roster / eligibility feed) to know a 0-game player is still
-  rostered. The *portal* redshirt returner is already handled (`satout_lookup`);
-  only the stay-put variant is missing. Scope only if the population proves
-  material.
+- **Returner-redshirt / projected-returner-attrition exclusion (its own PR).**
+  The mirror of PR 1, for the *returning* bucket: a player who played the base
+  season and is projected to return, then redshirts (or otherwise never plays)
+  the target season, is over-credited — e.g. **Caden Pierce** is projected as a
+  Princeton 2026 returner (Jr in 2025) but redshirted 2026, and `did_not_play`
+  (recruit-only) can't flag him. Harder than the recruit case and NOT a clean
+  symmetric add: (a) it needs a *reliable* cross-season key — `torvik_pid`, since
+  `natstat_id` breaks on transfers (a naive "no same-`natstat_id` box score next
+  season" check flags 70.9% of 2025 returners, overwhelmingly transfers-out /
+  grads / draft, **not** redshirts); (b) it must check appearance *for the
+  projected team* and reconcile with the existing portal-departure path so a
+  real transfer-out isn't double-counted; (c) like PR 1 it's only decidable for
+  *completed* target seasons. Scope as a dedicated PR once PR 3's linkage lands
+  (same `torvik_pid` plumbing). The *portal* redshirt returner is already handled
+  (`satout_lookup`); this is the stay-put + true-attrition remainder.
+- **Redshirt "development" boost — considered and declined.** The idea that a
+  redshirt/practice year should *raise* a player's debut projection is not
+  supported: redshirt/non-enroll recruits who eventually debut do so at ~0.149
+  cam_v3 vs ~1.062 for immediate contributors — the redshirt cohort is *weaker*
+  (selection: weaker players redshirt), not elevated by the extra year. A "has
+  practiced a year" boost feature would train against the evidence. Redshirt
+  status currently has no projection impact by design; leave it that way absent
+  data showing a genuine within-player development gain.
 - **Redshirt flag on the actual-season roster — considered and declined.** The
   `did_not_play` signal is a projection/recruiting concept; surfacing it on the
   box-score-derived season roster would be confusing and incomplete: (1) a

@@ -77,7 +77,9 @@ async fn withdrawn_players_stay_on_their_team() {
     }
 
     let entrants = fetch_draft_entrants(&pool, BASE_SEASON).await.unwrap();
-    let projections = compose_all_projections(&pool, BASE_SEASON, &entrants, &predictor)
+    // `false` = don't retro-exclude redshirt recruits; this test exercises the
+    // withdrawn-transfer return path, not the redshirt gate.
+    let projections = compose_all_projections(&pool, BASE_SEASON, &entrants, &predictor, false)
         .await
         .unwrap();
 

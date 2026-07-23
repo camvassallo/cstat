@@ -342,15 +342,20 @@ async fn projection_list(
             )
         })?;
 
-    let projections =
-        compose_all_projections(&state.db.pool, base_season, &entrants, &state.predictor)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
-                )
-            })?;
+    let projections = compose_all_projections(
+        &state.db.pool,
+        base_season,
+        &entrants,
+        &state.predictor,
+        cstat_ingest::target_season_retro_complete(year),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
+        )
+    })?;
 
     // Fetch the base-season AdjEM per team in one batch. Keyed by
     // team_id; missing entries (new D-I, no AdjEM) fall through to
@@ -634,7 +639,11 @@ fn predict_team(
             arrivals_count: p.arrivals.len(),
             arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
             arrivals_projected_cam_v3_sum,
-            recruits_count: p.recruits.len(),
+            // Count only the recruits that contribute — i.e. exclude redshirt /
+            // did-not-play commits (completed seasons only), so the headline
+            // count agrees with `recruits_cam_v3_sum`, which also excludes them.
+            // The excluded commits still appear (greyed) in `top_recruits`.
+            recruits_count: p.recruits.iter().filter(|(_, m)| !m.did_not_play).count(),
             recruits_cam_v3_sum,
             top_recruits: top_recruits.clone(),
             uncertain_count: p.uncertain.len(),
@@ -783,14 +792,20 @@ async fn projection_team_detail(
             Json(json!({ "error": format!("fetch_draft_entrants failed: {e}") })),
         )
     })?;
-    let projections = compose_all_projections(pool, base_season, &entrants, &state.predictor)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
-            )
-        })?;
+    let projections = compose_all_projections(
+        pool,
+        base_season,
+        &entrants,
+        &state.predictor,
+        cstat_ingest::target_season_retro_complete(year),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("compose_all_projections failed: {e}") })),
+        )
+    })?;
     let Some(projection) = projections.into_iter().find(|p| p.team_id == resolved_id) else {
         return Err((
             StatusCode::NOT_FOUND,

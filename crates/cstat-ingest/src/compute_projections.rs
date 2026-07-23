@@ -181,7 +181,14 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
         // drafted players from the returning roster (else over-projected).
         let entrants = fetch_draft_entrants(pool, base_season).await?;
 
-        let projections = compose_all_projections(pool, base_season, &entrants, predictor).await?;
+        let projections = compose_all_projections(
+            pool,
+            base_season,
+            &entrants,
+            predictor,
+            crate::target_season_retro_complete(year),
+        )
+        .await?;
         let baseline_map = fetch_baseline_adj_em(pool, base_season).await?;
         let target_map = resolve_base_to_target(pool, base_season, year).await?;
 

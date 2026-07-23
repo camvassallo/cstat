@@ -190,17 +190,6 @@ pub struct RecruitMeta {
 /// class / archetype — never the synthesized box-score statline).
 const FRESHMAN_FALLBACK_CAM_V3: f64 = 1.20;
 
-/// Fraction of the base season's game volume the target season must reach
-/// before we trust the "committed recruit never appeared = redshirt" signal
-/// (see `did_not_play`). The base season is always fully ingested (it's the
-/// projection's source), so a target season with >=90% of the base's games is
-/// effectively complete — every freshman who was going to play has. Below
-/// this (an unplayed upcoming season is 0 games) we include every committed
-/// recruit and never retro-exclude. Era-robust: keys off relative game volume,
-/// not an absolute count or the wall clock, so it holds as roster sizes and
-/// schedule lengths drift across seasons.
-const SEASON_COMPLETE_GAME_FRACTION: f64 = 0.90;
-
 /// Build a synthetic PlayerRow from a recruit commit. The row plugs into
 /// `build_roster_impact_features`, which keys *only* on `cam_v3`,
 /// `class_year`, and `primary_class` — it ranks the roster by `cam_v3`
@@ -662,11 +651,21 @@ pub fn normalize_player_name(name: &str) -> String {
 /// declared/gone list — pass `&[]` to skip draft-cohort handling
 /// entirely (every player who isn't a Sr or in the portal is treated
 /// as returning).
+///
+/// `target_season_complete` is the caller's clock verdict on whether the target
+/// season (`base_season + 1`) is *fully over* — pass
+/// `cstat_ingest::target_season_retro_complete(base_season + 1)`. When true (and
+/// the target's games are actually ingested), committed recruits who never
+/// recorded a box score are treated as redshirts/no-shows and dropped from the
+/// scored roster (see `RecruitMeta::did_not_play`). Pass `false` for the live
+/// upcoming projection so every committed freshman is included — we don't
+/// forecast who will redshirt.
 pub async fn compose_all_projections(
     pool: &PgPool,
     base_season: i32,
     draft_entrants: &[DraftEntrant],
     predictor: &Predictor,
+    target_season_complete: bool,
 ) -> Result<Vec<ProjectedRoster>, sqlx::Error> {
     // --- Pull every input table in one shot. ----------------------------
     let teams: Vec<TeamRow> =
@@ -894,29 +893,20 @@ pub async fn compose_all_projections(
 
     // Redshirt / non-enrollment gate. A committed recruit whose `cstat_player_id`
     // never resolved has no box-score row in the target season = they didn't play
-    // (redshirt, non-enroll, reclass). We only trust that once the target season
-    // has actually happened, measured by game volume relative to the (fully
-    // ingested) base season — so the live upcoming projection (target = 0 games)
-    // includes every freshman and never retro-excludes, while a completed
-    // season's graded projection drops the non-players from the scored roster.
-    // One tiny aggregate; keeps the whole feature self-contained here rather than
-    // threading a clock-derived bool through every caller.
-    let target_season_complete: bool = {
-        let (base_games, target_games): (i64, i64) = sqlx::query_as(
-            r#"
-            SELECT
-                count(*) FILTER (WHERE season = $1),
-                count(*) FILTER (WHERE season = $2)
-            FROM games
-            WHERE season IN ($1, $2)
-            "#,
-        )
-        .bind(base_season)
-        .bind(target_season)
-        .fetch_one(pool)
-        .await?;
-        base_games > 0
-            && (target_games as f64) >= SEASON_COMPLETE_GAME_FRACTION * (base_games as f64)
+    // (redshirt, non-enroll, reclass). Two conditions must BOTH hold to trust it:
+    //   1. `target_season_complete` — the caller's clock verdict that the season
+    //      is fully OVER (never the live/in-progress one; see
+    //      `cstat_ingest::target_season_retro_complete`). A game-volume proxy is
+    //      NOT enough — it flips true in the final weeks of a season still being
+    //      played, which would drop not-yet-debuted freshmen from the live grid.
+    //   2. the target season's games are actually ingested — otherwise every
+    //      recruit looks like a no-show (no players exist to resolve against).
+    let target_season_complete: bool = target_season_complete && {
+        let target_games: i64 = sqlx::query_scalar("SELECT count(*) FROM games WHERE season = $1")
+            .bind(target_season)
+            .fetch_one(pool)
+            .await?;
+        target_games > 0
     };
 
     let recruit_cstat_ids: Vec<Uuid> = recruit_rows
@@ -1912,7 +1902,10 @@ mod tests {
             return; // models not present in this environment.
         };
 
-        let Ok(projections) = compose_all_projections(&pool, BASE_SEASON, &[], &predictor).await
+        // `false` = don't retro-exclude redshirts; this guard is about OOF-vs-live
+        // freshman serving, and the fixture recruit played (has a resolved id).
+        let Ok(projections) =
+            compose_all_projections(&pool, BASE_SEASON, &[], &predictor, false).await
         else {
             return; // a compose failure is a different concern, not this guard's.
         };
