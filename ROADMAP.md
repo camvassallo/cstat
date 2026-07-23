@@ -1495,10 +1495,14 @@ time someone is in the relevant area.
   hardening** (extend the Pass-2 `cstat_player_id` resolver with a
   `torvik_pid`/fuzzy/played-elsewhere fallback to cut the ~5.3% false-exclude
   that mislabels a played recruit as a redshirt; ingest-only, coverage-regression
-  test); and a **returner-redshirt / projected-returner-attrition exclusion**
-  (the Caden-Pierce case — a projected returner who redshirts the target season
-  is over-credited; harder than the recruit case, needs `torvik_pid` YoY tracking
-  since `natstat_id` breaks on transfers, so gated on PR 3). Deliberately parked
+  test); and the **returner-redshirt exclusion** (the Caden-Pierce case — a
+  projected returner who redshirts the target season is over-credited) was
+  **BUILT then empirically REJECTED and reverted** — it correctly IDs no-shows
+  via `torvik_pid` but the backtest showed it costs ~90 team-seasons of coverage
+  and worsens bias (+0.22→+0.54), because the roster-impact calibrator trains on
+  *played* rosters but serves *projected* ones (a train/serve mismatch a serving
+  filter can't fix). The real fix is the **roster-impact retrain** below, not a
+  filter. Deliberately parked
   (with reasons in the doc): a forward redshirt-`P(play)` model (declined — don't
   forecast redshirts), transfer-`eligibility_type` wiring (low yield),
   redshirt-freshman debut projection, and a redshirt "development" boost
@@ -1526,6 +1530,12 @@ time someone is in the relevant area.
   moves going stale until a manual `coaches` re-run — is **not** a missing cron:
   §S5 decided against one; the fix is folding the on-demand refresh into the
   offseason/carousel checklist.)
+
+- [ ] **Roster-impact retrain on projected (serve-consistent) rosters — scoped, `docs/roster_impact_retrain_plan.md`.** The principled fix for the returner-redshirt over-credit and the general preseason over-projection (bias +0.22): the calibrator trains on *actually-played* rosters (`games_played >= 5`) but serves on base-carried-forward rosters that include future no-shows — a train/serve mismatch. Fix = train on the same projected rosters we serve so the model prices in expected attrition. Drift-proof approach: a Rust `--dump-features` path emits the exact `build_roster_impact_features` frame, Python trains on it (also deletes the Python roster-aggregation mirror). `train_roster_adjo_model.py` rides along (imports `build_dataset`). Hard accept/reject gates (bias→0, MAE ≤ 6.13, coverage unchanged) — a hypothesis, ship only if it validates. Downstream on success: re-export both ONNX, regenerate `team_preseason_projection` + CAE, re-tune the preseason×pit blend.
+
+- [ ] **Value-weighted roster-shape features (`ROSTER_VALUE_FEATURES`, gated OFF).** Candidate `rv_*` diffs in `training/features.py` keyed off player VALUE (gbpm) and its spread — `rv_top1_gbpm` (best by value, not the minutes star), `rv_top3_gbpm`, `rv_gbpm_gap12` (star separation), `rv_gbpm_std` (top-heavy vs balanced) — complementing the minutes-keyed `star_*` features. Default OFF (flipping it on changes `NUM_FEATURES`, the Rust wire contract), subset-ablatable, fail-loud on a typo'd name. Needs a LOSO backtest to accept or reject before it can ship; kept out of the dropna completeness filter for an apples-to-apples MAE delta.
+
+- [ ] **Injury / availability feature — investigated, DECLINED (`docs/injury_availability_investigation.md`).** Whether player injury/availability should feed the game predictor / projections. Verdict: do not build into the served models (absences are already observable via missing `player_game_stats` rows for labeling; the forward-looking feed is not worth shipping — three reasons in the doc). Recorded so it isn't re-litigated.
 
 - [ ] **Rename `class` → `archetype` in the backend (DB/API/Rust/TS field names).** The
   player-archetype fields are named `primary_class` / `secondary_class` everywhere below
