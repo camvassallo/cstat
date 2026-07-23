@@ -301,13 +301,16 @@ here for continuity and easy to promote into `ROADMAP.md`.
   and unit-testing those, which this PR did. A jsdom/RTL harness is worth its own
   infra PR only when genuinely interactive, stateful components need regression
   cover; not justified for the mostly-presentational pages today.
-- **Coach-data freshness: schedule the weekly `coaches` cron + auto-sync.** The
-  `coaches` ingest (barttorvik coachdict → `coaches` / `coach_seasons`) is
-  **not** in the nightly and has **no cron**, despite `docs/deploy_nightly_cron`
-  / the in-season plan calling for a weekly job. It's a manual
-  `cargo run -- coaches` + `sync_to_prod.sh --tables coaches,coach_seasons`, so
-  new-HC moves (e.g. Michigan → Boynton for 2027) silently go stale until someone
-  reruns it. Wire a weekly Railway cron + prod push.
+- **Coach-data freshness: the on-demand refresh isn't reliably happening.**
+  The `coaches` ingest (barttorvik coachdict → `coaches` / `coach_seasons`) is
+  manual — `cargo run -- coaches` + `sync_to_prod.sh --tables
+  coaches,coach_seasons` — so new-HC moves (e.g. Michigan → Boynton for 2027)
+  silently go stale until someone reruns it. NOTE: ROADMAP §S5 already
+  *decided against* a weekly cron for this (display-only, offseason-computed,
+  ~zero in-season churn) in favour of an offseason/on-demand refresh. So the fix
+  is **not** a cron — it's making the on-demand refresh dependable: fold a
+  `coaches` run + targeted sync into the offseason bootstrap/carousel checklist
+  (the S6 sync-protocol writeup), so it isn't forgotten.
 - **Coach "arrived from" misses gap-year hires.** `coach_prev_team` is derived
   from a *base-season* different-program row (`fetch_coach_cae` LATERAL in
   `projections.rs`), so a coach who sat out a year (e.g. Boynton: Oklahoma St.
@@ -318,9 +321,11 @@ here for continuity and easy to promote into `ROADMAP.md`.
 ## Key files
 
 - `crates/cstat-core/src/roster_projection.rs` — `did_not_play` on `RecruitMeta`,
-  `target_season_complete` gate + `SEASON_COMPLETE_GAME_FRACTION`, `for_scenario`
-  / `projecting_recruits_count` exclusion, recruit pull, returning fetch,
-  `satout_lookup`, `freshman_row`.
+  the `target_season_complete` param + "target has games" EXISTS safety net,
+  `for_scenario` / `projecting_recruits_count` exclusion, recruit pull, returning
+  fetch, `satout_lookup`, `freshman_row`.
+- `crates/cstat-ingest/src/lib.rs` — `target_season_retro_complete` /
+  `retro_complete_on` (the clock gate the callers pass in).
 - `crates/cstat-api/src/routes/projections.rs` — `recruits_cam_v3_sum` exclusion
   (list route); recruits display payload (PR 2 target).
 - `crates/cstat-core/src/roster_features.rs:97-98` — `QUAL_MIN_GAMES_PLAYED`,
