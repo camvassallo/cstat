@@ -639,11 +639,15 @@ fn predict_team(
             arrivals_count: p.arrivals.len(),
             arrivals_cam_v3_sum: p.inbound_cam_v3_sum,
             arrivals_projected_cam_v3_sum,
-            // Count only the recruits that contribute — i.e. exclude redshirt /
-            // did-not-play commits (completed seasons only), so the headline
-            // count agrees with `recruits_cam_v3_sum`, which also excludes them.
-            // The excluded commits still appear (greyed) in `top_recruits`.
-            recruits_count: p.recruits.iter().filter(|(_, m)| !m.did_not_play).count(),
+            // Total committed recruits, INCLUDING redshirt / did-not-play
+            // commits — this must match the `top_recruits` list (which shows
+            // them greyed) so the Projected tooltip's count agrees with the
+            // names it lists, and the `recruits_count === 0` dash-guard only
+            // fires when a team truly has no commits. `recruits_cam_v3_sum`
+            // separately excludes did_not_play (they contributed zero); the
+            // greyed "— redshirt (did not play)" marker on the excluded name
+            // explains why the count can exceed the summed cohort.
+            recruits_count: p.recruits.len(),
             recruits_cam_v3_sum,
             top_recruits: top_recruits.clone(),
             uncertain_count: p.uncertain.len(),

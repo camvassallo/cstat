@@ -902,11 +902,14 @@ pub async fn compose_all_projections(
     //   2. the target season's games are actually ingested — otherwise every
     //      recruit looks like a no-show (no players exist to resolve against).
     let target_season_complete: bool = target_season_complete && {
-        let target_games: i64 = sqlx::query_scalar("SELECT count(*) FROM games WHERE season = $1")
-            .bind(target_season)
-            .fetch_one(pool)
-            .await?;
-        target_games > 0
+        // Presence check only — EXISTS short-circuits on the first row instead
+        // of counting every game in the season.
+        let target_has_games: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM games WHERE season = $1)")
+                .bind(target_season)
+                .fetch_one(pool)
+                .await?;
+        target_has_games
     };
 
     let recruit_cstat_ids: Vec<Uuid> = recruit_rows

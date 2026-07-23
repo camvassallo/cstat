@@ -300,12 +300,15 @@ function buildColumns(
         if (p.value == null || baseline == null) return chip;
         const w = p.data?.baseline_weight ?? 0.5;
         const bw = Math.round(w * 100);
-        // The stable cap is PROJECTION_SHRINK_WEIGHT = 0.45, but it's an f32 on
-        // the backend and serializes to JSON as 0.44999998…, so a naive `w <
-        // 0.45` was TRUE for every team (including the ~75% at the stable cap)
-        // and the badge fired on all 364. Threshold just under the served cap
-        // so only genuine roster-overhaul teams (retained < ~40%, weight pulled
-        // materially below 0.45) light up.
+        // The stable cap is PROJECTION_SHRINK_WEIGHT = 0.45f32 on the backend.
+        // The route returns `Json(json!({... "teams": rows}))`, and building a
+        // serde_json `Value` promotes the f32 to f64 (a `Number` only holds
+        // f64) — so 0.45f32 reaches the client as 0.44999998807907104, NOT
+        // "0.45" (a direct `to_string(&f32)` would ryu-print "0.45", but that's
+        // not this path). A naive `w < 0.45` was therefore TRUE for every team,
+        // including the ~75% pinned at the stable cap, so the badge fired on all
+        // 364. Threshold just under the served cap so only genuine
+        // roster-overhaul teams (retained < ~40%) light up.
         const leansRoster = w < 0.449;
         const title =
           `${bw}% last year's actual AdjEM (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}) ` +

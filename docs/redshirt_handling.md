@@ -139,9 +139,14 @@ The live upcoming-season projection is untouched.
    cstat_player_id IS NULL`. When true the recruit is dropped from the scored
    roster (`for_scenario`, `projecting_recruits_count`) — mirroring the existing
    `feeds_projection` commits-cohort exclusion — and from the API's
-   `recruits_cam_v3_sum` **and** `recruits_count` (so the report card's headline
-   count and Σ agree; a review finding), while still appearing (greyed) in the
-   recruit list.
+   `recruits_cam_v3_sum` (they contributed zero). `recruits_count` deliberately
+   stays the **total** committed count so it matches the `top_recruits` list
+   (which shows redshirts greyed) and the `recruits_count === 0` dash-guard only
+   fires when a team truly has no commits — a round-1 review fix that excluded
+   redshirts from the count was *reverted* in round 2 because it hid the greyed
+   commits and disagreed with the list. The greyed "— redshirt (did not play)"
+   marker on the excluded name explains why the count can exceed the summed
+   cohort.
 3. Recruits stay in the `recruits` payload/list for display (who committed);
    only their *scored* and *summed* contribution is zeroed.
 
