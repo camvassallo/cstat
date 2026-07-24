@@ -53,6 +53,44 @@ async fn no_fully_swapped_games_remain() {
     );
 }
 
+/// The precondition that makes the cross-season guards in BOTH
+/// `correct_swapped_games` (issue #201) and `repair_phantom_swapped_games`
+/// (issue #140) load-bearing: a single `game_id` carrying box rows in more
+/// than one season (a NatStat duplicate whose typo'd date lands the same game
+/// in two seasons). When that happens, a `game_id`-only self-join pairs this
+/// season's row with the OTHER season's partner and corrupts its box; the
+/// `t2.season = t1.season` / `opp.season = tgs.season` guards prevent it.
+///
+/// A non-empty result here is a data-hygiene problem (a backfill left a
+/// cross-year duplicate) — investigate and clean it up. The season guards keep
+/// it from corrupting the healthy season in the meantime, but the collision
+/// itself should not persist.
+#[tokio::test]
+#[ignore = "needs local DB with box scores + compute run for all seasons"]
+async fn no_cross_season_game_id_collisions() {
+    let (pool, _) = pool_and_seasons().await;
+    for table in ["team_game_stats", "player_game_stats"] {
+        let colliding: Vec<(String, i64)> = sqlx::query_as(&format!(
+            "SELECT game_id::text, count(DISTINCT season) \
+             FROM {table} GROUP BY game_id HAVING count(DISTINCT season) > 1 \
+             ORDER BY 2 DESC LIMIT 20"
+        ))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        for (game_id, n) in &colliding {
+            eprintln!("  {table}: game_id {game_id} spans {n} seasons");
+        }
+        assert!(
+            colliding.is_empty(),
+            "{} game_id(s) in {table} carry box rows across multiple seasons — a cross-year \
+             NatStat duplicate. The swap-corrector season guards prevent corruption, but the \
+             colliding rows should be cleaned up.",
+            colliding.len()
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs local DB with compute run for all seasons"]
 async fn no_phantom_swapped_games_remain() {
