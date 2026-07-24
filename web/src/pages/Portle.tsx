@@ -51,7 +51,7 @@ function initialMode(): GameMode {
   const cfg = loadJson<{ mode?: string }>(CONFIG_KEY, {});
   return (MODE_ORDER as readonly string[]).includes(cfg.mode ?? '')
     ? (cfg.mode as GameMode)
-    : 'p5';
+    : 'campom10';
 }
 
 export default function Portle() {

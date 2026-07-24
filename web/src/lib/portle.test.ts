@@ -115,7 +115,7 @@ describe('filterPool / isAnswerable', () => {
     const byId = (id: string) => pool.find((p) => p.player_id === id)!;
     expect(isAnswerable(byId('no-campom'))).toBe(false);
     expect(isAnswerable(byId('no-class'))).toBe(false);
-    for (const mode of ['all', 'p5', 'starters', 'campom10'] as const) {
+    for (const mode of ['p5', 'starters', 'campom10'] as const) {
       const ids = filterPool(pool, mode).map((p) => p.player_id);
       expect(ids).not.toContain('no-campom');
       expect(ids).not.toContain('no-class');
@@ -311,11 +311,11 @@ describe('buildShare', () => {
   });
   it('labels a practice run and marks a loss with X', () => {
     const out = buildShare([compareGuess(player({ player_id: 'g' }), answer)], {
-      mode: 'all',
+      mode: 'starters',
       won: false,
       daily: false,
     });
-    expect(out).toContain('CamPom · Portle · Practice · All D-I · X/10');
+    expect(out).toContain('CamPom · Portle · Practice · All D1 · X/10');
   });
   it('annotates hinted solves', () => {
     const out = buildShare([compareGuess(answer, answer)], {

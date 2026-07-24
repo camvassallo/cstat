@@ -118,5 +118,5 @@
     }
   },
   "accept": false,
-  "verdict": "REJECT (fails ironclad bar; revert the features.py gate)"
+  "verdict": "REJECT (fails ironclad bar; keep the gate default-OFF, do not ship)"
 }

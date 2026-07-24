@@ -20,8 +20,8 @@ and surfaced this roster-shape gap as the one buildable, no-external-feed lever.
 
 ACCEPT BAR (ironclad, no overfit): candidate must lower pooled margin MAE AND
 lower MAE in >= 5 of 6 folds, with >= 1 rv feature carrying non-trivial gain.
-Anything mixed-sign or within seed noise => REJECT (revert the features.py gate;
-CamPom's mean already carries the shape). A pass here is only a SCREEN on
+Anything mixed-sign or within seed noise => REJECT (keep the gate default-OFF,
+do not ship into the vector; CamPom's mean already carries the shape). A pass here is only a SCREEN on
 season-aggregate CamPom; productionizing additionally requires re-confirming on
 the point-in-time (pit_cam_v3) LOSO before touching the served path.
 
@@ -125,7 +125,7 @@ rv_gain = {c: {"gain": float(gain[feature_cols.index(c)]), "rank": rank[c]+1,
 accept = (pooled["dmae"] < 0 and improved >= 5 and
           any(rank[c]+1 <= 40 and gain[feature_cols.index(c)] > 0 for c in rv_cols))
 verdict = "ACCEPT (screen passed; next: confirm on pit_cam_v3 LOSO)" if accept else \
-          "REJECT (fails ironclad bar; revert the features.py gate)"
+          "REJECT (fails ironclad bar; keep the gate default-OFF, do not ship)"
 
 log(f"\nPOOLED MAE {pooled['mae_base']:.4f} -> {pooled['mae_cand']:.4f}  (delta {pooled['dmae']:+.4f})")
 log(f"POOLED AUC {pooled['auc_base']:.4f} -> {pooled['auc_cand']:.4f}  (delta {pooled['dauc']:+.4f})")

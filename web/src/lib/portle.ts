@@ -15,16 +15,15 @@ import { conferenceLabel } from './conferences';
  *  rest of the share header. */
 export const GAME_TITLE = 'CamPom · Portle';
 
-export type GameMode = 'p5' | 'starters' | 'campom10' | 'all';
+export type GameMode = 'campom10' | 'p5' | 'starters';
 
 export const MODE_LABELS: Record<GameMode, string> = {
-  p5: 'Power 5',
-  starters: 'Starters',
   campom10: 'CamPom 10+',
-  all: 'All D-I',
+  p5: 'Power 5',
+  starters: 'All D1',
 };
 
-export const MODE_ORDER: readonly GameMode[] = ['p5', 'starters', 'campom10', 'all'];
+export const MODE_ORDER: readonly GameMode[] = ['campom10', 'p5', 'starters'];
 
 export const MAX_GUESSES = 10;
 
@@ -34,8 +33,9 @@ export const MAX_GUESSES = 10;
 const P5_CONFERENCES = new Set(['ACC', 'BIG10', 'BIG12', 'SEC', 'BIGEAST']);
 
 // Minutes floors on top of the API's GP>=5 & MPG>=10 gate, so answers are
-// recognizable. P5 lifts it modestly (drop deep-bench power-conf players);
-// Starters lifts it further to genuine starter minutes.
+// recognizable. P5 lifts it modestly (drop deep-bench power-conf players); the
+// "All D1" tier (mode key `starters`) lifts it further to genuine starter
+// minutes across every conference.
 const P5_MIN_MPG = 20;
 const STARTER_MIN_MPG = 24;
 
@@ -65,11 +65,9 @@ export function filterPool(pool: PlayerRow[], mode: GameMode): PlayerRow[] {
     if (mode === 'starters') {
       return p.minutes_per_game != null && p.minutes_per_game >= STARTER_MIN_MPG;
     }
-    if (mode === 'campom10') {
-      // isAnswerable already guarantees campom != null.
-      return p.campom! > CAMPOM_MIN;
-    }
-    return true;
+    // campom10 (the only remaining mode): isAnswerable already guarantees
+    // campom != null.
+    return p.campom! > CAMPOM_MIN;
   });
 }
 
