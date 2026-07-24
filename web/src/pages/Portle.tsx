@@ -182,7 +182,7 @@ export default function Portle() {
           <p className="text-sm text-gray-400">
             Guess the mystery player in {MAX_GUESSES} tries. Each guess reveals how it
             compares — <span className="text-emerald-300">green</span> = exact,{' '}
-            <span className="text-amber-300">amber</span> = close / archetype overlap, and{' '}
+            <span className="text-amber-300">amber</span> = close (or the answer's secondary archetype), and{' '}
             <span className="text-gray-300">▲ / ▼</span> point toward the answer.
           </p>
         </div>
