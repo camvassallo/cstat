@@ -30,20 +30,21 @@ import { seasonHref, setPageSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
 import { resolveAxes } from '../components/radarAxes';
-import { pctileTextColor } from '../components/pctile';
 import { RadarAxisTooltip } from '../components/RadarAxisTooltip';
 import { RadarTick } from '../components/RadarTick';
 import { useDismissOnOutside } from '../components/useDismissOnOutside';
 
 const fmt = (v: number | null | undefined, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null | undefined) => (v != null ? (v * 100).toFixed(1) + '%' : '—');
+const signedFmt = (v: number | null | undefined, d = 1) =>
+  v != null ? `${v > 0 ? '+' : ''}${v.toFixed(d)}` : '—';
 
-function PercentileBar({ label, value, pctile }: { label: string; value: string; pctile: number | null }) {
+function PercentileBar({ label, value, pctile, title }: { label: string; value: string; pctile: number | null; title?: string }) {
   const p = pctile != null ? Math.round(pctile * 100) : null;
   const color = p == null ? 'bg-gray-600' : p >= 80 ? 'bg-green-500' : p >= 60 ? 'bg-blue-500' : p >= 40 ? 'bg-yellow-500' : p >= 20 ? 'bg-orange-500' : 'bg-red-500';
 
   return (
-    <div className="flex items-center gap-3 py-1">
+    <div className="flex items-center gap-3 py-1" title={title}>
       <div className="w-24 text-xs text-gray-400">{label}</div>
       <div className="w-16 text-sm font-medium text-right">{value}</div>
       <div className="flex-1 bg-gray-700 rounded-full h-2.5">
@@ -54,234 +55,6 @@ function PercentileBar({ label, value, pctile }: { label: string; value: string;
   );
 }
 
-/// Play-by-play season profile: paint/perimeter shot mix, scoring-context
-/// points, fouls drawn, and on-floor +/- — all derived from the PBP columns on
-/// player_game_stats.
-function PbpProfilePanel({ pbp }: { pbp: PlayerPbpProfile }) {
-  const totalFga = pbp.paint_fga + pbp.perimeter_fga;
-  const paintShare = totalFga > 0 ? pbp.paint_fga / totalFga : 0;
-  const paintFg = pbp.paint_fga > 0 ? pbp.paint_fgm / pbp.paint_fga : null;
-  const perimFg = pbp.perimeter_fga > 0 ? pbp.perimeter_fgm / pbp.perimeter_fga : null;
-
-  const ord = (p: number) => {
-    const n = Math.round(p * 100);
-    const s = ['th', 'st', 'nd', 'rd'];
-    const v = n % 100;
-    return n + (s[(v - 20) % 10] || s[v] || s[0]);
-  };
-  // A FG% colored by its within-season percentile (rim finishing / jumper
-  // efficiency are the non-redundant-with-shot-diet signal).
-  const fgWithPct = (fg: number | null, p: number | null) =>
-    fg == null ? null : (
-      <span style={{ color: pctileTextColor(p) }}>
-        {pct(fg)} FG{p != null && <span className="text-gray-500"> ({ord(p)})</span>}
-      </span>
-    );
-
-  // Rate tile: the per-40 rate as the headline (colored by its percentile so
-  // it's comparable across players), label, then "Nth pct · M total" so the raw
-  // count is still there. Falls back to the raw count when there's no rate
-  // (player below the percentile gate).
-  const rateTile = (
-    label: string,
-    rate: number | null,
-    p: number | null,
-    raw: number,
-  ) => (
-    <div className="bg-gray-900 rounded p-3 text-center">
-      <div
-        className="text-lg font-bold tabular-nums"
-        style={{ color: rate != null ? pctileTextColor(p) : undefined }}
-      >
-        {rate != null ? rate.toFixed(1) : raw}
-      </div>
-      <div className="text-xs text-gray-400 mt-0.5">
-        {label}
-        {rate != null && <span className="text-gray-600"> /40</span>}
-      </div>
-      <div className="text-[10px] text-gray-600 mt-0.5 tabular-nums">
-        {p != null ? `${ord(p)} · ${raw} tot` : `${raw} total`}
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="bg-gray-800 rounded-lg p-5 mt-6">
-      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-3">
-        <h2 className="text-lg font-bold">Play-by-Play Profile</h2>
-        <span className="text-xs text-gray-500">{pbp.games} games with play-by-play</span>
-      </div>
-
-      {/* Shot mix: paint vs perimeter share of attempts; FG% colored by percentile */}
-      {totalFga > 0 && (
-        <div className="mb-4">
-          <div className="flex justify-between text-xs text-gray-400 mb-1">
-            <span>
-              <span style={{ color: pctileTextColor(pbp.paint_rate_pct) }}>
-                Paint {Math.round(paintShare * 100)}%
-              </span>
-              {paintFg != null && <span> · {fgWithPct(paintFg, pbp.paint_fg_pct_pct)}</span>}
-            </span>
-            <span>
-              {perimFg != null && <span>{fgWithPct(perimFg, pbp.perimeter_fg_pct_pct)} · </span>}
-              Perimeter {Math.round((1 - paintShare) * 100)}%
-            </span>
-          </div>
-          <div className="flex h-3 rounded-full overflow-hidden bg-gray-700">
-            <div className="bg-blue-500" style={{ width: `${paintShare * 100}%` }} />
-            <div className="bg-purple-500" style={{ width: `${(1 - paintShare) * 100}%` }} />
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            {pbp.paint_fga} paint / {pbp.perimeter_fga} perimeter field-goal attempts
-            {pbp.paint_rate_pct != null && (
-              <span> · paint rate {ord(pbp.paint_rate_pct)} percentile</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Scoring context (per-40 rates, percentile-colored) + on-floor impact */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-        {rateTile('Transition', pbp.transition_pts_per40, pbp.transition_pts_per40_pct, pbp.transition_pts)}
-        {rateTile('2nd-chance', pbp.second_chance_pts_per40, pbp.second_chance_pts_per40_pct, pbp.second_chance_pts)}
-        {rateTile('Pts off TO', pbp.points_off_turnovers_per40, pbp.points_off_turnovers_per40_pct, pbp.points_off_turnovers)}
-        {rateTile('Fouls drawn', pbp.fouls_drawn_per40, pbp.fouls_drawn_per40_pct, pbp.fouls_drawn)}
-        <div className="bg-gray-900 rounded p-3 text-center">
-          <div className="text-lg font-bold tabular-nums">
-            {pbp.plus_minus_pbp == null
-              ? '—'
-              : `${pbp.plus_minus_pbp > 0 ? '+' : ''}${pbp.plus_minus_pbp}`}
-          </div>
-          <div className="text-xs text-gray-400 mt-0.5">On-floor +/-</div>
-        </div>
-      </div>
-      <p className="text-[10px] text-gray-600 mt-2">
-        Per-40-minute rates; color and percentile rank vs all qualified players this season.
-      </p>
-    </div>
-  );
-}
-
-/// On/off splits: team offense/defense per 100 possessions with vs without the
-/// player on the floor (PBP-derived). The headline is the on−off net swing — the
-/// classic player-value number. Off-court possessions can be thin for heavy-
-/// minute starters, so we surface the off sample and caveat replay-sourced data.
-function OnOffPanel({ onOff }: { onOff: PlayerOnOff }) {
-  const signed = (v: number | null, d = 1) =>
-    v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}`;
-  const netColor = (v: number | null) =>
-    v == null
-      ? 'text-gray-400'
-      : v > 0
-        ? 'text-green-400'
-        : v < 0
-          ? 'text-red-400'
-          : 'text-gray-300';
-
-  // Off-court possessions can be thin for a player who rarely sits → flag it.
-  const offPoss = onOff.off_possessions_for + onOff.off_possessions_against;
-  const thinOff = offPoss < 100;
-
-  // Adj on/off (RAPM) companion line — display floor on the fit sample so a
-  // garbage-time player's near-prior coefficient never headlines. (Can't use
-  // adjOnOff() here — the panel payload names the field rapm_paired_possessions,
-  // not the grids' rapm_paired_poss — but the floor constant is shared.)
-  const showRapm =
-    onOff.rapm_net != null &&
-    (onOff.rapm_paired_possessions ?? 0) >= RAPM_DISPLAY_FLOOR;
-
-  const row = (
-    label: string,
-    sub: string,
-    ortg: number | null,
-    drtg: number | null,
-    net: number | null,
-  ) => (
-    <div className="grid grid-cols-4 gap-2 items-center py-2">
-      <div>
-        <div className="text-sm font-semibold">{label}</div>
-        <div className="text-xs text-gray-500">{sub}</div>
-      </div>
-      <div className="text-right tabular-nums text-sm">{fmt(ortg)}</div>
-      <div className="text-right tabular-nums text-sm">{fmt(drtg)}</div>
-      <div className={`text-right tabular-nums text-sm font-medium ${netColor(net)}`}>
-        {signed(net)}
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="bg-gray-800 rounded-lg p-5 mt-6">
-      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
-        <h2 className="text-lg font-bold">On / Off Splits</h2>
-        <span className="text-xs text-gray-500">{onOff.games} games</span>
-      </div>
-      <p className="text-xs text-gray-500 mb-3">
-        Team rating per 100 possessions with the player on the floor vs on the bench (same games).
-      </p>
-
-      {/* Headline: net on/off swing */}
-      <div className="flex items-baseline gap-2 mb-4">
-        <span className={`text-3xl font-bold tabular-nums ${netColor(onOff.net_on_off)}`}>
-          {signed(onOff.net_on_off)}
-        </span>
-        <span className="text-sm text-gray-400">net on/off (per 100 poss)</span>
-      </div>
-
-      <div className="grid grid-cols-4 gap-2 text-xs text-gray-400 border-b border-gray-700 pb-1">
-        <div />
-        <div className="text-right">ORtg</div>
-        <div className="text-right">DRtg</div>
-        <div className="text-right">Net</div>
-      </div>
-      <div className="divide-y divide-gray-700/50">
-        {row('On floor', `${onOff.on_minutes.toFixed(0)} min`, onOff.on_ortg, onOff.on_drtg, onOff.on_net_rtg)}
-        {row('Off floor', `${onOff.off_minutes.toFixed(0)} min`, onOff.off_ortg, onOff.off_drtg, onOff.off_net_rtg)}
-      </div>
-
-      {showRapm && (
-        <div className="mt-4 pt-3 border-t border-gray-700">
-          <div className="flex items-baseline gap-2">
-            <span className={`text-2xl font-bold tabular-nums ${netColor(onOff.rapm_net)}`}>
-              {signed(onOff.rapm_net)}
-            </span>
-            <span className="text-sm text-gray-400">
-              adj on/off (RAPM)
-            </span>
-            <span className="text-xs text-gray-500 tabular-nums">
-              O {signed(onOff.rapm_o)} / D {signed(onOff.rapm_d)}
-            </span>
-          </div>
-          <p className="text-xs text-gray-600 mt-1">
-            The same per-100 swing with teammates and opponents held constant (ridge-regressed
-            adjusted +/- over every stint) — removes the deep-team garbage-time bias raw on/off
-            carries. Stabilized with the player's prior-season stints at decayed weight, so it
-            reads career-informed, not season-pure. Negative D is good (points allowed below
-            average).
-          </p>
-        </div>
-      )}
-
-      {thinOff && (
-        <p className="text-xs text-amber-500/80 mt-3">
-          Small off-court sample ({Math.round(offPoss)} poss) — the split is noisy for a player
-          who rarely leaves the floor.
-        </p>
-      )}
-      {onOff.source === 'replay' && (
-        <p className="text-xs text-gray-500 mt-2">
-          Lineups reconstructed from substitution play-by-play (~86% accurate); on/off is approximate.
-        </p>
-      )}
-      <p className="text-xs text-gray-600 mt-2">
-        On/off is a team-result measure — it reflects whoever else is on the floor, so a strong
-        player can read negative on a deep team (the bench may feast in garbage time).
-        {showRapm ? ' The adjusted line above controls for that;' : ''} read it alongside CamPom,
-        not instead of it.
-      </p>
-    </div>
-  );
-}
 
 function heightString(inches: number | null) {
   if (inches == null) return null;
@@ -623,51 +396,77 @@ export default function PlayerDetail() {
               <PercentileBar label="FC/40" value={fmt(torvik.personal_foul_rate)} pctile={torvik.fc_rate_pct} />
             )}
 
-            {torvik && (
+            {/* Scoring context (PBP-derived per-40 rates) — folded in from the old
+                Play-by-Play Profile panel; renders only where PBP coverage exists. */}
+            {pbp && (pbp.transition_pts_per40 != null || pbp.second_chance_pts_per40 != null) && (
+              <>
+                <div className="border-t border-gray-700 my-2" />
+                {pbp.transition_pts_per40 != null && (
+                  <PercentileBar label="Transition /40" value={fmt(pbp.transition_pts_per40)} pctile={pbp.transition_pts_per40_pct} />
+                )}
+                {pbp.second_chance_pts_per40 != null && (
+                  <PercentileBar label="2nd chance /40" value={fmt(pbp.second_chance_pts_per40)} pctile={pbp.second_chance_pts_per40_pct} />
+                )}
+              </>
+            )}
+
+            {(torvik || (onOff?.rapm_net != null && (onOff.rapm_paired_possessions ?? 0) >= RAPM_DISPLAY_FLOOR)) && (
               <>
                 <h2 className="text-lg font-bold mt-5 mb-3">Advanced Metrics</h2>
-                <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
-                <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
+                {torvik && (
+                  <>
+                    <PercentileBar label="Adj ORTG" value={fmt(torvik.adj_oe)} pctile={torvik.adj_oe_pct} />
+                    <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
+                  </>
+                )}
+                {/* Adj +/- (RAPM) — folded in from the old On/Off panel; the one
+                    context-adjusted plus-minus number. Raw on/off lives in the tooltip. */}
+                {onOff?.rapm_net != null && (onOff.rapm_paired_possessions ?? 0) >= RAPM_DISPLAY_FLOOR && (
+                  <PercentileBar
+                    label="Adj +/-"
+                    value={signedFmt(onOff.rapm_net)}
+                    pctile={onOff.rapm_net_pct ?? null}
+                    title={`Adjusted +/- (RAPM), per 100 poss — ridge-regressed with teammates and opponents held constant. O ${signedFmt(onOff.rapm_o)} / D ${signedFmt(onOff.rapm_d)} (negative D is good). Raw net on/off ${signedFmt(onOff.net_on_off)}. Career-informed (decayed prior-season stints); read alongside CamPom, not instead of it.`}
+                  />
+                )}
               </>
             )}
           </div>
 
-          {/* Shot Diet */}
-          {torvik && (
-            <div className="bg-gray-800 rounded-lg p-5">
-              <h2 className="text-lg font-bold mb-3">Shot Diet</h2>
-              <div className="flex flex-col items-center">
-                <ShotDietCourt torvik={torvik} />
-              </div>
-              <div className="mt-6">
-                <h2 className="text-lg font-bold mb-3">Shot Distribution</h2>
-                <ShotDistributionBar torvik={torvik} />
-              </div>
+          {/* Shot Diet + lineup-combos button (right column). Flex column so the
+              button pins to the bottom and balances the taller stats column. */}
+          {(torvik || onOff) && (
+            <div className="bg-gray-800 rounded-lg p-5 flex flex-col">
+              {torvik && (
+                <>
+                  <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+                    <h2 className="text-lg font-bold">Shot Diet</h2>
+                    <span className="text-xs text-gray-500">Volume by zone · FG% by color</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <ShotDietCourt torvik={torvik} />
+                  </div>
+                  <div className="mt-8">
+                    <h2 className="text-lg font-bold mb-3">Shot Distribution</h2>
+                    <ShotDistributionBar torvik={torvik} />
+                  </div>
+                </>
+              )}
+              {onOff && (
+                <div className="mt-auto pt-6">
+                  <SeasonLink
+                    to={`/lineups?player=${player.id}`}
+                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-blue-400 transition-colors hover:bg-gray-700 hover:text-blue-300"
+                  >
+                    View {player.name}'s lineup combos (duos / trios / 5-man) →
+                  </SeasonLink>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* Play-by-Play Profile (shot location, scoring context, on-floor +/-) */}
-      {pbp && <PbpProfilePanel pbp={pbp} />}
-
-      {/* On/off splits (team rating with vs without the player) */}
-      {onOff && (
-        <>
-          <OnOffPanel onOff={onOff} />
-          {/* Lineup combos live on the dedicated cross-team Lineups tab now;
-              deep-link there pre-filtered to this player rather than crowding
-              the page with another table. */}
-          <div className="mt-3 text-sm">
-            <SeasonLink
-              to={`/lineups?player=${player.id}`}
-              className="text-blue-400 hover:underline"
-            >
-              View {player.name}'s lineup combos (duos / trios / 5-man) →
-            </SeasonLink>
-          </div>
-        </>
-      )}
 
       {/* Similar Players */}
       {similar.length > 0 && (

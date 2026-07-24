@@ -108,7 +108,8 @@ function buildColumns(
       headerName: 'Rk',
       colId: 'campom_rank',
       headerTooltip: 'CamPom rank within the loaded pool (best CamPom = 1).',
-      width: 56,
+      // Wide enough for a 4-digit rank (~3k-player pool) so it never truncates.
+      width: 72,
       pinned: 'left',
       sortable: false,
       // The synthetic rank is not a searchable attribute — keep it out of the

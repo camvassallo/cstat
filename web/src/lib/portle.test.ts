@@ -115,7 +115,7 @@ describe('filterPool / isAnswerable', () => {
     const byId = (id: string) => pool.find((p) => p.player_id === id)!;
     expect(isAnswerable(byId('no-campom'))).toBe(false);
     expect(isAnswerable(byId('no-class'))).toBe(false);
-    for (const mode of ['all', 'p5', 'starters', 'campom10'] as const) {
+    for (const mode of ['p5', 'starters', 'campom10'] as const) {
       const ids = filterPool(pool, mode).map((p) => p.player_id);
       expect(ids).not.toContain('no-campom');
       expect(ids).not.toContain('no-class');
@@ -130,11 +130,15 @@ describe('filterPool / isAnswerable', () => {
     expect(ids).not.toContain('acc-bench'); // P5 but sub-20 mpg
   });
 
-  it('starters keeps only >= 24 mpg', () => {
+  it('all-d1 (starters mode) keeps >= 20 mpg across all conferences — a p5 superset', () => {
     const ids = filterPool(pool, 'starters').map((p) => p.player_id);
     expect(ids).toContain('acc-starter');
     expect(ids).toContain('bigeast');
-    expect(ids).not.toContain('mid-bench');
+    expect(ids).not.toContain('acc-bench'); // sub-20 mpg
+    expect(ids).not.toContain('mid-bench'); // sub-20 mpg
+    // Same floor as p5, no conference gate → every p5 answer is in all-d1.
+    const p5 = filterPool(pool, 'p5').map((p) => p.player_id);
+    expect(p5.every((id) => ids.includes(id))).toBe(true);
   });
 
   it('campom10 keeps only campom > 10, ignoring conference and minutes', () => {
@@ -311,11 +315,11 @@ describe('buildShare', () => {
   });
   it('labels a practice run and marks a loss with X', () => {
     const out = buildShare([compareGuess(player({ player_id: 'g' }), answer)], {
-      mode: 'all',
+      mode: 'starters',
       won: false,
       daily: false,
     });
-    expect(out).toContain('CamPom · Portle · Practice · All D-I · X/10');
+    expect(out).toContain('CamPom · Portle · Practice · All D1 · X/10');
   });
   it('annotates hinted solves', () => {
     const out = buildShare([compareGuess(answer, answer)], {

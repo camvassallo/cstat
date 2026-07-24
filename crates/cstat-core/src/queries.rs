@@ -871,6 +871,10 @@ pub struct PlayerOnOff {
     pub rapm_d: Option<f64>,
     pub rapm_net: Option<f64>,
     pub rapm_paired_possessions: Option<f64>,
+    /// Season percentile (0..1) of this player's `net_rapm` among display-qualified
+    /// players (paired_possessions >= 250, matching the UI's RAPM display floor).
+    /// NULL when the player has no RAPM fit. Powers the "Adj +/-" percentile bar.
+    pub rapm_net_pct: Option<f64>,
 }
 
 /// Fetch a player's season on/off split. Returns `None` when the player has no
@@ -890,7 +894,14 @@ pub async fn get_player_on_off(
                oo.off_points_for, oo.off_points_against, oo.off_ortg, oo.off_drtg, oo.off_net_rtg,
                oo.net_on_off, oo.source,
                pr.o_rapm AS rapm_o, pr.d_rapm AS rapm_d, pr.net_rapm AS rapm_net,
-               pr.paired_possessions AS rapm_paired_possessions
+               pr.paired_possessions AS rapm_paired_possessions,
+               -- Season percentile of net_rapm among display-qualified players
+               -- (>= 250 paired poss, the UI floor). NULL when this player has no
+               -- fit (pr.net_rapm IS NULL makes the comparison NULL → avg NULL).
+               (SELECT avg((r2.net_rapm <= pr.net_rapm)::int)::float8
+                  FROM player_rapm r2
+                 WHERE r2.season = pr.season AND r2.paired_possessions >= 250)
+                 AS rapm_net_pct
         FROM player_on_off oo
         LEFT JOIN player_rapm pr ON pr.player_id = oo.player_id AND pr.season = oo.season
         -- Pin to the player's canonical team. The derivation now credits a player
