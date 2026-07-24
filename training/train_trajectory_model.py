@@ -319,7 +319,14 @@ def build_dataset() -> pd.DataFrame:
 def lgb_params(objective: str = "regression", alpha: Optional[float] = None) -> dict:
     """Shared shape for mean + quantile models. Same conservative knobs as
     the roster model (~4k rows / ~37 features). Quantile fits use the same
-    leaves/lr; only the objective differs."""
+    leaves/lr; only the objective differs.
+
+    No early stopping, fixed 400-iter budget (per the roster/freshman-model
+    precedent) — used verbatim by both the honest backtest (LOPO / quantile /
+    k-fold) and the final served fit. Keeping one param set is what keeps them
+    identical: an early-stopping variant here would have to hand the held-out
+    fold to the fit as an eval_set, letting `best_iteration_` peek at the test
+    labels and optimistically biasing the persisted OOF numbers (issue #199)."""
     p = {
         "objective": objective,
         "metric": "mae" if objective == "regression" else "quantile",
@@ -332,8 +339,7 @@ def lgb_params(objective: str = "regression", alpha: Optional[float] = None) -> 
         "lambda_l1": 0.1,
         "lambda_l2": 1.0,
         "verbose": -1,
-        "n_estimators": 1500,
-        "early_stopping_rounds": 80,
+        "n_estimators": 400,
         # Pinned for reproducibility — without this, bagging/feature subsampling
         # re-rolls every fit. `seed=42` overrides all sub-seeds per LightGBM docs;
         # `deterministic=True` is needed for full multi-thread reproducibility.
@@ -380,7 +386,7 @@ def leave_one_pair_out(df: pd.DataFrame) -> tuple[dict, pd.Series]:
         X_tr, y_tr = train[FEATURE_COLS], train["target_campom"]
         X_te, y_te = test[FEATURE_COLS], test["target_campom"]
         model = lgb.LGBMRegressor(**lgb_params())
-        model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], eval_metric="mae")
+        model.fit(X_tr, y_tr)
         preds = model.predict(X_te)
         lopo_preds.loc[mask] = preds
         key = f"{held['s_n']}->{held['s_np1']}"
@@ -416,9 +422,9 @@ def lopo_quantile_predictions(df: pd.DataFrame, alpha: float) -> pd.Series:
         if len(train) == 0 or len(test) == 0:
             continue
         X_tr, y_tr = train[FEATURE_COLS], train["target_campom"]
-        X_te, y_te = test[FEATURE_COLS], test["target_campom"]
+        X_te = test[FEATURE_COLS]
         model = lgb.LGBMRegressor(**lgb_params(objective="quantile", alpha=alpha))
-        model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)])
+        model.fit(X_tr, y_tr)
         preds.loc[mask] = model.predict(X_te)
     return preds
 
@@ -437,7 +443,7 @@ def kfold_cv(df: pd.DataFrame, n_splits: int = 5) -> tuple[dict, np.ndarray]:
     maes, rmses, r2s = [], [], []
     for fold, (tr, te) in enumerate(kf.split(X), 1):
         model = lgb.LGBMRegressor(**lgb_params())
-        model.fit(X[tr], y[tr], eval_set=[(X[te], y[te])], eval_metric="mae")
+        model.fit(X[tr], y[tr])
         p = model.predict(X[te])
         oof[te] = p
         maes.append(float(mean_absolute_error(y[te], p)))
@@ -578,11 +584,10 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
 
 
 def fit_final(df: pd.DataFrame, objective: str = "regression", alpha: Optional[float] = None) -> lgb.LGBMRegressor:
-    """Fit on ALL paired rows. No held-out set, so no early stopping —
-    lock the budget at 400 iters per roster_model precedent."""
+    """Fit on ALL paired rows. Uses the same `lgb_params` (400 iters, no early
+    stopping) as the honest backtest, so the served fit and the persisted OOF
+    numbers come from an identical training recipe."""
     params = lgb_params(objective=objective, alpha=alpha)
-    params.pop("early_stopping_rounds", None)
-    params["n_estimators"] = 400
     model = lgb.LGBMRegressor(**params)
     model.fit(df[FEATURE_COLS], df["target_campom"])
     return model
