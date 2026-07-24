@@ -266,17 +266,40 @@ describe('compareGuess', () => {
     expect(close.state).toBe('close'); // within 3 inches
   });
 
-  it('archetype: primary match hit, overlap close, disjoint miss', () => {
+  it('archetype: primary match hit, guessed primary == answer secondary close, else miss', () => {
     expect(cell(player({ player_id: 'a', primary_class: 'Wizard' }), 'archetype').state).toBe('hit');
-    // guess primary equals answer secondary -> close
+    // guessed (displayed) primary equals the answer's secondary -> close
     expect(
       cell(player({ player_id: 'b', primary_class: 'Bard', secondary_class: 'Rogue' }), 'archetype')
         .state,
     ).toBe('close');
+    // guessed SECONDARY matching the answer's primary no longer counts (only the
+    // displayed primary is colored) -> miss
+    expect(
+      cell(player({ player_id: 'd', primary_class: 'Rogue', secondary_class: 'Wizard' }), 'archetype')
+        .state,
+    ).toBe('miss');
     expect(
       cell(player({ player_id: 'c', primary_class: 'Paladin', secondary_class: 'Druid' }), 'archetype')
         .state,
     ).toBe('miss');
+  });
+
+  it('campom O/D cells hit/close/miss on their own bands, null = miss', () => {
+    const ans = player({ player_id: 'od', campom_o: 8, campom_d: 4 });
+    const spotO = compareGuess(player({ player_id: 'o1', campom_o: 8 }), ans).find(
+      (c) => c.key === 'campom_o',
+    )!;
+    expect(spotO.state).toBe('hit');
+    const closeD = compareGuess(player({ player_id: 'd1', campom_d: 5.5 }), ans).find(
+      (c) => c.key === 'campom_d',
+    )!;
+    expect(closeD.state).toBe('close'); // |4 - 5.5| = 1.5, within band 2
+    // Guess missing the split (null) reads as a miss, not a hit against a null answer.
+    const nullO = compareGuess(player({ player_id: 'o2', campom_o: null }), ans).find(
+      (c) => c.key === 'campom_o',
+    )!;
+    expect(nullO.state).toBe('miss');
   });
 
   it('handles null attributes as non-green misses', () => {

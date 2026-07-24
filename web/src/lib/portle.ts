@@ -247,20 +247,18 @@ function numericCell(
   return { key, label, display: opts.format(guessVal), state, arrow };
 }
 
-/** Archetype cell: primary match = hit; any primary/secondary overlap = close;
+/** Archetype cell: the displayed value is the guess's *primary* class, so color
+ *  it by that alone — primary == answer primary = hit; primary == answer
+ *  secondary = close (the guessed archetype is the answer's secondary class);
  *  else miss. */
 function archetypeCell(guess: PlayerRow, answer: PlayerRow): GuessCell {
   const gp = guess.primary_class;
-  const gs = guess.secondary_class;
   const ap = answer.primary_class;
   const as = answer.secondary_class;
   let state: CellState = 'miss';
   if (gp != null && ap != null && gp === ap) {
     state = 'hit';
-  } else if (
-    (gp != null && (gp === ap || gp === as)) ||
-    (gs != null && (gs === ap || gs === as))
-  ) {
+  } else if (gp != null && as != null && gp === as) {
     state = 'close';
   }
   return { key: 'archetype', label: 'Archetype', display: gp ?? '—', state, arrow: null };
@@ -278,9 +276,6 @@ function classYearCell(guess: PlayerRow, answer: PlayerRow): GuessCell {
 }
 
 const fmt1 = (v: number) => v.toFixed(1);
-// usage_rate is stored as a fraction (0.297 = 29.7%); show it as a whole-number
-// percent to match the rest of the app.
-const fmtUsage = (v: number) => `${Math.round(v * 100)}%`;
 // Height inches → feet'inches" (e.g. 81 → 6'9").
 const fmtHeight = (v: number) => `${Math.floor(v / 12)}'${Math.round(v % 12)}"`;
 
@@ -293,8 +288,9 @@ export const GUESS_COLUMNS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'height', label: 'Height' },
   { key: 'archetype', label: 'Archetype' },
   { key: 'ppg', label: 'PPG' },
-  { key: 'usage', label: 'Usage' },
   { key: 'campom', label: 'CamPom' },
+  { key: 'campom_o', label: 'Offense' },
+  { key: 'campom_d', label: 'Defense' },
 ];
 
 /** Build the full row of attribute cells comparing a guess to the answer.
@@ -312,13 +308,19 @@ export function compareGuess(guess: PlayerRow, answer: PlayerRow): GuessCell[] {
     }),
     archetypeCell(guess, answer),
     numericCell('ppg', 'PPG', guess.ppg, answer.ppg, { tight: 0.5, band: 2, format: fmt1 }),
-    numericCell('usage', 'Usage', guess.usage_rate, answer.usage_rate, {
-      // Fraction scale: within 1 pp = hit, within 3 pp = close.
-      tight: 0.01,
-      band: 0.03,
-      format: fmtUsage,
-    }),
     numericCell('campom', 'CamPom', guess.campom, answer.campom, {
+      tight: 0.5,
+      band: 2,
+      format: fmt1,
+    }),
+    // O/D halves (o + d = campom; d positive-good). Same band as the CamPom
+    // headline; null (outside the ±30 envelope / uncovered) reads as a miss.
+    numericCell('campom_o', 'Offense', guess.campom_o, answer.campom_o, {
+      tight: 0.5,
+      band: 2,
+      format: fmt1,
+    }),
+    numericCell('campom_d', 'Defense', guess.campom_d, answer.campom_d, {
       tight: 0.5,
       band: 2,
       format: fmt1,
