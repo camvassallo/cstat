@@ -1071,6 +1071,8 @@ export interface PlayerOnOff {
   rapm_d: number | null;
   rapm_net: number | null;
   rapm_paired_possessions: number | null;
+  /// Season percentile (0..1) of net RAPM among display-qualified players; null when unfit.
+  rapm_net_pct: number | null;
 }
 
 export function fetchPlayerOnOff(id: string, season?: number) {
