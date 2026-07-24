@@ -329,6 +329,11 @@ pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sq
 
     // 2. team_game_stats: swap the box-stat columns between the two rows (team_id
     //    fixed). The self-join reads the partner row's ORIGINAL values.
+    //    `t2.season = t1.season` is load-bearing, not cosmetic: a game_id can
+    //    carry team_game_stats rows in more than one season (a NatStat duplicate
+    //    with a typo'd date lands the same game in two seasons — see the memo on
+    //    `repair_phantom_swapped_games`), and without it the self-join would pair
+    //    this season's row with the OTHER season's partner and corrupt its box.
     sqlx::query(
         "UPDATE team_game_stats t1 SET
              minutes = t2.minutes, points = t2.points,
@@ -340,6 +345,7 @@ pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sq
              turnovers = t2.turnovers, fouls = t2.fouls
          FROM team_game_stats t2
          WHERE t1.game_id = t2.game_id AND t1.team_id <> t2.team_id
+           AND t2.season = t1.season
            AND t1.game_id = ANY($1)",
     )
     .bind(&swapped)
@@ -348,7 +354,9 @@ pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sq
 
     // 3. team_game_stats: recompute is_home / win from the corrected games row and
     //    the now-swapped points (compute_derived_game_fields also rederives W-L,
-    //    but keep this row self-consistent immediately).
+    //    but keep this row self-consistent immediately). Same cross-season guard as
+    //    step 2 (`opp.season = tgs.season`), so the winner is decided against this
+    //    season's opponent row, never a same-game_id row bled in from another season.
     sqlx::query(
         "UPDATE team_game_stats tgs SET
              is_home = (tgs.team_id = g.home_team_id),
@@ -356,6 +364,7 @@ pub async fn correct_swapped_games(pool: &PgPool, season: i32) -> Result<u64, sq
          FROM games g, team_game_stats opp
          WHERE tgs.game_id = g.id
            AND opp.game_id = tgs.game_id AND opp.team_id <> tgs.team_id
+           AND opp.season = tgs.season
            AND tgs.game_id = ANY($1)",
     )
     .bind(&swapped)
