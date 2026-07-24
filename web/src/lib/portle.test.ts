@@ -130,11 +130,15 @@ describe('filterPool / isAnswerable', () => {
     expect(ids).not.toContain('acc-bench'); // P5 but sub-20 mpg
   });
 
-  it('starters keeps only >= 24 mpg', () => {
+  it('all-d1 (starters mode) keeps >= 20 mpg across all conferences — a p5 superset', () => {
     const ids = filterPool(pool, 'starters').map((p) => p.player_id);
     expect(ids).toContain('acc-starter');
     expect(ids).toContain('bigeast');
-    expect(ids).not.toContain('mid-bench');
+    expect(ids).not.toContain('acc-bench'); // sub-20 mpg
+    expect(ids).not.toContain('mid-bench'); // sub-20 mpg
+    // Same floor as p5, no conference gate → every p5 answer is in all-d1.
+    const p5 = filterPool(pool, 'p5').map((p) => p.player_id);
+    expect(p5.every((id) => ids.includes(id))).toBe(true);
   });
 
   it('campom10 keeps only campom > 10, ignoring conference and minutes', () => {

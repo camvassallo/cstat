@@ -32,12 +32,10 @@ export const MAX_GUESSES = 10;
 // East. Pac-12 no longer fields a men's league, so there's no PAC12 code.
 const P5_CONFERENCES = new Set(['ACC', 'BIG10', 'BIG12', 'SEC', 'BIGEAST']);
 
-// Minutes floors on top of the API's GP>=5 & MPG>=10 gate, so answers are
-// recognizable. P5 lifts it modestly (drop deep-bench power-conf players); the
-// "All D1" tier (mode key `starters`) lifts it further to genuine starter
-// minutes across every conference.
-const P5_MIN_MPG = 20;
-const STARTER_MIN_MPG = 24;
+// Minutes floor on top of the API's GP>=5 & MPG>=10 gate, so answers are
+// recognizable — shared by Power 5 and All D1 so the pools nest cleanly: All D1
+// (any conference) is a proper superset of Power 5 (power conferences only).
+const MIN_MPG = 20;
 
 // CamPom floor for the "CamPom 10+" pool — impact players only, regardless of
 // conference or minutes. Answers are the genuine standouts of the season.
@@ -59,11 +57,12 @@ export function filterPool(pool: PlayerRow[], mode: GameMode): PlayerRow[] {
         p.conference != null &&
         P5_CONFERENCES.has(p.conference) &&
         p.minutes_per_game != null &&
-        p.minutes_per_game >= P5_MIN_MPG
+        p.minutes_per_game >= MIN_MPG
       );
     }
     if (mode === 'starters') {
-      return p.minutes_per_game != null && p.minutes_per_game >= STARTER_MIN_MPG;
+      // "All D1": the same minutes floor as Power 5, any conference.
+      return p.minutes_per_game != null && p.minutes_per_game >= MIN_MPG;
     }
     // campom10 (the only remaining mode): isAnswerable already guarantees
     // campom != null.
