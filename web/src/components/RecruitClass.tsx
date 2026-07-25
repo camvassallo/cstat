@@ -3,6 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchRecruits, type RecruitRow } from '../api/client';
 import { campomTier, campomTierColor } from './campom';
+import { agNullsBottom } from './tableSort';
 import { gridTheme } from '../theme';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
@@ -192,12 +193,10 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       field: 'composite_rank',
       ...flexCol(1, 70),
       headerTooltip: '247Sports composite national rank within the recruiting class. — for unranked recruits.',
-      comparator: (a: number | null, b: number | null) => {
-        if (a == null && b == null) return 0;
-        if (a == null) return 1;
-        if (b == null) return -1;
-        return a - b;
-      },
+      // agNullsBottom keeps unranked (—) recruits pinned to the bottom in BOTH
+      // directions; a naive nulls-last comparator floats them to the top on the
+      // desc sort AG Grid negates (issue #196).
+      comparator: agNullsBottom,
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="text-gray-400 text-xs">{p.value}</span>
@@ -211,12 +210,9 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       ...flexCol(1, 70),
       headerTooltip:
         'Value vs. 247: composite_rank − cstat projected rank. Positive (green) = CamPom rates the recruit higher than 247 does; negative (red) = CamPom is lower. Useful for spotting model-vs-scouts disagreement; also a sanity-check surface — sort desc to find sleepers, asc to find scout-favorites the model is bearish on. NULL when either rank is missing (unranked-by-247 recruit, or projection unavailable).',
-      comparator: (a: number | null, b: number | null) => {
-        if (a == null && b == null) return 0;
-        if (a == null) return 1;
-        if (b == null) return -1;
-        return a - b;
-      },
+      // Direction-aware nulls-last so the em-dash rows don't top the desc sort
+      // the headerTooltip tells users to run for sleepers (issue #196).
+      comparator: agNullsBottom,
       cellRenderer: (p: { value: number | null }) => {
         if (p.value == null) return <span className="text-gray-600 text-xs">—</span>;
         const v = p.value;
