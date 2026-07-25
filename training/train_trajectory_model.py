@@ -192,10 +192,16 @@ WHERE pssN.minutes_per_game >= 5
 --
 -- `(torvik_pid, s_n)` alone does NOT determine a row: `player_season_stats`
 -- is unique on `(player_id, team_id, season)`, so a player who appears on
--- two teams in one season fans the pssN / pssNP1 / pssNM1 joins out. The
--- team ids close that. (Those fan-out rows are a pre-existing property of
--- this query — 274 of them are exact duplicates, which double-weights
--- multi-team player-seasons in training. Out of scope here; noted in #222.)
+-- two teams in one season fans the pssN / pssNP1 / pssNM1 joins out.
+--
+-- The team ids narrow it but do NOT fully close it; this frame was still
+-- unstable with them in place. `db.canonical_frame_order` is what actually
+-- guarantees the order. This clause is kept so the DB returns a sensible
+-- order for anyone running the query by hand, not as the guarantee.
+--
+-- (Those fan-out rows are a pre-existing property of this query — 274 of
+-- them are exact duplicates, which double-weights multi-team player-seasons
+-- in training. Out of scope here; noted in #222.)
 ORDER BY base.torvik_pid, base.s_n,
          pssN.team_id, pssNP1.team_id, pssNM1.team_id
 """

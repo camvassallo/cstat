@@ -5,9 +5,13 @@
 # ordering buys, and it makes a model diff unreviewable — you cannot tell a
 # data change from a dependency bump.
 #
-# These are the versions the models currently in `training/models/` were built
-# with. Bumping any of them is a model-affecting change: retrain, and expect
-# the artifacts to move.
+# Pinned to what is currently installed in `training/.venv` — the environment
+# the next retrain (#218) will run in, which is what makes that retrain's diff
+# attributable. Not verified against the build environment of every artifact
+# already in `training/models/`; several predate this pinning.
+#
+# Bumping any of these is a model-affecting change: retrain, and expect the
+# artifacts to move.
 pandas==2.3.3  # train_roster_model.py uses GroupBy.apply(include_groups=...)
 psycopg2-binary==2.9.11
 sqlalchemy==2.0.49

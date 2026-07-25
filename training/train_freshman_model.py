@@ -175,11 +175,16 @@ WHERE r.cstat_player_id IS NOT NULL
 -- subsamples by row position, so an unordered read makes the fit — and
 -- therefore the OOF predictions this model persists — irreproducible.
 --
--- `(cstat_player_id, year)` alone does NOT determine a row: the `pss` join
--- fans out for a freshman who appears on two teams in their first season,
--- and `tm_prior` can match more than one prior-season team row. The team
--- ids close that.
-ORDER BY r.cstat_player_id, r.year, pss.team_id, tm_prior.id
+-- `(cstat_player_id, year)` alone does NOT determine a row: the `pss` and
+-- `t` joins both fan out for a freshman who appears on two teams in their
+-- first season. (`tm_prior` cannot — `teams` is UNIQUE on
+-- `(natstat_id, season)` — and `peer` is pre-grouped.)
+--
+-- The team id narrows it but does NOT fully close it; this frame was still
+-- unstable with it in place. `db.canonical_frame_order` is what actually
+-- guarantees the order. This clause is kept so the DB returns a sensible
+-- order for anyone running the query by hand, not as the guarantee.
+ORDER BY r.cstat_player_id, r.year, pss.team_id
 """
 
 
