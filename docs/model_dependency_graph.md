@@ -181,12 +181,15 @@ prod/local archetype mismatch into a committed model.
 
 ### What each stage owes the next
 
-- **`roster_impact` must re-export `models/roster_impact_loso/*.onnx`.** These
-  are gitignored, so they are invisible to `git status` and easy to forget.
-  `projections-backtest` loads the per-target-season LOSO model
-  (`projections_backtest.rs:335`) precisely so the backtest is honest, and
-  `compute_cae.py` scores against that backtest's dump. A stale LOSO set means
-  CAE grades computed against a projection generation that no longer ships.
+- **`models/roster_impact_loso/*.onnx` refreshes only as a side effect of the
+  `roster_impact` stage.** `projections-backtest` loads the per-target-season
+  LOSO model (`projections_backtest.rs:335`) precisely so the backtest is
+  honest, and `compute_cae.py` scores against that backtest's dump — so a stale
+  LOSO set means CAE grades computed against a projection generation that no
+  longer ships. Two things make it easy to miss: the files are gitignored, so
+  they never appear in `git status`, and `roster_adjo` computes LOSO metrics
+  but exports **no** per-season ONNX. Running the AdjO half alone therefore
+  leaves the backtest reading the old models.
 - **`roster_adjo` needs its own invocation.** It `import`s `build_dataset` from
   the net trainer, which reliably creates the intuition that retraining the net
   model updates the AdjO half. It does not. This is the single specific

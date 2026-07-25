@@ -140,20 +140,26 @@ Run when:
 2. Pre-2021 recruit-class backfill completes (the current model already includes recruit features for classes 2021-2026; older classes would lift recruit coverage for the upperclassmen in our older training pairs — e.g. a senior in the 2022→2023 pair was recruited in ~2018, currently in the `is_ranked=0` sentinel branch).
 3. The CamPom v3 formula changes (e.g. CamPom v4) — target shifts, so retrain.
 
+**Do not run this trainer on its own.** It `TRUNCATE`s and repopulates `trajectory_oof_predictions`, which is the training input for *both* roster-frame calibrators, so a bare trajectory retrain leaves everything downstream fit on an OOF snapshot that no longer exists. Use the chain runner, which runs the stages in dependency order and cannot skip one:
+
 ```bash
 # From repo root:
-cd training && source .venv/bin/activate
-python train_trajectory_model.py
+./training/retrain_downstream.sh --from trajectory --dry-run   # confirm the plan
+./training/retrain_downstream.sh --from trajectory
 ```
 
-Outputs:
+`--from trajectory` implies `--with-layer1`, so the plan is the full tree: `trajectory freshman roster_impact roster_adjo backtest cae projections`.
+
+Trajectory-stage outputs:
 - `training/models/trajectory_mean_model.onnx`
 - `training/models/trajectory_q10_model.onnx`
 - `training/models/trajectory_q90_model.onnx`
 - `training/models/trajectory_model_meta.json`
 - repopulates the `trajectory_oof_predictions` table (held-out LOPO mean + q10/q90)
 
-**Then retrain the downstream `roster_impact_model`** (`python train_roster_impact_model.py`): it trains on `trajectory_oof_predictions` (train-on-what-you-serve), so a trajectory retrain shifts its inputs. Skipping this leaves the preseason projection calibrator fit on stale OOF.
+**Why the rest of the chain is not optional.** `roster_impact` trains on `trajectory_oof_predictions` (train-on-what-you-serve), so a trajectory retrain shifts its inputs — and so does `roster_adjo`, the display-only AdjO half, which shares the same training frame via `build_dataset` but **needs its own invocation**. An earlier version of this playbook named only `roster_impact` here; that omission is the documented root cause of #218, where `roster_adjo` served an OOF three generations stale for months, wrong by ~0.65 AdjO points on average and up to 3.5 for individual teams. The two now stamp their meta with an `oof_provenance` fingerprint and `Predictor::load` refuses to boot when they disagree, so retraining one without the other is a hard failure rather than a silent one — but the guard only compares the two halves against *each other*, and nothing yet catches a Layer 1 retrain with no Layer 2 retrain at all (#223). Run the chain.
+
+Full layer map, the retrain protocol, and what reaches prod by git deploy vs by data sync: `docs/model_dependency_graph.md`.
 
 The boot-time validator in `crates/cstat-core/src/inference.rs::validate_trajectory_meta` will hard-fail at API startup if:
 - `player_filter` drifts from `cstat_core::roster_features::QUAL_FILTER_STRING`
@@ -165,7 +171,7 @@ When changing the feature set:
 1. Update `NUMERIC_FEATURE_COLS` / `ARCH_FEATURE_COLS` in `train_trajectory_model.py`.
 2. Mirror the order in `TRAJECTORY_FEATURE_NAMES` (Rust) and update `TRAJECTORY_NUM_FEATURES`.
 3. Update `build_trajectory_features` in Rust to populate the new slots.
-4. Retrain — boot will fail loudly if anything's out of sync.
+4. Retrain the chain (`./training/retrain_downstream.sh --from trajectory`) — a feature change reshapes the OOF, so Layer 2 is stale too. Boot will fail loudly if anything's out of sync.
 
 When adding a new pair-fold (new season ingested):
 - Update `SEASONS` tuple in `train_trajectory_model.py`.

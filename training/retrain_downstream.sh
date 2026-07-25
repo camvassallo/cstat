@@ -17,6 +17,14 @@
 # drift no matter how the artifacts were produced. Prevention makes the right
 # thing easy; detection is what actually holds. Both, deliberately.
 #
+# WHY THE TREE IS SHAPED THIS WAY — including the one idea worth internalizing
+# before touching any of it (Layer 2 trains on Layer 1's held-out PREDICTIONS,
+# so error absorbs rather than compounds, and the failure mode is
+# desynchronization rather than bad data) — is in
+# `docs/model_dependency_graph.md`. That doc also covers what reaches prod by
+# git deploy vs by data sync, which is not symmetric across the two Layer 2
+# halves and is the reason a stale roster_adjo survived months of syncs.
+#
 # THE CHAIN
 #
 #   Layer 1 (opt-in, --with-layer1) — these WRITE the OOF tables
