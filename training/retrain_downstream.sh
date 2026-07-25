@@ -203,6 +203,15 @@ run_cae() {
 
 run_projections() {
   stage_banner "projections — materialize team_preseason_projection"
+  # Heads-up: compute-projections writes TWO tables. `team_preseason_projection`
+  # legitimately wants the full 2016..2026 range (the preseason blend and
+  # measure-blend-accuracy read historical seasons). `player_season_projection`
+  # does not — operationally it held only the forward season, and running the
+  # wide range materializes ~3.5k rows per historical season that nothing
+  # serves. Those rows are inert (`/api/projected-players/{year}` filters on
+  # target_season) and their values come from the trajectory/freshman models,
+  # so a Layer 2 retrain does not change them. They just diverge from prod.
+  # Use --years to narrow if you only meant to refresh the team table.
   ( cd "$REPO_ROOT" && cargo run --release --bin cstat-ingest -- \
       compute-projections --years "$YEARS" )
   WROTE+=("team_preseason_projection (database)")
