@@ -472,6 +472,11 @@ pub async fn upsert_commit(
 
 /// Pass 1: resolve `committed_school` text → `teams.id`.
 ///
+/// Re-runs against every committed recruit each ingest (not just unresolved
+/// rows), so a recommit to a different school updates `committed_team_id`
+/// instead of leaving it frozen at the first school (issue #200); the
+/// `IS DISTINCT FROM` update writes only rows that actually changed.
+///
 /// Matching is done in Rust (not SQL) so we can reuse the same
 /// [`team_match_score`] scoring the transfers route handler uses — exact
 /// short-name match beats alias match beats prefix fallback. Teams are
@@ -492,13 +497,20 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
         full_name: String,
     }
 
+    // Re-score EVERY committed recruit each run — not just unresolved ones —
+    // so a decommit-and-recommit to a different school re-points
+    // `committed_team_id` instead of freezing it at the first school forever
+    // (issue #200). Mirrors the transfers path (`resolve_cstat_joins` re-scans
+    // all rows and lets `IS DISTINCT FROM` below write only the changes); a
+    // `committed_team_id IS NULL` gate here is what made recruits go stale on
+    // recommit while transfers didn't. Bounded work: a few thousand recruits ×
+    // ~360 candidate teams, scored in Rust.
     let needs: Vec<RecruitNeed> = sqlx::query_as(
         r#"
         SELECT id, committed_school
         FROM recruits
         WHERE year = $1
           AND committed_school IS NOT NULL
-          AND committed_team_id IS NULL
         "#,
     )
     .bind(year)
@@ -571,10 +583,16 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
         }
     }
 
+    // On an ACTUAL change (IS DISTINCT FROM), also null cstat_player_id: Pass 2
+    // (`resolve_player_joins`) only resolves rows where cstat_player_id IS NULL,
+    // so without this a recommit would leave the player FK pointing at the old
+    // school's roster. Nulling forces Pass 2 to re-resolve against the new team.
+    // Harmless on first resolution (NULL→team): cstat_player_id is already NULL.
     let result = sqlx::query(
         r#"
         UPDATE recruits r
-        SET committed_team_id = m.team_id
+        SET committed_team_id = m.team_id,
+            cstat_player_id = NULL
         FROM UNNEST($1::uuid[], $2::uuid[]) AS m(recruit_id, team_id)
         WHERE r.id = m.recruit_id
           AND r.committed_team_id IS DISTINCT FROM m.team_id
