@@ -797,7 +797,13 @@ export interface ProjectedRecruitDetail {
   did_not_play?: boolean;
 }
 export interface ProjectedDeparture {
-  kind: 'senior' | 'transferred' | 'draft_gone';
+  /// `left_program` covers the exits no feed reports — signed professionally
+  /// abroad, retired, dismissed. Curated by hand in `player_departures`.
+  kind: 'senior' | 'transferred' | 'draft_gone' | 'left_program';
+  /// Sub-vocabulary for `left_program` only ('pro_overseas', 'pro_other',
+  /// 'retired', 'dismissed', 'left_program'). Null on every other kind — they
+  /// carry their reason in `kind` itself. Display-only.
+  reason?: string | null;
   player_id: string;
   name: string;
   /// Base-season the player played for the source team. UI uses this to
@@ -820,7 +826,9 @@ export interface ProjectedDeparture {
   projected_campom_mean?: number | null;
   projected_campom_lower?: number | null;
   projected_campom_upper?: number | null;
-  /// Transfer destination institution name (text label from 247).
+  /// Where they went. For `transferred`, the destination institution name
+  /// (247 text label); for `left_program`, the free-text pro club or league
+  /// ("Valencia (ACB)"), null on a retirement. Unused by the other kinds.
   destination?: string | null;
   /// Base-season UUID of the destination team — set when destination
   /// resolved to a D-I program in base_season, null for non-D1 dests.

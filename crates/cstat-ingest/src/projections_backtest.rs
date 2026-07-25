@@ -48,7 +48,8 @@ use uuid::Uuid;
 use cstat_core::inference::{Predictor, RosterImpactModel};
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, compose_all_projections, fetch_draft_entrants, project_returner_cam_v3,
+    DraftScenario, compose_all_projections, fetch_draft_entrants, fetch_player_departures,
+    project_returner_cam_v3,
 };
 
 /// Minimum (returning + arrivals + recruits) to score a team — mirrors
@@ -181,10 +182,15 @@ async fn backtest_year(
         );
     }
 
+    // Curated non-portal, non-draft exits. Historically sparse (the capture
+    // starts at base 2026), so this is a no-op for most backtest folds.
+    let departures = fetch_player_departures(pool, base_season).await?;
+
     let projections = compose_all_projections(
         pool,
         base_season,
         &entrants,
+        &departures,
         predictor,
         crate::target_season_retro_complete(year),
     )

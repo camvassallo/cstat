@@ -1926,13 +1926,28 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                     ? 'text-slate-300 border-slate-500/40'
                     : d.kind === 'transferred'
                       ? 'text-amber-300 border-amber-500/40'
-                      : 'text-rose-300 border-rose-500/40';
+                      : d.kind === 'left_program'
+                        ? 'text-violet-300 border-violet-500/40'
+                        : 'text-rose-300 border-rose-500/40';
+                // `left_program` is the curated non-portal, non-draft exit. It
+                // reads as a destination chip when we know where they went
+                // ("→ Valencia (ACB)") and falls back to the reason vocabulary
+                // when there's nowhere to point (a retirement, a dismissal).
+                const leftProgramLabel = d.destination
+                  ? `→ ${d.destination}`
+                  : d.reason === 'retired'
+                    ? 'retired'
+                    : d.reason === 'dismissed'
+                      ? 'dismissed'
+                      : 'left program';
                 const statusLabel =
                   d.kind === 'senior'
                     ? 'Sr graduation'
                     : d.kind === 'draft_gone'
                       ? 'NBA draft'
-                      : `→ ${d.destination ?? 'portal'}`;
+                      : d.kind === 'left_program'
+                        ? leftProgramLabel
+                        : `→ ${d.destination ?? 'portal'}`;
                 return (
                   <div
                     key={d.player_id}
@@ -2011,7 +2026,15 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                           title={
                             d.kind === 'transferred' && d.destination
                               ? `to ${d.destination}`
-                              : undefined
+                              : d.kind === 'left_program'
+                                ? `Left the program outside the portal and the NBA draft${
+                                    d.reason === 'pro_overseas'
+                                      ? ' — signed professionally overseas'
+                                      : d.reason === 'pro_other'
+                                        ? ' — signed professionally'
+                                        : ''
+                                  }${d.destination ? ` (${d.destination})` : ''}.`
+                                : undefined
                           }
                         >
                           {statusLabel}

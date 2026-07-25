@@ -4,7 +4,7 @@
 
 `GET /api/projections/{year}` projects an upcoming season's team AdjEM band per team by composing a hypothetical N+1 roster from three sources and scoring it with the **roster-impact model** (`roster_impact_model.onnx`):
 
-1. **Returning players** — last season's qualifying roster minus seniors, outbound portal commits, firm NBA-draft departures, and (in the floor scenario) declared-but-undecided draft entrants.
+1. **Returning players** — last season's qualifying roster minus seniors, outbound portal commits, firm NBA-draft departures, curated non-portal/non-draft exits (see *Curated departures* below), and (in the floor scenario) declared-but-undecided draft entrants.
 2. **Incoming portal transfers** — players committed to this team in the matching portal cycle, with their *source-team* stats carried as their PlayerRow.
 3. **Incoming HS recruits** — class-of-`base_season` commits to this team. Each is given a per-recruit projected cam_v3 from the freshman-impact model (see *Recruit synthesis* below).
 
@@ -12,7 +12,7 @@ Each scenario's roster is scored from its *projected* cam_v3 distribution (see *
 
 ## Composition (`crates/cstat-core/src/roster_projection.rs`)
 
-`compose_all_projections(pool, base_season, draft_entrants) -> Vec<ProjectedRoster>` runs three concurrent SQL fetches:
+`compose_all_projections(pool, base_season, draft_entrants, player_departures) -> Vec<ProjectedRoster>` runs three concurrent SQL fetches:
 
 ```sql
 -- 1. roster_rows: every qualified player from base_season (≥5 GP, ≥5 MPG)
@@ -36,6 +36,18 @@ WHERE year = $base_season
 ```
 
 Per-team buckets then partition each row into `returning` / `arrivals` / `recruits` / `uncertain` (declared `?` cohort) / `departures` (audit-only).
+
+### Curated departures (issue #215)
+
+Three feeds cover most attrition — `players.class_year = 'Sr'` for graduation, `transfers` for the portal, `draft_entrants` for the NBA draft. Nothing covers the rest, and the projection's default for an unlisted player is *returning*, so every uncovered exit silently inflates a team. Mario Saint-Supery signed a four-year deal with Valencia in July 2026: a freshman, never in the portal, never an NBA entrant, so Gonzaga's 2027 projection kept a 92nd-percentile CamPom guard on the roster (**31.98 → 27.40 projected AdjEM** once corrected).
+
+`player_departures` is the fourth channel — pro signings abroad, medical retirements, dismissals, players who simply walk away, and non-D1 moves the 247 feed never lists. There is no feed to ingest, so rows are entered by hand in `data/departures/{year}_departures.json` and loaded with `cstat-ingest departures`; the projection reads the table, not the file, so the data syncs to prod with the rest of the schema.
+
+Every row is **firm** — unlike the draft's `declared`/`gone` split there is no withdrawal deadline to wait on, so an unconfirmed report simply doesn't get a row. `reason` (`pro_overseas`, `pro_other`, `retired`, `dismissed`, `left_program`) is display-only; the row's *existence* is what removes the player. Matched rows take precedence over both the portal and the draft channel: a player who committed in the portal and then signed professionally is gone from his old team *and* from his would-be destination's arrivals.
+
+**Finding the cases** is the hard half, and `cstat-ingest departures-audit --year N` is the worklist. It prints (1) capture rows that resolve to no roster player — a typo'd name is otherwise a silent no-op that looks correct in the table, and the command exits 2 when any exist — then (2) every returner the projection currently assumes is coming back, ranked by CamPom, defaulting to the non-US cohort (`--all-nationalities` widens it). It is a worklist, not a detector: nothing in cstat knows who actually left. Run it in July and skim the top against the news.
+
+Probed and rejected as an automatic signal: NatStat's `/players/mbb/{TEAM}` roster endpoint still returned the full 2026 Gonzaga roster *including Saint-Supery* two weeks after he signed, so it can't be used to diff away departures during the offseason.
 
 **Sat-out transfers** (issue #146): a transfer whose `cstat_player_id` is *not* in fetch 1 — they have no `base_season` stat row because they skipped the season to preserve eligibility (e.g. Caden Pierce: Princeton 2025 → sat out 2026 → Purdue 2027) — gets a fourth, targeted fetch. Their season-scoped `cstat_player_id` pins their last played season; that row (within `TRANSFER_SEASON_LOOKBACK` years, same gates) is folded into the lookup maps so the player still surfaces as an `arrival` at their destination. Without it the team showed "Incoming transfers (0)". Their projected `cam_v3` (see below) is built off that prior season — one-season-forward, so it can lag the actual destination year by one (and is blind to an earlier peak; see `docs/trajectory_methodology.md`).
 

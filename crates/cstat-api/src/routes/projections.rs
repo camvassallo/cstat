@@ -13,8 +13,8 @@ use axum::{
 use cstat_core::inference::Predictor;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, ProjectedRoster, compose_all_projections, fetch_draft_entrants, load_mock_draft,
-    normalize_player_name, project_returner_cam_v3,
+    DraftScenario, ProjectedRoster, compose_all_projections, fetch_draft_entrants,
+    fetch_player_departures, load_mock_draft, normalize_player_name, project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -342,10 +342,22 @@ async fn projection_list(
             )
         })?;
 
+    // Curated exits no feed reports (pro signings abroad, retirements,
+    // dismissals). Same degrade-to-empty story as the entrants above.
+    let departures = fetch_player_departures(&state.db.pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("fetch_player_departures failed: {e}") })),
+            )
+        })?;
+
     let projections = compose_all_projections(
         &state.db.pool,
         base_season,
         &entrants,
+        &departures,
         &state.predictor,
         cstat_ingest::target_season_retro_complete(year),
     )
@@ -800,10 +812,19 @@ async fn projection_team_detail(
             Json(json!({ "error": format!("fetch_draft_entrants failed: {e}") })),
         )
     })?;
+    let departures = fetch_player_departures(pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("fetch_player_departures failed: {e}") })),
+            )
+        })?;
     let projections = compose_all_projections(
         pool,
         base_season,
         &entrants,
+        &departures,
         &state.predictor,
         cstat_ingest::target_season_retro_complete(year),
     )
@@ -982,17 +1003,9 @@ async fn projection_team_detail(
     // stayed, we'd have projected X" alongside the current cam_v3 chip.
     // Applies to all kinds — seniors (counterfactual), transfers (used
     // by their *destination* team's roster but the chip lives on the
-    // source row for context), and NBA-draft departures.
+    // source row for context), NBA-draft departures, and curated exits.
     for d in &projection.departures {
-        let pid = match d {
-            cstat_core::roster_projection::DepartureReason::GraduatedSenior {
-                player_id, ..
-            }
-            | cstat_core::roster_projection::DepartureReason::Transferred { player_id, .. }
-            | cstat_core::roster_projection::DepartureReason::DraftGone { player_id, .. } => {
-                *player_id
-            }
-        };
+        let pid = d.player_id();
         traj_ids.push(pid);
     }
     // Precedence: OOF (LOPO held-out) predictions first for any player
@@ -1222,15 +1235,7 @@ async fn projection_team_detail(
     let departure_pids: Vec<Uuid> = projection
         .departures
         .iter()
-        .map(|d| match d {
-            cstat_core::roster_projection::DepartureReason::GraduatedSenior {
-                player_id, ..
-            }
-            | cstat_core::roster_projection::DepartureReason::Transferred { player_id, .. }
-            | cstat_core::roster_projection::DepartureReason::DraftGone { player_id, .. } => {
-                *player_id
-            }
-        })
+        .map(|d| d.player_id())
         .collect();
     struct DepartureMeta {
         primary_class: Option<String>,
@@ -1282,11 +1287,15 @@ async fn projection_team_detail(
         .departures
         .iter()
         .map(|d| {
-            let (pid, kind, name, destination, destination_team_id) = match d {
+            // `reason` is populated for `left_program` only — it's the
+            // sub-vocabulary ('pro_overseas' / 'retired' / …) that lets the UI
+            // distinguish a pro signing (has a destination) from a retirement
+            // (doesn't). The other kinds carry their reason in `kind` itself.
+            let (pid, kind, name, destination, destination_team_id, reason) = match d {
                 cstat_core::roster_projection::DepartureReason::GraduatedSenior {
                     player_id,
                     name,
-                } => (*player_id, "senior", name.clone(), None, None),
+                } => (*player_id, "senior", name.clone(), None, None, None),
                 cstat_core::roster_projection::DepartureReason::Transferred {
                     player_id,
                     name,
@@ -1298,15 +1307,30 @@ async fn projection_team_detail(
                     name.clone(),
                     destination.clone(),
                     *destination_team_id,
+                    None,
                 ),
                 cstat_core::roster_projection::DepartureReason::DraftGone { player_id, name } => {
-                    (*player_id, "draft_gone", name.clone(), None, None)
+                    (*player_id, "draft_gone", name.clone(), None, None, None)
                 }
+                cstat_core::roster_projection::DepartureReason::LeftProgram {
+                    player_id,
+                    name,
+                    reason,
+                    destination,
+                } => (
+                    *player_id,
+                    "left_program",
+                    name.clone(),
+                    destination.clone(),
+                    None,
+                    Some(reason.clone()),
+                ),
             };
             let meta = departure_meta.get(&pid);
             let (mean, lower, upper) = serialize_proj(&pid);
             json!({
                 "kind": kind,
+                "reason": reason,
                 "player_id": pid,
                 "name": name,
                 "prior_season": base_season,
