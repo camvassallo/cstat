@@ -68,7 +68,7 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
-from db import get_engine
+from db import canonical_frame_order, get_engine
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
@@ -171,12 +171,21 @@ WHERE r.cstat_player_id IS NOT NULL
   AND t.cam_gbpm_v3_psos IS NOT NULL
   AND pss.games_played >= 5
   AND pss.minutes_per_game >= 5
+-- Deterministic row order (issue #222). LightGBM's `bagging_fraction`
+-- subsamples by row position, so an unordered read makes the fit — and
+-- therefore the OOF predictions this model persists — irreproducible.
+--
+-- `(cstat_player_id, year)` alone does NOT determine a row: the `pss` join
+-- fans out for a freshman who appears on two teams in their first season,
+-- and `tm_prior` can match more than one prior-season team row. The team
+-- ids close that.
+ORDER BY r.cstat_player_id, r.year, pss.team_id, tm_prior.id
 """
 
 
 def build_dataset() -> pd.DataFrame:
     engine = get_engine()
-    df = pd.read_sql(PAIRED_QUERY, engine)
+    df = canonical_frame_order(pd.read_sql(PAIRED_QUERY, engine))
     print(f"Loaded {len(df):,} qualified freshman rows.")
 
     df = derive_recruit_features(df, prior_season_col="s_n")
@@ -444,6 +453,10 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     from onnxconverter_common.data_types import FloatTensorType
     initial_type = [("input", FloatTensorType([None, n_features]))]
     onnx_model = convert_lightgbm(model, initial_types=initial_type, target_opset=15)
+    # Deterministic graph name (issue #222) — onnxmltools otherwise stamps a
+    # random UUID, so two exports of an identical model differ in bytes while
+    # predicting identically. See train_roster_impact_model.export_to_onnx.
+    onnx_model.graph.name = onnx_path.stem
     onnx_path.write_bytes(onnx_model.SerializeToString())
 
 

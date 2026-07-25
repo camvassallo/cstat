@@ -54,7 +54,7 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
-from db import get_engine
+from db import canonical_frame_order, get_engine
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
@@ -186,6 +186,18 @@ WHERE pssN.minutes_per_game >= 5
   AND pssN.games_played >= 5
   AND pssNP1.minutes_per_game >= 5
   AND pssNP1.games_played >= 5
+-- Deterministic row order (issue #222). LightGBM's `bagging_fraction`
+-- subsamples by row position, so an unordered read makes the fit — and
+-- therefore the OOF predictions this model persists — irreproducible.
+--
+-- `(torvik_pid, s_n)` alone does NOT determine a row: `player_season_stats`
+-- is unique on `(player_id, team_id, season)`, so a player who appears on
+-- two teams in one season fans the pssN / pssNP1 / pssNM1 joins out. The
+-- team ids close that. (Those fan-out rows are a pre-existing property of
+-- this query — 274 of them are exact duplicates, which double-weights
+-- multi-team player-seasons in training. Out of scope here; noted in #222.)
+ORDER BY base.torvik_pid, base.s_n,
+         pssN.team_id, pssNP1.team_id, pssNM1.team_id
 """
 
 # Class year encoding. NULL maps to -1 (separate bucket — LightGBM splits
@@ -273,7 +285,9 @@ def add_archetype_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_dataset() -> pd.DataFrame:
     engine = get_engine()
-    df = pd.read_sql(PAIRED_QUERY, engine, params={"seasons": list(SEASONS)})
+    df = canonical_frame_order(
+        pd.read_sql(PAIRED_QUERY, engine, params={"seasons": list(SEASONS)})
+    )
     print(f"Loaded {len(df):,} paired (season_N → season_N+1) rows.")
 
     df["prior_class_year_code"] = df["prior_class_year"].map(encode_class_year)
@@ -580,6 +594,10 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     onnx_model = onnxmltools.convert_lightgbm(
         model.booster_, initial_types=initial_types, target_opset=15
     )
+    # Deterministic graph name (issue #222) — onnxmltools otherwise stamps a
+    # random UUID, so two exports of an identical model differ in bytes while
+    # predicting identically. See train_roster_impact_model.export_to_onnx.
+    onnx_model.graph.name = onnx_path.stem
     onnxmltools.utils.save_model(onnx_model, str(onnx_path))
 
 
