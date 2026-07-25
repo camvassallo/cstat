@@ -31,6 +31,7 @@ import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error
 
 from db import get_engine
+from oof_provenance import oof_provenance
 from train_roster_impact_model import (
     build_dataset,
     lgb_params,
@@ -124,6 +125,11 @@ def main() -> None:
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
         "cam_v3_source": "oof",
         "cam_v3_coverage": coverage,
+        # Must equal roster_impact_model_meta.json's stamp — the boot
+        # validator compares them and refuses to serve a mismatched pair
+        # (issue #218). Retrain BOTH whenever the OOF is regenerated;
+        # `training/retrain_downstream.sh` does this in the right order.
+        "oof_provenance": oof_provenance(),
         "final_n_estimators": final_n,
         "backtest_loso": {"pooled_mae": loso_mae, "naive_mae": naive,
                           "per_season": per_season},
