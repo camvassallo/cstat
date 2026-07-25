@@ -37,7 +37,10 @@ const FETCH_BACKOFF: Duration = Duration::from_secs(30);
 ///
 /// Anything not carrying an HTTP status (connect, timeout, parse) is treated as
 /// retryable, which is the pre-existing behaviour: the regeneration race this
-/// retry exists for shows up as a malformed body, not a status.
+/// retry exists for shows up as a malformed body, not a status. A non-2xx that is
+/// neither 4xx nor 5xx (an unfollowed 3xx) also retries — it cannot occur in
+/// practice, since reqwest follows redirects, and one wasted request is the
+/// cheaper side to err on than mis-classifying a real 5xx as terminal.
 fn is_client_error(e: &anyhow::Error) -> bool {
     e.downcast_ref::<reqwest::Error>()
         .and_then(reqwest::Error::status)
@@ -230,8 +233,15 @@ impl std::fmt::Display for TorvikHttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind = if self.status.is_client_error() {
             "client"
-        } else {
+        } else if self.status.is_server_error() {
             "server"
+        } else {
+            // Only reachable for a non-2xx that is neither 4xx nor 5xx — in
+            // practice an unfollowed 3xx, which means Torvik changed where a file
+            // lives. reqwest never produces this (`error_for_status` fires only on
+            // 4xx/5xx) so there is no wording to match, and calling it "server"
+            // would send the next reader hunting for an outage that isn't there.
+            "unexpected"
         };
         write!(
             f,
@@ -459,11 +469,20 @@ impl TorkvikClient {
     pub async fn fetch_coachdict(&self) -> anyhow::Result<BTreeMap<i32, HashMap<String, String>>> {
         let url = "https://barttorvik.com/coachdict.json";
         info!("fetching Torvik coach dictionary");
+        // Status-guard before decoding, same as the two season fetches: this is
+        // the *same file* `probe()` uses, so it is refused first when the egress
+        // IP is blocked. Without the guard a 403 surfaces as a JSON decode error
+        // ("expected value at line 1 column 1") with none of the edge
+        // diagnostics — which is exactly the misdiagnosis this change removes
+        // everywhere else.
+        let resp = self.http.get(url).send().await?;
+        if !resp.status().is_success() {
+            return Err(edge_block_error(resp, "coachdict").await);
+        }
         // Coach values are tolerated as `Option<String>` so a stray null
         // anywhere in the 130+ years of history can't fail the whole
         // (current-season) ingest — null/missing coaches are simply dropped.
-        let raw: HashMap<String, HashMap<String, Option<String>>> =
-            self.http.get(url).send().await?.json().await?;
+        let raw: HashMap<String, HashMap<String, Option<String>>> = resp.json().await?;
         let mut out: BTreeMap<i32, HashMap<String, String>> = BTreeMap::new();
         for (year, teams) in raw {
             if let Ok(y) = year.parse::<i32>() {
@@ -1094,6 +1113,12 @@ mod tests {
         assert_eq!(
             http_err(503).to_string(),
             "HTTP status server error (503 Service Unavailable) for url \
+             (https://barttorvik.com/test)"
+        );
+        // Neither class: labelled honestly rather than blamed on the server.
+        assert_eq!(
+            http_err(301).to_string(),
+            "HTTP status unexpected error (301 Moved Permanently) for url \
              (https://barttorvik.com/test)"
         );
     }
