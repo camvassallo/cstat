@@ -412,6 +412,20 @@ pub enum LoadError {
     /// or carries a `player_filter` / feature-list value the Rust path
     /// can't honor. Same load-fail-loudly contract as the roster meta.
     RosterImpactMetaMismatch(String),
+    /// `roster_impact_model` and `roster_adjo_model` were trained against
+    /// different OOF snapshots, or one of them carries no provenance stamp.
+    ///
+    /// The two share `build_dataset`, which created a false intuition that
+    /// retraining the net model updates the AdjO half too. It does not — and
+    /// because their feature contract never changes, a stale half loads and
+    /// serves perfectly happily. `roster_adjo` silently fell three OOF
+    /// generations behind that way (#218), which cost ~0.65 AdjO points on
+    /// average and up to 3.5 for individual teams before anyone noticed.
+    ///
+    /// This is the detector for that class of drift: it compares what the
+    /// models were *actually trained on* rather than what they claim to be,
+    /// so it fires regardless of how or when the artifacts were produced.
+    RosterProvenanceMismatch(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -434,6 +448,9 @@ impl std::fmt::Display for LoadError {
             }
             LoadError::RosterImpactMetaMismatch(msg) => {
                 write!(f, "roster_impact_model_meta.json contract mismatch: {msg}")
+            }
+            LoadError::RosterProvenanceMismatch(msg) => {
+                write!(f, "roster-frame model provenance mismatch: {msg}")
             }
         }
     }
@@ -561,6 +578,16 @@ impl Predictor {
             .commit_from_file(model_dir.join("roster_adjo_model.onnx"))?;
 
         validate_roster_impact_meta(&model_dir.join("roster_adjo_model_meta.json"))?;
+
+        // Both metas parse and match the compiled contract individually; the
+        // remaining question is whether they agree with each OTHER about which
+        // OOF generation they were trained on. Nothing above can answer that —
+        // a stale half has an identical feature contract, which is precisely
+        // why #218 went unnoticed for three regenerations.
+        validate_roster_frame_provenance(
+            &model_dir.join("roster_impact_model_meta.json"),
+            &model_dir.join("roster_adjo_model_meta.json"),
+        )?;
 
         // Phase 5c trajectory: mean + q=0.1 + q=0.9 LightGBMs share one
         // feature shape; the meta JSON pins the alphas in the order the
@@ -1389,6 +1416,53 @@ fn validate_roster_impact_meta(path: &Path) -> Result<(), LoadError> {
     Ok(())
 }
 
+/// Pull the `oof_provenance` stamp out of a roster-frame model meta.
+///
+/// Written by `training/oof_provenance.py`: per OOF table, a row count plus
+/// an order-stable md5 over `(key, target_season, mean)`. Deliberately not a
+/// timestamp — a regen that reproduces identical predictions IS the same
+/// snapshot, and stamping the clock would flag a deterministic re-run as
+/// drift.
+fn read_oof_provenance(path: &Path) -> Result<serde_json::Value, LoadError> {
+    let err = LoadError::RosterProvenanceMismatch;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| err(format!("read {}: {e}", path.display())))?;
+    let meta: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| err(format!("parse {}: {e}", path.display())))?;
+    // Absence is a hard failure, not a skip. A missing stamp means the model
+    // was built by a trainer that predates the guardrail, which is exactly
+    // the state #218 was produced in — treating it as "can't tell, carry on"
+    // would reproduce the original bug.
+    match meta.get("oof_provenance") {
+        Some(v) if v.is_object() => Ok(v.clone()),
+        _ => Err(err(format!(
+            "{} carries no `oof_provenance` stamp. Retrain it — \
+             `training/retrain_downstream.sh` runs the chain in the right order.",
+            path.display(),
+        ))),
+    }
+}
+
+/// Refuse to boot when the two roster-frame models were trained against
+/// different OOF snapshots.
+///
+/// `roster_impact` (served net AdjEM) and `roster_adjo` (the display-only
+/// AdjO half) share one training frame via `build_dataset`, so they are only
+/// coherent when built from the same `trajectory_oof_predictions` /
+/// `freshman_oof_predictions` generation. Nothing about their feature
+/// contract encodes that, which is why the drift in #218 was invisible for
+/// three regenerations.
+fn validate_roster_frame_provenance(impact: &Path, adjo: &Path) -> Result<(), LoadError> {
+    let (a, b) = (read_oof_provenance(impact)?, read_oof_provenance(adjo)?);
+    if a != b {
+        return Err(LoadError::RosterProvenanceMismatch(format!(
+            "roster_impact and roster_adjo were trained on different OOF snapshots — \
+             retrain both.\n  roster_impact: {a}\n  roster_adjo:   {b}",
+        )));
+    }
+    Ok(())
+}
+
 /// Read `trajectory_model_meta.json` and verify feature order, qualification
 /// gate, count, and quantile-alpha labeling match what the Rust path expects.
 fn validate_trajectory_meta(path: &Path) -> Result<(), LoadError> {
@@ -2169,6 +2243,77 @@ mod tests {
             .predict_trajectory_batch(&[])
             .expect("empty batch failed");
         assert!(result.is_empty());
+    }
+
+    /// The shipped invariant: the two roster-frame models must have been
+    /// trained on the same OOF snapshot. This is the check that would have
+    /// failed the moment `roster_adjo` fell a generation behind in #218,
+    /// and it reads the real committed artifacts rather than fixtures.
+    #[test]
+    fn shipped_roster_models_share_an_oof_snapshot() {
+        let dir = model_dir();
+        validate_roster_frame_provenance(
+            &dir.join("roster_impact_model_meta.json"),
+            &dir.join("roster_adjo_model_meta.json"),
+        )
+        .expect("roster_impact and roster_adjo disagree on their OOF snapshot");
+    }
+
+    #[test]
+    fn provenance_mismatch_is_rejected() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join("cstat_prov_mismatch_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let write = |name: &str, digest: &str| {
+            let p = tmp.join(name);
+            let body = format!(
+                r#"{{"oof_provenance":{{"trajectory_oof_predictions":
+                   {{"n_rows":100,"digest":"{digest}"}}}}}}"#
+            );
+            std::fs::File::create(&p)
+                .unwrap()
+                .write_all(body.as_bytes())
+                .unwrap();
+            p
+        };
+
+        // Same snapshot → accepted.
+        let a = write("impact_ok.json", "aaa");
+        let b = write("adjo_ok.json", "aaa");
+        assert!(validate_roster_frame_provenance(&a, &b).is_ok());
+
+        // Different snapshot → rejected. This is the #218 condition: same
+        // feature contract, different training generation.
+        let c = write("adjo_stale.json", "bbb");
+        let err = validate_roster_frame_provenance(&a, &c)
+            .expect_err("differing OOF digests must fail boot");
+        assert!(
+            matches!(err, LoadError::RosterProvenanceMismatch(_)),
+            "wrong error variant: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_provenance_stamp_is_rejected() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join("cstat_prov_missing_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let p = tmp.join("no_stamp.json");
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(br#"{"model":"roster_adjo_model","n_features":27}"#)
+            .unwrap();
+
+        // Fail-closed. An unstamped meta means a trainer that predates the
+        // guardrail — exactly the state #218 was produced in — so treating
+        // it as "can't tell, carry on" would reproduce the original bug.
+        let err = validate_roster_frame_provenance(&p, &p)
+            .expect_err("a missing oof_provenance stamp must fail boot");
+        assert!(
+            matches!(err, LoadError::RosterProvenanceMismatch(_)),
+            "wrong error variant: {err}"
+        );
     }
 
     #[test]
