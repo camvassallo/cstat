@@ -22,6 +22,29 @@ const FETCH_MAX_ATTEMPTS: usize = 2;
 /// retry onto the finished file instead of degrading the day.
 const FETCH_BACKOFF: Duration = Duration::from_secs(30);
 
+/// Is this error a 4xx — i.e. terminal, do not retry?
+///
+/// A 4xx (403 from the CloudFront edge, 401, 404) is not a transient hiccup:
+/// retrying only hammers a host that has already refused us and wastes the 30s
+/// backoff. Retry 5xx / connect / timeout only.
+///
+/// Two error shapes must both be recognised: a plain `reqwest::Error` (from
+/// `error_for_status()` on paths that don't read the body) and our own
+/// [`TorvikHttpError`] (from `edge_block_error`, which has to consume the
+/// response to log the body). Missing the second would silently turn every 403
+/// back into a 30s backoff — which is why this is a named function with its own
+/// test rather than an inline expression.
+///
+/// Anything not carrying an HTTP status (connect, timeout, parse) is treated as
+/// retryable, which is the pre-existing behaviour: the regeneration race this
+/// retry exists for shows up as a malformed body, not a status.
+fn is_client_error(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<reqwest::Error>()
+        .and_then(reqwest::Error::status)
+        .or_else(|| e.downcast_ref::<TorvikHttpError>().map(|t| t.status))
+        .is_some_and(|s| s.is_client_error())
+}
+
 /// Retry an async Torvik fetch that may transiently fail. Retries on **any**
 /// error — network *or* parse — because the regeneration race shows up as a
 /// malformed body (truncated CSV, non-gzip bytes, HTML error page), not a
@@ -38,14 +61,7 @@ where
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) => {
-                // A 4xx (403 Forbidden from a Cloudflare / datacenter-IP block,
-                // 401, 404) is not a transient hiccup: retrying only hammers a
-                // host that has already refused us and wastes the 30s backoff.
-                // Retry 5xx / connect / timeout only; bail immediately on 4xx.
-                let client_error = e
-                    .downcast_ref::<reqwest::Error>()
-                    .and_then(reqwest::Error::status)
-                    .is_some_and(|s| s.is_client_error());
+                let client_error = is_client_error(&e);
                 warn!(
                     what,
                     attempt,
@@ -190,38 +206,119 @@ impl Default for TorkvikClient {
     }
 }
 
-/// Log Cloudflare's block diagnostics from a non-2xx Torvik response, *without*
-/// consuming it (so the caller can still return the reqwest status error, which
-/// `with_retry` needs to classify a 4xx as terminal). `cf-ray` uniquely
-/// identifies the exact block event — hand it to Bart to look one up;
-/// `cf-mitigated` says *why* (managed-challenge / bot-fight / WAF rule), and
-/// `retry-after` *for how long*. `-` means the header was absent.
-fn log_cf_block(resp: &reqwest::Response, what: &str) {
+/// A non-2xx Torvik response, carrying the status so [`with_retry`] can still
+/// classify a 4xx as terminal *after* the body has been consumed for
+/// diagnostics.
+///
+/// This exists only because reading the error body is destructive. The obvious
+/// shape — log headers off a `&Response`, then `resp.error_for_status()?` — is
+/// what the code did before, and it cannot see the body at all. Consuming the
+/// response to read it means we no longer hand back a `reqwest::Error`, so the
+/// 4xx short-circuit in `with_retry` (the guard that keeps us from hammering a
+/// host that already refused us) has to recognise this type too.
+///
+/// `Display` deliberately reproduces reqwest's `error_for_status()` wording, so
+/// the `ingest_runs` error column and the Slack degraded line read exactly as
+/// they did before this type existed.
+#[derive(Debug)]
+struct TorvikHttpError {
+    status: reqwest::StatusCode,
+    url: String,
+}
+
+impl std::fmt::Display for TorvikHttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = if self.status.is_client_error() {
+            "client"
+        } else {
+            "server"
+        };
+        write!(
+            f,
+            "HTTP status {} error ({}) for url ({})",
+            kind, self.status, self.url
+        )
+    }
+}
+
+impl std::error::Error for TorvikHttpError {}
+
+/// How much of a non-2xx body to log. CloudFront's deny page is ~1KB of HTML;
+/// the distinguishing sentence is at the top.
+const BODY_SNIPPET_CHARS: usize = 240;
+
+/// Collapse a response body to one loggable line: whitespace runs (HTML is
+/// newline-heavy) become single spaces, then truncate.
+fn body_snippet(body: &str) -> String {
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.char_indices().nth(BODY_SNIPPET_CHARS) {
+        Some((idx, _)) => format!("{}…", &flat[..idx]),
+        None => flat,
+    }
+}
+
+/// Consume a non-2xx Torvik response, log the edge diagnostics, and return a
+/// status-carrying error.
+///
+/// barttorvik is fronted by **AWS CloudFront** (not Cloudflare — the previous
+/// version of this function logged `cf-ray`/`cf-mitigated`, which are
+/// structurally always absent here and told us nothing for months). On a deny
+/// the edge answers with `server: CloudFront` and never reaches Bart's origin
+/// Apache; a served response carries `server: Apache` plus `via: … CloudFront`.
+/// So `server` alone distinguishes "edge refused us" from "origin erred", and
+/// `x-amz-cf-id` is the request identifier Bart or AWS can look up — the
+/// `cf-ray` analogue. The body is what separates a WAF/IP rule from a geo
+/// restriction, which headers alone cannot.
+async fn edge_block_error(resp: reqwest::Response, what: &str) -> anyhow::Error {
+    let status = resp.status();
+    let url = resp.url().to_string();
+    // Own the header values before `text()` consumes the response.
     let hdr = |name: &str| {
         resp.headers()
             .get(name)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("-")
+            .to_string()
     };
+    let (amz_cf_id, amz_cf_pop, x_cache, via, server, retry_after) = (
+        hdr("x-amz-cf-id"),
+        hdr("x-amz-cf-pop"),
+        hdr("x-cache"),
+        hdr("via"),
+        hdr("server"),
+        hdr("retry-after"),
+    );
+    let body = resp.text().await.unwrap_or_default();
     warn!(
         what,
-        status = %resp.status(),
-        cf_ray = hdr("cf-ray"),
-        cf_mitigated = hdr("cf-mitigated"),
-        server = hdr("server"),
-        retry_after = hdr("retry-after"),
-        "Torvik non-2xx — Cloudflare block diagnostics"
+        status = %status,
+        server = %server,
+        x_amz_cf_id = %amz_cf_id,
+        x_amz_cf_pop = %amz_cf_pop,
+        x_cache = %x_cache,
+        via = %via,
+        retry_after = %retry_after,
+        body = %body_snippet(&body),
+        "Torvik non-2xx — CDN edge block diagnostics"
     );
+    TorvikHttpError { status, url }.into()
 }
 
 impl TorkvikClient {
     pub fn new() -> Self {
         let mut builder = Client::builder()
-            // Deliberately unattributed UA for now. barttorvik blocks by IP, not
-            // UA, so identifying ourselves buys nothing until we choose the
-            // allowlist path — at which point a contactable UA (e.g.
-            // `cstat-ingest/0.1 (+https://campom.org)`) goes in alongside the
-            // email to Bart. Until then, one less targetable signal.
+            // Deliberately unattributed UA for now: the block we actually hit is
+            // scoped to Google IP space (see below), which a UA change cannot
+            // affect either way.
+            //
+            // TODO: switch to a contactable UA — `cstat-ingest/0.1
+            // (+https://campom.org)`, matching `tfs.rs` — if we ever need Bart to
+            // tell us apart from the abuse his rule was aimed at. Triggers: a
+            // Railway-owned static egress IP starts getting refused, or we ask him
+            // to allowlist ours. He reads his own access logs and invites contact
+            // when a rule catches someone legitimate, so being identifiable is an
+            // asset in that conversation, not a risk. Our nightly is 3 requests
+            // total against his stated "once an hour is certainly fine".
             .user_agent("cstat/0.1")
             // Explicit timeouts so a stalled Torvik socket self-aborts instead
             // of hanging the nightly. The per-game gzip file is several MB
@@ -230,11 +327,19 @@ impl TorkvikClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120));
 
-        // Optional egress proxy. barttorvik (Cloudflare) 403s datacenter IP
-        // ranges, so a deploy that lands on a flagged Railway egress IP can
-        // route Torvik through a fixed residential/allowlisted proxy. Fail-soft:
-        // an unset var is a direct connection, an unparseable one logs and falls
-        // back to direct rather than killing the client.
+        // Optional egress proxy — the escape hatch, not the primary fix.
+        //
+        // The 403s we saw were NOT a generic datacenter-IP block: AWS EC2 and
+        // Railway's own ranges both served fine, and only a Google-owned egress
+        // was refused. Bart blocked Google IP space to stop an abusive Apps
+        // Script, and Google's published range list includes GCP *customer*
+        // ranges, so a container Railway happened to place on GCP was collateral
+        // damage. The fix is Railway's static outbound IPs (Railway-owned space,
+        // so no provider lottery) — see `docs/torvik_egress_block.md`. This proxy
+        // hook remains for the residual case: the static IPs are *shared* with
+        // other Railway customers, so a co-tenant's abuse could still taint one.
+        // Fail-soft: an unset var is a direct connection, an unparseable one logs
+        // and falls back to direct rather than killing the client.
         if let Ok(url) = std::env::var("TORVIK_PROXY_URL")
             && !url.trim().is_empty()
         {
@@ -265,9 +370,12 @@ impl TorkvikClient {
         if status.is_success() {
             Ok(())
         } else {
-            // Surface the Cloudflare block diagnostics (cf-ray, etc.) — this is
-            // the preflight path that fires first on a datacenter-IP block.
-            log_cf_block(&resp, "probe");
+            // Surface the edge diagnostics — this is the path that fires first
+            // when the egress IP is refused, so it is usually the only place the
+            // block is described. The returned error is dropped on purpose:
+            // preflight reports its own shorter wording, which `FeedHealth::Down`
+            // carries into the ledger and the Slack alert.
+            let _ = edge_block_error(resp, "probe").await;
             anyhow::bail!("Torvik returned HTTP {}", status.as_u16())
         }
     }
@@ -278,17 +386,17 @@ impl TorkvikClient {
         let players = with_retry("player_stats", || async move {
             let url = format!("https://barttorvik.com/getadvstats.php?year={year}&csv=1");
             info!(year, "fetching Torvik player stats");
-            // Guard the HTTP status BEFORE reading the body: reqwest's send()
-            // only errors on transport failures, not HTTP 4xx/5xx, so a
+            // Guard the HTTP status BEFORE reading the body as CSV: reqwest's
+            // send() only errors on transport failures, not HTTP 4xx/5xx, so a
             // barttorvik error page (HTML) would otherwise flow into
             // parse_player_csv, get skipped row-by-row (< 64 cols), and return
-            // Ok(vec![]) — a silent empty "success". error_for_status() makes it
-            // a retryable Err; log_cf_block first captures Cloudflare's cf-ray.
+            // Ok(vec![]) — a silent empty "success". `edge_block_error` turns it
+            // into a status-carrying Err and logs the CloudFront diagnostics.
             let resp = self.http.get(&url).send().await?;
             if !resp.status().is_success() {
-                log_cf_block(&resp, "player_stats");
+                return Err(edge_block_error(resp, "player_stats").await);
             }
-            let body = resp.error_for_status()?.text().await?;
+            let body = resp.text().await?;
             let players = parse_player_csv(&body)?;
             info!(year, count = players.len(), "parsed Torvik player stats");
             Ok(players)
@@ -310,13 +418,13 @@ impl TorkvikClient {
             let url = format!("https://barttorvik.com/{year}_all_advgames.json.gz");
             info!(year, "fetching Torvik game stats (gzip)");
             // See fetch_player_stats: guard the HTTP status before reading the
-            // body so a 4xx/5xx page becomes a retryable Err rather than a
-            // confusing gzip/JSON parse error, and capture Cloudflare's cf-ray.
+            // body so a 4xx/5xx page becomes a classified Err rather than a
+            // confusing gzip/JSON parse error, and capture the edge diagnostics.
             let resp = self.http.get(&url).send().await?;
             if !resp.status().is_success() {
-                log_cf_block(&resp, "game_stats");
+                return Err(edge_block_error(resp, "game_stats").await);
             }
-            let bytes = resp.error_for_status()?.bytes().await?;
+            let bytes = resp.bytes().await?;
 
             // The server may send Content-Encoding: gzip (auto-decompressed by reqwest)
             // or raw gzip bytes. Try parsing as JSON first, fall back to gzip decompress.
@@ -933,27 +1041,77 @@ mod tests {
 
     // -- retry policy -------------------------------------------------------
 
-    /// A 4xx HTTP status is terminal — one attempt, no retry, no 30s backoff.
-    /// Gated on the network: GETs a bogus barttorvik path that 404s. Verifies
-    /// the fix that a 403/404 from a Cloudflare / IP block is not hammered on
-    /// retry (before, `.error_for_status()?` made every 4xx a retryable Err).
+    fn http_err(code: u16) -> anyhow::Error {
+        TorvikHttpError {
+            status: reqwest::StatusCode::from_u16(code).unwrap(),
+            url: "https://barttorvik.com/test".to_string(),
+        }
+        .into()
+    }
+
+    /// A 4xx is terminal — one attempt, no retry, no 30s backoff. This is the
+    /// guard that keeps us from hammering a host that already refused us, so it
+    /// runs offline and unconditionally: the previous version was `#[ignore]`d
+    /// behind a real GET to barttorvik, which meant the guard was never actually
+    /// verified in CI *and* checking it cost Bart a request.
     #[tokio::test]
-    #[ignore = "network: verifies a 4xx is not retried (GET a bogus barttorvik path)"]
     async fn with_retry_does_not_retry_client_errors() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let client = reqwest::Client::new();
         let calls = AtomicUsize::new(0);
         let result: anyhow::Result<()> = with_retry("client_error", || {
             calls.fetch_add(1, Ordering::SeqCst);
-            let client = client.clone();
-            async move {
-                let url = "https://barttorvik.com/this-path-does-not-exist-cstat-test";
-                client.get(url).send().await?.error_for_status()?;
-                Ok(())
-            }
+            async { Err(http_err(403)) }
         })
         .await;
-        assert!(result.is_err(), "a 404 must surface as an error");
+        assert!(result.is_err(), "a 403 must surface as an error");
         assert_eq!(calls.load(Ordering::SeqCst), 1, "a 4xx must not be retried");
+    }
+
+    /// The classifier, tested directly rather than through `with_retry` — the
+    /// retryable paths would pay the real 30s backoff, and the point is that the
+    /// 4xx short-circuit is *specific* rather than "never retries anything".
+    #[test]
+    fn classifier_recognises_both_error_shapes() {
+        assert!(is_client_error(&http_err(403)), "403 is terminal");
+        assert!(is_client_error(&http_err(404)), "404 is terminal");
+        assert!(!is_client_error(&http_err(503)), "5xx stays retryable");
+        assert!(
+            !is_client_error(&anyhow::anyhow!("truncated CSV")),
+            "a parse error carries no status and stays retryable — this is the \
+             regeneration race the retry exists for"
+        );
+    }
+
+    /// The ledger `error` column and the Slack degraded line are built from this
+    /// text, so it must stay byte-identical to reqwest's `error_for_status()`
+    /// wording that it replaced.
+    #[test]
+    fn torvik_http_error_matches_reqwest_wording() {
+        assert_eq!(
+            http_err(403).to_string(),
+            "HTTP status client error (403 Forbidden) for url (https://barttorvik.com/test)"
+        );
+        assert_eq!(
+            http_err(503).to_string(),
+            "HTTP status server error (503 Service Unavailable) for url \
+             (https://barttorvik.com/test)"
+        );
+    }
+
+    #[test]
+    fn body_snippet_flattens_and_truncates() {
+        assert_eq!(
+            body_snippet("<HTML>\n  <HEAD>\n<TITLE>403 Forbidden</TITLE>\n"),
+            "<HTML> <HEAD> <TITLE>403 Forbidden</TITLE>"
+        );
+        let long = "x".repeat(BODY_SNIPPET_CHARS + 50);
+        let out = body_snippet(&long);
+        assert_eq!(
+            out.chars().count(),
+            BODY_SNIPPET_CHARS + 1,
+            "truncated + ellipsis"
+        );
+        assert!(out.ends_with('…'));
+        assert_eq!(body_snippet(""), "");
     }
 }
