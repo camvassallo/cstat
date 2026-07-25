@@ -143,11 +143,20 @@ pub fn build_roster_impact_features(
 
     // Rank by cam_v3 desc; missing coverage sorts last (bench slots) —
     // same convention as `roster_features::project_rotation`.
+    //
+    // `player_id` breaks ties (issue #222). Without it the rotation cut
+    // below depends on the caller's roster order, and ties are common —
+    // every player with no Torvik coverage collides at NEG_INFINITY. The
+    // training aggregator (`train_roster_impact_model.aggregate_team_season`)
+    // applies the same rule, sorting the UUID as canonical lowercase hex,
+    // which orders identically to `Uuid: Ord`'s bytewise compare.
     let mut by_rank: Vec<&PlayerRow> = roster.iter().collect();
     by_rank.sort_by(|a, b| {
         let aq = a.cam_v3.unwrap_or(f64::NEG_INFINITY);
         let bq = b.cam_v3.unwrap_or(f64::NEG_INFINITY);
-        bq.partial_cmp(&aq).unwrap_or(std::cmp::Ordering::Equal)
+        bq.partial_cmp(&aq)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.player_id.cmp(&b.player_id))
     });
     let rotation_n = by_rank.len().min(CANONICAL_ROTATION_MPG.len());
     let rotation = &by_rank[..rotation_n];
@@ -273,6 +282,52 @@ mod tests {
     fn empty_roster_is_all_zero() {
         let out = build_roster_impact_features(&[], 0.0, 0.0);
         assert!(out.iter().all(|&v| v == 0.0));
+    }
+
+    /// Issue #222: a tie at the rotation cut must be resolved by `player_id`,
+    /// not by the order the caller happened to assemble the roster in.
+    ///
+    /// The training aggregator applies the same rule, so train and serve agree
+    /// on which of two tied players holds the last slot. Without it, `roster`
+    /// order leaks into the features — and at serve time that order comes from
+    /// `compose_all_projections`, which has no reason to be stable.
+    #[test]
+    fn rotation_cut_breaks_ties_by_player_id() {
+        // 12 clearly-ranked players, then two tied for the 13th and last slot.
+        // The tied pair carry different class years, so picking the other one
+        // moves the experience shares.
+        let mut base: Vec<PlayerRow> = (0..12)
+            .map(|i| row(Some(20.0 - i as f64), Some("Jr"), Some("Wizard")))
+            .collect();
+
+        let mut lower = row(Some(1.0), Some("Fr"), Some("Rogue"));
+        lower.player_id = Uuid::from_u128(1);
+        let mut higher = row(Some(1.0), Some("Sr"), Some("Cleric"));
+        higher.player_id = Uuid::from_u128(u128::MAX);
+
+        let forward: Vec<PlayerRow> = base
+            .iter()
+            .cloned()
+            .chain([lower.clone(), higher.clone()])
+            .collect();
+        base.reverse();
+        let reversed: Vec<PlayerRow> = base.into_iter().chain([higher, lower]).collect();
+
+        let a = build_roster_impact_features(&forward, 0.0, 0.0);
+        let b = build_roster_impact_features(&reversed, 0.0, 0.0);
+        assert_eq!(
+            a, b,
+            "rotation cut depends on roster order; ties must break on player_id"
+        );
+
+        // Pin the direction too, so the rule can't silently invert: the lower
+        // UUID (the Fr) takes the slot and the Sr is cut. Index 9 is
+        // exp_fr_share, 12 is exp_sr_share.
+        assert!(
+            a[9] > 0.0,
+            "lower-UUID tied player (Fr) should make the cut"
+        );
+        assert_eq!(a[12], 0.0, "higher-UUID tied player (Sr) should be cut");
     }
 
     #[test]
