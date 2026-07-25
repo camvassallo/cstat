@@ -21,8 +21,8 @@
 use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_projection::{
-    compose_all_projections, fetch_draft_entrants, project_returner_cam_v3,
-    project_returner_cam_v3_banded, score_projection_adj_em,
+    compose_all_projections, fetch_draft_entrants, fetch_player_departures,
+    project_returner_cam_v3, project_returner_cam_v3_banded, score_projection_adj_em,
 };
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -181,10 +181,15 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, years: &[i32]) -> Result<
         // drafted players from the returning roster (else over-projected).
         let entrants = fetch_draft_entrants(pool, base_season).await?;
 
+        // Curated exits no feed reports — pro signings abroad, retirements,
+        // dismissals. Same over-projection failure mode as the draft list.
+        let departures = fetch_player_departures(pool, base_season).await?;
+
         let projections = compose_all_projections(
             pool,
             base_season,
             &entrants,
+            &departures,
             predictor,
             crate::target_season_retro_complete(year),
         )
