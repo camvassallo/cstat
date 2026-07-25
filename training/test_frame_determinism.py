@@ -163,6 +163,16 @@ def test_onnx_export_is_byte_stable() -> None:
             )
 
 
+# Checks that couldn't run, and why. A skipped check must never report as a
+# pass — CI runs this without a database on purpose, so "5 ok" when only 3
+# actually executed is precisely the silent-no-op this whole issue is about.
+_SKIPS: dict[str, str] = {}
+
+
+def _skip(name: str, reason: str) -> None:
+    _SKIPS[name] = reason
+
+
 def _db_reachable() -> bool:
     try:
         from db import get_engine
@@ -176,8 +186,9 @@ def _db_reachable() -> bool:
 def test_roster_impact_frame_is_deterministic() -> None:
     """Two reads of the roster-impact frame must be byte-identical."""
     if not _db_reachable():
-        print("  skip: no database reachable")
-        return
+        return _skip(
+            "test_roster_impact_frame_is_deterministic", "no database reachable"
+        )
     a, cols, _ = R.build_dataset()
     b, _, _ = R.build_dataset()
     assert _frame_digest(a[cols]) == _frame_digest(b[cols]), (
@@ -195,8 +206,7 @@ def test_layer1_frames_are_deterministic() -> None:
     retrain look like a genuine snapshot change.
     """
     if not _db_reachable():
-        print("  skip: no database reachable")
-        return
+        return _skip("test_layer1_frames_are_deterministic", "no database reachable")
     import train_freshman_model as F
     import train_trajectory_model as T
 
@@ -220,7 +230,10 @@ def main() -> int:
     for check in checks:
         try:
             check()
-            print(f"  ok: {check.__name__}")
+            if check.__name__ in _SKIPS:
+                print(f"  SKIP: {check.__name__} — {_SKIPS[check.__name__]}")
+            else:
+                print(f"  ok:   {check.__name__}")
         except AssertionError as e:
             failures.append(f"{check.__name__}: {e}")
     print()
@@ -229,7 +242,11 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("all #222 determinism checks pass.")
+    ran = len(checks) - len(_SKIPS)
+    summary = f"{ran}/{len(checks)} #222 determinism checks pass"
+    if _SKIPS:
+        summary += f" ({len(_SKIPS)} skipped: {', '.join(sorted(_SKIPS))})"
+    print(summary + ".")
     return 0
 
 
