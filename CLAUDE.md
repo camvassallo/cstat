@@ -62,6 +62,13 @@ cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,20
 # roster-frame models also stamp their meta with an OOF fingerprint and the API
 # REFUSES TO BOOT if they disagree, so retraining one without the other is a
 # hard failure, not a silent one.
+# **`train_roster_adjo_model.py` does NOT ride along on a roster_impact retrain.**
+# It `import`s `build_dataset` from the net trainer, which reliably reads as "the
+# AdjO half updates itself." It does not — it needs its own invocation, and that
+# exact misreading is what caused #218 (skipped in #130, #152, #211). Same trap
+# shape as the archetype `--seasons` default above: the wrong thing succeeds
+# quietly. Canonical layer map, retrain protocol, and the deploy-vs-sync split:
+# `docs/model_dependency_graph.md`.
 ./training/retrain_downstream.sh [--dry-run]        # Layer 2 + 3 (the common case)
 ./training/retrain_downstream.sh --with-layer1      # also trajectory + freshman;
                                                     # these TRUNCATE the OOF tables

@@ -445,7 +445,7 @@ def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
 
 
 def lgb_params() -> dict:
-    # Conservative for ~4k rows + ~25 features. cam_sum / cam_wmean carry
+    # Conservative for ~4k rows + 27 features. cam_sum / cam_wmean carry
     # most of the signal (the intended near-identity), so the trees stay
     # shallow and well-regularized — the model's job is calibration, not
     # squeezing variance out of a small N.

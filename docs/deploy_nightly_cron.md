@@ -159,6 +159,16 @@ cron service reuses it — no separate build.
    - `HEARTBEAT_URL` — optional dead-man's-switch ping (see below).
    - `MODEL_DIR` is **not** needed (the nightly job runs no ONNX inference).
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
+4. **Enable Static Outbound IPs** — Service → Settings → Networking, on the cron
+   service only (the API never calls Torvik). Requires a redeploy to take effect.
+   This is **not** optional hardening: barttorvik refuses Google IP space, and
+   with no region pinned Railway is free to place the container on GCP, where
+   every Torvik fetch 403s for that container's whole lifetime. Static egress sits
+   in Railway-owned address space, which removes the provider lottery. Recreating
+   this service without re-enabling the setting silently reintroduces
+   intermittent, multi-day Torvik outages that look like a barttorvik problem and
+   are not. Full diagnosis, the assigned addresses, and how to verify:
+   `docs/torvik_egress_block.md`.
 
 The cron service shares the API's database, so migrations (incl. `039`
 `ingest_runs`) are applied by the API at boot; the nightly binary just writes to

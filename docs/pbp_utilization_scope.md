@@ -260,6 +260,9 @@ ablates them from production instead of re-adding), the Rust contract
 sentinel fill) carries the `player_on_off` join, and the full downstream chain
 regenerated: OOF → roster-impact retrain → 11-season backtest dump (pooled
 roster_proj MAE 6.04 → 5.96) → CAE (guards pass) → `compute-projections`.
+(That sequence is the historical record and is **missing `roster_adjo`** — the
+omission behind #218. Canonical chain: `training/retrain_downstream.sh`, per
+`docs/model_dependency_graph.md`.)
 Production retrain reproduced the accept exactly (pooled LOPO 2.133 → 2.127;
 `prior_on_net_rtg` 3rd of 51 by importance). Details in the ROADMAP ship
 bullet under P-onfloor-4. Tier-3 RAPM is now the next membership item.
