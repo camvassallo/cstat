@@ -84,12 +84,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           # Matches training/.venv, which is the environment requirements.txt
-          # is pinned against.
-          python-version: "3.9"
+          # is pinned against and the one the #218 retrain will run in.
+          python-version: "3.13"
           cache: pip
           cache-dependency-path: training/requirements.txt
-      # Installing the full pinned set also verifies the exact pins still
-      # resolve — the pins are what make a model diff attributable (#222).
+      # requirements.txt is a full lock (direct + transitive), so this also
+      # verifies the pins still resolve — the pins are what make a model diff
+      # attributable (#222). `--no-deps` would skip the resolver check, so
+      # deliberately not used.
       - run: pip install -r requirements.txt
       # Source-level guards, no database required.
       - run: python test_no_oof_leak.py
