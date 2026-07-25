@@ -1146,14 +1146,6 @@ pub async fn compose_all_projections(
             .push((row, meta));
     }
 
-    // Transfers: bucket outbound by source_team_id (= which team is
-    // losing a player) and incoming by destination_team_id (= which
-    // team is gaining one). The route's existing ingestion populated
-    // `cstat_player_id` per row; we use it both as the "outbound
-    // player to remove from returning" identity AND as the PlayerRow
-    // key to clone into the destination's `arrivals`. Audit display
-    // names come from `roster_by_team` (cstat-canonical), not from
-    // the 247-side string on the transfer row.
     // --- Curated non-portal, non-draft exits (issue #215). ---------------
     // Resolved before the transfer bucketing below so a player who committed
     // in the portal and *then* signed professionally is kept out of his
@@ -1169,6 +1161,14 @@ pub async fn compose_all_projections(
         })
         .collect();
 
+    // Transfers: bucket outbound by source_team_id (= which team is
+    // losing a player) and incoming by destination_team_id (= which
+    // team is gaining one). The route's existing ingestion populated
+    // `cstat_player_id` per row; we use it both as the "outbound
+    // player to remove from returning" identity AND as the PlayerRow
+    // key to clone into the destination's `arrivals`. Audit display
+    // names come from `roster_by_team` (cstat-canonical), not from
+    // the 247-side string on the transfer row.
     let mut outbound_by_team: HashMap<Uuid, Vec<(Uuid, Option<String>)>> = HashMap::new();
     let mut incoming_by_team: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for t in &transfers {

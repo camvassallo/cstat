@@ -34,6 +34,7 @@
 
 use anyhow::Result;
 use cstat_core::inference::Predictor;
+use cstat_core::roster_features::{QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use cstat_core::roster_projection::{
     DepartureReason, PlayerDeparture, compose_all_projections, fetch_draft_entrants,
     fetch_player_departures, normalize_player_name,
@@ -66,10 +67,17 @@ struct PlayerMeta {
     team_name: String,
     class_year: Option<String>,
     nationality: Option<String>,
+    /// Clears the projection's roster gate (`QUAL_MIN_GAMES_PLAYED` /
+    /// `QUAL_MIN_MPG`). Sub-gate players never enter `compose_all_projections`
+    /// at all, so a capture row naming one is *correctly* a no-op rather than a
+    /// mistake — see the unmatched classification below.
+    qualified: bool,
 }
 
-/// Run the audit and print its report to stdout. Returns the number of
-/// unmatched capture rows so a caller can decide whether that's fatal.
+/// Run the audit and print its report to stdout. Returns the number of capture
+/// rows that failed to resolve **despite naming a qualified player** — i.e. real
+/// mistakes a caller should treat as fatal. Rows naming a sub-gate or unknown
+/// player are reported but not counted; they are harmless by construction.
 pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> Result<usize> {
     let base = opts.base_season;
     let entrants = fetch_draft_entrants(pool, base).await?;
@@ -90,55 +98,105 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
         projections.len(),
     );
 
-    // --- 1. Capture rows that resolved to nobody. ------------------------
-    // A matched row shows up as a LeftProgram departure on exactly one team;
-    // anything in the capture without a corresponding label never resolved.
-    let matched: HashSet<String> = projections
-        .iter()
-        .flat_map(|p| p.departures.iter())
-        .filter_map(|d| match d {
-            DepartureReason::LeftProgram { name, .. } => Some(normalize_player_name(name)),
-            _ => None,
-        })
-        .collect();
-    let unmatched: Vec<&PlayerDeparture> = captured
-        .iter()
-        .filter(|d| !matched.contains(&normalize_player_name(&d.name)))
-        .collect();
-
-    println!();
-    if unmatched.is_empty() {
-        println!("UNMATCHED CAPTURE ROWS: none — every player_departures row resolved.");
-    } else {
-        println!(
-            "UNMATCHED CAPTURE ROWS ({}) — these are silently doing NOTHING:",
-            unmatched.len()
-        );
-        for d in &unmatched {
-            println!(
-                "  {:<28} {:<24} reason={} — name/team resolves to no {base} roster player",
-                d.name, d.current_team, d.reason,
-            );
-        }
-        println!(
-            "  Fix the name or team string in data/departures/{base}_departures.json to match \
-             cstat's players.name / teams.short_name, then re-run `cstat-ingest departures`."
-        );
-    }
-
-    // --- 2. At-risk returners, ranked by what their exit would cost. -----
     let meta: Vec<PlayerMeta> = sqlx::query_as::<_, PlayerMeta>(
         r#"
-        SELECT p.id, p.name, t.name AS team_name, p.class_year, p.nationality
+        SELECT p.id, p.name, t.name AS team_name, p.class_year, p.nationality,
+               COALESCE(pss.games_played >= $2 AND pss.minutes_per_game >= $3, false)
+                   AS qualified
         FROM players p
         JOIN teams t ON t.id = p.team_id
+        LEFT JOIN player_season_stats pss
+               ON pss.player_id = p.id AND pss.season = p.season
         WHERE p.season = $1
         "#,
     )
     .bind(base)
+    .bind(QUAL_MIN_GAMES_PLAYED)
+    .bind(QUAL_MIN_MPG)
     .fetch_all(pool)
     .await?;
     let meta_by_id: HashMap<Uuid, &PlayerMeta> = meta.iter().map(|m| (m.id, m)).collect();
+
+    // --- 1. Capture rows that resolved to nobody. ------------------------
+    // A matched row shows up as a LeftProgram departure on exactly one team.
+    // Counted per normalized name rather than set-membership: cstat genuinely
+    // carries same-name players in one season (issue #138 — two Jake Davises in
+    // 2026), so two capture rows sharing a name must consume two resolved
+    // departures or one of them is silently doing nothing.
+    let mut matched: HashMap<String, usize> = HashMap::new();
+    for d in projections.iter().flat_map(|p| p.departures.iter()) {
+        if let DepartureReason::LeftProgram { name, .. } = d {
+            *matched.entry(normalize_player_name(name)).or_default() += 1;
+        }
+    }
+    // Split the failures three ways, because "didn't resolve" means very
+    // different things depending on whether the *name* exists at all:
+    //
+    //   - name unknown to season N  → almost certainly a typo. Hard failure:
+    //     this is the case the whole section exists to catch, and keying the
+    //     benign test on the name would let every misspelling slip through it.
+    //   - name known AND qualified  → the name is right but it still didn't
+    //     resolve, so the team string is wrong (or a same-name sibling ate the
+    //     match). Hard failure — the projection is still carrying him.
+    //   - name known but sub-gate   → correctly a no-op. Sub-gate players never
+    //     enter `compose_all_projections`, so there was nothing to remove;
+    //     recording a deep-bench player's exit must not break the command.
+    let mut known_names: HashSet<String> = HashSet::new();
+    let mut qualified_names: HashSet<String> = HashSet::new();
+    for m in &meta {
+        let key = normalize_player_name(&m.name);
+        if m.qualified {
+            qualified_names.insert(key.clone());
+        }
+        known_names.insert(key);
+    }
+    let mut unmatched_real: Vec<(&PlayerDeparture, &str)> = Vec::new();
+    let mut unmatched_benign: Vec<&PlayerDeparture> = Vec::new();
+    for d in &captured {
+        let key = normalize_player_name(&d.name);
+        match matched.get_mut(&key) {
+            Some(n) if *n > 0 => *n -= 1,
+            _ if !known_names.contains(&key) => {
+                unmatched_real.push((d, "no player by that name in the season — check spelling"))
+            }
+            _ if qualified_names.contains(&key) => unmatched_real.push((
+                d,
+                "name exists but not on that team — check the team string",
+            )),
+            _ => unmatched_benign.push(d),
+        }
+    }
+
+    println!();
+    if unmatched_real.is_empty() {
+        println!("UNMATCHED CAPTURE ROWS: none — every player_departures row resolved.");
+    } else {
+        println!(
+            "UNMATCHED CAPTURE ROWS ({}) — these are silently doing NOTHING:",
+            unmatched_real.len()
+        );
+        for (d, why) in &unmatched_real {
+            println!("  {:<28} {:<24} {why}", d.name, d.current_team);
+        }
+        println!(
+            "  Fix data/departures/{base}_departures.json to match cstat's players.name / \
+             teams.short_name, then re-run `cstat-ingest departures`."
+        );
+    }
+    if !unmatched_benign.is_empty() {
+        println!();
+        println!(
+            "  Note: {} row(s) name a player below the projection's \
+             {QUAL_MIN_GAMES_PLAYED} GP / {QUAL_MIN_MPG:.0} MPG gate. Harmless — they were \
+             never on the projected roster, so there was nothing to remove:",
+            unmatched_benign.len()
+        );
+        for d in &unmatched_benign {
+            println!("    {:<28} {}", d.name, d.current_team);
+        }
+    }
+
+    // --- 2. At-risk returners, ranked by what their exit would cost. -----
 
     let mut at_risk: Vec<(f64, &PlayerMeta, f64)> = Vec::new();
     for p in &projections {
@@ -197,7 +255,7 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
          data/departures/{base}_departures.json and run `cstat-ingest departures`."
     );
 
-    Ok(unmatched.len())
+    Ok(unmatched_real.len())
 }
 
 /// Clip a display string to `max` chars so the fixed-width table stays aligned

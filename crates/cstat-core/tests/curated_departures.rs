@@ -21,14 +21,17 @@
 //! (`cstat-ingest departures`) and the ONNX model dir present. Run:
 //!   DATABASE_URL=... cargo test -p cstat-core --test curated_departures -- --ignored --nocapture
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use cstat_core::inference::Predictor;
+use cstat_core::roster_features::{QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use cstat_core::roster_projection::{
     DepartureReason, compose_all_projections, fetch_draft_entrants, fetch_player_departures,
     normalize_player_name,
 };
 use sqlx::postgres::PgPoolOptions;
+use uuid::Uuid;
 
 /// Base season carrying the capture. 2026 is the first year with curated rows
 /// (Mario Saint-Supery → Valencia).
@@ -58,27 +61,82 @@ async fn curated_departures_remove_their_player() {
             .await
             .unwrap();
 
+    // Which capture rows resolved, counted per normalized name. Counting rather
+    // than set-membership because cstat genuinely carries same-name players in
+    // one season (issue #138 — two Jake Davises in 2026): two capture rows
+    // sharing a name must consume two resolved departures, or a set would call
+    // the unresolved one matched and hide exactly the bug this guards.
+    let mut resolved: HashMap<String, Vec<Uuid>> = HashMap::new();
+    for dep in projections.iter().flat_map(|p| p.departures.iter()) {
+        if let DepartureReason::LeftProgram {
+            player_id, name, ..
+        } = dep
+        {
+            resolved
+                .entry(normalize_player_name(name))
+                .or_default()
+                .push(*player_id);
+        }
+    }
+
+    // A capture row that didn't resolve is only benign in one specific case:
+    // the name IS a real base-season player who sits below the projection's
+    // roster gate. Sub-gate players never enter `compose_all_projections`, so
+    // there was nothing to remove. Every other miss is a mistake — an unknown
+    // name is a typo, and a known-and-qualified name that still didn't resolve
+    // means the team string is wrong. Keying the benign test on the name alone
+    // would be backwards: a misspelling matches nothing and would be excused as
+    // "sub-gate", which is exactly the bug this guard exists to catch.
+    let roster: Vec<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
+        r#"
+        SELECT p.name,
+               COALESCE(pss.games_played >= $2 AND pss.minutes_per_game >= $3, false)
+        FROM players p
+        LEFT JOIN player_season_stats pss
+               ON pss.player_id = p.id AND pss.season = p.season
+        WHERE p.season = $1
+        "#,
+    )
+    .bind(BASE_SEASON)
+    .bind(QUAL_MIN_GAMES_PLAYED)
+    .bind(QUAL_MIN_MPG)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let known: HashSet<String> = roster
+        .iter()
+        .map(|(n, _)| normalize_player_name(n))
+        .collect();
+    let qualified: HashSet<String> = roster
+        .iter()
+        .filter(|(_, q)| *q)
+        .map(|(n, _)| normalize_player_name(n))
+        .collect();
+
     let mut violations: Vec<String> = Vec::new();
+    let mut checked = 0usize;
     for d in &captured {
         let key = normalize_player_name(&d.name);
 
         // 1. Resolved to a LeftProgram departure somewhere?
-        let departed = projections.iter().find_map(|p| {
-            p.departures.iter().find_map(|dep| match dep {
-                DepartureReason::LeftProgram {
-                    player_id, name, ..
-                } if normalize_player_name(name) == key => Some(*player_id),
-                _ => None,
-            })
-        });
-        let Some(pid) = departed else {
-            violations.push(format!(
-                "{} ({}) is in player_departures but resolved to no roster player — \
-                 the row is a silent no-op; check the name/team spelling",
-                d.name, d.current_team,
-            ));
+        let Some(pid) = resolved.get_mut(&key).and_then(|pids| pids.pop()) else {
+            if !known.contains(&key) {
+                violations.push(format!(
+                    "{} ({}) is in player_departures but no {BASE_SEASON} player has that \
+                     name — the row is a silent no-op; check the spelling",
+                    d.name, d.current_team,
+                ));
+            } else if qualified.contains(&key) {
+                violations.push(format!(
+                    "{} ({}) is in player_departures and is a qualified {BASE_SEASON} player, \
+                     but the row resolved to nobody — check the team string",
+                    d.name, d.current_team,
+                ));
+            }
+            // Known but sub-gate: correctly a no-op, nothing to assert.
             continue;
         };
+        checked += 1;
 
         // 2. Gone from every returning core and every arrivals list.
         if let Some(p) = projections
@@ -109,7 +167,9 @@ async fn curated_departures_remove_their_player() {
         violations.join("\n  "),
     );
     eprintln!(
-        "{} curated departure(s) for {BASE_SEASON} all resolved and removed",
-        captured.len()
+        "{checked} of {} curated departure(s) for {BASE_SEASON} resolved and removed \
+         ({} sub-gate / unknown, correctly no-ops)",
+        captured.len(),
+        captured.len() - checked,
     );
 }
