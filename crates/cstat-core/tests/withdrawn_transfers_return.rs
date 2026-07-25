@@ -24,7 +24,9 @@
 use std::path::PathBuf;
 
 use cstat_core::inference::Predictor;
-use cstat_core::roster_projection::{compose_all_projections, fetch_draft_entrants};
+use cstat_core::roster_projection::{
+    compose_all_projections, fetch_draft_entrants, fetch_player_departures,
+};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 
@@ -77,11 +79,19 @@ async fn withdrawn_players_stay_on_their_team() {
     }
 
     let entrants = fetch_draft_entrants(&pool, BASE_SEASON).await.unwrap();
+    let departures = fetch_player_departures(&pool, BASE_SEASON).await.unwrap();
     // `false` = don't retro-exclude redshirt recruits; this test exercises the
     // withdrawn-transfer return path, not the redshirt gate.
-    let projections = compose_all_projections(&pool, BASE_SEASON, &entrants, &predictor, false)
-        .await
-        .unwrap();
+    let projections = compose_all_projections(
+        &pool,
+        BASE_SEASON,
+        &entrants,
+        &departures,
+        &predictor,
+        false,
+    )
+    .await
+    .unwrap();
 
     let mut violations: Vec<String> = Vec::new();
     let mut returned = 0usize;
@@ -130,7 +140,18 @@ async fn withdrawn_players_stay_on_their_team() {
             // outside the projection entirely (2026: Gai Chol, no season
             // row; Isaiah Denis, 9 GP at 3.1 MPG). Only the false-departure
             // direction is a bug.
-            if departed_from.is_some() {
+            // Exception: a curated `player_departures` row (issue #215) is a
+            // legitimate departure for someone who withdrew from the portal
+            // and then left basketball-in-college entirely — signed pro
+            // abroad, retired, was dismissed. That label is hand-entered, so
+            // trust it over the portal's silence.
+            let curated_exit = departed_from.is_some_and(|p| {
+                p.departures
+                    .iter()
+                    .find(|d| d.player_id() == pid)
+                    .is_some_and(|d| format!("{d:?}").contains("LeftProgram"))
+            });
+            if departed_from.is_some() && !curated_exit {
                 violations.push(format!(
                     "{name} ({src}) withdrew from the portal but is counted as a departure"
                 ));

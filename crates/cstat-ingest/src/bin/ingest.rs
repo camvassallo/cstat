@@ -406,6 +406,42 @@ enum Commands {
         source: String,
     },
 
+    /// Load curated non-portal, non-draft program exits into the
+    /// `player_departures` table from the `data/departures/{year}_departures.json`
+    /// captures — players who signed professionally abroad, retired, were
+    /// dismissed, or otherwise left without touching the portal or the draft.
+    /// No feed reports these; the rows are hand-entered from news reports.
+    /// Idempotent upsert. Run `departures-audit` first to find the candidates.
+    Departures {
+        /// Directory of `{year}_departures.json` files.
+        #[arg(long, default_value = "data/departures")]
+        dir: std::path::PathBuf,
+    },
+
+    /// Print the offseason attrition worklist: `player_departures` rows that
+    /// resolve to nobody (silent no-ops from a typo'd name), then the returners
+    /// the projection currently assumes are coming back, ranked by CamPom.
+    /// Read-only. Run it in July and skim the top of the list against the news.
+    DeparturesAudit {
+        /// Base season N — the completed season being projected into N+1.
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+
+        /// Floor on base-season CamPom for the at-risk list.
+        #[arg(long, default_value_t = 4.0)]
+        min_cam: f64,
+
+        /// Include US players. Off by default — the international cohort is
+        /// where the unreported exits concentrate — but domestic dismissals
+        /// and medical retirements land in the same blind spot.
+        #[arg(long)]
+        all_nationalities: bool,
+
+        /// Cap on printed at-risk rows.
+        #[arg(long, default_value_t = 60)]
+        limit: usize,
+    },
+
     /// Ingest 247Sports composite recruit rankings for a class year. `year` is
     /// the recruiting class year (= spring of HS graduation, = 247's URL
     /// `{year}-basketball` slug). Class-of-2026 recruits first appear in
@@ -1019,6 +1055,47 @@ async fn main() -> Result<()> {
                 total,
                 reports.len()
             );
+        }
+
+        Commands::Departures { dir } => {
+            let reports =
+                cstat_ingest::ingest::departures::bootstrap_from_dir(&db.pool, &dir).await?;
+            let total: usize = reports.iter().map(|r| r.rows).sum();
+            for r in &reports {
+                println!("departures {}: {} exit(s)", r.year, r.rows);
+            }
+            println!(
+                "departures: {} exit(s) across {} year(s) loaded into player_departures. \
+                 Run `departures-audit` to confirm they resolved to real roster players.",
+                total,
+                reports.len()
+            );
+        }
+
+        Commands::DeparturesAudit {
+            year,
+            min_cam,
+            all_nationalities,
+            limit,
+        } => {
+            let model_dir =
+                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let predictor =
+                cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
+                    .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
+            let opts = cstat_ingest::departures_audit::AuditOptions {
+                base_season: year,
+                min_cam,
+                intl_only: !all_nationalities,
+                limit,
+            };
+            let unmatched =
+                cstat_ingest::departures_audit::run(&db.pool, &predictor, &opts).await?;
+            if unmatched > 0 {
+                // Non-zero exit so a scripted run can't quietly ship a capture
+                // where a typo'd row is doing nothing.
+                std::process::exit(2);
+            }
         }
 
         Commands::Recruits {

@@ -104,6 +104,26 @@ pub enum DepartureReason {
     /// On the NBA-draft early-entrants list with status `gone` (firm
     /// commitment, not just `declared`). Always counts as departing.
     DraftGone { player_id: Uuid, name: String },
+    /// In the `player_departures` table for base season N — left the
+    /// program outside the portal and outside the NBA draft. Signed
+    /// professionally overseas, medically retired, was dismissed, or
+    /// simply walked away. No feed reports these, so the rows are curated
+    /// by hand from `data/departures/{year}_departures.json` (issue #215:
+    /// Mario Saint-Supery left Gonzaga for Valencia in July 2026 and, as a
+    /// non-senior who never entered the portal, counted as returning).
+    LeftProgram {
+        player_id: Uuid,
+        name: String,
+        /// Display-only vocabulary off `player_departures.reason`
+        /// (`pro_overseas`, `pro_other`, `retired`, `dismissed`,
+        /// `left_program`). Never behavior-bearing — the row's existence
+        /// is what removes the player, so an unrecognized value still
+        /// projects correctly.
+        reason: String,
+        /// Free-text destination for the UI chip ("Valencia (ACB)").
+        /// `None` when unknown or inapplicable (a retirement).
+        destination: Option<String>,
+    },
 }
 
 impl DepartureReason {
@@ -112,7 +132,8 @@ impl DepartureReason {
         match self {
             Self::GraduatedSenior { player_id, .. }
             | Self::Transferred { player_id, .. }
-            | Self::DraftGone { player_id, .. } => *player_id,
+            | Self::DraftGone { player_id, .. }
+            | Self::LeftProgram { player_id, .. } => *player_id,
         }
     }
 }
@@ -380,6 +401,64 @@ pub async fn fetch_draft_entrants(
     .await
 }
 
+/// One curated non-portal, non-draft program exit. Deserializes from the
+/// `data/departures/{year}_departures.json` capture AND maps from a
+/// `player_departures` row (the `player_name` column aliases to `name`).
+///
+/// Every row is firm — there is no `declared`-style uncertainty status the way
+/// [`DraftEntrant`] has, because no withdrawal deadline exists to wait on. An
+/// unconfirmed report simply doesn't get a row.
+#[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
+pub struct PlayerDeparture {
+    pub name: String,
+    pub current_team: String,
+    /// Display-only; see [`DepartureReason::LeftProgram::reason`].
+    #[serde(default = "default_departure_reason")]
+    pub reason: String,
+    #[serde(default)]
+    pub destination: Option<String>,
+    /// Provenance for the capture — a URL or outlet slug. Not served.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Free-text human note. Not served.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Matches the `player_departures.reason` column default, so a capture row
+/// that omits the field behaves the same through the file path and the DB.
+fn default_departure_reason() -> String {
+    "left_program".to_string()
+}
+
+/// Load + parse `data/departures/{year}_departures.json`. The version-controlled
+/// capture; `cstat-ingest departures` loads it into `player_departures`, which
+/// is what the projection actually reads (see `fetch_player_departures`).
+pub fn load_player_departures(path: &Path) -> Result<Vec<PlayerDeparture>, std::io::Error> {
+    let content = std::fs::read_to_string(path)?;
+    let parsed: Vec<PlayerDeparture> = serde_json::from_str(&content)
+        .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
+    Ok(parsed)
+}
+
+/// DB-backed sibling of `load_player_departures`: the curated exits for one
+/// base season from `player_departures`. Same file-vs-DB split as
+/// `fetch_draft_entrants` — the DB copy is what syncs to prod. Empty vec when
+/// nothing's loaded for `year`, which degrades to the pre-#215 behaviour
+/// (seniors + portal + draft only).
+pub async fn fetch_player_departures(
+    pool: &PgPool,
+    year: i32,
+) -> Result<Vec<PlayerDeparture>, sqlx::Error> {
+    sqlx::query_as::<_, PlayerDeparture>(
+        "SELECT player_name AS name, current_team, reason, destination, source, note \
+         FROM player_departures WHERE year = $1",
+    )
+    .bind(year)
+    .fetch_all(pool)
+    .await
+}
+
 /// One pick from the Tankathon mock draft. The API surfaces this on
 /// uncertain (`?`) draft entrants — players who've declared but haven't
 /// withdrawn — so users can eyeball "is this player projected to be
@@ -594,9 +673,37 @@ fn match_draft_entrant(
     players_by_name: &HashMap<String, Vec<(Uuid, Uuid)>>, // norm_name → [(player_id, team_id)]
     teams: &[TeamRow],
 ) -> Option<Uuid> {
-    let key = normalize_player_name(&entrant.name);
+    match_roster_entry(&entrant.name, &entrant.current_team, players_by_name, teams)
+}
+
+/// Match a curated `player_departures` row to a season-N player_id. Same
+/// `(normalized name, resolved team)` join as `match_draft_entrant` — shared so
+/// the two hand-maintained captures can't drift on matching rules.
+fn match_player_departure(
+    departure: &PlayerDeparture,
+    players_by_name: &HashMap<String, Vec<(Uuid, Uuid)>>,
+    teams: &[TeamRow],
+) -> Option<Uuid> {
+    match_roster_entry(
+        &departure.name,
+        &departure.current_team,
+        players_by_name,
+        teams,
+    )
+}
+
+/// The shared `(name, team)` → base-season `player_id` resolution behind both
+/// hand-curated captures. `None` when the player isn't on a cstat-known D-I
+/// roster or the team string doesn't resolve.
+fn match_roster_entry(
+    name: &str,
+    current_team: &str,
+    players_by_name: &HashMap<String, Vec<(Uuid, Uuid)>>, // norm_name → [(player_id, team_id)]
+    teams: &[TeamRow],
+) -> Option<Uuid> {
+    let key = normalize_player_name(name);
     let candidates = players_by_name.get(&key)?;
-    let want_team_id = resolve_team_id(teams, &entrant.current_team)?;
+    let want_team_id = resolve_team_id(teams, current_team)?;
     candidates
         .iter()
         .find(|(_, tid)| *tid == want_team_id)
@@ -652,6 +759,14 @@ pub fn normalize_player_name(name: &str) -> String {
 /// entirely (every player who isn't a Sr or in the portal is treated
 /// as returning).
 ///
+/// `player_departures` is the optional curated list of exits no feed reports —
+/// pro signings abroad, retirements, dismissals (issue #215). Pass `&[]` to
+/// skip. A matched row takes precedence over all three inferred channels
+/// (graduation, portal, draft), so a hand-entered exit always wins: a player who
+/// committed in the portal and *then* signed professionally is gone from both
+/// his old team and his would-be destination's arrivals, and a graduating senior
+/// who signed abroad is labelled by where he went rather than by his class year.
+///
 /// `target_season_complete` is the caller's clock verdict on whether the target
 /// season (`base_season + 1`) is *fully over* — pass
 /// `cstat_ingest::target_season_retro_complete(base_season + 1)`. When true (and
@@ -664,6 +779,7 @@ pub async fn compose_all_projections(
     pool: &PgPool,
     base_season: i32,
     draft_entrants: &[DraftEntrant],
+    player_departures: &[PlayerDeparture],
     predictor: &Predictor,
     target_season_complete: bool,
 ) -> Result<Vec<ProjectedRoster>, sqlx::Error> {
@@ -1032,6 +1148,21 @@ pub async fn compose_all_projections(
             .push((row, meta));
     }
 
+    // --- Curated non-portal, non-draft exits (issue #215). ---------------
+    // Resolved before the transfer bucketing below so a player who committed
+    // in the portal and *then* signed professionally is kept out of his
+    // would-be destination's `arrivals` — otherwise the projection would move
+    // a player who is on another continent onto a roster he never joined.
+    // (reason, destination) is display payload only; membership is what
+    // removes the player.
+    let left_program: HashMap<Uuid, (String, Option<String>)> = player_departures
+        .iter()
+        .filter_map(|d| {
+            match_player_departure(d, &players_by_name, &teams)
+                .map(|pid| (pid, (d.reason.clone(), d.destination.clone())))
+        })
+        .collect();
+
     // Transfers: bucket outbound by source_team_id (= which team is
     // losing a player) and incoming by destination_team_id (= which
     // team is gaining one). The route's existing ingestion populated
@@ -1049,11 +1180,17 @@ pub async fn compose_all_projections(
         let Some(&source_team_id) = player_team.get(&pid) else {
             continue; // resolved cstat_player_id but the player no longer in our roster fetch
         };
+        // Outbound is deliberately NOT filtered on `left_program`: the source
+        // team loses the player either way, and `outbound_cam_v3_sum` (a served
+        // model feature) should keep counting the talent that walked.
         outbound_by_team
             .entry(source_team_id)
             .or_default()
             .push((pid, t.destination_institution.clone()));
 
+        if left_program.contains_key(&pid) {
+            continue; // never showed up at the destination
+        }
         if let Some(dest_str) = t.destination_institution.as_deref()
             && let Some(dest_team_id) = resolve_team_id(&teams, dest_str)
         {
@@ -1120,6 +1257,29 @@ pub async fn compose_all_projections(
 
         for (row, name) in rows {
             let pid = row.player_id;
+            // Left the program outside the portal and the draft? Checked FIRST,
+            // ahead of all three inferred channels, so a hand-entered row always
+            // wins: a portal commit who then signed pro is labelled by where he
+            // actually went, a curated exit beats a `declared` draft flag
+            // (nothing left to resolve — he's gone), and a *senior* who signed
+            // abroad reads "→ Real Madrid" instead of "Sr graduation". The
+            // roster effect is identical either way — he's a departure — but the
+            // label is the informative one, and the invariant that a matched
+            // capture row always produces a `LeftProgram` is what
+            // `departures-audit` and `tests/curated_departures.rs` rely on to
+            // tell a resolved row from a typo. Without this ordering, recording
+            // a graduating senior's overseas signing (a perfectly reasonable
+            // entry) would make both of them report the row as doing nothing.
+            if let Some((reason, destination)) = left_program.get(&pid) {
+                departures.push(DepartureReason::LeftProgram {
+                    player_id: pid,
+                    name: name.clone(),
+                    reason: reason.clone(),
+                    destination: destination.clone(),
+                });
+                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
+                continue;
+            }
             // Senior graduating? class_year fits {'Sr', 'SR', 'Senior'};
             // cstat normalizes to 'Sr' but tolerate variants.
             let is_senior = row
@@ -1908,7 +2068,7 @@ mod tests {
         // `false` = don't retro-exclude redshirts; this guard is about OOF-vs-live
         // freshman serving, and the fixture recruit played (has a resolved id).
         let Ok(projections) =
-            compose_all_projections(&pool, BASE_SEASON, &[], &predictor, false).await
+            compose_all_projections(&pool, BASE_SEASON, &[], &[], &predictor, false).await
         else {
             return; // a compose failure is a different concern, not this guard's.
         };
