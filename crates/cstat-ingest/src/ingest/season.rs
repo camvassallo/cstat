@@ -535,10 +535,12 @@ impl<'a> SeasonIngester<'a> {
             "starting nightly ingestion"
         );
 
-        // Log the public egress IP (fail-soft) so a barttorvik 403 can be tied
-        // to the exact outbound IP Railway used this run — see
-        // `preflight::log_egress_ip`.
-        crate::preflight::log_egress_ip().await;
+        // Detect the public egress IP (fail-soft) so a barttorvik 403 can be tied
+        // to the exact outbound IP Railway used this run. Carried into the
+        // preflight ledger row and the degraded Slack alert below, because having
+        // it only in the Railway logs is what made this a log-dig twice — see
+        // `preflight::detect_egress_ip` and `docs/torvik_egress_block.md`.
+        let egress_ip = crate::preflight::detect_egress_ip().await;
 
         // --- 0. preflight connectivity check (M3 1.2) ---
         // Probe the serving-critical feeds up front so a dead dependency is
@@ -554,14 +556,15 @@ impl<'a> SeasonIngester<'a> {
         preflight.log();
         if preflight.critical_down() {
             let down = preflight.down_feeds().join(", ");
+            // Stamp the egress IP onto the ledger row: for Torvik the refusal is
+            // IP-scoped, so "which IP was this run" is the first question asked
+            // of a failure, and `ingest_runs` is what survives log retention.
+            let detail = match &egress_ip {
+                Some(ip) => format!("serving-critical feed(s) down: {down} (egress IP {ip})"),
+                None => format!("serving-critical feed(s) down: {down}"),
+            };
             ledger
-                .record(
-                    "preflight",
-                    StepStatus::Failed,
-                    None,
-                    t0,
-                    Some(&format!("serving-critical feed(s) down: {down}")),
-                )
+                .record("preflight", StepStatus::Failed, None, t0, Some(&detail))
                 .await;
             failures.push(format!("preflight: serving-critical feed(s) down: {down}"));
         } else {
@@ -1215,17 +1218,26 @@ impl<'a> SeasonIngester<'a> {
                 .map(|f| format!("•  {f}"))
                 .collect::<Vec<_>>()
                 .join("\n");
+            // Egress IP on every degraded alert, not just Torvik ones: it is one
+            // short string, and for the whole class of IP-scoped refusals it is
+            // the difference between reading the alert and digging through
+            // Railway logs. Omitted from the SUCCESS alert, where it is noise.
+            let egress_line = match &egress_ip {
+                Some(ip) => format!("\n_egress IP {ip}_"),
+                None => String::new(),
+            };
             notify::post_slack(
                 notify::SlackChannel::Cron,
                 &format!(
                     ":warning: *Nightly ingest DEGRADED* — season {season}\n\
                      Completed with {n} issue(s):\n\
-                     {issues}{heal_line}\n\
+                     {issues}{heal_line}{egress_line}\n\
                      _run {run_id}_",
                     season = self.season,
                     n = failures.len(),
                     issues = issues,
                     heal_line = heal_line,
+                    egress_line = egress_line,
                     run_id = ledger.run_id(),
                 ),
             )

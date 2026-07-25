@@ -26,16 +26,22 @@ use crate::torvik::TorkvikClient;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-/// Fail-soft: fetch and log this process's public egress IP.
+/// Fail-soft: fetch, log, and return this process's public egress IP.
 ///
-/// barttorvik sits behind Cloudflare, which 403s requests from datacenter IP
-/// ranges while a residential IP gets 200 with the byte-identical client. When
-/// the nightly's Torvik step is refused, the one fact we otherwise can't see is
-/// *which* outbound IP Railway used for that run. Logging it at startup lets a
-/// 403 be correlated to an exact egress IP across successive runs — a stable IP
-/// points at "allowlist it with Bart", a rotating one at "route through a proxy
-/// with a fixed IP". Never blocks or fails the run: any error is just logged.
-pub(crate) async fn log_egress_ip() {
+/// barttorvik sits behind AWS CloudFront and refuses requests from **Google IP
+/// space** — Bart blocked it to stop an abusive Google Apps Script, and Google's
+/// published range list covers GCP *customer* ranges too, so a container Railway
+/// happened to place on GCP is collateral damage. It is not a generic
+/// datacenter block: AWS and Railway-owned egress both serve fine.
+///
+/// This probe is what identified that. Correlating the logged IP against the
+/// per-run Torvik verdict is the whole diagnosis, so the value is returned as
+/// well as logged: the caller puts it in the degraded Slack alert, because
+/// having it only in the Railway logs cost two separate investigations.
+///
+/// Never blocks or fails the run: any error is logged and yields `None`.
+/// See `docs/torvik_egress_block.md`.
+pub(crate) async fn detect_egress_ip() -> Option<String> {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
@@ -43,7 +49,7 @@ pub(crate) async fn log_egress_ip() {
         Ok(c) => c,
         Err(e) => {
             warn!(error = %e, "egress-ip probe: could not build client");
-            return;
+            return None;
         }
     };
     match client
@@ -53,10 +59,20 @@ pub(crate) async fn log_egress_ip() {
         .and_then(reqwest::Response::error_for_status)
     {
         Ok(resp) => match resp.text().await {
-            Ok(ip) => info!(egress_ip = %ip.trim(), "nightly public egress IP"),
-            Err(e) => warn!(error = %e, "egress-ip probe: could not read body"),
+            Ok(ip) => {
+                let ip = ip.trim().to_string();
+                info!(egress_ip = %ip, "nightly public egress IP");
+                Some(ip)
+            }
+            Err(e) => {
+                warn!(error = %e, "egress-ip probe: could not read body");
+                None
+            }
         },
-        Err(e) => warn!(error = %e, "egress-ip probe failed (non-fatal)"),
+        Err(e) => {
+            warn!(error = %e, "egress-ip probe failed (non-fatal)");
+            None
+        }
     }
 }
 
@@ -264,12 +280,15 @@ pub async fn run(
 mod tests {
     use super::*;
 
-    /// Smoke: the egress-IP probe completes and logs without panicking.
-    /// Gated on the network (hits api.ipify.org). Run with `--nocapture` and
-    /// `RUST_LOG=info` to eyeball the IP it reports.
+    /// Smoke: the egress-IP probe completes and reports an address without
+    /// panicking. Gated on the network (hits api.ipify.org — not barttorvik).
+    /// This is the fastest way to check what a given host egresses as:
+    /// `cargo test -p cstat-ingest egress_ip_probe -- --ignored --nocapture`.
     #[tokio::test]
-    #[ignore = "network: GETs api.ipify.org to log the public egress IP"]
+    #[ignore = "network: GETs api.ipify.org to report the public egress IP"]
     async fn egress_ip_probe_runs() {
-        log_egress_ip().await;
+        let ip = detect_egress_ip().await;
+        assert!(ip.is_some(), "probe should return an address");
+        println!("egress IP: {}", ip.unwrap());
     }
 }
