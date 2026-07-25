@@ -63,6 +63,40 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  # ── Training (Python) ───────────────────────────────────
+
+  training-tests:
+    name: Training Guards
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: training
+    env:
+      # Deliberately unreachable. These guards have a database-free subset and
+      # a database-backed subset; CI runs the former. Pointing at the `test`
+      # job's Postgres service would be worse than useless — that database is
+      # empty, so `_db_reachable()` would succeed and the frame checks would
+      # then fail on missing tables rather than skip. The suite reports which
+      # checks it skipped and why, so a silent no-op is visible in the log.
+      DATABASE_URL: postgresql://unused:unused@127.0.0.1:1/unused
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Matches training/.venv, which is the environment requirements.txt
+          # is pinned against and the one the #218 retrain will run in.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: training/requirements.txt
+      # requirements.txt is a full lock (direct + transitive), so this also
+      # verifies the pins still resolve — the pins are what make a model diff
+      # attributable (#222). `--no-deps` would skip the resolver check, so
+      # deliberately not used.
+      - run: pip install -r requirements.txt
+      # Source-level guards, no database required.
+      - run: python test_no_oof_leak.py
+      - run: python test_frame_determinism.py
+
   # ── Frontend ────────────────────────────────────────────
 
   web-lint:

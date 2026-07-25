@@ -62,7 +62,7 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
-from db import get_engine
+from db import canonical_frame_order, get_engine
 
 OUT_DIR = Path(__file__).parent / "models"
 SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
@@ -141,6 +141,7 @@ LEFT JOIN player_archetypes pa
 WHERE pss.season = ANY(%(seasons)s)
   AND COALESCE(pss.games_played, 0) >= 5
   AND COALESCE(pss.minutes_per_game, 0) >= 5
+ORDER BY pss.team_id, pss.season, pss.player_id
 """
 
 TEAM_QUERY = """
@@ -148,6 +149,7 @@ SELECT team_id, season, adj_efficiency_margin
 FROM team_season_stats
 WHERE season = ANY(%(seasons)s)
   AND adj_efficiency_margin IS NOT NULL
+ORDER BY team_id, season
 """
 
 # Per (source_team, target_season) sum of base-season cam_v3 for players
@@ -198,6 +200,7 @@ LEFT JOIN torvik_player_stats tps
     ON tps.player_id = p_base.id AND tps.season = t.year
 WHERE t.year = ANY(%(portal_years)s)
 GROUP BY tgt_team.id, p_base.season
+ORDER BY tgt_team.id, p_base.season
 """
 
 # Symmetric inbound query: for each transfer, locate the player's
@@ -252,6 +255,7 @@ JOIN players p_tgt
 JOIN teams tgt_team ON tgt_team.id = p_tgt.team_id
 WHERE t.year = ANY(%(portal_years)s)
 GROUP BY tgt_team.id, p_tgt.season
+ORDER BY tgt_team.id, p_tgt.season
 """
 
 
@@ -281,8 +285,36 @@ def aggregate_team_season(group: pd.DataFrame) -> pd.Series:
     on the Rust side exactly."""
     g = group.copy()
     # Rank by cam_v3 desc; missing coverage sorts last (bench slots).
+    #
+    # `player_id` is a REQUIRED tiebreak, not a nicety (issue #222). Ties are
+    # common — every player with no Torvik coverage collides at the `_NEG`
+    # sentinel — and `head()` below truncates to the rotation, so an
+    # undefined tie order silently swaps who is IN the rotation at all. That
+    # moved the minutes-weighted class/archetype shares on ~5 of 4,255
+    # team-seasons per run, which was enough to shift the fit (LOSO
+    # early-stopping budget 259 vs 266 estimators) and move served AdjEM by
+    # up to 1.02 points on a retrain that changed no data.
+    #
+    # `kind="stable"` matters too: pandas defaults to quicksort, which is
+    # not stable, so even a deterministically-ordered input frame would not
+    # give a deterministic rotation without it.
+    #
+    # Sorting the UUID as a string is deliberate — canonical lowercase
+    # hyphenated hex sorts lexicographically in the same order Rust's
+    # `Uuid: Ord` sorts bytewise, so `build_roster_impact_features` breaks
+    # ties identically at serve time.
+    #
+    # Caveat: `players.id` is a `gen_random_uuid` surrogate that is re-minted
+    # on a full rebuild, so the tie order is stable for a given database
+    # generation, not across rebuilds. That is consistent with the rest of
+    # the provenance design — `freshman_oof_predictions` is keyed on the same
+    # UUID, so a rebuild already registers as a new OOF snapshot and forces
+    # a retrain anyway.
     g["_rank_key"] = g["campom"].fillna(_NEG)
-    g = g.sort_values("_rank_key", ascending=False).reset_index(drop=True)
+    g["_tiebreak"] = g["player_id"].astype(str)
+    g = g.sort_values(
+        ["_rank_key", "_tiebreak"], ascending=[False, True], kind="stable"
+    ).reset_index(drop=True)
     g = g.head(len(CANONICAL_ROTATION_MPG))
     g["proj_mpg"] = [CANONICAL_ROTATION_MPG[i] for i in range(len(g))]
     total_w = float(g["proj_mpg"].sum())
@@ -398,6 +430,12 @@ def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
         f"({100.0 * nz_inbound / len(df):.1f}%); pre-portal-era rows = 0.0."
     )
 
+    # Deterministic row order (issue #222) — see `db.canonical_frame_order`.
+    # The per-team rotation cut is made deterministic separately, by the
+    # `player_id` tie-break in `aggregate_team_season`; that one is not a
+    # row-order problem and this sort cannot substitute for it.
+    df = canonical_frame_order(df)
+
     feature_cols = [
         c for c in df.columns
         if c not in ("team_id", "season", "adj_efficiency_margin")
@@ -500,6 +538,13 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     onnx_model = onnxmltools.convert_lightgbm(
         model.booster_, initial_types=initial_types, target_opset=15
     )
+    # Deterministic graph name (issue #222). onnxmltools defaults to a random
+    # UUID here, which is the ONLY thing that differs between two exports of
+    # an identical model — predictions come out bit-identical, but the file
+    # bytes don't, so a git diff of the .onnx can't be used to prove a retrain
+    # changed nothing. Naming it after the artifact makes the bytes a function
+    # of the model alone.
+    onnx_model.graph.name = onnx_path.stem
     onnxmltools.utils.save_model(onnx_model, str(onnx_path))
 
 
