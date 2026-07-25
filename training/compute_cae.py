@@ -351,7 +351,13 @@ def main() -> None:
 
     # --- Summary artifact ---
     summary = {
-        "generated_at": dt.datetime.utcnow().isoformat() + "Z",
+        # `utcnow()` is deprecated and scheduled for removal; the Python 3.13
+        # move in #222 started warning about it. `.replace` keeps the trailing
+        # "Z" the previous summaries were written with, so the field format is
+        # unchanged for anything reading the eval_history ledger.
+        "generated_at": dt.datetime.now(dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
         "denominator": "roster_proj",
         "headline": "raw (coach×program over-expectation)",
         "n_team_seasons": len(rows),
@@ -367,7 +373,7 @@ def main() -> None:
                                         "last_season")}
                   for r in eligible[:15]],
     }
-    date_str = dt.datetime.utcnow().strftime("%Y%m%d")
+    date_str = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
     out = EVAL_DIR / f"cae_compute_{date_str}_summary.json"
     out.write_text(json.dumps(summary, indent=2, default=float))
     print(f"\nwrote {out}")
