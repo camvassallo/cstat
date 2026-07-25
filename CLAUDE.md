@@ -55,6 +55,23 @@ cargo run --bin cstat-ingest -- simulate --year 2026 --from 2025-11-02 --to 2025
 # combined-cohort fit; the CLI default of 2025,2026 is NOT a full retrain). Uses training/.venv.
 cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026 [--diagnostics]
 
+# Retrain the model tree from a node downward, in dependency order. USE THIS
+# rather than running trainers by hand — the chain is roster_impact -> roster_adjo
+# -> backtest -> cae -> compute-projections, and hand-running it is what let
+# `roster_adjo` serve a three-generation-stale OOF for months (#218). The two
+# roster-frame models also stamp their meta with an OOF fingerprint and the API
+# REFUSES TO BOOT if they disagree, so retraining one without the other is a
+# hard failure, not a silent one.
+./training/retrain_downstream.sh [--dry-run]        # Layer 2 + 3 (the common case)
+./training/retrain_downstream.sh --with-layer1      # also trajectory + freshman;
+                                                    # these TRUNCATE the OOF tables
+                                                    # and invalidate everything below
+./training/retrain_downstream.sh --from cae         # resume after a failed stage
+# Note: `compute-projections` writes team_preseason_projection AND
+# player_season_projection. The wide season range is right for the former (the
+# preseason blend reads history) but materializes historical rows in the latter
+# that nothing serves — narrow with --years if you only meant the team table.
+
 # Push local data to prod (no schema migrations needed if migrations/ is unchanged).
 # A FULL sync is now REFUSED (exit 3) while prod looks live — a served-critical step
 # succeeded within 36h, or the calendar says in-season — because it would roll the

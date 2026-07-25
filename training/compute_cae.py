@@ -75,11 +75,36 @@ MIN_SEASONS_FACE = 3    # coaches considered for the face-validity top list
 N_QUARTILES = 4
 
 
-def load_backtest() -> list[dict]:
+def load_backtest(explicit: Path | None = None) -> list[dict]:
+    """Load the per-team backtest dump CAE scores coaches against.
+
+    Pass `explicit` (the `--dump` flag) to name the file directly. That is
+    what `retrain_downstream.sh` does, because the fallback below picks by
+    *filename*, not recency, and the two disagree more often than you would
+    expect — the dumps carry descriptive tags (`…_honest`, `…_traj60_DATE`,
+    `…_traj60honest211_DATE`), so a fresh `…_full_11season_20260726.json`
+    sorts BEFORE a months-old `…_traj60honest211_20260725.json`. Silently
+    grading coaches against a superseded projection is exactly the kind of
+    drift #218 was about, so when the two orderings disagree we say so.
+    """
+    if explicit is not None:
+        path = Path(explicit)
+        if not path.exists():
+            raise SystemExit(f"--dump {path} does not exist")
+        print(f"backtest dump: {path.name}  (explicit --dump)")
+        return _normalize_proj_keys(json.loads(path.read_text()))
+
     dumps = sorted(EVAL_DIR.glob(BT_GLOB))
     if not dumps:
         raise SystemExit(f"no backtest dump matching {BT_GLOB} in {EVAL_DIR}")
     path = dumps[-1]
+    newest = max(dumps, key=lambda p: p.stat().st_mtime)
+    if newest != path:
+        print(
+            f"  WARNING: picking {path.name} by name, but {newest.name} is newer "
+            f"on disk. Pass --dump to be explicit about which projection "
+            f"generation these grades are scored against."
+        )
     print(f"backtest dump: {path.name}")
     return _normalize_proj_keys(json.loads(path.read_text()))
 
@@ -230,9 +255,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true",
                     help="upsert coach_season_cae + coach_ratings (default: dry-run)")
+    ap.add_argument("--dump", type=Path, default=None,
+                    help="explicit per-team backtest dump to score against. "
+                         "Without it the newest-by-FILENAME match wins, which "
+                         "is not always the newest on disk (see load_backtest).")
     args = ap.parse_args()
 
-    bt = load_backtest()
+    bt = load_backtest(args.dump)
     engine = get_engine()
     with engine.connect() as conn:
         rows = join_coaches(bt, conn)
@@ -322,7 +351,13 @@ def main() -> None:
 
     # --- Summary artifact ---
     summary = {
-        "generated_at": dt.datetime.utcnow().isoformat() + "Z",
+        # `utcnow()` is deprecated and scheduled for removal; the Python 3.13
+        # move in #222 started warning about it. `.replace` keeps the trailing
+        # "Z" the previous summaries were written with, so the field format is
+        # unchanged for anything reading the eval_history ledger.
+        "generated_at": dt.datetime.now(dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
         "denominator": "roster_proj",
         "headline": "raw (coach×program over-expectation)",
         "n_team_seasons": len(rows),
@@ -338,7 +373,7 @@ def main() -> None:
                                         "last_season")}
                   for r in eligible[:15]],
     }
-    date_str = dt.datetime.utcnow().strftime("%Y%m%d")
+    date_str = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
     out = EVAL_DIR / f"cae_compute_{date_str}_summary.json"
     out.write_text(json.dumps(summary, indent=2, default=float))
     print(f"\nwrote {out}")

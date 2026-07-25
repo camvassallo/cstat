@@ -5,6 +5,25 @@ train/serve mismatch in the roster-impact preseason projection calibrator. This
 is the principled fix for the Pierce-class returner over-credit
 (`docs/redshirt_handling.md`), replacing the reverted serving-side filter.
 
+> **This is a design doc, not the operational checklist.** For "I changed
+> something upstream, what do I rerun?", use `training/retrain_downstream.sh`,
+> which runs the chain in dependency order and cannot skip a step.
+>
+> That distinction is load-bearing. Step 3 below — "`train_roster_adjo_model.py`
+> rides along… retrain it too" — was for a long time the *only* place the AdjO
+> retrain was written down, and being buried in a future design doc is precisely
+> why it got skipped three times (#130, #152, #211). `roster_adjo` served an
+> OOF three generations stale for months, wrong by ~0.65 AdjO points on average
+> and up to 3.5 for individual teams, with nothing erroring because its feature
+> contract never changed. See #218.
+>
+> Prose is the weakest link in that chain, so the guarantee is not prose: the
+> two roster-frame models each stamp their meta with an `oof_provenance`
+> fingerprint (`training/oof_provenance.py`), and
+> `cstat_core::inference::validate_roster_frame_provenance` refuses to boot the
+> API when they disagree. The script makes the right thing easy; the stamp is
+> what actually holds.
+
 ## The problem (why)
 
 The roster-impact model maps a team's roster (cam_v3 distribution + archetype
@@ -54,21 +73,23 @@ Instead, generate the training frame from the **exact serving code path**:
    Extract the `build_roster_impact_features` vector from
    `for_scenario(DraftScenario::Ceiling)` (the scenario the backtest already
    scores, `projections_backtest.rs:227`) and write rows:
-   `(team_id, target_season, f0..f24, actual_adj_em, actual_adj_offense)`.
+   `(team_id, target_season, f0..f26, actual_adj_em, actual_adj_offense)`.
    Feature extraction needs only the freshman/trajectory models (for player cam
    values via `apply_projected_cam_v3`) — **not** the roster-impact model itself,
    so there is no chicken-and-egg.
 2. **`build_dataset` reads the dump** — `train_roster_impact_model.py::build_dataset`
-   loads the CSV instead of `PLAYER_QUERY` + `aggregate_team_season`. The 25-feature
+   loads the CSV instead of `PLAYER_QUERY` + `aggregate_team_season`. The 27-feature
    contract is unchanged (same `build_roster_impact_features`), so
    `roster_impact_model_meta.json` and the Rust boot check
    (`inference.rs::validate_roster_impact_meta`) need no change. **Bonus:**
    deleting the Python roster-aggregation mirror (`aggregate_team_season`,
    `PLAYER_QUERY`, `CANONICAL_ROTATION_MPG` copy) also removes a standing
    Rust/Python parity risk.
-3. **`train_roster_adjo_model.py` rides along** — it `import`s `build_dataset`
-   from the impact model, so it trains on the new frame automatically; retrain it
-   too for consistency.
+3. **`train_roster_adjo_model.py` needs its own invocation** — it `import`s
+   `build_dataset` from the impact model, so it picks up the new frame *when it
+   runs*, but sharing the loader does NOT mean it retrains itself. That false
+   intuition is the root cause of #218. `retrain_downstream.sh` runs both halves
+   as adjacent stages so they cannot drift apart.
 4. Keep LOSO (`LOSO_EXPORT_SEASONS = 2016..2026`) export unchanged.
 
 ## Leakage discipline (preserve)
