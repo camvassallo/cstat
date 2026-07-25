@@ -87,14 +87,18 @@ async fn curated_departures_remove_their_player() {
     // means the team string is wrong. Keying the benign test on the name alone
     // would be backwards: a misspelling matches nothing and would be excused as
     // "sub-gate", which is exactly the bug this guard exists to catch.
+    // `bool_or` + GROUP BY rather than a bare LEFT JOIN: `player_season_stats`
+    // is unique on `(player_id, team_id, season)`, so a player with rows on two
+    // teams in one season would otherwise fan the join out.
     let roster: Vec<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
         r#"
         SELECT p.name,
-               COALESCE(pss.games_played >= $2 AND pss.minutes_per_game >= $3, false)
+               COALESCE(bool_or(pss.games_played >= $2 AND pss.minutes_per_game >= $3), false)
         FROM players p
         LEFT JOIN player_season_stats pss
                ON pss.player_id = p.id AND pss.season = p.season
         WHERE p.season = $1
+        GROUP BY p.id, p.name
         "#,
     )
     .bind(BASE_SEASON)

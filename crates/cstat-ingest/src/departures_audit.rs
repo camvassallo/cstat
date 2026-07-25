@@ -68,9 +68,12 @@ struct PlayerMeta {
     class_year: Option<String>,
     nationality: Option<String>,
     /// Clears the projection's roster gate (`QUAL_MIN_GAMES_PLAYED` /
-    /// `QUAL_MIN_MPG`). Sub-gate players never enter `compose_all_projections`
-    /// at all, so a capture row naming one is *correctly* a no-op rather than a
-    /// mistake — see the unmatched classification below.
+    /// `QUAL_MIN_MPG`) on *any* of the player's season rows —
+    /// `player_season_stats` is unique on `(player_id, team_id, season)`, so a
+    /// player with rows on two teams in one season has two, and `bool_or`
+    /// collapses them rather than fanning the join out. Sub-gate players never
+    /// enter `compose_all_projections` at all, so a capture row naming one is
+    /// *correctly* a no-op rather than a mistake — see the classification below.
     qualified: bool,
 }
 
@@ -101,13 +104,14 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
     let meta: Vec<PlayerMeta> = sqlx::query_as::<_, PlayerMeta>(
         r#"
         SELECT p.id, p.name, t.name AS team_name, p.class_year, p.nationality,
-               COALESCE(pss.games_played >= $2 AND pss.minutes_per_game >= $3, false)
+               COALESCE(bool_or(pss.games_played >= $2 AND pss.minutes_per_game >= $3), false)
                    AS qualified
         FROM players p
         JOIN teams t ON t.id = p.team_id
         LEFT JOIN player_season_stats pss
                ON pss.player_id = p.id AND pss.season = p.season
         WHERE p.season = $1
+        GROUP BY p.id, p.name, t.name, p.class_year, p.nationality
         "#,
     )
     .bind(base)

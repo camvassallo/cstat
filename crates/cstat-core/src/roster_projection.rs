@@ -761,9 +761,11 @@ pub fn normalize_player_name(name: &str) -> String {
 ///
 /// `player_departures` is the optional curated list of exits no feed reports —
 /// pro signings abroad, retirements, dismissals (issue #215). Pass `&[]` to
-/// skip. Matched rows take precedence over the portal and draft channels: a
-/// player who committed in the portal and *then* signed professionally is gone
-/// from both his old team and his would-be destination's arrivals.
+/// skip. A matched row takes precedence over all three inferred channels
+/// (graduation, portal, draft), so a hand-entered exit always wins: a player who
+/// committed in the portal and *then* signed professionally is gone from both
+/// his old team and his would-be destination's arrivals, and a graduating senior
+/// who signed abroad is labelled by where he went rather than by his class year.
 ///
 /// `target_season_complete` is the caller's clock verdict on whether the target
 /// season (`base_season + 1`) is *fully over* — pass
@@ -1255,6 +1257,29 @@ pub async fn compose_all_projections(
 
         for (row, name) in rows {
             let pid = row.player_id;
+            // Left the program outside the portal and the draft? Checked FIRST,
+            // ahead of all three inferred channels, so a hand-entered row always
+            // wins: a portal commit who then signed pro is labelled by where he
+            // actually went, a curated exit beats a `declared` draft flag
+            // (nothing left to resolve — he's gone), and a *senior* who signed
+            // abroad reads "→ Real Madrid" instead of "Sr graduation". The
+            // roster effect is identical either way — he's a departure — but the
+            // label is the informative one, and the invariant that a matched
+            // capture row always produces a `LeftProgram` is what
+            // `departures-audit` and `tests/curated_departures.rs` rely on to
+            // tell a resolved row from a typo. Without this ordering, recording
+            // a graduating senior's overseas signing (a perfectly reasonable
+            // entry) would make both of them report the row as doing nothing.
+            if let Some((reason, destination)) = left_program.get(&pid) {
+                departures.push(DepartureReason::LeftProgram {
+                    player_id: pid,
+                    name: name.clone(),
+                    reason: reason.clone(),
+                    destination: destination.clone(),
+                });
+                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
+                continue;
+            }
             // Senior graduating? class_year fits {'Sr', 'SR', 'Senior'};
             // cstat normalizes to 'Sr' but tolerate variants.
             let is_senior = row
@@ -1265,21 +1290,6 @@ pub async fn compose_all_projections(
                 departures.push(DepartureReason::GraduatedSenior {
                     player_id: pid,
                     name: name.clone(),
-                });
-                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
-                continue;
-            }
-            // Left the program outside the portal and the draft? Checked
-            // ahead of both so a portal commit who then signed pro is
-            // labelled by where he actually went, and so a curated exit
-            // beats a `declared` draft flag (there's nothing left to
-            // resolve — he's gone).
-            if let Some((reason, destination)) = left_program.get(&pid) {
-                departures.push(DepartureReason::LeftProgram {
-                    player_id: pid,
-                    name: name.clone(),
-                    reason: reason.clone(),
-                    destination: destination.clone(),
                 });
                 departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
                 continue;
