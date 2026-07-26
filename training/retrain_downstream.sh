@@ -274,5 +274,7 @@ If this retrain moved the projector materially, re-check them:
   cargo run --bin cstat-ingest -- measure-blend-accuracy --years 2024,2025,2026
 Pass --dump. The fallback picks the newest dump by FILENAME, and descriptive tags
 sort after a plain run-name, so it can hand you a superseded generation.
-See docs/model_dependency_graph.md "Layer 4".
+All five were measured optimal 2026-07-26 against the post-#218 state, so this is
+a structural gap, not a live defect. See docs/model_dependency_graph.md "Layer 4"
+and issue #236.
 NOTE
