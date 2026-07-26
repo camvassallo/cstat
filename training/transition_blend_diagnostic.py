@@ -184,9 +184,12 @@ def main():
     print(f"  transition-cond wt   pooled MAE {cond:.4f}  (lift {flat-cond:+.4f})")
     print(f"  last-fold weights: stable w={w_last.get('S')}, transition w={w_last.get('T')}")
 
-    out = EVAL_DIR / f"transition_blend_diagnostic_{dt.datetime.utcnow():%Y%m%d}_summary.json"
+    # utcnow() is deprecated; now(UTC) is aware, so drop the tzinfo before
+    # formatting to keep the naive `…Z` shape the existing artifacts use.
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    out = EVAL_DIR / f"transition_blend_diagnostic_{now:%Y%m%d}_summary.json"
     out.write_text(json.dumps({
-        "generated_at": dt.datetime.utcnow().isoformat() + "Z",
+        "generated_at": now.isoformat() + "Z",
         "n": len(rows), "flat_served_mae": mae(rows, 0.5),
         "global_best_w": best_weight(rows)[0],
         "loso_flat_mae": flat, "loso_conditional_mae": cond, "loso_lift": flat - cond,

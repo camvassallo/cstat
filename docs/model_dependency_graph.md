@@ -237,8 +237,13 @@ But it means a retrain leaves the constants carrying an assumption nobody
 re-tested. After a Layer 2 retrain that moved the projector materially, run:
 
 ```bash
-cd training && ./.venv/bin/python transition_blend_diagnostic.py --dump "$BT_DUMP"
-cargo run --bin cstat-ingest -- measure-blend-accuracy --years 2024,2025,2026
+# From training/ — pass the dump the retrain just produced, by name.
+./.venv/bin/python transition_blend_diagnostic.py \
+    --dump eval_history/projections_backtest_per_team_full_11season_run<TAG>.json
+
+# From the REPO ROOT — MODEL_DIR defaults to the relative `training/models`,
+# so this fails with "margin_model.onnx does not exist" from anywhere else.
+cargo run --release --bin cstat-ingest -- measure-blend-accuracy --years 2024,2025,2026
 ```
 
 Pass `--dump` explicitly. `load_backtest()`'s fallback picks the newest dump by
@@ -250,10 +255,61 @@ mode one layer over. `compute_cae.py`, `transition_blend_diagnostic.py`,
 `pit_cae_backtest.py`, and `pit_program_calibration.py` all take `--dump`;
 `load_backtest` warns when name-order and mtime-order disagree.
 
-**Not re-validated after the #218 retrain.** That retrain moved AdjO by ~0.65
-on average, and neither tuner was rerun. The shipped constants may still be
-optimal — nobody has measured it either way, and this doc would rather say so
-than imply the chain is closed.
+**Re-validated after the #218 retrain (2026-07-26). All five constants
+confirmed; no change warranted.** Both tuners were rerun against the
+post-retrain state. Details below, but the headline is that Layer 4 is a real
+structural gap because nothing *forces* the re-check — not because the
+constants drift often.
+
+#### Shrink weights
+
+Checked against both the pre- and post-retrain dumps, on the same 2,632
+team-seasons, so the retrain's effect could be separated from the tuning
+question:
+
+| cohort | shipped | shipped MAE | grid optimum | optimum MAE | cost of shipping |
+|---|---|---|---|---|---|
+| continuity (≥40% retained), post-#218 | **0.45** | 5.4274 | 0.45 | 5.4274 | 0.0000 |
+| continuity, pre-#218 | 0.45 | 5.4233 | 0.45 | 5.4233 | 0.0000 |
+| overhaul (<40% retained), post-#218 | **0.20** | 5.9483 | 0.25 | 5.9446 | +0.0037 |
+| overhaul, pre-#218 | 0.20 | 5.9372 | 0.25 | 5.9352 | +0.0020 |
+
+`PROJECTION_SHRINK_WEIGHT = 0.45` is exactly optimal on both generations.
+`PROJECTION_SHRINK_WEIGHT_OVERHAUL = 0.20` sits one grid step off a nearly flat
+optimum — the overhaul curve runs 5.9686 / 5.9483 / 5.9446 / 5.9532 across
+w = 0.15 / 0.20 / 0.25 / 0.30 — so the cost is 0.0037 AdjEM on a ~5.95 metric,
+far inside noise.
+
+The more useful finding is the attribution: **the retrain did not move the
+optimum.** Both dumps pick 0.25 for the overhaul cohort, so the one-step offset
+predates #218 and is not calibrator drift. It is consistent with the original
+tuning note ("the overhaul cohort's own backtest optimum moved 0.25 → 0.20"),
+i.e. a deliberate rounding rather than a stale value.
+
+#### Preseason blend schedule
+
+`measure-blend-accuracy --years 2024,2025,2026`, 17,176 games scored, 11,107 in
+the shared subset where both legs exist:
+
+| schedule | pooled blended MAE |
+|---|---|
+| pit-only (no blend) | 9.17 |
+| pre-calibration (w=1.0, end=75, HCA=3.5) | 9.01 |
+| **current route (w=0.70, end=42, HCA=3.5)** | **8.82** |
+| grid optimum (w=0.70, end=49, HCA=3.5) | 8.82 |
+| per-week oracle (ceiling) | 8.78 |
+
+`PRESEASON_PEAK_WEIGHT = 0.70` and `PRESEASON_HOME_COURT_ADVANTAGE = 3.5` are
+both exactly optimal. `PRESEASON_DECAY_DAYS = 42` versus the grid's 49 is worth
+nothing pooled — the two tie at 8.82 — and per season the gap is 0.00 / 0.00 /
+0.01 (2024 / 2025 / 2026). Total remaining headroom to the per-week oracle is
+0.04, so the linear-from-open shape is close to exhausted.
+
+**One trap in that output.** The HCA sweep reports a "preseason-leg HCA optimum
+1.5", well below the shipped 3.5. That sweep scores the **preseason leg alone**;
+the joint grid, which optimizes the metric actually served, picks 3.5. Read in
+isolation the sweep looks like it is telling you to change the constant. It is
+not.
 
 ### The `player_season_projection` caveat
 
