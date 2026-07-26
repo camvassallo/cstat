@@ -268,20 +268,103 @@ def test_missing_season_detail_reports_the_strong_verdict() -> None:
     assert "+2" in why
 
 
-def test_staleness_propagates_to_layer2() -> None:
-    """A Layer 2 node with matching inputs is still stale when Layer 1 moved.
+def test_every_node_is_actually_reported() -> None:
+    """`check_provenance.NODES` must cover every node in the registry.
 
-    This is #218 stated as a rule: Layer 2 trains on Layer 1's predictions, so
-    it is calibrated for an error profile that no longer exists. Its own
-    feature contract is unchanged and nothing errors — which is precisely why
-    the propagation has to be explicit rather than inferred from a digest.
+    The report iterates `NODES`, not `NODE_INPUTS`. A node added to the
+    registry but forgotten here would be fingerprinted and then silently left
+    out of the verdict — a tool that quietly under-reports, which is the exact
+    class of failure this whole chain is meant to remove.
     """
-    for node, ups in P.NODE_UPSTREAM.items():
-        if P.NODE_INPUTS[node] and node.startswith("roster"):
-            assert "trajectory" in ups and "freshman" in ups, (
-                f"{node} trains on the OOF tables, so both Layer 1 nodes must "
-                f"be declared upstream or a Layer 1 retrain goes unreported"
+    assert set(C.NODES) == set(P.NODE_INPUTS), (
+        f"NODES {sorted(C.NODES)} does not match the registry "
+        f"{sorted(P.NODE_INPUTS)}; a missing node is silently never reported"
+    )
+    assert set(C.LAYER) == set(C.NODES), "every reported node needs a layer"
+
+
+def test_nodes_are_in_dependency_order() -> None:
+    """`NODES` order decides which node the report tells you to retrain from.
+
+    `render()` picks the *first* stale entry as the highest stale node and
+    prints it into a `--from` command. If the order were wrong that advice
+    would skip a stale upstream node, leaving the tree desynced after a retrain
+    the operator believes fixed it.
+    """
+    seen: set[str] = set()
+    for node in C.NODES:
+        for up in P.NODE_UPSTREAM[node]:
+            assert up in seen, (
+                f"{node} is listed before its upstream {up}; the report would "
+                f"recommend retraining from too far down the tree"
             )
+        seen.add(node)
+
+
+def test_staleness_propagates_to_layer2() -> None:
+    """A Layer 2 node with matching inputs is still STALE when Layer 1 moved.
+
+    This is #218 stated as a rule, and it is the one verdict that cannot be
+    derived from a digest comparison: Layer 2's own inputs genuinely still
+    match, because it consumes the OOF tables and those have not changed. It is
+    stale because it is calibrated for an error profile that no longer exists.
+
+    Deliberately end-to-end through `check()` rather than asserting on the
+    `NODE_UPSTREAM` table — the table being right is worth nothing if the
+    propagation loop does not read it.
+    """
+    import json
+    import tempfile
+    from pathlib import Path
+
+    live = {
+        name: {
+            "n_rows": 1,
+            "digest": f"d-{name}",
+            "by_season": {"2026": {"n_rows": 1, "digest": f"s-{name}"}},
+        }
+        for name in P.SOURCES
+    }
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        # Layer 1 `trajectory` trained on an older Layer 0; everything else,
+        # including both Layer 2 halves, matches the live database exactly.
+        for node in C.NODES:
+            stamp = {n: json.loads(json.dumps(live[n])) for n in P.NODE_INPUTS[node]}
+            if node == "trajectory":
+                cam = stamp["torvik_player_stats.cam_v3"]
+                cam["digest"] = "older"
+                cam["by_season"]["2026"] = {"n_rows": 1, "digest": "older-2026"}
+            meta = {"input_provenance": stamp}
+            if node.startswith("roster"):
+                meta["oof_provenance"] = P.oof_provenance_from(live)
+            (d / P.NODE_META_FILES[node]).write_text(json.dumps(meta))
+
+        orig_dir = C.MODEL_DIR
+        try:
+            C.MODEL_DIR = d
+            report = C.check(live=live, today=dt.date(2026, 7, 26))
+        finally:
+            C.MODEL_DIR = orig_dir
+
+    nodes = report["nodes"]
+    assert nodes["trajectory"]["verdict"] == C.STALE
+    assert nodes["freshman"]["verdict"] == C.CURRENT, (
+        "freshman does not consume the changed source and must stay current — "
+        "over-propagating would make the report recommend needless retrains"
+    )
+    for half in ("roster_impact", "roster_adjo"):
+        assert nodes[half]["verdict"] == C.STALE, (
+            f"{half}'s own inputs match, but Layer 1 above it moved; without "
+            f"propagation this is the #218 blind spot"
+        )
+        assert any("upstream" in r for r in nodes[half]["reasons"])
+    assert report["boot_guard"]["status"] == "ok", (
+        "the two halves genuinely share one OOF snapshot — the boot guard is "
+        "right to pass, which is exactly why it cannot catch this case"
+    )
+    assert report["exit_code"] == 1
 
 
 # ---- Database-backed ----------------------------------------------------
@@ -364,6 +447,8 @@ def main() -> int:
         test_churn_exemption_is_limited_to_nightly_tables,
         test_offseason_grants_no_exemption,
         test_missing_season_detail_reports_the_strong_verdict,
+        test_every_node_is_actually_reported,
+        test_nodes_are_in_dependency_order,
         test_staleness_propagates_to_layer2,
         test_oof_digest_matches_the_218_construction,
         test_fingerprints_are_stable_across_reads,

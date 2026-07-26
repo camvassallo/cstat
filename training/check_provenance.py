@@ -154,10 +154,18 @@ def classify_source(
     return STALE, f"{name}: {detail}"
 
 
-def check(strict: bool = False, today: dt.date | None = None) -> dict:
-    """Build the full report. Pure data — printing is the caller's job."""
+def check(
+    strict: bool = False,
+    today: dt.date | None = None,
+    live: dict | None = None,
+) -> dict:
+    """Build the full report. Pure data — printing is the caller's job.
+
+    `live` overrides the database read, which lets the propagation rule be
+    tested without a populated database (`test_provenance.py`).
+    """
     churning = mutable_season(today)
-    live = fingerprint(tuple(SOURCES))
+    live = live if live is not None else fingerprint(tuple(SOURCES))
 
     report: dict = {
         "checked_at": (today or dt.date.today()).isoformat(),
@@ -213,9 +221,12 @@ def check(strict: bool = False, today: dt.date | None = None) -> dict:
 
     failures = [n for n, r in report["nodes"].items() if r["verdict"] == STALE]
     unstamped = [n for n, r in report["nodes"].items() if r["verdict"] == UNSTAMPED]
+    # Anything other than `ok` here means the API will not start: the Rust
+    # validator treats a mismatched stamp AND a missing/unreadable meta as hard
+    # failures, so `missing` cannot be softer than `mismatch`.
     report["exit_code"] = (
         2
-        if report["boot_guard"]["status"] == "mismatch"
+        if report["boot_guard"]["status"] != "ok"
         else 1
         if failures or (strict and unstamped)
         else 0
@@ -280,7 +291,7 @@ def render(report: dict) -> str:
         # NODES is in dependency order, so the first stale entry is the highest.
         highest = next(n for n in NODES if n in stale)
         out.append(f"  {len(stale)} stale node(s): {', '.join(stale)}")
-        out.append(f"  Retrain from the highest stale node downward:")
+        out.append("  Retrain from the highest stale node downward:")
         out.append(f"    ./training/retrain_downstream.sh --from {highest}")
         if LAYER[highest] == 1:
             out.append(

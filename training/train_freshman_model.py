@@ -479,6 +479,10 @@ def main() -> None:
     print("=" * 60)
     df = build_dataset()
     print(f"Features: {len(FEATURE_COLS)}  | rows: {len(df)}")
+    # Adjacent to the read it describes, not at meta-write time — see the note
+    # in train_trajectory_model.main(). A post-fit stamp can claim a snapshot
+    # the model never trained on, and it errs toward reporting stale as current.
+    stamp = input_provenance("freshman")
 
     print()
     print("=" * 60)
@@ -585,7 +589,8 @@ def main() -> None:
         # `freshman_oof_predictions`, so Layer 0 drift that stops here still
         # reaches Layer 2 under a valid `oof_provenance` stamp. Compared
         # against the live database by `check_provenance.py`.
-        "input_provenance": input_provenance("freshman"),
+        # Captured next to the frame read, not here — see main().
+        "input_provenance": stamp,
         "tier_thresholds": TIER_THRESHOLDS,
         "tier_mean_baseline": baseline,
         "cv_5fold": cv,

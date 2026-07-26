@@ -625,6 +625,13 @@ def main() -> None:
     df = build_dataset()
     df = df.reset_index(drop=True)
     print(f"Features: {len(FEATURE_COLS)}  | rows: {len(df)}")
+    # Fingerprint the inputs HERE, adjacent to the read they describe — not at
+    # meta-write time. A stamp taken after the fit would describe the database
+    # as it is when training finishes, and a retrain that overlaps a nightly
+    # `compute_all` would then claim the model trained on a snapshot it never
+    # saw. That error points the wrong way: it reports a stale model as
+    # current, which is the failure this whole chain exists to catch.
+    stamp = input_provenance("trajectory")
 
     print("\n" + "=" * 60)
     print(f"Naive baseline (year N+1 ≈ year N CamPom)")
@@ -730,7 +737,8 @@ def main() -> None:
         # failure one layer up, and invisible to the boot guard because that
         # guard only compares the two Layer 2 halves against each other.
         # `check_provenance.py` compares this against the live database.
-        "input_provenance": input_provenance("trajectory"),
+        # Captured next to the frame read, not here — see main().
+        "input_provenance": stamp,
         "baseline_naive": naive,
         "backtest_lopo": lopo,
         "cv_5fold": cv,

@@ -344,9 +344,14 @@ def fingerprint(names: tuple[str, ...] | list[str], conn=None) -> dict:
 def input_provenance(node: str) -> dict:
     """The `input_provenance` block a trainer stamps into its meta.
 
-    Call this at meta-write time, not at frame-build time — a fingerprint is a
-    claim about what the model was trained on, and reading it after the fit
-    keeps it honest if the frame query is later edited.
+    Call this **immediately after the frame is read**, not at meta-write time.
+    The stamp is a claim about what the model trained on, so it has to be taken
+    adjacent to the read it describes. Taken after the fit instead, a retrain
+    that overlaps a nightly `compute_all` would stamp the post-compute snapshot
+    onto a model built from the pre-compute one — and `check_provenance.py`
+    would then compare that stamp to a matching database and report CURRENT.
+    A false "current" is strictly worse than a false "stale" here: it is the
+    exact silence this chain exists to break.
     """
     stamp = fingerprint(NODE_INPUTS[node])
     print(f"  input provenance ({node}):")

@@ -59,6 +59,9 @@ def main() -> None:
     print("=" * 60)
     print("Building dataset (reusing the served roster-impact frame)...")
     df, feature_cols, coverage = build_dataset()
+    # Adjacent to the read it describes, not at meta-write time — see the note
+    # in train_trajectory_model.main().
+    stamp = input_provenance("roster_adjo")
     # feature_cols is fixed BEFORE this merge, so adj_offense can never leak
     # in as a feature (same discipline as the validation experiment).
     df["team_id"] = df["team_id"].astype(str)
@@ -111,9 +114,6 @@ def main() -> None:
     onnx_path = OUT_DIR / "roster_adjo_model.onnx"
     export_to_onnx(final, len(feature_cols), onnx_path)
     print(f"Exported ONNX → {onnx_path}")
-
-    # One read of the input snapshot, used for both provenance blocks below.
-    stamp = input_provenance("roster_adjo")
 
     meta = {
         "model": "roster_adjo_model",

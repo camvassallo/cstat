@@ -589,6 +589,11 @@ def main() -> None:
     print("=" * 60)
     print("Building dataset...")
     df, feature_cols, coverage = build_dataset()
+    # Adjacent to the read it describes, not at meta-write time — see the note
+    # in train_trajectory_model.main(). Also matters more here: the LOSO export
+    # loop below is long, so a post-fit stamp has a wide window to straddle a
+    # concurrent write and record a snapshot this frame never saw.
+    stamp = input_provenance("roster_impact")
     print(f"Features: {len(feature_cols)}  | rows: {len(df)}")
     print(f"Feature order: {feature_cols}")
 
@@ -632,9 +637,6 @@ def main() -> None:
     print("Leave-one-season-out models for projections-backtest (v2 Part 2)")
     print("=" * 60)
     loso_train_ns = export_loso_models(df, feature_cols, final_n)
-
-    # One read of the input snapshot, used for both provenance blocks below.
-    stamp = input_provenance("roster_impact")
 
     meta = {
         "model": "roster_impact_model",
