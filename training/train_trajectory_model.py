@@ -55,6 +55,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
 from db import canonical_frame_order, get_engine
+from provenance import input_provenance
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
@@ -624,6 +625,13 @@ def main() -> None:
     df = build_dataset()
     df = df.reset_index(drop=True)
     print(f"Features: {len(FEATURE_COLS)}  | rows: {len(df)}")
+    # Fingerprint the inputs HERE, adjacent to the read they describe — not at
+    # meta-write time. A stamp taken after the fit would describe the database
+    # as it is when training finishes, and a retrain that overlaps a nightly
+    # `compute_all` would then claim the model trained on a snapshot it never
+    # saw. That error points the wrong way: it reports a stale model as
+    # current, which is the failure this whole chain exists to catch.
+    stamp = input_provenance("trajectory")
 
     print("\n" + "=" * 60)
     print(f"Naive baseline (year N+1 ≈ year N CamPom)")
@@ -722,6 +730,15 @@ def main() -> None:
         # this so a stale meta + empty table can't silently regress the
         # historical-year API routes to in-sample serving.
         "oof_persisted": True,
+        # Fingerprint of the Layer 0 snapshot this frame was built from
+        # (issue #223). This model WRITES `trajectory_oof_predictions`, so a
+        # Layer 0 change that goes unretrained here propagates into Layer 2
+        # wearing a perfectly valid-looking `oof_provenance` stamp — the #218
+        # failure one layer up, and invisible to the boot guard because that
+        # guard only compares the two Layer 2 halves against each other.
+        # `check_provenance.py` compares this against the live database.
+        # Captured next to the frame read, not here — see main().
+        "input_provenance": stamp,
         "baseline_naive": naive,
         "backtest_lopo": lopo,
         "cv_5fold": cv,

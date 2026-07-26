@@ -31,7 +31,7 @@ import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error
 
 from db import get_engine
-from oof_provenance import oof_provenance
+from provenance import input_provenance, oof_provenance_from
 from train_roster_impact_model import (
     build_dataset,
     lgb_params,
@@ -59,6 +59,9 @@ def main() -> None:
     print("=" * 60)
     print("Building dataset (reusing the served roster-impact frame)...")
     df, feature_cols, coverage = build_dataset()
+    # Adjacent to the read it describes, not at meta-write time — see the note
+    # in train_trajectory_model.main().
+    stamp = input_provenance("roster_adjo")
     # feature_cols is fixed BEFORE this merge, so adj_offense can never leak
     # in as a feature (same discipline as the validation experiment).
     df["team_id"] = df["team_id"].astype(str)
@@ -125,11 +128,17 @@ def main() -> None:
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
         "cam_v3_source": "oof",
         "cam_v3_coverage": coverage,
+        # Full input fingerprint, the superset `check_provenance.py` reads
+        # (issue #223). Declared identical to roster_impact's — the two share
+        # one frame via `build_dataset`, so they cannot honestly differ.
+        "input_provenance": stamp,
         # Must equal roster_impact_model_meta.json's stamp — the boot
         # validator compares them and refuses to serve a mismatched pair
         # (issue #218). Retrain BOTH whenever the OOF is regenerated;
         # `training/retrain_downstream.sh` does this in the right order.
-        "oof_provenance": oof_provenance(),
+        # Projected out of `stamp` so one run can never write two disagreeing
+        # views of the same snapshot.
+        "oof_provenance": oof_provenance_from(stamp),
         "final_n_estimators": final_n,
         "backtest_loso": {"pooled_mae": loso_mae, "naive_mae": naive,
                           "per_season": per_season},

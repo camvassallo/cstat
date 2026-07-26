@@ -13,9 +13,12 @@ ordering of durability is:
 1. **Executable guard** — the `oof_provenance` stamp compared at boot by
    `cstat_core::inference::validate_roster_frame_provenance`. Catches drift
    regardless of who ran what, or whether they read this file.
-2. **Single command** — `training/retrain_downstream.sh`. Makes the correct
+2. **Staleness query** — `training/check_provenance.py`. Answers "which nodes
+   are stale?" against the live database, across every edge of the tree rather
+   than the single Layer 1 → Layer 2 edge the boot guard covers (§6).
+3. **Single command** — `training/retrain_downstream.sh`. Makes the correct
    sequence the easy one.
-3. **Prose** — this doc. Explains *why* the tree is shaped this way, which
+4. **Prose** — this doc. Explains *why* the tree is shaped this way, which
    neither of the above can.
 
 Use the script to do the work. Read this to understand what the script is doing
@@ -230,9 +233,10 @@ raw projector. Their own doc comment records that they were last retuned
 2026-06-27 "after the multi-season-trajectory calibrator refit," which is the
 tell — a Layer 2 retrain is exactly the event that can move their optimum.
 
-**`retrain_downstream.sh` does not run either tuner, and nothing checks them.**
-That is deliberate rather than an oversight: both tools *report* a recommended
-value, they do not write code, so there is no honest way to automate the step.
+**`retrain_downstream.sh` does not run either tuner, and nothing checks them**
+(#236). That is deliberate rather than an oversight: both tools *report* a
+recommended value, they do not write code, so there is no honest way to
+automate the step.
 But it means the constants keep carrying their last-measured assumption until
 someone re-measures. After a Layer 2 retrain that moved the projector
 materially, run both (the current values were last confirmed 2026-07-26, below):
@@ -412,26 +416,99 @@ healthy while serving in-sample projections — elite 2024 transfers projecting
 - `crates/cstat-core/tests/sync_prod_r4_invariant.rs` — the four raw
   PBP/lineup tables stay local-only, which is what lets the in-season targeted
   push safely own the derived rollups.
+- `training/test_provenance.py` — the #223 fingerprint chain. Also in the
+  `Training Guards` CI job; the load-bearing check is that the generalized
+  digest still reduces exactly to the #218 construction, because a drift there
+  makes every committed stamp incomparable and the API refuses to boot.
+
 
 ### Still convention (nothing will stop you)
 
 - **Local Layer 0 being current, and matching prod, before you train.** #225.
-- **Retraining downstream after a Layer 1 change.** The provenance stamp
-  catches Layer 2 halves disagreeing *with each other*, but nothing yet checks
-  a Layer 2 model against the OOF table's *current* contents, so a Layer 1
-  retrain followed by no Layer 2 retrain at all is still invisible. That is the
-  generalization tracked in #223.
 - **Syncing Layer 3 tables after regenerating them.** A retrain that stops at
   the last local stage leaves prod on the old numbers indefinitely.
 - **Re-tuning the Layer 4 serving constants after a Layer 2 retrain.** Nothing
   runs the tuners, nothing compares the shipped value to the current optimum,
   and the constants are plain `const`s that will compile and serve whatever
-  they say. See the Layer 4 section above.
+  they say. Tracked as #236 (low priority — all five measured optimal
+  2026-07-26). See the Layer 4 section above.
 - **Passing every ingested season to `archetypes.py`.** The CLI default
   (`2025,2026`) is a 2-season fit that does *not* match the shipped
   combined-cohort model and clusters differently. See CLAUDE.md and
   `docs/archetypes_methodology.md`.
 - **The `eval_history` staging policy** in §4.
+
+---
+
+## 6. Asking which nodes are stale
+
+```bash
+cd training && ./.venv/bin/python check_provenance.py
+```
+
+Every trainer stamps its meta with an `input_provenance` block — a fingerprint
+of each input it consumed, built by `training/provenance.py`. The check
+recomputes those fingerprints against the live database and prints a per-node
+verdict, propagating staleness downward so a Layer 2 node reads STALE when
+Layer 1 above it moved, even though its own inputs match.
+
+This is the half the boot guard structurally cannot cover. That guard compares
+the two Layer 2 halves **against each other**, so a Layer 1 retrain followed by
+no Layer 2 retrain leaves both halves agreeing — and both stale. The report
+catches it; the boot guard reports OK, correctly, because the pair really does
+share one snapshot.
+
+```
+  ✗ Layer 1  trajectory       STALE      torvik_player_stats.cam_v3: changed 2019
+  ✓ Layer 1  freshman         CURRENT
+  ✗ Layer 2  roster_impact    STALE      upstream trajectory is stale
+  ✗ Layer 2  roster_adjo      STALE      upstream trajectory is stale
+  ✓ boot guard      OK         both halves share one OOF snapshot
+```
+
+### Verdicts are not binary, and that is the whole design
+
+`compute_all` rewrites the live season's `cam_gbpm_v3_psos`,
+`player_season_stats`, `player_on_off` and `player_archetypes` every nightly,
+and the Layer 1 training window includes the in-progress season. A whole-table
+comparison is therefore genuinely different every morning in-season. A tool
+that prints STALE 150 nights a year is one people learn to scroll past — the
+same ignored-warning failure that let #218 survive three regenerations.
+
+So the fingerprints carry per-season sub-digests, and a change is classified:
+
+| verdict | meaning |
+|---|---|
+| `CURRENT` | nothing moved |
+| `CHURN` | only the in-progress season moved, in a table the nightly rewrites by design. Expected; not a reason to retrain |
+| `STALE` | a **closed** season moved, or a table no nightly touches moved — a recompute, a swap-repair (#140/#201), a re-ingest, or an archetype refit |
+| `UNSTAMPED` | the node predates the chain. Reported, not failed — every model is unstamped until its next retrain |
+
+The exemption is deliberately narrow: one season, only in a table flagged
+`nightly=True` in the source registry, and only when nothing else moved. A
+season appearing or disappearing is never churn, and `recruits` — which no
+nightly writes — is never exempt whatever the calendar says. In the offseason
+`mutable_season()` returns `None` and nothing is exempt at all, so the same
+byte-level diff reads CHURN in January and STALE in July. That is correct: in
+July there is no nightly to explain it.
+
+Exit codes: 0 = no drift, 1 = at least one STALE node, 2 = the two Layer 2
+halves disagree (the API will refuse to boot). `--strict` also fails on
+UNSTAMPED, once the tree has been retrained through. `--json` for tooling,
+`--as-of YYYY-MM-DD` to evaluate the in-season rule against another date.
+
+`retrain_downstream.sh` runs this at the end of every retrain, report-only — a
+partial run is a legitimate mid-flight state and `--from` exists to resume one.
+
+### What is not covered yet
+
+Layer 3 producers — `team_preseason_projection`, the backtest dumps,
+`coach_season_cae` — still record nothing about which model artifact produced
+them, so `models/roster_impact_loso/*` (gitignored) can drift from the
+committed serving model unnoticed. That half of #223 is not built. Layer 3
+staleness should stay **report-only** when it is: a stale projection table is a
+data-freshness problem, and prod refusing to boot over it would be worse than
+serving it.
 
 ---
 

@@ -1,6 +1,15 @@
 """OOF snapshot fingerprint — the provenance stamp shared by every model
 trained on the roster-impact feature frame.
 
+**No trainer imports this any more.** `provenance.py` (#223) generalized the
+mechanism to every edge of the dependency tree, and the Layer 2 trainers now
+project their `oof_provenance` block out of that larger stamp. What survives
+here is the frozen #218 construction, kept deliberately as an *independent*
+reference implementation: `test_provenance.py` asserts the generalized helper
+still reproduces this file's digests bit for bit. Fold this into `provenance.py`
+and that test compares the code to itself, at which point nothing catches the
+one change that would make the API refuse to boot. Do not "clean this up".
+
 Why this exists (issue #218): `train_roster_adjo_model.py` reuses
 `build_dataset` from `train_roster_impact_model.py`, so the two models share
 a training frame whose player cam values come from `trajectory_oof_predictions`
