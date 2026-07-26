@@ -262,4 +262,17 @@ PR #215). Review with `git status` and stage deliberately.
 If roster_impact moved, the downstream products built from it did too — commit
 the model artifacts and push the regenerated database tables to prod:
   ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings
+
+NOT RUN BY THIS SCRIPT — the hand-tuned serving constants. PROJECTION_SHRINK_WEIGHT
+/ _OVERHAUL (roster_projection.rs) and PRESEASON_PEAK_WEIGHT / _DECAY_DAYS /
+_HOME_COURT_ADVANTAGE (predict.rs) were each read out of a diagnostic and typed
+into source. Their optimum can move when the raw projector does, and the shrink
+weights are applied by the `projections` stage above, so they sit INSIDE the loop.
+Both tools only report a recommendation, so automating the edit would be dishonest.
+If this retrain moved the projector materially, re-check them:
+  cd training && ./.venv/bin/python transition_blend_diagnostic.py --dump DUMP
+  cargo run --bin cstat-ingest -- measure-blend-accuracy --years 2024,2025,2026
+Pass --dump. The fallback picks the newest dump by FILENAME, and descriptive tags
+sort after a plain run-name, so it can hand you a superseded generation.
+See docs/model_dependency_graph.md "Layer 4".
 NOTE

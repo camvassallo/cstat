@@ -23,6 +23,7 @@ years) beat the flat 0.5 out-of-sample?
 Run:  python3 transition_blend_diagnostic.py
 """
 
+import argparse
 import datetime as dt
 import json
 from collections import defaultdict
@@ -38,9 +39,9 @@ OVERHAUL_RETURNING = 0.40   # < this fraction of talent retained = "overhaul"
 MIN_QUAL = 5                # player qualifying gate (mirror the roster model)
 
 
-def load_rows(conn) -> list[dict]:
+def load_rows(conn, dump: Path | None = None) -> list[dict]:
     """Backtest dump rows + team_natstat_id + is_new_hc + returning-talent frac."""
-    bt = load_backtest()
+    bt = load_backtest(dump)
     tid2ns = {r.id: r.natstat_id
               for r in conn.execute(text("SELECT id::text AS id, natstat_id FROM teams"))}
 
@@ -141,8 +142,21 @@ def loso_conditional(rows, cohort_fn, cohorts):
 
 
 def main():
+    # `--dump` matters more here than in the other backtest readers: this tool
+    # is what re-tunes PROJECTION_SHRINK_WEIGHT{,_OVERHAUL}, which are SERVED
+    # constants in roster_projection.rs. load_backtest()'s fallback picks by
+    # filename, not recency, so without this flag a retrain's fresh dump can
+    # lose the sort to a months-old descriptively-tagged one and the weights
+    # get tuned against a superseded projection generation — the #218 failure
+    # mode, one layer over. Pass the dump the retrain just produced.
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--dump", type=Path, default=None,
+                    help="per-team backtest dump to read (default: newest by "
+                         "filename, which is not always newest on disk)")
+    args = ap.parse_args()
+
     with get_engine().connect() as conn:
-        rows = load_rows(conn)
+        rows = load_rows(conn, args.dump)
     print(f"\nn = {len(rows)} team-seasons ({START_YEAR}-2026); "
           f"flat served MAE {mae(rows,0.5):.3f}, global best w={best_weight(rows)[0]:.2f}")
 

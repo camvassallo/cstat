@@ -58,6 +58,15 @@ LAYER 3  derived products                         [no training]
   training/compute_cae.py            -> coach_season_cae, coach_ratings
   cstat-ingest compute-projections   -> team_preseason_projection
                                      -> player_season_projection (see caveat, §3)
+
+LAYER 4  hand-tuned serving constants             [NOT in the chain runner]
+  transition_blend_diagnostic.py  reads the Layer 3 dump
+      -> PROJECTION_SHRINK_WEIGHT / _OVERHAUL   (roster_projection.rs, Rust const)
+  cstat-ingest measure-blend-accuracy  reads team_preseason_projection
+      -> PRESEASON_PEAK_WEIGHT / _DECAY_DAYS / _HOME_COURT_ADVANTAGE
+                                                (predict.rs, Rust const)
+      these are READ OUT of a diagnostic and typed into source by a human;
+      nothing re-derives or re-validates them on a retrain — see §3
 ```
 
 ### The game-model branch has no edge into this tree
@@ -201,6 +210,51 @@ prod/local archetype mismatch into a committed model.
   roster-impact residual, so grades shift on every Layer 2 retrain. That is
   descriptive and expected, not a defect.
 
+### Layer 4: the constants the chain runner does not touch
+
+Five numbers in the serving path were tuned by hand against a Layer 3 output
+and are now Rust `const`s:
+
+| Constant | Where | Tuned by |
+|---|---|---|
+| `PROJECTION_SHRINK_WEIGHT` (0.45) | `roster_projection.rs` | `transition_blend_diagnostic.py`, off the backtest dump |
+| `PROJECTION_SHRINK_WEIGHT_OVERHAUL` (0.20) | `roster_projection.rs` | same |
+| `PRESEASON_PEAK_WEIGHT` (0.70) | `predict.rs` | `cstat-ingest measure-blend-accuracy` |
+| `PRESEASON_DECAY_DAYS` (42) | `predict.rs` | same |
+| `PRESEASON_HOME_COURT_ADVANTAGE` (3.5) | `predict.rs` | same |
+
+The shrink weights sit **inside** the loop, not after it: `compute-projections`
+and the `/api/projections` route both apply them, so the `projections` stage
+materializes rows using a weight tuned against a *previous* generation of the
+raw projector. Their own doc comment records that they were last retuned
+2026-06-27 "after the multi-season-trajectory calibrator refit," which is the
+tell — a Layer 2 retrain is exactly the event that can move their optimum.
+
+**`retrain_downstream.sh` does not run either tuner, and nothing checks them.**
+That is deliberate rather than an oversight: both tools *report* a recommended
+value, they do not write code, so there is no honest way to automate the step.
+But it means a retrain leaves the constants carrying an assumption nobody
+re-tested. After a Layer 2 retrain that moved the projector materially, run:
+
+```bash
+cd training && ./.venv/bin/python transition_blend_diagnostic.py --dump "$BT_DUMP"
+cargo run --bin cstat-ingest -- measure-blend-accuracy --years 2024,2025,2026
+```
+
+Pass `--dump` explicitly. `load_backtest()`'s fallback picks the newest dump by
+**filename**, not by mtime, and the historical dumps carry descriptive tags
+(`…_traj60honest211_20260725`) that sort *after* a plain `run…` name — so the
+fallback can silently hand a freshly-retrained tuner a superseded dump. Tuning
+a served constant against the wrong projection generation is the #218 failure
+mode one layer over. `compute_cae.py`, `transition_blend_diagnostic.py`,
+`pit_cae_backtest.py`, and `pit_program_calibration.py` all take `--dump`;
+`load_backtest` warns when name-order and mtime-order disagree.
+
+**Not re-validated after the #218 retrain.** That retrain moved AdjO by ~0.65
+on average, and neither tuner was rerun. The shipped constants may still be
+optimal — nobody has measured it either way, and this doc would rather say so
+than imply the chain is closed.
+
 ### The `player_season_projection` caveat
 
 `compute-projections` writes **two** tables. `team_preseason_projection`
@@ -312,6 +366,10 @@ healthy while serving in-sample projections — elite 2024 transfers projecting
   generalization tracked in #223.
 - **Syncing Layer 3 tables after regenerating them.** A retrain that stops at
   the last local stage leaves prod on the old numbers indefinitely.
+- **Re-tuning the Layer 4 serving constants after a Layer 2 retrain.** Nothing
+  runs the tuners, nothing compares the shipped value to the current optimum,
+  and the constants are plain `const`s that will compile and serve whatever
+  they say. See the Layer 4 section above.
 - **Passing every ingested season to `archetypes.py`.** The CLI default
   (`2025,2026`) is a 2-season fit that does *not* match the shipped
   combined-cohort model and clusters differently. See CLAUDE.md and
