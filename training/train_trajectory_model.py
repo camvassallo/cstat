@@ -55,6 +55,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
 from db import canonical_frame_order, get_engine
+from provenance import input_provenance
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
@@ -722,6 +723,14 @@ def main() -> None:
         # this so a stale meta + empty table can't silently regress the
         # historical-year API routes to in-sample serving.
         "oof_persisted": True,
+        # Fingerprint of the Layer 0 snapshot this frame was built from
+        # (issue #223). This model WRITES `trajectory_oof_predictions`, so a
+        # Layer 0 change that goes unretrained here propagates into Layer 2
+        # wearing a perfectly valid-looking `oof_provenance` stamp — the #218
+        # failure one layer up, and invisible to the boot guard because that
+        # guard only compares the two Layer 2 halves against each other.
+        # `check_provenance.py` compares this against the live database.
+        "input_provenance": input_provenance("trajectory"),
         "baseline_naive": naive,
         "backtest_lopo": lopo,
         "cv_5fold": cv,

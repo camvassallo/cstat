@@ -96,6 +96,11 @@ jobs:
       # Source-level guards, no database required.
       - run: python test_no_oof_leak.py
       - run: python test_frame_determinism.py
+      # The #223 fingerprint chain. The database-free subset here is the part
+      # that matters most in CI: it pins the generalized digest construction to
+      # the #218 one, and a drift there makes the next retrain's stamps
+      # incomparable — surfacing as a production API that refuses to boot.
+      - run: python test_provenance.py
 
   # ── Frontend ────────────────────────────────────────────
 

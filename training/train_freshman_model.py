@@ -69,6 +69,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
 from db import canonical_frame_order, get_engine
+from provenance import input_provenance
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
 
 OUT_DIR = Path(__file__).parent / "models"
@@ -579,6 +580,12 @@ def main() -> None:
         # this so a stale meta + empty table can't silently regress the
         # Recruits page to in-sample serving.
         "oof_persisted": True,
+        # Fingerprint of the Layer 0 snapshot this frame was built from
+        # (issue #223). Same reasoning as the trajectory model: this writes
+        # `freshman_oof_predictions`, so Layer 0 drift that stops here still
+        # reaches Layer 2 under a valid `oof_provenance` stamp. Compared
+        # against the live database by `check_provenance.py`.
+        "input_provenance": input_provenance("freshman"),
         "tier_thresholds": TIER_THRESHOLDS,
         "tier_mean_baseline": baseline,
         "cv_5fold": cv,

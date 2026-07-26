@@ -74,6 +74,14 @@ cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,20
                                                     # these TRUNCATE the OOF tables
                                                     # and invalidate everything below
 ./training/retrain_downstream.sh --from cae         # resume after a failed stage
+# "Which nodes are stale?" — every trainer stamps an `input_provenance`
+# fingerprint of its own inputs; this recomputes them against the live DB and
+# propagates staleness downward. Catches the case the boot guard structurally
+# cannot: a Layer 1 retrain with no Layer 2 retrain leaves both Layer 2 halves
+# agreeing with EACH OTHER, and both stale. Verdicts are CURRENT / CHURN /
+# STALE / UNSTAMPED — the in-progress season is rewritten nightly, so a change
+# there is expected churn, while a CLOSED season moving is real drift.
+cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # Note: `compute-projections` writes team_preseason_projection AND
 # player_season_projection. The wide season range is right for the former (the
 # preseason blend reads history) but materializes historical rows in the latter

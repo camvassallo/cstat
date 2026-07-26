@@ -246,6 +246,17 @@ elif is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}"; then
   echo "        its job — rerun with both stages."
 fi
 
+# ── Cross-layer staleness (#223) ────────────────────────
+# The stamp check above compares the two Layer 2 halves against EACH OTHER; it
+# cannot see a Layer 1 retrain that was never followed by a Layer 2 one, since
+# both halves would then agree and both be stale. This walks every node's input
+# fingerprint against the live database instead, so a partial run says so.
+#
+# Report-only: a partial run is a legitimate mid-flight state, and `--from`
+# exists precisely to resume one. Read it, don't let it fail the script.
+stage_banner "verify — cross-layer input provenance"
+( cd "$TRAINING_DIR" && "$VENV_PY" check_provenance.py ) || true
+
 # ── What happened ───────────────────────────────────────
 echo
 echo "══ done ═══════════════════════════════════════"

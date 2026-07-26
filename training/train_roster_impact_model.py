@@ -63,7 +63,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
 from db import canonical_frame_order, get_engine
-from oof_provenance import oof_provenance
+from provenance import input_provenance, oof_provenance_from
 
 OUT_DIR = Path(__file__).parent / "models"
 SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
@@ -633,6 +633,9 @@ def main() -> None:
     print("=" * 60)
     loso_train_ns = export_loso_models(df, feature_cols, final_n)
 
+    # One read of the input snapshot, used for both provenance blocks below.
+    stamp = input_provenance("roster_impact")
+
     meta = {
         "model": "roster_impact_model",
         "target": "adj_efficiency_margin",
@@ -648,11 +651,20 @@ def main() -> None:
         "cam_v3_source": "oof",
         # Per-source provenance of the training cam_v3 inputs.
         "cam_v3_coverage": coverage,
+        # Fingerprint of every input this frame was built from — the OOF
+        # tables plus the Layer 0 sources (issue #223). Superset of the
+        # `oof_provenance` stamp below; `check_provenance.py` reads this one.
+        "input_provenance": stamp,
         # Fingerprint of the OOF snapshot this frame was built from. The Rust
         # boot validator requires roster_impact and roster_adjo to carry the
         # SAME stamp, so the AdjO half can't silently fall a generation behind
         # again (issue #218). See training/oof_provenance.py.
-        "oof_provenance": oof_provenance(),
+        #
+        # Projected out of `stamp` rather than recomputed: two reads of the
+        # database are two chances to straddle a write, and this block is the
+        # one the API refuses to boot over. Deriving it also keeps it
+        # byte-identical to what #218 wrote, so committed metas stay valid.
+        "oof_provenance": oof_provenance_from(stamp),
         "final_n_estimators": final_n,
         # Per-target-season LOSO models exported to models/roster_impact_loso/
         # for the honest end-to-end backtest (gitignored; regenerable here).
