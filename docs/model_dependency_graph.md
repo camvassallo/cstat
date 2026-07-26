@@ -233,8 +233,9 @@ tell — a Layer 2 retrain is exactly the event that can move their optimum.
 **`retrain_downstream.sh` does not run either tuner, and nothing checks them.**
 That is deliberate rather than an oversight: both tools *report* a recommended
 value, they do not write code, so there is no honest way to automate the step.
-But it means a retrain leaves the constants carrying an assumption nobody
-re-tested. After a Layer 2 retrain that moved the projector materially, run:
+But it means the constants keep carrying their last-measured assumption until
+someone re-measures. After a Layer 2 retrain that moved the projector
+materially, run both (the current values were last confirmed 2026-07-26, below):
 
 ```bash
 # From training/ — pass the dump the retrain just produced, by name.

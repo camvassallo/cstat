@@ -20,7 +20,12 @@ signed bias, and the IN-SAMPLE optimal weight on baseline. Then an honest
 leave-one-season-out test: does a cohort-conditional weight (fit on the other
 years) beat the flat 0.5 out-of-sample?
 
-Run:  python3 transition_blend_diagnostic.py
+Run:  ./.venv/bin/python transition_blend_diagnostic.py --dump eval_history/<dump>.json
+
+Always pass `--dump`. This tool re-tunes PROJECTION_SHRINK_WEIGHT{,_OVERHAUL},
+which are SERVED constants, and the no-flag fallback picks the newest dump by
+FILENAME rather than by mtime — so it can quietly hand you a superseded
+projection generation to tune against.
 """
 
 import argparse
@@ -149,7 +154,9 @@ def main():
     # lose the sort to a months-old descriptively-tagged one and the weights
     # get tuned against a superseded projection generation — the #218 failure
     # mode, one layer over. Pass the dump the retrain just produced.
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(
+        description="Transition-conditional blend diagnostic: re-tune "
+                    "PROJECTION_SHRINK_WEIGHT{,_OVERHAUL} against a backtest dump.")
     ap.add_argument("--dump", type=Path, default=None,
                     help="per-team backtest dump to read (default: newest by "
                          "filename, which is not always newest on disk)")
