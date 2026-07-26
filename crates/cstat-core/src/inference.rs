@@ -561,7 +561,7 @@ impl Predictor {
         // `validate_box_score_model_meta`.
 
         // roster-impact model: a separate ONNX from the box-score
-        // `roster_model` above. Consumes the 25-feature cam_v3-aggregation
+        // `roster_model` above. Consumes the 27-feature cam_v3-aggregation
         // vector and powers the 2027 projection route — this is the live
         // projection model. Validated with the same fail-loudly contract.
         let roster_impact_session = Session::builder()?
@@ -848,7 +848,7 @@ impl Predictor {
     }
 
     /// Score a projected roster's AdjEM with the roster-impact
-    /// model (`roster_impact_model.onnx`). Input is the 25-feature vector
+    /// model (`roster_impact_model.onnx`). Input is the 27-feature vector
     /// from `roster_impact::build_roster_impact_features`, built over a
     /// roster whose `cam_v3` fields carry *projected* next-season values
     /// (trajectory model for returners / arrivals, freshman model for
@@ -1235,7 +1235,7 @@ impl Predictor {
     }
 }
 
-/// Run the roster-impact ONNX session on one 25-feature vector. Shared by
+/// Run the roster-impact ONNX session on one 27-feature vector. Shared by
 /// `Predictor::predict_roster_impact` and the standalone `RosterImpactModel`
 /// below so the tensor-shape / extract logic lives in one place.
 fn roster_impact_infer(
@@ -1284,7 +1284,7 @@ impl RosterImpactModel {
         })
     }
 
-    /// Score one 25-feature `roster_impact::build_roster_impact_features`
+    /// Score one 27-feature `roster_impact::build_roster_impact_features`
     /// vector. Same model family as `Predictor::predict_roster_impact`.
     pub fn predict(&self, features: &[f32; ROSTER_IMPACT_NUM_FEATURES]) -> Result<f32, ort::Error> {
         let mut session = self.session.lock().unwrap();

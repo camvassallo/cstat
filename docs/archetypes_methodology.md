@@ -66,7 +66,11 @@ cd training && ./.venv/bin/python -m archetypes --seasons 2015,…,2026
 cargo run --bin cstat-ingest -- compute --year 2015   # ... repeat per season, or loop
 # 3. push both tables to prod
 ./scripts/sync_to_prod.sh --tables archetype_models,player_archetypes
+# 4. retrain the model tree — see below for why this step is not optional
+./training/retrain_downstream.sh --with-layer1
 ```
+
+**Step 4 — an archetype refit invalidates the projection models.** `player_archetypes` is a *training input* two layers down: the trajectory model reads an archetype mixture (primary 1.0× / secondary 0.5×) and the roster-impact and roster-adjo calibrators each carry 12 minutes-weighted `arch_*` shares. Refitting moves those features for every player-season in the corpus, so the shipped projection models are now calibrated against an archetype space that no longer exists — silently, because none of the feature *names* or counts change and every boot validator still passes. Nothing in the retrain above surfaces this. The archetype fit is its own node with real downstream edges; layer map and protocol in `docs/model_dependency_graph.md`.
 
 **Consequence for prod ownership:** with the nightly assigning archetypes, **prod owns the daily `player_archetypes` write** for the current season. The surviving laptop→prod archetype writes are the **annual** `archetype_models` refit and the post-retrain carry-over sweep of *historical* `player_archetypes` (both via `--tables`). A routine in-season `--tables player_archetypes` push of the current season would be overwritten by the next nightly — which is correct.
 

@@ -74,6 +74,20 @@ better provider. As of 2026-07-25 the assigned set is:
 None are in `goog.json` or `cloud.json`, and both /24s appear in the evidence
 table above as **observed serving 200s**. This is not inference from ownership.
 
+**Confirmed 2026-07-25 18:12 UTC** — run `1761a86e-eb7e-4fb9-8d18-6ae173404b16`,
+the first nightly after enabling the toggle and redeploying:
+
+```
+INFO cstat_ingest::preflight: nightly public egress IP egress_ip=152.55.180.240
+INFO cstat_ingest::preflight: preflight feed="torvik" status="ok" detail="reachable"
+```
+
+The egress came from the static set rather than a lucky placement — that
+distinction is the whole point, and it is why the log line matters more than the
+green run. The run pulled 4978 season rows, 113882 per-game rows, and 19132
+rebound backfills with zero `Torvik non-2xx` warnings; `/api/health/ingest`
+reported `preflight`, `torvik`, `torvik_games`, and `compute` all `ok`.
+
 Caveats:
 
 - All three are marked **Shared** — Railway does not guarantee dedication. A
@@ -89,7 +103,7 @@ Caveats:
 
 ## Verifying
 
-The next nightly proves it for free — no request to barttorvik needed:
+Any nightly re-confirms it for free — no request to barttorvik needed:
 
 1. Read the `egress_ip` field off the `nightly public egress IP` log line, or off
    the `_egress IP …_` footer of any DEGRADED alert, or from the `preflight` row

@@ -177,9 +177,14 @@ def main() -> None:
     ap.add_argument("--base", choices=["served", "roster_proj"], default="served",
                     help="projector to calibrate (default: served — the production number)")
     ap.add_argument("--start-year", type=int, default=2019)
+    # load_backtest()'s fallback picks by filename, not recency; pass the dump
+    # explicitly when analysing a specific projection generation (see #218).
+    ap.add_argument("--dump", type=Path, default=None,
+                    help="per-team backtest dump to read (default: newest by "
+                         "filename, which is not always newest on disk)")
     args = ap.parse_args()
 
-    bt = load_backtest()
+    bt = load_backtest(args.dump)
     engine = get_engine()
     with engine.connect() as conn:
         rows = attach_program_key(bt, conn)

@@ -7,7 +7,8 @@ is the principled fix for the Pierce-class returner over-credit
 
 > **This is a design doc, not the operational checklist.** For "I changed
 > something upstream, what do I rerun?", use `training/retrain_downstream.sh`,
-> which runs the chain in dependency order and cannot skip a step.
+> which runs the chain in dependency order and cannot skip a step, and read
+> `docs/model_dependency_graph.md` for why the tree is shaped this way.
 >
 > That distinction is load-bearing. Step 3 below — "`train_roster_adjo_model.py`
 > rides along… retrain it too" — was for a long time the *only* place the AdjO

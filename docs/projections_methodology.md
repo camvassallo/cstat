@@ -59,7 +59,7 @@ Each recruit becomes a minimal synthetic `PlayerRow` via `roster_projection.rs::
 
 **Tiers were deprecated** (mid-2026). The projection used to bucket `composite_rank` into four tiers (T1 ≤30 / T2 ≤100 / T3 ≤250 / T4 rest) and synthesize a tier-mean box-score statline. That statline reached no served model (verified: deleting it left `/api/projections` byte-identical), so the 4-tier scaffold, the `{T1..T4}_PROFILE` constants, and the `composite_rank → tier` bucketing were removed. The per-recruit model — which was always rank/stars-*granular*, never bucketed — is the sole freshman signal.
 
-**Freshman-impact model** (`training/train_freshman_model.py`, ONNX in `training/models/freshman_*_model.onnx`): a LightGBM regression on 13 continuous features (the shared 11-element recruit block — `composite_rank`, `composite_rating`, `star_rating`, `position_rank`, `rank_movement`, physicals — plus `committed_team_prior_adjem` and `peer_class_strength`) targeting the recruit's first-college-season `cam_gbpm_v3_psos`. Trained on the full class-of-2014→2025 paired history (**n ≈ 3253**, gate ≥5 GP / ≥5 MPG). LOCO pooled MAE ≈ **2.25**, beating a rank-bucket-mean yardstick (≈2.42) by ~6.6%. The mean model carries a sentinel-safe `monotone_constraints` (non-decreasing in `composite_rating` + `star_rating`) so that, holding the other inputs fixed, a better-rated recruit never projects lower — a narrow legibility guarantee, since `composite_rank` (the stronger feature) stays unconstrained. q10/q90 band models are unconstrained (LightGBM forbids monotone + quantile). Re-run the script when a new class year's freshmen finish a season.
+**Freshman-impact model** (`training/train_freshman_model.py`, ONNX in `training/models/freshman_*_model.onnx`): a LightGBM regression on 13 continuous features (the shared 11-element recruit block — `composite_rank`, `composite_rating`, `star_rating`, `position_rank`, `rank_movement`, physicals — plus `committed_team_prior_adjem` and `peer_class_strength`) targeting the recruit's first-college-season `cam_gbpm_v3_psos`. Trained on the full class-of-2014→2025 paired history (**n ≈ 3253**, gate ≥5 GP / ≥5 MPG). LOCO pooled MAE ≈ **2.25**, beating a rank-bucket-mean yardstick (≈2.42) by ~6.6%. The mean model carries a sentinel-safe `monotone_constraints` (non-decreasing in `composite_rating` + `star_rating`) so that, holding the other inputs fixed, a better-rated recruit never projects lower — a narrow legibility guarantee, since `composite_rank` (the stronger feature) stays unconstrained. q10/q90 band models are unconstrained (LightGBM forbids monotone + quantile). Refresh when a new class year's freshmen finish a season — via the chain runner, not the trainer alone; see *Calibration refresh playbook* below.
 
 **Fallback**: when whole-batch inference fails (degraded, warn-logged), `freshman_row` falls back to `FRESHMAN_FALLBACK_CAM_V3` = **+1.20**, the unconditional mean of the training target — the least-biased point estimate when the model is unavailable. The normal path gives every recruit a model prediction, so this is rarely hit.
 
@@ -140,14 +140,21 @@ Run when:
 1. A new HS recruiting class is ingested AND its freshman cstat-season has finished.
 2. CamPom v3 formula changes (target shifts).
 
-Retrain the freshman-impact model on the expanded paired history:
+**Do not hand-run `train_freshman_model.py` on its own.** Both triggers above invalidate the whole tree beneath Layer 1, and running one trainer and stopping is precisely the omission that left `roster_adjo` three OOF generations stale for months (#218). The freshman trainer `TRUNCATE`s and reloads `freshman_oof_predictions`, which is the training input for both roster-frame calibrators; a new recruiting class also moves the trajectory model's recruit-rank feature block, so trigger 1 wants Layer 1 in full, not just the freshman half.
+
+Use the chain runner, which cannot skip a step:
 
 ```bash
-cd training && python train_freshman_model.py
+./training/retrain_downstream.sh --with-layer1 --dry-run   # confirm the plan
+./training/retrain_downstream.sh --with-layer1
 ```
 
-It re-validates via LOCO CV, re-emits the 3 ONNX models + `freshman_oof_predictions`, and rewrites `freshman_model_meta.json`. The Rust boot validator hard-fails on feature/alpha drift. Then rebuild + retest:
+That runs `trajectory freshman roster_impact roster_adjo backtest cae projections` in dependency order, then verifies the two roster-frame models carry the same `oof_provenance` stamp — a mismatch there means the API will refuse to boot, so it is caught at the end of the retrain rather than at the next deploy. Layer map, why the ordering matters, and what reaches prod by git deploy vs by data sync: `docs/model_dependency_graph.md`.
+
+Each Layer 1 trainer still re-validates via LOPO/LOCO CV, re-emits its 3 ONNX models, repopulates its `*_oof_predictions` table, and rewrites its meta; the Rust boot validator hard-fails on feature/alpha drift and on `oof_persisted ≠ true`. After the chain finishes, spot-check and push the regenerated tables:
+
 ```bash
 cargo test -p cstat-core roster_projection
 curl -s http://localhost:8080/api/projections/2027 | jq '.teams[0]'
+./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings
 ```

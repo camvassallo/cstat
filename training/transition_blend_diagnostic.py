@@ -20,9 +20,15 @@ signed bias, and the IN-SAMPLE optimal weight on baseline. Then an honest
 leave-one-season-out test: does a cohort-conditional weight (fit on the other
 years) beat the flat 0.5 out-of-sample?
 
-Run:  python3 transition_blend_diagnostic.py
+Run:  ./.venv/bin/python transition_blend_diagnostic.py --dump eval_history/<dump>.json
+
+Always pass `--dump`. This tool re-tunes PROJECTION_SHRINK_WEIGHT{,_OVERHAUL},
+which are SERVED constants, and the no-flag fallback picks the newest dump by
+FILENAME rather than by mtime — so it can quietly hand you a superseded
+projection generation to tune against.
 """
 
+import argparse
 import datetime as dt
 import json
 from collections import defaultdict
@@ -38,9 +44,9 @@ OVERHAUL_RETURNING = 0.40   # < this fraction of talent retained = "overhaul"
 MIN_QUAL = 5                # player qualifying gate (mirror the roster model)
 
 
-def load_rows(conn) -> list[dict]:
+def load_rows(conn, dump: Path | None = None) -> list[dict]:
     """Backtest dump rows + team_natstat_id + is_new_hc + returning-talent frac."""
-    bt = load_backtest()
+    bt = load_backtest(dump)
     tid2ns = {r.id: r.natstat_id
               for r in conn.execute(text("SELECT id::text AS id, natstat_id FROM teams"))}
 
@@ -141,8 +147,23 @@ def loso_conditional(rows, cohort_fn, cohorts):
 
 
 def main():
+    # `--dump` matters more here than in the other backtest readers: this tool
+    # is what re-tunes PROJECTION_SHRINK_WEIGHT{,_OVERHAUL}, which are SERVED
+    # constants in roster_projection.rs. load_backtest()'s fallback picks by
+    # filename, not recency, so without this flag a retrain's fresh dump can
+    # lose the sort to a months-old descriptively-tagged one and the weights
+    # get tuned against a superseded projection generation — the #218 failure
+    # mode, one layer over. Pass the dump the retrain just produced.
+    ap = argparse.ArgumentParser(
+        description="Transition-conditional blend diagnostic: re-tune "
+                    "PROJECTION_SHRINK_WEIGHT{,_OVERHAUL} against a backtest dump.")
+    ap.add_argument("--dump", type=Path, default=None,
+                    help="per-team backtest dump to read (default: newest by "
+                         "filename, which is not always newest on disk)")
+    args = ap.parse_args()
+
     with get_engine().connect() as conn:
-        rows = load_rows(conn)
+        rows = load_rows(conn, args.dump)
     print(f"\nn = {len(rows)} team-seasons ({START_YEAR}-2026); "
           f"flat served MAE {mae(rows,0.5):.3f}, global best w={best_weight(rows)[0]:.2f}")
 
@@ -170,9 +191,12 @@ def main():
     print(f"  transition-cond wt   pooled MAE {cond:.4f}  (lift {flat-cond:+.4f})")
     print(f"  last-fold weights: stable w={w_last.get('S')}, transition w={w_last.get('T')}")
 
-    out = EVAL_DIR / f"transition_blend_diagnostic_{dt.datetime.utcnow():%Y%m%d}_summary.json"
+    # utcnow() is deprecated; now(UTC) is aware, so drop the tzinfo before
+    # formatting to keep the naive `…Z` shape the existing artifacts use.
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    out = EVAL_DIR / f"transition_blend_diagnostic_{now:%Y%m%d}_summary.json"
     out.write_text(json.dumps({
-        "generated_at": dt.datetime.utcnow().isoformat() + "Z",
+        "generated_at": now.isoformat() + "Z",
         "n": len(rows), "flat_served_mae": mae(rows, 0.5),
         "global_best_w": best_weight(rows)[0],
         "loso_flat_mae": flat, "loso_conditional_mae": cond, "loso_lift": flat - cond,
