@@ -66,7 +66,9 @@ tells you the API will refuse to boot.
 from __future__ import annotations
 
 import datetime as _dt
+import os as _os
 from dataclasses import dataclass
+from pathlib import Path as _Path
 
 from sqlalchemy import text
 
@@ -375,6 +377,90 @@ def oof_provenance_from(stamp: dict) -> dict:
         for name in _OOF_SOURCES
         if name in stamp
     }
+
+
+# ---- Layer 3 -----------------------------------------------------------
+# Derived products with no meta of their own. They record which model artifact
+# produced them into `artifact_provenance` (migration 047), written by
+# `compute-projections`, `projections-backtest` and `compute_cae.py`.
+
+#: artifact name -> the Layer 2 nodes whose staleness propagates into it.
+LAYER3_UPSTREAM: dict[str, tuple[str, ...]] = {
+    "team_preseason_projection": ("roster_impact", "roster_adjo"),
+    "coach_season_cae": ("roster_impact",),
+}
+
+#: Env-overridable, matching `export_onnx.py` and the Rust producers
+#: (`bin/ingest.rs` reads `MODEL_DIR` before every Layer 3 command). If this
+#: hardcoded `training/models` while the producers honoured the override, the
+#: digests recorded and the digests compared would come from different
+#: directories and every Layer 3 node would read STALE forever — a permanently
+#: wrong report is one people stop reading, which is the failure this chain is
+#: for.
+MODEL_DIR = _Path(_os.environ.get("MODEL_DIR", _Path(__file__).parent / "models"))
+
+
+def onnx_sha256(stem: str, model_dir=None) -> str | None:
+    """SHA-256 of a model's ONNX bytes, or None if the file is absent.
+
+    Mirrors `cstat_core::provenance::sha256_file`. Plain content hashing only —
+    the *set* digest over the LOSO directory is deliberately NOT reimplemented
+    here. Rust records each file's individual sha256 alongside it, so the
+    comparison can be done file-by-file against data Rust already wrote.
+    Reimplementing an aggregation algorithm in a second language would create
+    exactly the cross-implementation desync this project keeps fixing.
+    """
+    path = (model_dir or MODEL_DIR) / f"{stem}.onnx"
+    if not path.exists():
+        return None
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def loso_file_digests(model_dir=None) -> dict[str, str]:
+    """Current sha256 per file in the gitignored LOSO directory."""
+    import hashlib
+
+    d = (model_dir or MODEL_DIR) / "roster_impact_loso"
+    if not d.is_dir():
+        return {}
+    return {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(d.glob("*.onnx"))
+    }
+
+
+def read_artifact_provenance(conn=None) -> dict[str, dict]:
+    """Load `artifact_provenance` as `{artifact: {key: provenance}}`.
+
+    Returns `{}` only when the table genuinely does not exist yet, so the report
+    still runs against a database that predates migration 047.
+
+    That absence is probed with `to_regclass` rather than caught as an
+    exception. A bare `except` here would also swallow a connection failure, a
+    permission error, or a typo'd column — and every one of those would surface
+    as "no rows", which the report renders as UNSTAMPED and exit 0: **a clean
+    bill of health produced by not having looked.** That is the same
+    false-negative direction as a stale model reporting current, and it is the
+    exact failure this whole chain exists to prevent. Anything other than a
+    missing table propagates.
+    """
+    own = conn is None
+    conn = get_engine().connect() if own else conn
+    try:
+        if conn.execute(text("SELECT to_regclass('artifact_provenance')")).scalar() is None:
+            return {}
+        rows = conn.execute(
+            text("SELECT artifact, artifact_key, provenance FROM artifact_provenance")
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+    out: dict[str, dict] = {}
+    for artifact, key, prov in rows:
+        out.setdefault(artifact, {})[key] = prov
+    return out
 
 
 def season_for_date(today: _dt.date) -> int:

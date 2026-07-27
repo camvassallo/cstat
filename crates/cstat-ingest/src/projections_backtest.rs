@@ -40,6 +40,7 @@
 //!    2025 base seasons have no `early_entrants.json`, so floor == ceiling.
 
 use anyhow::{Context, Result};
+use serde_json::Value;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::path::Path;
@@ -406,19 +407,62 @@ pub async fn run(
          live freshman inference (mildly in-sample). See module docs.",
     );
 
+    // Which models scored this backtest (#238). The LOSO set is the whole
+    // point here: it is gitignored, so it never appears in `git status`, and a
+    // set drawn from a different frame than the committed serving model
+    // produces a dump that looks fine and grades coaches against a projection
+    // generation that no longer ships.
+    let provenance = cstat_core::provenance::layer3_provenance(
+        model_dir,
+        "cstat-ingest projections-backtest",
+        &[cstat_core::provenance::ROSTER_IMPACT],
+        true,
+    )?;
+
     if let Some(path) = output_path {
-        dump_per_team_json(path, &pooled)?;
+        dump_per_team_json(path, &pooled, &provenance)?;
         println!("  wrote per-team dump → {}", path.display());
+
+        // Also recorded in the database, keyed by dump filename, so the record
+        // survives the dump being deleted — these files are gitignored and one
+        // once accounted for 89% of a PR's diff, so they do get cleaned up.
+        let key = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+        sqlx::query(
+            r#"
+            INSERT INTO artifact_provenance (artifact, artifact_key, provenance, computed_at)
+            VALUES ('projections_backtest_dump', $1, $2, now())
+            ON CONFLICT (artifact, artifact_key) DO UPDATE SET
+                provenance  = EXCLUDED.provenance,
+                computed_at = now()
+            "#,
+        )
+        .bind(key)
+        .bind(&provenance)
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }
 
 /// Dump per-team predictions to JSON for downstream residual analysis.
-/// Schema: a flat array of `{team_id, team_name, season, roster_proj,
-/// baseline, actual}` records — one per scored team. Floats kept at their
-/// native f64 precision; downstream audit code handles rounding.
-fn dump_per_team_json(path: &Path, results: &[TeamResult]) -> Result<()> {
-    use serde_json::{Value, json};
+///
+/// Schema (since #238): `{"provenance": {...}, "teams": [...]}`, where `teams`
+/// is the flat array of `{team_id, team_name, season, roster_proj, baseline,
+/// actual}` records this file has always carried — one per scored team. Floats
+/// kept at their native f64 precision; downstream audit code handles rounding.
+///
+/// The envelope is what lets a consumer say *which projection generation these
+/// residuals came from*. `compute_cae.py`, `transition_blend_diagnostic.py`,
+/// `pit_cae_backtest.py` and `pit_program_calibration.py` all read these dumps
+/// through `load_backtest()`, which accepts both this shape and the historical
+/// bare array — the same back-compat approach as the `phase_b` -> `roster_proj`
+/// rename shim, so existing dumps need no regeneration.
+fn dump_per_team_json(path: &Path, results: &[TeamResult], provenance: &Value) -> Result<()> {
+    use serde_json::json;
     let arr: Vec<Value> = results
         .iter()
         .map(|r| {
@@ -438,7 +482,54 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult]) -> Result<()> {
     }
     let f = std::fs::File::create(path)
         .with_context(|| format!("create dump file {}", path.display()))?;
-    serde_json::to_writer_pretty(f, &arr)
+    serde_json::to_writer_pretty(f, &json!({ "provenance": provenance, "teams": arr }))
         .with_context(|| format!("write JSON dump {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod dump_format_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn one_result() -> TeamResult {
+        TeamResult {
+            team_id: Uuid::nil(),
+            team_name: "Duke Blue Devils".to_string(),
+            season: 2026,
+            roster_proj: 20.0,
+            baseline: 18.0,
+            actual: 22.0,
+        }
+    }
+
+    /// The dump envelope is a cross-language format contract: Rust writes it,
+    /// four Python consumers read it through `compute_cae.read_dump_records` /
+    /// `load_backtest`. Nothing else pins the key names, so a rename here would
+    /// surface as a `KeyError` in a diagnostic script months later.
+    #[test]
+    fn dump_has_a_provenance_envelope_around_the_team_array() {
+        let dir = std::env::temp_dir().join(format!("cstat_dump_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dump.json");
+
+        dump_per_team_json(&path, &[one_result()], &json!({"produced_by": "test"})).unwrap();
+
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["provenance"]["produced_by"], "test");
+        let teams = v["teams"].as_array().expect("`teams` must be an array");
+        assert_eq!(teams.len(), 1);
+        // The per-team keys downstream reads by name.
+        for key in [
+            "team_id",
+            "team_name",
+            "season",
+            "roster_proj",
+            "baseline",
+            "actual",
+        ] {
+            assert!(teams[0].get(key).is_some(), "dump row lost the `{key}` key");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -272,7 +272,7 @@ PR #215). Review with `git status` and stage deliberately.
 
 If roster_impact moved, the downstream products built from it did too — commit
 the model artifacts and push the regenerated database tables to prod:
-  ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings
+  ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance
 
 NOT RUN BY THIS SCRIPT — the hand-tuned serving constants. PROJECTION_SHRINK_WEIGHT
 / _OVERHAUL (roster_projection.rs) and PRESEASON_PEAK_WEIGHT / _DECAY_DAYS /

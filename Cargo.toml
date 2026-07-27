@@ -46,3 +46,8 @@ dotenvy = "0.15"
 
 # ONNX inference
 ort = "2.0.0-rc.12"
+
+# Content hashing for model-artifact provenance (#238). Needed because the
+# gitignored LOSO models carry no meta of their own, so the only stable
+# identity they have is their bytes.
+sha2 = "0.10"

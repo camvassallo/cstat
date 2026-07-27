@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
+from compute_cae import read_dump_records
 from db import get_engine
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -75,7 +76,9 @@ def load_per_team() -> pd.DataFrame:
         )
     dump_path = dumps[-1]
     print(f"loading per-team dump: {dump_path.name}")
-    df = pd.read_json(dump_path)
+    # Handles both the #238 provenance envelope and the historical bare
+    # array; see compute_cae.read_dump_records.
+    df = pd.DataFrame(read_dump_records(dump_path))
     # Back-compat for the phase_b→roster_proj dump-key rename (this script keeps
     # the legacy column name internally).
     if "roster_proj" in df.columns and "phase_b" not in df.columns:
