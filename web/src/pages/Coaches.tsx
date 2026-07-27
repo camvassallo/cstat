@@ -129,7 +129,15 @@ function fmtStrength(v: number | null, d = 1): string {
   return v == null ? '—' : v.toFixed(d);
 }
 
-function CareerTable({ rows, search }: { rows: CoachLeaderboardRow[]; search: string }) {
+function CareerTable({
+  rows,
+  search,
+  activeOnly,
+}: {
+  rows: CoachLeaderboardRow[];
+  search: string;
+  activeOnly: boolean;
+}) {
   // The newest *actual* coaching season anywhere on the board (from
   // coach_seasons, not the scored rating) — a coach whose latest season equals
   // it is still active, even if that season isn't scored yet. Derived from the
@@ -164,16 +172,18 @@ function CareerTable({ rows, search }: { rows: CoachLeaderboardRow[]; search: st
     [rows, sort],
   );
 
-  // Name/team/conference filter over the sorted list. blendRank below is still
-  // computed over the FULL board, so the `#` stays a stable board-wide rank even
-  // while the visible list is filtered.
+  // Name/team/conference + "active" filter over the sorted list. blendRank below
+  // is still computed over the FULL board, so the `#` stays a stable board-wide
+  // rank even while the visible list is filtered. "Active" mirrors TenureCell:
+  // the coach's latest season reaches the board's newest season.
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return sorted;
-    return sorted.filter((c) =>
-      matchesCoach(q, { name: c.name, team: c.last_team_name, conference: c.conference }),
-    );
-  }, [sorted, search]);
+    return sorted.filter((c) => {
+      if (activeOnly && (c.last_team_season ?? c.last_season) < currentSeason) return false;
+      if (!q) return true;
+      return matchesCoach(q, { name: c.name, team: c.last_team_name, conference: c.conference });
+    });
+  }, [sorted, search, activeOnly, currentSeason]);
 
   // Fixed Blend rank over the loaded board (best = 1), keyed by coach. Bound to
   // the data, so the `#` stays with the coach under re-sort — it is a stable
@@ -407,6 +417,9 @@ export function Coaches() {
   // Name/team/conference filter — applies to both boards (fields common to
   // each), kept across the career/season toggle since all three still apply.
   const [search, setSearch] = useState('');
+  // Career-only "still coaching this season" filter. Meaningless on the season
+  // board (every row is that one season), so it's shown only in career mode.
+  const [activeOnly, setActiveOnly] = useState(false);
 
   // No synchronous `setLoading(true)` — initial `loading` covers first paint;
   // a mode/season change keeps the prior board visible until the new one lands
@@ -498,24 +511,37 @@ export function Coaches() {
         </div>
       </div>
 
-      <div className="relative max-w-xs">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search coach, team, or conference…"
-          className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
-          aria-label="Search coaches by name, team, or conference"
-        />
-        {search && (
-          <button
-            type="button"
-            onClick={() => setSearch('')}
-            aria-label="Clear search"
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-          >
-            ×
-          </button>
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="relative w-full max-w-xs">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search coach, team, or conference…"
+            className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+            aria-label="Search coaches by name, team, or conference"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+            >
+              ×
+            </button>
+          )}
+        </div>
+        {mode === 'career' && (
+          <label className="inline-flex items-center gap-2 text-sm text-gray-300 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={activeOnly}
+              onChange={(e) => setActiveOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-600 bg-gray-800 accent-blue-600"
+            />
+            Active only
+          </label>
         )}
       </div>
 
@@ -525,7 +551,7 @@ export function Coaches() {
       ) : board?.mode === 'season' ? (
         <SeasonTable rows={board.rows} search={search} />
       ) : board ? (
-        <CareerTable rows={board.rows} search={search} />
+        <CareerTable rows={board.rows} search={search} activeOnly={activeOnly} />
       ) : null}
     </div>
   );
