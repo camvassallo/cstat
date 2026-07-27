@@ -276,11 +276,18 @@ def test_every_node_is_actually_reported() -> None:
     out of the verdict — a tool that quietly under-reports, which is the exact
     class of failure this whole chain is meant to remove.
     """
-    assert set(C.NODES) == set(P.NODE_INPUTS), (
-        f"NODES {sorted(C.NODES)} does not match the registry "
-        f"{sorted(P.NODE_INPUTS)}; a missing node is silently never reported"
+    # Layer 1/2 come from NODE_INPUTS (meta-stamped); Layer 3 from
+    # LAYER3_UPSTREAM (artifact_provenance-stamped). Together they must be
+    # exactly what the report iterates.
+    assert set(C.NODES) == set(P.NODE_INPUTS) | set(P.LAYER3_UPSTREAM), (
+        f"NODES {sorted(C.NODES)} does not match the registries; a node missing "
+        f"here is fingerprinted and then silently never reported"
     )
     assert set(C.LAYER) == set(C.NODES), "every reported node needs a layer"
+    assert set(C.LAYER3) == set(P.LAYER3_UPSTREAM), (
+        "LAYER3 must match the registry, or a Layer 3 node would be classified "
+        "by the meta-stamp rule it has no meta for"
+    )
 
 
 def test_nodes_are_in_dependency_order() -> None:
@@ -289,16 +296,20 @@ def test_nodes_are_in_dependency_order() -> None:
     `render()` picks the *first* stale entry as the highest stale node and
     prints it into a `--from` command. If the order were wrong that advice
     would skip a stale upstream node, leaving the tree desynced after a retrain
-    the operator believes fixed it.
+    the operator believes fixed it. Layer 3 must come last for the same reason:
+    it is downstream of everything.
     """
     seen: set[str] = set()
     for node in C.NODES:
-        for up in P.NODE_UPSTREAM[node]:
+        upstream = P.NODE_UPSTREAM.get(node) or P.LAYER3_UPSTREAM.get(node, ())
+        for up in upstream:
             assert up in seen, (
                 f"{node} is listed before its upstream {up}; the report would "
                 f"recommend retraining from too far down the tree"
             )
         seen.add(node)
+    layers = [C.LAYER[n] for n in C.NODES]
+    assert layers == sorted(layers), f"NODES is not in layer order: {layers}"
 
 
 def test_staleness_propagates_to_layer2() -> None:
@@ -330,7 +341,7 @@ def test_staleness_propagates_to_layer2() -> None:
         d = Path(d)
         # Layer 1 `trajectory` trained on an older Layer 0; everything else,
         # including both Layer 2 halves, matches the live database exactly.
-        for node in C.NODES:
+        for node in P.NODE_INPUTS:
             stamp = {n: json.loads(json.dumps(live[n])) for n in P.NODE_INPUTS[node]}
             if node == "trajectory":
                 cam = stamp["torvik_player_stats.cam_v3"]
@@ -341,10 +352,21 @@ def test_staleness_propagates_to_layer2() -> None:
                 meta["oof_provenance"] = P.oof_provenance_from(live)
             (d / P.NODE_META_FILES[node]).write_text(json.dumps(meta))
 
+        # Layer 3 was produced by exactly the model artifact on disk, so its
+        # OWN check passes — it can only be caught by propagation.
+        sha = P.onnx_sha256("roster_impact_model") or "x"
+        artifacts = {
+            "team_preseason_projection": {
+                "2026": {"models": {"roster_impact_model": {"onnx_sha256": sha}}}
+            }
+        }
+
         orig_dir = C.MODEL_DIR
         try:
             C.MODEL_DIR = d
-            report = C.check(live=live, today=dt.date(2026, 7, 26))
+            report = C.check(
+                live=live, artifacts=artifacts, today=dt.date(2026, 7, 26)
+            )
         finally:
             C.MODEL_DIR = orig_dir
 
@@ -360,11 +382,129 @@ def test_staleness_propagates_to_layer2() -> None:
             f"propagation this is the #218 blind spot"
         )
         assert any("upstream" in r for r in nodes[half]["reasons"])
+    assert nodes["team_preseason_projection"]["verdict"] == C.STALE, (
+        "the projection was built by exactly the model artifact on disk, so its "
+        "own check passes — but that model is now calibrated against a Layer 1 "
+        "generation that no longer exists, so staleness has to reach Layer 3"
+    )
+    assert any(
+        "upstream" in r for r in nodes["team_preseason_projection"]["reasons"]
+    )
     assert report["boot_guard"]["status"] == "ok", (
         "the two halves genuinely share one OOF snapshot — the boot guard is "
         "right to pass, which is exactly why it cannot catch this case"
     )
     assert report["exit_code"] == 1
+
+
+# ---- Layer 3 ------------------------------------------------------------
+#
+# Layer 3 has no meta to re-evaluate, so it classifies on a different rule:
+# was this built by the model artifact that ships now? These pin that rule and
+# the one thing it must never do — block anything.
+
+
+def _model_entry(stem: str, sha: str) -> dict:
+    return {stem: {"onnx_sha256": sha, "input_provenance": None, "oof_provenance": None}}
+
+
+def test_layer3_matching_artifact_is_current() -> None:
+    real = P.onnx_sha256("roster_impact_model")
+    if real is None:
+        return _skip("test_layer3_matching_artifact_is_current", "no model on disk")
+    verdict, reasons = C.classify_layer3(
+        "team_preseason_projection",
+        {"2026": {"models": _model_entry("roster_impact_model", real)}},
+    )
+    assert verdict == C.CURRENT, reasons
+
+
+def test_layer3_superseded_model_is_stale() -> None:
+    """The rows are untouched; the model that made them has been retrained.
+
+    Nothing about the projection table itself is wrong-looking — this is the
+    #218 shape one layer over, and the only signal is the artifact identity.
+    """
+    verdict, reasons = C.classify_layer3(
+        "team_preseason_projection",
+        {"2026": {"models": _model_entry("roster_impact_model", "0" * 64)}},
+    )
+    assert verdict == C.STALE
+    assert "superseded" in reasons[0] and "2026" in reasons[0]
+
+
+def test_layer3_is_keyed_per_season() -> None:
+    """A partial `--years` run must not vouch for seasons it did not write.
+
+    `compute-projections --years 2026` refreshes one season. If provenance were
+    stored once per run, that row would implicitly claim every other season was
+    regenerated by the same model.
+    """
+    verdict, reasons = C.classify_layer3(
+        "team_preseason_projection",
+        {
+            "2025": {"models": _model_entry("roster_impact_model", "0" * 64)},
+            "2026": {"models": _model_entry("roster_impact_model", P.onnx_sha256("roster_impact_model") or "x")},
+        },
+    )
+    assert verdict == C.STALE
+    assert any("2025" in r for r in reasons)
+    assert not any("2026" in r for r in reasons), "2026 matches and must not be flagged"
+
+
+def test_layer3_detects_a_drifted_loso_set() -> None:
+    """The specific gap #238 exists for.
+
+    `projections-backtest` scores with the gitignored LOSO models and
+    `compute_cae.py` grades against that dump. Those files never appear in
+    `git status`, so a set from a different frame than the committed serving
+    model produces plausible grades against a projection generation that no
+    longer ships.
+    """
+    current = P.loso_file_digests()
+    if not current:
+        return _skip("test_layer3_detects_a_drifted_loso_set", "no LOSO models on disk")
+    files = sorted(current.items())
+    drifted = [{"file": f, "sha256": ("f" * 64 if i == 0 else s)} for i, (f, s) in enumerate(files)]
+    verdict, reasons = C.classify_layer3(
+        "coach_season_cae",
+        {"all": {"dump_provenance": {"models": {}, "roster_impact_loso": {"models": drifted}}}},
+    )
+    assert verdict == C.STALE
+    assert "LOSO set changed" in reasons[0]
+
+
+def test_layer3_missing_row_is_unstamped_not_stale() -> None:
+    """Nothing has run its producer yet — that is not evidence of drift."""
+    verdict, reasons = C.classify_layer3("team_preseason_projection", None)
+    assert verdict == C.UNSTAMPED
+    assert "rerun its producer" in reasons[0]
+
+
+def test_layer3_never_blocks_the_boot() -> None:
+    """Report-only, deliberately (the parent issue's open question).
+
+    A stale `team_preseason_projection` is a data-freshness problem. Exit 2 is
+    reserved for conditions that genuinely stop the API starting, so Layer 3
+    drift must produce exit 1 at most — prod refusing to serve over a stale
+    projection would be strictly worse than serving it.
+    """
+    live = {
+        name: {"n_rows": 1, "digest": f"d-{name}",
+               "by_season": {"2026": {"n_rows": 1, "digest": f"s-{name}"}}}
+        for name in P.SOURCES
+    }
+    report = C.check(
+        live=live,
+        artifacts={"team_preseason_projection": {
+            "2026": {"models": _model_entry("roster_impact_model", "0" * 64)}}},
+        today=dt.date(2026, 7, 26),
+    )
+    assert report["nodes"]["team_preseason_projection"]["verdict"] == C.STALE
+    assert report["exit_code"] == 1, (
+        "Layer 3 drift must never reach exit 2 — that code means the API will "
+        "not start, and a stale projection table does not stop it"
+    )
 
 
 # ---- Database-backed ----------------------------------------------------
@@ -450,6 +590,12 @@ def main() -> int:
         test_every_node_is_actually_reported,
         test_nodes_are_in_dependency_order,
         test_staleness_propagates_to_layer2,
+        test_layer3_matching_artifact_is_current,
+        test_layer3_superseded_model_is_stale,
+        test_layer3_is_keyed_per_season,
+        test_layer3_detects_a_drifted_loso_set,
+        test_layer3_missing_row_is_unstamped_not_stale,
+        test_layer3_never_blocks_the_boot,
         test_oof_digest_matches_the_218_construction,
         test_fingerprints_are_stable_across_reads,
         test_season_subdigests_cover_every_row,

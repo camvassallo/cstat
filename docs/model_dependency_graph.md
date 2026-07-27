@@ -339,6 +339,7 @@ about because the two halves of Layer 2 land differently.
 | `team_preseason_projection` | 3 | **data sync** |
 | `coach_season_cae`, `coach_ratings` | 3 | **data sync** |
 | `player_archetypes` | 0 | data sync in the offseason; **prod-owned in-season** (the Rust assign half runs nightly) |
+| `artifact_provenance` | 3 | **data sync** — not in `sync_to_prod.sh`'s EXCLUDED list, so it travels with the tables it describes. It has to: `team_preseason_projection` reaches prod by sync, and provenance recorded only on one laptop would leave prod holding rows of unknown origin |
 
 ```bash
 ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings
@@ -500,15 +501,51 @@ UNSTAMPED, once the tree has been retrained through. `--json` for tooling,
 `retrain_downstream.sh` runs this at the end of every retrain, report-only — a
 partial run is a legitimate mid-flight state and `--from` exists to resume one.
 
-### What is not covered yet
+### Layer 3: which model artifact produced this
 
-Layer 3 producers — `team_preseason_projection`, the backtest dumps,
-`coach_season_cae` — still record nothing about which model artifact produced
-them, so `models/roster_impact_loso/*` (gitignored) can drift from the
-committed serving model unnoticed. That half of #223 is not built. Layer 3
-staleness should stay **report-only** when it is: a stale projection table is a
-data-freshness problem, and prod refusing to boot over it would be worse than
-serving it.
+Layer 3 has no meta to stamp — `team_preseason_projection`, the backtest dumps,
+and `coach_season_cae` are rows and files produced by CLI runs, not fits. They
+record their producing model into `artifact_provenance` (migration 047) instead,
+written inside the same transaction as the data itself so a crash cannot leave
+rows whose recorded origin belongs to the previous run.
+
+| producer | artifact | keyed by |
+|---|---|---|
+| `cstat-ingest compute-projections` | `team_preseason_projection` | season |
+| `cstat-ingest projections-backtest` | `projections_backtest_dump` | dump filename |
+| `training/compute_cae.py --write` | `coach_season_cae` | `all` |
+
+Per-season keying on the projection is load-bearing: `--years` is routinely a
+subset, and a single row per run would implicitly vouch for seasons that run
+never touched.
+
+The question Layer 3 can answer is narrower than Layer 1/2's, and still the one
+that matters: **the model that produced this is not the model that ships now.**
+Comparison is by the ONNX content digest, which is only meaningful because #222
+made export byte-stable — before that, a no-op retrain would have moved every
+digest and the signal would be worthless.
+
+The specific gap this closes is the LOSO set. `projections-backtest` scores with
+the per-target-season models in `models/roster_impact_loso/`, and `compute_cae.py`
+grades coaches against that backtest's dump. Those files are **gitignored**, so
+they never appear in `git status`, and `roster_adjo` exports no per-season ONNX
+at all — so a backtest could silently run against a set drawn from a different
+frame than the committed serving model, producing plausible CAE grades scored
+against a projection generation that no longer ships. The set's per-file digests
+are recorded and compared file-by-file.
+
+**The dump format gained an envelope**: `{"provenance": {...}, "teams": [...]}`.
+`load_backtest()` reads both that and the historical bare array, the same
+back-compat approach as the `phase_b` -> `roster_proj` shim — `eval_history/`
+holds months of dumps still cited in writeups, and regenerating them to satisfy
+a format change would destroy the record they exist to preserve. All four
+readers share that one loader, so the shim is a single point.
+
+Layer 3 staleness is **report-only**, deliberately. Exit 2 is reserved for
+conditions that genuinely stop the API starting; a stale
+`team_preseason_projection` is a data-freshness problem, and prod refusing to
+serve over it would be strictly worse than serving it. Guarded by
+`test_provenance.py::test_layer3_never_blocks_the_boot`.
 
 ---
 

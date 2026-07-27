@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from dataclasses import dataclass
+from pathlib import Path as _Path
 
 from sqlalchemy import text
 
@@ -375,6 +376,74 @@ def oof_provenance_from(stamp: dict) -> dict:
         for name in _OOF_SOURCES
         if name in stamp
     }
+
+
+# ---- Layer 3 -----------------------------------------------------------
+# Derived products with no meta of their own. They record which model artifact
+# produced them into `artifact_provenance` (migration 047), written by
+# `compute-projections`, `projections-backtest` and `compute_cae.py`.
+
+#: artifact name -> the Layer 2 nodes whose staleness propagates into it.
+LAYER3_UPSTREAM: dict[str, tuple[str, ...]] = {
+    "team_preseason_projection": ("roster_impact", "roster_adjo"),
+    "coach_season_cae": ("roster_impact",),
+}
+
+MODEL_DIR = _Path(__file__).parent / "models"
+
+
+def onnx_sha256(stem: str, model_dir=None) -> str | None:
+    """SHA-256 of a model's ONNX bytes, or None if the file is absent.
+
+    Mirrors `cstat_core::provenance::sha256_file`. Plain content hashing only —
+    the *set* digest over the LOSO directory is deliberately NOT reimplemented
+    here. Rust records each file's individual sha256 alongside it, so the
+    comparison can be done file-by-file against data Rust already wrote.
+    Reimplementing an aggregation algorithm in a second language would create
+    exactly the cross-implementation desync this project keeps fixing.
+    """
+    path = (model_dir or MODEL_DIR) / f"{stem}.onnx"
+    if not path.exists():
+        return None
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def loso_file_digests(model_dir=None) -> dict[str, str]:
+    """Current sha256 per file in the gitignored LOSO directory."""
+    import hashlib
+
+    d = (model_dir or MODEL_DIR) / "roster_impact_loso"
+    if not d.is_dir():
+        return {}
+    return {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(d.glob("*.onnx"))
+    }
+
+
+def read_artifact_provenance(conn=None) -> dict[str, dict]:
+    """Load `artifact_provenance` as `{artifact: {key: provenance}}`.
+
+    Returns `{}` when the table does not exist yet, so the report still runs on
+    a database that predates migration 047 rather than failing on it.
+    """
+    own = conn is None
+    conn = get_engine().connect() if own else conn
+    try:
+        rows = conn.execute(
+            text("SELECT artifact, artifact_key, provenance FROM artifact_provenance")
+        ).fetchall()
+    except Exception:
+        return {}
+    finally:
+        if own:
+            conn.close()
+    out: dict[str, dict] = {}
+    for artifact, key, prov in rows:
+        out.setdefault(artifact, {})[key] = prov
+    return out
 
 
 def season_for_date(today: _dt.date) -> int:

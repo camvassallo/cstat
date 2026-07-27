@@ -7,6 +7,7 @@ pub mod invariants;
 pub mod models;
 pub mod pbp_replay;
 pub mod pit_campom;
+pub mod provenance;
 pub mod queries;
 pub mod recruit_features;
 pub mod roster_features;

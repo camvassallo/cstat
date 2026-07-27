@@ -66,20 +66,41 @@ import sys
 from pathlib import Path
 
 from provenance import (
+    LAYER3_UPSTREAM,
     NODE_INPUTS,
     NODE_META_FILES,
     NODE_UPSTREAM,
     SOURCES,
     fingerprint,
+    loso_file_digests,
     mutable_season,
+    onnx_sha256,
+    read_artifact_provenance,
 )
 
 MODEL_DIR = Path(__file__).parent / "models"
 
 #: Report order = dependency order. Reading top to bottom gives you the highest
 #: stale node, which is the one to retrain from.
-NODES = ("trajectory", "freshman", "roster_impact", "roster_adjo")
-LAYER = {"trajectory": 1, "freshman": 1, "roster_impact": 2, "roster_adjo": 2}
+NODES = (
+    "trajectory",
+    "freshman",
+    "roster_impact",
+    "roster_adjo",
+    "team_preseason_projection",
+    "coach_season_cae",
+)
+LAYER = {
+    "trajectory": 1,
+    "freshman": 1,
+    "roster_impact": 2,
+    "roster_adjo": 2,
+    "team_preseason_projection": 3,
+    "coach_season_cae": 3,
+}
+#: Layer 3 products carry no meta; they record their producing model into
+#: `artifact_provenance` instead, so they classify by a different rule.
+LAYER3 = tuple(n for n, layer in LAYER.items() if layer == 3)
 
 CURRENT, CHURN, STALE, UNSTAMPED = "current", "churn", "STALE", "unstamped"
 
@@ -154,15 +175,69 @@ def classify_source(
     return STALE, f"{name}: {detail}"
 
 
+def classify_layer3(artifact: str, recorded: dict | None) -> tuple[str, list[str]]:
+    """Was this derived product built by the model artifact now on disk?
+
+    Layer 3 has no `input_provenance` of its own to re-evaluate — it is rows and
+    files, not a fit. The question that *is* answerable is narrower and still
+    the one that matters: **the model that produced this is not the model that
+    ships now.** That is the #218 shape one layer over.
+
+    Compared file-by-file against the sha256s Rust recorded, never by
+    recomputing an aggregate digest in Python — see `provenance.onnx_sha256`.
+    """
+    if not recorded:
+        return UNSTAMPED, [
+            f"no artifact_provenance row for {artifact} — rerun its producer to stamp it"
+        ]
+
+    reasons: list[str] = []
+    for key, prov in sorted(recorded.items()):
+        prefix = f"[{key}] " if key != "all" else ""
+
+        # The dump CAE was scored against wraps its own model record, so unwrap
+        # one level to reach the models that actually produced the numbers.
+        models = (prov or {}).get("models") or {}
+        nested = ((prov or {}).get("dump_provenance") or {}).get("models") or {}
+        for stem, entry in {**models, **nested}.items():
+            recorded_sha = (entry or {}).get("onnx_sha256")
+            current_sha = onnx_sha256(stem)
+            if current_sha is None:
+                reasons.append(f"{prefix}{stem}.onnx is missing from disk")
+            elif recorded_sha and recorded_sha != current_sha:
+                reasons.append(f"{prefix}produced by a superseded {stem}")
+
+        # The LOSO set is the specific gap #238 exists for: gitignored, so it
+        # never shows in `git status`, and a set from a different frame than the
+        # committed serving model yields grades against a projection generation
+        # that no longer ships.
+        loso = ((prov or {}).get("dump_provenance") or prov or {}).get(
+            "roster_impact_loso"
+        ) or {}
+        recorded_files = {m["file"]: m["sha256"] for m in loso.get("models", [])}
+        if recorded_files:
+            current_files = loso_file_digests()
+            changed = [f for f, s in recorded_files.items() if current_files.get(f) != s]
+            missing = [f for f in recorded_files if f not in current_files]
+            if missing:
+                reasons.append(f"{prefix}LOSO models absent: {len(missing)} file(s)")
+            elif changed:
+                reasons.append(f"{prefix}LOSO set changed: {len(changed)} model(s)")
+
+    return (STALE if reasons else CURRENT), reasons
+
+
 def check(
     strict: bool = False,
     today: dt.date | None = None,
     live: dict | None = None,
+    artifacts: dict | None = None,
 ) -> dict:
     """Build the full report. Pure data — printing is the caller's job.
 
-    `live` overrides the database read, which lets the propagation rule be
-    tested without a populated database (`test_provenance.py`).
+    `live` and `artifacts` override the two database reads, which lets the
+    propagation and Layer 3 rules be tested without a populated database
+    (`test_provenance.py`).
     """
     churning = mutable_season(today)
     live = live if live is not None else fingerprint(tuple(SOURCES))
@@ -173,11 +248,18 @@ def check(
         "nodes": {},
     }
 
+    recorded = read_artifact_provenance() if artifacts is None else artifacts
+
     stale_nodes: set[str] = set()
     for node in NODES:
-        stamp = _load_stamp(node)
         verdicts: list[tuple[str, str, str]] = []
-        if stamp is None:
+        stamp = None if node in LAYER3 else _load_stamp(node)
+
+        if node in LAYER3:
+            # No meta to re-evaluate — classified against the model artifact
+            # recorded in `artifact_provenance` instead.
+            verdict, reasons = classify_layer3(node, recorded.get(node))
+        elif stamp is None:
             verdict, reasons = UNSTAMPED, [
                 f"no input_provenance in {NODE_META_FILES[node]} — "
                 "retrain to stamp it"
@@ -200,7 +282,8 @@ def check(
         # still stale when Layer 1 moved: it trains on Layer 1's predictions,
         # so it is calibrated for an error profile that no longer exists. This
         # is the #218 failure stated as a rule.
-        upstream_stale = [u for u in NODE_UPSTREAM[node] if u in stale_nodes]
+        upstream = NODE_UPSTREAM.get(node) or LAYER3_UPSTREAM.get(node, ())
+        upstream_stale = [u for u in upstream if u in stale_nodes]
         if upstream_stale:
             verdict = STALE
             reasons.append(f"upstream {' + '.join(upstream_stale)} is stale")
@@ -268,14 +351,16 @@ def render(report: dict) -> str:
     )
     out.append("=" * 74)
 
+    width = max(len(n) for n in report["nodes"]) if report["nodes"] else 16
+    indent = 12 + width + 11
     for node, r in report["nodes"].items():
         out.append(
             f"  {_MARK[r['verdict']]} Layer {r['layer']}  "
-            f"{node:<16} {r['verdict'].upper():<10} "
+            f"{node:<{width}} {r['verdict'].upper():<10} "
             + (r["reasons"][0] if r["reasons"] else "")
         )
         for extra in r["reasons"][1:]:
-            out.append(" " * 41 + extra)
+            out.append(" " * indent + extra)
 
     g = report["boot_guard"]
     out.append("")
@@ -304,8 +389,9 @@ def render(report: dict) -> str:
             f"fingerprint yet:\n    {', '.join(unstamped)}"
         )
         out.append(
-            "  They stamp themselves on their next retrain. Until then this "
-            "check\n  cannot speak for them — it is not asserting they are current."
+            "  Layer 1/2 stamp themselves on their next retrain; Layer 3 on the "
+            "next\n  run of its producer. Until then this check cannot speak for "
+            "them — it is\n  not asserting they are current."
         )
     else:
         out.append("  All nodes current. Nothing to retrain.")

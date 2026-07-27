@@ -82,6 +82,13 @@ cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,20
 # STALE / UNSTAMPED — the in-progress season is rewritten nightly, so a change
 # there is expected churn, while a CLOSED season moving is real drift.
 cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
+# Layer 3 (team_preseason_projection, backtest dumps, coach_season_cae) has no
+# meta to stamp, so its producers record the model artifact into
+# `artifact_provenance` (migration 047) and the check compares ONNX digests.
+# This is what catches a backtest run against a gitignored LOSO set drawn from
+# a different frame than the committed serving model. Report-only: exit 2 is
+# reserved for conditions that stop the API booting, and a stale projection
+# table is a freshness problem, not one of those.
 # Note: `compute-projections` writes team_preseason_projection AND
 # player_season_projection. The wide season range is right for the former (the
 # preseason blend reads history) but materializes historical rows in the latter
@@ -150,7 +157,7 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 
 ## Database
 
-Postgres with SQLx. Migrations in `/migrations/` (46 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `torvik_player_game_stats` (point-in-time CamPom source), `player_archetypes`, `archetype_models`, `api_cache`, `transfers`, `recruits`, `draft_entrants`, `player_departures` (hand-curated non-portal/non-draft exits — pro signings abroad, retirements, dismissals; the projection's fourth departure channel, see `docs/projections_methodology.md`), `trajectory_oof_predictions` / `freshman_oof_predictions` (held-out projection inputs), `team_preseason_projection` (materialized served AdjEM band), `coaches` / `coach_seasons` (coachdict entity model), `coach_season_cae` / `coach_ratings` (coach-above-expectation grades), `ingest_runs` (per-step nightly-ingest ledger — runtime-written on prod, excluded from `sync_to_prod.sh`).
+Postgres with SQLx. Migrations in `/migrations/` (47 files). Key tables: `teams`, `players`, `games`, `player_game_stats` (110+ columns), `player_season_stats`, `team_season_stats`, `team_game_stats`, `player_percentiles`, `game_forecasts`, `torvik_player_stats`, `torvik_player_game_stats` (point-in-time CamPom source), `player_archetypes`, `archetype_models`, `api_cache`, `transfers`, `recruits`, `draft_entrants`, `player_departures` (hand-curated non-portal/non-draft exits — pro signings abroad, retirements, dismissals; the projection's fourth departure channel, see `docs/projections_methodology.md`), `trajectory_oof_predictions` / `freshman_oof_predictions` (held-out projection inputs), `team_preseason_projection` (materialized served AdjEM band), `coaches` / `coach_seasons` (coachdict entity model), `coach_season_cae` / `coach_ratings` (coach-above-expectation grades), `ingest_runs` (per-step nightly-ingest ledger — runtime-written on prod, excluded from `sync_to_prod.sh`), `artifact_provenance` (which model artifact produced each Layer 3 derived product — see `docs/model_dependency_graph.md` §6).
 
 All season-scoped tables carry a `season` column; the API and frontend support arbitrary multi-year browsing via a site-wide `?season=` query param plumbed through `web/src/components/season.ts::useSeason()`. **The frontend reads the season list from `GET /api/seasons`** (DISTINCT season FROM games, newest first) — no source edit needed for the dropdown when adding a year. Adding a new season is two commands: `cargo run --bin cstat-ingest -- season --year YYYY` (NatStat + Torvik + compute, end-to-end) and a `cd training && python -m archetypes --seasons …` retraining pass on the new combined cohort. Optional: ingest the 247Sports transfer portal for that class year via `cargo run --bin cstat-ingest -- transfers --year YYYY` (live API, needs `TFS_247_JWT`) or `--bootstrap-from data/transfers/YYYY_raw.json` to load a captured snapshot. Rows land in the `transfers` table; the `/api/transfers/{year}` route reads from there.
 

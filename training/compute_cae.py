@@ -87,12 +87,18 @@ def load_backtest(explicit: Path | None = None) -> list[dict]:
     grading coaches against a superseded projection is exactly the kind of
     drift #218 was about, so when the two orderings disagree we say so.
     """
+    rows, _, _ = load_backtest_with_provenance(explicit)
+    return rows
+
+
+def _resolve_dump(explicit: Path | None) -> Path:
+    """Pick the dump file, warning when name-order and mtime-order disagree."""
     if explicit is not None:
         path = Path(explicit)
         if not path.exists():
             raise SystemExit(f"--dump {path} does not exist")
         print(f"backtest dump: {path.name}  (explicit --dump)")
-        return _normalize_proj_keys(json.loads(path.read_text()))
+        return path
 
     dumps = sorted(EVAL_DIR.glob(BT_GLOB))
     if not dumps:
@@ -106,7 +112,40 @@ def load_backtest(explicit: Path | None = None) -> list[dict]:
             f"generation these grades are scored against."
         )
     print(f"backtest dump: {path.name}")
-    return _normalize_proj_keys(json.loads(path.read_text()))
+    return path
+
+
+def _unwrap_dump(obj) -> tuple[list[dict], dict | None]:
+    """Read either dump shape and return `(team_rows, provenance)`.
+
+    Since #238 the backtest writes `{"provenance": {...}, "teams": [...]}` so a
+    consumer can say which model generation the residuals came from. Every dump
+    written before that is a bare array. Both are accepted for the same reason
+    the `phase_b` -> `roster_proj` shim exists: `eval_history/` holds months of
+    historical dumps that are still cited in writeups, and regenerating them to
+    satisfy a format change would destroy the record they exist to preserve.
+
+    A bare array yields `None` provenance, which downstream records honestly
+    rather than papering over — an old dump genuinely cannot say what produced
+    it, and claiming otherwise is the failure mode this whole chain is about.
+    """
+    if isinstance(obj, dict):
+        return obj.get("teams", []), obj.get("provenance")
+    return obj, None
+
+
+def load_backtest_with_provenance(
+    explicit: Path | None = None,
+) -> tuple[list[dict], dict | None, Path]:
+    """`load_backtest`, plus the dump's provenance and the path it came from.
+
+    Separate entry point so `load_backtest`'s signature stays exactly as the
+    three other consumers (`transition_blend_diagnostic.py`,
+    `pit_cae_backtest.py`, `pit_program_calibration.py`) already call it.
+    """
+    path = _resolve_dump(explicit)
+    rows, provenance = _unwrap_dump(json.loads(path.read_text()))
+    return _normalize_proj_keys(rows), provenance, path
 
 
 def _normalize_proj_keys(rows: list[dict]) -> list[dict]:
@@ -261,7 +300,13 @@ def main() -> None:
                          "is not always the newest on disk (see load_backtest).")
     args = ap.parse_args()
 
-    bt = load_backtest(args.dump)
+    bt, dump_provenance, dump_path = load_backtest_with_provenance(args.dump)
+    if dump_provenance is None:
+        print(
+            "  NOTE: this dump predates the #238 provenance envelope, so the "
+            "grades cannot record which projection generation they were scored "
+            "against. Rerun `projections-backtest` to get one."
+        )
     engine = get_engine()
     with engine.connect() as conn:
         rows = join_coaches(bt, conn)
@@ -387,11 +432,17 @@ def main() -> None:
     if not guards_pass:
         sys.exit("guards FAILED (ICC or split-half regressed) — refusing to write")
 
-    write_db(engine, rows, ratings)
+    write_db(engine, rows, ratings, dump_provenance, dump_path)
     print(f"\nwrote {len(rows)} coach_season_cae rows + {len(ratings)} coach_ratings rows")
 
 
-def write_db(engine, rows: list[dict], ratings: list[dict]) -> None:
+def write_db(
+    engine,
+    rows: list[dict],
+    ratings: list[dict],
+    dump_provenance: dict | None = None,
+    dump_path: Path | None = None,
+) -> None:
     with engine.begin() as conn:
         conn.execute(text("TRUNCATE coach_season_cae, coach_ratings"))
         conn.execute(
@@ -429,6 +480,38 @@ def write_db(engine, rows: list[dict], ratings: list[dict]) -> None:
               "cen_s": r["cen_shrunk"], "rel": r["reliability"], "lo": r["ci_low"],
               "hi": r["ci_high"], "fs": r["first_season"], "ls": r["last_season"]}
              for r in ratings],
+        )
+
+        # Which projection generation these grades were scored against (#238),
+        # in the same transaction as the grades. CAE is the roster-impact
+        # residual, so a retrain moves every grade — that is expected and
+        # descriptive, but it means a grade is only interpretable alongside the
+        # projection it was measured from.
+        #
+        # `dump_provenance` is None for a pre-#238 dump. Recorded as null
+        # rather than omitted: an old dump genuinely cannot say what produced
+        # it, and a row that quietly claims nothing is wrong is the failure
+        # this chain exists to break.
+        conn.execute(
+            text(
+                """
+                INSERT INTO artifact_provenance
+                    (artifact, artifact_key, provenance, computed_at)
+                VALUES ('coach_season_cae', 'all', CAST(:prov AS jsonb), now())
+                ON CONFLICT (artifact, artifact_key) DO UPDATE SET
+                    provenance  = EXCLUDED.provenance,
+                    computed_at = now()
+                """
+            ),
+            {
+                "prov": json.dumps(
+                    {
+                        "produced_by": "training/compute_cae.py --write",
+                        "scored_against_dump": dump_path.name if dump_path else None,
+                        "dump_provenance": dump_provenance,
+                    }
+                )
+            },
         )
 
 
