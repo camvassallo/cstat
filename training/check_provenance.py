@@ -52,9 +52,11 @@ retrained through once.
 
 0 = no drift (CURRENT / CHURN / UNSTAMPED), 1 = at least one STALE node,
 2 = the two Layer 2 halves disagree, which means the API will refuse to boot.
-Layer 3 staleness is deliberately out of scope here and report-only by design:
-a stale `team_preseason_projection` is a data-freshness problem, and prod
-refusing to boot over it would be worse than serving it.
+
+Layer 3 (#238) is included and is **report-only by design**: it can reach exit
+1 but never exit 2. A stale `team_preseason_projection` is a data-freshness
+problem, and prod refusing to serve over it would be strictly worse than
+serving it. Guarded by `test_layer3_never_blocks_the_boot`.
 """
 
 from __future__ import annotations
@@ -65,6 +67,7 @@ import json
 import sys
 from pathlib import Path
 
+import provenance
 from provenance import (
     LAYER3_UPSTREAM,
     NODE_INPUTS,
@@ -77,8 +80,6 @@ from provenance import (
     onnx_sha256,
     read_artifact_provenance,
 )
-
-MODEL_DIR = Path(__file__).parent / "models"
 
 #: Report order = dependency order. Reading top to bottom gives you the highest
 #: stale node, which is the one to retrain from.
@@ -107,7 +108,7 @@ CURRENT, CHURN, STALE, UNSTAMPED = "current", "churn", "STALE", "unstamped"
 
 def _load_stamp(node: str) -> dict | None:
     """The `input_provenance` block a node carries, or None if unstamped."""
-    path = MODEL_DIR / NODE_META_FILES[node]
+    path = provenance.MODEL_DIR / NODE_META_FILES[node]
     if not path.exists():
         return None
     try:
@@ -148,7 +149,6 @@ def classify_source(
         (s for s in set(before) & set(after) if before[s]["digest"] != after[s]["digest"]),
         key=int,
     )
-    moved = sorted(set(added) | set(removed) | set(changed), key=int)
 
     # The churn exemption is narrow on purpose: it applies only to the single
     # in-progress season, only in a table the nightly rewrites, and only when
@@ -321,7 +321,7 @@ def _boot_guard() -> dict:
     """Would `Predictor::load` accept the two Layer 2 halves as they sit?"""
     blocks = {}
     for node in ("roster_impact", "roster_adjo"):
-        path = MODEL_DIR / NODE_META_FILES[node]
+        path = provenance.MODEL_DIR / NODE_META_FILES[node]
         if not path.exists():
             return {"status": "missing", "detail": f"{path.name} not found"}
         blocks[node] = json.loads(path.read_text()).get("oof_provenance")

@@ -156,5 +156,5 @@ Each Layer 1 trainer still re-validates via LOPO/LOCO CV, re-emits its 3 ONNX mo
 ```bash
 cargo test -p cstat-core roster_projection
 curl -s http://localhost:8080/api/projections/2027 | jq '.teams[0]'
-./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings
+./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance
 ```

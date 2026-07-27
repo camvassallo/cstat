@@ -134,6 +134,25 @@ def _unwrap_dump(obj) -> tuple[list[dict], dict | None]:
     return obj, None
 
 
+def read_dump_records(path: Path) -> list[dict]:
+    """Read a backtest dump into its per-team records, whichever shape it is.
+
+    The entry point for consumers that build a DataFrame rather than going
+    through `load_backtest` — `audit_preseason_projections.py`,
+    `decompose_projection_error.py` and `diagnose_trajectory_attrition.py` all
+    glob for the newest dump and previously called `pd.read_json` on it
+    directly. That breaks on the #238 envelope: `pd.read_json` on
+    `{"provenance": ..., "teams": [...]}` yields a frame of the envelope, not
+    of the teams.
+
+    Centralized here rather than shimmed in each caller because three inline
+    copies of the same unwrap is precisely what drifts — the `phase_b` ->
+    `roster_proj` rename is already duplicated inline in all three, which is
+    how this file ended up being the only place that knew about the rename.
+    """
+    return _normalize_proj_keys(_unwrap_dump(json.loads(Path(path).read_text()))[0])
+
+
 def load_backtest_with_provenance(
     explicit: Path | None = None,
 ) -> tuple[list[dict], dict | None, Path]:

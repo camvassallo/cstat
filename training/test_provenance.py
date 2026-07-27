@@ -361,14 +361,16 @@ def test_staleness_propagates_to_layer2() -> None:
             }
         }
 
-        orig_dir = C.MODEL_DIR
+        # Patch the ONE model-dir constant; both the meta reads and the ONNX
+        # digests follow it.
+        orig_dir = P.MODEL_DIR
         try:
-            C.MODEL_DIR = d
+            P.MODEL_DIR = d
             report = C.check(
                 live=live, artifacts=artifacts, today=dt.date(2026, 7, 26)
             )
         finally:
-            C.MODEL_DIR = orig_dir
+            P.MODEL_DIR = orig_dir
 
     nodes = report["nodes"]
     assert nodes["trajectory"]["verdict"] == C.STALE

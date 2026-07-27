@@ -422,12 +422,10 @@ pub async fn run(
     if let Some(path) = output_path {
         dump_per_team_json(path, &pooled, &provenance)?;
         println!("  wrote per-team dump → {}", path.display());
-    }
 
-    // Also recorded in the database, keyed by dump filename, so the record
-    // survives the dump being deleted — these files are gitignored and one
-    // once accounted for 89% of a PR's diff, so they get cleaned up.
-    if let Some(path) = output_path {
+        // Also recorded in the database, keyed by dump filename, so the record
+        // survives the dump being deleted — these files are gitignored and one
+        // once accounted for 89% of a PR's diff, so they do get cleaned up.
         let key = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -487,4 +485,51 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult], provenance: &Value) -
     serde_json::to_writer_pretty(f, &json!({ "provenance": provenance, "teams": arr }))
         .with_context(|| format!("write JSON dump {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod dump_format_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn one_result() -> TeamResult {
+        TeamResult {
+            team_id: Uuid::nil(),
+            team_name: "Duke Blue Devils".to_string(),
+            season: 2026,
+            roster_proj: 20.0,
+            baseline: 18.0,
+            actual: 22.0,
+        }
+    }
+
+    /// The dump envelope is a cross-language format contract: Rust writes it,
+    /// four Python consumers read it through `compute_cae.read_dump_records` /
+    /// `load_backtest`. Nothing else pins the key names, so a rename here would
+    /// surface as a `KeyError` in a diagnostic script months later.
+    #[test]
+    fn dump_has_a_provenance_envelope_around_the_team_array() {
+        let dir = std::env::temp_dir().join(format!("cstat_dump_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dump.json");
+
+        dump_per_team_json(&path, &[one_result()], &json!({"produced_by": "test"})).unwrap();
+
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["provenance"]["produced_by"], "test");
+        let teams = v["teams"].as_array().expect("`teams` must be an array");
+        assert_eq!(teams.len(), 1);
+        // The per-team keys downstream reads by name.
+        for key in [
+            "team_id",
+            "team_name",
+            "season",
+            "roster_proj",
+            "baseline",
+            "actual",
+        ] {
+            assert!(teams[0].get(key).is_some(), "dump row lost the `{key}` key");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

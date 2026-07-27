@@ -342,7 +342,7 @@ about because the two halves of Layer 2 land differently.
 | `artifact_provenance` | 3 | **data sync** — not in `sync_to_prod.sh`'s EXCLUDED list, so it travels with the tables it describes. It has to: `team_preseason_projection` reaches prod by sync, and provenance recorded only on one laptop would leave prod holding rows of unknown origin |
 
 ```bash
-./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings
+./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance
 ```
 
 The subtlety: **the served AdjO/AdjD split is never materialized.**
@@ -538,8 +538,18 @@ are recorded and compared file-by-file.
 `load_backtest()` reads both that and the historical bare array, the same
 back-compat approach as the `phase_b` -> `roster_proj` shim — `eval_history/`
 holds months of dumps still cited in writeups, and regenerating them to satisfy
-a format change would destroy the record they exist to preserve. All four
-readers share that one loader, so the shim is a single point.
+a format change would destroy the record they exist to preserve.
+
+There are **seven** dump readers, not the four that take `--dump`. Four go
+through `load_backtest` (`compute_cae`, `transition_blend_diagnostic`,
+`pit_cae_backtest`, `pit_program_calibration`); three more —
+`audit_preseason_projections`, `decompose_projection_error`,
+`diagnose_trajectory_attrition` — glob for the newest dump and previously called
+`pd.read_json` on it directly, which raises `ValueError: Mixing dicts with
+non-Series` on an envelope. They now share `compute_cae.read_dump_records`.
+Three further scripts (`cae_feasibility`, `derisk_coach_quality`,
+`derisk_coaching_change`) read a *pinned* historical filename, so they are
+permanently on the bare-array shape and need nothing.
 
 Layer 3 staleness is **report-only**, deliberately. Exit 2 is reserved for
 conditions that genuinely stop the API starting; a stale

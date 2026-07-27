@@ -426,17 +426,26 @@ def loso_file_digests(model_dir=None) -> dict[str, str]:
 def read_artifact_provenance(conn=None) -> dict[str, dict]:
     """Load `artifact_provenance` as `{artifact: {key: provenance}}`.
 
-    Returns `{}` when the table does not exist yet, so the report still runs on
-    a database that predates migration 047 rather than failing on it.
+    Returns `{}` only when the table genuinely does not exist yet, so the report
+    still runs against a database that predates migration 047.
+
+    That absence is probed with `to_regclass` rather than caught as an
+    exception. A bare `except` here would also swallow a connection failure, a
+    permission error, or a typo'd column — and every one of those would surface
+    as "no rows", which the report renders as UNSTAMPED and exit 0: **a clean
+    bill of health produced by not having looked.** That is the same
+    false-negative direction as a stale model reporting current, and it is the
+    exact failure this whole chain exists to prevent. Anything other than a
+    missing table propagates.
     """
     own = conn is None
     conn = get_engine().connect() if own else conn
     try:
+        if conn.execute(text("SELECT to_regclass('artifact_provenance')")).scalar() is None:
+            return {}
         rows = conn.execute(
             text("SELECT artifact, artifact_key, provenance FROM artifact_provenance")
         ).fetchall()
-    except Exception:
-        return {}
     finally:
         if own:
             conn.close()

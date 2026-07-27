@@ -43,6 +43,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
+from compute_cae import read_dump_records
 from db import get_engine
 
 EVAL_DIR = Path(__file__).resolve().parent / "eval_history"
@@ -261,7 +262,8 @@ def team_level_cut() -> dict | None:
     if not dumps:
         print("\n(no projections backtest dump — skipping team-level cut)")
         return None
-    bt = pd.read_json(dumps[-1])
+    # Both dump shapes (#238 envelope / historical bare array).
+    bt = pd.DataFrame(read_dump_records(dumps[-1]))
     # Back-compat for the phase_b→roster_proj dump-key rename (legacy column name kept).
     if "roster_proj" in bt.columns and "phase_b" not in bt.columns:
         bt["phase_b"] = bt["roster_proj"]
