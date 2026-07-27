@@ -239,7 +239,7 @@ recommended value, they do not write code, so there is no honest way to
 automate the step.
 But it means the constants keep carrying their last-measured assumption until
 someone re-measures. After a Layer 2 retrain that moved the projector
-materially, run both (the current values were last confirmed 2026-07-26, below):
+materially, run both (the current values were last confirmed 2026-07-27, below):
 
 ```bash
 # From training/ — pass the dump the retrain just produced, by name.
@@ -260,11 +260,30 @@ mode one layer over. `compute_cae.py`, `transition_blend_diagnostic.py`,
 `pit_cae_backtest.py`, and `pit_program_calibration.py` all take `--dump`;
 `load_backtest` warns when name-order and mtime-order disagree.
 
-**Re-validated after the #218 retrain (2026-07-26). All five constants
+**Re-validated after the full-tree retrain (2026-07-27). All five constants
 confirmed; no change warranted.** Both tuners were rerun against the
 post-retrain state. Details below, but the headline is that Layer 4 is a real
 structural gap because nothing *forces* the re-check — not because the
 constants drift often.
+
+One number *did* move, in the direction that removes a caveat.
+`PROJECTION_SHRINK_WEIGHT_OVERHAUL = 0.20` had sat one grid step off its
+optimum (0.25) on both the pre- and post-#218 dumps, which the previous
+write-up characterised as a deliberate rounding. On the 2026-07-27 dump the
+overhaul optimum **is** 0.20 — pooled MAE 5.934, with continuity optimal at
+0.45 / 5.429. The shipped pair is now exactly optimal on both cohorts, and the
+honest leave-one-season-out test still favours transition-conditional
+weighting (flat 5.7034 → 5.6588, lift +0.045).
+
+The preseason blend re-measured identically to the #218 check: peak weight
+0.70 and HCA 3.5 exactly optimal, `PRESEASON_DECAY_DAYS = 42` versus the
+grid's 49 worth nothing pooled (both 8.82) and 0.00 / 0.01 / 0.00 per season
+across 2024 / 2025 / 2026. The preseason-leg-only HCA sweep again reports an
+"optimum 1.5" — that is the trap documented below, not a recommendation.
+
+The tables that follow are from the #218 re-validation and are kept because
+their pre/post comparison is what established that the retrain, rather than
+drift, moves these numbers.
 
 #### Shrink weights
 
