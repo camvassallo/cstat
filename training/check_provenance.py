@@ -195,33 +195,53 @@ def classify_layer3(artifact: str, recorded: dict | None) -> tuple[str, list[str
     for key, prov in sorted(recorded.items()):
         prefix = f"[{key}] " if key != "all" else ""
 
-        # The dump CAE was scored against wraps its own model record, so unwrap
-        # one level to reach the models that actually produced the numbers.
-        models = (prov or {}).get("models") or {}
-        nested = ((prov or {}).get("dump_provenance") or {}).get("models") or {}
-        for stem, entry in {**models, **nested}.items():
-            recorded_sha = (entry or {}).get("onnx_sha256")
-            current_sha = onnx_sha256(stem)
-            if current_sha is None:
-                reasons.append(f"{prefix}{stem}.onnx is missing from disk")
-            elif recorded_sha and recorded_sha != current_sha:
-                reasons.append(f"{prefix}produced by a superseded {stem}")
+        # CAE records the dump it was scored against, which wraps its own model
+        # record — so the models live one level down for that artifact and at
+        # the top level for the others. Both blocks are checked rather than
+        # merged into one dict: a merge lets a key present in both silently
+        # shadow the other, and dropping a record we were asked to verify is
+        # the under-reporting this tool exists to prevent.
+        blocks = [(prov or {}).get("models") or {}]
+        nested = (prov or {}).get("dump_provenance") or {}
+        blocks.append(nested.get("models") or {})
+
+        for models in blocks:
+            for stem, entry in sorted(models.items()):
+                recorded_sha = (entry or {}).get("onnx_sha256")
+                current_sha = onnx_sha256(stem)
+                if current_sha is None:
+                    reasons.append(f"{prefix}{stem}.onnx is missing from disk")
+                elif not recorded_sha:
+                    # A record that names a model but carries no digest cannot
+                    # be checked. Say so — silently treating unverifiable as
+                    # fine is how #218 lasted three regenerations.
+                    reasons.append(f"{prefix}{stem} recorded without a digest")
+                elif recorded_sha != current_sha:
+                    reasons.append(f"{prefix}produced by a superseded {stem}")
 
         # The LOSO set is the specific gap #238 exists for: gitignored, so it
         # never shows in `git status`, and a set from a different frame than the
         # committed serving model yields grades against a projection generation
-        # that no longer ships.
-        loso = ((prov or {}).get("dump_provenance") or prov or {}).get(
-            "roster_impact_loso"
-        ) or {}
-        recorded_files = {m["file"]: m["sha256"] for m in loso.get("models", [])}
-        if recorded_files:
-            current_files = loso_file_digests()
-            changed = [f for f, s in recorded_files.items() if current_files.get(f) != s]
+        # that no longer ships. Checked at both levels for the same reason as
+        # the models above.
+        current_files = None
+        for source in ((prov or {}), nested):
+            recorded_files = {
+                m["file"]: m["sha256"]
+                for m in (source.get("roster_impact_loso") or {}).get("models", [])
+            }
+            if not recorded_files:
+                continue
+            if current_files is None:
+                current_files = loso_file_digests()
             missing = [f for f in recorded_files if f not in current_files]
+            changed = [
+                f for f, s in recorded_files.items()
+                if f in current_files and current_files[f] != s
+            ]
             if missing:
                 reasons.append(f"{prefix}LOSO models absent: {len(missing)} file(s)")
-            elif changed:
+            if changed:
                 reasons.append(f"{prefix}LOSO set changed: {len(changed)} model(s)")
 
     return (STALE if reasons else CURRENT), reasons

@@ -66,6 +66,7 @@ tells you the API will refuse to boot.
 from __future__ import annotations
 
 import datetime as _dt
+import os as _os
 from dataclasses import dataclass
 from pathlib import Path as _Path
 
@@ -389,7 +390,14 @@ LAYER3_UPSTREAM: dict[str, tuple[str, ...]] = {
     "coach_season_cae": ("roster_impact",),
 }
 
-MODEL_DIR = _Path(__file__).parent / "models"
+#: Env-overridable, matching `export_onnx.py` and the Rust producers
+#: (`bin/ingest.rs` reads `MODEL_DIR` before every Layer 3 command). If this
+#: hardcoded `training/models` while the producers honoured the override, the
+#: digests recorded and the digests compared would come from different
+#: directories and every Layer 3 node would read STALE forever — a permanently
+#: wrong report is one people stop reading, which is the failure this chain is
+#: for.
+MODEL_DIR = _Path(_os.environ.get("MODEL_DIR", _Path(__file__).parent / "models"))
 
 
 def onnx_sha256(stem: str, model_dir=None) -> str | None:

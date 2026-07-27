@@ -476,6 +476,44 @@ def test_layer3_detects_a_drifted_loso_set() -> None:
     assert "LOSO set changed" in reasons[0]
 
 
+def test_layer3_unverifiable_record_is_not_waved_through() -> None:
+    """A record naming a model but carrying no digest cannot be checked.
+
+    Silently treating unverifiable as fine is the "can't tell, carry on" state
+    that let #218 survive three regenerations, so it has to read STALE.
+    """
+    verdict, reasons = C.classify_layer3(
+        "team_preseason_projection",
+        {"2026": {"models": {"roster_impact_model": {}}}},
+    )
+    assert verdict == C.STALE
+    assert "without a digest" in reasons[0]
+
+
+def test_layer3_model_dir_honours_the_env_override() -> None:
+    """Python must resolve the model dir the same way the Rust producers do.
+
+    `bin/ingest.rs` reads `MODEL_DIR` before every Layer 3 command and
+    `export_onnx.py` honours it too. If this side hardcoded `training/models`,
+    a run under the override would record digests from one directory and
+    compare against another — every Layer 3 node STALE forever, which is a
+    report nobody keeps reading.
+    """
+    import importlib
+    import os
+
+    before = P.MODEL_DIR
+    os.environ["MODEL_DIR"] = "/tmp/cstat-model-dir-probe"
+    try:
+        reloaded = importlib.reload(P)
+        assert str(reloaded.MODEL_DIR) == "/tmp/cstat-model-dir-probe"
+    finally:
+        del os.environ["MODEL_DIR"]
+        importlib.reload(P)
+        importlib.reload(C)
+    assert P.MODEL_DIR == before
+
+
 def test_layer3_missing_row_is_unstamped_not_stale() -> None:
     """Nothing has run its producer yet — that is not evidence of drift."""
     verdict, reasons = C.classify_layer3("team_preseason_projection", None)
@@ -596,6 +634,8 @@ def main() -> int:
         test_layer3_superseded_model_is_stale,
         test_layer3_is_keyed_per_season,
         test_layer3_detects_a_drifted_loso_set,
+        test_layer3_unverifiable_record_is_not_waved_through,
+        test_layer3_model_dir_honours_the_env_override,
         test_layer3_missing_row_is_unstamped_not_stale,
         test_layer3_never_blocks_the_boot,
         test_oof_digest_matches_the_218_construction,
