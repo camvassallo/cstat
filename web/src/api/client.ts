@@ -1484,6 +1484,9 @@ export interface CoachLeaderboardRow {
   last_team_id: string | null;
   last_team_name: string | null;
   last_team_season: number | null;
+  // Conference of the coach's most recent (or season-scoped) team. Display +
+  // search only. null when no team matched or the team carries no conference.
+  conference: string | null;
 }
 
 export function fetchCoaches(
@@ -1523,6 +1526,9 @@ export interface CoachSeasonLeaderboardRow {
   // this season's board. A lens, not a truth; null on degenerate boards.
   blend: number | null;
   is_new_hc: boolean | null;
+  // That season's team conference. Display + search only. null when no team
+  // matched or the team carries no conference label.
+  conference: string | null;
 }
 
 export function fetchCoachSeasonBoard(season: number, limit?: number) {
