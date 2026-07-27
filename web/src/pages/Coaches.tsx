@@ -107,7 +107,21 @@ type CareerSortKey =
   | 'blend'
   | 'reliability'
   | 'last_team_season'
-  | 'last_team_name';
+  | 'last_team_name'
+  | 'conference';
+
+/** Case-insensitive substring match of `q` against a coach's name, team, and
+ *  conference. `q` is assumed already lowercased/trimmed by the caller. */
+function matchesCoach(
+  q: string,
+  fields: { name: string; team: string | null; conference: string | null },
+): boolean {
+  return (
+    fields.name.toLowerCase().includes(q) ||
+    (fields.team ?? '').toLowerCase().includes(q) ||
+    (fields.conference ?? '').toLowerCase().includes(q)
+  );
+}
 
 /** Plain fixed-decimal for the display-only team-strength columns; `—` for the
  *  coaches whose scored seasons never resolved to a team-stats row. */
@@ -115,7 +129,15 @@ function fmtStrength(v: number | null, d = 1): string {
   return v == null ? '—' : v.toFixed(d);
 }
 
-function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
+function CareerTable({
+  rows,
+  search,
+  activeOnly,
+}: {
+  rows: CoachLeaderboardRow[];
+  search: string;
+  activeOnly: boolean;
+}) {
   // The newest *actual* coaching season anywhere on the board (from
   // coach_seasons, not the scored rating) — a coach whose latest season equals
   // it is still active, even if that season isn't scored yet. Derived from the
@@ -137,13 +159,31 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
           {
             key,
             dir:
-              key === 'name' || key === 'last_team_name' || key === 'career_adj_d' ? 'asc' : 'desc',
+              key === 'name' ||
+              key === 'last_team_name' ||
+              key === 'conference' ||
+              key === 'career_adj_d'
+                ? 'asc'
+                : 'desc',
           },
     );
   const sorted = useMemo(
     () => [...rows].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir)),
     [rows, sort],
   );
+
+  // Name/team/conference + "active" filter over the sorted list. blendRank below
+  // is still computed over the FULL board, so the `#` stays a stable board-wide
+  // rank even while the visible list is filtered. "Active" mirrors TenureCell:
+  // the coach's latest season reaches the board's newest season.
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return sorted.filter((c) => {
+      if (activeOnly && (c.last_team_season ?? c.last_season) < currentSeason) return false;
+      if (!q) return true;
+      return matchesCoach(q, { name: c.name, team: c.last_team_name, conference: c.conference });
+    });
+  }, [sorted, search, activeOnly, currentSeason]);
 
   // Fixed Blend rank over the loaded board (best = 1), keyed by coach. Bound to
   // the data, so the `#` stays with the coach under re-sort — it is a stable
@@ -168,6 +208,8 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
             <SortHeader label="Coach" sortKey="name" current={sort} onSort={onSort} />
             <SortHeader label="Team" sortKey="last_team_name" current={sort} onSort={onSort}
               title="The coach's most recently coached team." />
+            <SortHeader label="Conf" sortKey="conference" current={sort} onSort={onSort}
+              title="Conference of the coach's most recently coached team." />
             <SortHeader label="CAE" sortKey="cae_shrunk" current={sort} onSort={onSort} align="right"
               title="Shrunk Coach-Above-Expectation (AdjEM points above roster projection). The headline rating." />
             <StickyHeader align="right">95% CI</StickyHeader>
@@ -190,7 +232,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {sorted.map((c) => (
+          {visible.map((c) => (
             <tr key={c.coach_id} className="border-b border-gray-800 hover:bg-gray-800/50">
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-500">
                 {blendRank.get(c.coach_id) ?? '—'}
@@ -204,6 +246,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
                 <TeamCell teamId={c.last_team_id} teamName={c.last_team_name}
                   season={c.last_team_season ?? c.last_season} />
               </td>
+              <td className="py-1.5 px-2 text-gray-400">{c.conference ?? '—'}</td>
               <td className="py-1.5 px-2 text-right tabular-nums font-semibold" style={{ color: caeColor(c.cae_shrunk) }}>
                 {fmtCae(c.cae_shrunk)}
               </td>
@@ -227,7 +270,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
           ))}
         </tbody>
       </table>
-      {sorted.length === 0 && (
+      {visible.length === 0 && (
         <div className="text-gray-500 py-6 text-center">No coaches match this filter.</div>
       )}
     </div>
@@ -239,6 +282,7 @@ function CareerTable({ rows }: { rows: CoachLeaderboardRow[] }) {
 type SeasonSortKey =
   | 'name'
   | 'team_name'
+  | 'conference'
   | 'actual_adjem'
   | 'adj_offense'
   | 'adj_defense'
@@ -246,7 +290,7 @@ type SeasonSortKey =
   | 'cae_raw'
   | 'blend';
 
-function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
+function SeasonTable({ rows, search }: { rows: CoachSeasonLeaderboardRow[]; search: string }) {
   const [sort, setSort] = useState<{ key: SeasonSortKey; dir: SortDir }>({
     key: 'blend',
     dir: 'desc',
@@ -259,13 +303,29 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
           // other metric opens descending (more = better).
           {
             key,
-            dir: key === 'name' || key === 'team_name' || key === 'adj_defense' ? 'asc' : 'desc',
+            dir:
+              key === 'name' ||
+              key === 'team_name' ||
+              key === 'conference' ||
+              key === 'adj_defense'
+                ? 'asc'
+                : 'desc',
           },
     );
   const sorted = useMemo(
     () => [...rows].sort((a, b) => compareValues(a[sort.key], b[sort.key], sort.dir)),
     [rows, sort],
   );
+
+  // Name/team/conference filter over the sorted list. blendRank below is still
+  // computed over the FULL board, so the `#` stays a stable board-wide rank.
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter((c) =>
+      matchesCoach(q, { name: c.name, team: c.team_name, conference: c.conference }),
+    );
+  }, [sorted, search]);
 
   // Fixed Blend rank over the loaded season board (best = 1), keyed by coach.
   // Bound to the data, so the `#` is a stable rank by the headline composite,
@@ -288,6 +348,8 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
             <StickyHeader align="right" className="w-10">#</StickyHeader>
             <SortHeader label="Coach" sortKey="name" current={sort} onSort={onSort} />
             <SortHeader label="Team" sortKey="team_name" current={sort} onSort={onSort} />
+            <SortHeader label="Conf" sortKey="conference" current={sort} onSort={onSort}
+              title="That season's team conference." />
             <SortHeader label="AdjEM" sortKey="actual_adjem" current={sort} onSort={onSort} align="right"
               title="The team's actual AdjEM that season." />
             <SortHeader label="AdjO" sortKey="adj_offense" current={sort} onSort={onSort} align="right"
@@ -303,7 +365,7 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {sorted.map((c) => (
+          {visible.map((c) => (
             <tr key={c.coach_id} className="border-b border-gray-800 hover:bg-gray-800/50">
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-500">
                 {blendRank.get(c.coach_id) ?? '—'}
@@ -317,6 +379,7 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
                 <TeamCell teamId={c.team_id} teamName={c.team_name} season={c.season} />
                 {c.is_new_hc && NEW_BADGE}
               </td>
+              <td className="py-1.5 px-2 text-gray-400">{c.conference ?? '—'}</td>
               <td className="py-1.5 px-2 text-right tabular-nums">{c.actual_adjem.toFixed(1)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_offense)}</td>
               <td className="py-1.5 px-2 text-right tabular-nums text-gray-400">{fmtStrength(c.adj_defense)}</td>
@@ -331,8 +394,10 @@ function SeasonTable({ rows }: { rows: CoachSeasonLeaderboardRow[] }) {
           ))}
         </tbody>
       </table>
-      {sorted.length === 0 && (
-        <div className="text-gray-500 py-6 text-center">No CAE data for this season.</div>
+      {visible.length === 0 && (
+        <div className="text-gray-500 py-6 text-center">
+          {search.trim() ? 'No coaches match this filter.' : 'No CAE data for this season.'}
+        </div>
       )}
     </div>
   );
@@ -349,6 +414,12 @@ export function Coaches() {
   >(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Name/team/conference filter — applies to both boards (fields common to
+  // each), kept across the career/season toggle since all three still apply.
+  const [search, setSearch] = useState('');
+  // Career-only "still coaching this season" filter. Meaningless on the season
+  // board (every row is that one season), so it's shown only in career mode.
+  const [activeOnly, setActiveOnly] = useState(false);
 
   // No synchronous `setLoading(true)` — initial `loading` covers first paint;
   // a mode/season change keeps the prior board visible until the new one lands
@@ -440,13 +511,47 @@ export function Coaches() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="relative w-full max-w-xs">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search coach, team, or conference…"
+            className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+            aria-label="Search coaches by name, team, or conference"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+            >
+              ×
+            </button>
+          )}
+        </div>
+        {mode === 'career' && (
+          <label className="inline-flex items-center gap-2 text-sm text-gray-300 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={activeOnly}
+              onChange={(e) => setActiveOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-600 bg-gray-800 accent-blue-600"
+            />
+            Active only
+          </label>
+        )}
+      </div>
+
       {error && <div className="text-red-400">{error}</div>}
       {loading && !board ? (
         <div className="text-gray-400">Loading…</div>
       ) : board?.mode === 'season' ? (
-        <SeasonTable rows={board.rows} />
+        <SeasonTable rows={board.rows} search={search} />
       ) : board ? (
-        <CareerTable rows={board.rows} />
+        <CareerTable rows={board.rows} search={search} activeOnly={activeOnly} />
       ) : null}
     </div>
   );

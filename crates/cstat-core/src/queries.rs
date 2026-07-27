@@ -2899,6 +2899,10 @@ pub struct CoachLeaderboardRow {
     /// The season of `last_team_*`, so the team link deep-links to the right
     /// season-scoped page. NULL when there's no matched team.
     pub last_team_season: Option<i32>,
+    /// Conference of `last_team_*` (the coach's most recent, or season-scoped,
+    /// team) — display + search only. NULL when there's no matched team or the
+    /// team carries no conference label.
+    pub conference: Option<String>,
 }
 
 /// Populate the display-only `blend` lens on a set of career leaderboard rows:
@@ -3020,7 +3024,8 @@ pub async fn get_coach_leaderboard(
             st.career_adj_d,
             lt.team_id      AS last_team_id,
             lt.team_name    AS last_team_name,
-            lt.team_season  AS last_team_season
+            lt.team_season  AS last_team_season,
+            lt.conference   AS conference
         FROM coach_ratings cr
         JOIN coaches c ON c.id = cr.coach_id
         -- Display-only team-strength means over the coach's scored seasons.
@@ -3040,7 +3045,8 @@ pub async fn get_coach_leaderboard(
         ) st ON TRUE
         LEFT JOIN LATERAL (
             SELECT cs.team_id, cs.season AS team_season,
-                   COALESCE(t.short_name, t.name) AS team_name
+                   COALESCE(t.short_name, t.name) AS team_name,
+                   t.conference
             FROM coach_seasons cs
             LEFT JOIN teams t ON t.id = cs.team_id
             WHERE cs.coach_id = c.id AND cs.team_id IS NOT NULL
@@ -3099,6 +3105,9 @@ pub struct CoachSeasonLeaderboardRow {
     #[sqlx(default)]
     pub blend: Option<f64>,
     pub is_new_hc: Option<bool>,
+    /// That season's team conference — display + search only. NULL when the team
+    /// row didn't resolve or carries no conference label.
+    pub conference: Option<String>,
 }
 
 /// Single-season CAE leaderboard for `season`, ranked by raw residual DESC.
@@ -3122,7 +3131,8 @@ pub async fn get_coach_season_leaderboard(
             csc.cae_centered,
             ts.adj_offense,
             ts.adj_defense,
-            tm.is_new_hc
+            tm.is_new_hc,
+            tm.conference
         FROM coach_season_cae csc
         JOIN coaches c ON c.id = csc.coach_id
         -- Dedup the coach_seasons join to ONE team row: coachdict carries
@@ -3132,7 +3142,8 @@ pub async fn get_coach_season_leaderboard(
         -- one with an unmatched (NULL) team. Prefer the matched variant.
         LEFT JOIN LATERAL (
             SELECT cs.team_id, cs.is_new_hc,
-                   COALESCE(t.short_name, t.name) AS team_name
+                   COALESCE(t.short_name, t.name) AS team_name,
+                   t.conference
             FROM coach_seasons cs
             LEFT JOIN teams t ON t.id = cs.team_id
             WHERE cs.coach_id = csc.coach_id AND cs.season = csc.season
@@ -3419,6 +3430,7 @@ mod tests {
             last_team_id: None,
             last_team_name: None,
             last_team_season: None,
+            conference: None,
         }
     }
 
@@ -3460,6 +3472,7 @@ mod tests {
             adj_defense: None,
             blend: None,
             is_new_hc: None,
+            conference: None,
         }
     }
 
