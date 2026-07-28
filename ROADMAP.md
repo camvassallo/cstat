@@ -352,6 +352,32 @@ This naturally enables:
   - Multi-season blend: weighted prior from prior season once 2+ seasons are fully ingested
   - More aggressive defensive skepticism: tunable per-component weight on dgbpm beyond the current `(1 − 0.1 × usg_ratio)` haircut
 
+#### Audit — is optimizing the CamPom formula worth it? (2026-07-28)
+> Prompted by a design-review pass on the served `cam_gbpm_v3_psos`. The formula's 6 constants (`OFFENSE_EXPONENT=0.7`, `DEFENSE_DISCOUNT=0.1`, `USG_REF=17.87`, `MINUTES_EXPONENT=0.5`, `GP_K=8`, SOS transfer rates) are **hand-tuned judgment calls, not fits** — none is optimized against a target (`USG_REF` and the minute means are the only population stats, and `USG_REF` is frozen while the minute means float per season). Question: replace the fudges with calibrated values, and/or fix the structural weaknesses below? Brief spot-checks (below) say **the payoff is small — deprioritize a full grid-search; the only material lever is SOS.**
+
+Structural weaknesses identified (devil's advocate):
+- **Usage double-count**: `OGBPM × (USG/17.87)^0.7` re-applies a usage premium on a metric (GBPM) that already encodes usage — the `0.7` exponent partly exists to soften a redundant adjustment.
+- **Sign × volume incoherence**: `adj_gbpm × mp_factor × gp_weight` multiplies a *signed* rate by volume, so a negative-rate player is pushed *more* negative by more minutes — volume shouldn't monotonically worsen a rate index.
+- **SOS amplified by volume**: SOS is added to the rate *before* the volume multipliers, so the opponent-quality bump scales with minutes/GP — no clear reason it should.
+- **Half-frozen normalization**: `USG_REF` is pinned to one era's mean across all seasons while `mean_mp`/`mean_min%` are per-season. Pick one convention.
+- **Share-of-minutes rewards thin benches**: `mp_factor` uses `Min%`, so an equal player on a shallow roster (higher minute share) outranks one on a deep roster.
+- **GBPM-base noise**: the whole composite inherits Barttorvik GBPM's on/off noise (college lineup collinearity, small samples), worst on defense.
+
+Spot-checks against `docs/campom_2026_baseline.csv` (2026, 3,434 players @ GP≥5 / MPG≥10):
+- [x] **The adjustments barely reorder the board.** Spearman(raw `gbpm`, `cam_gbpm_v3`) = **0.951**. Each fudge in isolation is near-identity: usage-adj `adj_gbpm` r=**0.994**, minutes `cam_gbpm` r=0.988, GP-shrink `cam_gbpm_v2` r=0.998. So "cleaning up the double-counting / fudges" would change the *published ranking almost not at all*.
+- [x] **The usage double-count is real but empirically tiny.** `OGBPM` already correlates with `usg` at +0.43; the usage multiplier lifts the composite's usg-correlation only +0.278 → +0.287. Negligible.
+- [x] **The sign×volume issue has ~0 empirical bite.** Among the 1,871 negative-`adj_gbpm` players, corr(`mp_factor`, `cam_gbpm`) = −0.016 — no systematic push.
+- [x] **SOS is the ONLY material lever.** conf-SOS (`cam_gbpm_v2` → `cam_gbpm_v3`) shifts the mean player **154 spots** (Spearman 0.977). If any optimization has value, it's concentrated in the SOS component (transfer rate + conf-vs-player SOS), not the usage/minutes/GP constants.
+- [x] **Predict-model path is a known dead end** (see the Iterate experiment above: CamPom lost to raw GBPM by MAE +0.16 / AUC −0.009). The reorder analysis explains why — the adjustments add little signal, and what they add (usage, SOS) the model already carries in separate features. A constant grid-search vs predict-fitness would at best recover that gap; don't expect it to beat raw.
+- [x] **Weak external anchor ≈ raw.** No 2026 draft picks in the file (`pick` empty). vs recruit rating (freshmen, n=217, `Rec_Rank` 0–100 higher-better): `cam_gbpm_v3` +0.601 vs raw `gbpm` +0.570 — marginally better, and partly circular (SOS rewards high-major recruits). Top-12 by `cam_gbpm_v3` is mostly sane (Boozer, Dybantsa, Lendeborg, Ejiofor, Thornton) but carries a couple of non-consensus names — consistent with GBPM-base noise.
+
+Recommendation (ordered):
+- [ ] **Do NOT invest in a 6-constant grid-search.** The usage/minutes/GP constants are ~no-ops on the output (r≥0.99) and the predict-fitness target is known-negative. Low ceiling.
+- [ ] **If tuning at all, tune only SOS** — it's the one lever that moves ranks. Calibrate the transfer rate against a real target (next-season CamPom carryover, or draft/NBA outcome once ≥1 draft class is matched in-db), not by hand.
+- [ ] **Prefer simplification over optimization for the fudges.** Since usage/minutes/GP barely change the order, consider dropping or merging the near-collinear pieces (the two minutes factors correlate ~0.965) for interpretability, rather than tuning them. Any change must keep the `campom-parity` gate green or intentionally re-baseline `docs/campom_2026_baseline.csv`.
+- [ ] **Fix the two clear correctness smells regardless of tuning** (small, self-contained): make normalization consistent (un-freeze `USG_REF` or freeze the minute means too, and document why), and decide whether SOS should be volume-amplified or applied as a flat rate-level shift.
+- [ ] **The real open question is the fitness function, not the constants.** CamPom is a *descriptive* grade with no target it's fit to. Before more tuning, decide what "better CamPom" even means (next-season value? draft? team success contribution?) — that choice, not the exponents, is where the leverage is.
+
 #### Validate (sanity-check the winner)
 - [ ] **External benchmarks**: once a tuned parameterization wins on the predict-model fitness, sanity-check the rankings against external consensus — does the top-50 by `cam_gbpm_v3` align with KenPom POY shortlist, AP all-American teams, projected NBA draft order? Names that look obviously wrong are a signal the optimizer found a degenerate local optimum.
 - [ ] **Train/serve parity check**: verify Rust-side computed composites match Python training-side composites on a sampled cohort (same trap that bit BPM pre-PR #25). Lock as a regression test.
