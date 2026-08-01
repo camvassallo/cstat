@@ -51,8 +51,13 @@ The builder hard-fails rather than writing bad data if either gate trips:
    columns must equal Wikipedia's own published `CP` column. All 210 parsed
    player-seasons currently pass.
 2. **Consensus check** — the derived first and second teams must reproduce the
-   officially published consensus teams. All 12 seasons currently pass, which
-   is what justifies trusting the third band.
+   `Consensus First Team` / `Consensus Second Team` tables that Wikipedia
+   publishes on the same page. All 12 seasons currently pass, which is what
+   justifies trusting the third band.
+
+   That comparison is parsed straight from the page and **must never read this
+   CSV** — checking the builder's output against the file the builder writes
+   would be circular and the gate could never fail.
 
 ## Why this exists
 

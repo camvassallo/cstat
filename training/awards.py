@@ -121,9 +121,21 @@ def load_awards(engine, verbose: bool = True) -> pd.DataFrame:
     resolved = cand[keep].drop_duplicates(["season", "key"])
 
     merged = aw.merge(resolved[["season", "key", "torvik_pid"]], on=["season", "key"], how="left")
+    # Overrides key on the exact `player` string, which build_awards_data.py
+    # regenerates from Wikipedia -- a rename upstream would silently turn an
+    # override into a no-op and drop the awardee. Fail loudly instead.
+    stale = []
     for (season, player), pid in PID_OVERRIDES.items():          # issue #243
         sel = (merged.season == season) & (merged.player == player)
+        if not sel.any():
+            stale.append((season, player))
+            continue
         merged.loc[sel, "torvik_pid"] = pid
+    if stale:
+        raise ValueError(
+            "PID_OVERRIDES entries match no row in the awards CSV (the player "
+            f"name probably changed upstream): {stale}"
+        )
 
     hit = merged.torvik_pid.notna()
     if verbose:

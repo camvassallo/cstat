@@ -116,6 +116,35 @@ def parse(year: int, txt: str) -> pd.DataFrame:
     return d
 
 
+def parse_official_consensus(txt: str) -> dict[int, set]:
+    """The published 'Consensus First/Second Team' tables from the same page.
+
+    This is the independent side of gate 2. It must NOT read our own output
+    CSV — comparing the derived tiers against the file this script writes
+    would be circular and the gate could never fail.
+    """
+    out: dict[int, set] = {}
+    for tier, caption in ((1, "Consensus First Team"), (2, "Consensus Second Team")):
+        m = re.search(rf"\|\+\s*'''{caption}'''(.*?)\n\|\}}", txt, re.S)
+        if not m:
+            raise SystemExit(f"could not locate the published '{caption}' table")
+        names = set()
+        for row in re.split(r"\n\|-\s*", m.group(1)):
+            for line in row.splitlines():
+                line = line.strip()
+                if not line.startswith("|") or line.startswith("|+"):
+                    continue
+                cell = line.lstrip("|").strip()
+                if not cell or cell.startswith("style") or cell.startswith("!"):
+                    continue
+                name = linktext(cell)
+                if name and not re.fullmatch(r"[A-Z/]{1,5}|[A-Za-z]+man|Junior|Senior|Sophomore|Freshman", name):
+                    names.add(name)
+                break  # first data cell of the row is the player
+        out[tier] = names
+    return out
+
+
 def assign_tiers(g: pd.DataFrame) -> dict:
     """NCAA rule: top five plus ties = first team, next five plus ties =
     second. Extended one band further for the derived third team."""
@@ -132,56 +161,57 @@ def assign_tiers(g: pd.DataFrame) -> dict:
 
 
 def main() -> None:
-    frames = []
+    from awards import normalize_name
+
+    frames, official = [], {}
     for y in SEASONS:
-        d = parse(y, fetch(y))
+        txt = fetch(y)
+        d = parse(y, txt)
         sels = [c for c in ("AP", "USBWA", "NABC", "TSN") if c in d.columns]
         calc = sum(d[c].map(lambda v: POINTS.get(v, 0)) for c in sels)
         bad = d[calc != d.CP]
         if not bad.empty:
             raise SystemExit(f"{y}: CP integrity check FAILED for {len(bad)} rows:\n{bad}")
-        print(f"{y}: {len(d):>3} players, CP check OK")
+        official[y] = parse_official_consensus(txt)
+        print(f"{y}: {len(d):>3} players, CP check OK "
+              f"(published consensus: {len(official[y][1])} + {len(official[y][2])})")
         frames.append(d)
         time.sleep(0.4)
 
     df = pd.concat(frames, ignore_index=True)
 
-    # gate 2: derived first/second must reproduce the official consensus
-    from awards import normalize_name, read_csv
-    try:
-        official = read_csv()
-    except Exception:
-        official = None
-
     out_rows = []
     for season, g in df.groupby("season"):
         t = assign_tiers(g)
+        poy_key = normalize_name(POY[season]) if season in POY else None
         for i, tier in t.items():
             r = df.loc[i]
             out_rows.append({"season": season, "player": r.player, "school": r.school,
                              "consensus_team": tier,
-                             "poy": str(POY.get(season, "")).strip() == str(r.player).strip()
-                                    or normalize_name(POY.get(season, "~")) == normalize_name(r.player),
+                             "poy": poy_key is not None and normalize_name(r.player) == poy_key,
                              "derived": tier == 3})
     out = pd.DataFrame(out_rows).sort_values(["season", "consensus_team", "player"])
 
-    if official is not None:
-        bad_seasons = []
-        for season, g in out.groupby("season"):
-            o = official[official.season == season]
-            for tier in (1, 2):
-                got = {normalize_name(p) for p in g[g.consensus_team == tier].player}
-                want = {normalize_name(p) for p in o[o.consensus_team == tier].player}
-                if got != want:
-                    bad_seasons.append((season, tier, sorted(got ^ want)))
-        if bad_seasons:
-            for s, t, diff in bad_seasons:
-                print(f"  {s} team {t} differs: {diff}", file=sys.stderr)
-            raise SystemExit("consensus check FAILED - refusing to write")
-        print("consensus check OK for all seasons")
+    # gate 2: the derived first/second teams must reproduce the consensus teams
+    # Wikipedia publishes on the same page (parsed independently, never from
+    # our own output). Only then is the third band trustworthy.
+    bad_seasons = []
+    for season, g in out.groupby("season"):
+        for tier in (1, 2):
+            got = {normalize_name(p) for p in g[g.consensus_team == tier].player}
+            want = {normalize_name(p) for p in official[season][tier]}
+            if got != want:
+                bad_seasons.append((season, tier, sorted(got ^ want)))
+    if bad_seasons:
+        for s, t, diff in bad_seasons:
+            print(f"  {s} team {t} differs: {diff}", file=sys.stderr)
+        raise SystemExit("consensus check FAILED - refusing to write")
+    print("consensus check OK for all seasons (vs the published consensus tables)")
 
-    for season, n in out[out.consensus_team == 3].groupby("season").size().items():
-        pass
+    missing_poy = set(POY) - set(out[out.poy].season)
+    if missing_poy:
+        raise SystemExit(f"POY not matched to any row for seasons: {sorted(missing_poy)}")
+
     print(f"\nwriting {len(out)} rows "
           f"({(out.consensus_team < 3).sum()} official + "
           f"{(out.consensus_team == 3).sum()} derived third team), "
