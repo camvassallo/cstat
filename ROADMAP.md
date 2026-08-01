@@ -1361,6 +1361,18 @@ The HTML-entity corruption the issue named as a second root cause is essentially
 
 Two adjacent findings left open, both below.
 
+### Player display names — show the name people use (#243 follow-up — Fixed)
+
+NatStat's legal name is what the site rendered, so Obi Toppin read "Obadiah Toppin", Ja Morant read "Temetrius Morant", and ~2,000 players lost their generational suffix ("Jaren Jackson" for Jaren Jackson Jr., "Marvin Bagley" for Marvin Bagley III).
+
+**The obvious fix — adopt Torvik's name — is wrong, and the data says so.** On the 1,043 player-seasons where the two sources disagree substantively, 247Sports (a third, independent feed already in the DB) sides with NatStat **44 to 20**. Torvik is frequently the one with the typo: "Jeffery Solarin" for Jeffrey, "Ezra Ausur" for Ausar, "Martez Robinson" for Martaz, "Javonte" for "Javonté". Switching wholesale would trade one class of wrong names for another. The earlier read that Torvik wins ~3:1 came from eyeballing thirty high-minute stars; it does not survive contact with the long tail.
+
+So `players.display_name` (migration `050`) is set from exactly two sources, and `players.name` stays the legal join key five resolvers match on:
+- **Suffix restoration**, mechanical and safe *by construction* — fires only when the two names are identical once a trailing generational suffix is stripped, so it cannot introduce a spelling the sources didn't already agree on. ~2,000 players, and it keeps NatStat's spelling of the base, borrowing only the suffix.
+- **Curated overrides** in `data/player_display_names.json`, keyed on `torvik_pid` because names collide — there are two Jonathan Davises and only one of them is Johnny. Each entry carries its evidence. Seeded with Obi Toppin, Ja Morant, Johnny Davis, Zavier Simpson, Fatts Russell (NatStat calls him Daron in 2019-20 and Fatts in 2021-22, so his own career page disagreed with itself), Filip Petrusev (NatStat's "Petrusey" is an outright misspelling) and Johann Grünloh.
+
+Derived by `compute::compute_display_names` (step 21, rewritten from scratch each run) and served as `COALESCE(display_name, name) AS name`, so the API contract and the frontend are unchanged. Search matches **both** columns — "Obadiah" and "Obi" both find him. The two match-key sites that must NOT use it (`routes/draft.rs`, `routes/transfers.rs`, where `p.name` is compared against an external feed) are annotated in place.
+
 ### Stale `torvik_player_stats` rows double-count in per-player joins (#243 follow-up — Open)
 
 Torvik occasionally re-mints a player's `pid` mid-season. The old row is never removed and keeps its `player_id`, so a single player-season can carry two rows with identical stats. 309 such rows exist locally, accounting for 261 of the 287 duplicate `(player_id, season)` pairs — the other 26 are legitimate mid-season transfers, where Torvik genuinely has one row per team. Now identifiable as `player_name IS NULL` on any season re-ingested since migration `049`.

@@ -140,6 +140,10 @@ async fn draft_board(
         r#"
         SELECT
             p.id                     AS player_id,
+            -- Legal `name`, NOT `display_name`: this column is a MATCH KEY
+            -- against the external feed (see the `normalize(&c.name)` index
+            -- below), and the name actually rendered comes from that feed's
+            -- own row. Swapping in the display name would change matching.
             p.name                   AS name,
             t.id                     AS team_id,
             COALESCE(t.short_name, t.name) AS team_name,

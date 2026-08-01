@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use sqlx::QueryBuilder;
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
@@ -4108,11 +4109,98 @@ pub async fn compute_all(
     // Runs last: reads season-to-date player_season_stats (rate stats) +
     // torvik_player_stats (shot zones / GBPM), both fresh by now. Real + carry-over
     // always; tier-3 live inference only when `infer_newcomers` (in-progress season).
-    info!("step 20/20: assigning player archetypes (real + carry-over + tier-3 inference)");
+    info!("step 20/21: assigning player archetypes (real + carry-over + tier-3 inference)");
     report.archetypes = compute_archetypes(pool, season, infer_newcomers).await?;
+
+    // Reads `players.name` + the linked Torvik name, so it must run after the
+    // roster-correcting steps have settled who is who. Pure presentation —
+    // nothing downstream reads `display_name`.
+    info!("step 21/21: deriving player display names");
+    report.display_names = compute_display_names(pool, season).await?;
 
     info!(season, "compute pipeline complete");
     Ok(report)
+}
+
+/// Populate `players.display_name` — the name to *show*, when it differs from
+/// the legal `name` the joins key on (issue #243 follow-up).
+///
+/// Two sources, both deliberately narrow; the reasoning for the narrowness,
+/// including the 247Sports evidence that Torvik is *not* uniformly the better
+/// name, is in [`crate::display_names`]:
+///   1. a generational suffix NatStat dropped and Torvik kept, restored only
+///      when the two base names already agree;
+///   2. a curated override from `data/player_display_names.json`.
+///
+/// Rewritten from scratch each run — the column is derived state, so a removed
+/// override or a corrected `players.name` un-sets it on the next compute
+/// rather than leaving a stale value behind. `display_name` is left NULL when
+/// it would only repeat `name`, so `COALESCE(display_name, name)` is the whole
+/// read contract and "no opinion" stays distinguishable from "same as name".
+pub async fn compute_display_names(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // The Torvik name for each player this season. A mid-season transfer has
+    // one row per team; take the one he played the most games for, so the
+    // choice is deterministic rather than dependent on scan order.
+    let rows = sqlx::query(
+        r#"SELECT DISTINCT ON (t.player_id)
+                  t.player_id, t.torvik_pid, t.player_name, p.name
+             FROM torvik_player_stats t
+             JOIN players p ON p.id = t.player_id
+            WHERE t.season = $1 AND t.player_id IS NOT NULL AND t.player_name IS NOT NULL
+            ORDER BY t.player_id, t.games_played DESC NULLS LAST, t.torvik_pid"#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    let overrides: HashMap<i32, &str> = crate::display_names::overrides()
+        .iter()
+        .map(|o| (o.torvik_pid, o.display_name.as_str()))
+        .collect();
+
+    let mut updates: Vec<(Uuid, String)> = Vec::new();
+    for row in &rows {
+        let player_id: Uuid = row.get("player_id");
+        let torvik_pid: i32 = row.get("torvik_pid");
+        let torvik_name: String = row.get("player_name");
+        let cstat_name: String = row.get("name");
+
+        // A curated override outranks the mechanical rule — it exists
+        // precisely for the cases the mechanical rule can't reach.
+        let chosen = match overrides.get(&torvik_pid) {
+            Some(name) => Some((*name).to_string()),
+            None => crate::display_names::suffix_restoration(&cstat_name, &torvik_name),
+        };
+        if let Some(display) = chosen
+            && display != cstat_name
+        {
+            updates.push((player_id, display));
+        }
+    }
+
+    // Clear first so a display name that no longer qualifies actually goes
+    // away. Scoped to the season being computed.
+    sqlx::query(
+        "UPDATE players SET display_name = NULL WHERE season = $1 AND display_name IS NOT NULL",
+    )
+    .bind(season)
+    .execute(pool)
+    .await?;
+
+    let mut written: u64 = 0;
+    for chunk in updates.chunks(2000) {
+        let mut qb = QueryBuilder::new(
+            "UPDATE players AS p SET display_name = v.display_name, updated_at = now() FROM ( ",
+        );
+        qb.push_values(chunk, |mut b, (id, display)| {
+            b.push_bind(*id).push_bind(display);
+        });
+        qb.push(" ) AS v(id, display_name) WHERE p.id = v.id");
+        written += qb.build().execute(pool).await?.rows_affected();
+    }
+
+    info!(season, written, "display names derived");
+    Ok(written)
 }
 
 #[derive(Debug, Default)]
@@ -4137,13 +4225,14 @@ pub struct ComputeReport {
     pub schedules: u64,
     pub percentiles: u64,
     pub archetypes: u64,
+    pub display_names: u64,
 }
 
 impl std::fmt::Display for ComputeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} phantom swaps repaired, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles, {} archetypes",
+            "Computed: {} deduped, {} team reconciled, {} swapped games fixed, {} phantom swaps repaired, {} misid reattached, {} backfilled, {} est rebounds, {} player stats, {} pbp aggregates, {} pbp lineups, {} four factors, {} adj eff, {} ORTG/DRTG, {} CamPom, {} player SOS, {} rolling avgs, {} derived fields, {} schedules, {} percentiles, {} archetypes, {} display names",
             self.deduplicated_players,
             self.reconciled_player_teams,
             self.corrected_swapped_games,
@@ -4163,7 +4252,8 @@ impl std::fmt::Display for ComputeReport {
             self.derived_fields,
             self.schedules,
             self.percentiles,
-            self.archetypes
+            self.archetypes,
+            self.display_names
         )
     }
 }
