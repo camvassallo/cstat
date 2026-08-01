@@ -85,7 +85,12 @@ where
 }
 
 /// Raw player season stats from the Torvik CSV endpoint.
-#[derive(Debug, Clone)]
+///
+/// `Default` exists so tests can build a row by naming only the handful of
+/// fields under test (`ingest::torvik`'s linkage cases care about the name,
+/// team, pid and minutes); it is never used on the parse path, which fills
+/// every field positionally from the CSV.
+#[derive(Debug, Clone, Default)]
 pub struct TorkvikPlayerSeason {
     pub player_name: String,
     pub team: String,

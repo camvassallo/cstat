@@ -5,6 +5,69 @@
 
 use serde_json::Value;
 
+/// Decode the HTML entities NatStat leaves in free-text fields (issue #243).
+///
+/// Some NatStat records arrive HTML-escaped rather than as plain text, so
+/// `players.name` accumulated 177 rows storing the escape sequence verbatim —
+/// `D&#039;Angelo Russell`, `Devonte&#039; Graham`, `Gregory &quot;GG&quot;
+/// Jackson`. Those names are simply wrong in the database and render wrong on
+/// the site. Decode at every write site so the raw form can never land again.
+///
+/// Single pass, like a browser: `&amp;#039;` decodes to the literal
+/// `&#039;`, which is what double-escaped source text is *meant* to display.
+pub fn decode_html_entities(s: &str) -> String {
+    // Overwhelmingly the common case — skip the scan entirely.
+    if !s.contains('&') {
+        return s.to_string();
+    }
+
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        // Entities are short; a `;` far away is punctuation, not a terminator.
+        match after.find(';').filter(|end| *end <= 8) {
+            Some(end) => match decode_entity(&after[..end]) {
+                Some(c) => {
+                    out.push(c);
+                    rest = &after[end + 1..];
+                }
+                None => {
+                    out.push('&');
+                    rest = after;
+                }
+            },
+            None => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Decode one entity body (the text between `&` and `;`), or `None` if it
+/// isn't an entity we recognize — in which case the caller emits it verbatim.
+fn decode_entity(body: &str) -> Option<char> {
+    match body {
+        "amp" => return Some('&'),
+        "lt" => return Some('<'),
+        "gt" => return Some('>'),
+        "quot" => return Some('"'),
+        "apos" => return Some('\''),
+        "nbsp" => return Some(' '),
+        _ => {}
+    }
+    let digits = body.strip_prefix('#')?;
+    let code = match digits.strip_prefix(['x', 'X']) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => digits.parse::<u32>().ok()?,
+    };
+    char::from_u32(code)
+}
+
 /// Extract f64 from a JSON value that may be a number or string.
 pub fn parse_f64(v: &Value) -> Option<f64> {
     v.as_f64()
@@ -122,5 +185,69 @@ mod tests {
     #[test]
     fn get_f64_from_none_parent() {
         assert_eq!(get_f64_from(None, "ppg"), None);
+    }
+
+    // decode_html_entities (issue #243)
+
+    #[test]
+    fn decode_numeric_apostrophe_entities() {
+        // The two forms actually present in `players.name`.
+        assert_eq!(
+            decode_html_entities("D&#039;Angelo Russell"),
+            "D'Angelo Russell"
+        );
+        assert_eq!(
+            decode_html_entities("Ja&#39;Vier Francis"),
+            "Ja'Vier Francis"
+        );
+        assert_eq!(
+            decode_html_entities("Devonte&#039; Graham"),
+            "Devonte' Graham"
+        );
+    }
+
+    #[test]
+    fn decode_named_entities() {
+        assert_eq!(
+            decode_html_entities("Gregory &quot;GG&quot; Jackson"),
+            "Gregory \"GG\" Jackson"
+        );
+        assert_eq!(decode_html_entities("Smith &amp; Jones"), "Smith & Jones");
+    }
+
+    #[test]
+    fn decode_hex_entities() {
+        assert_eq!(decode_html_entities("D&#x27;Angelo"), "D'Angelo");
+    }
+
+    #[test]
+    fn decode_leaves_plain_names_untouched() {
+        assert_eq!(decode_html_entities("Cooper Flagg"), "Cooper Flagg");
+        assert_eq!(decode_html_entities("D'Angelo Russell"), "D'Angelo Russell");
+    }
+
+    #[test]
+    fn decode_leaves_bare_ampersand_untouched() {
+        // A `&` that isn't an entity must survive verbatim — team names like
+        // "Texas A&M" flow through the same helper.
+        assert_eq!(decode_html_entities("Texas A&M"), "Texas A&M");
+        assert_eq!(decode_html_entities("A & B"), "A & B");
+        assert_eq!(decode_html_entities("trailing &"), "trailing &");
+    }
+
+    #[test]
+    fn decode_ignores_unknown_and_overlong_entities() {
+        assert_eq!(decode_html_entities("&bogus;"), "&bogus;");
+        // A distant `;` is punctuation, not an entity terminator.
+        assert_eq!(
+            decode_html_entities("Smith & Sons, Inc; Ltd"),
+            "Smith & Sons, Inc; Ltd"
+        );
+    }
+
+    #[test]
+    fn decode_is_single_pass_like_a_browser() {
+        // Double-escaped source is *meant* to render as the literal escape.
+        assert_eq!(decode_html_entities("&amp;#039;"), "&#039;");
     }
 }

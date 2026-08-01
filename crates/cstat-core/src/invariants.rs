@@ -68,6 +68,7 @@ pub async fn check_season(
         fully_swapped_games_remain(pool, season).await?,
         phantom_swapped_games_remain(pool, season).await?,
         pbp_present_but_lineups_empty(pool, season).await?,
+        torvik_rows_unlinked(pool, season).await?,
     ]
     .into_iter()
     .flatten()
@@ -348,6 +349,87 @@ async fn pbp_present_but_lineups_empty(
         sample.into_iter(),
     ))
 }
+
+/// Share of a season's Torvik rotation rows allowed to sit unlinked to a
+/// cstat player before the check fires.
+///
+/// The residual after the matcher's three passes is upstream coverage, not a
+/// matching failure: NatStat never ingested those players at all. It sits
+/// under 0.5% for ten of the twelve seasons, and at 2.1%/2.0% for 2021/2022,
+/// where whole rosters are missing (George Washington, UC San Diego,
+/// Bellarmine, Tarleton State — the COVID season and that year's D1
+/// transitions). 3% clears that ceiling while leaving no room for a matcher
+/// regression: before the fix, unlinked rotation rows ran at ~27% pooled.
+pub const TORVIK_UNLINKED_ROTATION_MAX_SHARE: f64 = 0.03;
+
+/// Torvik rows carry a player's advanced metrics, but only reach the site
+/// through `players` — the player-SOS step resolves through `player_id`, so
+/// an unlinked row silently ends with a NULL `cam_gbpm_v3_psos`, the column
+/// the leaderboard sorts on. That is how 1,207 rotation players, Obi Toppin
+/// and Ja Morant among them, vanished from the leaderboard without an error
+/// (issue #243).
+///
+/// `Warning`, not `Error`: what survives the matcher is a hole in the source
+/// data the pipeline faithfully reflects, and failing every run on a static
+/// gap is alarm fatigue. The *share* is what carries signal, so the check
+/// fires on [`TORVIK_UNLINKED_ROTATION_MAX_SHARE`] rather than a raw count.
+///
+/// Rotation minutes come from `total_minutes`, which despite the name holds
+/// Torvik's true minutes-per-game; `minutes_per_game` holds Min% (see the
+/// column-naming gotcha in `compute::compute_campom`). A season with no
+/// Torvik rows ingested is not a violation.
+pub async fn torvik_rows_unlinked(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT count(*) FILTER (WHERE total_minutes >= $2) AS rotation, \
+                count(*) FILTER (WHERE total_minutes >= $2 AND player_id IS NULL) AS unlinked \
+           FROM torvik_player_stats WHERE season = $1",
+    )
+    .bind(season)
+    .bind(ROTATION_MPG)
+    .fetch_one(pool)
+    .await?;
+    let rotation: i64 = row.get("rotation");
+    let unlinked: i64 = row.get("unlinked");
+    if rotation == 0 || (unlinked as f64 / rotation as f64) <= TORVIK_UNLINKED_ROTATION_MAX_SHARE {
+        return Ok(None);
+    }
+
+    // Name a few so the report says who was dropped. `player_name` is only
+    // populated from the ingest that introduced it, so fall back to the pid.
+    let samples = sqlx::query(
+        "SELECT COALESCE(player_name, 'pid ' || torvik_pid) AS who, team_name \
+           FROM torvik_player_stats \
+          WHERE season = $1 AND player_id IS NULL AND total_minutes >= $2 \
+          ORDER BY gbpm DESC NULLS LAST LIMIT 5",
+    )
+    .bind(season)
+    .bind(ROTATION_MPG)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(Some(InvariantViolation {
+        check: "torvik_rows_unlinked",
+        severity: Severity::Warning,
+        count: unlinked,
+        samples: samples
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} ({})",
+                    r.get::<String, _>("who"),
+                    r.get::<String, _>("team_name")
+                )
+            })
+            .collect(),
+    }))
+}
+
+/// Minutes per game at or above which a Torvik row counts as a rotation
+/// player. Mirrors `cstat_ingest::ingest::torvik`'s own threshold.
+const ROTATION_MPG: f64 = 10.0;
 
 fn violation(
     check: &'static str,

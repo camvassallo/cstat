@@ -1,4 +1,4 @@
-use super::utils::{get_f64, get_i32, parse_i32};
+use super::utils::{decode_html_entities, get_f64, get_i32, parse_i32};
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::{extract_results, team_id_by_code_and_season};
@@ -387,15 +387,18 @@ async fn upsert_player_game_stats(
     {
         Some((id,)) => id,
         None => {
-            let name = perf
-                .get("player")
-                .and_then(|n| n.as_str())
-                .or_else(|| {
-                    perf.get("player-name")
-                        .or_else(|| perf.get("player_name"))
-                        .and_then(|n| n.as_str())
-                })
-                .unwrap_or("Unknown");
+            // Decoded for the same reason as `players.rs::upsert_player` —
+            // NatStat HTML-escapes some records (#243).
+            let name = decode_html_entities(
+                perf.get("player")
+                    .and_then(|n| n.as_str())
+                    .or_else(|| {
+                        perf.get("player-name")
+                            .or_else(|| perf.get("player_name"))
+                            .and_then(|n| n.as_str())
+                    })
+                    .unwrap_or("Unknown"),
+            );
             let new_id = Uuid::new_v4();
             let (id,): (Uuid,) = sqlx::query_as(
                 "INSERT INTO players (id, natstat_id, name, team_id, season)
@@ -407,7 +410,7 @@ async fn upsert_player_game_stats(
             )
             .bind(new_id)
             .bind(&player_natstat_id)
-            .bind(name)
+            .bind(&name)
             .bind(team_id)
             .bind(season)
             .fetch_one(pool)

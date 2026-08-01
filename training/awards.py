@@ -29,12 +29,24 @@ TIER_FIRST = 3
 TIER_SECOND = 2
 TIER_THIRD = 1   # derived third team (see data/awards/README.md)
 
-# Awardees whose `torvik_player_stats` row has a NULL `player_id`, so they
-# cannot be reached through `players` at all and no name alias can recover
-# them. Mapped straight to `torvik_pid`. Tracked in issue #243 -- once the
-# linkage is fixed these should resolve by name and this table can go.
+# Awardees the name join can't reach. Mapped straight to `torvik_pid`.
+#
+# Originally attributed to issue #243 -- these rows had a NULL `player_id`, so
+# they were unreachable through `players` at all. That linkage is now fixed and
+# every one of them carries a `cam_gbpm_v3_psos`, but the table still stands,
+# for a different reason: the award selectors publish a player's COMMON name
+# where NatStat stores the LEGAL one, and this join goes awards -> players.name.
+# "Ja Morant" still does not equal "Temetrius Morant".
+#
+# The clean removal is to join on `torvik_player_stats.player_name` (added by
+# migration 049), which carries Torvik's common-name spelling -- the same one
+# the selectors use. Not done here because it changes the published validation
+# numbers and wants its own verification that the resolved pid set is identical.
 PID_OVERRIDES = {
-    (2015, "D'Angelo Russell"): 38468,   # Ohio St., stored as D&#039;Angelo Russell
+    # Was blocked by the raw HTML entity in `players.name`; migration 048
+    # decoded it, so this entry is now redundant. Kept so the table stays a
+    # single audited list rather than a mix of live and historical entries.
+    (2015, "D'Angelo Russell"): 38468,   # Ohio St., was stored as D&#039;Angelo Russell
     (2019, "Ja Morant"): 50678,          # Murray St., NatStat "Temetrius Morant"
     (2020, "Obi Toppin"): 65484,         # Dayton, NatStat "Obadiah Toppin"
     (2022, "Johnny Davis"): 72499,       # Wisconsin, NatStat "Jonathan Davis"

@@ -37,6 +37,7 @@ use uuid::Uuid;
 
 use super::playbyplay::{PbpRow, insert_pbp_rows, parse_score_diff, parse_tags};
 use super::team_aliases;
+use super::utils::decode_html_entities;
 
 /// Per-table row counts from a bootstrap run. Surfaced to the CLI so the
 /// user can sanity-check against expected season volume.
@@ -608,12 +609,15 @@ async fn load_player_statlines(
         // Fall back to player_id when Name is empty so the players row
         // has *something* in name (NOT NULL constraint upstream). The API
         // path similarly stubs to "Unknown" when name is missing.
+        // Decoded because the NatStat CSV exports carry HTML-escaped names
+        // verbatim (`D&#039;Angelo Russell`) — the bootstrap path is where
+        // most of the 177 corrupted 2015/2016 rows came from (#243).
         let name = {
             let n = cell(&row, 2);
             if n.is_empty() {
                 player_id.clone()
             } else {
-                n.to_string()
+                decode_html_entities(n)
             }
         };
         let team_csv = cell_owned(&row, 5);
