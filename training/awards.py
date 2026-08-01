@@ -24,9 +24,10 @@ from sqlalchemy import text
 CSV = Path(__file__).resolve().parent.parent / "data" / "awards" / "consensus_all_americans.csv"
 
 # Relevance tiers used for NDCG scoring.
-TIER_POY = 3
-TIER_FIRST = 2
-TIER_SECOND = 1
+TIER_POY = 4
+TIER_FIRST = 3
+TIER_SECOND = 2
+TIER_THIRD = 1   # derived third team (see data/awards/README.md)
 
 # Awardees whose `torvik_player_stats` row has a NULL `player_id`, so they
 # cannot be reached through `players` at all and no name alias can recover
@@ -37,6 +38,10 @@ PID_OVERRIDES = {
     (2019, "Ja Morant"): 50678,          # Murray St., NatStat "Temetrius Morant"
     (2020, "Obi Toppin"): 65484,         # Dayton, NatStat "Obadiah Toppin"
     (2022, "Johnny Davis"): 72499,       # Wisconsin, NatStat "Jonathan Davis"
+    (2020, "Filip Petrušev"): 66035,     # Gonzaga; NatStat misspells him "Filip Petrusey"
+    (2021, "Herbert Jones"): 51990,      # Alabama, NatStat "Herb Jones"
+    # Linked row, but the selectors use his nickname and NatStat his legal name.
+    (2016, "Kay Felder"): 33408,         # Oakland, NatStat "Kahlil Felder"
 }
 
 _SUFFIX = re.compile(r"\b(jr|sr|ii|iii|iv)\b")
@@ -73,7 +78,15 @@ def read_csv() -> pd.DataFrame:
     """Raw award rows: season, player, school, consensus_team, poy, tier, key."""
     df = pd.read_csv(CSV)
     df["poy"] = df.poy.astype(str).str.lower().eq("true")
-    df["tier"] = np.where(df.poy, TIER_POY, np.where(df.consensus_team == 1, TIER_FIRST, TIER_SECOND))
+    if "derived" in df.columns:
+        df["derived"] = df.derived.astype(str).str.lower().eq("true")
+    else:
+        df["derived"] = df.consensus_team == 3
+    df["tier"] = np.select(
+        [df.poy, df.consensus_team == 1, df.consensus_team == 2],
+        [TIER_POY, TIER_FIRST, TIER_SECOND],
+        default=TIER_THIRD,
+    )
     df["key"] = df.player.map(normalize_name)
     df["tkey"] = df.school.map(team_key)
     return df

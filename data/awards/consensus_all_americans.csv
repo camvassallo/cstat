@@ -1,126 +1,194 @@
-season,player,school,consensus_team,poy
-2015,Willie Cauley-Stein,Kentucky,1,false
-2015,Jerian Grant,Notre Dame,1,false
-2015,Frank Kaminsky,Wisconsin,1,true
-2015,Jahlil Okafor,Duke,1,false
-2015,D'Angelo Russell,Ohio State,1,false
-2015,Malcolm Brogdon,Virginia,2,false
-2015,Bobby Portis,Arkansas,2,false
-2015,Karl-Anthony Towns,Kentucky,2,false
-2015,Seth Tuttle,Northern Iowa,2,false
-2015,Kyle Wiltjer,Gonzaga,2,false
-2015,Delon Wright,Utah,2,false
-2016,Malcolm Brogdon,Virginia,1,false
-2016,Buddy Hield,Oklahoma,1,false
-2016,Brice Johnson,North Carolina,1,false
-2016,Ben Simmons,LSU,1,false
-2016,Tyler Ulis,Kentucky,1,false
-2016,Denzel Valentine,Michigan State,1,true
-2016,Kris Dunn,Providence,2,false
-2016,Perry Ellis,Kansas,2,false
-2016,Georges Niang,Iowa State,2,false
-2016,Jakob Pöltl,Utah,2,false
-2016,Jarrod Uthoff,Iowa,2,false
-2017,Lonzo Ball,UCLA,1,false
-2017,Josh Hart,Villanova,1,false
-2017,Justin Jackson,North Carolina,1,false
-2017,Frank Mason III,Kansas,1,true
-2017,Caleb Swanigan,Purdue,1,false
-2017,Dillon Brooks,Oregon,2,false
-2017,Luke Kennard,Duke,2,false
-2017,Malik Monk,Kentucky,2,false
-2017,Johnathan Motley,Baylor,2,false
-2017,Nigel Williams-Goss,Gonzaga,2,false
-2018,Deandre Ayton,Arizona,1,false
-2018,Marvin Bagley III,Duke,1,false
-2018,Jalen Brunson,Villanova,1,true
-2018,Devonte' Graham,Kansas,1,false
-2018,Trae Young,Oklahoma,1,false
-2018,Keita Bates-Diop,Ohio State,2,false
-2018,Trevon Bluiett,Xavier,2,false
-2018,Miles Bridges,Michigan State,2,false
-2018,Jevon Carter,West Virginia,2,false
-2018,Keenan Evans,Texas Tech,2,false
-2018,Jock Landale,Saint Mary's,2,false
-2019,RJ Barrett,Duke,1,false
-2019,Rui Hachimura,Gonzaga,1,false
-2019,Ja Morant,Murray State,1,false
-2019,Grant Williams,Tennessee,1,false
-2019,Zion Williamson,Duke,1,true
-2019,Jarrett Culver,Texas Tech,2,false
-2019,Carsen Edwards,Purdue,2,false
-2019,Ethan Happ,Wisconsin,2,false
-2019,Markus Howard,Marquette,2,false
-2019,Cassius Winston,Michigan State,2,false
-2020,Luka Garza,Iowa,1,false
-2020,Markus Howard,Marquette,1,false
-2020,Myles Powell,Seton Hall,1,false
-2020,Payton Pritchard,Oregon,1,false
-2020,Obi Toppin,Dayton,1,true
-2020,Udoka Azubuike,Kansas,2,false
-2020,Vernon Carey Jr.,Duke,2,false
-2020,Devon Dotson,Kansas,2,false
-2020,Malachi Flynn,San Diego State,2,false
-2020,Cassius Winston,Michigan State,2,false
-2021,Jared Butler,Baylor,1,false
-2021,Cade Cunningham,Oklahoma State,1,false
-2021,Ayo Dosunmu,Illinois,1,false
-2021,Luka Garza,Iowa,1,true
-2021,Corey Kispert,Gonzaga,1,false
-2021,Kofi Cockburn,Illinois,2,false
-2021,Hunter Dickinson,Michigan,2,false
-2021,Evan Mobley,USC,2,false
-2021,Jalen Suggs,Gonzaga,2,false
-2021,Drew Timme,Gonzaga,2,false
-2022,Ochai Agbaji,Kansas,1,false
-2022,Kofi Cockburn,Illinois,1,false
-2022,Johnny Davis,Wisconsin,1,false
-2022,Keegan Murray,Iowa,1,false
-2022,Oscar Tshiebwe,Kentucky,1,true
-2022,Paolo Banchero,Duke,2,false
-2022,Chet Holmgren,Gonzaga,2,false
-2022,Jaden Ivey,Purdue,2,false
-2022,Bennedict Mathurin,Arizona,2,false
-2022,Jabari Smith,Auburn,2,false
-2022,Drew Timme,Gonzaga,2,false
-2023,Zach Edey,Purdue,1,true
-2023,Trayce Jackson-Davis,Indiana,1,false
-2023,Marcus Sasser,Houston,1,false
-2023,Drew Timme,Gonzaga,1,false
-2023,Jalen Wilson,Kansas,1,false
-2023,Jaime Jaquez Jr.,UCLA,2,false
-2023,Brandon Miller,Alabama,2,false
-2023,Jalen Pickett,Penn State,2,false
-2023,Oscar Tshiebwe,Kentucky,2,false
-2023,Ąžuolas Tubelis,Arizona,2,false
-2024,R.J. Davis,North Carolina,1,false
-2024,Zach Edey,Purdue,1,true
-2024,Dalton Knecht,Tennessee,1,false
-2024,Tristen Newton,UConn,1,false
-2024,Jamal Shead,Houston,1,false
-2024,Hunter Dickinson,Kansas,2,false
-2024,Kyle Filipowski,Duke,2,false
-2024,DaRon Holmes II,Dayton,2,false
-2024,Tyler Kolek,Marquette,2,false
-2024,Mark Sears,Alabama,2,false
-2025,Johni Broome,Auburn,1,false
-2025,Walter Clayton Jr.,Florida,1,false
-2025,Cooper Flagg,Duke,1,true
-2025,Mark Sears,Alabama,1,false
-2025,Braden Smith,Purdue,1,false
-2025,PJ Haggerty,Memphis,2,false
-2025,Kam Jones,Marquette,2,false
-2025,RJ Luis Jr.,St. John's,2,false
-2025,John Tonje,Wisconsin,2,false
-2025,JT Toppin,Texas Tech,2,false
-2026,Darius Acuff Jr.,Arkansas,1,false
-2026,Cameron Boozer,Duke,1,true
-2026,AJ Dybantsa,BYU,1,false
-2026,Yaxel Lendeborg,Michigan,1,false
-2026,Braden Smith,Purdue,1,false
-2026,Kingston Flemings,Houston,2,false
-2026,Thomas Haugh,Florida,2,false
-2026,Joshua Jefferson,Iowa State,2,false
-2026,JT Toppin,Texas Tech,2,false
-2026,Keaton Wagler,Illinois,2,false
-2026,Caleb Wilson,North Carolina,2,false
+season,player,school,consensus_team,poy,derived
+2015,D'Angelo Russell,Ohio State,1,False,False
+2015,Frank Kaminsky,Wisconsin,1,True,False
+2015,Jahlil Okafor,Duke,1,False,False
+2015,Jerian Grant,Notre Dame,1,False,False
+2015,Willie Cauley-Stein,Kentucky,1,False,False
+2015,Bobby Portis,Arkansas,2,False,False
+2015,Delon Wright,Utah,2,False,False
+2015,Karl-Anthony Towns,Kentucky,2,False,False
+2015,Kyle Wiltjer,Gonzaga,2,False,False
+2015,Malcolm Brogdon,Virginia,2,False,False
+2015,Seth Tuttle,Northern Iowa,2,False,False
+2015,Buddy Hield,Oklahoma,3,False,True
+2015,Darrun Hilliard,Villanova,3,False,True
+2015,Georges Niang,Iowa State,3,False,True
+2015,Kevin Pangos,Gonzaga,3,False,True
+2015,Melo Trimble,Maryland,3,False,True
+2015,Quinn Cook,Duke,3,False,True
+2015,Rakeem Christmas,Syracuse,3,False,True
+2016,Ben Simmons,Louisiana State,1,False,False
+2016,Brice Johnson,North Carolina,1,False,False
+2016,Buddy Hield,Oklahoma,1,False,False
+2016,Denzel Valentine,Michigan State,1,True,False
+2016,Malcolm Brogdon,Virginia,1,False,False
+2016,Tyler Ulis,Kentucky,1,False,False
+2016,Georges Niang,Iowa State,2,False,False
+2016,Jakob Pöltl,Utah,2,False,False
+2016,Jarrod Uthoff,Iowa,2,False,False
+2016,Kris Dunn,Providence,2,False,False
+2016,Perry Ellis,Kansas,2,False,False
+2016,Dillon Brooks,Oregon,3,False,True
+2016,Grayson Allen,Duke,3,False,True
+2016,Jamal Murray,Kentucky,3,False,True
+2016,Josh Hart,Villanova,3,False,True
+2016,Kay Felder,Oakland,3,False,True
+2016,Yogi Ferrell,Indiana,3,False,True
+2017,Caleb Swanigan,Purdue,1,False,False
+2017,Frank Mason III,Kansas,1,True,False
+2017,Josh Hart,Villanova,1,False,False
+2017,Justin Jackson,North Carolina,1,False,False
+2017,Lonzo Ball,UCLA,1,False,False
+2017,Dillon Brooks,Oregon,2,False,False
+2017,Johnathan Motley,Baylor,2,False,False
+2017,Luke Kennard,Duke,2,False,False
+2017,Malik Monk,Kentucky,2,False,False
+2017,Nigel Williams-Goss,Gonzaga,2,False,False
+2017,Bonzie Colson,Notre Dame,3,False,True
+2017,Ethan Happ,Wisconsin,3,False,True
+2017,Josh Jackson,Kansas,3,False,True
+2017,Lauri Markkanen,Arizona,3,False,True
+2017,Markelle Fultz,Washington,3,False,True
+2018,Deandre Ayton,Arizona,1,False,False
+2018,Devonte' Graham,Kansas,1,False,False
+2018,Jalen Brunson,Villanova,1,True,False
+2018,Marvin Bagley III,Duke,1,False,False
+2018,Trae Young,Oklahoma,1,False,False
+2018,Jevon Carter,West Virginia,2,False,False
+2018,Jock Landale,Saint Mary's,2,False,False
+2018,Keenan Evans,Texas Tech,2,False,False
+2018,Keita Bates-Diop,Ohio State,2,False,False
+2018,Miles Bridges,Michigan State,2,False,False
+2018,Trevon Bluiett,Xavier,2,False,False
+2018,Aaron Holiday,UCLA,3,False,True
+2018,Carsen Edwards,Purdue,3,False,True
+2018,Joel Berry II,North Carolina,3,False,True
+2018,Kyle Guy,Virginia,3,False,True
+2018,Luke Maye,North Carolina,3,False,True
+2018,Mikal Bridges,Villanova,3,False,True
+2019,Grant Williams,Tennessee,1,False,False
+2019,Ja Morant,Murray State,1,False,False
+2019,RJ Barrett,Duke,1,False,False
+2019,Rui Hachimura,Gonzaga,1,False,False
+2019,Zion Williamson,Duke,1,True,False
+2019,Carsen Edwards,Purdue,2,False,False
+2019,Cassius Winston,Michigan State,2,False,False
+2019,Ethan Happ,Wisconsin,2,False,False
+2019,Jarrett Culver,Texas Tech,2,False,False
+2019,Markus Howard,Marquette,2,False,False
+2019,Brandon Clarke,Gonzaga,3,False,True
+2019,De'Andre Hunter,Virginia,3,False,True
+2019,Dedric Lawson,Kansas,3,False,True
+2019,Kyle Guy,Virginia,3,False,True
+2019,Mike Daum,South Dakota State,3,False,True
+2019,P. J. Washington,Kentucky,3,False,True
+2020,Luka Garza,Iowa,1,False,False
+2020,Markus Howard,Marquette,1,False,False
+2020,Myles Powell,Seton Hall,1,False,False
+2020,Obi Toppin,Dayton,1,True,False
+2020,Payton Pritchard,Oregon,1,False,False
+2020,Cassius Winston,Michigan State,2,False,False
+2020,Devon Dotson,Kansas,2,False,False
+2020,Malachi Flynn,San Diego State,2,False,False
+2020,Udoka Azubuike,Kansas,2,False,False
+2020,Vernon Carey Jr.,Duke,2,False,False
+2020,Filip Petrušev,Gonzaga,3,False,True
+2020,Jalen Smith,Maryland,3,False,True
+2020,Jared Butler,Baylor,3,False,True
+2020,Jordan Nwora,Louisville,3,False,True
+2020,Tre Jones,Duke,3,False,True
+2021,Ayo Dosunmu,Illinois,1,False,False
+2021,Cade Cunningham,Oklahoma State,1,False,False
+2021,Corey Kispert,Gonzaga,1,False,False
+2021,Jared Butler,Baylor,1,False,False
+2021,Luka Garza,Iowa,1,True,False
+2021,Drew Timme,Gonzaga,2,False,False
+2021,Evan Mobley,USC,2,False,False
+2021,Hunter Dickinson,Michigan,2,False,False
+2021,Jalen Suggs,Gonzaga,2,False,False
+2021,Kofi Cockburn,Illinois,2,False,False
+2021,Chris Duarte,Oregon,3,False,True
+2021,Collin Gillespie,Villanova,3,False,True
+2021,Davion Mitchell,Baylor,3,False,True
+2021,Herbert Jones,Alabama,3,False,True
+2021,Jeremiah Robinson-Earl,Villanova,3,False,True
+2021,Quentin Grimes,Houston,3,False,True
+2021,Trayce Jackson-Davis,Indiana,3,False,True
+2022,Johnny Davis,Wisconsin,1,False,False
+2022,Keegan Murray,Iowa,1,False,False
+2022,Kofi Cockburn,Illinois,1,False,False
+2022,Ochai Agbaji,Kansas,1,False,False
+2022,Oscar Tshiebwe,Kentucky,1,True,False
+2022,Bennedict Mathurin,Arizona,2,False,False
+2022,Chet Holmgren,Gonzaga,2,False,False
+2022,Drew Timme,Gonzaga,2,False,False
+2022,Jabari Smith,Auburn,2,False,False
+2022,Jaden Ivey,Purdue,2,False,False
+2022,Paolo Banchero,Duke,2,False,False
+2022,Collin Gillespie,Villanova,3,False,True
+2022,E. J. Liddell,Ohio State,3,False,True
+2022,JD Notae,Arkansas,3,False,True
+2022,James Akinjo,Baylor,3,False,True
+2022,Walker Kessler,Auburn,3,False,True
+2023,Drew Timme,Gonzaga,1,False,False
+2023,Jalen Wilson,Kansas,1,False,False
+2023,Marcus Sasser,Houston,1,False,False
+2023,Trayce Jackson-Davis,Indiana,1,False,False
+2023,Zach Edey,Purdue,1,True,False
+2023,Brandon Miller,Alabama,2,False,False
+2023,Jaime Jaquez Jr.,UCLA,2,False,False
+2023,Jalen Pickett,Penn State,2,False,False
+2023,Oscar Tshiebwe,Kentucky,2,False,False
+2023,Ąžuolas Tubelis,Arizona,2,False,False
+2023,Armando Bacot,North Carolina,3,False,True
+2023,Keyontae Johnson,Kansas State,3,False,True
+2023,Kris Murray,Iowa,3,False,True
+2023,Markquis Nowell,Kansas State,3,False,True
+2023,Tyler Kolek,Marquette,3,False,True
+2024,Dalton Knecht,Tennessee,1,False,False
+2024,Jamal Shead,Houston,1,False,False
+2024,R. J. Davis,North Carolina,1,False,False
+2024,Tristen Newton,UConn,1,False,False
+2024,Zach Edey,Purdue,1,True,False
+2024,DaRon Holmes II,Dayton,2,False,False
+2024,Hunter Dickinson,Kansas,2,False,False
+2024,Kyle Filipowski,Duke,2,False,False
+2024,Mark Sears,Alabama,2,False,False
+2024,Tyler Kolek,Marquette,2,False,False
+2024,Antonio Reeves,Kentucky,3,False,True
+2024,Baylor Scheierman,Creighton,3,False,True
+2024,Caleb Love,Arizona,3,False,True
+2024,Jaedon LeDee,San Diego State,3,False,True
+2024,Johni Broome,Auburn,3,False,True
+2025,Braden Smith,Purdue,1,False,False
+2025,Cooper Flagg,Duke,1,True,False
+2025,Johni Broome,Auburn,1,False,False
+2025,Mark Sears,Alabama,1,False,False
+2025,Walter Clayton Jr.,Florida,1,False,False
+2025,JT Toppin,Texas Tech,2,False,False
+2025,John Tonje,Wisconsin,2,False,False
+2025,Kam Jones,Marquette,2,False,False
+2025,PJ Haggerty,Memphis,2,False,False
+2025,RJ Luis Jr.,St. John's,2,False,False
+2025,Chaz Lanier,Tennessee,3,False,True
+2025,Eric Dixon,Villanova,3,False,True
+2025,Hunter Dickinson,Kansas,3,False,True
+2025,LJ Cryer,Houston,3,False,True
+2025,Ryan Kalkbrenner,Creighton,3,False,True
+2025,Zakai Zeigler,Tennessee,3,False,True
+2026,AJ Dybantsa,BYU,1,False,False
+2026,Braden Smith,Purdue,1,False,False
+2026,Cameron Boozer,Duke,1,True,False
+2026,Darius Acuff Jr.,Arkansas,1,False,False
+2026,Yaxel Lendeborg,Michigan,1,False,False
+2026,Caleb Wilson,North Carolina,2,False,False
+2026,JT Toppin,Texas Tech,2,False,False
+2026,Joshua Jefferson,Iowa State,2,False,False
+2026,Keaton Wagler,Illinois,2,False,False
+2026,Kingston Flemings,Houston,2,False,False
+2026,Thomas Haugh,Florida,2,False,False
+2026,Christian Anderson Jr.,Texas Tech,3,False,True
+2026,Graham Ike,Gonzaga,3,False,True
+2026,Jaden Bradley,Arizona,3,False,True
+2026,Jeremy Fears Jr.,Michigan State,3,False,True
+2026,Labaron Philon Jr.,Alabama,3,False,True
