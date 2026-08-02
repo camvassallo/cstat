@@ -1,5 +1,6 @@
 pub mod compute;
 pub mod db;
+pub mod display_names;
 pub mod features;
 pub mod freshman_model;
 pub mod inference;

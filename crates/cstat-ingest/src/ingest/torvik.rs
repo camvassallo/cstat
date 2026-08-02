@@ -2,9 +2,10 @@
 
 use crate::torvik::{TorkvikClient, TorkvikGameRow};
 use chrono::NaiveDate;
+use cstat_core::team_name_match::team_match_score;
 use sqlx::{PgPool, QueryBuilder};
-use std::collections::HashMap;
-use tracing::info;
+use std::collections::{HashMap, HashSet};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 /// Ingest Torvik player season stats, matching to existing cstat players.
@@ -14,27 +15,20 @@ pub async fn ingest_torvik_player_stats(
     season: i32,
 ) -> anyhow::Result<(u64, u64)> {
     let players = client.fetch_player_stats(season).await?;
-    // Build the season's cstat player index once and match in-process. Both the
-    // Torvik name and the cstat name go through the same `normalize_name`, so
-    // accented cstat rows (Dörries, Kostić) and NatStat's German romanizations
-    // (Grünloh→Gruenloh, issue #170) meet symmetrically — a formerly SQL-side
-    // match couldn't fold diacritics the same way on both sides.
-    let name_index = build_player_name_index(pool, season).await?;
+    // Resolve every Torvik row to a cstat player up front (see `link_players`)
+    // rather than row-by-row: the nickname-tolerant fallbacks need to know
+    // which cstat players the exact-name pass already claimed before they can
+    // pair off what's left.
+    let roster = SeasonRoster::load(pool, season).await?;
+    let links = link_players(&roster, &players, season);
     let mut upserted: u64 = 0;
-    let mut matched: u64 = 0;
+    let matched = links.stats.matched();
 
-    for p in &players {
+    for (p, &player_id) in players.iter().zip(links.player_ids.iter()) {
         let pid = match p.pid {
             Some(id) => id,
             None => continue,
         };
-
-        // Torvik team names differ from NatStat, so we fuzzy-match the team to
-        // disambiguate same-name players, falling back to a name-only match.
-        let player_id = match_player(&name_index, &p.player_name, &p.team);
-        if player_id.is_some() {
-            matched += 1;
-        }
 
         // Also backfill class_year and height on the player record if we matched
         // and NatStat didn't provide them.
@@ -72,7 +66,7 @@ pub async fn ingest_torvik_player_stats(
                     orb_pct, drb_pct, ast_pct, tov_pct, stl_pct, blk_pct,
                     personal_foul_rate, ast_to_tov,
                     ppg, oreb_pg, dreb_pg, treb_pg, ast_pg, stl_pg, blk_pg,
-                    nba_pick, min_per
+                    nba_pick, min_per, player_name
                ) VALUES (
                     $1, $2, $3, $4, $5,
                     $6, $7, $8, $9, $10,
@@ -88,7 +82,7 @@ pub async fn ingest_torvik_player_stats(
                     $49, $50, $51, $52, $53, $54,
                     $55, $56,
                     $57, $58, $59, $60, $61, $62, $63,
-                    $64, $65
+                    $64, $65, $66
                ) ON CONFLICT (torvik_pid, season) DO UPDATE SET
                     player_id = COALESCE(EXCLUDED.player_id, torvik_player_stats.player_id),
                     team_name = EXCLUDED.team_name, conf = EXCLUDED.conf,
@@ -127,6 +121,7 @@ pub async fn ingest_torvik_player_stats(
                     stl_pg = EXCLUDED.stl_pg, blk_pg = EXCLUDED.blk_pg,
                     nba_pick = EXCLUDED.nba_pick,
                     min_per = EXCLUDED.min_per,
+                    player_name = EXCLUDED.player_name,
                     updated_at = now()
             "#,
         )
@@ -195,16 +190,39 @@ pub async fn ingest_torvik_player_stats(
         .bind(p.blk_pg) // $63
         .bind(p.nba_pick) // $64
         .bind(p.min_per) // $65 — Torvik's Min% (share of team minutes 0–100)
+        .bind(&p.player_name) // $66
         .execute(pool)
         .await?;
 
         upserted += 1;
     }
 
+    let s = &links.stats;
     info!(
         season,
-        upserted, matched, "Torvik player stats ingestion complete"
+        upserted,
+        matched,
+        exact = s.exact,
+        name_only = s.name_only,
+        family_fallback = s.family_fallback,
+        given_fallback = s.given_fallback,
+        "Torvik player stats ingestion complete"
     );
+    // Loud on purpose (issue #243): an unlinked row keeps its Torvik stats but
+    // drops out of every query that reaches them through `players`, including
+    // the player-SOS step that produces the served `cam_gbpm_v3_psos` — which
+    // is how 1,305 rotation players, Obi Toppin and Ja Morant among them, went
+    // missing from the leaderboard without a single error.
+    if s.unlinked > 0 {
+        warn!(
+            season,
+            unlinked = s.unlinked,
+            unlinked_rotation = s.unlinked_rotation,
+            unresolved_teams = s.unresolved_teams.len(),
+            sample = ?s.unlinked_sample,
+            "Torvik rows left unlinked to a cstat player"
+        );
+    }
     Ok((upserted, matched))
 }
 
@@ -446,6 +464,97 @@ fn normalize_name(name: &str) -> String {
     tokens[..end].join(" ")
 }
 
+/// Last token of a normalized name — the family name the surname fallback
+/// keys on. Empty for an empty/whitespace name.
+fn family_name(name: &str) -> String {
+    normalize_name(name)
+        .rsplit(' ')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// First token of a normalized name — the given name the second fallback
+/// keys on. Empty for an empty/whitespace name.
+fn given_name(name: &str) -> String {
+    normalize_name(name)
+        .split(' ')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Everything after the given name, spaces removed — the comparison key for
+/// the surname guard. Joining the tokens is what lets "Van Soelen" meet
+/// "VanSoelen"; a single-token name is its own surname key.
+fn surname_key(name: &str) -> String {
+    let norm = normalize_name(name);
+    match norm.split_once(' ') {
+        Some((_, rest)) => rest.replace(' ', ""),
+        None => norm,
+    }
+}
+
+/// Are these two surnames plausibly the same person's, given that the given
+/// name and team already matched exactly?
+///
+/// Two accepted shapes, both drawn from the real mismatches in the data:
+/// - **Containment** — one surname is a compound of the other, which is how
+///   Torvik's "Tory Miller-Stewart" meets cstat's "Tory Miller" and how
+///   "Jacob Enevold" meets "Jacob Enevold Jensen". Both sides must be at
+///   least [`SURNAME_CONTAINMENT_MIN`] characters so short fragments can't
+///   swallow unrelated names.
+/// - **Near-spelling** — edit distance ≤ [`SURNAME_MAX_EDITS`], covering the
+///   transposition/typo class ("Chirvous"/"Chievous", "Ostekowski"/
+///   "Osetkowski", "Müller"/"Muller").
+///
+/// This guard is what makes the given-name fallback safe: a shared first name
+/// carries far less identifying signal than a shared surname, so the pass is
+/// only allowed to fire when the surname corroborates it. It rejects the
+/// genuinely-different people the pass would otherwise pair — "Max Montana"
+/// vs "Max Hoetzel", "Jaren Holmes" vs "Jaren English".
+fn surnames_compatible(a: &str, b: &str) -> bool {
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a.len() >= SURNAME_CONTAINMENT_MIN
+        && b.len() >= SURNAME_CONTAINMENT_MIN
+        && (a.contains(b) || b.contains(a))
+    {
+        return true;
+    }
+    levenshtein(a, b) <= SURNAME_MAX_EDITS
+}
+
+/// Minimum length for either side of a surname containment match.
+const SURNAME_CONTAINMENT_MIN: usize = 4;
+/// Maximum edit distance for a surname near-spelling match.
+const SURNAME_MAX_EDITS: usize = 2;
+
+/// Plain Levenshtein distance over `char`s, with an early bail once the
+/// length gap alone exceeds what [`SURNAME_MAX_EDITS`] could bridge.
+fn levenshtein(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len().abs_diff(b.len()) > SURNAME_MAX_EDITS {
+        return usize::MAX;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j + 1] + 1)
+                .min(cur[j] + 1)
+                .min(prev[j] + usize::from(ca != cb));
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
 /// Lowercase a name and fold its diacritics to ASCII, dropping punctuation
 /// (periods, apostrophes — including the curly `’` U+2019 and the Windows-1252
 /// mojibake control char U+0092 we see in a few DB rows). German umlauts and
@@ -496,79 +605,356 @@ fn fold_diacritics(name: &str) -> String {
 // Player matching
 // ---------------------------------------------------------------------------
 
-/// A cstat player candidate in the season name index.
-struct PlayerCandidate {
+/// A cstat player row in the season roster.
+struct PlayerRow {
     id: Uuid,
-    /// The player's cstat team name (e.g. "Virginia Cavaliers"), if teamed.
-    team_name: Option<String>,
-    /// The team's short name (e.g. "Virginia"), if teamed.
+    /// Cstat name, as stored. Fallback keys derive from this.
+    name: String,
+    /// The player's cstat team for the season, if teamed.
+    team_id: Option<Uuid>,
+}
+
+/// One season's cstat players and teams, indexed for in-process matching.
+///
+/// Loaded once per ingest so the fallback passes can iterate the roster
+/// without going back to the DB. Both the Torvik name and the cstat name go
+/// through the same `normalize_name`, so accented cstat rows (Dörries,
+/// Kostić) and NatStat's German romanizations (Grünloh→Gruenloh, issue #170)
+/// meet symmetrically — a SQL-side match couldn't fold diacritics the same
+/// way on both sides.
+struct SeasonRoster {
+    players: Vec<PlayerRow>,
+    /// normalized cstat name -> indices into `players`
+    by_name: HashMap<String, Vec<usize>>,
+    teams: Vec<TeamRow>,
+}
+
+/// A cstat team in the season, as the shared scorer wants it.
+struct TeamRow {
+    id: Uuid,
+    full_name: String,
     short_name: Option<String>,
 }
 
-/// Build a `normalized_name -> candidates` index of every player in the season.
-/// Teams are LEFT-joined so unteamed players (no `team_id`) still appear for the
-/// name-only fallback, mirroring the old two-tier SQL match.
-async fn build_player_name_index(
-    pool: &PgPool,
-    season: i32,
-) -> anyhow::Result<HashMap<String, Vec<PlayerCandidate>>> {
-    let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<String>)>(
-        r#"SELECT p.id, p.name, t.name AS team_name, t.short_name
-           FROM players p
-           LEFT JOIN teams t ON t.id = p.team_id AND t.season = p.season
-           WHERE p.season = $1"#,
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await?;
+impl SeasonRoster {
+    async fn load(pool: &PgPool, season: i32) -> anyhow::Result<Self> {
+        let rows = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
+            r#"SELECT p.id, p.name, p.team_id
+               FROM players p
+               WHERE p.season = $1"#,
+        )
+        .bind(season)
+        .fetch_all(pool)
+        .await?;
 
-    let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::with_capacity(rows.len());
-    for (id, name, team_name, short_name) in rows {
-        index
-            .entry(normalize_name(&name))
-            .or_default()
-            .push(PlayerCandidate {
-                id,
-                team_name,
-                short_name,
-            });
+        let players: Vec<PlayerRow> = rows
+            .into_iter()
+            .map(|(id, name, team_id)| PlayerRow { id, name, team_id })
+            .collect();
+
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::with_capacity(players.len());
+        for (i, p) in players.iter().enumerate() {
+            by_name.entry(normalize_name(&p.name)).or_default().push(i);
+        }
+
+        let teams = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
+            r#"SELECT id, name, short_name FROM teams WHERE season = $1"#,
+        )
+        .bind(season)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|(id, full_name, short_name)| TeamRow {
+            id,
+            full_name,
+            short_name,
+        })
+        .collect();
+
+        Ok(Self {
+            players,
+            by_name,
+            teams,
+        })
     }
-    Ok(index)
+
+    /// Resolve a Torvik team name to a cstat team id via the shared
+    /// cross-source scorer — the same one the transfers / recruits /
+    /// coachdict paths use, so a Torvik-vocabulary alias fixed for one is
+    /// fixed for all. `teams.short_name` is already maintained in Torvik's
+    /// vocabulary (`data/team_short_names.json`), so all but a handful of
+    /// names resolve on the scorer's exact tier.
+    ///
+    /// Only the *best-scoring* team wins, and a tie at the best score
+    /// resolves to `None`. That matters because the scorer's weakest tier is
+    /// a bare prefix match on the full NatStat name: Torvik's "Houston"
+    /// prefix-matches "Houston Baptist Huskies" (score 2) as well as
+    /// "Houston Cougars" (score 0 on short_name), and only taking the minimum
+    /// keeps the roster off the wrong school.
+    fn resolve_team(&self, torvik_team: &str) -> Option<Uuid> {
+        let mut best: Option<(u32, Uuid)> = None;
+        let mut tied = false;
+        for t in &self.teams {
+            let Some(score) = team_match_score(t.short_name.as_deref(), &t.full_name, torvik_team)
+            else {
+                continue;
+            };
+            match best {
+                Some((b, _)) if score > b => {}
+                Some((b, _)) if score == b => tied = true,
+                _ => {
+                    best = Some((score, t.id));
+                    tied = false;
+                }
+            }
+        }
+        best.filter(|_| !tied).map(|(_, id)| id)
+    }
 }
 
-/// Match a Torvik player to a cstat player using the pre-built season index.
-/// Prefers a candidate whose cstat team fuzzy-matches the Torvik team name;
-/// otherwise falls back to the first same-name candidate (the old name-only
-/// tier). Both names are normalized identically, so accents and German
-/// umlaut romanizations meet (issue #170).
-fn match_player(
-    index: &HashMap<String, Vec<PlayerCandidate>>,
-    name: &str,
-    torvik_team: &str,
-) -> Option<Uuid> {
-    let candidates = index.get(&normalize_name(name))?;
-    candidates
+/// How each Torvik row resolved, for the run log and the CLI summary.
+#[derive(Debug, Default)]
+struct LinkStats {
+    /// Normalized name matched a cstat player on the same team.
+    exact: u64,
+    /// Name matched exactly one cstat player, but not on the Torvik team —
+    /// kept because a unique name is strong evidence on its own.
+    name_only: u64,
+    /// Recovered by the family-name fallback (nicknames).
+    family_fallback: u64,
+    /// Recovered by the given-name fallback (surname misspellings).
+    given_fallback: u64,
+    unlinked: u64,
+    /// Unlinked rows at rotation minutes — the ones a user would notice.
+    unlinked_rotation: u64,
+    /// Torvik team names with no cstat counterpart, e.g. a program cstat
+    /// hasn't ingested yet (Le Moyne, 2026).
+    unresolved_teams: Vec<String>,
+    /// A few `Name (Team)` strings to make the warning actionable.
+    unlinked_sample: Vec<String>,
+}
+
+impl LinkStats {
+    fn matched(&self) -> u64 {
+        self.exact + self.name_only + self.family_fallback + self.given_fallback
+    }
+}
+
+/// Minutes per game at or above which an unlinked row counts as a *rotation*
+/// player for the log. Torvik's true MPG lives in `total_minutes`; the
+/// `minutes_per_game` column actually holds Min% (see the column-naming
+/// gotcha in `compute::compute_campom`).
+const ROTATION_MPG: f64 = 10.0;
+
+/// How many unlinked rows to name in the warning.
+const UNLINKED_SAMPLE: usize = 8;
+
+struct Links {
+    /// One entry per input row, positionally aligned.
+    player_ids: Vec<Option<Uuid>>,
+    stats: LinkStats,
+}
+
+/// Resolve every Torvik row for a season to a cstat player.
+///
+/// Three passes, each strictly more permissive than the last and each barred
+/// from taking a player an earlier pass already claimed (issue #243):
+///
+/// 1. **Exact name.** Normalized name plus the resolved team. If no candidate
+///    is on that team but the name matches exactly one cstat player in the
+///    whole season, take it — that covers a team cstat hasn't resolved and
+///    genuine cstat team-label errors. Two-or-more candidates with no team
+///    agreement are left unlinked rather than coin-flipped onto the first one,
+///    which is how Torvik's Xavier "Anthony Robinson" ended up attached to
+///    Missouri's.
+/// 2. **Family name + team.** Torvik uses the common name where NatStat keeps
+///    the legal one — Obi/Obadiah Toppin, Ja/Temetrius Morant, Johnny/Jonathan
+///    Davis. Nicknames bear no systematic relation to the legal given name, so
+///    this pass deliberately does not constrain it; safety comes from
+///    requiring exactly one unclaimed cstat player *and* exactly one unmatched
+///    Torvik row for the (team, family name) pair.
+/// 3. **Given name + team, guarded by surname similarity.** The mirror case,
+///    where the surname is misspelled or hyphenated differently on one side.
+///    A shared given name is weak evidence by itself, so
+///    [`surnames_compatible`] must also hold.
+///
+/// Passes 2 and 3 both require a resolved team; the residual after all three
+/// is dominated by players NatStat never ingested at all (Anthony Barber's
+/// 2015 N.C. State season, Fred VanVleet's 2015 Wichita State season), which
+/// no matching rule can recover.
+fn link_players(
+    roster: &SeasonRoster,
+    rows: &[crate::torvik::TorkvikPlayerSeason],
+    season: i32,
+) -> Links {
+    let mut player_ids: Vec<Option<Uuid>> = vec![None; rows.len()];
+    let mut stats = LinkStats::default();
+    let mut claimed: HashSet<Uuid> = HashSet::with_capacity(rows.len());
+
+    // Resolve each distinct Torvik team once.
+    let mut team_ids: HashMap<&str, Option<Uuid>> = HashMap::new();
+    for r in rows {
+        team_ids
+            .entry(r.team.as_str())
+            .or_insert_with(|| roster.resolve_team(&r.team));
+    }
+    stats.unresolved_teams = {
+        let mut v: Vec<String> = team_ids
+            .iter()
+            .filter(|(_, id)| id.is_none())
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+        v.sort();
+        v
+    };
+
+    // Pass 1 — exact name.
+    let mut unmatched: Vec<usize> = Vec::new();
+    for (i, r) in rows.iter().enumerate() {
+        if r.pid.is_none() {
+            continue; // not persisted at all; must not claim a player
+        }
+        let team = team_ids[r.team.as_str()];
+        let candidates = roster
+            .by_name
+            .get(&normalize_name(&r.player_name))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+
+        let on_team = team.and_then(|t| {
+            candidates
+                .iter()
+                .copied()
+                .find(|&c| roster.players[c].team_id == Some(t))
+        });
+        match on_team {
+            Some(c) => {
+                stats.exact += 1;
+                claimed.insert(roster.players[c].id);
+                player_ids[i] = Some(roster.players[c].id);
+            }
+            None if candidates.len() == 1 => {
+                stats.name_only += 1;
+                claimed.insert(roster.players[candidates[0]].id);
+                player_ids[i] = Some(roster.players[candidates[0]].id);
+            }
+            None => unmatched.push(i),
+        }
+    }
+
+    // Passes 2 and 3 — same shape, different key and guard.
+    unmatched = fallback_pass(
+        roster,
+        rows,
+        &team_ids,
+        &mut claimed,
+        &mut player_ids,
+        unmatched,
+        family_name,
+        |_, _| true,
+        &mut stats.family_fallback,
+    );
+    unmatched = fallback_pass(
+        roster,
+        rows,
+        &team_ids,
+        &mut claimed,
+        &mut player_ids,
+        unmatched,
+        given_name,
+        |torvik, cstat| surnames_compatible(&surname_key(torvik), &surname_key(cstat)),
+        &mut stats.given_fallback,
+    );
+
+    stats.unlinked = unmatched.len() as u64;
+    let mut rotation: Vec<usize> = unmatched
         .iter()
-        .find(|c| team_matches(c, torvik_team))
-        .or_else(|| candidates.first())
-        .map(|c| c.id)
+        .copied()
+        .filter(|&i| rows[i].total_minutes.is_some_and(|m| m >= ROTATION_MPG))
+        .collect();
+    stats.unlinked_rotation = rotation.len() as u64;
+    // Best players first: the warning is only actionable if it names the ones
+    // whose absence from the leaderboard someone would notice.
+    rotation.sort_by(|&a, &b| {
+        rows[b]
+            .gbpm
+            .partial_cmp(&rows[a].gbpm)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    stats.unlinked_sample = rotation
+        .iter()
+        .take(UNLINKED_SAMPLE)
+        .map(|&i| format!("{} ({})", rows[i].player_name, rows[i].team))
+        .collect();
+    debug_assert_eq!(
+        stats.matched() + stats.unlinked,
+        rows.iter().filter(|r| r.pid.is_some()).count() as u64,
+        "season {season}: every pid-carrying row must be counted exactly once"
+    );
+
+    Links { player_ids, stats }
 }
 
-/// Fuzzy team match mirroring the old SQL predicate: the cstat team name
-/// contains the Torvik team, or the Torvik team contains the cstat short name.
-/// Case-insensitive; empty short names never match (SQL `LIKE '%%'` would).
-fn team_matches(candidate: &PlayerCandidate, torvik_team: &str) -> bool {
-    let torvik = torvik_team.to_lowercase();
-    let name_hit = candidate
-        .team_name
-        .as_deref()
-        .is_some_and(|t| t.to_lowercase().contains(&torvik));
-    let short_hit = candidate
-        .short_name
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .is_some_and(|s| torvik.contains(&s.to_lowercase()));
-    name_hit || short_hit
+/// One fallback pass: pair off `unmatched` Torvik rows against unclaimed cstat
+/// players by `key`, within the same team, accepting only when the pairing is
+/// unambiguous in *both* directions and `guard` agrees. Returns the rows still
+/// unmatched.
+///
+/// Requiring uniqueness on the Torvik side as well as the cstat side is what
+/// makes the pass order-independent: with at most one candidate and at most
+/// one claimant per (team, key), no two groups can ever contend for the same
+/// player, so the result doesn't depend on which row is visited first.
+#[allow(clippy::too_many_arguments)]
+fn fallback_pass(
+    roster: &SeasonRoster,
+    rows: &[crate::torvik::TorkvikPlayerSeason],
+    team_ids: &HashMap<&str, Option<Uuid>>,
+    claimed: &mut HashSet<Uuid>,
+    player_ids: &mut [Option<Uuid>],
+    unmatched: Vec<usize>,
+    key: fn(&str) -> String,
+    guard: fn(&str, &str) -> bool,
+    counter: &mut u64,
+) -> Vec<usize> {
+    // Group the unmatched Torvik rows by (team, key).
+    let mut groups: HashMap<(Uuid, String), Vec<usize>> = HashMap::new();
+    let mut skipped: Vec<usize> = Vec::new();
+    for i in unmatched {
+        match team_ids[rows[i].team.as_str()] {
+            Some(team) => groups
+                .entry((team, key(&rows[i].player_name)))
+                .or_default()
+                .push(i),
+            None => skipped.push(i),
+        }
+    }
+
+    // Index the still-unclaimed cstat players the same way.
+    let mut pool: HashMap<(Uuid, String), Vec<usize>> = HashMap::new();
+    for (i, p) in roster.players.iter().enumerate() {
+        if let Some(team) = p.team_id
+            && !claimed.contains(&p.id)
+        {
+            pool.entry((team, key(&p.name))).or_default().push(i);
+        }
+    }
+
+    let mut still = skipped;
+    for (group_key, group) in groups {
+        let candidates = pool.get(&group_key).map(Vec::as_slice).unwrap_or_default();
+        match (group.as_slice(), candidates) {
+            ([row], [candidate])
+                if guard(&rows[*row].player_name, &roster.players[*candidate].name) =>
+            {
+                claimed.insert(roster.players[*candidate].id);
+                player_ids[*row] = Some(roster.players[*candidate].id);
+                *counter += 1;
+            }
+            _ => still.extend(group),
+        }
+    }
+    still.sort_unstable();
+    still
 }
 
 /// Parse height string like "6-5" to inches.
@@ -672,68 +1058,374 @@ mod tests {
         assert_eq!(normalize_name("D\u{0092}Angelo Allen"), "dangelo allen");
     }
 
-    // match_player tests
+    // Name-part helpers (issue #243)
 
-    fn candidate(id: Uuid, team: &str, short: &str) -> PlayerCandidate {
-        PlayerCandidate {
-            id,
-            team_name: Some(team.to_string()),
-            short_name: Some(short.to_string()),
+    #[test]
+    fn name_parts_split_on_normalized_tokens() {
+        assert_eq!(family_name("Obi Toppin"), "toppin");
+        assert_eq!(given_name("Obi Toppin"), "obi");
+        // The suffix is stripped before the family name is taken.
+        assert_eq!(family_name("Ace Baldwin Jr."), "baldwin");
+        // Compound surnames join into one key so spacing can't split them.
+        assert_eq!(surname_key("Keaton Van Soelen"), "vansoelen");
+        assert_eq!(surname_key("Keaton VanSoelen"), "vansoelen");
+        // A mononym is its own surname key.
+        assert_eq!(surname_key("Pele"), "pele");
+    }
+
+    #[test]
+    fn surnames_compatible_accepts_compound_and_near_spellings() {
+        // Compound vs bare — the hyphenation split between the two sources.
+        assert!(surnames_compatible("millerstewart", "miller"));
+        assert!(surnames_compatible("enevold", "enevoldjensen"));
+        // Typos and transpositions.
+        assert!(surnames_compatible("chirvous", "chievous"));
+        assert!(surnames_compatible("ostekowski", "osetkowski"));
+        assert!(surnames_compatible("mueller", "muller"));
+    }
+
+    #[test]
+    fn surnames_compatible_rejects_different_people() {
+        // Same given name, unrelated surname — the case the guard exists for.
+        assert!(!surnames_compatible("montana", "hoetzel"));
+        assert!(!surnames_compatible("holmes", "english"));
+        assert!(!surnames_compatible("navarro", "colon"));
+        // A short fragment must not swallow a longer surname.
+        assert!(!surnames_compatible("lee", "leemanwilliams"));
+        assert!(!surnames_compatible("", "toppin"));
+    }
+
+    // Team resolution (issue #243)
+
+    /// Build a roster from `(id, name, team_id)` players and
+    /// `(id, short_name, full_name)` teams, mirroring what `load` reads.
+    fn roster(
+        players: &[(Uuid, &str, Option<Uuid>)],
+        teams: &[(Uuid, &str, &str)],
+    ) -> SeasonRoster {
+        let players: Vec<PlayerRow> = players
+            .iter()
+            .map(|(id, name, team_id)| PlayerRow {
+                id: *id,
+                name: (*name).to_string(),
+                team_id: *team_id,
+            })
+            .collect();
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, p) in players.iter().enumerate() {
+            by_name.entry(normalize_name(&p.name)).or_default().push(i);
+        }
+        let teams = teams
+            .iter()
+            .map(|(id, short, full)| TeamRow {
+                id: *id,
+                full_name: (*full).to_string(),
+                short_name: Some((*short).to_string()),
+            })
+            .collect();
+        SeasonRoster {
+            players,
+            by_name,
+            teams,
+        }
+    }
+
+    fn torvik_row(
+        name: &str,
+        team: &str,
+        pid: i32,
+        mpg: f64,
+    ) -> crate::torvik::TorkvikPlayerSeason {
+        crate::torvik::TorkvikPlayerSeason {
+            player_name: name.to_string(),
+            team: team.to_string(),
+            pid: Some(pid),
+            total_minutes: Some(mpg),
+            ..Default::default()
         }
     }
 
     #[test]
-    fn match_player_matches_across_umlaut_romanization() {
+    fn resolve_team_matches_on_short_name() {
+        let duke = Uuid::from_u128(10);
+        let r = roster(&[], &[(duke, "Duke", "Duke Blue Devils")]);
+        assert_eq!(r.resolve_team("Duke"), Some(duke));
+    }
+
+    #[test]
+    fn resolve_team_handles_torvik_22_char_truncation() {
+        // Torvik cuts its team-name column at 22 chars, which is why every
+        // Texas A&M-Corpus Christi roster used to miss. The alias table
+        // already carried both cstat spellings for the coachdict ingest.
+        let tamc = Uuid::from_u128(12);
+        let truncated = "Texas A&M Corpus Chris";
+        assert_eq!(truncated.len(), 22);
+        for full in [
+            "Texas A&M-Corpus Christi Islanders",
+            "Texas A&M Corpus Christi",
+        ] {
+            let r = roster(&[], &[(tamc, "Texas A&M Corpus Christi", full)]);
+            assert_eq!(r.resolve_team(truncated), Some(tamc), "full name {full}");
+        }
+    }
+
+    #[test]
+    fn resolve_team_prefers_the_best_score_over_a_bare_prefix() {
+        // Torvik's "Houston" prefix-matches "Houston Baptist Huskies" on the
+        // scorer's weakest tier; only taking the minimum keeps that roster
+        // off the wrong school.
+        let (houston, hbu) = (Uuid::from_u128(13), Uuid::from_u128(14));
+        let r = roster(
+            &[],
+            &[
+                (hbu, "Houston Baptist", "Houston Baptist Huskies"),
+                (houston, "Houston", "Houston Cougars"),
+            ],
+        );
+        assert_eq!(r.resolve_team("Houston"), Some(houston));
+    }
+
+    #[test]
+    fn resolve_team_follows_school_renames() {
+        // Torvik retro-names Houston Baptist's pre-2022 seasons.
+        let hbu = Uuid::from_u128(14);
+        let r = roster(&[], &[(hbu, "Houston Baptist", "Houston Baptist Huskies")]);
+        assert_eq!(r.resolve_team("Houston Christian"), Some(hbu));
+    }
+
+    #[test]
+    fn resolve_team_returns_none_for_an_unknown_program() {
+        let r = roster(&[], &[(Uuid::from_u128(15), "Duke", "Duke Blue Devils")]);
+        assert_eq!(r.resolve_team("Le Moyne"), None);
+    }
+
+    #[test]
+    fn resolve_team_returns_none_when_two_teams_tie() {
+        // A tie at the best score is ambiguous, not a coin flip.
+        let (a, b) = (Uuid::from_u128(16), Uuid::from_u128(17));
+        let r = roster(
+            &[],
+            &[
+                (a, "Miami", "Miami (Fla.) Hurricanes"),
+                (b, "Miami", "Miami (Ohio) RedHawks"),
+            ],
+        );
+        assert_eq!(r.resolve_team("Miami"), None);
+    }
+
+    // link_players (issue #243)
+
+    #[test]
+    fn link_exact_name_prefers_the_matching_team() {
+        let (illinois, cal_poly) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (t_ill, t_cp) = (Uuid::from_u128(90), Uuid::from_u128(91));
+        let r = roster(
+            &[
+                (illinois, "Jake Davis", Some(t_ill)),
+                (cal_poly, "Jake Davis", Some(t_cp)),
+            ],
+            &[
+                (t_ill, "Illinois", "Illinois Fighting Illini"),
+                (t_cp, "Cal Poly", "Cal Poly Mustangs"),
+            ],
+        );
+        let rows = [
+            torvik_row("Jake Davis", "Cal Poly", 1, 20.0),
+            torvik_row("Jake Davis", "Illinois", 2, 20.0),
+        ];
+        let links = link_players(&r, &rows, 2026);
+        assert_eq!(links.player_ids, vec![Some(cal_poly), Some(illinois)]);
+        assert_eq!(links.stats.exact, 2);
+    }
+
+    #[test]
+    fn link_exact_name_matches_across_umlaut_romanization() {
         // cstat stores the NatStat romanization; Torvik supplies the umlaut.
         let id = Uuid::from_u128(1);
-        let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
-        index
-            .entry(normalize_name("Johann Gruenloh"))
-            .or_default()
-            .push(candidate(id, "Virginia Cavaliers", "Virginia"));
-
-        assert_eq!(match_player(&index, "Johann Grünloh", "Virginia"), Some(id));
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[(id, "Johann Gruenloh", Some(team))],
+            &[(team, "Virginia", "Virginia Cavaliers")],
+        );
+        let rows = [torvik_row("Johann Grünloh", "Virginia", 1, 20.0)];
+        assert_eq!(link_players(&r, &rows, 2026).player_ids, vec![Some(id)]);
     }
 
     #[test]
-    fn match_player_prefers_team_match_for_same_name() {
-        let illinois = Uuid::from_u128(1);
-        let cal_poly = Uuid::from_u128(2);
-        let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
-        let entry = index.entry(normalize_name("Jake Davis")).or_default();
-        entry.push(candidate(illinois, "Illinois Fighting Illini", "Illinois"));
-        entry.push(candidate(cal_poly, "Cal Poly Mustangs", "Cal Poly"));
-
-        assert_eq!(
-            match_player(&index, "Jake Davis", "Cal Poly"),
-            Some(cal_poly)
-        );
-        assert_eq!(
-            match_player(&index, "Jake Davis", "Illinois"),
-            Some(illinois)
-        );
-    }
-
-    #[test]
-    fn match_player_falls_back_to_name_only() {
-        // No team match → first same-name candidate, mirroring the old tier-2.
+    fn link_keeps_the_name_only_tier_for_a_unique_name() {
+        // Team didn't resolve, but exactly one player in the season carries
+        // the name — strong enough on its own.
         let id = Uuid::from_u128(1);
-        let mut index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
-        index
-            .entry(normalize_name("Cooper Flagg"))
-            .or_default()
-            .push(candidate(id, "Duke Blue Devils", "Duke"));
-
-        assert_eq!(
-            match_player(&index, "Cooper Flagg", "Some Other School"),
-            Some(id)
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[(id, "Cooper Flagg", Some(team))],
+            &[(team, "Duke", "Duke Blue Devils")],
         );
+        let rows = [torvik_row("Cooper Flagg", "Some Other School", 1, 20.0)];
+        let links = link_players(&r, &rows, 2026);
+        assert_eq!(links.player_ids, vec![Some(id)]);
+        assert_eq!(links.stats.name_only, 1);
+        assert_eq!(links.stats.unresolved_teams, vec!["Some Other School"]);
     }
 
     #[test]
-    fn match_player_returns_none_when_absent() {
-        let index: HashMap<String, Vec<PlayerCandidate>> = HashMap::new();
-        assert_eq!(match_player(&index, "Nobody Here", "Nowhere"), None);
+    fn link_leaves_an_ambiguous_off_team_name_unlinked() {
+        // Two same-name players, neither on the Torvik team: the old code
+        // coin-flipped onto the first, attaching Torvik's Xavier "Anthony
+        // Robinson" row to Missouri's Anthony Robinson.
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (t_a, t_b) = (Uuid::from_u128(90), Uuid::from_u128(91));
+        let r = roster(
+            &[
+                (a, "Anthony Robinson", Some(t_a)),
+                (b, "Anthony Robinson", Some(t_b)),
+            ],
+            &[
+                (t_a, "Missouri", "Missouri Tigers"),
+                (t_b, "South Carolina", "South Carolina Gamecocks"),
+            ],
+        );
+        let rows = [torvik_row("Anthony Robinson", "Xavier", 1, 20.0)];
+        let links = link_players(&r, &rows, 2026);
+        assert_eq!(links.player_ids, vec![None]);
+        assert_eq!(links.stats.unlinked, 1);
+        assert_eq!(links.stats.unlinked_rotation, 1);
+    }
+
+    #[test]
+    fn link_recovers_a_nickname_by_family_name_and_team() {
+        // Torvik "Obi Toppin" vs NatStat "Obadiah Toppin" (2020 AP POY).
+        let id = Uuid::from_u128(1);
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[(id, "Obadiah Toppin", Some(team))],
+            &[(team, "Dayton", "Dayton Flyers")],
+        );
+        let rows = [torvik_row("Obi Toppin", "Dayton", 1, 31.6)];
+        let links = link_players(&r, &rows, 2020);
+        assert_eq!(links.player_ids, vec![Some(id)]);
+        assert_eq!(links.stats.family_fallback, 1);
+    }
+
+    #[test]
+    fn link_family_fallback_needs_a_unique_pair_on_both_sides() {
+        // Two unmatched Barneses on one team: no way to tell which is which,
+        // so neither links.
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[
+                (a, "Corey Barnes", Some(team)),
+                (b, "Devon Barnes", Some(team)),
+            ],
+            &[(team, "Alcorn St.", "Alcorn State Braves")],
+        );
+        let rows = [
+            torvik_row("CJ Barnes", "Alcorn St.", 1, 20.0),
+            torvik_row("Dee Barnes", "Alcorn St.", 2, 20.0),
+        ];
+        let links = link_players(&r, &rows, 2026);
+        assert_eq!(links.player_ids, vec![None, None]);
+        assert_eq!(links.stats.family_fallback, 0);
+    }
+
+    #[test]
+    fn link_family_fallback_will_not_steal_an_exact_match() {
+        // The exact-name pass claims Corey Barnes first, so the fallback has
+        // no unclaimed candidate left and must not re-take him.
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[
+                (a, "Corey Barnes", Some(team)),
+                (b, "Someone Else", Some(team)),
+            ],
+            &[(team, "Alcorn St.", "Alcorn State Braves")],
+        );
+        let rows = [
+            torvik_row("CJ Barnes", "Alcorn St.", 1, 20.0),
+            torvik_row("Corey Barnes", "Alcorn St.", 2, 20.0),
+        ];
+        let links = link_players(&r, &rows, 2026);
+        assert_eq!(links.player_ids, vec![None, Some(a)]);
+        assert_eq!(links.stats.exact, 1);
+        assert_eq!(links.stats.family_fallback, 0);
+    }
+
+    #[test]
+    fn link_recovers_a_misspelled_surname_by_given_name_and_team() {
+        let id = Uuid::from_u128(1);
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[(id, "Quinton Chievous", Some(team))],
+            &[(team, "Hampton", "Hampton Pirates")],
+        );
+        let rows = [torvik_row("Quinton Chirvous", "Hampton", 1, 25.0)];
+        let links = link_players(&r, &rows, 2015);
+        assert_eq!(links.player_ids, vec![Some(id)]);
+        assert_eq!(links.stats.given_fallback, 1);
+    }
+
+    #[test]
+    fn link_given_fallback_stops_at_an_unrelated_surname() {
+        let id = Uuid::from_u128(1);
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[(id, "Max Hoetzel", Some(team))],
+            &[(team, "San Diego St.", "San Diego State Aztecs")],
+        );
+        let rows = [torvik_row("Max Montana", "San Diego St.", 1, 20.0)];
+        let links = link_players(&r, &rows, 2018);
+        assert_eq!(links.player_ids, vec![None]);
+        assert_eq!(links.stats.given_fallback, 0);
+    }
+
+    #[test]
+    fn link_fallbacks_require_a_resolved_team() {
+        // Without a team anchor a surname alone is far too weak to pair on.
+        let id = Uuid::from_u128(1);
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[(id, "Obadiah Toppin", Some(team))],
+            &[(team, "Dayton", "Dayton Flyers")],
+        );
+        let rows = [torvik_row("Obi Toppin", "Le Moyne", 1, 31.6)];
+        let links = link_players(&r, &rows, 2020);
+        assert_eq!(links.player_ids, vec![None]);
+    }
+
+    #[test]
+    fn link_ignores_rows_without_a_torvik_pid() {
+        // Those rows are never persisted, so they must not claim a player.
+        let id = Uuid::from_u128(1);
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[(id, "Cooper Flagg", Some(team))],
+            &[(team, "Duke", "Duke Blue Devils")],
+        );
+        let rows = [crate::torvik::TorkvikPlayerSeason {
+            player_name: "Cooper Flagg".to_string(),
+            team: "Duke".to_string(),
+            pid: None,
+            ..Default::default()
+        }];
+        let links = link_players(&r, &rows, 2025);
+        assert_eq!(links.player_ids, vec![None]);
+        assert_eq!(links.stats.matched(), 0);
+        assert_eq!(links.stats.unlinked, 0);
+    }
+
+    #[test]
+    fn link_counts_only_rotation_minutes_as_rotation_unlinked() {
+        let r = roster(&[], &[(Uuid::from_u128(90), "Duke", "Duke Blue Devils")]);
+        let rows = [
+            torvik_row("Nobody Here", "Duke", 1, ROTATION_MPG - 0.1),
+            torvik_row("Also Missing", "Duke", 2, ROTATION_MPG),
+        ];
+        let links = link_players(&r, &rows, 2026);
+        assert_eq!(links.stats.unlinked, 2);
+        assert_eq!(links.stats.unlinked_rotation, 1);
+        assert_eq!(links.stats.unlinked_sample, vec!["Also Missing (Duke)"]);
     }
 
     // parse_height tests

@@ -886,7 +886,9 @@ async fn main() -> Result<()> {
                 cstat_ingest::ingest::torvik::ingest_torvik_player_stats(&torvik, &db.pool, year)
                     .await?;
             println!(
-                "Torvik player stats: {upserted} upserted, {matched} matched to cstat players"
+                "Torvik player stats: {upserted} upserted, {matched} matched to cstat players \
+                 ({} unlinked)",
+                upserted.saturating_sub(matched)
             );
 
             // Both flags consume the same gzip JSON from

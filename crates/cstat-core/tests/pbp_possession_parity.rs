@@ -109,14 +109,24 @@ async fn stint_possessions_track_box_score() {
     );
 
     // The corruption gate (compute_pbp_lineups) must leave a known-corrupt
-    // season with no REPLAY-derived aggregates — better an absent surface than
-    // a wrong one. Guards against the gate silently regressing and
-    // re-publishing 2019 off its mis-tagged play stream. Rows sourced from the
-    // captured NatStat lineups object ARE allowed: those are server-computed
-    // per-game units, unaffected by the corrupt tag CSV (and their possessions
-    // are rescaled to the box estimate, not derived from the tags).
+    // season's REPLAY-derived aggregates INTACT — see below. This assertion
+    // used to demand zero of them, which was correct when it was written
+    // (2026-06-12) and stopped being correct two days later.
+    //
+    // #136 made the corruption gate surgical: 2019's mis-tagged export breaks
+    // only the tag-derived POSSESSIONS, while membership (SUB events), minutes
+    // (the clock) and plus-minus (the running score field) are all immune. So
+    // `compute_pbp_lineups` now keeps the replay and rescales possessions to
+    // the box total instead of discarding everything — the old clear-it-all
+    // behavior is what collapsed Duke 2019's waffle to one 9-minute lineup
+    // with no Zion. `tests/corrupt_season_lineups.rs` is the authority on the
+    // new contract and asserts these rows are non-empty with sane ratings.
+    //
+    // The stale assertion survived because it only fires once 2019 is
+    // recomputed, which nothing had done since. A full 12-season recompute
+    // surfaced it. Kept as a positive check so the two tests now agree.
     for &season in CORRUPT_PBP_SEASONS {
-        let n: i64 = sqlx::query(
+        let replay: i64 = sqlx::query(
             "SELECT count(*) FROM lineup_aggregates WHERE season = $1 AND source <> 'natstat_lineups'",
         )
         .bind(season)
@@ -124,9 +134,10 @@ async fn stint_possessions_track_box_score() {
         .await
         .unwrap()
         .get(0);
-        assert_eq!(
-            n, 0,
-            "corrupt season {season} still has {n} replay/onfloor lineup_aggregates rows — the coverage gate didn't clear it"
+        assert!(
+            replay > 0,
+            "corrupt season {season} has no replay/onfloor lineup_aggregates — the gate \
+regressed to clear-everything (see tests/corrupt_season_lineups.rs)"
         );
         let nat: i64 = sqlx::query(
             "SELECT count(*) FROM lineup_aggregates WHERE season = $1 AND source = 'natstat_lineups'",
@@ -137,7 +148,7 @@ async fn stint_possessions_track_box_score() {
         .unwrap()
         .get(0);
         println!(
-            "corrupt season {season}: no replay/onfloor aggregates ✓ ({nat} natstat-sourced rows)"
+            "corrupt season {season}: replay recovered ✓ ({replay} replay + {nat} natstat-sourced rows)"
         );
     }
 

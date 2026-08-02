@@ -1,3 +1,4 @@
+use super::utils::decode_html_entities;
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::{current_natstat_season, extract_results, team_id_by_code_and_season};
@@ -108,11 +109,16 @@ async fn upsert_player(
     // present (even when its value isn't a string) and lands at the
     // "Unknown" fallback. Players with `&` in the name on the teams
     // side were the canary; preempt the same shape on players.
-    let name = player
-        .get("name")
-        .and_then(|n| n.as_str())
-        .or_else(|| player.get("full_name").and_then(|n| n.as_str()))
-        .unwrap_or("Unknown");
+    //
+    // Decoded because NatStat HTML-escapes some records — writing the raw
+    // string is what left 177 rows reading `D&#039;Angelo Russell` (#243).
+    let name = decode_html_entities(
+        player
+            .get("name")
+            .and_then(|n| n.as_str())
+            .or_else(|| player.get("full_name").and_then(|n| n.as_str()))
+            .unwrap_or("Unknown"),
+    );
 
     let position = player
         .get("position")
@@ -177,7 +183,7 @@ async fn upsert_player(
     )
     .bind(Uuid::new_v4())
     .bind(&natstat_id)
-    .bind(name)
+    .bind(&name)
     .bind(team_id)
     .bind(season)
     .bind(position)

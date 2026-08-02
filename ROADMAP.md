@@ -1347,6 +1347,44 @@ A multi-agent read-only audit: **11 finder agents**, one per codebase section (c
 
 ## Known Bugs / Data Quality Issues
 
+### Torvik player linkage dropped 1,207 rotation players (#243 — Fixed)
+
+`torvik_player_stats.player_id` was NULL for 1,814 rows. Not analysis-only: the player-SOS step in `compute_campom` resolves through `player_id`, so **every** unlinked row also carried a NULL `cam_gbpm_v3_psos` — the column the player leaderboard sorts on. Obi Toppin's 2020 AP Player of the Year season, Ja Morant's 2019, Johnny Davis's 2022 and D'Angelo Russell's 2015 were all missing from the board, with nothing logged.
+
+Three causes, only the first of which the issue had identified. **Nicknames**: Torvik carries the common name, NatStat the legal one (Obi/Obadiah, Ja/Temetrius, Johnny/Jonathan). **Fuzzy team matching**: the predicate was two-way substring containment, so Torvik's 22-character team-column truncation ("Texas A&M Corpus Chris") matched nothing while "Houston Baptist Huskies" matched Torvik's *Houston*. **A coin-flip fallback**: several same-name candidates and no team agreement took `candidates.first()`, producing a *wrong* link rather than a NULL — Torvik's Xavier "Anthony Robinson" row attached to Missouri's.
+
+Fixed by routing team resolution through the shared `cstat_core::team_name_match::team_match_score` (which already knew Torvik's truncation from the coachdict work; one alias added for the Houston rename) and taking the best score with ties treated as unresolved, then replacing the row-by-row matcher with three claim-ordered passes: exact name, then family name + team, then given name + team guarded by surname similarity. Each fallback requires an unambiguous pairing in both directions, which also makes it order-independent. Unlinked rotation rows: **1,207 → 211**. The residual is upstream — NatStat's 2015 N.C. State roster has no Anthony Barber, and its 2021 George Washington / UC San Diego / Bellarmine / Tarleton State rosters are absent outright.
+
+Guarded going forward by a per-pass ingest log, a `WARN` naming the highest-GBPM unlinked rotation players, `invariants::torvik_rows_unlinked` (3% of a season's rotation rows), and `crates/cstat-core/tests/torvik_linkage.rs`, which also asserts the four headline award seasons by name — a share ceiling can drift without anyone noticing *which* players it let through.
+
+The HTML-entity corruption the issue named as a second root cause is essentially not one: `normalize_name` drops non-alphabetic characters, so `d&#039;angelo` already folded to `dangelo`. Decoding recovers 2 rows in a 12-season replay, both `&quot;`-form (`quot` *is* alphabetic, unlike the numeric entities that make up 177 of the 181 rows). It was still a real bug — those names rendered wrong on the site — and is fixed at all three write sites plus a backfill in migration `048`.
+
+Two adjacent findings left open, both below.
+
+### Player display names — show the name people use (#243 follow-up — Fixed)
+
+NatStat's legal name is what the site rendered, so Obi Toppin read "Obadiah Toppin", Ja Morant read "Temetrius Morant", and ~2,000 players lost their generational suffix ("Jaren Jackson" for Jaren Jackson Jr., "Marvin Bagley" for Marvin Bagley III).
+
+**The obvious fix — adopt Torvik's name — is wrong, and the data says so.** On the 1,043 player-seasons where the two sources disagree substantively, 247Sports (a third, independent feed already in the DB) sides with NatStat **44 to 20**. Torvik is frequently the one with the typo: "Jeffery Solarin" for Jeffrey, "Ezra Ausur" for Ausar, "Martez Robinson" for Martaz, "Javonte" for "Javonté". Switching wholesale would trade one class of wrong names for another. The earlier read that Torvik wins ~3:1 came from eyeballing thirty high-minute stars; it does not survive contact with the long tail.
+
+So `players.display_name` (migration `050`) is set from exactly two sources, and `players.name` stays the legal join key five resolvers match on:
+- **Suffix restoration**, mechanical and safe *by construction* — fires only when the two names are identical once a trailing generational suffix is stripped, so it cannot introduce a spelling the sources didn't already agree on. ~2,000 players, and it keeps NatStat's spelling of the base, borrowing only the suffix.
+- **Curated overrides** in `data/player_display_names.json`, keyed on `torvik_pid` because names collide — there are two Jonathan Davises and only one of them is Johnny. Each entry carries its evidence. Seeded with Obi Toppin, Ja Morant, Johnny Davis, Zavier Simpson, Fatts Russell (NatStat calls him Daron in 2019-20 and Fatts in 2021-22, so his own career page disagreed with itself), Filip Petrusev (NatStat's "Petrusey" is an outright misspelling) and Johann Grünloh.
+
+Derived by `compute::compute_display_names` (step 21, rewritten from scratch each run) and served as `COALESCE(display_name, name) AS name`, so the API contract and the frontend are unchanged. Search matches **both** columns — "Obadiah" and "Obi" both find him. The two match-key sites that must NOT use it (`routes/draft.rs`, `routes/transfers.rs`, where `p.name` is compared against an external feed) are annotated in place.
+
+### Stale `torvik_player_stats` rows double-count in per-player joins (#243 follow-up — Open)
+
+Torvik occasionally re-mints a player's `pid` mid-season. The old row is never removed and keeps its `player_id`, so a single player-season can carry two rows with identical stats. 309 such rows exist locally, accounting for 261 of the 287 duplicate `(player_id, season)` pairs — the other 26 are legitimate mid-season transfers, where Torvik genuinely has one row per team. Now identifiable as `player_name IS NULL` on any season re-ingested since migration `049`.
+
+**Fix**: delete a season's rows whose `torvik_pid` is absent from the fetched CSV, inside `ingest_torvik_player_stats` where the authoritative full-season list is already in hand. Deferred because it is a deletion path and wants its own review; a migration can't do it, since `player_name` is NULL for every row on prod until that season is re-ingested.
+
+### `torvik_player_stats.minutes_per_game` holds Min%, not MPG (#243 follow-up — Open)
+
+`total_minutes` holds Torvik's true minutes-per-game and `minutes_per_game` holds `Min_per`, the share of team minutes. `compute_campom` already reads the right column for each and documents the trap, so nothing computes wrong — this is a naming misnomer, not a live ingest bug. The cost is that any `minutes_per_game >= N` filter written against the table means "N percent of team minutes": it is why #243's own reproduce query counted 1,305 rotation players where the true-MPG cut gives 1,207, and why the awards pool in `training/awards.py` is more permissive than it reads.
+
+**Fix**: rename to `min_pct` / `minutes_per_game` in a migration, updating `compute.rs` and the Python trainers together. Mechanical but cross-cutting.
+
 ### `sync_to_prod.sh` rewound prod's `ingest_runs` id sequence (#186 — Fixed 2026-07-17; **recurred, see below**)
 
 **Second occurrence, found 2026-07-18 — the ledger was dark for three nights.** The account below describes a self-limiting incident that "healed at 45". That understates the pattern: prod was found with `ingest_runs_id_seq.last_value = 68` against `max(id) = 170`, i.e. **102** doomed inserts, with no ledger row written since 2026-07-15 09:35 UTC. The `a445e1c` fix is purely **preventive** — it stops a future dump leaking the sequence, and empirical replay confirms it works (pre-fix flags reproduce `SEQUENCE SET public ingest_runs_id_seq` in the TOC; post-fix flags do not) — but nothing repaired the sequence already rewound on prod, and nothing detected that it was still broken. Four lessons, each now closed:

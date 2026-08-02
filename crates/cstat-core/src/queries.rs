@@ -705,7 +705,7 @@ pub async fn get_team_lineups(
             SELECT
                 array_agg(u.pid ORDER BY p.height_inches ASC NULLS LAST, u.ord)
                     AS lineup,
-                array_agg(COALESCE(p.name, 'Unknown') ORDER BY p.height_inches ASC NULLS LAST, u.ord)
+                array_agg(COALESCE(p.display_name, p.name, 'Unknown') ORDER BY p.height_inches ASC NULLS LAST, u.ord)
                     AS player_names,
                 array_agg(pa.primary_class ORDER BY p.height_inches ASC NULLS LAST, u.ord)
                     AS player_classes
@@ -1119,7 +1119,7 @@ pub async fn get_lineup_rankings(
         CROSS JOIN LATERAL (
             SELECT
                 array_agg(u.pid ORDER BY p.height_inches ASC NULLS LAST, u.ord) AS lineup,
-                array_agg(COALESCE(p.name, 'Unknown') ORDER BY p.height_inches ASC NULLS LAST, u.ord) AS player_names,
+                array_agg(COALESCE(p.display_name, p.name, 'Unknown') ORDER BY p.height_inches ASC NULLS LAST, u.ord) AS player_names,
                 array_agg(pa.primary_class ORDER BY p.height_inches ASC NULLS LAST, u.ord) AS player_classes
             FROM unnest(s.combo) WITH ORDINALITY AS u(pid, ord)
             LEFT JOIN players p ON p.id = u.pid AND p.season = s.season
@@ -1393,7 +1393,7 @@ pub async fn get_team_roster(
         r#"
         SELECT
             p.id AS player_id,
-            p.name,
+            COALESCE(p.display_name, p.name) AS name,
             p.position,
             p.class_year,
             p.height_inches,
@@ -1485,7 +1485,7 @@ pub async fn search_players(
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
-          AND ($3::text IS NULL OR p.name ILIKE $3)
+          AND ($3::text IS NULL OR p.name ILIKE $3 OR p.display_name ILIKE $3)
           AND (
               $4::text IS NULL
               OR pa.primary_class = $4
@@ -1506,7 +1506,7 @@ pub async fn search_players(
         SELECT
             p.id AS player_id,
             p.natstat_id,
-            p.name,
+            COALESCE(p.display_name, p.name) AS name,
             p.team_id,
             COALESCE(t.short_name, t.name) AS team_name,
             t.conference,
@@ -1556,7 +1556,7 @@ pub async fn search_players(
           AND pss.games_played >= 5
           AND pss.minutes_per_game >= 10
           AND ($2::uuid IS NULL OR pss.team_id = $2)
-          AND ($3::text IS NULL OR p.name ILIKE $3)
+          AND ($3::text IS NULL OR p.name ILIKE $3 OR p.display_name ILIKE $3)
           AND (
               $4::text IS NULL
               OR pa.primary_class = $4
@@ -1716,7 +1716,7 @@ pub async fn get_player_by_id(
     sqlx::query_as::<_, PlayerProfile>(
         r#"
         SELECT
-            p.id, p.name, p.team_id,
+            p.id, COALESCE(p.display_name, p.name) AS name, p.team_id,
             COALESCE(t.short_name, t.name) AS team_name,
             t.conference,
             p.position, p.class_year,
@@ -2208,7 +2208,7 @@ pub async fn get_similar_players(
         )
         SELECT
             c.player_id,
-            p.name,
+            COALESCE(p.display_name, p.name) AS name,
             p.team_id,
             COALESCE(t.short_name, t.name) AS team_name,
             c.primary_class,
@@ -2280,7 +2280,7 @@ pub async fn get_archetype_exemplars(
                 pa.primary_class,
                 pa.primary_score,
                 p.id AS player_id,
-                p.name,
+                COALESCE(p.display_name, p.name) AS name,
                 p.team_id,
                 COALESCE(t.short_name, t.name) AS team_name,
                 ROW_NUMBER() OVER (
@@ -2817,7 +2817,7 @@ pub async fn get_player_game_boxes(
         SELECT
             pgs.game_id,
             pgs.player_id,
-            p.name AS player_name,
+            COALESCE(p.display_name, p.name) AS player_name,
             pgs.team_id,
             pgs.starter,
             pgs.minutes,

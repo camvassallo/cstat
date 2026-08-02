@@ -1,0 +1,37 @@
+[
+  {
+    "torvik_pid": 65484,
+    "display_name": "Obi Toppin",
+    "note": "NatStat 'Obadiah Toppin'. 2020 AP Player of the Year; Torvik and 247Sports both use Obi."
+  },
+  {
+    "torvik_pid": 50678,
+    "display_name": "Ja Morant",
+    "note": "NatStat 'Temetrius Morant'. Torvik and 247Sports both use Ja; nobody says Temetrius."
+  },
+  {
+    "torvik_pid": 72499,
+    "display_name": "Johnny Davis",
+    "note": "NatStat 'Jonathan Davis' (Wisconsin, 2021-22). Distinct from pid 44843, a genuinely-Jonathan Davis at Baylor — which is why this file keys on torvik_pid, not name."
+  },
+  {
+    "torvik_pid": 47104,
+    "display_name": "Zavier Simpson",
+    "note": "NatStat 'Xavier Simpson'. Michigan spelled it with a Z; Torvik agrees across all four of his seasons."
+  },
+  {
+    "torvik_pid": 50422,
+    "display_name": "Fatts Russell",
+    "note": "NatStat is inconsistent with itself: 'Daron Russell' in 2019-20, 'Fatts Russell' in 2021-22. Pinning it makes his career page read the same in every row."
+  },
+  {
+    "torvik_pid": 66035,
+    "display_name": "Filip Petrusev",
+    "note": "NatStat 'Filip Petrusey' is an outright misspelling, not a name variant."
+  },
+  {
+    "torvik_pid": 135586,
+    "display_name": "Johann Grünloh",
+    "note": "NatStat romanizes the umlaut as 'Gruenloh' (issue #170). Both spellings still match for joins — normalize_name folds them together — so this only affects display."
+  }
+]

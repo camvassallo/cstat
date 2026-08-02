@@ -43,6 +43,12 @@ pub const TEAM_ALIASES: &[(&str, &str)] = &[
     ("texas a&m corpus chris", "texas a&m corpus christi"),
     ("ut martin", "tennessee-martin"),
     ("arkansas little rock", "arkansas-little rock"),
+    // Renamed schools. barttorvik retro-applies a program's *current* name to
+    // its historical seasons while NatStat keeps the contemporaneous one, so
+    // the two only disagree where a school renamed. Houston Baptist became
+    // Houston Christian in 2022; Torvik calls the 2015-2021 rows "Houston
+    // Christian" too, which stranded that roster every season (issue #243).
+    ("houston christian", "houston baptist"),
 ];
 
 /// Score how well a cstat team matches a 247 short name. Lower is better;
@@ -123,6 +129,32 @@ mod tests {
     #[test]
     fn bare_prefix_fallback_when_no_alias() {
         assert_eq!(team_match_score(None, "Duke Blue Devils", "Duke"), Some(2),);
+    }
+
+    #[test]
+    fn houston_rename_alias_beats_the_houston_bare_prefix() {
+        // Torvik calls the pre-2022 Houston Baptist seasons "Houston
+        // Christian" (issue #243). The rename alias must land on Baptist,
+        // and the real Houston must still outscore Baptist's bare prefix so
+        // a "Houston" row can't drift onto the wrong roster.
+        assert_eq!(
+            team_match_score(
+                Some("Houston Baptist"),
+                "Houston Baptist Huskies",
+                "Houston Christian"
+            ),
+            Some(1),
+        );
+        let cougars = team_match_score(Some("Houston"), "Houston Cougars", "Houston");
+        let huskies = team_match_score(
+            Some("Houston Baptist"),
+            "Houston Baptist Huskies",
+            "Houston",
+        );
+        assert!(
+            cougars < huskies,
+            "Houston ({cougars:?}) should outscore Houston Baptist ({huskies:?})"
+        );
     }
 
     #[test]
