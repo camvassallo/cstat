@@ -89,11 +89,18 @@ async fn fetch_player_identity(
     if player_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows: Vec<(Uuid, String, Option<String>)> =
-        sqlx::query_as("SELECT id, name, natstat_id FROM players WHERE id = ANY($1)")
-            .bind(player_ids)
-            .fetch_all(pool)
-            .await?;
+    // `COALESCE(display_name, name)` for the same reason the served player
+    // queries use it: this column is rendered, and the projected page would
+    // otherwise be the one surface still showing "Obadiah Toppin" while every
+    // other page says "Obi Toppin" (issue #243 follow-up). The snapshot is
+    // rebuilt by `compute-projections`, so it picks up a display-name change
+    // on the next run rather than needing its own backfill.
+    let rows: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, COALESCE(display_name, name), natstat_id FROM players WHERE id = ANY($1)",
+    )
+    .bind(player_ids)
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|(id, name, natstat_id)| (id, (name, natstat_id)))

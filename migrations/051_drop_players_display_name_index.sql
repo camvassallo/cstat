@@ -1,0 +1,25 @@
+-- Drop the index migration 050 added. It cannot serve any query we run.
+--
+-- 050 created `idx_players_display_name` on the reasoning that name search
+-- "wants the same treatment `name` gets". That was wrong twice over:
+--
+--   * The search predicate is `ILIKE '%…%'`, and a plain btree cannot answer a
+--     leading-wildcard match. `EXPLAIN` on the real query bitmap-scans
+--     `idx_players_team` for the season and then filters both name columns —
+--     the display_name index is never consulted. (`idx_players_name` is in the
+--     same position for the search path; it earns its keep on the equality
+--     lookups that join through `players.name`, which display_name has none
+--     of.)
+--   * Nothing queries `display_name` by equality outside a test.
+--
+-- So it is pure write-side cost on every `players` upsert for no read benefit.
+-- Small — the column is non-NULL for ~2,000 of ~59,000 rows — but an index
+-- that exists only because a comment claimed it was needed is worse than no
+-- index, because the next reader trusts the claim.
+--
+-- Corrected here rather than by editing 050: SQLx checksums every file in
+-- `migrations/`, so an applied migration is immutable even for a comment.
+--
+-- If leading-wildcard player search ever needs to be fast, the answer is a
+-- pg_trgm GIN index over BOTH name columns, not a btree over one.
+DROP INDEX IF EXISTS idx_players_display_name;
