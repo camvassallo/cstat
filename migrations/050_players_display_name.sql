@@ -32,7 +32,11 @@ ALTER TABLE players ADD COLUMN display_name TEXT;
 COMMENT ON COLUMN players.display_name IS
     'Presentation name when it differs from the legal `name`: a restored generational suffix or a curated override. NULL means `name` is already correct. Derived by compute_display_names; never hand-edit (issue #243).';
 
--- Search hits both columns, so the trigram/ILIKE path over display_name wants
--- the same treatment `name` gets. Cheap: the column is NULL for most rows.
-CREATE INDEX IF NOT EXISTS idx_players_display_name ON players (display_name)
-    WHERE display_name IS NOT NULL;
+-- Deliberately NO index. Player search is `ILIKE '%…%'`, which a btree cannot
+-- answer, and `EXPLAIN` confirms the real query bitmap-scans `idx_players_team`
+-- for the season and then filters both name columns. Nothing looks up
+-- `display_name` by equality either, so an index here would be write-side cost
+-- for no read. (`idx_players_name` is in the same position for search; it earns
+-- its keep on equality joins through `players.name`, which this column has
+-- none of.) If leading-wildcard search ever needs to be fast, the answer is one
+-- pg_trgm GIN index covering BOTH columns, not a btree over this one.

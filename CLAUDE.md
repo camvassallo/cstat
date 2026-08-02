@@ -165,7 +165,21 @@ All season-scoped tables carry a `season` column; the API and frontend support a
 
 **Roster ingest caveat**: NatStat's `/players/mbb/{TEAMCODE}` endpoint has no historical-season filter — it always returns the *current* roster. The box-score path (`games.rs`) is the sole authority for `players.team_id` per season; `players.rs::upsert_player` deliberately never overwrites `team_id` on conflict. Running `cstat-ingest players --year YYYY` against a non-current season warns once and only enriches metadata fields (height, weight, position, etc.). Box-score ingest auto-creates player rows with the correct team, so historical seasons are safe to add via `cstat-ingest season --year YYYY` alone.
 
-**Never edit an applied migration** — not even comments. SQLx checksums every file in `/migrations/` and refuses to boot if the on-disk hash differs from `_sqlx_migrations.checksum` in prod. To correct an applied migration, add a new one. For data-driven migrations (e.g. `017_team_short_names.sql` is sourced from `data/team_short_names.json`), edit the JSON and re-run the relevant `cstat-ingest` command — no SQL needed.
+**Never edit a migration prod has applied** — not even comments. SQLx checksums every file in `/migrations/` and refuses to boot if the on-disk hash differs from `_sqlx_migrations.checksum` in prod. To correct one, add a new migration.
+
+**A migration created in an unmerged PR is NOT in that category.** Prod applies migrations on deploy, so a file added on a branch that hasn't merged has never entered prod's ledger and is free to edit — fold the correction into it rather than shipping a `CREATE` + `DROP` pair that has to live in the history forever. The checksum only binds once it has been deployed.
+
+The catch is *local*: your dev DB has already applied it, so editing the file makes your own boot fail. Re-baseline before rebuilding — undo what the migration did, drop its ledger row, and let the migrator re-apply the edited version:
+
+```sql
+-- e.g. reverting migration 050 after editing it
+ALTER TABLE players DROP COLUMN IF EXISTS display_name;
+DELETE FROM _sqlx_migrations WHERE version = 50;
+```
+
+Then `touch crates/cstat-core/src/db.rs && cargo build` — the migration files are embedded by the `sqlx::migrate!` macro at compile time, so a `.sql`-only change does **not** trigger a rebuild on its own and the binary will silently keep running the old set. Re-derive anything the dropped column held (a compute step, usually).
+
+For data-driven migrations (e.g. `017_team_short_names.sql` is sourced from `data/team_short_names.json`), edit the JSON and re-run the relevant `cstat-ingest` command — no SQL needed.
 
 ## ML Inference
 
