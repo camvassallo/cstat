@@ -1081,6 +1081,10 @@ export interface PlayerOnOff {
   rapm_paired_possessions: number | null;
   /// Season percentile (0..1) of net RAPM among display-qualified players; null when unfit.
   rapm_net_pct: number | null;
+  /// Same cohort for the O and D halves. `rapm_d_pct` is inverted server-side
+  /// (d_rapm is points allowed, negative = good), so high is good on both.
+  rapm_o_pct: number | null;
+  rapm_d_pct: number | null;
 }
 
 export function fetchPlayerOnOff(id: string, season?: number) {

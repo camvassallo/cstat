@@ -875,6 +875,11 @@ pub struct PlayerOnOff {
     /// players (paired_possessions >= 250, matching the UI's RAPM display floor).
     /// NULL when the player has no RAPM fit. Powers the "Adj +/-" percentile bar.
     pub rapm_net_pct: Option<f64>,
+    /// Same cohort, for the O and D halves. `rapm_d_pct` is **inverted** —
+    /// `d_rapm` is points allowed per 100, where negative is good — so on both
+    /// bars a high percentile means a good player, as everywhere else on the page.
+    pub rapm_o_pct: Option<f64>,
+    pub rapm_d_pct: Option<f64>,
 }
 
 /// Fetch a player's season on/off split. Returns `None` when the player has no
@@ -901,7 +906,17 @@ pub async fn get_player_on_off(
                (SELECT avg((r2.net_rapm <= pr.net_rapm)::int)::float8
                   FROM player_rapm r2
                  WHERE r2.season = pr.season AND r2.paired_possessions >= 250)
-                 AS rapm_net_pct
+                 AS rapm_net_pct,
+               (SELECT avg((r2.o_rapm <= pr.o_rapm)::int)::float8
+                  FROM player_rapm r2
+                 WHERE r2.season = pr.season AND r2.paired_possessions >= 250)
+                 AS rapm_o_pct,
+               -- Inverted: d_rapm is points ALLOWED, so the best defenders are
+               -- the most negative. `>=` makes a high percentile mean good D.
+               (SELECT avg((r2.d_rapm >= pr.d_rapm)::int)::float8
+                  FROM player_rapm r2
+                 WHERE r2.season = pr.season AND r2.paired_possessions >= 250)
+                 AS rapm_d_pct
         FROM player_on_off oo
         LEFT JOIN player_rapm pr ON pr.player_id = oo.player_id AND pr.season = oo.season
         -- Pin to the player's canonical team. The derivation now credits a player

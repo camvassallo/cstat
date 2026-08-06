@@ -419,15 +419,36 @@ export default function PlayerDetail() {
                     <PercentileBar label="Adj DRTG" value={fmt(torvik.adj_de)} pctile={torvik.adj_de_pct} />
                   </>
                 )}
-                {/* Adj +/- (RAPM) — folded in from the old On/Off panel; the one
-                    context-adjusted plus-minus number. Raw on/off lives in the tooltip. */}
+                {/* RAPM — folded in from the old On/Off panel; the one
+                    context-adjusted plus-minus number, then its O and D halves.
+                    Labels match the roster's Adv view (RAPM / RAPM-O / RAPM-D)
+                    so the same metric reads the same on both pages. Raw on/off
+                    lives in the tooltip. */}
                 {onOff?.rapm_net != null && (onOff.rapm_paired_possessions ?? 0) >= RAPM_DISPLAY_FLOOR && (
-                  <PercentileBar
-                    label="Adj +/-"
-                    value={signedFmt(onOff.rapm_net)}
-                    pctile={onOff.rapm_net_pct ?? null}
-                    title={`Adjusted +/- (RAPM), per 100 poss — ridge-regressed with teammates and opponents held constant. O ${signedFmt(onOff.rapm_o)} / D ${signedFmt(onOff.rapm_d)} (negative D is good). Raw net on/off ${signedFmt(onOff.net_on_off)}. Career-informed (decayed prior-season stints); read alongside CamPom, not instead of it.`}
-                  />
+                  <>
+                    <PercentileBar
+                      label="RAPM"
+                      value={signedFmt(onOff.rapm_net)}
+                      pctile={onOff.rapm_net_pct ?? null}
+                      title={`Adjusted on/off (RAPM), per 100 poss — ridge-regressed with teammates and opponents held constant. Net = O − D. Raw net on/off ${signedFmt(onOff.net_on_off)}. Career-informed (decayed prior-season stints); read alongside CamPom, not instead of it.`}
+                    />
+                    {onOff.rapm_o != null && (
+                      <PercentileBar
+                        label="RAPM-O"
+                        value={signedFmt(onOff.rapm_o)}
+                        pctile={onOff.rapm_o_pct ?? null}
+                        title="Adjusted on/off, offensive half: points per 100 added on offense with teammates and opponents held constant."
+                      />
+                    )}
+                    {onOff.rapm_d != null && (
+                      <PercentileBar
+                        label="RAPM-D"
+                        value={signedFmt(onOff.rapm_d)}
+                        pctile={onOff.rapm_d_pct ?? null}
+                        title="Adjusted on/off, defensive half: points per 100 ALLOWED while defending — negative is good, so the percentile bar is inverted (a high bar means good defense)."
+                      />
+                    )}
+                  </>
                 )}
               </>
             )}
