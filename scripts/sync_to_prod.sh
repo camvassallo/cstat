@@ -33,6 +33,7 @@
 #   ./scripts/sync_to_prod.sh --prod-status            # READ-ONLY prod inspection
 #   ./scripts/sync_to_prod.sh --tables a,b,c           # push only these tables
 #   ./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
+#   ./scripts/sync_to_prod.sh --columns players.display_name  # merge one column
 #   ./scripts/sync_to_prod.sh --force-full             # override the in-season guard
 #
 # IN-SEASON RULE (enforced, not just documented — see the P0 guard below and
@@ -52,6 +53,18 @@
 # its heavy derived tables (PBP/RAPM/archetype/lineup outputs) without a full
 # truncate clobbering what the cron just wrote. Names in EXCLUDED can never be
 # selected; an unknown name aborts before any write.
+#
+# --columns table.col[,col…] is the third mode, for the case --tables cannot
+# serve: a derived column on a table that is REFERENCED by foreign keys.
+# `players.display_name` is the motivating one — `players` has 10 dependents, so
+# --tables would cascade-wipe them, and a full sync (the only other carrier of
+# `players`) is refused while prod is cron-fed. Column merge does the one safe
+# operation available: UPDATE existing rows, named columns only. No TRUNCATE, no
+# INSERT, no DELETE — so it cannot cascade, invent rows, or lose them. Rows are
+# matched on the table's UNIQUE constraint (its natural key), not the primary
+# key, so a locally-generated UUID that diverged still lands on the right row.
+# Batched into `UPDATE … FROM (VALUES …)` chunks to avoid an N+1 over the prod
+# link. Not gated by the full-sync guard: it is strictly narrower than --tables.
 #
 # CAVEAT: the restore still uses TRUNCATE ... CASCADE, so targeting a table that
 # is *referenced* by a foreign key (e.g. `teams`, which `players`/`games` point
@@ -79,6 +92,7 @@ LOCAL_URL="${LOCAL_DATABASE_URL:-postgres://cstat:cstat@localhost:5432/cstat}"
 PROD_URL="${PROD_DATABASE_URL:?Set PROD_DATABASE_URL in .env or your shell to the Railway prod connection string}"
 DRY_RUN=0
 REQUESTED_TABLES=""   # empty = all (full sync); set by --tables for targeted mode
+REQUESTED_COLUMNS=""  # set by --columns for column-merge mode (see below)
 FORCE_FULL=0          # --force-full: override the in-season full-sync guard
 PROD_STATUS=0         # --prod-status: read-only prod inspection, then exit
 
@@ -87,6 +101,8 @@ while [[ $# -gt 0 ]]; do
     --dry-run|-n) DRY_RUN=1; shift ;;
     --tables) REQUESTED_TABLES="${2:?--tables needs a comma-separated list}"; shift 2 ;;
     --tables=*) REQUESTED_TABLES="${1#--tables=}"; shift ;;
+    --columns) REQUESTED_COLUMNS="${2:?--columns needs table.col[,col…]}"; shift 2 ;;
+    --columns=*) REQUESTED_COLUMNS="${1#--columns=}"; shift ;;
     --force-full) FORCE_FULL=1; shift ;;
     --prod-status) PROD_STATUS=1; shift ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \?//'; exit 0 ;;
@@ -410,6 +426,141 @@ if ! "${PSQL[@]}" "$PROD_URL" -t -A -c "SELECT 1" >/dev/null 2>&1; then
 fi
 echo "  ✓ reachable"
 echo
+
+# ---------------------------------------------------------------------------
+# COLUMN-MERGE mode (--columns table.col[,col…]).
+#
+# WHY IT EXISTS. `--tables` replaces a table by TRUNCATE ... CASCADE + restore,
+# which is only safe for leaf tables. A table that is *referenced* by foreign
+# keys cannot go that route: `players` is referenced by 10 tables, so
+# `--tables players` would wipe `player_game_stats` and nine others as
+# collateral. But derived columns do land on such tables — `players.display_name`
+# is computed locally by `compute_all` step 21 and has no other way to reach
+# prod, because a full sync (the only mode that carries `players`) is refused
+# while prod is cron-fed.
+#
+# Rather than a bespoke side script, this is the same "compute locally, push to
+# prod" path the rest of the file implements, narrowed to the one safe
+# operation available on an FK-referenced table: UPDATE existing rows, named
+# columns only.
+#
+# SAFETY, by construction rather than by care:
+#   * no TRUNCATE  → nothing can cascade
+#   * no INSERT    → cannot invent rows prod's pipeline didn't create
+#   * no DELETE    → cannot lose rows
+#   * only the named columns are written; every other column is untouched
+#   * rows present locally but not on prod are silently skipped (0-row UPDATEs)
+# The worst case is that the named column ends up matching local, which is the
+# entire intent. That is why this mode is NOT gated by the full-sync guard —
+# it is strictly narrower than `--tables`, which also isn't gated.
+#
+# Rows are matched on the table's natural key, read from its UNIQUE constraint
+# rather than hardcoded, so this works for any table that has one. `players`
+# keys on (natstat_id, season). Deliberately NOT the primary key: `id` is a
+# locally-generated UUID, and matching on the natural key means a row whose
+# UUID ever diverged between the two databases still lands on the right player.
+if [[ -n "$REQUESTED_COLUMNS" ]]; then
+  MERGE_TABLE="${REQUESTED_COLUMNS%%.*}"
+  MERGE_COLS="${REQUESTED_COLUMNS#*.}"
+  if [[ "$MERGE_TABLE" == "$REQUESTED_COLUMNS" || -z "$MERGE_COLS" ]]; then
+    echo "✗ --columns wants table.col[,col…] (e.g. players.display_name)" >&2
+    exit 2
+  fi
+  for e in "${EXCLUDED[@]}"; do
+    if [[ "$e" == "$MERGE_TABLE" ]]; then
+      echo "✗ '$MERGE_TABLE' is EXCLUDED — it is prod-written and never pushed." >&2
+      exit 2
+    fi
+  done
+
+  # Natural key = the table's UNIQUE constraint columns, in ordinal order.
+  KEY_COLS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -F',' -c "
+    SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+      FROM pg_constraint c
+      JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+     WHERE c.conrelid = '\"$MERGE_TABLE\"'::regclass AND c.contype = 'u'
+     GROUP BY c.oid ORDER BY count(*) LIMIT 1" | tr -d '[:space:]')
+  if [[ -z "$KEY_COLS" ]]; then
+    echo "✗ '$MERGE_TABLE' has no UNIQUE constraint — no natural key to match on." >&2
+    echo "  Use --tables if it is a leaf table, or add a UNIQUE constraint." >&2
+    exit 2
+  fi
+
+  # Batched, not row-at-a-time. 59k single-row UPDATEs is 59k round trips to a
+  # database across the internet — the same N+1 that made the Torvik per-game
+  # persist take ~10 min against prod before it was batched (ingest/torvik.rs).
+  # One `UPDATE … FROM (VALUES …)` per MERGE_CHUNK rows makes it ~120
+  # statements. Literals are rendered by quote_nullable in SQL, so quoting stays
+  # Postgres' problem rather than bash's.
+  MERGE_CHUNK=500
+  coltype() {
+    "${PSQL[@]}" "$LOCAL_URL" -t -A -c \
+      "SELECT format_type(a.atttypid, a.atttypmod) FROM pg_attribute a \
+        WHERE a.attrelid = '\"$MERGE_TABLE\"'::regclass AND a.attname = '$1' AND a.attnum > 0" \
+      | tr -d '[:space:]'
+  }
+
+  TUPLE_EXPR=""; ALIAS_COLS=""; SET_EXPR=""; WHERE_EXPR=""
+  for k in ${KEY_COLS//,/ }; do
+    TUPLE_EXPR="${TUPLE_EXPR:+$TUPLE_EXPR || ',' || }quote_nullable(\"$k\")"
+    ALIAS_COLS="${ALIAS_COLS:+$ALIAS_COLS, }\"$k\""
+    # Cast on the VALUES side: literals arrive as `unknown`, and the real column
+    # may be int/uuid/etc. Reading the type keeps this generic across tables.
+    WHERE_EXPR="${WHERE_EXPR:+$WHERE_EXPR AND }t.\"$k\" = v.\"$k\"::$(coltype "$k")"
+  done
+  for c in ${MERGE_COLS//,/ }; do
+    ctype=$(coltype "$c")
+    if [[ -z "$ctype" ]]; then
+      echo "✗ column '$c' does not exist on $MERGE_TABLE" >&2
+      exit 2
+    fi
+    TUPLE_EXPR="$TUPLE_EXPR || ',' || quote_nullable(\"$c\")"
+    ALIAS_COLS="$ALIAS_COLS, \"$c\""
+    SET_EXPR="${SET_EXPR:+$SET_EXPR, }\"$c\" = v.\"$c\"::$ctype"
+  done
+
+  echo "→ Mode:     COLUMN MERGE — UPDATE only, no TRUNCATE/INSERT/DELETE"
+  echo "→ Table:    $MERGE_TABLE"
+  echo "→ Columns:  ${MERGE_COLS//,/, }"
+  echo "→ Match on: ${KEY_COLS//,/, }  (natural key, from UNIQUE constraint)"
+  echo
+
+  STATEMENTS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+    WITH r AS (
+      SELECT row_number() OVER (ORDER BY $KEY_COLS) AS rn,
+             '(' || ($TUPLE_EXPR) || ')' AS tup
+        FROM \"$MERGE_TABLE\"
+    )
+    SELECT 'UPDATE \"$MERGE_TABLE\" AS t SET $SET_EXPR FROM (VALUES '
+        || string_agg(tup, ',' ORDER BY rn)
+        || ') AS v($ALIAS_COLS) WHERE $WHERE_EXPR;'
+      FROM r GROUP BY (rn - 1) / $MERGE_CHUNK ORDER BY min(rn)")
+  N=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "SELECT count(*) FROM \"$MERGE_TABLE\"" | tr -d '[:space:]')
+  B=$(grep -c '^UPDATE' <<<"$STATEMENTS" || true)
+  echo "→ $N row(s) to merge from local, in $B batched statement(s)"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "→ Dry run — would apply these on prod in ONE transaction."
+    echo "  First batch (truncated):"
+    head -1 <<<"$STATEMENTS" | cut -c1-260 | sed 's/^/    /'
+    echo "    …"
+    exit 0
+  fi
+
+  read -r -p "→ Apply to PROD? UPDATEs $N row(s) of $MERGE_TABLE.${MERGE_COLS} [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
+
+  START=$(date +%s)
+  "${PSQL[@]}" "$PROD_URL" -v ON_ERROR_STOP=1 --single-transaction --quiet -f - <<<"$STATEMENTS"
+  echo "✓ Merged in $(($(date +%s) - START))s. Prod non-NULL counts:"
+  for c in ${MERGE_COLS//,/ }; do
+    v=$("${PSQL[@]}" "$PROD_URL" -t -A -c \
+      "SELECT count(*) FROM \"$MERGE_TABLE\" WHERE \"$c\" IS NOT NULL" | tr -d '[:space:]')
+    printf "    %-25s %s\n" "$c" "$v"
+  done
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # P0 guard — refuse a full replace while prod is live.
