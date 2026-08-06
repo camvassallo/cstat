@@ -62,16 +62,30 @@ whole 2027 chain — box scores, four factors, AdjEM, rankings, predictions — 
 to hang on. The site would show an empty 2027 with a green Slack heartbeat, because
 nothing in the served-critical set is *failing*; there is simply no season.
 
-**Fix, one of:**
-- **(a) Operator, minimum viable:** run `cstat-ingest teams --year 2027` (and, if we want
-  metadata, `team_details`) **on Railway** in late October. One command, no laptop data.
-- **(b) Code, and the right long-term answer:** have the nightly self-bootstrap — if
-  `teams` for the current season is empty, run the teams ingest before the games step.
-  It fires once per year and is a no-op every other night. This is what makes the
-  rollover survive an operator who is on a plane.
+**Decided 2026-08-06: bootstrap manually this year.** Run `cstat-ingest teams --year 2027`
+(and, if we want metadata, `team_details`) **on Railway** once NatStat's own data rolls
+over to the new season. One command, no laptop data, and it keeps the first live rollover
+off a code path that has never run.
 
-Recommend **(b) with (a) as the belt** — build the auto-bootstrap, and still run the
-command by hand in October so the first live rollover is not also the code's first run.
+**The open variable is *when*, and it is not ours to pick.** NatStat has to publish 2027
+teams before the command can return anything; we have no confirmed date for that, and the
+gap between their rollover and opening night could be short. So the bootstrap is not a
+calendar task, it is a **watch**:
+
+- From **early October**, re-run `cstat-ingest teams --year 2027` on prod weekly. It is
+  cheap (one paginated call), idempotent, and a no-op while NatStat still has nothing —
+  it simply succeeds the moment their rollover happens, which is also how we learn the
+  date. Record the date when it lands.
+- **Nothing downstream can start until it does** — B2 in particular is gated on it, and
+  the `season_for_date` flip to 2027 happens on Nov 1 regardless of whether NatStat is
+  ready, so a late NatStat rollover means the cron spends its first nights ingesting a
+  season with no teams. That is survivable (the 2026 site is untouched) but it must be
+  *watched*, not assumed.
+
+**Deferred, not rejected — the auto-bootstrap.** Having the nightly self-bootstrap (if
+`teams` for the current season is empty, run the teams ingest before the games step; a
+no-op every other night) is still the right answer for future rollovers, when nobody
+remembers this runbook. It is out of scope for *this* tipoff by the decision above.
 
 ### B2 — The 2027 preseason projection anchor does not exist, and cannot until B1 lands
 
@@ -232,21 +246,24 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
 ## 4. Ordered runbook
 
 **Now → mid-October (code).**
-1. B1(b) nightly season self-bootstrap.
-2. B3 PBP coverage invariant (`Warning`) + confirm the `playbyplay --from/--to` backfill path.
-3. B7 "source has not published this season" status for the Torvik year guard.
-4. B4 ownership split — `CLAUDE.md` line, R4 test rationale, ownership table enforcement.
-5. B5 (a)+(b) if a refit is planned this offseason; otherwise schedule before the refit.
-6. Keep the weekly `cstat-ingest simulate --reset` habit — it is the only thing exercising
+1. B3 PBP coverage invariant (`Warning`) + confirm the `playbyplay --from/--to` backfill path.
+2. B7 "source has not published this season" status for the Torvik year guard.
+3. B4 ownership split — `CLAUDE.md` line, R4 test rationale, ownership table enforcement.
+4. B5 (a)+(b) if a refit is planned this offseason; otherwise schedule before the refit.
+5. Keep the weekly `cstat-ingest simulate --reset` habit — it is the only thing exercising
    the nightly end-to-end while there are no games.
 
-**Late October (operator, on prod).**
-7. `cstat-ingest teams --year 2027` on Railway → verify `select count(*) from teams where season=2027` ≈ 364.
-8. `cstat-ingest compute-projections --years 2027` on Railway → verify `team_preseason_projection` has 2027 rows.
-9. Final offseason `--tables` pushes while the laptop is still the owner: `transfers`,
+**Early October onward (watch, on prod) — start date is NatStat's, not ours.**
+6. Weekly `cstat-ingest teams --year 2027` on Railway until it returns rows; that is both
+   the bootstrap and the detector for NatStat's rollover (B1). Verify
+   `select count(*) from teams where season=2027` ≈ 364, and record the date.
+7. **Immediately after 6 succeeds:** `cstat-ingest compute-projections --years 2027` on
+   Railway → verify `team_preseason_projection` has 2027 rows (B2 — it silently writes
+   nothing if run before 6).
+8. Final offseason `--tables` pushes while the laptop is still the owner: `transfers`,
    `recruits`, `coaches`, `draft_entrants`, `archetype_models`, `player_rapm`,
    `coach_ratings`, `coach_season_cae`.
-10. Confirm no `CSTAT_SIMULATED_DATE` on either Railway service.
+9. Confirm no `CSTAT_SIMULATED_DATE` on either Railway service.
 
 **Nov 1 (rollover day).** Season flips to 2027. Expect `torvik`/`torvik_games` failures
 until barttorvik publishes (B7). Confirm the nightly still completes and the *2026* site
@@ -275,9 +292,10 @@ labels before that).
    ownership work; **(iii)** port with a single-season fit and accept a measurably worse
    number. Recommend **(i) for tipoff, (ii) as the real fix afterward** — (iii) trades a
    quality regression for a self-sufficiency checkbox on a display-only metric.
-2. **Season bootstrap:** auto-step in the nightly (B1b) or permanently an operator
-   command? Recommend the auto-step; the rollover is annual, which is precisely when
-   nobody remembers the runbook.
+2. ~~**Season bootstrap:** auto-step or operator command?~~ **DECIDED 2026-08-06 —
+   manual this year** (see B1). The auto-bootstrap stays on the list for future
+   rollovers. The live variable is NatStat's rollover date, which is unknown and is what
+   the weekly watch in §4 exists to catch.
 3. **Archetype refit this offseason?** #244 moved the inputs. If yes, B5 (a)+(b) must land
    first, or the refit wipes carry-over across 12 seasons and the site degrades until a
    manual sweep.
