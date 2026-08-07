@@ -107,6 +107,14 @@ cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # push their derived tables without truncating the cron-written serving tables).
 # NOT gated by the guard; this is the intended in-season path:
 ./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
+# Column merge — the third mode, for a derived column on a table that is
+# REFERENCED by foreign keys, where --tables would cascade-wipe the dependents
+# (`players` has 10) and a full sync is refused. UPDATE-only: no TRUNCATE, no
+# INSERT, no DELETE, named columns only, rows matched on the table's UNIQUE
+# constraint rather than its UUID primary key. Not gated by the guard (it is
+# strictly narrower than --tables). Historical seasons only in practice — the
+# nightly recomputes the current season itself:
+./scripts/sync_to_prod.sh --columns players.display_name
 
 # Archetype in-season stability sweep — how many games until a label matches the
 # full-season label. Re-run after any retrain; the curve is a property of the fit.

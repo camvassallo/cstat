@@ -110,6 +110,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --columns short-circuits before the table-push path, so accepting both would
+# run the merge and silently drop the requested table push. Refuse instead: the
+# two are different operations with different blast radii, and "I asked for a
+# push and got a merge" is exactly the kind of quiet substitution this script
+# exists to prevent.
+if [[ -n "$REQUESTED_COLUMNS" && -n "$REQUESTED_TABLES" ]]; then
+  echo "✗ --columns and --tables are separate modes; run them one at a time." >&2
+  exit 2
+fi
+
 mask_url() { sed -E 's|://[^@]+@|://***@|' <<<"$1"; }
 
 # Staleness threshold for "is prod still being fed by the cron?", mirroring
@@ -501,7 +511,7 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
       | tr -d '[:space:]'
   }
 
-  TUPLE_EXPR=""; ALIAS_COLS=""; SET_EXPR=""; WHERE_EXPR=""
+  TUPLE_EXPR=""; ALIAS_COLS=""; SET_EXPR=""; WHERE_EXPR=""; DIST_T=""; DIST_V=""
   for k in ${KEY_COLS//,/ }; do
     TUPLE_EXPR="${TUPLE_EXPR:+$TUPLE_EXPR || ',' || }quote_nullable(\"$k\")"
     ALIAS_COLS="${ALIAS_COLS:+$ALIAS_COLS, }\"$k\""
@@ -518,7 +528,15 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     TUPLE_EXPR="$TUPLE_EXPR || ',' || quote_nullable(\"$c\")"
     ALIAS_COLS="$ALIAS_COLS, \"$c\""
     SET_EXPR="${SET_EXPR:+$SET_EXPR, }\"$c\" = v.\"$c\"::$ctype"
+    DIST_T="${DIST_T:+$DIST_T, }t.\"$c\""
+    DIST_V="${DIST_V:+$DIST_V, }v.\"$c\"::$ctype"
   done
+
+  # Only touch rows that actually change. Without this every row of the table is
+  # rewritten on every merge — 59k row versions on `players` to move 2k real
+  # values — which is pure bloat and WAL for prod's autovacuum to clean up.
+  # Row-constructor form so one column and many read the same.
+  WHERE_EXPR="$WHERE_EXPR AND ($DIST_T) IS DISTINCT FROM ($DIST_V)"
 
   echo "→ Mode:     COLUMN MERGE — UPDATE only, no TRUNCATE/INSERT/DELETE"
   echo "→ Table:    $MERGE_TABLE"
@@ -538,7 +556,8 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
       FROM r GROUP BY (rn - 1) / $MERGE_CHUNK ORDER BY min(rn)")
   N=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "SELECT count(*) FROM \"$MERGE_TABLE\"" | tr -d '[:space:]')
   B=$(grep -c '^UPDATE' <<<"$STATEMENTS" || true)
-  echo "→ $N row(s) to merge from local, in $B batched statement(s)"
+  echo "→ $N row(s) offered from local, in $B batched statement(s)"
+  echo "  (rows whose named columns already match prod are skipped, not rewritten)"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "→ Dry run — would apply these on prod in ONE transaction."
@@ -548,7 +567,7 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     exit 0
   fi
 
-  read -r -p "→ Apply to PROD? UPDATEs $N row(s) of $MERGE_TABLE.${MERGE_COLS} [y/N] " confirm
+  read -r -p "→ Apply to PROD? UPDATEs the differing rows of $MERGE_TABLE.${MERGE_COLS} (≤$N) [y/N] " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
 
   START=$(date +%s)
