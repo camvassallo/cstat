@@ -68,6 +68,7 @@ pub async fn check_season(
         fully_swapped_games_remain(pool, season).await?,
         phantom_swapped_games_remain(pool, season).await?,
         pbp_present_but_lineups_empty(pool, season).await?,
+        pbp_date_coverage_gap(pool, season).await?,
         torvik_rows_unlinked(pool, season).await?,
     ]
     .into_iter()
@@ -315,8 +316,6 @@ pub async fn phantom_swapped_games_remain(
     ))
 }
 
-/// Fold a list of offending ids into a violation (None when clean),
-/// keeping the first few as samples.
 /// If a season has any `play_by_play`, `compute_pbp_lineups` must have produced
 /// `lineup_aggregates` from it. An empty rollup despite present PBP means step 10
 /// silently produced nothing — the exact failure this PR's prod-owned PBP path
@@ -347,6 +346,107 @@ async fn pbp_present_but_lineups_empty(
         "pbp_present_but_lineups_empty",
         Severity::Error,
         sample.into_iter(),
+    ))
+}
+
+/// A game date must clear this share of its completed games having play-by-play
+/// before [`pbp_date_coverage_gap`] stays quiet.
+///
+/// PBP coverage is never complete — NatStat simply never publishes some games —
+/// so a per-*game* check would report 170–380 violations a night and be noise.
+/// Per *date* the picture is clean: across 2021–2026 no game date sits below
+/// 66% coverage, and not one is at zero. 50% therefore leaves 16 points of
+/// headroom over the worst real date while still catching the failure this
+/// exists for, which lands at 0%.
+pub const PBP_DATE_MIN_COVERAGE: f64 = 0.5;
+
+/// Completed games a date needs before its coverage share means anything.
+///
+/// The one 0%-coverage date in twelve ingested seasons (2019-12-24) had exactly
+/// one game on it — a single unpublished game, not a pipeline failure. A share
+/// computed over one or two games is a coin flip, so require a real slate.
+pub const PBP_DATE_MIN_GAMES: i64 = 3;
+
+/// Days a game date is left alone before its PBP coverage is judged.
+///
+/// The nightly ingests date D's box scores and its PBP in the same run (the run
+/// on D+1), so if NatStat ever publishes PBP behind the box score, the newest
+/// date would read as a hole on every single run. Two days of slack costs
+/// nothing operationally — the backfill is one `cstat-ingest playbyplay
+/// --from X --to Y` either way — and buys immunity to a feed-ordering quirk we
+/// cannot observe from here.
+const PBP_SETTLE_DAYS: i64 = 2;
+
+/// A game date whose completed games are mostly missing play-by-play means a
+/// `playbyplay` night was lost — and nothing else notices (issue #247).
+///
+/// The self-heal gap scan counts a date as covered on the box-score steps alone
+/// (`BOX_SCORE_STEPS`), so a night where `games`/`player_perfs`/`team_perfs`
+/// succeeded and `playbyplay` failed is never revisited. `compute_pbp_lineups`
+/// is a season-scoped DELETE-then-rebuild, so from that night on it rebuilds the
+/// whole season around the hole and `lineup_aggregates` / `player_on_off` /
+/// `lineup_stints` quietly undercount for the rest of the year. The other two
+/// signals both read that as healthy: [`pbp_present_but_lineups_empty`] is
+/// all-or-nothing on the season, and the `row_counts` gate compares against a
+/// prior run that was equally short, so the shortfall never looks like a shrink.
+///
+/// `Warning`, not `Error`: PBP is a source feed with genuine gaps, and what the
+/// pipeline does with the rows it has is correct. It is also best-effort by
+/// design (it feeds display surfaces and 3-of-60 trajectory features), so a hole
+/// is worth a line in the run summary, not a red build.
+///
+/// Skipped entirely when the season has no PBP at all — a PBP-less prod, the
+/// `simulate` replay, and the `ingest_replay` fixtures all seed none, and none
+/// of them should see this fire. That gate rides on the same aggregate the check
+/// already computes, so it costs nothing.
+pub async fn pbp_date_coverage_gap(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    // `EXISTS` per game rather than a join+aggregate over `play_by_play`: the
+    // table is 30M+ rows with a `(game_id, seq)` primary key, so this is one
+    // index probe per game and the whole check runs in ~0.3s for a full season.
+    let rows = sqlx::query(
+        r#"
+        WITH d AS (
+            SELECT g.game_date,
+                   count(*) AS games,
+                   count(*) FILTER (
+                       WHERE EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id)
+                   ) AS with_pbp
+            FROM games g
+            WHERE g.season = $1
+              AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+              AND g.game_date <= CURRENT_DATE - $2::int
+            GROUP BY g.game_date
+        ),
+        gate AS (SELECT COALESCE(sum(with_pbp), 0) AS total FROM d)
+        SELECT d.game_date, d.games, d.with_pbp
+        FROM d, gate
+        WHERE gate.total > 0
+          AND d.games >= $3
+          AND d.with_pbp::float8 / d.games < $4
+        ORDER BY d.game_date
+        "#,
+    )
+    .bind(season)
+    .bind(PBP_SETTLE_DAYS as i32)
+    .bind(PBP_DATE_MIN_GAMES)
+    .bind(PBP_DATE_MIN_COVERAGE)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(violation(
+        "pbp_date_coverage_gap",
+        Severity::Warning,
+        rows.iter().map(|r| {
+            format!(
+                "{} ({}/{} games)",
+                r.get::<chrono::NaiveDate, _>("game_date"),
+                r.get::<i64, _>("with_pbp"),
+                r.get::<i64, _>("games"),
+            )
+        }),
     ))
 }
 
@@ -431,6 +531,8 @@ pub async fn torvik_rows_unlinked(
 /// player. Mirrors `cstat_ingest::ingest::torvik`'s own threshold.
 const ROTATION_MPG: f64 = 10.0;
 
+/// Fold a list of offending ids into a violation (None when clean),
+/// keeping the first few as samples.
 fn violation(
     check: &'static str,
     severity: Severity,

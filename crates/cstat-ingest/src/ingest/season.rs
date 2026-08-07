@@ -2,7 +2,8 @@ use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::notify;
 use crate::run_ledger::{
-    RunLedger, StepStatus, detect_count_regressions, first_uncovered_ingest_date, heal_window,
+    RunLedger, StepStatus, detect_count_regressions, first_uncovered_ingest_date,
+    first_uncovered_pbp_date, heal_window,
 };
 use crate::team_id_by_code_and_season;
 use crate::torvik::TorkvikClient;
@@ -300,6 +301,16 @@ impl<'a> SeasonIngester<'a> {
         // hole, which is the exact failure this milestone is built to prevent.
         // Fail the build rather than let a future tweak inverting them ship.
         const _: () = assert!(HEAL_LOOKBACK_DAYS > MAX_HEAL_DAYS);
+        // The PBP heal's own cap, deliberately tighter than MAX_HEAL_DAYS: a
+        // re-pull of play-by-play is roughly two orders of magnitude more rows
+        // (~530/game) than the box-score steps for the same dates, so a wide
+        // window is a real draw on the hourly rate budget. A week covers the
+        // realistic case — one or a few `playbyplay` nights lost while the
+        // served-critical chain kept succeeding — and anything longer is a
+        // deliberate operator backfill, not something to do automatically at
+        // 09:30 with no one watching. Whatever the cap leaves behind keeps
+        // showing up in `pbp_date_coverage_gap` until someone backfills it.
+        const MAX_PBP_HEAL_DAYS: i64 = 7;
 
         let mut ledger = RunLedger::start(self.pool, self.season);
 
@@ -389,6 +400,66 @@ impl<'a> SeasonIngester<'a> {
             }
         };
 
+        // --- play-by-play gap self-heal (issue #247) ---
+        // PBP gets its own coverage scan and its own, wider start date. A night
+        // where the box-score steps succeeded and `playbyplay` failed leaves the
+        // date fully covered as far as `BOX_SCORE_STEPS` is concerned, so the
+        // heal above never revisits it — and because `compute_pbp_lineups` is a
+        // season-scoped DELETE-then-rebuild, every later run rebuilds the whole
+        // season's `lineup_aggregates` / `player_on_off` / `lineup_stints`
+        // around that hole. Nothing was self-correcting and nothing alerted.
+        //
+        // Scanned strictly *before* the settled box-score start, so a PBP gap
+        // the box window already re-covers costs nothing extra (`heal_window`
+        // returns `None` when the gap starts at/after `default_from`).
+        //
+        // No shortfall degrade when the cap bites, unlike the box-score heal:
+        // PBP is best-effort (display surfaces plus 3-of-60 trajectory features
+        // that degrade to a sentinel), and the standing
+        // `pbp_date_coverage_gap` warning already names the exact dates every
+        // night until they are backfilled. A second nightly line saying the same
+        // thing would just be the alarm fatigue that gate is built to avoid.
+        let mut pbp_heal_note: Option<String> = None;
+        let pbp_start_date: String = match (
+            self_heal,
+            NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
+            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
+        ) {
+            (true, Ok(df), Ok(dt)) => {
+                let gap = first_uncovered_pbp_date(
+                    self.pool,
+                    ledger.run_id(),
+                    df,
+                    dt,
+                    HEAL_LOOKBACK_DAYS,
+                )
+                .await;
+                match heal_window(df, dt, gap, MAX_PBP_HEAL_DAYS) {
+                    Some(plan) => {
+                        let healed_str = plan.from.format("%Y-%m-%d").to_string();
+                        let gap_str = gap
+                            .map(|d| d.to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        warn!(
+                            season = self.season,
+                            box_from = %start_date,
+                            pbp_from = %healed_str,
+                            gap_start = %gap_str,
+                            unrecovered_days = plan.unrecovered_days,
+                            "self-heal: widening play-by-play window to recover skipped night(s)"
+                        );
+                        pbp_heal_note = Some(format!(
+                            "play-by-play self-heal widened its window start {start_date} → \
+                             {healed_str} (first date without PBP {gap_str})"
+                        ));
+                        healed_str
+                    }
+                    None => start_date.clone(),
+                }
+            }
+            _ => start_date.clone(),
+        };
+
         // Stamp the settled window (post-heal) onto every step row this run
         // writes — this is what lets the next run's `first_uncovered_ingest_date`
         // scan real coverage instead of guessing from wall-clock finish times.
@@ -423,6 +494,23 @@ impl<'a> SeasonIngester<'a> {
         if let Some((ws, ce)) = stamped {
             ledger.set_window(ws, ce);
         }
+
+        // The same clamp for the PBP step's own window, which on a PBP heal
+        // night reaches further back than the box-score one (issue #247). Its
+        // ledger row must record the range it actually covered: stamped with the
+        // run's narrower window instead, the next night's scan would find the
+        // identical gap and re-pull the same days forever. Identical to
+        // `stamped` on every healthy night, where `pbp_start_date == start_date`.
+        let pbp_stamped: Option<(NaiveDate, NaiveDate)> = match (
+            NaiveDate::parse_from_str(&pbp_start_date, "%Y-%m-%d"),
+            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
+        ) {
+            (Ok(ws), Ok(we)) => {
+                let ce = we.min(crate::today_utc() - chrono::Duration::days(1));
+                (ws <= ce).then_some((ws, ce))
+            }
+            _ => None,
+        };
 
         // The clamp above is only sound because the cron fires *after* last
         // night's games finish (09:30 UTC vs a ~08:00 settle). Nothing in the
@@ -809,12 +897,17 @@ impl<'a> SeasonIngester<'a> {
         // served-critical chain. Uses the date-range path, never `gamecode`:
         // NatStat only honours the `range` filter on page 1, so a paginated
         // gamecode query silently runs away into the global season stream.
+        //
+        // Runs over `pbp_start_date`, not `start_date` — its own self-healed
+        // window (issue #247). Equal to `start_date` on every healthy night;
+        // wider only when a past `playbyplay` step failed on a night whose box
+        // scores succeeded, which the box-score coverage scan cannot see.
         let t0 = Utc::now();
         match super::playbyplay::ingest_play_by_play_by_date_range(
             self.client,
             self.pool,
             self.season,
-            &start_date,
+            &pbp_start_date,
             &end_date,
         )
         .await
@@ -822,12 +915,13 @@ impl<'a> SeasonIngester<'a> {
             Ok(pbp) => {
                 report.pbp_rows = pbp.rows;
                 ledger
-                    .record(
+                    .record_windowed(
                         "playbyplay",
                         StepStatus::Ok,
                         Some(pbp.rows as i64),
                         t0,
                         None,
+                        pbp_stamped,
                     )
                     .await;
             }
@@ -835,7 +929,14 @@ impl<'a> SeasonIngester<'a> {
                 let msg = e.to_string();
                 warn!(season = self.season, error = %msg, "play-by-play refresh failed; PBP-derived surfaces (lineups/on-off/RAPM) may be stale");
                 ledger
-                    .record("playbyplay", StepStatus::Failed, None, t0, Some(&msg))
+                    .record_windowed(
+                        "playbyplay",
+                        StepStatus::Failed,
+                        None,
+                        t0,
+                        Some(&msg),
+                        pbp_stamped,
+                    )
                     .await;
                 failures.push(format!("playbyplay: {msg}"));
             }
@@ -928,11 +1029,21 @@ impl<'a> SeasonIngester<'a> {
         // completed above, so a gate failure alerts rather than kills the run.
         // Gated on a compute having actually run (the checks assume fresh
         // derived tables).
+        // Warning-severity findings, rendered as one compact `check count` line
+        // for the run summary. Until this existed they reached only the tracing
+        // log, which meant a `Warning` check was invisible to anyone not tailing
+        // Railway — and so a new one could not do the job it was added for.
+        // Names and counts only, no samples: enough to see a hole appear or a
+        // standing count move, short enough to sit under a green summary every
+        // night without becoming noise. Deliberately does NOT degrade the run —
+        // a warning is a source-data hole the pipeline faithfully reflects.
+        let mut invariant_warnings: Option<String> = None;
         if report.compute.is_some() {
             let t0 = Utc::now();
             match invariants::check_season(self.pool, self.season).await {
                 Ok(violations) => {
                     let mut errors = 0i64;
+                    let mut warnings: Vec<String> = Vec::new();
                     for v in &violations {
                         match v.severity {
                             Severity::Error => {
@@ -941,8 +1052,12 @@ impl<'a> SeasonIngester<'a> {
                             }
                             Severity::Warning => {
                                 info!(season = self.season, "invariant warning — {v}");
+                                warnings.push(format!("{} {}", v.check, v.count));
                             }
                         }
+                    }
+                    if !warnings.is_empty() {
+                        invariant_warnings = Some(warnings.join(" · "));
                     }
                     if errors > 0 {
                         let summary = violations
@@ -1168,8 +1283,17 @@ impl<'a> SeasonIngester<'a> {
         // a "the cron fired and finished" heartbeat.
         // A self-heal widened the window this run — surface it in whichever
         // summary posts (a healed run is still a SUCCESS: it recovered the gap).
-        let heal_line = match &heal_note {
-            Some(n) => format!("\n_:arrows_counterclockwise: {n}_"),
+        let heal_line: String = [heal_note.as_deref(), pbp_heal_note.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(|n| format!("\n_:arrows_counterclockwise: {n}_"))
+            .collect();
+        // Warning-severity invariants, on BOTH summaries: a degraded run is
+        // exactly when you also want to know which standing holes are open, and
+        // a healthy run is where a *new* hole (a lost `playbyplay` night) has to
+        // announce itself, since nothing else about that run looks wrong.
+        let warn_line = match &invariant_warnings {
+            Some(w) => format!("\n_:mag: warnings: {w}_"),
             None => String::new(),
         };
         if failures.is_empty() {
@@ -1193,7 +1317,7 @@ impl<'a> SeasonIngester<'a> {
                      *Feeds:*  {elo} ELO · {fc} forecasts\n\
                      {torvik_line}\n\
                      *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
-                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}{heal_line}\n\
+                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}{heal_line}{warn_line}\n\
                      _run {run_id}_",
                     season = self.season,
                     games = report.ingest.games,
@@ -1208,6 +1332,7 @@ impl<'a> SeasonIngester<'a> {
                     remaining = tokens_after,
                     budget = budget,
                     heal_line = heal_line,
+                    warn_line = warn_line,
                     run_id = ledger.run_id(),
                 ),
             )
@@ -1231,12 +1356,13 @@ impl<'a> SeasonIngester<'a> {
                 &format!(
                     ":warning: *Nightly ingest DEGRADED* — season {season}\n\
                      Completed with {n} issue(s):\n\
-                     {issues}{heal_line}{egress_line}\n\
+                     {issues}{heal_line}{warn_line}{egress_line}\n\
                      _run {run_id}_",
                     season = self.season,
                     n = failures.len(),
                     issues = issues,
                     heal_line = heal_line,
+                    warn_line = warn_line,
                     egress_line = egress_line,
                     run_id = ledger.run_id(),
                 ),

@@ -108,7 +108,7 @@ is not evidence the anchor is.)
 **Fix:** after B1, run `cstat-ingest compute-projections --years 2027` on prod. Ordering
 is mandatory — run it first and it writes zero rows and exits successfully.
 
-### B3 — A missed PBP night is a permanent, silent hole
+### B3 — A missed PBP night is a permanent, silent hole — **FIXED 2026-08-07 (#247)**
 
 The self-heal gap scan counts a date as covered only when **all of
 `games`/`player_perfs`/`team_perfs`** succeeded (`run_ledger.rs:53`, `BOX_SCORE_STEPS`).
@@ -126,12 +126,38 @@ Nothing detects this. The existing invariant `pbp_present_but_lineups_empty`
 *zero* rollups. Partial coverage reads as healthy. `row_counts` compares against the
 prior run, which also lacked those rows, so the shortfall never looks like a shrink.
 
-**Fix (cheap, do before tipoff):** add a coverage invariant — *completed games in the
-season with zero `play_by_play` rows* — at `Warning` severity, so a hole shows up in the
-nightly Slack summary the next morning while a backfill is one command
+**Shipped — detection.** `invariants::pbp_date_coverage_gap`, `Warning` severity. Measured
+per **game date**, not per game: PBP coverage is never complete (94–97% of a recent
+season's games), so a per-game check would report 170–380 violations a night and be pure
+noise. Per date the signal is clean — across 2021–2026 no game date sits below **66%**
+coverage and not one is at zero, while a lost `playbyplay` night lands at 0%. The check
+fires on dates with ≥3 completed games under **50%** coverage, skips the two most recent
+days (the nightly ingests a date's box scores and its PBP in the same run, so an unclamped
+check would fire every night if NatStat ever published PBP behind the box score), and
+no-ops entirely on a season with no PBP at all — a PBP-less prod, `simulate`, and the
+`ingest_replay` fixtures all seed none. Backfill stays one command
 (`cstat-ingest playbyplay --from X --to Y`).
-**Fix (complete, can follow):** extend the gap scan with a PBP-specific covered-date
-notion so the heal re-pulls those dates itself.
+
+**Shipped — Slack visibility, which the above depended on.** `Warning`-severity violations
+previously reached only the tracing log, so a `Warning` check was invisible to anyone not
+tailing Railway and could not have done its job. The nightly summary now carries a compact
+`warnings: check count · check count` line on both the SUCCESS and DEGRADED messages —
+names and counts, no samples, and it does **not** degrade the run. Note this also starts
+surfacing the standing `completed_game_missing_team_stats` count (#232).
+
+**Shipped — self-heal.** `playbyplay` now has its own covered-date notion
+(`run_ledger::first_uncovered_pbp_date`, keyed on `PBP_STEPS`) beside the box-score scan,
+so a night whose box scores succeeded and whose PBP failed is re-pulled by the next run
+instead of never. The two scans stay separate in both directions: a PBP failure must not
+drag the box scores into a re-pull they don't need, and a box-score success must not
+certify a night whose PBP never landed. The PBP window heals on a tighter **7-day** cap
+(vs 14 for box scores) because a PBP re-pull is ~530 rows/game and a real draw on the
+hourly rate budget; whatever the cap leaves behind keeps showing up in
+`pbp_date_coverage_gap` until someone backfills it. Self-limiting on first use — a ledger
+with no `playbyplay` success yet reports no gap rather than declaring the whole lookback
+uncovered.
+
+`lineups` still has the same shape of hole and was deliberately left out of scope.
 
 ### B4 — The R4 premise expires at tipoff; two tables change owner
 
@@ -246,7 +272,9 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
 ## 4. Ordered runbook
 
 **Now → mid-October (code).**
-1. B3 PBP coverage invariant (`Warning`) + confirm the `playbyplay --from/--to` backfill path.
+1. ~~B3 PBP coverage invariant (`Warning`) + confirm the `playbyplay --from/--to` backfill
+   path.~~ **Done 2026-08-07 (#247)** — detection, Slack visibility for `Warning`
+   violations, and the PBP self-heal all shipped.
 2. B7 "source has not published this season" status for the Torvik year guard.
 3. B4 ownership split — `CLAUDE.md` line, R4 test rationale, ownership table enforcement.
 4. B5 (a)+(b) if a refit is planned this offseason; otherwise schedule before the refit.
