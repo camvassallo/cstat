@@ -360,11 +360,17 @@ async fn pbp_present_but_lineups_empty(
 /// exists for, which lands at 0%.
 pub const PBP_DATE_MIN_COVERAGE: f64 = 0.5;
 
-/// Completed games a date needs before its coverage share means anything.
+/// Completed games a date needs before its coverage *share* means anything.
 ///
 /// The one 0%-coverage date in twelve ingested seasons (2019-12-24) had exactly
 /// one game on it — a single unpublished game, not a pipeline failure. A share
 /// computed over one or two games is a coin flip, so require a real slate.
+///
+/// This floor applies **only to the share test**. A date at *zero* coverage is
+/// reported at any slate size (see [`pbp_date_coverage_gap`]) — otherwise a
+/// `playbyplay` night lost on a light slate (early November before the schedule
+/// fills, Dec 24–25, the day before the Final Four) would be invisible, and
+/// permanent once past the heal cap.
 pub const PBP_DATE_MIN_GAMES: i64 = 3;
 
 /// Days a game date is left alone before its PBP coverage is judged.
@@ -390,6 +396,15 @@ const PBP_SETTLE_DAYS: i64 = 2;
 /// all-or-nothing on the season, and the `row_counts` gate compares against a
 /// prior run that was equally short, so the shortfall never looks like a shrink.
 ///
+/// Two arms, because one threshold cannot cover both shapes:
+/// - **zero coverage at any slate size.** A date with completed games and *no*
+///   PBP is the signature of a lost night, and it needs no slate-size floor:
+///   across 2021–2026 there is not one such date, so this arm has no false
+///   positives on the era the nightly actually checks. Without it a light-slate
+///   night (1–2 games) would be invisible and, past the heal cap, permanent.
+/// - **share below the floor on a real slate**, which catches a partial loss
+///   that the zero test would miss.
+///
 /// `Warning`, not `Error`: PBP is a source feed with genuine gaps, and what the
 /// pipeline does with the rows it has is correct. It is also best-effort by
 /// design (it feeds display surfaces and 3-of-60 trajectory features), so a hole
@@ -398,7 +413,22 @@ const PBP_SETTLE_DAYS: i64 = 2;
 /// Skipped entirely when the season has no PBP at all — a PBP-less prod, the
 /// `simulate` replay, and the `ingest_replay` fixtures all seed none, and none
 /// of them should see this fire. That gate rides on the same aggregate the check
-/// already computes, so it costs nothing.
+/// already computes, so it costs nothing. **It also means this check cannot see
+/// a total loss** (a season that never receives any PBP): with nothing to
+/// compare against, every date would fire and the harnesses would drown. That
+/// case is caught where the information to judge it exists — the nightly's
+/// in-season empty-PBP check in `SeasonIngester::nightly`, which has the
+/// calendar and the simulated-clock discriminator this function does not.
+///
+/// **Clock caveat.** The settle cutoff is Postgres `CURRENT_DATE`, not the
+/// pipeline's overridable `today_utc()`, because `cstat-core` has no clock
+/// override (it lives in `cstat-ingest`) and threading one through
+/// [`check_season`]'s three call sites would buy nothing here: under a simulated
+/// clock the real date is always *later*, so the clamp merely excludes nothing,
+/// and the season gate above suppresses the check in every harness that sets
+/// one. A non-UTC DB session shifts the boundary by at most a day, which a
+/// two-day settle window absorbs. Revisit if this check ever grows an arm whose
+/// correctness depends on the exact cutoff.
 pub async fn pbp_date_coverage_gap(
     pool: &PgPool,
     season: i32,
@@ -424,8 +454,10 @@ pub async fn pbp_date_coverage_gap(
         SELECT d.game_date, d.games, d.with_pbp
         FROM d, gate
         WHERE gate.total > 0
-          AND d.games >= $3
-          AND d.with_pbp::float8 / d.games < $4
+          AND (
+                d.with_pbp = 0
+             OR (d.games >= $3 AND d.with_pbp::float8 / d.games < $4)
+          )
         ORDER BY d.game_date
         "#,
     )

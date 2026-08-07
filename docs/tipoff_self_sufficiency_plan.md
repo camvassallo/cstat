@@ -131,12 +131,28 @@ per **game date**, not per game: PBP coverage is never complete (94–97% of a r
 season's games), so a per-game check would report 170–380 violations a night and be pure
 noise. Per date the signal is clean — across 2021–2026 no game date sits below **66%**
 coverage and not one is at zero, while a lost `playbyplay` night lands at 0%. The check
-fires on dates with ≥3 completed games under **50%** coverage, skips the two most recent
+has two arms: a date at **zero** coverage is reported at any slate size (across 2021–2026
+there is not one such date, so this needs no floor — and without it a night lost on a
+light slate would be invisible and, past the heal cap, permanent), and a date with ≥3
+completed games under **50%** coverage catches a partial loss. It skips the two most recent
 days (the nightly ingests a date's box scores and its PBP in the same run, so an unclamped
 check would fire every night if NatStat ever published PBP behind the box score), and
 no-ops entirely on a season with no PBP at all — a PBP-less prod, `simulate`, and the
-`ingest_replay` fixtures all seed none. Backfill stays one command
-(`cstat-ingest playbyplay --from X --to Y`).
+`ingest_replay` fixtures all seed none.
+
+**Backfill with `cstat-ingest nightly --year YYYY --from X --to Y`, not the standalone
+`playbyplay` subcommand.** The subcommand fills the rows but writes no `ingest_runs` row,
+so the coverage scan keeps reporting the gap and the nightly keeps re-pulling the window.
+Only a run that records ledger coverage actually closes it.
+
+**The total-loss case lives elsewhere by necessity.** A season that never receives *any*
+PBP cannot be caught by a check that measures per-date share — there is nothing to compare
+against, and firing on every date would drown the replay harnesses. That case is caught in
+the nightly instead (`SeasonIngester::nightly`'s in-season empty-PBP check), which has the
+calendar and the simulated-clock discriminator the invariant does not. It matters: with
+zero PBP the step still records `ok` (an empty page is a successful fetch), the coverage
+scan sees no gap, and `pbp_present_but_lineups_empty` is itself gated on PBP being present
+— so the season would serve empty rollups under a green summary every night.
 
 **Shipped — Slack visibility, which the above depended on.** `Warning`-severity violations
 previously reached only the tracing log, so a `Warning` check was invisible to anyone not
@@ -150,12 +166,23 @@ surfacing the standing `completed_game_missing_team_stats` count (#232).
 so a night whose box scores succeeded and whose PBP failed is re-pulled by the next run
 instead of never. The two scans stay separate in both directions: a PBP failure must not
 drag the box scores into a re-pull they don't need, and a box-score success must not
-certify a night whose PBP never landed. The PBP window heals on a tighter **7-day** cap
-(vs 14 for box scores) because a PBP re-pull is ~530 rows/game and a real draw on the
-hourly rate budget; whatever the cap leaves behind keeps showing up in
-`pbp_date_coverage_gap` until someone backfills it. Self-limiting on first use — a ledger
-with no `playbyplay` success yet reports no gap rather than declaring the whole lookback
-uncovered.
+certify a night whose PBP never landed. Self-limiting on first use — a ledger with no
+`playbyplay` success yet reports no gap rather than declaring the whole lookback uncovered.
+
+The PBP heal has a tighter **7-day** cap (vs 14 for box scores) because a PBP re-pull is
+~530 rows/game and a real draw on the hourly rate budget. Read that cap precisely: it
+bounds how far PBP reaches back *beyond the box-score window*, not the window the PBP step
+runs. Its `default_from` is the already-healed box start, so when a 14-day box heal fires
+the PBP heal returns nothing to widen and PBP simply covers that same 14-day window — which
+is correct (those dates just had box scores ingested and need their PBP), but it means the
+effective window is `max(box window, PBP heal)`.
+
+**A capped PBP heal degrades the run**, exactly as the box-score heal does. The first cut
+of this skipped the alert, reasoning that `pbp_date_coverage_gap` already names the dates
+nightly. That missed the real behaviour: an over-cap gap is not merely left unclosed, it
+makes the heal re-pull a full cap-width PBP window *every night* until it ages out of the
+30-day lookback — hundreds of NatStat calls a night, silently. The alert is what bounds it
+to an operator action, and it names the `nightly --from/--to` form for the reason above.
 
 `lineups` still has the same shape of hole and was deliberately left out of scope.
 
@@ -272,9 +299,10 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
 ## 4. Ordered runbook
 
 **Now → mid-October (code).**
-1. ~~B3 PBP coverage invariant (`Warning`) + confirm the `playbyplay --from/--to` backfill
-   path.~~ **Done 2026-08-07 (#247)** — detection, Slack visibility for `Warning`
-   violations, and the PBP self-heal all shipped.
+1. ~~B3 PBP coverage invariant (`Warning`) + confirm the backfill path.~~ **Done 2026-08-07
+   (#247)** — detection, Slack visibility for `Warning` violations, and the PBP self-heal
+   all shipped. Backfill path confirmed, with a correction: it is
+   `nightly --from/--to`, **not** the standalone `playbyplay` subcommand.
 2. B7 "source has not published this season" status for the Torvik year guard.
 3. B4 ownership split — `CLAUDE.md` line, R4 test rationale, ownership table enforcement.
 4. B5 (a)+(b) if a refit is planned this offseason; otherwise schedule before the refit.

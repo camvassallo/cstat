@@ -68,7 +68,9 @@ async fn api_era_seasons_have_no_pbp_date_gaps() {
         violations.is_empty(),
         "{} season(s) contain a game date under the {:.0}% PBP-coverage floor. \
          Either a `playbyplay` night was lost and needs \
-         `cstat-ingest playbyplay --from X --to Y`, or the feed's honest coverage \
+         `cstat-ingest nightly --year YYYY --from X --to Y` (NOT the standalone \
+         `playbyplay` subcommand — it writes no `ingest_runs` row, so the self-heal \
+         keeps re-pulling the window), or the feed's honest coverage \
          has drifted down into the floor and PBP_DATE_MIN_COVERAGE needs \
          re-deriving. Inspect with:\n  \
          SELECT g.game_date, count(*) AS games, count(*) FILTER (WHERE EXISTS \
@@ -77,6 +79,46 @@ async fn api_era_seasons_have_no_pbp_date_gaps() {
          GROUP BY 1 ORDER BY 3::float8 / 2 ASC LIMIT 10;",
         violations.len(),
         PBP_DATE_MIN_COVERAGE * 100.0,
+    );
+}
+
+/// The zero-coverage arm reports a date at ANY slate size, with no min-games
+/// floor under it — that is what makes a lost `playbyplay` night visible on a
+/// light slate (early November, Dec 24–25, the day before the Final Four), where
+/// the share test's `games >= 3` gate would drop it entirely.
+///
+/// It carries no floor because it needs none: across the API era there is not a
+/// single game date at zero coverage. That is a property of the data, so it is
+/// asserted rather than assumed — if a season ever lands one honestly, this arm
+/// starts crying wolf and the design needs revisiting, not silencing.
+#[tokio::test]
+#[ignore = "needs local DB with play-by-play ingested"]
+async fn no_api_era_game_date_sits_at_zero_pbp_coverage() {
+    let pool = pool().await;
+    let zero_dates: Vec<(chrono::NaiveDate, i64)> = sqlx::query_as(
+        "WITH d AS ( \
+             SELECT g.game_date, count(*) AS games, \
+                    count(*) FILTER ( \
+                        WHERE EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id) \
+                    ) AS with_pbp \
+             FROM games g \
+             WHERE g.season >= $1 AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL \
+             GROUP BY g.game_date \
+         ) \
+         SELECT game_date, games FROM d WHERE with_pbp = 0 ORDER BY game_date",
+    )
+    .bind(FIRST_API_ERA_SEASON)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        zero_dates.is_empty(),
+        "{} API-era game date(s) have zero PBP coverage: {:?}. The zero-coverage arm of \
+         pbp_date_coverage_gap assumes this never happens honestly — either these are real \
+         holes to backfill, or the arm needs a floor after all.",
+        zero_dates.len(),
+        zero_dates.iter().take(5).collect::<Vec<_>>(),
     );
 }
 

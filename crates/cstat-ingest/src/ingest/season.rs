@@ -447,13 +447,24 @@ impl<'a> SeasonIngester<'a> {
         // the box window already re-covers costs nothing extra (`heal_window`
         // returns `None` when the gap starts at/after `default_from`).
         //
-        // No shortfall degrade when the cap bites, unlike the box-score heal:
-        // PBP is best-effort (display surfaces plus 3-of-60 trajectory features
-        // that degrade to a sentinel), and the standing
-        // `pbp_date_coverage_gap` warning already names the exact dates every
-        // night until they are backfilled. A second nightly line saying the same
-        // thing would just be the alarm fatigue that gate is built to avoid.
+        // MAX_PBP_HEAL_DAYS bounds the widening this block adds, NOT the window
+        // the PBP step ends up running. `default_from` here is the *already
+        // healed* box-score start, so when a 14-day box heal fires, `heal_window`
+        // returns `None` and PBP simply runs over that same 14-day window. That
+        // is intended — those dates just had box scores ingested and need their
+        // PBP — but it means the effective window is
+        // `max(box window, this heal)`, and the tighter cap only ever limits how
+        // far PBP reaches back *beyond* the box scores.
+        //
+        // A capped heal MUST degrade the run, exactly as the box-score heal
+        // does. The first version of this block skipped that on the reasoning
+        // that `pbp_date_coverage_gap` already names the dates nightly — which
+        // missed that the heal does not merely fail to close an over-cap gap, it
+        // re-pulls a full cap-width window at it *every night* until the gap
+        // ages out of HEAL_LOOKBACK_DAYS. Silent, and hundreds of NatStat calls
+        // a night. The alert is what turns that into a bounded operator action.
         let mut pbp_heal_note: Option<String> = None;
+        let mut pbp_heal_shortfall: Option<String> = None;
         let pbp_start_date: String = match (
             self_heal,
             NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
@@ -486,6 +497,32 @@ impl<'a> SeasonIngester<'a> {
                             "play-by-play self-heal widened its window start {start_date} → \
                              {healed_str} (first date without PBP {gap_str})"
                         ));
+                        if plan.unrecovered_days > 0 {
+                            warn!(
+                                season = self.season,
+                                unrecovered_days = plan.unrecovered_days,
+                                "play-by-play self-heal capped — the gap will re-fire every \
+                                 night until it is backfilled or ages out"
+                            );
+                            // Name `nightly --from/--to`, NOT `playbyplay
+                            // --from/--to`: the standalone subcommand writes no
+                            // `ingest_runs` row, so it fills the rows but leaves
+                            // the coverage scan still reporting the gap — the
+                            // heal would keep re-pulling a cap-width window
+                            // nightly and the operator would have no idea why.
+                            pbp_heal_shortfall = Some(format!(
+                                "play-by-play self-heal only PARTIAL: capped at \
+                                 {MAX_PBP_HEAL_DAYS}d, so {days} day(s) before {healed_str} \
+                                 still have no PBP (gap opens {gap_str}). Until backfilled, \
+                                 every night re-pulls a {MAX_PBP_HEAL_DAYS}d PBP window \
+                                 without closing it — backfill with \
+                                 `cstat-ingest nightly --year {season} --from {gap_str} \
+                                 --to {healed_str}` (the standalone `playbyplay` subcommand \
+                                 records no ledger coverage and will NOT stop the re-pull)",
+                                days = plan.unrecovered_days,
+                                season = self.season,
+                            ));
+                        }
                         healed_str
                     }
                     None => start_date.clone(),
@@ -614,6 +651,12 @@ impl<'a> SeasonIngester<'a> {
         // A self-heal that hit the MAX_HEAL_DAYS cap recovered only part of the
         // gap — surface it as a degraded run (see the heal block above).
         if let Some(shortfall) = heal_shortfall {
+            failures.push(shortfall);
+        }
+
+        // Same for the PBP heal — an over-cap PBP gap re-pulls a full cap-width
+        // window every night without ever closing, so it has to be said out loud.
+        if let Some(shortfall) = pbp_heal_shortfall {
             failures.push(shortfall);
         }
 
@@ -907,9 +950,16 @@ impl<'a> SeasonIngester<'a> {
                 let (status, lines) =
                     classify_torvik_games_outcome(persist_err.as_deref(), rebound_err.as_deref());
                 // Every failure this step saw goes in the ledger row, not just
-                // the one that decided the status: `ingest_runs` outlives log
-                // retention, so a rebound failure recorded nowhere but a `warn!`
-                // is unrecoverable a week later. `None` on a clean run.
+                // the one that decided the status. `None` on a clean run.
+                //
+                // Caveat worth knowing before relying on it: when only the
+                // rebound backfill failed the status stays `ok`, and both
+                // operator surfaces that read this table filter on status —
+                // `--prod-status` lists recent *failures*, `/api/health/ingest`
+                // reports per-step freshness — so the text is reachable only by
+                // querying `ingest_runs` directly. The degraded Slack line below
+                // is the surface that actually carries it to a human; this is
+                // the durable copy for someone digging later.
                 let detail = (!lines.is_empty()).then(|| lines.join("; "));
                 ledger
                     .record(
@@ -1082,10 +1132,14 @@ impl<'a> SeasonIngester<'a> {
         // for the run summary. Until this existed they reached only the tracing
         // log, which meant a `Warning` check was invisible to anyone not tailing
         // Railway — and so a new one could not do the job it was added for.
-        // Names and counts only, no samples: enough to see a hole appear or a
-        // standing count move, short enough to sit under a green summary every
-        // night without becoming noise. Deliberately does NOT degrade the run —
-        // a warning is a source-data hole the pipeline faithfully reflects.
+        // Carries the samples, not just the count. A line reading
+        // `pbp_date_coverage_gap 1` tells the operator a PBP hole exists but not
+        // which date, so the backfill still needs a psql session — and the PBP
+        // heal's shortfall message explicitly relies on this line naming the
+        // dates. `InvariantViolation` already caps its samples, and they are
+        // trimmed again here so a standing multi-violation check (e.g. #232's
+        // 22) stays one readable line. Deliberately does NOT degrade the run — a
+        // warning is a source-data hole the pipeline faithfully reflects.
         let mut invariant_warnings: Option<String> = None;
         if report.compute.is_some() {
             let t0 = Utc::now();
@@ -1101,7 +1155,29 @@ impl<'a> SeasonIngester<'a> {
                             }
                             Severity::Warning => {
                                 info!(season = self.season, "invariant warning — {v}");
-                                warnings.push(format!("{} {}", v.check, v.count));
+                                // Up to 3 of the (already capped) samples, so
+                                // the reader gets the actual dates/ids to act on
+                                // without the line running away.
+                                const SLACK_SAMPLES: usize = 3;
+                                let shown: Vec<&str> = v
+                                    .samples
+                                    .iter()
+                                    .take(SLACK_SAMPLES)
+                                    .map(String::as_str)
+                                    .collect();
+                                let unshown = v.count - shown.len() as i64;
+                                warnings.push(if shown.is_empty() {
+                                    format!("{} {}", v.check, v.count)
+                                } else if unshown > 0 {
+                                    format!(
+                                        "{} {} ({}, +{unshown})",
+                                        v.check,
+                                        v.count,
+                                        shown.join(", ")
+                                    )
+                                } else {
+                                    format!("{} {} ({})", v.check, v.count, shown.join(", "))
+                                });
                             }
                         }
                     }
@@ -1293,6 +1369,48 @@ impl<'a> SeasonIngester<'a> {
             ));
         }
 
+        // --- In-season empty-PBP check (issue #247) ---
+        // The total-loss case, and the one blind spot `pbp_date_coverage_gap`
+        // structurally cannot cover: that invariant no-ops when the season holds
+        // no PBP *at all* (it has nothing to measure a share against, and firing
+        // on every date would drown the replay harnesses). But a season that
+        // never receives any PBP is precisely the worst outcome — and it is
+        // silent end to end. `ingest_pbp_scoped` returns `Ok` with zero rows
+        // when a page yields no in-scope plays, so the step records `ok`, the
+        // coverage scan sees the window covered and reports no gap, and
+        // `pbp_present_but_lineups_empty` is itself gated on PBP being present.
+        // The season would serve empty `lineup_aggregates` / `player_on_off` /
+        // `lineup_stints` — blank duos/trios, on-off and RAPM, and the three
+        // on/off trajectory features pinned to their sentinel — under a green
+        // summary every night.
+        //
+        // Same core-season gate as the box-score check above, so quiet
+        // off-season nights and the pre-tip ramp can't false-fire. Additionally
+        // skipped under a simulated clock: `simulate` seeds no PBP fixtures by
+        // design and replays in-season windows, so this would fire on every
+        // window of every replay. Box scores need no such exemption because the
+        // harness does seed those.
+        if report.pbp_rows == 0
+            && report.ingest.games > 0
+            && is_core_season_date(&end_date)
+            && crate::simulated_today().is_none()
+        {
+            warn!(
+                season = self.season,
+                start_date = pbp_start_date.as_str(),
+                end_date = end_date.as_str(),
+                games = report.ingest.games,
+                "in-season nightly ingested zero play-by-play rows despite ingesting games"
+            );
+            failures.push(format!(
+                "empty play-by-play ingest for {pbp_start_date}..{end_date} during the season \
+                 ({games} games ingested, 0 play rows) — the PBP feed may be silently empty, \
+                 which nothing else detects while the season holds no PBP at all \
+                 (`pbp_date_coverage_gap` needs some PBP to measure against)",
+                games = report.ingest.games,
+            ));
+        }
+
         // --- Ledger self-check ---
         // Deliberately the LAST thing before the run summary, so it counts every
         // `ledger.record` call in the run no matter where a future step is added
@@ -1377,52 +1495,62 @@ impl<'a> SeasonIngester<'a> {
             }
             _ => String::new(),
         };
+        let torvik_line = match &report.torvik {
+            Some(t) => format!(
+                "*Torvik:*  {} season · {} per-game",
+                t.upserted, report.torvik_games_persisted
+            ),
+            None => "*Torvik:*  skipped".to_string(),
+        };
+        // "Compute: ok" told you only that the step returned. These four counts
+        // are the load-bearing derived products — player rows, the AdjEM solve,
+        // CamPom, archetypes — so a step that silently computed over nothing
+        // (the shape of every stale-input bug this pipeline has had) reads as a
+        // row of zeroes instead of as "ok".
+        let compute_str = match &report.compute {
+            Some(c) => format!(
+                "{} player-seasons · {} AdjEM · {} CamPom · {} archetypes",
+                c.player_season_stats, c.adjusted_efficiency, c.campom, c.archetypes
+            ),
+            None => "skipped".to_string(),
+        };
+        // Shared by BOTH summaries. Originally only the SUCCESS post carried it,
+        // which meant any single degraded line — including one from a
+        // best-effort enrichment like the Torvik rebound backfill — replaced the
+        // whole picture with a bare issue list, throwing away exactly the counts
+        // that make a silently-empty run visible. A degraded run is when you
+        // want the numbers most.
+        let stat_block = format!(
+            "{window_line}\n\
+             *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
+             *Feeds:*  {elo} ELO · {fc} forecasts\n\
+             {torvik_line}\n\
+             *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
+             *Compute:*  {compute_str}{repair_line}\n\
+             *Rate budget:*  {remaining}/{budget}",
+            window_line = window_line,
+            games = report.ingest.games,
+            pp = report.ingest.player_performances,
+            tp = report.ingest.team_performances,
+            elo = report.ingest.elo_ratings,
+            fc = report.ingest.game_forecasts,
+            torvik_line = torvik_line,
+            pbp = report.pbp_rows,
+            lu = report.lineups_fetched,
+            compute_str = compute_str,
+            repair_line = repair_line,
+            remaining = tokens_after,
+            budget = budget,
+        );
         if failures.is_empty() {
-            let torvik_line = match &report.torvik {
-                Some(t) => format!(
-                    "*Torvik:*  {} season · {} per-game",
-                    t.upserted, report.torvik_games_persisted
-                ),
-                None => "*Torvik:*  skipped".to_string(),
-            };
-            // "Compute: ok" told you only that the step returned. These four
-            // counts are the load-bearing derived products — player rows, the
-            // AdjEM solve, CamPom, archetypes — so a step that silently computed
-            // over nothing (the shape of every stale-input bug this pipeline has
-            // had) reads as a row of zeroes instead of as "ok".
-            let compute_str = match &report.compute {
-                Some(c) => format!(
-                    "{} player-seasons · {} AdjEM · {} CamPom · {} archetypes",
-                    c.player_season_stats, c.adjusted_efficiency, c.campom, c.archetypes
-                ),
-                None => "skipped".to_string(),
-            };
             notify::post_slack(
                 notify::SlackChannel::Cron,
                 &format!(
                     ":white_check_mark: *Nightly ingest OK* — season {season}\n\
-                     {window_line}\n\
-                     *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
-                     *Feeds:*  {elo} ELO · {fc} forecasts\n\
-                     {torvik_line}\n\
-                     *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
-                     *Compute:*  {compute_str}{repair_line}\n\
-                     *Rate budget:*  {remaining}/{budget}{heal_line}{warn_line}\n\
+                     {stat_block}{heal_line}{warn_line}\n\
                      _run {run_id}_",
                     season = self.season,
-                    window_line = window_line,
-                    games = report.ingest.games,
-                    pp = report.ingest.player_performances,
-                    tp = report.ingest.team_performances,
-                    elo = report.ingest.elo_ratings,
-                    fc = report.ingest.game_forecasts,
-                    torvik_line = torvik_line,
-                    pbp = report.pbp_rows,
-                    lu = report.lineups_fetched,
-                    compute_str = compute_str,
-                    repair_line = repair_line,
-                    remaining = tokens_after,
-                    budget = budget,
+                    stat_block = stat_block,
                     heal_line = heal_line,
                     warn_line = warn_line,
                     run_id = ledger.run_id(),
@@ -1447,12 +1575,12 @@ impl<'a> SeasonIngester<'a> {
                 notify::SlackChannel::Cron,
                 &format!(
                     ":warning: *Nightly ingest DEGRADED* — season {season}\n\
-                     {window_line}\n\
+                     {stat_block}\n\
                      Completed with {n} issue(s):\n\
                      {issues}{heal_line}{warn_line}{egress_line}\n\
                      _run {run_id}_",
                     season = self.season,
-                    window_line = window_line,
+                    stat_block = stat_block,
                     n = failures.len(),
                     issues = issues,
                     heal_line = heal_line,
