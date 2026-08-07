@@ -123,9 +123,11 @@ cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # `data/player_display_names.json` is `include_str!`-compiled into the binary
 # (`crates/cstat-core/src/display_names.rs:56`), so prod's nightly recomputes the
 # current season from the copy baked into the DEPLOYED image. In-season the merge
-# skips the current season entirely, and even off-season (when it does write those
-# rows) the next nightly recomputes over them from the deployed JSON. Either way:
-# deploy the image. The merge is for HISTORICAL seasons, which no nightly rewrites.
+# skips the current season, so the override cannot land that way at all. Off-season
+# it DOES write those rows — and nothing repairs them, because the very condition
+# that widens the scope (no successful nightly in 36h) means no nightly is coming.
+# Either way the fix is the same: deploy the image. The merge is for HISTORICAL
+# seasons, which no nightly rewrites.
 
 # Archetype in-season stability sweep — how many games until a label matches the
 # full-season label. Re-run after any retrain; the curve is a property of the fit.

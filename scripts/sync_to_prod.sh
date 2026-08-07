@@ -61,10 +61,17 @@
 # `players`) is refused while prod is cron-fed. Column merge does the one safe
 # operation available: UPDATE existing rows, named columns only. No TRUNCATE, no
 # INSERT, no DELETE — so it cannot cascade, invent rows, or lose them. Rows are
-# matched on a unique INDEX (the natural key), not the primary key, so a
-# locally-generated UUID that diverged still lands on the right row, and rows
-# that already agree are skipped rather than rewritten. Batched into
-# `UPDATE … FROM (VALUES …)` chunks to avoid an N+1 over the prod link.
+# matched on a natural key taken from MERGE_ALLOWLIST (never the uuid primary
+# key, which is generated locally), and rows that already agree are skipped
+# rather than rewritten. Batched into `UPDATE … FROM (VALUES …)` chunks to avoid
+# an N+1 over the prod link.
+#
+# The supported (table, key) pairs are ENUMERATED, not discovered from the
+# catalog. Discovery is what made this mode hard: across four review rounds it
+# accepted INCLUDE payload columns, invalid indexes, nondeterministic ties,
+# surrogate-uuid composites and a nullable key — each fix opening the next case,
+# for generality nothing used. Adding a table is a deliberate act with a
+# reviewer; the key must be stable across databases and NOT NULL (asserted).
 #
 # It does NOT inherit the full-sync guard, because it is narrower — but "narrow"
 # is not "harmless": prod's nightly computes some of these columns itself
@@ -509,64 +516,59 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     fi
   done
 
-  # Natural key = the columns of a unique index, in ordinal order.
+  # The match key comes from an ALLOWLIST, not from the catalog.
   #
-  # Read from `pg_index`, not `pg_constraint`: every UNIQUE *constraint* has a
-  # backing unique index, but the reverse does not hold, and this codebase has
-  # both spellings — `players` uses `UNIQUE (natstat_id, season)` while
-  # `player_on_off` gets its uniqueness from a bare
-  # `CREATE UNIQUE INDEX … (season, player_id)` (migration 035). Reading
-  # constraints alone made the script tell an operator that a table with a
-  # perfectly good natural key had none, and then recommend `--tables` — the
-  # TRUNCATE … CASCADE path this whole mode exists to avoid.
+  # Discovering it from `pg_index` was the source of most of this mode's history:
+  # over four review rounds it accepted INCLUDE payload columns, invalid indexes,
+  # nondeterministic ties, single- then composite- surrogate UUID keys, and a
+  # nullable unique column — each fix opening the next case. None of that
+  # generality was ever used: this mode exists to carry `players.display_name`
+  # onto prod's historical seasons.
   #
-  # Excluded, and why each matters:
-  #   * partial (`indpred`) / expression (`indexprs`) indexes — they do not
-  #     guarantee a key for every row;
-  #   * invalid indexes (`indisvalid` false, e.g. a failed CREATE CONCURRENTLY)
-  #     — they do not enforce uniqueness at all;
-  #   * INCLUDE payload columns — `indkey` carries `indnatts` entries but only
-  #     the first `indnkeyatts` are key columns. Unnesting all of them would
-  #     silently adopt a payload column as part of the match key, and rows
-  #     differing on that unrelated column would then never match;
-  #   * ANY key containing a uuid column. Every uuid in this schema is a
-  #     locally-generated surrogate (`gen_random_uuid()`), and `teams`/`players`
-  #     ids are season-scoped and re-minted by prod's own box-score ingest — so
-  #     matching on one assumes exactly the agreement this mode was built not to
-  #     assume. Arity is not the test: `player_rapm (season, player_id)` and
-  #     `team_preseason_projection (season, team_id)` look like natural
-  #     composites and are season + surrogate; a merge on them would silently
-  #     skip every prod-created row while reporting a healthy updated count.
-  #
-  # This deliberately narrows the mode to tables with a REAL natural key
-  # (`players (natstat_id, season)`, `coaches (canonical_name)`, `transfers
-  # (year, tfs_key)`, …). Everything it turns away — `player_rapm`,
-  # `player_on_off`, `team_season_stats`, `game_forecasts`, `coach_ratings` — is
-  # an FK leaf that `--tables` already pushes safely, so nothing loses its route
-  # to prod. Three review rounds' worth of edge cases came from trying to be
-  # generic over tables whose keys cannot support the guarantee.
-  #
-  # ORDER BY prefers a non-primary unique index, then the narrowest, then the
-  # index name — deterministic rather than "whichever oid Postgres returned".
-  # The winner is echoed below so the operator can see which key is in play.
-  KEY_COLS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -F',' -c "
-    SELECT string_agg(a.attname, ',' ORDER BY k.ord)
-      FROM pg_index i
-      JOIN pg_class ic ON ic.oid = i.indexrelid
-      JOIN LATERAL unnest(i.indkey::int[]) WITH ORDINALITY AS k(attnum, ord) ON TRUE
-      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
-     WHERE i.indrelid = '\"$MERGE_TABLE\"'::regclass
-       AND i.indisunique AND i.indisvalid
-       AND i.indpred IS NULL AND i.indexprs IS NULL
-       AND k.ord <= i.indnkeyatts
-     GROUP BY i.indexrelid, ic.relname, i.indisprimary
-    HAVING count(*) FILTER (WHERE a.atttypid = 'uuid'::regtype) = 0
-     ORDER BY i.indisprimary, count(*), ic.relname LIMIT 1" | trim)
+  # So the supported merges are enumerated here, `table:key,cols`, and a table
+  # not on the list is refused. Adding one is a deliberate act with a reviewer:
+  # the key must be a REAL natural key — stable across databases, NOT NULL, and
+  # not a locally-generated uuid (`players.id` is `gen_random_uuid()`, season-
+  # scoped, and re-minted by prod's own box-score ingest, so matching on it would
+  # assume exactly the agreement this mode exists not to assume).
+  MERGE_ALLOWLIST=(
+    "players:natstat_id,season"
+  )
+  KEY_COLS=""
+  for entry in "${MERGE_ALLOWLIST[@]}"; do
+    if [[ "${entry%%:*}" == "$MERGE_TABLE" ]]; then KEY_COLS="${entry#*:}"; fi
+  done
   if [[ -z "$KEY_COLS" ]]; then
-    echo "✗ '$MERGE_TABLE' has no uuid-free unique key to match rows on." >&2
-    echo "  Its unique keys are (or include) locally-generated uuid columns," >&2
-    echo "  which are not guaranteed to be the same values on prod." >&2
-    echo "  If it is an FK leaf, push it with --tables instead." >&2
+    echo "✗ column merge is not supported for '$MERGE_TABLE'." >&2
+    echo "  Supported: ${MERGE_ALLOWLIST[*]%%:*}" >&2
+    echo "  A table qualifies only if it has a real natural key (stable across" >&2
+    echo "  databases, NOT NULL, no locally-generated uuid). Add it to" >&2
+    echo "  MERGE_ALLOWLIST with that key once someone has checked it holds." >&2
+    echo >&2
+    echo "  Do NOT reach for --tables as a substitute unless the table is a" >&2
+    echo "  local-only derived leaf (player_rapm, player_on_off). For anything" >&2
+    echo "  prod's nightly writes — team_season_stats, game_forecasts — --tables" >&2
+    echo "  is a TRUNCATE + restore from this laptop's staler copy, i.e. exactly" >&2
+    echo "  the in-season rollback the full-sync guard refuses." >&2
+    exit 2
+  fi
+
+  # Assert the allowlist's own precondition rather than trusting the comment
+  # above it. A NULLABLE key column silently matches nothing for its NULL rows
+  # (SQL NULL never equals NULL) and does not enforce uniqueness either — and
+  # this schema has exactly that trap sitting in plain sight: `games.natstat_id`
+  # is UNIQUE but nullable. Checking here means a future allowlist entry cannot
+  # reintroduce it by inspection alone.
+  NULLABLE_KEY=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+    SELECT string_agg(a.attname, ', ')
+      FROM unnest(string_to_array('$KEY_COLS', ',')) AS w(col)
+      JOIN pg_attribute a ON a.attrelid = '\"$MERGE_TABLE\"'::regclass
+                         AND a.attname = w.col AND a.attnum > 0
+     WHERE NOT a.attnotnull" | trim)
+  if [[ -n "$NULLABLE_KEY" ]]; then
+    echo "✗ key column(s) nullable on $MERGE_TABLE: $NULLABLE_KEY" >&2
+    echo "  A NULL key matches nothing and enforces nothing — fix the" >&2
+    echo "  MERGE_ALLOWLIST entry (or the schema) before merging." >&2
     exit 2
   fi
 
@@ -750,7 +752,6 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   coltype() { awk -F'|' -v c="$1" '$1 == c { print $2; exit }' <<<"$TYPE_MAP"; }
 
   TUPLE_EXPR=""; ALIAS_COLS=""; SET_EXPR=""; WHERE_EXPR=""; DIST_T=""; DIST_V=""
-  KEY_TUPLE_EXPR=""; KEY_ALIAS=""; PROBE_KEY_T=""; PROBE_SELECT=""
   for k in ${KEY_COLS//,/ }; do
     ktype=$(coltype "$k")
     TUPLE_EXPR="${TUPLE_EXPR:+$TUPLE_EXPR || ',' || }quote_nullable(\"$k\")"
@@ -758,11 +759,6 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     # Cast on the VALUES side: literals arrive as `unknown`, and the real column
     # may be int/uuid/etc. Reading the type keeps this generic across tables.
     WHERE_EXPR="${WHERE_EXPR:+$WHERE_EXPR AND }t.\"$k\" = v.\"$k\"::$ktype"
-    # Key-only twins, for the post-merge "did this key match anything?" probe.
-    KEY_TUPLE_EXPR="${KEY_TUPLE_EXPR:+$KEY_TUPLE_EXPR || ',' || }quote_nullable(\"$k\")"
-    KEY_ALIAS="${KEY_ALIAS:+$KEY_ALIAS, }\"$k\""
-    PROBE_KEY_T="${PROBE_KEY_T:+$PROBE_KEY_T, }t.\"$k\""
-    PROBE_SELECT="${PROBE_SELECT:+$PROBE_SELECT, }v.\"$k\"::$ktype"
   done
   for c in ${MERGE_COLS//,/ }; do
     ctype=$(coltype "$c")
@@ -792,7 +788,7 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   echo "→ Mode:     COLUMN MERGE — UPDATE only, no TRUNCATE/INSERT/DELETE"
   echo "→ Table:    $MERGE_TABLE"
   echo "→ Columns:  ${MERGE_COLS//,/, }"
-  echo "→ Match on: ${KEY_COLS//,/, }  (natural key, from a unique index)"
+  echo "→ Match on: ${KEY_COLS//,/, }  (natural key, from MERGE_ALLOWLIST)"
   echo "→ Scope:    $SCOPE_NOTE"
   echo
 
@@ -806,14 +802,6 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
         || string_agg(tup, ',' ORDER BY rn)
         || ') AS v($ALIAS_COLS) WHERE $WHERE_EXPR;'
       FROM r GROUP BY (rn - 1) / $MERGE_CHUNK ORDER BY min(rn)")
-  # Key tuples of the first batch, kept for the zero-rows probe below.
-  PROBE_VALUES=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
-    WITH r AS (
-      SELECT row_number() OVER (ORDER BY $KEY_COLS) AS rn,
-             '(' || ($KEY_TUPLE_EXPR) || ')' AS tup
-        FROM \"$MERGE_TABLE\" $SEASON_FILTER
-    )
-    SELECT string_agg(tup, ',' ORDER BY rn) FROM r WHERE rn <= $MERGE_CHUNK")
   N=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c \
     "SELECT count(*) FROM \"$MERGE_TABLE\" $SEASON_FILTER" | trim)
   B=$(grep -c '^UPDATE' <<<"$STATEMENTS" || true)
@@ -822,9 +810,8 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
 
   # Nothing in scope is a legitimate outcome (a season-scoped merge on a table
   # local only has current-season rows for), and it must stop here: `STATEMENTS`
-  # and `PROBE_VALUES` are both empty, so continuing would send psql a lone SET
-  # and then build a probe reading `VALUES ` — a syntax error, under `set -e`,
-  # after the operator had already confirmed a production write.
+  # is empty, so continuing would send psql a lone SET and then prompt for a
+  # production write that could not do anything.
   if [[ "${N:-0}" -eq 0 || -z "$STATEMENTS" ]]; then
     echo "→ Nothing to merge in this scope. No prod write attempted."
     exit 0
@@ -857,7 +844,12 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     # The old preview cut at 260 characters, which is all VALUES tuples and never
     # reached the WHERE — so the one clause an operator needs to check (season
     # predicate, key join, IS DISTINCT FROM guard) was the one part never shown.
-    head -1 <<<"$STATEMENTS" | grep -o 'WHERE .*' | sed 's/^/    /'
+    #
+    # `|| true` because `set -o pipefail` is on: a value containing a newline
+    # makes the statement span lines, `head -1` then yields a fragment with no
+    # WHERE, and an unguarded grep would exit 1 and kill the dry run mid-preview
+    # with no message. The sibling `grep -c … || true` above is the same guard.
+    head -1 <<<"$STATEMENTS" | grep -o 'WHERE .*' | sed 's/^/    /' || true
     exit 0
   fi
 
@@ -876,7 +868,8 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   # of this comment claimed. The actual protection is not overlapping: the cron
   # runs 09:30 UTC, and `--prod-status` shows when it last ran. Season scoping
   # narrows the exposure further by keeping the merge off the rows the nightly
-  # rewrites, but only when the match key carries `season`.
+  # rewrites — for every table that has a `season` column, since the predicate
+  # is applied to prod's side of the UPDATE regardless of what the key contains.
   #
   # NOT --quiet: psql's `UPDATE n` command tags are the only evidence that the
   # natural key actually matched prod rows. Without them a merge that matched
@@ -888,60 +881,41 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   ROWS=$(awk '/^UPDATE [0-9]+$/ { s += $2 } END { print s + 0 }' <<<"$APPLY_OUT")
   echo "✓ Merged in $(($(date +%s) - START))s — $ROWS row(s) actually updated on prod."
   if [[ "$ROWS" -eq 0 ]]; then
-    # 0 updated is AMBIGUOUS, and the ambiguity is the whole point: with the
-    # IS DISTINCT FROM guard, 0 is the normal result of any second run. Warning
-    # on it unconditionally would fire on every healthy re-run and train the
-    # operator to dismiss the one case that matters — a key that doesn't line up
-    # with prod, which also updates 0 rows and leaves the non-NULL counts
-    # unchanged. So resolve it instead of guessing: ask prod how many of the
-    # first batch's key tuples actually exist there. Matched-but-unchanged is a
-    # no-op; matched-nothing is a broken key.
-    # `|| true`: the merge has already COMMITTED at this point, so a failing
-    # diagnostic must not take the script down under `set -e` before it prints
-    # the counts below. An empty MATCHED then falls through to the loud branch,
-    # which is the right way to be wrong here.
-    MATCHED=$("${PSQL[@]}" "$PROD_URL" -t -A -c "
-      SELECT count(*) FROM \"$MERGE_TABLE\" AS t
-       WHERE ($PROBE_KEY_T) IN (
-         SELECT $PROBE_SELECT FROM (VALUES $PROBE_VALUES) AS v($KEY_ALIAS))" 2>/dev/null | trim || true)
-    # Judge MATCHED against the size of the sample, not against zero. Branching
-    # on `> 0` called it agreement when a single tuple out of 500 survived —
-    # which is the shape of a prod bootstrapped from a different row set, i.e.
-    # the failure this probe exists to name.
-    # The sample is the first batch, so its size is known arithmetically. Do NOT
-    # count `),(` occurrences in the generated text: a value containing that
-    # sequence would inflate the denominator and turn a healthy run into a
-    # "partial match" warning.
-    PROBED=$(( N < MERGE_CHUNK ? N : MERGE_CHUNK ))
-    if [[ "${MATCHED:-0}" -eq "${PROBED:-0}" ]]; then
-      echo "  Nothing to change — prod already agrees with local."
-      echo "  (all $PROBED sampled key tuples from the first batch exist on prod)"
-    elif [[ "${MATCHED:-0}" -eq 0 ]]; then
-      echo "  ! ZERO rows matched, and NONE of the $PROBED sampled key tuples exist"
-      echo "    on prod. The natural key (${KEY_COLS//,/, }) does not line up between"
-      echo "    the two databases — this merge did nothing. Check PROD_DATABASE_URL"
-      echo "    and whether prod's rows were bootstrapped separately."
-    else
-      echo "  ! ZERO rows updated, but only $MATCHED of $PROBED sampled key tuples exist"
-      echo "    on prod. Prod is missing rows local has, so part of this merge could"
-      echo "    not land — check the two row sets before treating this as a no-op."
-    fi
+    # Zero updated is genuinely ambiguous — with the IS DISTINCT FROM guard it is
+    # the normal result of any second run — and two attempts at RESOLVING it
+    # automatically both misfired: a sampled key probe called one surviving tuple
+    # "agreement", and then strict equality against the sample called one missing
+    # row a permanent failure. Worse, swallowing the probe's own errors turned a
+    # dropped connection into a confident accusation that the key was broken.
+    #
+    # So it is stated as ambiguous, with the counts below (local vs prod, same
+    # scope) as the thing to read. Those numbers cannot lie about a wrong
+    # database or an empty local table, and they need no payload to compute.
+    echo "  Zero rows changed. That is the normal result of a re-run; it is also"
+    echo "  what a wrong PROD_DATABASE_URL or an empty local table looks like."
+    echo "  Compare the two counts below before treating it as a no-op."
   fi
   # Scoped the same way the merge was, and labelled with that scope. Printing an
   # unscoped whole-table count here while the merge covered past seasons only
   # showed the operator two numbers for what reads as the same quantity — one
   # including the current season, one not.
+  # Both sides, same scope, side by side. One number invites a story; two let the
+  # operator see the answer — prod far below local means the merge did not land,
+  # local far below prod means this laptop was the stale one and just cleared
+  # values. Neither line makes a claim, which is why neither can be wrong.
   if [[ -n "$SEASON_FILTER" ]]; then
     NN_WHERE="$SEASON_FILTER AND"
-    echo "  Prod non-NULL counts (seasons other than $CUR_SEASON — the merged scope):"
+    echo "  Non-NULL counts, seasons other than $CUR_SEASON (the merged scope):"
   else
     NN_WHERE="WHERE"
-    echo "  Prod non-NULL counts (whole table — the merged scope):"
+    echo "  Non-NULL counts, whole table (the merged scope):"
   fi
+  printf "    %-25s %10s %10s\n" "" "local" "prod"
   for c in ${MERGE_COLS//,/ }; do
-    v=$("${PSQL[@]}" "$PROD_URL" -t -A -c \
-      "SELECT count(*) FROM \"$MERGE_TABLE\" $NN_WHERE \"$c\" IS NOT NULL" | trim)
-    printf "    %-25s %s\n" "$c" "$v"
+    NN_SQL="SELECT count(*) FROM \"$MERGE_TABLE\" $NN_WHERE \"$c\" IS NOT NULL"
+    lv=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "$NN_SQL" | trim)
+    pv=$("${PSQL[@]}" "$PROD_URL" -t -A -c "$NN_SQL" | trim)
+    printf "    %-25s %10s %10s\n" "$c" "$lv" "$pv"
   done
   exit 0
 fi
