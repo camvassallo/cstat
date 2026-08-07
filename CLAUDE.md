@@ -122,10 +122,10 @@ cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # CAVEAT — a NEW curated display-name override needs a REDEPLOY, not a sync.
 # `data/player_display_names.json` is `include_str!`-compiled into the binary
 # (`crates/cstat-core/src/display_names.rs:56`), so prod's nightly recomputes the
-# current season from the copy baked into the DEPLOYED image. Adding an override
-# and pushing the column is a no-op for the current season (it is scoped out, and
-# prod would recompute over it anyway): deploy the image, and the next nightly
-# picks it up. The merge is for HISTORICAL seasons, which no nightly recomputes.
+# current season from the copy baked into the DEPLOYED image. In-season the merge
+# skips the current season entirely, and even off-season (when it does write those
+# rows) the next nightly recomputes over them from the deployed JSON. Either way:
+# deploy the image. The merge is for HISTORICAL seasons, which no nightly rewrites.
 
 # Archetype in-season stability sweep — how many games until a label matches the
 # full-season label. Re-run after any retrain; the curve is a property of the fit.
