@@ -303,9 +303,15 @@ What shipped:
   ships to prod with the other rollups.
 - **API**: `get_player_on_off` LEFT JOINs `player_rapm`; the on-off route
   carries `rapm_o` / `rapm_d` / `rapm_net` / `rapm_paired_possessions`.
-- **UI**: an "adj on/off (RAPM)" line in the PlayerDetail on/off panel
+- **UI**: a RAPM line in the PlayerDetail Advanced Metrics block
   (≥250 paired-possession display floor), with the panel's team-result
-  caveat updated to point at it. Every on/off *column* — the TeamDetail
+  caveat updated to point at it. Since 2026-08-06 the O and D halves render
+  beneath it as their own percentile bars, labelled **RAPM / RAPM-O /
+  RAPM-D** to match the TeamDetail roster's Adv view. `rapm_d_pct` is
+  **inverted server-side** (`d_rapm >= pr.d_rapm`) because `d_rapm` is points
+  allowed — so a high bar means a good player on all three rows, as everywhere
+  else on that page. Same display gate as the net line, so the halves never
+  appear alone. Every on/off *column* — the TeamDetail
   roster, the Players grid, and the Transfer-portal grid (source-season) —
   **replaces** raw on/off with "Adj On/Off" (same floor; sorts by the
   displayed value so sub-floor "—" rows sink); the raw swing and its

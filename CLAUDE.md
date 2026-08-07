@@ -107,6 +107,27 @@ cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # push their derived tables without truncating the cron-written serving tables).
 # NOT gated by the guard; this is the intended in-season path:
 ./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
+# Column merge — the third mode, for a derived column on a table that is
+# REFERENCED by foreign keys, where --tables would cascade-wipe the dependents
+# (`players` has 10) and a full sync is refused. UPDATE-only: no TRUNCATE, no
+# INSERT, no DELETE, named columns only, rows matched on a unique INDEX (the
+# natural key) rather than the locally-generated UUID primary key. While prod
+# looks live (same two signals as the full-sync guard), a table carrying a
+# `season` column merges PAST SEASONS ONLY — prod's nightly owns the current
+# season for anything `compute_all` derives, `display_name` included, so
+# pushing it would be a one-column rollback. `--force-full` merges every season.
+# Reports rows actually updated and warns loudly on zero (a natural key that
+# doesn't line up with prod matches nothing and otherwise looks like success):
+./scripts/sync_to_prod.sh --columns players.display_name
+# CAVEAT — a NEW curated display-name override needs a REDEPLOY, not a sync.
+# `data/player_display_names.json` is `include_str!`-compiled into the binary
+# (`crates/cstat-core/src/display_names.rs:56`), so prod's nightly recomputes the
+# current season from the copy baked into the DEPLOYED image. In-season the merge
+# skips the current season, so the override cannot land that way at all. Off-season
+# it DOES write those rows — and nothing repairs them, because the very condition
+# that widens the scope (no successful nightly in 36h) means no nightly is coming.
+# Either way the fix is the same: deploy the image. The merge is for HISTORICAL
+# seasons, which no nightly rewrites.
 
 # Archetype in-season stability sweep — how many games until a label matches the
 # full-season label. Re-run after any retrain; the curve is a property of the fit.
