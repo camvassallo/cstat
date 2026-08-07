@@ -46,7 +46,13 @@ struct PbpHealPlan {
     /// either because nothing is missing or because everything missing is
     /// already inside it (or out of reach).
     from: Option<chrono::NaiveDate>,
-    /// Missing dates older than the cap. Reported to an operator, never fetched.
+    /// Missing dates this run will **not** fetch. Reported to an operator.
+    ///
+    /// Computed against the window the run actually ends up covering, not
+    /// against the cap floor: when the box-score heal has already widened the
+    /// window past the floor, the PBP step rides on it and covers dates the cap
+    /// alone would call out of reach. Filtering on the floor instead produced a
+    /// DEGRADED summary naming dates the same run had just healed.
     unreachable: Vec<chrono::NaiveDate>,
 }
 
@@ -76,12 +82,21 @@ fn plan_pbp_heal(
     floor: chrono::NaiveDate,
     box_start: chrono::NaiveDate,
 ) -> PbpHealPlan {
+    let from = deficient
+        .iter()
+        .find(|d| **d >= floor && **d < box_start)
+        .copied();
+    // Where the PBP step will actually start: the healed date if we widened,
+    // otherwise the box window's own start (which a box heal may already have
+    // pushed back further than the PBP cap would reach on its own).
+    let covered_from = from.unwrap_or(box_start);
     PbpHealPlan {
-        from: deficient
+        from,
+        unreachable: deficient
             .iter()
-            .find(|d| **d >= floor && **d < box_start)
-            .copied(),
-        unreachable: deficient.iter().filter(|d| **d < floor).copied().collect(),
+            .filter(|d| **d < covered_from)
+            .copied()
+            .collect(),
     }
 }
 
@@ -419,6 +434,17 @@ impl<'a> SeasonIngester<'a> {
         // showing up in `pbp_date_coverage_gap` until someone backfills it.
         const MAX_PBP_HEAL_DAYS: i64 = 7;
 
+        // Wall-clock start, for the run duration in the summary. A nightly that
+        // suddenly takes 3× as long is the shape of the prod-DB latency / N+1
+        // regressions this pipeline has already hit twice, and it is invisible
+        // in a summary that only reports counts.
+        //
+        // Taken FIRST, before the two self-heal coverage scans below. Those are
+        // the newest and most query-heavy things in the run — the PBP scan
+        // probes per game across a 30M-row table — so a timer started after them
+        // would be blind to exactly the regression it exists to surface.
+        let run_started = Utc::now();
+
         let mut ledger = RunLedger::start(self.pool, self.season);
 
         // --- backfill-gap self-heal (M5b) ---
@@ -574,14 +600,34 @@ impl<'a> SeasonIngester<'a> {
                                 "play-by-play dates older than the heal cap — needs a manual \
                                  backfill; the nightly cannot reach them"
                             );
+                            // A NOTE, not a `failures` entry — deliberately, and
+                            // not a repeat of the round-one mistake that
+                            // suppressed this alert on the reasoning that the
+                            // invariant already named the dates. That reasoning
+                            // was wrong then for two specific reasons, both of
+                            // which have since been fixed: the warnings line
+                            // carried no samples, and the heal was silently
+                            // re-pulling a window nightly. Now the standing
+                            // `pbp_date_coverage_gap` warning does name these
+                            // dates on every summary, and the heal no longer
+                            // touches them.
+                            //
+                            // What remains is a hole no nightly action can
+                            // close — the source may simply never publish it.
+                            // Degrading the run turns that into a DEGRADED post
+                            // every night for the ~23 nights it takes to age out
+                            // of the lookback, on the channel that also carries
+                            // real feed outages. Visible on every summary,
+                            // colour reserved for what a run can act on.
+                            //
+                            // The backfill range spans all of them, not just the
+                            // oldest: one command, not one per date.
                             pbp_heal_shortfall = Some(format!(
                                 "{n} game date(s) older than the {MAX_PBP_HEAL_DAYS}d heal cap \
-                                 still have no play-by-play ({sample}) — the nightly can NOT \
-                                 recover these, and `lineup_aggregates` / `player_on_off` / \
-                                 `lineup_stints` are rebuilt around the hole every night. \
-                                 Backfill with `cstat-ingest playbyplay --year {season} \
-                                 --from {oldest} --to {oldest}` (any run that lands the rows \
-                                 clears this — the check reads the rows, not the ledger)",
+                                 still have no play-by-play ({sample}) — the nightly cannot \
+                                 reach these. Backfill with `cstat-ingest playbyplay \
+                                 --year {season} --from {oldest} --to {newest}`; any run that \
+                                 lands the rows clears it, since the check reads the rows",
                                 n = plan.unreachable.len(),
                                 sample = plan
                                     .unreachable
@@ -591,6 +637,7 @@ impl<'a> SeasonIngester<'a> {
                                     .collect::<Vec<_>>()
                                     .join(", "),
                                 oldest = plan.unreachable[0],
+                                newest = plan.unreachable[plan.unreachable.len() - 1],
                                 season = self.season,
                             ));
                         }
@@ -730,12 +777,6 @@ impl<'a> SeasonIngester<'a> {
             failures.push(shortfall);
         }
 
-        // Same for the PBP heal — an over-cap PBP gap re-pulls a full cap-width
-        // window every night without ever closing, so it has to be said out loud.
-        if let Some(shortfall) = pbp_heal_shortfall {
-            failures.push(shortfall);
-        }
-
         // The run fired before last night's games had settled (see above).
         if let Some(note) = early_run_note {
             failures.push(note);
@@ -760,12 +801,6 @@ impl<'a> SeasonIngester<'a> {
                  is pinned to a simulated date; unset this on the cron service"
             ));
         }
-
-        // Wall-clock start, for the run duration in the summary. A nightly that
-        // suddenly takes 3× as long is the shape of the prod-DB latency / N+1
-        // regressions this pipeline has already hit twice, and it is invisible
-        // in a summary that only reports counts.
-        let run_started = Utc::now();
 
         // Rate-budget headroom (2.5): snapshot tokens before the run so we can
         // log consumption and warn if a busy night eats most of the budget.
@@ -1119,13 +1154,25 @@ impl<'a> SeasonIngester<'a> {
         // `natstat_lineup_games` ledger is empty). Fetch-limited as a runaway
         // backstop even within the window (e.g. a wide self-heal window).
         // Best-effort like PBP.
+        //
+        // Scoped to `pbp_start_date`, the SAME window the PBP step just ran
+        // (issue #247). The two feeds fail together — a run that dies after the
+        // box steps loses both — and `compute_pbp_lineups` prefers this exact
+        // 5-man membership over the PBP-reconstructed stints, falling back to
+        // the weaker source per game. So healing PBP for a date while leaving
+        // its lineups behind would rebuild that date's `lineup_aggregates` /
+        // `player_on_off` / RAPM from the degraded source permanently, with no
+        // alert — the heal quietly locking in worse data for exactly the dates
+        // it touched. Costs nothing on a normal night (the windows are equal),
+        // and on a heal night the `natstat_lineup_games` ledger skips every game
+        // already captured, so only the genuinely missing ones are fetched.
         const NIGHTLY_LINEUPS_FETCH_LIMIT: u64 = 500;
         let t0 = Utc::now();
         match super::lineups::ingest_lineups_for_season(
             self.client,
             self.pool,
             self.season,
-            Some((&start_date, &end_date)),
+            Some((&pbp_start_date, &end_date)),
             Some(NIGHTLY_LINEUPS_FETCH_LIMIT),
             false,
         )
@@ -1478,24 +1525,36 @@ impl<'a> SeasonIngester<'a> {
         //   `CSTAT_SIMULATED_DATE` on prod would silence this check, but that
         //   condition is separately and loudly degraded by its own guard above,
         //   so it cannot hide quietly.
+        //
+        // - **The SEASON holds no PBP, not just this run's window.** Keying on
+        //   the run's own row count gave the check zero settle slack, which
+        //   contradicts the two-day `PBP_SETTLE_DAYS` that exists precisely
+        //   because the feed can publish a night behind its box scores: with a
+        //   one-night lag the window legitimately yields nothing and the run
+        //   would post DEGRADED every night while nothing was wrong. The
+        //   condition this alert is actually for is total loss, so ask that.
         if report.pbp_rows == 0
             && pbp_step_ok
             && report.ingest.player_performances > 0
             && is_core_season_date(&end_date)
             && crate::simulated_today().is_none()
+            && !cstat_core::invariants::season_has_any_pbp(self.pool, self.season)
+                .await
+                .unwrap_or(true)
         {
             warn!(
                 season = self.season,
                 start_date = pbp_start_date.as_str(),
                 end_date = end_date.as_str(),
                 perfs = report.ingest.player_performances,
-                "in-season nightly ingested zero play-by-play rows despite ingesting statlines"
+                "in-season nightly ingested zero play-by-play rows and the season holds none at all"
             );
             failures.push(format!(
-                "empty play-by-play ingest for {pbp_start_date}..{end_date} during the season \
-                 ({perfs} player statlines ingested, 0 play rows, step reported success) — the \
-                 PBP feed may be silently empty, which nothing else detects while the season \
-                 holds no PBP at all (`pbp_date_coverage_gap` needs some PBP to measure against)",
+                "the {season} season holds NO play-by-play at all, and this in-season run \
+                 ({perfs} player statlines, 0 play rows, step reported success) added none — \
+                 the PBP feed may be silently empty, which nothing else detects while there is \
+                 no PBP to measure against (`pbp_date_coverage_gap` needs some)",
+                season = self.season,
                 perfs = report.ingest.player_performances,
             ));
         }
@@ -1539,11 +1598,15 @@ impl<'a> SeasonIngester<'a> {
         // a "the cron fired and finished" heartbeat.
         // A self-heal widened the window this run — surface it in whichever
         // summary posts (a healed run is still a SUCCESS: it recovered the gap).
-        let heal_line: String = [heal_note.as_deref(), pbp_heal_note.as_deref()]
-            .into_iter()
-            .flatten()
-            .map(|n| format!("\n_:arrows_counterclockwise: {n}_"))
-            .collect();
+        let heal_line: String = [
+            heal_note.as_deref(),
+            pbp_heal_note.as_deref(),
+            pbp_heal_shortfall.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|n| format!("\n_:arrows_counterclockwise: {n}_"))
+        .collect();
         // Warning-severity invariants, on BOTH summaries: a degraded run is
         // exactly when you also want to know which standing holes are open, and
         // a healthy run is where a *new* hole (a lost `playbyplay` night) has to
@@ -1991,6 +2054,30 @@ mod tests {
         );
         assert_eq!(plan.from, None, "nothing reachable — do not widen");
         assert_eq!(plan.unreachable, vec![nd("2026-12-01"), nd("2026-12-02")]);
+    }
+
+    #[test]
+    fn a_wide_box_heal_covers_dates_the_pbp_cap_alone_could_not() {
+        // The box-score heal reaches back 14 days to the PBP cap's 7, and the
+        // PBP step rides on the box window when it has nothing of its own to
+        // widen. So on an outage-recovery night, dates between `box_start` and
+        // `floor` ARE fetched — and must not be reported as unrecoverable.
+        // Filtering `unreachable` on the floor alone posted a DEGRADED summary
+        // naming three dates the same run had just healed.
+        let plan = plan_pbp_heal(
+            &[nd("2026-12-03"), nd("2026-12-05"), nd("2026-12-06")],
+            nd("2026-12-08"), // PBP cap floor
+            nd("2026-12-04"), // box heal already widened this far back
+        );
+        assert_eq!(
+            plan.from, None,
+            "no date is both >= floor and < box_start, so nothing to widen"
+        );
+        assert_eq!(
+            plan.unreachable,
+            vec![nd("2026-12-03")],
+            "12-05 and 12-06 are inside the box window this run already fetches"
+        );
     }
 
     #[test]

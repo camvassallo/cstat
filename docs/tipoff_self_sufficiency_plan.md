@@ -194,6 +194,21 @@ never had:
 The decision itself is the pure, unit-tested `plan_pbp_heal`, because it is the piece that
 broke three times.
 
+The heal also carries the `lineups` capture with it: both feeds fail together, and
+`compute_pbp_lineups` prefers the exact 5-man membership over PBP-reconstructed stints, so
+healing a date's PBP while leaving its lineups behind would lock in the weaker source for
+exactly the dates the heal touched.
+
+**Two limitations, stated rather than papered over.** A `playbyplay` night that failed
+*partway through writing* leaves a date at 50–99% coverage, which clears the floor and is
+neither reported nor healed; the floor cannot be raised, because the worst honest date sits
+at 66%. The failing run does say so at the time (a DEGRADED summary naming the step), so it
+is not silent — but no later run goes back for it. And a date the source will simply never
+publish PBP for shows up as a standing warning that no nightly action can clear; that is
+why the over-cap message is a summary note rather than a run-degrading failure, since a
+DEGRADED post every night for three weeks over an unfixable hole is how the colour stops
+meaning anything.
+
 `lineups` still has the same shape of hole and was deliberately left out of scope.
 
 ### B4 — The R4 premise expires at tipoff; two tables change owner

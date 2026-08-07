@@ -500,17 +500,20 @@ mod tests {
 
     #[test]
     fn a_capped_heal_slides_forward_with_the_calendar_instead_of_reaching_the_gap() {
-        // Why the PBP heal refuses to widen once `unrecovered_days > 0`
-        // (issue #247). The floor is `default_to − cap`, and `default_to`
-        // advances every night, so consecutive runs against the SAME stale gap
-        // walk their start forward — away from the gap, never toward it. Each
-        // one re-pulls a cap-width window its own predecessors already covered
-        // and closes nothing.
+        // A **known limitation of the box-score heal**, pinned so it is a
+        // deliberate property rather than a surprise. The floor is
+        // `default_to − cap`, and `default_to` advances every night, so
+        // consecutive runs against the SAME stale gap walk their start forward —
+        // away from the gap, never toward it. Each re-ingests a cap-width window
+        // its own predecessors already covered and closes nothing; what makes it
+        // tolerable is the loud `self-heal only PARTIAL` line naming the manual
+        // backfill.
         //
-        // For play-by-play that is ~300 NatStat calls and a ~150k-row
-        // DELETE/INSERT per night, for as long as the gap stays inside the
-        // lookback. Pinned here so a future change that "restores" the widening
-        // has to argue with this test first.
+        // Play-by-play used to share this shape and no longer does: its heal
+        // (issue #247) starts from a date that is *actually* missing data rather
+        // than from a sliding floor, so it converges. Applying the same
+        // treatment here would need a per-date notion of box-score coverage the
+        // ledger does not have — worth doing, out of scope for #247.
         let gap = d("2026-12-01");
         let n1 = heal_window(d("2026-12-14"), d("2026-12-15"), Some(gap), 7).unwrap();
         let n2 = heal_window(d("2026-12-15"), d("2026-12-16"), Some(gap), 7).unwrap();

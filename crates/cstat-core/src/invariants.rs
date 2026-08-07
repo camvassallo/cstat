@@ -405,6 +405,20 @@ const PBP_SETTLE_DAYS: i64 = 2;
 /// - **share below the floor on a real slate**, which catches a partial loss
 ///   that the zero test would miss.
 ///
+/// **Known limitation — a partial write between 50% and 99% is invisible.**
+/// `ingest_pbp_scoped` writes game by game, so an error partway through a date
+/// (a statement timeout on a large DELETE/INSERT, say) commits the games it got
+/// to and leaves the rest. A date left at, e.g., 39/60 clears this floor and is
+/// neither reported nor healed. The floor cannot simply be raised: the worst
+/// *honest* game date across 2021–2026 sits at 66%, so a threshold that caught
+/// the partial-write case would fire on real data. What keeps this from being
+/// the silent hole of issue #247 is that the failing run says so at the time —
+/// the step records `Failed` and the nightly posts a DEGRADED summary naming it.
+/// The gap is that no later run goes back for it, so an operator who misses that
+/// one alert has no second chance. Closing it needs a per-*game* notion of
+/// expected coverage, which the source does not give us (it genuinely never
+/// publishes PBP for 3–6% of games).
+///
 /// `Warning`, not `Error`: PBP is a source feed with genuine gaps, and what the
 /// pipeline does with the rows it has is correct. It is also best-effort by
 /// design (it feeds display surfaces and 3-of-60 trajectory features), so a hole
@@ -441,6 +455,30 @@ pub async fn pbp_date_coverage_gap(
             .iter()
             .map(|d| format!("{} ({}/{} games)", d.date, d.with_pbp, d.games)),
     ))
+}
+
+/// Does this season hold **any** play-by-play at all?
+///
+/// The total-loss discriminator. Distinguishes "the feed is publishing and this
+/// window happens to be empty" — routine, since PBP can lag its box scores by a
+/// night — from "nothing has ever arrived", which is the silent catastrophe
+/// [`pbp_date_coverage_gap`] structurally cannot see (it needs some PBP to
+/// measure a share against).
+///
+/// Probes through `games` rather than scanning `play_by_play` directly: the
+/// table has no `season` index, so a direct `EXISTS` would seq-scan 30M rows to
+/// prove absence — the exact case this is asked in.
+pub async fn season_has_any_pbp(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS ( \
+             SELECT 1 FROM games g \
+             WHERE g.season = $1 \
+               AND EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id) \
+         )",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
 }
 
 /// One game date whose play-by-play coverage is short of what its completed

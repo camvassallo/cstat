@@ -86,40 +86,115 @@ async fn api_era_seasons_have_no_pbp_date_gaps() {
 /// "does this deployment have PBP at all" gate. Getting that backwards would
 /// make a lookback whose every date is missing suppress itself — silencing the
 /// heal in exactly the case it exists for.
+///
+/// A healthy DB reports no deficient dates at all, so asserting over live data
+/// proves nothing (the first version of this test did exactly that and passed
+/// vacuously). It therefore *creates* a deficiency — wiping one settled date's
+/// play-by-play inside a transaction it rolls back — on a single pinned
+/// connection so the function under test sees the uncommitted state.
 #[tokio::test]
 #[ignore = "needs local DB with play-by-play ingested"]
 async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
-    let pool = pool().await;
+    // One connection, so BEGIN / the queries / ROLLBACK all share a session.
+    // Nothing here can commit: the rollback is explicit, and a panic before it
+    // drops the pool, which rolls back too.
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect(&url)
+        .await
+        .unwrap();
     let season = 2026;
+
+    let (first, last): (NaiveDate, NaiveDate) = sqlx::query_as(
+        "SELECT min(game_date), max(game_date) FROM games \
+          WHERE season = $1 AND home_score IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(first < last, "season {season} has no game span to bound");
+
+    sqlx::query("BEGIN").execute(&pool).await.unwrap();
+
+    // A settled date with a real slate, late enough that a mid-season cutoff
+    // sits before it — so the bound has something to keep and something to drop.
+    let victim: NaiveDate = sqlx::query_scalar(
+        "SELECT g.game_date FROM games g \
+          WHERE g.season = $1 AND g.home_score IS NOT NULL \
+            AND g.game_date <= CURRENT_DATE - 2 \
+          GROUP BY g.game_date HAVING count(*) >= 3 \
+          ORDER BY g.game_date DESC LIMIT 1",
+    )
+    .bind(season)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "DELETE FROM play_by_play p USING games g \
+          WHERE p.game_id = g.id AND g.season = $1 AND g.game_date = $2",
+    )
+    .bind(season)
+    .bind(victim)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let all = invariants::pbp_deficient_dates(&pool, season, None)
         .await
         .unwrap();
-    // A cutoff late enough to exclude essentially the whole season. If the gate
-    // were computed over the bounded window it would see zero PBP there and
-    // return nothing regardless of the data; instead the bound may only ever
-    // remove dates that were already reported.
-    let cutoff = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
-    let bounded = invariants::pbp_deficient_dates(&pool, season, Some(cutoff))
+    assert!(
+        all.iter().any(|d| d.date == victim),
+        "the wiped date must be reported, or the rest of this test is vacuous"
+    );
+
+    // A `since` at the season's first game must change nothing — the assertion
+    // that fails if the bound is ever moved inside the CTE feeding the
+    // season-wide gate.
+    let wide = invariants::pbp_deficient_dates(&pool, season, Some(first))
         .await
         .unwrap();
-
-    for d in &bounded {
-        assert!(
-            d.date >= cutoff,
-            "`since` must exclude earlier dates: {d:?}"
-        );
-        assert!(
-            all.iter().any(|a| a.date == d.date),
-            "the bound may only remove dates, never invent one: {d:?}"
-        );
-    }
-    assert!(
-        bounded.len() <= all.len(),
-        "bounded {} > unbounded {}",
-        bounded.len(),
-        all.len()
+    assert_eq!(
+        wide, all,
+        "a `since` at the season's first game must match no bound at all"
     );
+
+    // A cutoff after the wiped date must drop it, and the gate must still hold
+    // (the season has PBP elsewhere), so the result is a strict filter.
+    let after = victim + chrono::Duration::days(1);
+    let bounded = invariants::pbp_deficient_dates(&pool, season, Some(after))
+        .await
+        .unwrap();
+    assert!(
+        !bounded.iter().any(|d| d.date == victim),
+        "`since` must exclude dates before it"
+    );
+    assert_eq!(
+        bounded,
+        all.iter()
+            .filter(|d| d.date >= after)
+            .cloned()
+            .collect::<Vec<_>>(),
+        "the bounded result must be exactly the unbounded one filtered by date"
+    );
+
+    sqlx::query("ROLLBACK").execute(&pool).await.unwrap();
+
+    // Belt and braces: the wipe is gone.
+    let restored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM play_by_play p JOIN games g ON g.id = p.game_id \
+          WHERE g.season = $1 AND g.game_date = $2",
+    )
+    .bind(season)
+    .bind(victim)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(restored > 0, "ROLLBACK did not restore {victim}");
 }
 
 /// The zero-coverage arm reports a date at ANY slate size, with no min-games
