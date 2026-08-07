@@ -52,18 +52,6 @@ pub const ROW_COUNT_TABLES: &[&str] = &[
 /// so they say nothing about which dates were ingested).
 pub const BOX_SCORE_STEPS: &[&str] = &["games", "player_perfs", "team_perfs"];
 
-/// The window-scoped play-by-play step, scanned for coverage on its own
-/// (issue #247).
-///
-/// PBP is deliberately outside [`BOX_SCORE_STEPS`] — it is best-effort, and
-/// folding it in would make a PBP failure mark the night's *box scores*
-/// uncovered and re-pull them for nothing. But that exclusion is also why a
-/// failed `playbyplay` night was never revisited: box scores succeeded, the date
-/// read as covered, and `compute_pbp_lineups` (a season-scoped DELETE-then-
-/// rebuild) rebuilt the season around the hole every night after. Giving PBP its
-/// own covered-date notion heals it without entangling the two.
-pub const PBP_STEPS: &[&str] = &["playbyplay"];
-
 /// A tracked table must drop by more than BOTH thresholds vs the prior run to
 /// count as a regression: a relative floor (guards against normal churn) AND an
 /// absolute floor (guards against noise on small early-season tables, and lets a
@@ -136,6 +124,14 @@ impl<'a> RunLedger<'a> {
     /// Record one finished step over the run's window
     /// ([`set_window`](RunLedger::set_window)). Fail-soft: a ledger write error
     /// is logged and swallowed so it can't abort the pipeline it's observing.
+    ///
+    /// Every step shares the run's window; there is deliberately no per-step
+    /// override. One existed briefly so the `playbyplay` step could record a
+    /// self-healed range of its own, and it was the wrong shape twice over —
+    /// the coverage it recorded was still whole-window, so a range containing
+    /// any rows certified the empty dates inside it too. PBP coverage is now
+    /// read from the `play_by_play` rows themselves (issue #247), which needs no
+    /// ledger bookkeeping at all.
     pub async fn record(
         &self,
         step: &str,
@@ -144,34 +140,8 @@ impl<'a> RunLedger<'a> {
         started_at: DateTime<Utc>,
         error: Option<&str>,
     ) {
-        self.record_windowed(step, status, rows_touched, started_at, error, self.window)
-            .await
-    }
-
-    /// Record a step that covered a **different** window from the rest of the
-    /// run (issue #247).
-    ///
-    /// The `playbyplay` step heals on its own scan and its own cap, so on a
-    /// heal night it ingests a wider range than the box-score steps did. Its
-    /// ledger row has to say so. Stamping the run's narrower window over a wider
-    /// PBP pull would make [`first_uncovered_pbp_date`] find the same gap again
-    /// the next night, and the next — re-fetching the same days forever while
-    /// the coverage it actually achieved went unrecorded. The reverse error is
-    /// worse and is why this is a per-step override rather than a widened run
-    /// window: stamping the PBP range onto the box-score steps would claim dates
-    /// they never ingested, which is precisely the silent-hole failure the
-    /// coverage scan exists to prevent.
-    pub async fn record_windowed(
-        &self,
-        step: &str,
-        status: StepStatus,
-        rows_touched: Option<i64>,
-        started_at: DateTime<Utc>,
-        error: Option<&str>,
-        window: Option<(NaiveDate, NaiveDate)>,
-    ) {
         let ended_at = Utc::now();
-        let (window_start, window_end) = match window {
+        let (window_start, window_end) = match self.window {
             Some((s, e)) => (Some(s), Some(e)),
             None => (None, None),
         };
@@ -339,68 +309,16 @@ impl<'a> RunLedger<'a> {
 /// caller's heal cap, or [`heal_window`] could never report an unrecoverable
 /// shortfall; past it, an un-backfilled hole ages out rather than degrading
 /// every run forever.
+///
+/// **Deliberately box-score-only.** Play-by-play is not tracked here and must
+/// not be: PBP coverage is derived from the `play_by_play` rows themselves
+/// (`cstat_core::invariants::pbp_deficient_dates`), which is the same read its
+/// alert makes. Three earlier attempts to give PBP a ledger-window notion of
+/// coverage each shipped a variant of one bug — a window claim cannot say "some
+/// dates in this range have PBP and others don't", so any range fetched with
+/// rows in it certified every date inside, permanently. See issue #247.
 pub async fn first_uncovered_ingest_date(
     pool: &PgPool,
-    exclude_run_id: Uuid,
-    before: NaiveDate,
-    as_of: NaiveDate,
-    lookback_days: i64,
-) -> Option<NaiveDate> {
-    first_uncovered_date_for_steps(
-        pool,
-        BOX_SCORE_STEPS,
-        exclude_run_id,
-        before,
-        as_of,
-        lookback_days,
-    )
-    .await
-}
-
-/// The earliest game date whose **play-by-play** we have not ingested — the same
-/// scan as [`first_uncovered_ingest_date`], keyed on [`PBP_STEPS`] (issue #247).
-///
-/// Separate from the box-score scan in both directions. A PBP failure must not
-/// drag the box scores into a re-pull they don't need; and a box-score success
-/// must not certify a night whose PBP never landed, which is exactly how a lost
-/// `playbyplay` night became permanent. Callers heal this window on its own,
-/// tighter cap — a wide PBP re-pull is far more API calls than a box-score one.
-///
-/// Coverage counts only runs that recorded `playbyplay` **ok**, and the
-/// `MIN(window_start)` floor means a ledger with no such run at all reports no
-/// gap rather than declaring the whole lookback uncovered.
-///
-/// That floor is a genuine blind spot as well as a safety net: it can never see
-/// a gap *earlier* than the first successful PBP window. Note this is not the
-/// state prod is in — S2 shipped and deployed, so prod's ledger already carries
-/// `playbyplay` rows from before this scan existed, and the first run after this
-/// deploys scans that real history rather than no-opping. In the off-season that
-/// costs nothing (no games in range → the fetch short-circuits with zero API
-/// calls), which is why deploying before tipoff is the cheap moment to do it.
-pub async fn first_uncovered_pbp_date(
-    pool: &PgPool,
-    exclude_run_id: Uuid,
-    before: NaiveDate,
-    as_of: NaiveDate,
-    lookback_days: i64,
-) -> Option<NaiveDate> {
-    first_uncovered_date_for_steps(
-        pool,
-        PBP_STEPS,
-        exclude_run_id,
-        before,
-        as_of,
-        lookback_days,
-    )
-    .await
-}
-
-/// Shared implementation of the coverage scan: a date is covered when **every**
-/// step in `steps` succeeded for some single run whose stamped window contains
-/// it. See [`first_uncovered_ingest_date`] for the reasoning behind the shape.
-async fn first_uncovered_date_for_steps(
-    pool: &PgPool,
-    steps: &[&str],
     exclude_run_id: Uuid,
     before: NaiveDate,
     as_of: NaiveDate,
@@ -429,10 +347,10 @@ async fn first_uncovered_date_for_steps(
              SELECT 1 FROM complete c WHERE d::date BETWEEN c.ws AND c.we \
          )",
     )
-    .bind(steps)
+    .bind(BOX_SCORE_STEPS)
     .bind(exclude_run_id)
     .bind(as_of)
-    .bind(steps.len() as i64)
+    .bind(BOX_SCORE_STEPS.len() as i64)
     .bind(horizon)
     .bind(last)
     .fetch_one(pool)

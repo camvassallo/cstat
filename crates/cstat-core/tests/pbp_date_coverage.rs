@@ -23,6 +23,7 @@
 //! Gated `#[ignore]` — needs a local DB with PBP ingested. Run:
 //!   DATABASE_URL=... cargo test -p cstat-core --test pbp_date_coverage -- --ignored --nocapture
 
+use chrono::NaiveDate;
 use cstat_core::invariants::{self, PBP_DATE_MIN_COVERAGE, PBP_DATE_MIN_GAMES};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -68,17 +69,56 @@ async fn api_era_seasons_have_no_pbp_date_gaps() {
         violations.is_empty(),
         "{} season(s) contain a game date under the {:.0}% PBP-coverage floor. \
          Either a `playbyplay` night was lost and needs \
-         `cstat-ingest nightly --year YYYY --from X --to Y` (NOT the standalone \
-         `playbyplay` subcommand — it writes no `ingest_runs` row, so the self-heal \
-         keeps re-pulling the window), or the feed's honest coverage \
-         has drifted down into the floor and PBP_DATE_MIN_COVERAGE needs \
-         re-deriving. Inspect with:\n  \
+         `cstat-ingest playbyplay --year YYYY --from X --to Y`, or the feed's \
+         honest coverage has drifted down into the floor and \
+         PBP_DATE_MIN_COVERAGE needs re-deriving. Inspect with:\n  \
          SELECT g.game_date, count(*) AS games, count(*) FILTER (WHERE EXISTS \
          (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id)) AS with_pbp\n   \
          FROM games g WHERE g.season = ? AND g.home_score IS NOT NULL\n   \
          GROUP BY 1 ORDER BY 3::float8 / 2 ASC LIMIT 10;",
         violations.len(),
         PBP_DATE_MIN_COVERAGE * 100.0,
+    );
+}
+
+/// The nightly's self-heal scans this same function, so the `since` bound it
+/// passes must narrow the *reported dates* without narrowing the season-wide
+/// "does this deployment have PBP at all" gate. Getting that backwards would
+/// make a lookback whose every date is missing suppress itself — silencing the
+/// heal in exactly the case it exists for.
+#[tokio::test]
+#[ignore = "needs local DB with play-by-play ingested"]
+async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
+    let pool = pool().await;
+    let season = 2026;
+
+    let all = invariants::pbp_deficient_dates(&pool, season, None)
+        .await
+        .unwrap();
+    // A cutoff late enough to exclude essentially the whole season. If the gate
+    // were computed over the bounded window it would see zero PBP there and
+    // return nothing regardless of the data; instead the bound may only ever
+    // remove dates that were already reported.
+    let cutoff = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+    let bounded = invariants::pbp_deficient_dates(&pool, season, Some(cutoff))
+        .await
+        .unwrap();
+
+    for d in &bounded {
+        assert!(
+            d.date >= cutoff,
+            "`since` must exclude earlier dates: {d:?}"
+        );
+        assert!(
+            all.iter().any(|a| a.date == d.date),
+            "the bound may only remove dates, never invent one: {d:?}"
+        );
+    }
+    assert!(
+        bounded.len() <= all.len(),
+        "bounded {} > unbounded {}",
+        bounded.len(),
+        all.len()
     );
 }
 

@@ -140,10 +140,9 @@ check would fire every night if NatStat ever published PBP behind the box score)
 no-ops entirely on a season with no PBP at all — a PBP-less prod, `simulate`, and the
 `ingest_replay` fixtures all seed none.
 
-**Backfill with `cstat-ingest nightly --year YYYY --from X --to Y`, not the standalone
-`playbyplay` subcommand.** The subcommand fills the rows but writes no `ingest_runs` row,
-so the coverage scan keeps reporting the gap and the nightly keeps re-pulling the window.
-Only a run that records ledger coverage actually closes it.
+**Backfill with `cstat-ingest playbyplay --year YYYY --from X --to Y`.** Because the check
+reads the `play_by_play` rows rather than a ledger claim, *any* run that lands the rows
+clears it — there is no bookkeeping to keep in step.
 
 **The total-loss case lives elsewhere by necessity.** A season that never receives *any*
 PBP cannot be caught by a check that measures per-date share — there is nothing to compare
@@ -163,41 +162,37 @@ backfill instead of only asserting one exists, and it does **not** degrade the r
 (the PBP heal's shortfall message relies on this line naming them). Note this also starts
 surfacing the standing `completed_game_missing_team_stats` count (#232).
 
-**Shipped — self-heal.** `playbyplay` now has its own covered-date notion
-(`run_ledger::first_uncovered_pbp_date`, keyed on `PBP_STEPS`) beside the box-score scan,
-so a night whose box scores succeeded and whose PBP failed is re-pulled by the next run
-instead of never. The two scans stay separate in both directions: a PBP failure must not
-drag the box scores into a re-pull they don't need, and a box-score success must not
-certify a night whose PBP never landed. Self-limiting on first use — a ledger with no
-`playbyplay` success yet reports no gap rather than declaring the whole lookback uncovered.
+**Shipped — self-heal, reading the data rather than the ledger.** This is the part that
+took three attempts, and the first three all inferred PBP coverage from `ingest_runs`
+window claims. Every one shipped a variant of the same bug: a window claim cannot express
+*"some dates in this range have PBP and others don't"*, so any range fetched with rows in
+it certified every date inside it, permanently. Each patch then bred a new hole — a
+zero-row success still claiming coverage; an unreachable old gap suppressing recovery of
+newer, trivially reachable ones; an operator backfill that cleared the alert without
+filling anything.
 
-The PBP heal has a tighter **7-day** cap (vs 14 for box scores) because a PBP re-pull is
-~530 rows/game and a real draw on the hourly rate budget. Read that cap precisely: it
-bounds how far PBP reaches back *beyond the box-score window*, not the window the PBP step
-runs. Its `default_from` is the already-healed box start, so when a 14-day box heal fires
-the PBP heal returns nothing to widen and PBP simply covers that same 14-day window — which
-is correct (those dates just had box scores ingested and need their PBP), but it means the
-effective window is `max(box window, PBP heal)`.
+The shipped design deletes the proxy. `cstat_core::invariants::pbp_deficient_dates` asks
+`games` joined to `play_by_play` which settled dates are short, and **both the alert and
+the heal call that one function** — so they cannot disagree, and a hole is self-clearing.
+No `record_windowed`, no `PBP_STEPS`, no per-step ledger window; the PBP step records
+status, rows and timing like every other step and nothing else.
 
-**When the cap cannot reach the gap, the heal alerts and does not widen.** `heal_window`
-floors the widened start at `end_date − cap`, and `end_date` advances nightly — so a capped
-widening slides forward with the calendar instead of reaching back toward the gap. It would
-re-fetch the same trailing week its own previous runs already covered, re-DELETE/INSERT
-~150k `play_by_play` rows, every night for as long as the gap stays inside the 30-day
-lookback, and never close it: hundreds of NatStat calls a night for nothing. So the rule is
-heal when the cap can actually close the gap, otherwise hand it to an operator. The alert
-names the `nightly --from/--to` form for the reason above. (The box-score heal widens
-unconditionally and has the same no-progress property; its re-pull is orders of magnitude
-cheaper, so that is a follow-up rather than part of this change.)
+The heal widens the PBP window to the **earliest date that is both missing and reachable**
+inside a **7-day** cap (tighter than the box scores' 14 because a PBP re-pull is ~530
+rows/game and a real draw on the hourly rate budget). Two properties the ledger version
+never had:
 
-**A zero-row success does not claim coverage** when the window had completed games.
-`ingest_pbp_scoped` returns `Ok` with zero rows whenever a page yields no in-scope plays,
-so NatStat publishing a date's PBP a night behind its box scores — likelier than an HTTP
-error — would otherwise stamp the window covered and put it permanently beyond the scan's
-reach. Without this the heal would only ever recover nights that *errored*, which is the
-same permanent silent hole B3 exists to close, reintroduced through the success path. Keyed
-on statlines rather than the games count, since the latter includes scheduled, untipped
-rows.
+- **It converges.** The window starts at a date genuinely missing, not at a sliding
+  cap-width floor, so as dates fill in it narrows and eventually stops widening. The
+  floor-based version re-fetched a full week every night and, because the floor advances
+  with the calendar, never reached an old gap at all.
+- **An unreachable date does not block a reachable one.** Dates older than the cap are
+  reported and never fetched, but the heal still recovers everything newer. The previous
+  behaviour — bail out entirely when the oldest missing date was out of reach — lost every
+  newer hole too, one at a time, as each aged past the cap.
+
+The decision itself is the pure, unit-tested `plan_pbp_heal`, because it is the piece that
+broke three times.
 
 `lineups` still has the same shape of hole and was deliberately left out of scope.
 
@@ -317,7 +312,7 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
 1. ~~B3 PBP coverage invariant (`Warning`) + confirm the backfill path.~~ **Done 2026-08-07
    (#247)** — detection, Slack visibility for `Warning` violations, and the PBP self-heal
    all shipped. Backfill path confirmed, with a correction: it is
-   `nightly --from/--to`, **not** the standalone `playbyplay` subcommand.
+   the plain `playbyplay --from/--to` subcommand — the check reads rows, not ledger claims.
 2. B7 "source has not published this season" status for the Torvik year guard.
 3. B4 ownership split — `CLAUDE.md` line, R4 test rationale, ownership table enforcement.
 4. B5 (a)+(b) if a refit is planned this offseason; otherwise schedule before the refit.

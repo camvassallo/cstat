@@ -433,9 +433,50 @@ pub async fn pbp_date_coverage_gap(
     pool: &PgPool,
     season: i32,
 ) -> Result<Option<InvariantViolation>, sqlx::Error> {
-    // `EXISTS` per game rather than a join+aggregate over `play_by_play`: the
-    // table is 30M+ rows with a `(game_id, seq)` primary key, so this is one
-    // index probe per game and the whole check runs in ~0.3s for a full season.
+    let dates = pbp_deficient_dates(pool, season, None).await?;
+    Ok(violation(
+        "pbp_date_coverage_gap",
+        Severity::Warning,
+        dates
+            .iter()
+            .map(|d| format!("{} ({}/{} games)", d.date, d.with_pbp, d.games)),
+    ))
+}
+
+/// One game date whose play-by-play coverage is short of what its completed
+/// games should have produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PbpDeficientDate {
+    pub date: chrono::NaiveDate,
+    /// Completed games on that date.
+    pub games: i64,
+    /// How many of them have any `play_by_play` rows.
+    pub with_pbp: i64,
+}
+
+/// Every settled game date in `season` whose PBP coverage is deficient, oldest
+/// first, optionally bounded to dates at or after `since`.
+///
+/// **This is the single definition of "a date is missing its play-by-play", and
+/// it is deliberately shared** between the alert ([`pbp_date_coverage_gap`]) and
+/// the nightly's self-heal, which scans it to decide what to re-pull. They were
+/// once separate — the alert read the data while the heal inferred coverage from
+/// `ingest_runs` window claims — and every difference between those two views
+/// turned into a bug: a window claim cannot say "some dates in this range have
+/// PBP and others don't", so a heal that fetched a range with *any* rows in it
+/// certified every date inside, including the empty ones, permanently. Reading
+/// the same rows both surfaces read makes the heal and the alert incapable of
+/// disagreeing, and makes a hole self-clearing: fill the rows by any means and
+/// both go quiet, with no ledger bookkeeping to get right.
+///
+/// `EXISTS` per game rather than a join+aggregate over `play_by_play`: the table
+/// is 30M+ rows with a `(game_id, seq)` primary key, so this is one index probe
+/// per game and a full season runs in ~0.3s.
+pub async fn pbp_deficient_dates(
+    pool: &PgPool,
+    season: i32,
+    since: Option<chrono::NaiveDate>,
+) -> Result<Vec<PbpDeficientDate>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
         WITH d AS (
@@ -450,10 +491,15 @@ pub async fn pbp_date_coverage_gap(
               AND g.game_date <= CURRENT_DATE - $2::int
             GROUP BY g.game_date
         ),
+        -- Deliberately computed over the WHOLE season, not the `since` window:
+        -- this gate asks "does this deployment have PBP at all", and narrowing
+        -- it would make a lookback whose every date is missing suppress itself —
+        -- silencing the heal in exactly the case it exists for.
         gate AS (SELECT COALESCE(sum(with_pbp), 0) AS total FROM d)
         SELECT d.game_date, d.games, d.with_pbp
         FROM d, gate
         WHERE gate.total > 0
+          AND ($5::date IS NULL OR d.game_date >= $5::date)
           AND (
                 d.with_pbp = 0
              OR (d.games >= $3 AND d.with_pbp::float8 / d.games < $4)
@@ -465,21 +511,18 @@ pub async fn pbp_date_coverage_gap(
     .bind(PBP_SETTLE_DAYS as i32)
     .bind(PBP_DATE_MIN_GAMES)
     .bind(PBP_DATE_MIN_COVERAGE)
+    .bind(since)
     .fetch_all(pool)
     .await?;
 
-    Ok(violation(
-        "pbp_date_coverage_gap",
-        Severity::Warning,
-        rows.iter().map(|r| {
-            format!(
-                "{} ({}/{} games)",
-                r.get::<chrono::NaiveDate, _>("game_date"),
-                r.get::<i64, _>("with_pbp"),
-                r.get::<i64, _>("games"),
-            )
-        }),
-    ))
+    Ok(rows
+        .iter()
+        .map(|r| PbpDeficientDate {
+            date: r.get("game_date"),
+            games: r.get("games"),
+            with_pbp: r.get("with_pbp"),
+        })
+        .collect())
 }
 
 /// Share of a season's Torvik rotation rows allowed to sit unlinked to a
