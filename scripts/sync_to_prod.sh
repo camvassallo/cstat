@@ -572,9 +572,10 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     exit 2
   fi
 
-  # Prod schema check, before generating anything and before the confirm prompt.
-  # Every other introspection here reads local, which is the wrong database to
-  # ask whether prod can accept the write: the motivating column
+  # Schema checks, before generating anything and before the confirm prompt —
+  # local first (below), then prod. Prod has to be asked at all because every
+  # other introspection here reads local, which is the wrong database to ask
+  # whether prod can accept the write: the motivating column
   # (`players.display_name`) arrived in a recent migration, so the likeliest
   # failure for this mode is "prod hasn't deployed that migration yet". Without
   # this the operator confirms a production write and *then* watches psql abort
@@ -597,10 +598,9 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     echo "  (checked locally — check the spelling against \\d $MERGE_TABLE)" >&2
     exit 2
   fi
-  # A merge column that is part of the match key can never differ from itself,
-  # so the run is guaranteed to update 0 rows — and now that zero rows raises a
-  # warning, that would read as "your natural key doesn't line up with prod"
-  # when nothing is wrong except the request.
+  # A merge column that is part of the match key can never differ from itself, so
+  # the run is guaranteed to update 0 rows — an outcome the operator would then
+  # have to interpret against the counts, when the request was simply impossible.
   for c in ${MERGE_COLS//,/ }; do
     for k in ${KEY_COLS//,/ }; do
       if [[ "$c" == "$k" ]]; then
@@ -642,11 +642,11 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     exit 2
   fi
 
-  # And the match key must actually BE a key on prod. It is discovered from the
-  # local catalog, so on a prod that is behind the migration which added the
-  # unique index, the same key can match SEVERAL rows per tuple — one local row
-  # would then be written over all of them, and the inflated count would be
-  # reported as success.
+  # And the match key must actually BE a key on prod. The allowlist asserts it is
+  # one *here*; that says nothing about a prod running behind the migration which
+  # added the unique index, where the same key can match SEVERAL rows per tuple —
+  # one local row written over all of them, with the inflated count reported as
+  # success.
   PROD_KEY_UNIQUE=$("${PSQL[@]}" "$PROD_URL" -t -A -c "
     SELECT 1
       FROM pg_index i
@@ -715,16 +715,6 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
             its cron is live (--force-full to merge every season)"
   fi
 
-  # The prod-side season predicate below is gated on HAS_SEASON — the TABLE
-  # having a season column — not on the KEY having one. Gating it on the key was
-  # backwards in both directions: where the key carries `season` the predicate is
-  # already implied by the key join (it protects nothing), and where it does not
-  # — `games` keyed on `natstat_id` alone, exactly the case the block was written
-  # for — it was omitted. A local past-season row whose `natstat_id` collides
-  # with a prod current-season row (this repo has hit cross-season natstat_id
-  # collisions from typo'd NatStat dates) would then overwrite live data while
-  # the banner claimed the current season was out of scope.
-
   # Batched, not row-at-a-time. 59k single-row UPDATEs is 59k round trips to a
   # database across the internet — the same N+1 that made the Torvik per-game
   # persist take ~10 min against prod before it was batched (ingest/torvik.rs).
@@ -774,7 +764,14 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   done
 
   # Enforce the season scope on PROD's side too, not just on which local rows
-  # were selected — see the comment above the scoping block.
+  # were selected. Gated on the TABLE having a season column, not on the KEY
+  # having one: where the key carries `season` this predicate is already implied
+  # by the key join, and where it does not — `games` keyed on `natstat_id` alone
+  # — gating on the key omitted it from exactly the case that needs it. A local
+  # past-season row whose `natstat_id` collides with a prod current-season row
+  # (this repo has hit cross-season natstat_id collisions from typo'd NatStat
+  # dates) would overwrite live data while the banner claimed the current season
+  # was out of scope.
   if [[ -n "$SEASON_FILTER" ]]; then
     WHERE_EXPR="$WHERE_EXPR AND t.season <> $CUR_SEASON"
   fi
