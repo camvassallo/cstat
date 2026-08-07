@@ -545,13 +545,38 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   # this the operator confirms a production write and *then* watches psql abort
   # on a missing column — and `--dry-run` could not warn either, since it also
   # only looked at local.
-  MISSING_ON_PROD=$("${PSQL[@]}" "$PROD_URL" -t -A -c "
+  # Local first, so the diagnosis is right. Asking prod first made a plain typo
+  # ("--columns coaches.name", where the column is `canonical_name` and exists in
+  # neither database) report as "prod is behind on migrations", sending the
+  # operator to check a deploy that is fine.
+  MISSING_COLS_SQL="
     SELECT string_agg(w.col, ', ')
       FROM unnest(string_to_array('${KEY_COLS},${MERGE_COLS}', ',')) AS w(col)
      WHERE NOT EXISTS (
        SELECT 1 FROM information_schema.columns c
         WHERE c.table_schema = 'public' AND c.table_name = '$MERGE_TABLE'
-          AND c.column_name = w.col)" | trim)
+          AND c.column_name = w.col)"
+  MISSING_LOCALLY=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "$MISSING_COLS_SQL" | trim)
+  if [[ -n "$MISSING_LOCALLY" ]]; then
+    echo "✗ '$MERGE_TABLE' has no column(s): $MISSING_LOCALLY" >&2
+    echo "  (checked locally — check the spelling against \\d $MERGE_TABLE)" >&2
+    exit 2
+  fi
+  # A merge column that is part of the match key can never differ from itself,
+  # so the run is guaranteed to update 0 rows — and now that zero rows raises a
+  # warning, that would read as "your natural key doesn't line up with prod"
+  # when nothing is wrong except the request.
+  for c in ${MERGE_COLS//,/ }; do
+    for k in ${KEY_COLS//,/ }; do
+      if [[ "$c" == "$k" ]]; then
+        echo "✗ '$c' is part of the match key (${KEY_COLS//,/, }) — merging it onto" >&2
+        echo "  itself can only ever update 0 rows. Pick a non-key column." >&2
+        exit 2
+      fi
+    done
+  done
+
+  MISSING_ON_PROD=$("${PSQL[@]}" "$PROD_URL" -t -A -c "$MISSING_COLS_SQL" | trim)
   if [[ -n "$MISSING_ON_PROD" ]]; then
     echo "✗ prod's '$MERGE_TABLE' is missing: $MISSING_ON_PROD" >&2
     echo "  Prod is behind on migrations, or the column is local-only." >&2
@@ -584,9 +609,22 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   AGE_H=$(prod_nightly_age_hours)
   if [[ "$AGE_H" =~ ^[0-9]+$ ]] && [[ "$AGE_H" -lt "$STALE_AFTER_HOURS" ]]; then PROD_LIVE=1; fi
   if in_season_now; then PROD_LIVE=1; fi
-  if [[ -n "$HAS_SEASON" && "$PROD_LIVE" -eq 1 && "$FORCE_FULL" -eq 0 ]]; then
+  # Say which of the three reasons actually applies. A blanket "no season column,
+  # or prod is not cron-fed" would have been a lie in the --force-full case, and
+  # the whole point of printing the scope is that the operator can check it.
+  if [[ -z "$HAS_SEASON" ]]; then
+    SCOPE_NOTE="every row — $MERGE_TABLE has no season column"
+  elif [[ "$PROD_LIVE" -eq 0 ]]; then
+    SCOPE_NOTE="every season — prod is not currently cron-fed (off-season/bootstrap)"
+  elif [[ "$FORCE_FULL" -eq 1 ]]; then
+    CUR_SEASON=$(current_season)
+    SCOPE_NOTE="every season INCLUDING $CUR_SEASON — --force-full given, so this can
+            overwrite what prod's nightly computed today"
+  else
     CUR_SEASON=$(current_season)
     SEASON_FILTER="WHERE season <> $CUR_SEASON"
+    SCOPE_NOTE="seasons other than $CUR_SEASON — prod owns the current season while
+            its cron is live (--force-full to merge every season)"
   fi
 
   # Batched, not row-at-a-time. 59k single-row UPDATEs is 59k round trips to a
@@ -640,12 +678,7 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   echo "→ Table:    $MERGE_TABLE"
   echo "→ Columns:  ${MERGE_COLS//,/, }"
   echo "→ Match on: ${KEY_COLS//,/, }  (natural key, from a unique index)"
-  if [[ -n "$SEASON_FILTER" ]]; then
-    echo "→ Scope:    seasons other than $CUR_SEASON — prod owns the current season"
-    echo "            while its cron is live (--force-full to merge every season)"
-  else
-    echo "→ Scope:    every row (no season column, or prod is not currently cron-fed)"
-  fi
+  echo "→ Scope:    $SCOPE_NOTE"
   echo
 
   STATEMENTS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
