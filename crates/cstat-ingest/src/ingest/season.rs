@@ -590,7 +590,29 @@ impl<'a> SeasonIngester<'a> {
                 .await
                 {
                     Ok(deficient) => {
-                        let dates: Vec<NaiveDate> = deficient.iter().map(|d| d.date).collect();
+                        // The heal chases only dates with a real slate; the
+                        // ALERT still reports every deficient date, including
+                        // one- and two-game ones.
+                        //
+                        // Those light-slate dates are the case the heal cannot
+                        // converge on. A whole-night ingest failure always hits
+                        // a full slate, so a 1–2 game date at zero coverage is
+                        // far more likely a game the source never published (the
+                        // only such date in twelve seasons, 2019-12-24, is
+                        // exactly that) than a pipeline fault. Re-fetching it
+                        // cannot fill it, so it stays deficient and gets picked
+                        // again the next night, and the next — each run paging a
+                        // multi-day range and DELETE/INSERT-replacing the
+                        // play-by-play of every already-complete game in it,
+                        // until the date drifts past the cap. Detection loses
+                        // nothing: the date is still named in the warnings line
+                        // every night, where a human can judge what the nightly
+                        // cannot.
+                        let dates: Vec<NaiveDate> = deficient
+                            .iter()
+                            .filter(|d| d.games >= cstat_core::invariants::PBP_DATE_MIN_GAMES)
+                            .map(|d| d.date)
+                            .collect();
                         let plan = plan_pbp_heal(&dates, floor, df);
                         if !plan.unreachable.is_empty() {
                             warn!(
@@ -1155,24 +1177,30 @@ impl<'a> SeasonIngester<'a> {
         // backstop even within the window (e.g. a wide self-heal window).
         // Best-effort like PBP.
         //
-        // Scoped to `pbp_start_date`, the SAME window the PBP step just ran
-        // (issue #247). The two feeds fail together — a run that dies after the
-        // box steps loses both — and `compute_pbp_lineups` prefers this exact
-        // 5-man membership over the PBP-reconstructed stints, falling back to
-        // the weaker source per game. So healing PBP for a date while leaving
-        // its lineups behind would rebuild that date's `lineup_aggregates` /
-        // `player_on_off` / RAPM from the degraded source permanently, with no
-        // alert — the heal quietly locking in worse data for exactly the dates
-        // it touched. Costs nothing on a normal night (the windows are equal),
-        // and on a heal night the `natstat_lineup_games` ledger skips every game
-        // already captured, so only the genuinely missing ones are fetched.
+        // Deliberately scoped to `start_date`, NOT the PBP heal's window.
+        //
+        // Riding the healed window looks right — the two feeds fail together,
+        // and `compute_pbp_lineups` prefers this exact 5-man membership over the
+        // PBP-reconstructed stints, so a healed date whose lineups were left
+        // behind keeps the weaker source. That is a real gap. But this sweep is
+        // oldest-first and truncates at the fetch limit below, so over a
+        // week-wide window (300–600 uncaptured peak-season games) the cap is
+        // spent on the oldest dates and never reaches the current night's — and
+        // *those* games are unrecoverable, because tomorrow's window no longer
+        // contains them and the PBP heal will not widen back to a date whose PBP
+        // has since landed. Trading a degraded source on old dates for a missing
+        // one on last night's games is the wrong trade, and the right fix needs
+        // the sweep's ordering and cap reworked together.
+        //
+        // So the lineups hole stays open and stays known, as it was before this
+        // issue. Tracked as the `lineups` follow-up to #247.
         const NIGHTLY_LINEUPS_FETCH_LIMIT: u64 = 500;
         let t0 = Utc::now();
         match super::lineups::ingest_lineups_for_season(
             self.client,
             self.pool,
             self.season,
-            Some((&pbp_start_date, &end_date)),
+            Some((&start_date, &end_date)),
             Some(NIGHTLY_LINEUPS_FETCH_LIMIT),
             false,
         )

@@ -121,25 +121,38 @@ async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
 
     sqlx::query("BEGIN").execute(&pool).await.unwrap();
 
-    // A settled date with a real slate, late enough that a mid-season cutoff
-    // sits before it — so the bound has something to keep and something to drop.
-    let victim: NaiveDate = sqlx::query_scalar(
-        "SELECT g.game_date FROM games g \
-          WHERE g.season = $1 AND g.home_score IS NOT NULL \
-            AND g.game_date <= CURRENT_DATE - 2 \
-          GROUP BY g.game_date HAVING count(*) >= 3 \
-          ORDER BY g.game_date DESC LIMIT 1",
+    // TWO victims, an early one and a late one, so a cutoff between them has
+    // something to drop AND something to keep. The previous version wiped only
+    // the season's LAST qualifying date and cut at victim+1, so the expected
+    // result was the empty vec under both the correct implementation and the
+    // regression it claimed to guard — vacuous for the second time.
+    let victims: Vec<NaiveDate> = sqlx::query_scalar(
+        "WITH d AS ( \
+             SELECT g.game_date FROM games g \
+              WHERE g.season = $1 AND g.home_score IS NOT NULL \
+                AND g.game_date <= CURRENT_DATE - 2 \
+              GROUP BY g.game_date HAVING count(*) >= 3 \
+              ORDER BY g.game_date \
+         ) \
+         (SELECT game_date FROM d LIMIT 1) \
+         UNION ALL \
+         (SELECT game_date FROM d ORDER BY game_date DESC LIMIT 1) \
+         ORDER BY 1",
     )
     .bind(season)
-    .fetch_one(&pool)
+    .fetch_all(&pool)
     .await
     .unwrap();
+    assert_eq!(victims.len(), 2, "need two distinct dates to bound between");
+    let (early, late) = (victims[0], victims[1]);
+    assert!(early < late);
+
     sqlx::query(
         "DELETE FROM play_by_play p USING games g \
-          WHERE p.game_id = g.id AND g.season = $1 AND g.game_date = $2",
+          WHERE p.game_id = g.id AND g.season = $1 AND g.game_date = ANY($2)",
     )
     .bind(season)
-    .bind(victim)
+    .bind(&victims)
     .execute(&pool)
     .await
     .unwrap();
@@ -147,14 +160,14 @@ async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
     let all = invariants::pbp_deficient_dates(&pool, season, None)
         .await
         .unwrap();
-    assert!(
-        all.iter().any(|d| d.date == victim),
-        "the wiped date must be reported, or the rest of this test is vacuous"
-    );
+    for v in &victims {
+        assert!(
+            all.iter().any(|d| d.date == *v),
+            "wiped date {v} must be reported, or the rest of this test is vacuous"
+        );
+    }
 
-    // A `since` at the season's first game must change nothing — the assertion
-    // that fails if the bound is ever moved inside the CTE feeding the
-    // season-wide gate.
+    // A `since` at the season's first game must change nothing.
     let wide = invariants::pbp_deficient_dates(&pool, season, Some(first))
         .await
         .unwrap();
@@ -163,20 +176,25 @@ async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
         "a `since` at the season's first game must match no bound at all"
     );
 
-    // A cutoff after the wiped date must drop it, and the gate must still hold
-    // (the season has PBP elsewhere), so the result is a strict filter.
-    let after = victim + chrono::Duration::days(1);
-    let bounded = invariants::pbp_deficient_dates(&pool, season, Some(after))
+    // Cut between the two victims: the late one survives, the early one does
+    // not. Both halves are non-trivial, so the test fails if the bound is
+    // dropped (early would survive) or over-applied (late would vanish).
+    let cutoff = late;
+    let bounded = invariants::pbp_deficient_dates(&pool, season, Some(cutoff))
         .await
         .unwrap();
     assert!(
-        !bounded.iter().any(|d| d.date == victim),
-        "`since` must exclude dates before it"
+        bounded.iter().any(|d| d.date == late),
+        "a date at the cutoff must be KEPT — `since` is inclusive"
+    );
+    assert!(
+        !bounded.iter().any(|d| d.date == early),
+        "a date before the cutoff must be dropped"
     );
     assert_eq!(
         bounded,
         all.iter()
-            .filter(|d| d.date >= after)
+            .filter(|d| d.date >= cutoff)
             .cloned()
             .collect::<Vec<_>>(),
         "the bounded result must be exactly the unbounded one filtered by date"
@@ -187,14 +205,93 @@ async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
     // Belt and braces: the wipe is gone.
     let restored: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM play_by_play p JOIN games g ON g.id = p.game_id \
-          WHERE g.season = $1 AND g.game_date = $2",
+          WHERE g.season = $1 AND g.game_date = ANY($2)",
     )
     .bind(season)
-    .bind(victim)
+    .bind(&victims)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(restored > 0, "ROLLBACK did not restore {victim}");
+    assert!(restored > 0, "ROLLBACK did not restore {victims:?}");
+}
+
+/// The PBP-less-deployment gate must sit on the ALERT, never inside
+/// `pbp_deficient_dates` — because the nightly self-heal reads that same
+/// function, and a gate there silences the heal exactly when a season holds no
+/// PBP yet.
+///
+/// That is not a theoretical ordering: at a season rollover, if the first
+/// `playbyplay` nights fail, the season has zero PBP. With the gate shared, the
+/// scan returns nothing, no heal is attempted, and by the time a night succeeds
+/// the 7-day cap can no longer reach opening night — a permanent hole in the
+/// season's lineup rollups, which is the whole failure #247 exists to close.
+///
+/// Builds the condition rather than hunting for it: every ingested season has
+/// PBP, so this inserts a few scored games for a fictitious season inside a
+/// transaction it rolls back.
+#[tokio::test]
+#[ignore = "needs local DB"]
+async fn a_pbp_less_season_is_silent_to_the_alert_but_visible_to_the_heal() {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect(&url)
+        .await
+        .unwrap();
+    // A season we never ingest, so nothing real can collide with it.
+    let season = 1901;
+
+    sqlx::query("BEGIN").execute(&pool).await.unwrap();
+
+    // Three completed games on one settled date, and no play-by-play anywhere.
+    let day = chrono::Utc::now().date_naive() - chrono::Duration::days(10);
+    for i in 0..3 {
+        sqlx::query(
+            "INSERT INTO games (id, natstat_id, season, game_date, home_score, away_score, \
+                                is_neutral_site, created_at, updated_at) \
+             VALUES (gen_random_uuid(), $1, $2, $3, 70, 60, false, now(), now())",
+        )
+        .bind(format!("test-gate-{i}"))
+        .bind(season)
+        .bind(day)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let deficient = invariants::pbp_deficient_dates(&pool, season, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        deficient.len(),
+        1,
+        "the heal's input must SEE the date — a gate here is what left opening \
+         night permanently unhealed"
+    );
+    assert_eq!(deficient[0].date, day);
+    assert_eq!(deficient[0].with_pbp, 0);
+
+    assert!(
+        invariants::pbp_date_coverage_gap(&pool, season)
+            .await
+            .unwrap()
+            .is_none(),
+        "the ALERT must stay quiet on a season with no PBP at all — otherwise a \
+         PBP-less prod and every replay harness fire on every date"
+    );
+    assert!(!invariants::season_has_any_pbp(&pool, season).await.unwrap());
+
+    sqlx::query("ROLLBACK").execute(&pool).await.unwrap();
+
+    let leftover: i64 = sqlx::query_scalar("SELECT count(*) FROM games WHERE season = $1")
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(leftover, 0, "ROLLBACK left test rows behind");
 }
 
 /// The zero-coverage arm reports a date at ANY slate size, with no min-games

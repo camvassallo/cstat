@@ -194,10 +194,29 @@ never had:
 The decision itself is the pure, unit-tested `plan_pbp_heal`, because it is the piece that
 broke three times.
 
-The heal also carries the `lineups` capture with it: both feeds fail together, and
-`compute_pbp_lineups` prefers the exact 5-man membership over PBP-reconstructed stints, so
-healing a date's PBP while leaving its lineups behind would lock in the weaker source for
-exactly the dates the heal touched.
+The heal chases only dates with a **real slate** (>=3 completed games), while the alert
+reports every deficient date. A whole-night ingest failure always hits a full slate, so a
+one- or two-game date at zero coverage is far more likely a game the source never published
+than a pipeline fault — and re-fetching it cannot fill it, so the heal would pick it again
+every night, paging a multi-day range and rewriting the play-by-play of every complete game
+in it, until the date drifted past the cap. Detection loses nothing: the date is still named
+in the warnings line, where a human can judge what the nightly cannot.
+
+The **`lineups` hole stays open**, deliberately. Riding the healed window looks right — the
+two feeds fail together, and `compute_pbp_lineups` prefers the exact 5-man membership — but
+that sweep is oldest-first and truncates at a 500-game cap, so a week-wide window spends the
+cap on the oldest dates and never reaches the current night's, whose games are then
+unrecoverable (tomorrow's window no longer contains them, and the PBP heal will not widen
+back to a date whose PBP has landed). Trading a degraded source on old dates for a missing
+one on last night's games is the wrong trade; the fix needs the sweep's ordering and cap
+reworked together, and is the `lineups` follow-up to this issue.
+
+The PBP-less-deployment gate sits on the **alert**, not on the shared query. It was briefly
+inside the shared definition, where it also silenced the heal — and the heal matters most
+when a season holds no PBP yet. At a rollover that was a permanent hole: if the first
+`playbyplay` nights fail the season has zero PBP, the scan returns nothing, no heal is
+attempted, and by the time a night succeeds the 7-day cap can no longer reach opening night.
+Pinned by a test that builds a PBP-less season in a rolled-back transaction.
 
 **Two limitations, stated rather than papered over.** A `playbyplay` night that failed
 *partway through writing* leaves a date at 50–99% coverage, which clears the floor and is

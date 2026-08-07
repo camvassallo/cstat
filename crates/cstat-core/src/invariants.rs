@@ -447,6 +447,18 @@ pub async fn pbp_date_coverage_gap(
     pool: &PgPool,
     season: i32,
 ) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    // The PBP-less-deployment gate lives HERE, on the alert, not inside
+    // [`pbp_deficient_dates`]. It used to sit in the shared query, where it also
+    // silenced the nightly self-heal that reads the same function — and the heal
+    // is most needed exactly when a season holds no PBP yet. At a season
+    // rollover that was a permanent hole: if the first nights' `playbyplay`
+    // steps fail, the season has zero PBP, the gate returns nothing, no heal is
+    // even attempted, and by the time one succeeds the 7-day cap can no longer
+    // reach opening night. The harness-noise problem is the alert's alone, so
+    // the fix belongs at the alert.
+    if !season_has_any_pbp(pool, season).await? {
+        return Ok(None);
+    }
     let dates = pbp_deficient_dates(pool, season, None).await?;
     Ok(violation(
         "pbp_date_coverage_gap",
@@ -495,6 +507,12 @@ pub struct PbpDeficientDate {
 /// Every settled game date in `season` whose PBP coverage is deficient, oldest
 /// first, optionally bounded to dates at or after `since`.
 ///
+/// **Unfiltered by design.** There is no "does this deployment have PBP at all"
+/// suppressor here; that belongs to [`pbp_date_coverage_gap`], which is the
+/// surface with the alarm-fatigue problem. Putting it here also gagged the
+/// self-heal, which is at its most necessary precisely when a season holds no
+/// PBP yet.
+///
 /// **This is the single definition of "a date is missing its play-by-play", and
 /// it is deliberately shared** between the alert ([`pbp_date_coverage_gap`]) and
 /// the nightly's self-heal, which scans it to decide what to re-pull. They were
@@ -528,16 +546,10 @@ pub async fn pbp_deficient_dates(
               AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
               AND g.game_date <= CURRENT_DATE - $2::int
             GROUP BY g.game_date
-        ),
-        -- Deliberately computed over the WHOLE season, not the `since` window:
-        -- this gate asks "does this deployment have PBP at all", and narrowing
-        -- it would make a lookback whose every date is missing suppress itself —
-        -- silencing the heal in exactly the case it exists for.
-        gate AS (SELECT COALESCE(sum(with_pbp), 0) AS total FROM d)
+        )
         SELECT d.game_date, d.games, d.with_pbp
-        FROM d, gate
-        WHERE gate.total > 0
-          AND ($5::date IS NULL OR d.game_date >= $5::date)
+        FROM d
+        WHERE ($5::date IS NULL OR d.game_date >= $5::date)
           AND (
                 d.with_pbp = 0
              OR (d.games >= $3 AND d.with_pbp::float8 / d.games < $4)
