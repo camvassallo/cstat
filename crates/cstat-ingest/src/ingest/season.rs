@@ -40,6 +40,40 @@ fn is_core_season_date(date: &str) -> bool {
     }
 }
 
+/// Classify the two `torvik_games` sub-step outcomes into the step's ledger
+/// status plus any lines for the degraded run summary. Pure — unit-tested.
+///
+/// The asymmetry is the point, and it is not an oversight to be tidied away
+/// later. `torvik_games` is in `SERVED_CRITICAL` (`routes/health.rs`) because it
+/// writes `torvik_player_game_stats`, the `pit_cam_v3` serving input — so a
+/// failed **persist** must fail the step, and the 503 that follows on
+/// `/api/health/ingest` is correct. The **rebound backfill** is an enrichment
+/// layered on top of that same fetch; collapsing both into "any error fails the
+/// step" would take the health endpoint red over data that is not what makes the
+/// step critical, and a red light nobody can act on is how a real outage gets
+/// missed.
+///
+/// Both previously swallowed their error into a `0` and let the step record
+/// `ok`, so a failed write posted a green summary and reset the 36h staleness
+/// clock while the pit CamPom source silently aged.
+fn classify_torvik_games_outcome(
+    persist_err: Option<&str>,
+    rebound_err: Option<&str>,
+) -> (StepStatus, Vec<String>) {
+    let mut lines = Vec::new();
+    if let Some(e) = rebound_err {
+        lines.push(format!("torvik_games: rebound backfill failed: {e}"));
+    }
+    let status = match persist_err {
+        Some(e) => {
+            lines.push(format!("torvik_games: per-game persist failed: {e}"));
+            StepStatus::Failed
+        }
+        None => StepStatus::Ok,
+    };
+    (status, lines)
+}
+
 /// Orchestrates full-season data ingestion.
 pub struct SeasonIngester<'a> {
     client: &'a NatStatClient,
@@ -608,6 +642,12 @@ impl<'a> SeasonIngester<'a> {
             ));
         }
 
+        // Wall-clock start, for the run duration in the summary. A nightly that
+        // suddenly takes 3× as long is the shape of the prod-DB latency / N+1
+        // regressions this pipeline has already hit twice, and it is invisible
+        // in a summary that only reports counts.
+        let run_started = Utc::now();
+
         // Rate-budget headroom (2.5): snapshot tokens before the run so we can
         // log consumption and warn if a busy night eats most of the budget.
         let budget = crate::rate_budget_from_env();
@@ -835,43 +875,52 @@ impl<'a> SeasonIngester<'a> {
         let t0 = Utc::now();
         match torvik_client.fetch_game_stats(self.season).await {
             Ok(games) => {
-                let persisted = match super::torvik::apply_persist_torvik_game_stats(
-                    self.pool,
-                    &games,
-                    self.season,
-                )
-                .await
-                {
-                    Ok(n) => n,
-                    Err(e) => {
-                        warn!(season = self.season, error = %e, "Torvik per-game persist failed");
-                        0
-                    }
-                };
-                let rebounds = match super::torvik::apply_rebound_backfill(
-                    self.pool,
-                    &games,
-                    self.season,
-                )
-                .await
-                {
-                    Ok(n) => n,
-                    Err(e) => {
-                        warn!(season = self.season, error = %e, "Torvik rebound backfill failed");
-                        0
-                    }
-                };
-                report.torvik_games_persisted = persisted;
-                report.torvik_rebounds_updated = rebounds;
+                // Both sub-steps used to swallow their error into a `0` and let
+                // the step record `ok`. That made a served-critical step report
+                // green over a failed write: the gzip fetch succeeded, so
+                // `torvik_games` logged `ok`, the SUCCESS summary posted, and
+                // `/api/health/ingest` had its 36h staleness clock reset — while
+                // `torvik_player_game_stats`, the `pit_cam_v3` serving input,
+                // was never written. The only trace was a `warn!` in the Railway
+                // logs. Outcomes are now split by what each actually costs.
+                let persisted =
+                    super::torvik::apply_persist_torvik_game_stats(self.pool, &games, self.season)
+                        .await;
+                let rebounds =
+                    super::torvik::apply_rebound_backfill(self.pool, &games, self.season).await;
+
+                if let Ok(n) = &rebounds {
+                    report.torvik_rebounds_updated = *n;
+                }
+                if let Ok(n) = &persisted {
+                    report.torvik_games_persisted = *n;
+                }
+                let persist_err = persisted.as_ref().err().map(|e| e.to_string());
+                let rebound_err = rebounds.as_ref().err().map(|e| e.to_string());
+                if let Some(e) = &rebound_err {
+                    warn!(season = self.season, error = %e, "Torvik rebound backfill failed");
+                }
+                if let Some(e) = &persist_err {
+                    warn!(season = self.season, error = %e, "Torvik per-game persist failed; pit CamPom source not refreshed");
+                }
+
+                let (status, lines) =
+                    classify_torvik_games_outcome(persist_err.as_deref(), rebound_err.as_deref());
+                // Every failure this step saw goes in the ledger row, not just
+                // the one that decided the status: `ingest_runs` outlives log
+                // retention, so a rebound failure recorded nowhere but a `warn!`
+                // is unrecoverable a week later. `None` on a clean run.
+                let detail = (!lines.is_empty()).then(|| lines.join("; "));
                 ledger
                     .record(
                         "torvik_games",
-                        StepStatus::Ok,
-                        Some(persisted as i64),
+                        status,
+                        (status == StepStatus::Ok).then_some(report.torvik_games_persisted as i64),
                         t0,
-                        None,
+                        detail.as_deref(),
                     )
                     .await;
+                failures.extend(lines);
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -1296,6 +1345,38 @@ impl<'a> SeasonIngester<'a> {
             Some(w) => format!("\n_:mag: warnings: {w}_"),
             None => String::new(),
         };
+        // Which dates this run actually covered, and how long it took. Both were
+        // log-only, and both are the first thing you want when reading a summary
+        // cold — "0 games" means something completely different over an
+        // off-season night than over a healed 9-day window.
+        let elapsed_secs = (Utc::now() - run_started).num_seconds().max(0);
+        let window_line = format!(
+            "*Window:*  {start_date} → {end_date}   ·   *Took:*  {mins}m{secs:02}s",
+            mins = elapsed_secs / 60,
+            secs = elapsed_secs % 60,
+        );
+        // Repairs are rare and individually notable (a swapped game, a phantom
+        // roster, a misidentified same-name player), so they are omitted
+        // entirely on the overwhelmingly common night when all four are zero
+        // rather than printed as a row of zeroes nobody reads.
+        let repair_line = match &report.compute {
+            Some(c)
+                if c.corrected_swapped_games
+                    + c.repaired_phantom_swaps
+                    + c.reattached_misidentified
+                    + c.deduplicated_players
+                    > 0 =>
+            {
+                format!(
+                    "\n*Repairs:*  {} swapped · {} phantom · {} misidentified · {} deduped",
+                    c.corrected_swapped_games,
+                    c.repaired_phantom_swaps,
+                    c.reattached_misidentified,
+                    c.deduplicated_players,
+                )
+            }
+            _ => String::new(),
+        };
         if failures.is_empty() {
             let torvik_line = match &report.torvik {
                 Some(t) => format!(
@@ -1304,22 +1385,32 @@ impl<'a> SeasonIngester<'a> {
                 ),
                 None => "*Torvik:*  skipped".to_string(),
             };
-            let compute_str = if report.compute.is_some() {
-                "ok"
-            } else {
-                "skipped"
+            // "Compute: ok" told you only that the step returned. These four
+            // counts are the load-bearing derived products — player rows, the
+            // AdjEM solve, CamPom, archetypes — so a step that silently computed
+            // over nothing (the shape of every stale-input bug this pipeline has
+            // had) reads as a row of zeroes instead of as "ok".
+            let compute_str = match &report.compute {
+                Some(c) => format!(
+                    "{} player-seasons · {} AdjEM · {} CamPom · {} archetypes",
+                    c.player_season_stats, c.adjusted_efficiency, c.campom, c.archetypes
+                ),
+                None => "skipped".to_string(),
             };
             notify::post_slack(
                 notify::SlackChannel::Cron,
                 &format!(
                     ":white_check_mark: *Nightly ingest OK* — season {season}\n\
+                     {window_line}\n\
                      *Box scores:*  {games} games · {pp} player perfs · {tp} team perfs\n\
                      *Feeds:*  {elo} ELO · {fc} forecasts\n\
                      {torvik_line}\n\
                      *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
-                     *Compute:*  {compute_str}   ·   *Rate budget:*  {remaining}/{budget}{heal_line}{warn_line}\n\
+                     *Compute:*  {compute_str}{repair_line}\n\
+                     *Rate budget:*  {remaining}/{budget}{heal_line}{warn_line}\n\
                      _run {run_id}_",
                     season = self.season,
+                    window_line = window_line,
                     games = report.ingest.games,
                     pp = report.ingest.player_performances,
                     tp = report.ingest.team_performances,
@@ -1329,6 +1420,7 @@ impl<'a> SeasonIngester<'a> {
                     pbp = report.pbp_rows,
                     lu = report.lineups_fetched,
                     compute_str = compute_str,
+                    repair_line = repair_line,
                     remaining = tokens_after,
                     budget = budget,
                     heal_line = heal_line,
@@ -1355,10 +1447,12 @@ impl<'a> SeasonIngester<'a> {
                 notify::SlackChannel::Cron,
                 &format!(
                     ":warning: *Nightly ingest DEGRADED* — season {season}\n\
+                     {window_line}\n\
                      Completed with {n} issue(s):\n\
                      {issues}{heal_line}{warn_line}{egress_line}\n\
                      _run {run_id}_",
                     season = self.season,
+                    window_line = window_line,
                     n = failures.len(),
                     issues = issues,
                     heal_line = heal_line,
@@ -1613,7 +1707,53 @@ impl std::fmt::Display for TeamReport {
 
 #[cfg(test)]
 mod tests {
-    use super::is_core_season_date;
+    use super::{StepStatus, classify_torvik_games_outcome, is_core_season_date};
+
+    #[test]
+    fn a_clean_torvik_games_step_reports_ok_and_says_nothing() {
+        let (status, lines) = classify_torvik_games_outcome(None, None);
+        assert_eq!(status, StepStatus::Ok);
+        assert!(lines.is_empty(), "{lines:?}");
+    }
+
+    #[test]
+    fn a_failed_persist_fails_the_step() {
+        // The regression this exists for: the write of the `pit_cam_v3` serving
+        // input blew up, and the step used to record `ok` anyway — green Slack
+        // summary, 36h staleness clock reset on /api/health/ingest, and the only
+        // trace a `warn!` in the Railway logs.
+        let (status, lines) = classify_torvik_games_outcome(Some("deadlock detected"), None);
+        assert_eq!(status, StepStatus::Failed);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("per-game persist failed"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_failed_rebound_backfill_degrades_but_does_not_fail_the_step() {
+        // Deliberately NOT symmetric with the persist case. `torvik_games` is
+        // served-critical because of the persist; failing the step here would
+        // 503 the health endpoint over an enrichment, and a red light nobody can
+        // act on is how a real outage gets missed.
+        let (status, lines) = classify_torvik_games_outcome(None, Some("timeout"));
+        assert_eq!(
+            status,
+            StepStatus::Ok,
+            "the rebound backfill is not what makes this step served-critical"
+        );
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("rebound backfill failed"), "{lines:?}");
+    }
+
+    #[test]
+    fn both_failing_reports_both() {
+        let (status, lines) = classify_torvik_games_outcome(Some("boom"), Some("timeout"));
+        assert_eq!(status, StepStatus::Failed);
+        assert_eq!(
+            lines.len(),
+            2,
+            "neither failure may be swallowed: {lines:?}"
+        );
+    }
 
     #[test]
     fn core_season_window_covers_nov_through_early_april() {
