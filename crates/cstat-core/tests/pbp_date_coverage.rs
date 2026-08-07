@@ -20,11 +20,19 @@
 //! the nightly only ever runs it against the current season, so they are not
 //! what the floor is calibrated for.
 //!
+//! The raw-SQL tests here query the distribution directly rather than through
+//! `pbp_deficient_dates` — the point is to measure the data, not to re-assert
+//! what the code does with it. They must still apply `PBP_SETTLE_DAYS`, though,
+//! and take the thresholds from the constants: a query that forgets the clamp
+//! reads today and yesterday, whose PBP has legitimately not arrived yet, as
+//! zero-coverage holes, and then fails in-season blaming the coverage floor for
+//! a gap that is only the settle window.
+//!
 //! Gated `#[ignore]` — needs a local DB with PBP ingested. Run:
 //!   DATABASE_URL=... cargo test -p cstat-core --test pbp_date_coverage -- --ignored --nocapture
 
 use chrono::NaiveDate;
-use cstat_core::invariants::{self, PBP_DATE_MIN_COVERAGE, PBP_DATE_MIN_GAMES};
+use cstat_core::invariants::{self, PBP_DATE_MIN_COVERAGE, PBP_DATE_MIN_GAMES, PBP_SETTLE_DAYS};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
@@ -34,6 +42,26 @@ const FIRST_API_ERA_SEASON: i32 = 2021;
 async fn pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
     PgPoolOptions::new().connect(&url).await.unwrap()
+}
+
+/// A pool pinned to ONE connection, for the tests that build their condition
+/// inside a transaction they roll back.
+///
+/// Every option here is load-bearing, which is why it lives in one place: the
+/// `BEGIN`, the queries, and the `ROLLBACK` must all land on the same session,
+/// or the function under test gets a fresh connection that cannot see the
+/// uncommitted change and asserts against unmodified data — passing vacuously
+/// rather than failing. Copy-pasted, half of that is one careless edit away.
+async fn pinned_pool() -> PgPool {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    PgPoolOptions::new()
+        .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect(&url)
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -92,21 +120,14 @@ async fn api_era_seasons_have_no_pbp_date_gaps() {
 /// vacuously). It therefore *creates* a deficiency — wiping one settled date's
 /// play-by-play inside a transaction it rolls back — on a single pinned
 /// connection so the function under test sees the uncommitted state.
+///
+/// Also asserts the alert's sample ordering, which needs the same fixture.
 #[tokio::test]
 #[ignore = "needs local DB with play-by-play ingested"]
 async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
-    // One connection, so BEGIN / the queries / ROLLBACK all share a session.
     // Nothing here can commit: the rollback is explicit, and a panic before it
     // drops the pool, which rolls back too.
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .min_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = pinned_pool().await;
     let season = 2026;
 
     let (first, last): (NaiveDate, NaiveDate) = sqlx::query_as(
@@ -130,16 +151,17 @@ async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
         "WITH d AS ( \
              SELECT g.game_date FROM games g \
               WHERE g.season = $1 AND g.home_score IS NOT NULL \
-                AND g.game_date <= CURRENT_DATE - 2 \
-              GROUP BY g.game_date HAVING count(*) >= 3 \
-              ORDER BY g.game_date \
+                AND g.game_date <= CURRENT_DATE - $2::int \
+              GROUP BY g.game_date HAVING count(*) >= $3 \
          ) \
-         (SELECT game_date FROM d LIMIT 1) \
+         (SELECT game_date FROM d ORDER BY game_date LIMIT 1) \
          UNION ALL \
          (SELECT game_date FROM d ORDER BY game_date DESC LIMIT 1) \
          ORDER BY 1",
     )
     .bind(season)
+    .bind(PBP_SETTLE_DAYS as i32)
+    .bind(PBP_DATE_MIN_GAMES)
     .fetch_all(&pool)
     .await
     .unwrap();
@@ -200,6 +222,27 @@ async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
         "the bounded result must be exactly the unbounded one filtered by date"
     );
 
+    // The alert's samples must lead with the NEWEST deficient date. On a season
+    // carrying a standing backlog the oldest dates never change, so an
+    // ascending sample spends every slot on them and the night just lost — the
+    // only one anybody can still act on inside the 7-day heal cap — is the one
+    // date the operator never sees. Both victims are deficient here, so the
+    // later of the two is what the first sample must name. Piggybacked on this
+    // test rather than given its own: the fixture — a real deficiency built and
+    // rolled back on a pinned connection — is the expensive part, and the
+    // ordering claim needs exactly it.
+    let newest = all.iter().map(|d| d.date).max().unwrap();
+    assert!(newest >= late);
+    let v = invariants::pbp_date_coverage_gap(&pool, season)
+        .await
+        .unwrap()
+        .expect("two wiped dates must produce a violation");
+    assert!(
+        v.samples[0].starts_with(&newest.to_string()),
+        "samples must lead with the newest deficient date ({newest}), got {:?}",
+        v.samples
+    );
+
     sqlx::query("ROLLBACK").execute(&pool).await.unwrap();
 
     // Belt and braces: the wipe is gone.
@@ -232,15 +275,7 @@ async fn the_since_bound_narrows_dates_without_narrowing_the_gate() {
 #[tokio::test]
 #[ignore = "needs local DB"]
 async fn a_pbp_less_season_is_silent_to_the_alert_but_visible_to_the_heal() {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .min_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = pinned_pool().await;
     // A season we never ingest, so nothing real can collide with it.
     let season = 1901;
 
@@ -315,11 +350,13 @@ async fn no_api_era_game_date_sits_at_zero_pbp_coverage() {
                     ) AS with_pbp \
              FROM games g \
              WHERE g.season >= $1 AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL \
+               AND g.game_date <= CURRENT_DATE - $2::int \
              GROUP BY g.game_date \
          ) \
          SELECT game_date, games FROM d WHERE with_pbp = 0 ORDER BY game_date",
     )
     .bind(FIRST_API_ERA_SEASON)
+    .bind(PBP_SETTLE_DAYS as i32)
     .fetch_all(&pool)
     .await
     .unwrap();
@@ -353,11 +390,13 @@ async fn worst_honest_game_date_clears_the_floor_with_margin() {
                     ) AS with_pbp \
              FROM games g \
              WHERE g.season >= $1 AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL \
+               AND g.game_date <= CURRENT_DATE - $2::int \
              GROUP BY g.game_date \
          ) \
-         SELECT min(with_pbp::float8 / games) FROM d WHERE games >= $2",
+         SELECT min(with_pbp::float8 / games) FROM d WHERE games >= $3",
     )
     .bind(FIRST_API_ERA_SEASON)
+    .bind(PBP_SETTLE_DAYS as i32)
     .bind(PBP_DATE_MIN_GAMES)
     .fetch_one(&pool)
     .await

@@ -580,39 +580,43 @@ impl<'a> SeasonIngester<'a> {
             NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
         ) {
             (true, Ok(df), Ok(dt)) => {
-                let horizon = dt - chrono::Duration::days(HEAL_LOOKBACK_DAYS);
                 let floor = dt - chrono::Duration::days(MAX_PBP_HEAL_DAYS);
-                match cstat_core::invariants::pbp_deficient_dates(
-                    self.pool,
-                    self.season,
-                    Some(horizon),
-                )
-                .await
+                match cstat_core::invariants::pbp_deficient_dates(self.pool, self.season, None)
+                    .await
                 {
                     Ok(deficient) => {
-                        // The heal chases only dates with a real slate; the
-                        // ALERT still reports every deficient date, including
-                        // one- and two-game ones.
+                        // Deliberately the SAME list the alert reports — whole,
+                        // with no slate floor over it and no lookback under it.
+                        // Two earlier bounds lived here and both were wrong:
                         //
-                        // Those light-slate dates are the case the heal cannot
-                        // converge on. A whole-night ingest failure always hits
-                        // a full slate, so a 1–2 game date at zero coverage is
-                        // far more likely a game the source never published (the
-                        // only such date in twelve seasons, 2019-12-24, is
-                        // exactly that) than a pipeline fault. Re-fetching it
-                        // cannot fill it, so it stays deficient and gets picked
-                        // again the next night, and the next — each run paging a
-                        // multi-day range and DELETE/INSERT-replacing the
-                        // play-by-play of every already-complete game in it,
-                        // until the date drifts past the cap. Detection loses
-                        // nothing: the date is still named in the warnings line
-                        // every night, where a human can judge what the nightly
-                        // cannot.
-                        let dates: Vec<NaiveDate> = deficient
-                            .iter()
-                            .filter(|d| d.games >= cstat_core::invariants::PBP_DATE_MIN_GAMES)
-                            .map(|d| d.date)
-                            .collect();
+                        // - A `games >= PBP_DATE_MIN_GAMES` filter, meant to stop
+                        //   the heal re-chasing a date the source will never
+                        //   publish. It could not: the *share* arm of
+                        //   `pbp_deficient_dates` already requires a real slate,
+                        //   so an unfillable partial date (3 games, 1 published)
+                        //   sailed straight past it and got re-chased anyway.
+                        //   What it did do was abandon the exact case the alert's
+                        //   zero-coverage arm carries no slate floor in order to
+                        //   catch — a `playbyplay` night lost on a light slate. A
+                        //   whole-night failure is slate-size-independent, and the
+                        //   lightest slates of the year are the Final Four and the
+                        //   title game. Filtered out of `dates`, such a date could
+                        //   not even reach `plan.unreachable`, so it got neither a
+                        //   heal nor a backfill command — detected forever, fixed
+                        //   never.
+                        //
+                        // - A `HEAL_LOOKBACK_DAYS` horizon on the scan. The alert
+                        //   scans the whole season, so a date past the horizon
+                        //   kept appearing in the warnings line every night while
+                        //   the one message that prints a backfill command had
+                        //   quietly stopped mentioning it.
+                        //
+                        // What actually bounds the chase is MAX_PBP_HEAL_DAYS: an
+                        // unfillable date is re-fetched at most that many nights,
+                        // then drops below `floor` and is reported as unreachable
+                        // instead. Same terminal state for every date the source
+                        // won't fill, whatever its slate size.
+                        let dates: Vec<NaiveDate> = deficient.iter().map(|d| d.date).collect();
                         let plan = plan_pbp_heal(&dates, floor, df);
                         if !plan.unreachable.is_empty() {
                             warn!(
@@ -1561,6 +1565,18 @@ impl<'a> SeasonIngester<'a> {
         //   one-night lag the window legitimately yields nothing and the run
         //   would post DEGRADED every night while nothing was wrong. The
         //   condition this alert is actually for is total loss, so ask that.
+        //
+        // - **The season must have had time to produce PBP.** Asking the season
+        //   instead of the window buys settle slack everywhere except the one
+        //   place the two are the same thing: opening week, where the season IS
+        //   the window. On the run after opening night the season has no PBP
+        //   because nothing in it has settled yet, and the check would announce a
+        //   total feed loss on the loudest night of the year. So require that the
+        //   season holds at least one *settled* game date still missing PBP —
+        //   with `season_has_any_pbp` already false, that is exactly "a date old
+        //   enough to judge exists", and it is empty until the settle window has
+        //   passed. Read through the same shared definition the alert and the
+        //   heal use, so it cannot drift from either.
         if report.pbp_rows == 0
             && pbp_step_ok
             && report.ingest.player_performances > 0
@@ -1569,6 +1585,10 @@ impl<'a> SeasonIngester<'a> {
             && !cstat_core::invariants::season_has_any_pbp(self.pool, self.season)
                 .await
                 .unwrap_or(true)
+            && !cstat_core::invariants::pbp_deficient_dates(self.pool, self.season, None)
+                .await
+                .unwrap_or_default()
+                .is_empty()
         {
             warn!(
                 season = self.season,
@@ -1717,19 +1737,14 @@ impl<'a> SeasonIngester<'a> {
              *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
              *Compute:*  {compute_str}{repair_line}\n\
              *Rate budget:*  {remaining}/{budget}",
-            window_line = window_line,
             games = report.ingest.games,
             pp = report.ingest.player_performances,
             tp = report.ingest.team_performances,
             elo = report.ingest.elo_ratings,
             fc = report.ingest.game_forecasts,
-            torvik_line = torvik_line,
             pbp = report.pbp_rows,
             lu = report.lineups_fetched,
-            compute_str = compute_str,
-            repair_line = repair_line,
             remaining = tokens_after,
-            budget = budget,
         );
         if failures.is_empty() {
             notify::post_slack(
@@ -1739,9 +1754,6 @@ impl<'a> SeasonIngester<'a> {
                      {stat_block}{heal_line}{warn_line}\n\
                      _run {run_id}_",
                     season = self.season,
-                    stat_block = stat_block,
-                    heal_line = heal_line,
-                    warn_line = warn_line,
                     run_id = ledger.run_id(),
                 ),
             )
@@ -1769,12 +1781,7 @@ impl<'a> SeasonIngester<'a> {
                      {issues}{heal_line}{warn_line}{egress_line}\n\
                      _run {run_id}_",
                     season = self.season,
-                    stat_block = stat_block,
                     n = failures.len(),
-                    issues = issues,
-                    heal_line = heal_line,
-                    warn_line = warn_line,
-                    egress_line = egress_line,
                     run_id = ledger.run_id(),
                 ),
             )

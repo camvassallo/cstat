@@ -151,7 +151,12 @@ the nightly instead (`SeasonIngester::nightly`'s in-season empty-PBP check), whi
 calendar and the simulated-clock discriminator the invariant does not. It matters: with
 zero PBP the step still records `ok` (an empty page is a successful fetch), the coverage
 scan sees no gap, and `pbp_present_but_lineups_empty` is itself gated on PBP being present
-— so the season would serve empty rollups under a green summary every night.
+— so the season would serve empty rollups under a green summary every night. It asks the
+*season*, not the run's window, so a one-night feed lag does not read as total loss — plus
+one more condition for the one place where those two are the same thing. On opening week
+the season legitimately holds no PBP because nothing in it has settled yet, so the check
+additionally requires a settled game date that is still missing PBP; otherwise it would
+announce a total feed loss on the loudest night of the year.
 
 **Shipped — Slack visibility, which the above depended on.** `Warning`-severity violations
 previously reached only the tracing log, so a `Warning` check was invisible to anyone not
@@ -194,13 +199,26 @@ never had:
 The decision itself is the pure, unit-tested `plan_pbp_heal`, because it is the piece that
 broke three times.
 
-The heal chases only dates with a **real slate** (>=3 completed games), while the alert
-reports every deficient date. A whole-night ingest failure always hits a full slate, so a
-one- or two-game date at zero coverage is far more likely a game the source never published
-than a pipeline fault — and re-fetching it cannot fill it, so the heal would pick it again
-every night, paging a multi-day range and rewriting the play-by-play of every complete game
-in it, until the date drifted past the cap. Detection loses nothing: the date is still named
-in the warnings line, where a human can judge what the nightly cannot.
+**The heal reads exactly the list the alert reports** — whole, with no slate floor over it
+and no lookback under it. Two bounds lived here briefly and both were wrong. A `>=3
+completed games` filter, meant to stop the heal re-chasing a date the source will never
+publish, could not do that: the *share* arm already requires a real slate, so an unfillable
+partial date (3 games, 1 published) sailed past it and got re-chased anyway. What it did do
+was abandon the exact case the zero-coverage arm carries no floor in order to catch — a
+`playbyplay` night lost on a light slate. A whole-night failure is slate-size-independent,
+and the lightest slates of the year are the Final Four and the title game; filtered out, such
+a date could reach neither the heal nor the unreachable-dates backfill message, so it was
+detected forever and fixed never. The second bound, a 30-day horizon on the heal's scan,
+made the backfill message disagree with the alert: a date past the horizon kept appearing in
+the warnings line every night while the one message that prints a backfill command had
+quietly stopped mentioning it. What actually bounds the chase is the 7-day cap — an
+unfillable date is re-fetched at most that many nights, then drops below the floor and is
+reported as unreachable instead.
+
+**Samples name the newest deficient dates, not the oldest.** On a season carrying a standing
+backlog (prod's `playbyplay` started part-way in, say), an oldest-first sample is the same
+three November dates every night forever, and the night just lost — the only one still
+inside the 7-day cap — is the one date the sample can never reach.
 
 The **`lineups` hole stays open**, deliberately. Riding the healed window looks right — the
 two feeds fail together, and `compute_pbp_lineups` prefers the exact 5-man membership — but

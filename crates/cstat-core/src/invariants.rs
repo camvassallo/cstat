@@ -381,7 +381,15 @@ pub const PBP_DATE_MIN_GAMES: i64 = 3;
 /// nothing operationally — the backfill is one `cstat-ingest playbyplay
 /// --from X --to Y` either way — and buys immunity to a feed-ordering quirk we
 /// cannot observe from here.
-const PBP_SETTLE_DAYS: i64 = 2;
+///
+/// Public so the calibration tests can apply the same clamp the check applies.
+/// They query the raw distribution directly rather than through
+/// [`pbp_deficient_dates`] — deliberately, so they measure the data rather than
+/// re-asserting the code — and a raw query that forgets this clamp reads the
+/// current and previous day, whose PBP has legitimately not arrived yet, as
+/// holes. That fails the tests in-season and indicts the coverage floor for a
+/// gap that is only the settle window.
+pub const PBP_SETTLE_DAYS: i64 = 2;
 
 /// A game date whose completed games are mostly missing play-by-play means a
 /// `playbyplay` night was lost — and nothing else notices (issue #247).
@@ -424,10 +432,20 @@ const PBP_SETTLE_DAYS: i64 = 2;
 /// design (it feeds display surfaces and 3-of-60 trajectory features), so a hole
 /// is worth a line in the run summary, not a red build.
 ///
+/// Samples are the **newest** deficient dates, not the oldest. On a season
+/// carrying a standing backlog — prod's `playbyplay` step started part-way in,
+/// say, leaving dozens of earlier dates at zero — an oldest-first sample is the
+/// same three November dates every night forever, and the one date that matters,
+/// the night just lost, is the one the sample can never reach. The count still
+/// covers everything; the samples are the actionable end of the list.
+///
 /// Skipped entirely when the season has no PBP at all — a PBP-less prod, the
 /// `simulate` replay, and the `ingest_replay` fixtures all seed none, and none
-/// of them should see this fire. That gate rides on the same aggregate the check
-/// already computes, so it costs nothing. **It also means this check cannot see
+/// of them should see this fire. That gate is its own query
+/// ([`season_has_any_pbp`]), so a season that *does* hold PBP pays for two
+/// season-wide scans per [`check_season`] run — budget for that before adding a
+/// third. It used to ride on the shared aggregate for free, which is precisely
+/// what made it silence the self-heal too. **It also means this check cannot see
 /// a total loss** (a season that never receives any PBP): with nothing to
 /// compare against, every date would fire and the harnesses would drown. That
 /// case is caught where the information to judge it exists — the nightly's
@@ -460,11 +478,16 @@ pub async fn pbp_date_coverage_gap(
         return Ok(None);
     }
     let dates = pbp_deficient_dates(pool, season, None).await?;
+    // `.rev()` — newest first. `violation` keeps the first 5 samples and the
+    // Slack summary keeps the first 3 of those, so on a season with a standing
+    // backlog an ascending list would spend every sample slot on the same old
+    // dates and never once name the night that was actually just lost.
     Ok(violation(
         "pbp_date_coverage_gap",
         Severity::Warning,
         dates
             .iter()
+            .rev()
             .map(|d| format!("{} ({}/{} games)", d.date, d.with_pbp, d.games)),
     ))
 }
