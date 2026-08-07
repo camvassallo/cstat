@@ -121,8 +121,17 @@ impl<'a> RunLedger<'a> {
         self.run_id
     }
 
-    /// Record one finished step. Fail-soft: a ledger write error is logged and
-    /// swallowed so it can't abort the pipeline it's observing.
+    /// Record one finished step over the run's window
+    /// ([`set_window`](RunLedger::set_window)). Fail-soft: a ledger write error
+    /// is logged and swallowed so it can't abort the pipeline it's observing.
+    ///
+    /// Every step shares the run's window; there is deliberately no per-step
+    /// override. One existed briefly so the `playbyplay` step could record a
+    /// self-healed range of its own, and it was the wrong shape twice over —
+    /// the coverage it recorded was still whole-window, so a range containing
+    /// any rows certified the empty dates inside it too. PBP coverage is now
+    /// read from the `play_by_play` rows themselves (issue #247), which needs no
+    /// ledger bookkeeping at all.
     pub async fn record(
         &self,
         step: &str,
@@ -300,6 +309,14 @@ impl<'a> RunLedger<'a> {
 /// caller's heal cap, or [`heal_window`] could never report an unrecoverable
 /// shortfall; past it, an un-backfilled hole ages out rather than degrading
 /// every run forever.
+///
+/// **Deliberately box-score-only.** Play-by-play is not tracked here and must
+/// not be: PBP coverage is derived from the `play_by_play` rows themselves
+/// (`cstat_core::invariants::pbp_deficient_dates`), which is the same read its
+/// alert makes. Three earlier attempts to give PBP a ledger-window notion of
+/// coverage each shipped a variant of one bug — a window claim cannot say "some
+/// dates in this range have PBP and others don't", so any range fetched with
+/// rows in it certified every date inside, permanently. See issue #247.
 pub async fn first_uncovered_ingest_date(
     pool: &PgPool,
     exclude_run_id: Uuid,
@@ -479,6 +496,46 @@ mod tests {
             heal_window(d("2026-11-30"), d("2026-12-01"), Some(d("2026-11-11")), 14).unwrap();
         assert_eq!(plan.from, d("2026-11-17"));
         assert_eq!(plan.unrecovered_days, 6);
+    }
+
+    #[test]
+    fn a_capped_heal_slides_forward_with_the_calendar_instead_of_reaching_the_gap() {
+        // A **known limitation of the box-score heal**, pinned so it is a
+        // deliberate property rather than a surprise. The floor is
+        // `default_to − cap`, and `default_to` advances every night, so
+        // consecutive runs against the SAME stale gap walk their start forward —
+        // away from the gap, never toward it. Each re-ingests a cap-width window
+        // its own predecessors already covered and closes nothing; what makes it
+        // tolerable is the loud `self-heal only PARTIAL` line naming the manual
+        // backfill.
+        //
+        // Play-by-play used to share this shape and no longer does: its heal
+        // (issue #247) starts from a date that is *actually* missing data rather
+        // than from a sliding floor, so it converges. Applying the same
+        // treatment here would need a per-date notion of box-score coverage the
+        // ledger does not have — worth doing, out of scope for #247.
+        let gap = d("2026-12-01");
+        let n1 = heal_window(d("2026-12-14"), d("2026-12-15"), Some(gap), 7).unwrap();
+        let n2 = heal_window(d("2026-12-15"), d("2026-12-16"), Some(gap), 7).unwrap();
+        let n3 = heal_window(d("2026-12-16"), d("2026-12-17"), Some(gap), 7).unwrap();
+
+        assert_eq!(n1.from, d("2026-12-08"));
+        assert_eq!(n2.from, d("2026-12-09"));
+        assert_eq!(n3.from, d("2026-12-10"));
+        assert!(
+            n1.from < n2.from && n2.from < n3.from,
+            "each night's widened start moves AWAY from the gap"
+        );
+        for plan in [n1, n2, n3] {
+            assert!(
+                plan.unrecovered_days > 0,
+                "the cap never reaches {gap}, so every one of these runs is pure re-work"
+            );
+            assert!(
+                plan.from > gap,
+                "and none of them touches the gap date itself"
+            );
+        }
     }
 
     #[test]

@@ -68,6 +68,7 @@ pub async fn check_season(
         fully_swapped_games_remain(pool, season).await?,
         phantom_swapped_games_remain(pool, season).await?,
         pbp_present_but_lineups_empty(pool, season).await?,
+        pbp_date_coverage_gap(pool, season).await?,
         torvik_rows_unlinked(pool, season).await?,
     ]
     .into_iter()
@@ -315,8 +316,6 @@ pub async fn phantom_swapped_games_remain(
     ))
 }
 
-/// Fold a list of offending ids into a violation (None when clean),
-/// keeping the first few as samples.
 /// If a season has any `play_by_play`, `compute_pbp_lineups` must have produced
 /// `lineup_aggregates` from it. An empty rollup despite present PBP means step 10
 /// silently produced nothing — the exact failure this PR's prod-owned PBP path
@@ -348,6 +347,255 @@ async fn pbp_present_but_lineups_empty(
         Severity::Error,
         sample.into_iter(),
     ))
+}
+
+/// A game date must clear this share of its completed games having play-by-play
+/// before [`pbp_date_coverage_gap`] stays quiet.
+///
+/// PBP coverage is never complete — NatStat simply never publishes some games —
+/// so a per-*game* check would report 170–380 violations a night and be noise.
+/// Per *date* the picture is clean: across 2021–2026 no game date sits below
+/// 66% coverage, and not one is at zero. 50% therefore leaves 16 points of
+/// headroom over the worst real date while still catching the failure this
+/// exists for, which lands at 0%.
+pub const PBP_DATE_MIN_COVERAGE: f64 = 0.5;
+
+/// Completed games a date needs before its coverage *share* means anything.
+///
+/// The one 0%-coverage date in twelve ingested seasons (2019-12-24) had exactly
+/// one game on it — a single unpublished game, not a pipeline failure. A share
+/// computed over one or two games is a coin flip, so require a real slate.
+///
+/// This floor applies **only to the share test**. A date at *zero* coverage is
+/// reported at any slate size (see [`pbp_date_coverage_gap`]) — otherwise a
+/// `playbyplay` night lost on a light slate (early November before the schedule
+/// fills, Dec 24–25, the day before the Final Four) would be invisible, and
+/// permanent once past the heal cap.
+pub const PBP_DATE_MIN_GAMES: i64 = 3;
+
+/// Days a game date is left alone before its PBP coverage is judged.
+///
+/// The nightly ingests date D's box scores and its PBP in the same run (the run
+/// on D+1), so if NatStat ever publishes PBP behind the box score, the newest
+/// date would read as a hole on every single run. Two days of slack costs
+/// nothing operationally — the backfill is one `cstat-ingest playbyplay
+/// --from X --to Y` either way — and buys immunity to a feed-ordering quirk we
+/// cannot observe from here.
+///
+/// Public so the calibration tests can apply the same clamp the check applies.
+/// They query the raw distribution directly rather than through
+/// [`pbp_deficient_dates`] — deliberately, so they measure the data rather than
+/// re-asserting the code — and a raw query that forgets this clamp reads the
+/// current and previous day, whose PBP has legitimately not arrived yet, as
+/// holes. That fails the tests in-season and indicts the coverage floor for a
+/// gap that is only the settle window.
+pub const PBP_SETTLE_DAYS: i64 = 2;
+
+/// A game date whose completed games are mostly missing play-by-play means a
+/// `playbyplay` night was lost — and nothing else notices (issue #247).
+///
+/// The self-heal gap scan counts a date as covered on the box-score steps alone
+/// (`BOX_SCORE_STEPS`), so a night where `games`/`player_perfs`/`team_perfs`
+/// succeeded and `playbyplay` failed is never revisited. `compute_pbp_lineups`
+/// is a season-scoped DELETE-then-rebuild, so from that night on it rebuilds the
+/// whole season around the hole and `lineup_aggregates` / `player_on_off` /
+/// `lineup_stints` quietly undercount for the rest of the year. The other two
+/// signals both read that as healthy: [`pbp_present_but_lineups_empty`] is
+/// all-or-nothing on the season, and the `row_counts` gate compares against a
+/// prior run that was equally short, so the shortfall never looks like a shrink.
+///
+/// Two arms, because one threshold cannot cover both shapes:
+/// - **zero coverage at any slate size.** A date with completed games and *no*
+///   PBP is the signature of a lost night, and it needs no slate-size floor:
+///   across 2021–2026 there is not one such date, so this arm has no false
+///   positives on the era the nightly actually checks. Without it a light-slate
+///   night (1–2 games) would be invisible and, past the heal cap, permanent.
+/// - **share below the floor on a real slate**, which catches a partial loss
+///   that the zero test would miss.
+///
+/// **Known limitation — a partial write between 50% and 99% is invisible.**
+/// `ingest_pbp_scoped` writes game by game, so an error partway through a date
+/// (a statement timeout on a large DELETE/INSERT, say) commits the games it got
+/// to and leaves the rest. A date left at, e.g., 39/60 clears this floor and is
+/// neither reported nor healed. The floor cannot simply be raised: the worst
+/// *honest* game date across 2021–2026 sits at 66%, so a threshold that caught
+/// the partial-write case would fire on real data. What keeps this from being
+/// the silent hole of issue #247 is that the failing run says so at the time —
+/// the step records `Failed` and the nightly posts a DEGRADED summary naming it.
+/// The gap is that no later run goes back for it, so an operator who misses that
+/// one alert has no second chance. Closing it needs a per-*game* notion of
+/// expected coverage, which the source does not give us (it genuinely never
+/// publishes PBP for 3–6% of games).
+///
+/// `Warning`, not `Error`: PBP is a source feed with genuine gaps, and what the
+/// pipeline does with the rows it has is correct. It is also best-effort by
+/// design (it feeds display surfaces and 3-of-60 trajectory features), so a hole
+/// is worth a line in the run summary, not a red build.
+///
+/// Samples are the **newest** deficient dates, not the oldest. On a season
+/// carrying a standing backlog — prod's `playbyplay` step started part-way in,
+/// say, leaving dozens of earlier dates at zero — an oldest-first sample is the
+/// same three November dates every night forever, and the one date that matters,
+/// the night just lost, is the one the sample can never reach. The count still
+/// covers everything; the samples are the actionable end of the list.
+///
+/// Skipped entirely when the season has no PBP at all — a PBP-less prod, the
+/// `simulate` replay, and the `ingest_replay` fixtures all seed none, and none
+/// of them should see this fire. That gate is its own query
+/// ([`season_has_any_pbp`]), so a season that *does* hold PBP pays for two
+/// season-wide scans per [`check_season`] run — budget for that before adding a
+/// third. It used to ride on the shared aggregate for free, which is precisely
+/// what made it silence the self-heal too. **It also means this check cannot see
+/// a total loss** (a season that never receives any PBP): with nothing to
+/// compare against, every date would fire and the harnesses would drown. That
+/// case is caught where the information to judge it exists — the nightly's
+/// in-season empty-PBP check in `SeasonIngester::nightly`, which has the
+/// calendar and the simulated-clock discriminator this function does not.
+///
+/// **Clock caveat.** The settle cutoff is Postgres `CURRENT_DATE`, not the
+/// pipeline's overridable `today_utc()`, because `cstat-core` has no clock
+/// override (it lives in `cstat-ingest`) and threading one through
+/// [`check_season`]'s three call sites would buy nothing here: under a simulated
+/// clock the real date is always *later*, so the clamp merely excludes nothing,
+/// and the season gate above suppresses the check in every harness that sets
+/// one. A non-UTC DB session shifts the boundary by at most a day, which a
+/// two-day settle window absorbs. Revisit if this check ever grows an arm whose
+/// correctness depends on the exact cutoff.
+pub async fn pbp_date_coverage_gap(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    // The PBP-less-deployment gate lives HERE, on the alert, not inside
+    // [`pbp_deficient_dates`]. It used to sit in the shared query, where it also
+    // silenced the nightly self-heal that reads the same function — and the heal
+    // is most needed exactly when a season holds no PBP yet. At a season
+    // rollover that was a permanent hole: if the first nights' `playbyplay`
+    // steps fail, the season has zero PBP, the gate returns nothing, no heal is
+    // even attempted, and by the time one succeeds the 7-day cap can no longer
+    // reach opening night. The harness-noise problem is the alert's alone, so
+    // the fix belongs at the alert.
+    if !season_has_any_pbp(pool, season).await? {
+        return Ok(None);
+    }
+    let dates = pbp_deficient_dates(pool, season, None).await?;
+    // `.rev()` — newest first. `violation` keeps the first 5 samples and the
+    // Slack summary keeps the first 3 of those, so on a season with a standing
+    // backlog an ascending list would spend every sample slot on the same old
+    // dates and never once name the night that was actually just lost.
+    Ok(violation(
+        "pbp_date_coverage_gap",
+        Severity::Warning,
+        dates
+            .iter()
+            .rev()
+            .map(|d| format!("{} ({}/{} games)", d.date, d.with_pbp, d.games)),
+    ))
+}
+
+/// Does this season hold **any** play-by-play at all?
+///
+/// The total-loss discriminator. Distinguishes "the feed is publishing and this
+/// window happens to be empty" — routine, since PBP can lag its box scores by a
+/// night — from "nothing has ever arrived", which is the silent catastrophe
+/// [`pbp_date_coverage_gap`] structurally cannot see (it needs some PBP to
+/// measure a share against).
+///
+/// Probes through `games` rather than scanning `play_by_play` directly: the
+/// table has no `season` index, so a direct `EXISTS` would seq-scan 30M rows to
+/// prove absence — the exact case this is asked in.
+pub async fn season_has_any_pbp(pool: &PgPool, season: i32) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS ( \
+             SELECT 1 FROM games g \
+             WHERE g.season = $1 \
+               AND EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id) \
+         )",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
+}
+
+/// One game date whose play-by-play coverage is short of what its completed
+/// games should have produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PbpDeficientDate {
+    pub date: chrono::NaiveDate,
+    /// Completed games on that date.
+    pub games: i64,
+    /// How many of them have any `play_by_play` rows.
+    pub with_pbp: i64,
+}
+
+/// Every settled game date in `season` whose PBP coverage is deficient, oldest
+/// first, optionally bounded to dates at or after `since`.
+///
+/// **Unfiltered by design.** There is no "does this deployment have PBP at all"
+/// suppressor here; that belongs to [`pbp_date_coverage_gap`], which is the
+/// surface with the alarm-fatigue problem. Putting it here also gagged the
+/// self-heal, which is at its most necessary precisely when a season holds no
+/// PBP yet.
+///
+/// **This is the single definition of "a date is missing its play-by-play", and
+/// it is deliberately shared** between the alert ([`pbp_date_coverage_gap`]) and
+/// the nightly's self-heal, which scans it to decide what to re-pull. They were
+/// once separate — the alert read the data while the heal inferred coverage from
+/// `ingest_runs` window claims — and every difference between those two views
+/// turned into a bug: a window claim cannot say "some dates in this range have
+/// PBP and others don't", so a heal that fetched a range with *any* rows in it
+/// certified every date inside, including the empty ones, permanently. Reading
+/// the same rows both surfaces read makes the heal and the alert incapable of
+/// disagreeing, and makes a hole self-clearing: fill the rows by any means and
+/// both go quiet, with no ledger bookkeeping to get right.
+///
+/// `EXISTS` per game rather than a join+aggregate over `play_by_play`: the table
+/// is 30M+ rows with a `(game_id, seq)` primary key, so this is one index probe
+/// per game and a full season runs in ~0.3s.
+pub async fn pbp_deficient_dates(
+    pool: &PgPool,
+    season: i32,
+    since: Option<chrono::NaiveDate>,
+) -> Result<Vec<PbpDeficientDate>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        WITH d AS (
+            SELECT g.game_date,
+                   count(*) AS games,
+                   count(*) FILTER (
+                       WHERE EXISTS (SELECT 1 FROM play_by_play p WHERE p.game_id = g.id)
+                   ) AS with_pbp
+            FROM games g
+            WHERE g.season = $1
+              AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+              AND g.game_date <= CURRENT_DATE - $2::int
+            GROUP BY g.game_date
+        )
+        SELECT d.game_date, d.games, d.with_pbp
+        FROM d
+        WHERE ($5::date IS NULL OR d.game_date >= $5::date)
+          AND (
+                d.with_pbp = 0
+             OR (d.games >= $3 AND d.with_pbp::float8 / d.games < $4)
+          )
+        ORDER BY d.game_date
+        "#,
+    )
+    .bind(season)
+    .bind(PBP_SETTLE_DAYS as i32)
+    .bind(PBP_DATE_MIN_GAMES)
+    .bind(PBP_DATE_MIN_COVERAGE)
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| PbpDeficientDate {
+            date: r.get("game_date"),
+            games: r.get("games"),
+            with_pbp: r.get("with_pbp"),
+        })
+        .collect())
 }
 
 /// Share of a season's Torvik rotation rows allowed to sit unlinked to a
@@ -431,6 +679,8 @@ pub async fn torvik_rows_unlinked(
 /// player. Mirrors `cstat_ingest::ingest::torvik`'s own threshold.
 const ROTATION_MPG: f64 = 10.0;
 
+/// Fold a list of offending ids into a violation (None when clean),
+/// keeping the first few as samples.
 fn violation(
     check: &'static str,
     severity: Severity,

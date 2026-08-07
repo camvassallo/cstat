@@ -244,13 +244,22 @@ channels via their own `SLACK_WEBHOOK_*` vars — see the channel registry in
 `crates/cstat-ingest/src/notify.rs` (`SlackChannel`). The nightly job posts
 exactly one message per run:
 
-- **Success** (`:white_check_mark:`) — a clean run, with a one-line summary
-  (games / player perfs / team perfs / ELO / forecasts / Torvik / compute +
-  remaining rate budget). This doubles as a heartbeat: seeing it confirms the
-  cron fired and finished.
+- **Success** (`:white_check_mark:`) — a clean run. This doubles as a heartbeat:
+  seeing it confirms the cron fired and finished. It carries the **covered window
+  and run duration** (a run that suddenly takes 3× as long is the shape of the
+  prod-DB latency / N+1 regressions this pipeline has hit twice, and "0 games"
+  means something completely different over an off-season night than over a
+  healed 9-day window), box scores / ELO / forecasts / Torvik / PBP counts, the
+  **compute line** (player-seasons · AdjEM · CamPom · archetypes, so a step that
+  silently computed over nothing reads as zeroes rather than as "ok"), and the
+  remaining rate budget. Two conditional lines: **repairs** (swapped games,
+  phantom rosters, misidentified players, dedupes) appear only when non-zero, and
+  **warnings** lists any `Warning`-severity invariant as `check count (sample,
+  sample, +N)` — up to three samples, so a reported PBP hole names the dates to
+  backfill rather than just asserting one exists.
 - **Degraded** (`:warning:`) — the run completed but a best-effort feed
   (forecasts / ELO / Torvik) failed, or rate-budget headroom got low. Lists each
-  issue.
+  issue, with the same window/duration header and warnings line.
 - **Critical** (`:rotating_light:`) — a load-bearing step (games / player_perfs
   / team_perfs / compute) failed and the run aborted.
 
