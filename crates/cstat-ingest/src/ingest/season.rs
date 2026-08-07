@@ -40,6 +40,32 @@ fn is_core_season_date(date: &str) -> bool {
     }
 }
 
+/// The slice of `[from, to]` a run may claim as ingested coverage, or `None`
+/// when nothing in it had finished.
+///
+/// Clamped to yesterday because the cron fires 09:30 UTC while date D's games
+/// don't tip until ~D 23:00 UTC — a run on D ingests none of D's games, so
+/// stamping `window_end = D` would claim D covered and no later run would ever
+/// re-fetch it. A window with nothing complete in it (an operator's `--from
+/// today --to today`) claims nothing rather than an inverted range. An
+/// unparseable date claims nothing.
+///
+/// Shared by the run-level window and the PBP step's own (issue #247): the two
+/// differ only in their start, and a load-bearing clamp that decides what future
+/// runs will never revisit should not exist in two copies that can drift.
+fn claimable_window(from: &str, to: &str) -> Option<(NaiveDate, NaiveDate)> {
+    match (
+        NaiveDate::parse_from_str(from, "%Y-%m-%d"),
+        NaiveDate::parse_from_str(to, "%Y-%m-%d"),
+    ) {
+        (Ok(ws), Ok(we)) => {
+            let ce = we.min(crate::today_utc() - chrono::Duration::days(1));
+            (ws <= ce).then_some((ws, ce))
+        }
+        _ => None,
+    }
+}
+
 /// Classify the two `torvik_games` sub-step outcomes into the step's ledger
 /// status plus any lines for the degraded run summary. Pure — unit-tested.
 ///
@@ -465,6 +491,12 @@ impl<'a> SeasonIngester<'a> {
         // a night. The alert is what turns that into a bounded operator action.
         let mut pbp_heal_note: Option<String> = None;
         let mut pbp_heal_shortfall: Option<String> = None;
+        // Whether the `playbyplay` step actually succeeded. `report.pbp_rows`
+        // alone cannot answer that — it stays at its `0` default when the step
+        // errors, so the in-season empty-PBP check below would read a plain
+        // fetch failure as "the feed is silently empty" and post a second,
+        // contradictory issue line next to the recorded error.
+        let mut pbp_step_ok = false;
         let pbp_start_date: String = match (
             self_heal,
             NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
@@ -480,6 +512,56 @@ impl<'a> SeasonIngester<'a> {
                 )
                 .await;
                 match heal_window(df, dt, gap, MAX_PBP_HEAL_DAYS) {
+                    // The cap cannot reach the gap. Alert, but DO NOT widen.
+                    //
+                    // Widening here looks like partial progress and is in fact
+                    // none: `heal_window` floors the start at `default_to - cap`,
+                    // and `default_to` advances every night, so the widened
+                    // window slides forward with the calendar instead of
+                    // reaching back toward `gap_start`. The run would re-fetch
+                    // the same trailing week — dates its own previous runs
+                    // already covered — and re-DELETE/INSERT ~150k
+                    // `play_by_play` rows, every night, for as long as the gap
+                    // stays inside HEAL_LOOKBACK_DAYS, without ever closing it.
+                    // Hundreds of NatStat calls a night drawn from the same
+                    // bucket the rest of the run needs, bought nothing.
+                    //
+                    // So the rule is: heal when the cap can actually close the
+                    // gap; otherwise hand it to an operator and stay out of the
+                    // way. (The box-score heal widens unconditionally here and
+                    // has the same no-progress property, but its re-pull is
+                    // orders of magnitude cheaper — worth revisiting, and not in
+                    // this PR's scope.)
+                    Some(plan) if plan.unrecovered_days > 0 => {
+                        let gap_str = gap
+                            .map(|d| d.to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        warn!(
+                            season = self.season,
+                            unrecovered_days = plan.unrecovered_days,
+                            gap_start = %gap_str,
+                            "play-by-play gap is older than the heal cap — not widening \
+                             (a capped widening would re-pull a trailing week nightly \
+                             without ever reaching the gap); needs a manual backfill"
+                        );
+                        // Name `nightly --from/--to`, NOT `playbyplay --from/--to`:
+                        // the standalone subcommand writes no `ingest_runs` row, so
+                        // it fills the rows but leaves the coverage scan still
+                        // reporting the gap, and the operator would have no idea why
+                        // the alert never cleared.
+                        pbp_heal_shortfall = Some(format!(
+                            "play-by-play gap at {gap_str} is older than the {MAX_PBP_HEAL_DAYS}d \
+                             heal cap, so the nightly can NOT recover it — those game dates have \
+                             no PBP and `lineup_aggregates` / `player_on_off` / `lineup_stints` \
+                             are rebuilt around the hole every night. Backfill with \
+                             `cstat-ingest nightly --year {season} --from {gap_str} --to {to}` \
+                             (the standalone `playbyplay` subcommand records no ledger coverage \
+                             and will NOT clear this)",
+                            season = self.season,
+                            to = end_date,
+                        ));
+                        start_date.clone()
+                    }
                     Some(plan) => {
                         let healed_str = plan.from.format("%Y-%m-%d").to_string();
                         let gap_str = gap
@@ -490,39 +572,12 @@ impl<'a> SeasonIngester<'a> {
                             box_from = %start_date,
                             pbp_from = %healed_str,
                             gap_start = %gap_str,
-                            unrecovered_days = plan.unrecovered_days,
                             "self-heal: widening play-by-play window to recover skipped night(s)"
                         );
                         pbp_heal_note = Some(format!(
                             "play-by-play self-heal widened its window start {start_date} → \
                              {healed_str} (first date without PBP {gap_str})"
                         ));
-                        if plan.unrecovered_days > 0 {
-                            warn!(
-                                season = self.season,
-                                unrecovered_days = plan.unrecovered_days,
-                                "play-by-play self-heal capped — the gap will re-fire every \
-                                 night until it is backfilled or ages out"
-                            );
-                            // Name `nightly --from/--to`, NOT `playbyplay
-                            // --from/--to`: the standalone subcommand writes no
-                            // `ingest_runs` row, so it fills the rows but leaves
-                            // the coverage scan still reporting the gap — the
-                            // heal would keep re-pulling a cap-width window
-                            // nightly and the operator would have no idea why.
-                            pbp_heal_shortfall = Some(format!(
-                                "play-by-play self-heal only PARTIAL: capped at \
-                                 {MAX_PBP_HEAL_DAYS}d, so {days} day(s) before {healed_str} \
-                                 still have no PBP (gap opens {gap_str}). Until backfilled, \
-                                 every night re-pulls a {MAX_PBP_HEAL_DAYS}d PBP window \
-                                 without closing it — backfill with \
-                                 `cstat-ingest nightly --year {season} --from {gap_str} \
-                                 --to {healed_str}` (the standalone `playbyplay` subcommand \
-                                 records no ledger coverage and will NOT stop the re-pull)",
-                                days = plan.unrecovered_days,
-                                season = self.season,
-                            ));
-                        }
                         healed_str
                     }
                     None => start_date.clone(),
@@ -552,16 +607,7 @@ impl<'a> SeasonIngester<'a> {
         //
         // A window with nothing complete in it (e.g. an operator's `--from today
         // --to today`) claims no coverage at all rather than an inverted range.
-        let stamped: Option<(NaiveDate, NaiveDate)> = match (
-            NaiveDate::parse_from_str(&start_date, "%Y-%m-%d"),
-            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
-        ) {
-            (Ok(ws), Ok(we)) => {
-                let ce = we.min(crate::today_utc() - chrono::Duration::days(1));
-                (ws <= ce).then_some((ws, ce))
-            }
-            _ => None,
-        };
+        let stamped = claimable_window(&start_date, &end_date);
         if let Some((ws, ce)) = stamped {
             ledger.set_window(ws, ce);
         }
@@ -572,16 +618,7 @@ impl<'a> SeasonIngester<'a> {
         // run's narrower window instead, the next night's scan would find the
         // identical gap and re-pull the same days forever. Identical to
         // `stamped` on every healthy night, where `pbp_start_date == start_date`.
-        let pbp_stamped: Option<(NaiveDate, NaiveDate)> = match (
-            NaiveDate::parse_from_str(&pbp_start_date, "%Y-%m-%d"),
-            NaiveDate::parse_from_str(&end_date, "%Y-%m-%d"),
-        ) {
-            (Ok(ws), Ok(we)) => {
-                let ce = we.min(crate::today_utc() - chrono::Duration::days(1));
-                (ws <= ce).then_some((ws, ce))
-            }
-            _ => None,
-        };
+        let pbp_stamped = claimable_window(&pbp_start_date, &end_date);
 
         // The clamp above is only sound because the cron fires *after* last
         // night's games finish (09:30 UTC vs a ~08:00 settle). Nothing in the
@@ -1013,6 +1050,41 @@ impl<'a> SeasonIngester<'a> {
         {
             Ok(pbp) => {
                 report.pbp_rows = pbp.rows;
+                pbp_step_ok = true;
+                // A zero-row success over a window that HAD completed games
+                // claims no coverage. `ingest_pbp_scoped` returns `Ok` with zero
+                // rows whenever a page yields no in-scope plays — so NatStat
+                // publishing a date's PBP a night behind its box scores (the
+                // likeliest real trigger, far likelier than an HTTP error) would
+                // otherwise stamp the window covered, and `first_uncovered_pbp_date`
+                // could never revisit it. That is exactly the permanent silent
+                // hole #247 exists to close, reintroduced through the success
+                // path: the heal would only ever recover nights that *errored*.
+                //
+                // Keyed on `player_performances`, not `games`: statlines exist
+                // only for games that have actually been played, while the games
+                // count includes scheduled, untipped rows. Off-season and quiet
+                // nights therefore still claim their window (no completed games,
+                // nothing to be missing), so the scan doesn't see phantom gaps
+                // stretching back through the summer.
+                //
+                // Bounded, not a spin: the retry lasts only while the date stays
+                // inside MAX_PBP_HEAL_DAYS. Past the cap the heal stops widening
+                // (see the block above) and the standing shortfall alert takes
+                // over — a real hole, reported, rather than silently claimed.
+                let claim = if pbp.rows == 0 && report.ingest.player_performances > 0 {
+                    warn!(
+                        season = self.season,
+                        from = pbp_start_date.as_str(),
+                        to = end_date.as_str(),
+                        perfs = report.ingest.player_performances,
+                        "play-by-play returned zero rows over a window with completed games — \
+                         not claiming coverage, so a later run re-pulls it"
+                    );
+                    None
+                } else {
+                    pbp_stamped
+                };
                 ledger
                     .record_windowed(
                         "playbyplay",
@@ -1020,7 +1092,7 @@ impl<'a> SeasonIngester<'a> {
                         Some(pbp.rows as i64),
                         t0,
                         None,
-                        pbp_stamped,
+                        claim,
                     )
                     .await;
             }
@@ -1384,14 +1456,34 @@ impl<'a> SeasonIngester<'a> {
         // on/off trajectory features pinned to their sentinel — under a green
         // summary every night.
         //
-        // Same core-season gate as the box-score check above, so quiet
-        // off-season nights and the pre-tip ramp can't false-fire. Additionally
-        // skipped under a simulated clock: `simulate` seeds no PBP fixtures by
-        // design and replays in-season windows, so this would fire on every
-        // window of every replay. Box scores need no such exemption because the
-        // harness does seed those.
+        // Three gates, each closing a false-fire path:
+        //
+        // - **`player_performances`, not `games`.** `ingest_games_by_date_range`
+        //   upserts *scheduled* rows too, so a games count says only that the
+        //   schedule exists, not that anything was played. Keying on it would
+        //   guarantee a false alarm on the season's most-watched nights: the
+        //   09:30 UTC cron on Final Four Saturday runs Apr 3..Apr 4, where Apr 3
+        //   has no games and Apr 4's semifinals are scheduled but untipped —
+        //   games > 0, zero plays, and `is_core_season_date` true. Statlines
+        //   exist only for games actually played, which is the evidence this
+        //   check needs. (The sibling `empty_box` check above keys off perfs for
+        //   the same reason.)
+        //
+        // - **The step must have succeeded.** `report.pbp_rows` stays 0 when
+        //   the step errors, so without this the run would post a second issue
+        //   line diagnosing a silently-empty feed right beneath the recorded
+        //   HTTP error — two issues for one fault, the second contradicting the
+        //   first and pointing at the wrong signal.
+        //
+        // - **Core-season only, and not under a simulated clock.** `simulate`
+        //   seeds no PBP fixtures by design and replays in-season windows, so
+        //   this would fire on every window of every replay. A *leftover*
+        //   `CSTAT_SIMULATED_DATE` on prod would silence this check, but that
+        //   condition is separately and loudly degraded by its own guard above,
+        //   so it cannot hide quietly.
         if report.pbp_rows == 0
-            && report.ingest.games > 0
+            && pbp_step_ok
+            && report.ingest.player_performances > 0
             && is_core_season_date(&end_date)
             && crate::simulated_today().is_none()
         {
@@ -1399,15 +1491,15 @@ impl<'a> SeasonIngester<'a> {
                 season = self.season,
                 start_date = pbp_start_date.as_str(),
                 end_date = end_date.as_str(),
-                games = report.ingest.games,
-                "in-season nightly ingested zero play-by-play rows despite ingesting games"
+                perfs = report.ingest.player_performances,
+                "in-season nightly ingested zero play-by-play rows despite ingesting statlines"
             );
             failures.push(format!(
                 "empty play-by-play ingest for {pbp_start_date}..{end_date} during the season \
-                 ({games} games ingested, 0 play rows) — the PBP feed may be silently empty, \
-                 which nothing else detects while the season holds no PBP at all \
-                 (`pbp_date_coverage_gap` needs some PBP to measure against)",
-                games = report.ingest.games,
+                 ({perfs} player statlines ingested, 0 play rows, step reported success) — the \
+                 PBP feed may be silently empty, which nothing else detects while the season \
+                 holds no PBP at all (`pbp_date_coverage_gap` needs some PBP to measure against)",
+                perfs = report.ingest.player_performances,
             ));
         }
 
@@ -1467,9 +1559,17 @@ impl<'a> SeasonIngester<'a> {
         // log-only, and both are the first thing you want when reading a summary
         // cold — "0 games" means something completely different over an
         // off-season night than over a healed 9-day window.
+        // On a PBP heal night the PBP step reached further back than the box
+        // scores, so a single range would understate what the run covered.
+        // Shown only when they differ, which is every night but a heal.
         let elapsed_secs = (Utc::now() - run_started).num_seconds().max(0);
+        let pbp_range = if pbp_start_date == start_date {
+            String::new()
+        } else {
+            format!("   ·   *PBP:*  {pbp_start_date} → {end_date}")
+        };
         let window_line = format!(
-            "*Window:*  {start_date} → {end_date}   ·   *Took:*  {mins}m{secs:02}s",
+            "*Window:*  {start_date} → {end_date}{pbp_range}   ·   *Took:*  {mins}m{secs:02}s",
             mins = elapsed_secs / 60,
             secs = elapsed_secs % 60,
         );
@@ -1835,7 +1935,51 @@ impl std::fmt::Display for TeamReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{StepStatus, classify_torvik_games_outcome, is_core_season_date};
+    use super::{StepStatus, claimable_window, classify_torvik_games_outcome, is_core_season_date};
+
+    // `claimable_window` reads the process clock, and `set_simulated_today`
+    // writes a process-global atomic — mutating it here would race the rest of
+    // the suite, which runs in parallel. These use dates far enough either side
+    // of any real "today" that the assertions hold whenever they run.
+
+    #[test]
+    fn a_settled_window_is_claimed_whole() {
+        // Both ends long past, so the yesterday clamp cannot bite.
+        assert_eq!(
+            claimable_window("2020-11-05", "2020-11-06"),
+            Some((
+                chrono::NaiveDate::from_ymd_opt(2020, 11, 5).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2020, 11, 6).unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_window_running_past_yesterday_is_clamped_to_it() {
+        // The load-bearing half: date D's games don't tip until ~D 23:00 UTC,
+        // so a run may never claim D. Claiming it would put D permanently beyond
+        // the coverage scan — every outage silently losing exactly one date.
+        let (from, to) = claimable_window("2020-11-05", "2999-01-01").expect("start is claimable");
+        assert_eq!(from, chrono::NaiveDate::from_ymd_opt(2020, 11, 5).unwrap());
+        assert!(
+            to < crate::today_utc(),
+            "claimed through {to}, which is not strictly before today — a run cannot \
+             have ingested games that had not finished"
+        );
+    }
+
+    #[test]
+    fn a_window_with_nothing_settled_claims_nothing() {
+        // An operator's `--from today --to today` (here, its always-future
+        // stand-in) must claim nothing rather than stamp an inverted range.
+        assert_eq!(claimable_window("2999-01-01", "2999-01-02"), None);
+    }
+
+    #[test]
+    fn an_unparseable_date_claims_nothing() {
+        assert_eq!(claimable_window("not-a-date", "2020-11-06"), None);
+        assert_eq!(claimable_window("2020-11-05", ""), None);
+    }
 
     #[test]
     fn a_clean_torvik_games_step_reports_ok_and_says_nothing() {

@@ -254,7 +254,9 @@ exactly one message per run:
   silently computed over nothing reads as zeroes rather than as "ok"), and the
   remaining rate budget. Two conditional lines: **repairs** (swapped games,
   phantom rosters, misidentified players, dedupes) appear only when non-zero, and
-  **warnings** lists any `Warning`-severity invariant as `check count`.
+  **warnings** lists any `Warning`-severity invariant as `check count (sample,
+  sample, +N)` — up to three samples, so a reported PBP hole names the dates to
+  backfill rather than just asserting one exists.
 - **Degraded** (`:warning:`) — the run completed but a best-effort feed
   (forecasts / ELO / Torvik) failed, or rate-budget headroom got low. Lists each
   issue, with the same window/duration header and warnings line.

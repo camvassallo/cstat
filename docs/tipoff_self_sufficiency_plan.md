@@ -157,8 +157,10 @@ scan sees no gap, and `pbp_present_but_lineups_empty` is itself gated on PBP bei
 **Shipped — Slack visibility, which the above depended on.** `Warning`-severity violations
 previously reached only the tracing log, so a `Warning` check was invisible to anyone not
 tailing Railway and could not have done its job. The nightly summary now carries a compact
-`warnings: check count · check count` line on both the SUCCESS and DEGRADED messages —
-names and counts, no samples, and it does **not** degrade the run. Note this also starts
+`warnings: check count (sample, sample, +N) · …` line on both the SUCCESS and DEGRADED
+messages — up to three samples per check, so a reported PBP hole names the dates to
+backfill instead of only asserting one exists, and it does **not** degrade the run
+(the PBP heal's shortfall message relies on this line naming them). Note this also starts
 surfacing the standing `completed_game_missing_team_stats` count (#232).
 
 **Shipped — self-heal.** `playbyplay` now has its own covered-date notion
@@ -177,12 +179,25 @@ the PBP heal returns nothing to widen and PBP simply covers that same 14-day win
 is correct (those dates just had box scores ingested and need their PBP), but it means the
 effective window is `max(box window, PBP heal)`.
 
-**A capped PBP heal degrades the run**, exactly as the box-score heal does. The first cut
-of this skipped the alert, reasoning that `pbp_date_coverage_gap` already names the dates
-nightly. That missed the real behaviour: an over-cap gap is not merely left unclosed, it
-makes the heal re-pull a full cap-width PBP window *every night* until it ages out of the
-30-day lookback — hundreds of NatStat calls a night, silently. The alert is what bounds it
-to an operator action, and it names the `nightly --from/--to` form for the reason above.
+**When the cap cannot reach the gap, the heal alerts and does not widen.** `heal_window`
+floors the widened start at `end_date − cap`, and `end_date` advances nightly — so a capped
+widening slides forward with the calendar instead of reaching back toward the gap. It would
+re-fetch the same trailing week its own previous runs already covered, re-DELETE/INSERT
+~150k `play_by_play` rows, every night for as long as the gap stays inside the 30-day
+lookback, and never close it: hundreds of NatStat calls a night for nothing. So the rule is
+heal when the cap can actually close the gap, otherwise hand it to an operator. The alert
+names the `nightly --from/--to` form for the reason above. (The box-score heal widens
+unconditionally and has the same no-progress property; its re-pull is orders of magnitude
+cheaper, so that is a follow-up rather than part of this change.)
+
+**A zero-row success does not claim coverage** when the window had completed games.
+`ingest_pbp_scoped` returns `Ok` with zero rows whenever a page yields no in-scope plays,
+so NatStat publishing a date's PBP a night behind its box scores — likelier than an HTTP
+error — would otherwise stamp the window covered and put it permanently beyond the scan's
+reach. Without this the heal would only ever recover nights that *errored*, which is the
+same permanent silent hole B3 exists to close, reintroduced through the success path. Keyed
+on statlines rather than the games count, since the latter includes scheduled, untipped
+rows.
 
 `lineups` still has the same shape of hole and was deliberately left out of scope.
 

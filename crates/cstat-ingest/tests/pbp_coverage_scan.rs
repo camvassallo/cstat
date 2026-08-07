@@ -215,10 +215,14 @@ async fn a_ledger_with_no_pbp_history_reports_no_gap() {
         return;
     };
 
-    // Box scores only — prod's ledger before the S2 deploy, when the nightly did
-    // not yet ingest PBP at all. The `MIN(window_start)` floor is what keeps this
-    // from reading the entire lookback as uncovered and pulling 30 days of
-    // play-by-play on the first run after the deploy.
+    // Box scores only — a ledger that has never recorded a `playbyplay` step.
+    // The `MIN(window_start)` floor is what keeps this from reading the entire
+    // lookback as uncovered and pulling 30 days of play-by-play.
+    //
+    // Not prod's current state: S2 shipped and deployed, so prod's ledger
+    // already carries `playbyplay` rows. This pins the floor's behaviour for a
+    // fresh ledger (a new environment, or the `simulate` DB), which is the case
+    // that would otherwise trigger a pointless month-wide pull.
     let mut ledger = RunLedger::start(&pool, 2027);
     ledger.set_window(d("2027-11-05"), d("2027-11-06"));
     for step in ["games", "player_perfs", "team_perfs"] {

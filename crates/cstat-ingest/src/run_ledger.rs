@@ -366,10 +366,17 @@ pub async fn first_uncovered_ingest_date(
 /// `playbyplay` night became permanent. Callers heal this window on its own,
 /// tighter cap — a wide PBP re-pull is far more API calls than a box-score one.
 ///
-/// Self-limiting on first use: coverage is computed only from runs that recorded
-/// `playbyplay` **ok**, and the `MIN(window_start)` floor means a ledger with no
-/// such run yet (any prod before the S2 deploy) reports no gap rather than
-/// declaring the whole lookback uncovered.
+/// Coverage counts only runs that recorded `playbyplay` **ok**, and the
+/// `MIN(window_start)` floor means a ledger with no such run at all reports no
+/// gap rather than declaring the whole lookback uncovered.
+///
+/// That floor is a genuine blind spot as well as a safety net: it can never see
+/// a gap *earlier* than the first successful PBP window. Note this is not the
+/// state prod is in — S2 shipped and deployed, so prod's ledger already carries
+/// `playbyplay` rows from before this scan existed, and the first run after this
+/// deploys scans that real history rather than no-opping. In the off-season that
+/// costs nothing (no games in range → the fetch short-circuits with zero API
+/// calls), which is why deploying before tipoff is the cheap moment to do it.
 pub async fn first_uncovered_pbp_date(
     pool: &PgPool,
     exclude_run_id: Uuid,
@@ -571,6 +578,43 @@ mod tests {
             heal_window(d("2026-11-30"), d("2026-12-01"), Some(d("2026-11-11")), 14).unwrap();
         assert_eq!(plan.from, d("2026-11-17"));
         assert_eq!(plan.unrecovered_days, 6);
+    }
+
+    #[test]
+    fn a_capped_heal_slides_forward_with_the_calendar_instead_of_reaching_the_gap() {
+        // Why the PBP heal refuses to widen once `unrecovered_days > 0`
+        // (issue #247). The floor is `default_to − cap`, and `default_to`
+        // advances every night, so consecutive runs against the SAME stale gap
+        // walk their start forward — away from the gap, never toward it. Each
+        // one re-pulls a cap-width window its own predecessors already covered
+        // and closes nothing.
+        //
+        // For play-by-play that is ~300 NatStat calls and a ~150k-row
+        // DELETE/INSERT per night, for as long as the gap stays inside the
+        // lookback. Pinned here so a future change that "restores" the widening
+        // has to argue with this test first.
+        let gap = d("2026-12-01");
+        let n1 = heal_window(d("2026-12-14"), d("2026-12-15"), Some(gap), 7).unwrap();
+        let n2 = heal_window(d("2026-12-15"), d("2026-12-16"), Some(gap), 7).unwrap();
+        let n3 = heal_window(d("2026-12-16"), d("2026-12-17"), Some(gap), 7).unwrap();
+
+        assert_eq!(n1.from, d("2026-12-08"));
+        assert_eq!(n2.from, d("2026-12-09"));
+        assert_eq!(n3.from, d("2026-12-10"));
+        assert!(
+            n1.from < n2.from && n2.from < n3.from,
+            "each night's widened start moves AWAY from the gap"
+        );
+        for plan in [n1, n2, n3] {
+            assert!(
+                plan.unrecovered_days > 0,
+                "the cap never reaches {gap}, so every one of these runs is pure re-work"
+            );
+            assert!(
+                plan.from > gap,
+                "and none of them touches the gap date itself"
+            );
+        }
     }
 
     #[test]
