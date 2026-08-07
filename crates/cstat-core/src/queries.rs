@@ -900,25 +900,24 @@ pub async fn get_player_on_off(
                oo.net_on_off, oo.source,
                pr.o_rapm AS rapm_o, pr.d_rapm AS rapm_d, pr.net_rapm AS rapm_net,
                pr.paired_possessions AS rapm_paired_possessions,
-               -- Season percentile of net_rapm among display-qualified players
-               -- (>= 250 paired poss, the UI floor). NULL when this player has no
-               -- fit (pr.net_rapm IS NULL makes the comparison NULL → avg NULL).
-               (SELECT avg((r2.net_rapm <= pr.net_rapm)::int)::float8
-                  FROM player_rapm r2
-                 WHERE r2.season = pr.season AND r2.paired_possessions >= 250)
-                 AS rapm_net_pct,
-               (SELECT avg((r2.o_rapm <= pr.o_rapm)::int)::float8
-                  FROM player_rapm r2
-                 WHERE r2.season = pr.season AND r2.paired_possessions >= 250)
-                 AS rapm_o_pct,
-               -- Inverted: d_rapm is points ALLOWED, so the best defenders are
-               -- the most negative. `>=` makes a high percentile mean good D.
-               (SELECT avg((r2.d_rapm >= pr.d_rapm)::int)::float8
-                  FROM player_rapm r2
-                 WHERE r2.season = pr.season AND r2.paired_possessions >= 250)
-                 AS rapm_d_pct
+               pct.net_pct AS rapm_net_pct, pct.o_pct AS rapm_o_pct, pct.d_pct AS rapm_d_pct
         FROM player_on_off oo
         LEFT JOIN player_rapm pr ON pr.player_id = oo.player_id AND pr.season = oo.season
+        -- Season percentiles among display-qualified players (>= 250 paired
+        -- poss, the UI floor), all three from ONE pass over the cohort rather
+        -- than three identical correlated subqueries — same rows, same filter,
+        -- and the floor lives in exactly one place. Each is NULL when this
+        -- player has no fit (the NULL comparison makes avg() NULL).
+        -- `d_rapm` is inverted (`>=`): it is points ALLOWED, so the best
+        -- defenders are the most negative, and a high percentile must mean good
+        -- defense on this bar exactly as it does on the other two.
+        LEFT JOIN LATERAL (
+            SELECT avg((r2.net_rapm <= pr.net_rapm)::int)::float8 AS net_pct,
+                   avg((r2.o_rapm   <= pr.o_rapm)::int)::float8   AS o_pct,
+                   avg((r2.d_rapm   >= pr.d_rapm)::int)::float8   AS d_pct
+              FROM player_rapm r2
+             WHERE r2.season = pr.season AND r2.paired_possessions >= 250
+        ) pct ON TRUE
         -- Pin to the player's canonical team. The derivation now credits a player
         -- only to his own team's lineups so (season, player_id) is unique, but
         -- this guard keeps the route correct against any stale pre-fix rows

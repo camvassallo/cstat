@@ -61,10 +61,17 @@
 # `players`) is refused while prod is cron-fed. Column merge does the one safe
 # operation available: UPDATE existing rows, named columns only. No TRUNCATE, no
 # INSERT, no DELETE — so it cannot cascade, invent rows, or lose them. Rows are
-# matched on the table's UNIQUE constraint (its natural key), not the primary
-# key, so a locally-generated UUID that diverged still lands on the right row.
-# Batched into `UPDATE … FROM (VALUES …)` chunks to avoid an N+1 over the prod
-# link. Not gated by the full-sync guard: it is strictly narrower than --tables.
+# matched on a unique INDEX (the natural key), not the primary key, so a
+# locally-generated UUID that diverged still lands on the right row, and rows
+# that already agree are skipped rather than rewritten. Batched into
+# `UPDATE … FROM (VALUES …)` chunks to avoid an N+1 over the prod link.
+#
+# It does NOT inherit the full-sync guard, because it is narrower — but "narrow"
+# is not "harmless": prod's nightly computes some of these columns itself
+# (`players.display_name` is `compute_all` step 21). So whenever prod looks live
+# — same two signals the guard uses — a table with a `season` column merges PAST
+# SEASONS ONLY, which is the real ownership split: prod owns the current season,
+# the laptop owns history. `--force-full` merges everything.
 #
 # CAVEAT: the restore still uses TRUNCATE ... CASCADE, so targeting a table that
 # is *referenced* by a foreign key (e.g. `teams`, which `players`/`games` point
@@ -121,6 +128,18 @@ if [[ -n "$REQUESTED_COLUMNS" && -n "$REQUESTED_TABLES" ]]; then
 fi
 
 mask_url() { sed -E 's|://[^@]+@|://***@|' <<<"$1"; }
+
+# Strip leading/trailing whitespace from a psql -t -A value, preserving any
+# internal spaces (see `coltype` — Postgres type names contain them).
+trim() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -1; }
+
+# The season the pipeline considers current, mirroring
+# `cstat_ingest::season_for_date` (lib.rs:165): November rolls to next year.
+current_season() {
+  local y m
+  y=$(date -u +%Y); m=$(date -u +%m)
+  if [[ "${m#0}" -ge 11 ]]; then echo $((y + 1)); else echo "$y"; fi
+}
 
 # Staleness threshold for "is prod still being fed by the cron?", mirroring
 # STALE_AFTER_HOURS in crates/cstat-api/src/routes/health.rs. One missed nightly
@@ -483,18 +502,91 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
     fi
   done
 
-  # Natural key = the table's UNIQUE constraint columns, in ordinal order.
+  # Natural key = the columns of a unique index, in ordinal order.
+  #
+  # Read from `pg_index`, not `pg_constraint`: every UNIQUE *constraint* has a
+  # backing unique index, but the reverse does not hold, and this codebase has
+  # both spellings — `players` uses `UNIQUE (natstat_id, season)` while
+  # `player_on_off` gets its uniqueness from a bare
+  # `CREATE UNIQUE INDEX … (season, player_id)` (migration 035). Reading
+  # constraints alone made the script tell an operator that a table with a
+  # perfectly good natural key had none, and then recommend `--tables` — the
+  # TRUNCATE … CASCADE path this whole mode exists to avoid.
+  #
+  # Partial (`indpred`) and expression (`indexprs`) indexes are excluded: they
+  # do not guarantee a key for every row. The primary key is excluded because a
+  # UUID pk is exactly what we must not match on. `ORDER BY` is narrowest-first
+  # with the index name as a tie-break, so the chosen key is deterministic
+  # rather than "whichever oid Postgres returned"; it is echoed below so the
+  # operator can see which one won.
   KEY_COLS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -F',' -c "
     SELECT string_agg(a.attname, ',' ORDER BY k.ord)
-      FROM pg_constraint c
-      JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
-      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
-     WHERE c.conrelid = '\"$MERGE_TABLE\"'::regclass AND c.contype = 'u'
-     GROUP BY c.oid ORDER BY count(*) LIMIT 1" | tr -d '[:space:]')
+      FROM pg_index i
+      JOIN pg_class ic ON ic.oid = i.indexrelid
+      JOIN LATERAL unnest(i.indkey::int[]) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+     WHERE i.indrelid = '\"$MERGE_TABLE\"'::regclass
+       AND i.indisunique AND NOT i.indisprimary
+       AND i.indpred IS NULL AND i.indexprs IS NULL
+     GROUP BY i.indexrelid, ic.relname
+     ORDER BY count(*), ic.relname LIMIT 1" | trim)
   if [[ -z "$KEY_COLS" ]]; then
-    echo "✗ '$MERGE_TABLE' has no UNIQUE constraint — no natural key to match on." >&2
-    echo "  Use --tables if it is a leaf table, or add a UNIQUE constraint." >&2
+    echo "✗ '$MERGE_TABLE' has no unique index (other than its primary key) —" >&2
+    echo "  no natural key to match on. A UUID primary key is deliberately not" >&2
+    echo "  usable here: it is generated locally and may differ on prod." >&2
     exit 2
+  fi
+
+  # Prod schema check, before generating anything and before the confirm prompt.
+  # Every other introspection here reads local, which is the wrong database to
+  # ask whether prod can accept the write: the motivating column
+  # (`players.display_name`) arrived in a recent migration, so the likeliest
+  # failure for this mode is "prod hasn't deployed that migration yet". Without
+  # this the operator confirms a production write and *then* watches psql abort
+  # on a missing column — and `--dry-run` could not warn either, since it also
+  # only looked at local.
+  MISSING_ON_PROD=$("${PSQL[@]}" "$PROD_URL" -t -A -c "
+    SELECT string_agg(w.col, ', ')
+      FROM unnest(string_to_array('${KEY_COLS},${MERGE_COLS}', ',')) AS w(col)
+     WHERE NOT EXISTS (
+       SELECT 1 FROM information_schema.columns c
+        WHERE c.table_schema = 'public' AND c.table_name = '$MERGE_TABLE'
+          AND c.column_name = w.col)" | trim)
+  if [[ -n "$MISSING_ON_PROD" ]]; then
+    echo "✗ prod's '$MERGE_TABLE' is missing: $MISSING_ON_PROD" >&2
+    echo "  Prod is behind on migrations, or the column is local-only." >&2
+    echo "  Deploy first — a merge would abort mid-transaction." >&2
+    exit 2
+  fi
+
+  # Season scoping — the fix for this mode's sharpest edge.
+  #
+  # The merge is a whole-table operation, but `players.display_name` (its
+  # motivating column) is computed ON PROD every night by `compute_all` step 21
+  # for the CURRENT season. Pushing every local row therefore does exactly what
+  # the P0 full-sync guard exists to prevent, just one column wide: the laptop's
+  # staler current-season values (often NULL, if local's Torvik copy is a day
+  # behind) overwrite prod's fresh ones, and every live player page shows bare
+  # legal names until the next nightly recomputes ~24h later.
+  #
+  # So when prod looks live — the same two signals the P0 guard uses — a table
+  # carrying a `season` column is merged for PAST seasons only. That matches the
+  # real ownership split: prod owns the current season, the laptop owns history.
+  # Off-season (cron quiet and calendar out-of-season) the whole table merges,
+  # which is the bootstrap case. `--force-full` overrides, since an operator who
+  # has said "I mean it" for a full sync means it here too.
+  SEASON_FILTER=""
+  HAS_SEASON=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='$MERGE_TABLE'
+       AND column_name='season'" | trim)
+  PROD_LIVE=0
+  AGE_H=$(prod_nightly_age_hours)
+  if [[ "$AGE_H" =~ ^[0-9]+$ ]] && [[ "$AGE_H" -lt "$STALE_AFTER_HOURS" ]]; then PROD_LIVE=1; fi
+  if in_season_now; then PROD_LIVE=1; fi
+  if [[ -n "$HAS_SEASON" && "$PROD_LIVE" -eq 1 && "$FORCE_FULL" -eq 0 ]]; then
+    CUR_SEASON=$(current_season)
+    SEASON_FILTER="WHERE season <> $CUR_SEASON"
   fi
 
   # Batched, not row-at-a-time. 59k single-row UPDATEs is 59k round trips to a
@@ -504,11 +596,17 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   # statements. Literals are rendered by quote_nullable in SQL, so quoting stays
   # Postgres' problem rather than bash's.
   MERGE_CHUNK=500
+  # Trim the ends only. NOT `tr -d '[:space:]'`: Postgres type names have
+  # internal spaces (`double precision`, `timestamp without time zone`,
+  # `character varying(50)`), and stripping those produced casts like
+  # `::doubleprecision` that parse fine in bash and then abort the whole
+  # transaction on prod — *after* the operator has confirmed the write. It made
+  # the mode silently text/int/uuid-only while claiming to be generic.
   coltype() {
     "${PSQL[@]}" "$LOCAL_URL" -t -A -c \
       "SELECT format_type(a.atttypid, a.atttypmod) FROM pg_attribute a \
         WHERE a.attrelid = '\"$MERGE_TABLE\"'::regclass AND a.attname = '$1' AND a.attnum > 0" \
-      | tr -d '[:space:]'
+      | trim
   }
 
   TUPLE_EXPR=""; ALIAS_COLS=""; SET_EXPR=""; WHERE_EXPR=""; DIST_T=""; DIST_V=""
@@ -541,20 +639,27 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   echo "→ Mode:     COLUMN MERGE — UPDATE only, no TRUNCATE/INSERT/DELETE"
   echo "→ Table:    $MERGE_TABLE"
   echo "→ Columns:  ${MERGE_COLS//,/, }"
-  echo "→ Match on: ${KEY_COLS//,/, }  (natural key, from UNIQUE constraint)"
+  echo "→ Match on: ${KEY_COLS//,/, }  (natural key, from a unique index)"
+  if [[ -n "$SEASON_FILTER" ]]; then
+    echo "→ Scope:    seasons other than $CUR_SEASON — prod owns the current season"
+    echo "            while its cron is live (--force-full to merge every season)"
+  else
+    echo "→ Scope:    every row (no season column, or prod is not currently cron-fed)"
+  fi
   echo
 
   STATEMENTS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
     WITH r AS (
       SELECT row_number() OVER (ORDER BY $KEY_COLS) AS rn,
              '(' || ($TUPLE_EXPR) || ')' AS tup
-        FROM \"$MERGE_TABLE\"
+        FROM \"$MERGE_TABLE\" $SEASON_FILTER
     )
     SELECT 'UPDATE \"$MERGE_TABLE\" AS t SET $SET_EXPR FROM (VALUES '
         || string_agg(tup, ',' ORDER BY rn)
         || ') AS v($ALIAS_COLS) WHERE $WHERE_EXPR;'
       FROM r GROUP BY (rn - 1) / $MERGE_CHUNK ORDER BY min(rn)")
-  N=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "SELECT count(*) FROM \"$MERGE_TABLE\"" | tr -d '[:space:]')
+  N=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c \
+    "SELECT count(*) FROM \"$MERGE_TABLE\" $SEASON_FILTER" | trim)
   B=$(grep -c '^UPDATE' <<<"$STATEMENTS" || true)
   echo "→ $N row(s) offered from local, in $B batched statement(s)"
   echo "  (rows whose named columns already match prod are skipped, not rewritten)"
@@ -571,8 +676,30 @@ if [[ -n "$REQUESTED_COLUMNS" ]]; then
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
 
   START=$(date +%s)
-  "${PSQL[@]}" "$PROD_URL" -v ON_ERROR_STOP=1 --single-transaction --quiet -f - <<<"$STATEMENTS"
-  echo "✓ Merged in $(($(date +%s) - START))s. Prod non-NULL counts:"
+  # `lock_timeout` decides who loses a race with the nightly. This transaction
+  # touches the same rows `compute_all` does (`compute_display_names` rewrites
+  # the season it computes), and the two take their locks in different orders,
+  # so an overlapping run can deadlock. Bounding the wait makes THIS side the
+  # victim: the merge rolls back whole and can simply be re-run, whereas the
+  # nightly losing means a failed served-critical step, a degraded Slack alert,
+  # and a stale /api/health/ingest. Prefer not to overlap at all — the cron runs
+  # 09:30 UTC.
+  #
+  # NOT --quiet: psql's `UPDATE n` command tags are the only evidence that the
+  # natural key actually matched prod rows. Without them a merge that matched
+  # NOTHING (diverged keys, wrong table) printed the same cheerful "✓ Merged" as
+  # a successful one, and the follow-up non-NULL count is equally unchanged in
+  # both cases. Summing the tags turns silent no-ops into a loud warning.
+  APPLY_OUT=$(printf 'SET lock_timeout = %s;\n%s\n' "'30s'" "$STATEMENTS" \
+    | "${PSQL[@]}" "$PROD_URL" -v ON_ERROR_STOP=1 --single-transaction -f -)
+  ROWS=$(awk '/^UPDATE [0-9]+$/ { s += $2 } END { print s + 0 }' <<<"$APPLY_OUT")
+  echo "✓ Merged in $(($(date +%s) - START))s — $ROWS row(s) actually updated on prod."
+  if [[ "$ROWS" -eq 0 ]]; then
+    echo "  ! ZERO rows matched. Either prod already agrees with local (fine), or"
+    echo "    the natural key (${KEY_COLS//,/, }) does not line up between the two"
+    echo "    databases (not fine) — check before assuming this was a no-op."
+  fi
+  echo "  Prod non-NULL counts:"
   for c in ${MERGE_COLS//,/ }; do
     v=$("${PSQL[@]}" "$PROD_URL" -t -A -c \
       "SELECT count(*) FROM \"$MERGE_TABLE\" WHERE \"$c\" IS NOT NULL" | tr -d '[:space:]')

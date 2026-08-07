@@ -110,10 +110,14 @@ cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # Column merge — the third mode, for a derived column on a table that is
 # REFERENCED by foreign keys, where --tables would cascade-wipe the dependents
 # (`players` has 10) and a full sync is refused. UPDATE-only: no TRUNCATE, no
-# INSERT, no DELETE, named columns only, rows matched on the table's UNIQUE
-# constraint rather than its UUID primary key. Not gated by the guard (it is
-# strictly narrower than --tables). Historical seasons only in practice — the
-# nightly recomputes the current season itself:
+# INSERT, no DELETE, named columns only, rows matched on a unique INDEX (the
+# natural key) rather than the locally-generated UUID primary key. While prod
+# looks live (same two signals as the full-sync guard), a table carrying a
+# `season` column merges PAST SEASONS ONLY — prod's nightly owns the current
+# season for anything `compute_all` derives, `display_name` included, so
+# pushing it would be a one-column rollback. `--force-full` merges every season.
+# Reports rows actually updated and warns loudly on zero (a natural key that
+# doesn't line up with prod matches nothing and otherwise looks like success):
 ./scripts/sync_to_prod.sh --columns players.display_name
 
 # Archetype in-season stability sweep — how many games until a label matches the
