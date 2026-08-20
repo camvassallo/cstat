@@ -139,6 +139,40 @@ deliberate — there are nine call sites, and a parameter is something a call si
 can pass `&[]` for. That failure would be silent and would look exactly like
 "this team lost its seniors", which is the bug rather than a symptom of it.
 
+## Downstream: how the uncertain cohort is weighted
+
+`uncertain` is not just a display bucket — its members set `p_return`, the
+weight that blends a team's floor and ceiling into the served `midpoint_adj_em`.
+That weight used to be read entirely off the Tankathon mock draft board, which
+was sound while the bucket held nothing but declared draft entrants.
+
+It is not sound for the population this work adds. `UncertainPlayer.cause`
+splits the two:
+
+| Cause | Weighted by | Rationale |
+| --- | --- | --- |
+| `draft_declared` | mock pick (≤30 → 0.05, 31-60 → 0.50, unlisted → 0.85) | The draft is what resolves him, so board position is evidence. |
+| `eligibility_unsettled` | flat 0.5 | A waiver desk or a court resolves him. The draft board says nothing. |
+
+Without the split the error runs the wrong way and concentrates on the players
+who matter: a contested-eligibility senior good enough to appear on a mock board
+would score 0.05, collapsing his team's midpoint onto the floor that assumes he
+is absent — on the strength of scouts rating a good senior.
+
+The flat 0.5 is also load-bearing downstream. `compute_projections.rs` hard-codes
+`IN_SEASON_P_RETURN = 0.5` on the argument that the uncertain bucket empties once
+a season starts. That argument covers draft declarants and does **not** cover
+contested eligibility, which can stay open into the season and which the new
+in-season portal refresh can add to on any night. Weighting the eligibility
+cohort at 0.5 is what keeps the materialized `team_preseason_projection` equal to
+the served `/api/projections` midpoint — a parity that feeds the preseason × pit
+predict blend. If either constant moves, both must.
+
+The same discriminator gates presentation: the API withholds `mock_pick` /
+`mock_team` for the eligibility cohort and the UI renders no mock chip, because
+the chip's own copy reads "declared players who fall off the board often
+withdraw" — which for a 5-in-5 case asserts a draft entry that never happened.
+
 ## Downstream: the projected player rankings
 
 `player_season_projection` (the `/players?season=N+1` view) originally

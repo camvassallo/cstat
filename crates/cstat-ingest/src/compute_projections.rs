@@ -31,9 +31,23 @@ use uuid::Uuid;
 /// Midpoint return-probability for an in-season projection. By the time a
 /// season is underway the draft-uncertain cohort is resolved (departed
 /// players are gone, returners are on the roster), so `compose_all_projections`
-/// leaves the `uncertain` bucket empty → floor == ceiling and this weight
-/// cancels. 0.5 is the neutral default that matches the projections route's
-/// empty-cohort behavior.
+/// leaves that half of the `uncertain` bucket empty → floor == ceiling and this
+/// weight cancels. 0.5 is the neutral default that matches the projections
+/// route's empty-cohort behavior.
+///
+/// The draft half is no longer the whole bucket (issue #220): unsettled 5-in-5
+/// eligibility also lands there, and unlike a draft declaration it does NOT
+/// reliably resolve before tipoff — an injunction is a mid-season state, and
+/// the nightly portal refresh can add a withdrawn senior on any night. So the
+/// "empties, therefore cancels" argument no longer covers the bucket, and this
+/// constant is load-bearing rather than vestigial.
+///
+/// It stays correct because `/api/projections` weights that cohort at
+/// `ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY`, which is also 0.5. The two
+/// values are coupled on purpose: the module doc above claims the persisted
+/// midpoint equals the served one by construction, and if either moves without
+/// the other, `team_preseason_projection` — which feeds the preseason × pit
+/// predict blend — silently stops matching the projections page.
 const IN_SEASON_P_RETURN: f32 = 0.5;
 
 /// Base-season AdjEM per team (the baseline the shrink blends toward),

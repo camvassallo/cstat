@@ -458,7 +458,12 @@ enum Commands {
     /// the recruiting class year (= spring of HS graduation, = 247's URL
     /// `{year}-basketball` slug). Class-of-2026 recruits first appear in
     /// cstat-season 2027 box scores.
-    /// Requires TFS_247_JWT env var (same JWT as Transfers; ~6h expiry).
+    ///
+    /// Reads 247's JSON API by default, on a guest token minted per run — no
+    /// credential needed. Pass `--html` for the legacy scrape, which needs a
+    /// subscriber `TFS_247_COOKIE` (or `TFS_247_JWT`) for the composite
+    /// rankings but is the only source of `previous_rank` /
+    /// `committed_school_slug`.
     Recruits {
         #[arg(short, long, default_value_t = default_season())]
         year: i32,
@@ -485,6 +490,18 @@ enum Commands {
         /// is ignored in this mode (the feed has no per-cohort split).
         #[arg(long, conflicts_with_all = ["bootstrap_from", "dump_snapshot", "resolve_only"])]
         commits_feed: bool,
+
+        /// Use the legacy HTML scrape instead of 247's JSON API.
+        ///
+        /// The JSON default needs no hand-captured credential (a guest token is
+        /// minted per run) and returns more rows — 712 vs 611 for the 2026 class
+        /// on 2026-08-19. The scrape is retained because it is the only source
+        /// for `previous_rank` and `committed_school_slug`, and as an escape
+        /// hatch if 247 changes the JSON shape. In this mode the composite
+        /// rankings need `TFS_247_COOKIE` (or legacy `TFS_247_JWT`); the commits
+        /// feed stays cookie-free.
+        #[arg(long, conflicts_with = "bootstrap_from")]
+        html: bool,
 
         /// Load from a local snapshot file instead of hitting the live API.
         #[arg(long)]
@@ -1145,6 +1162,7 @@ async fn main() -> Result<()> {
             year,
             groups,
             commits_feed,
+            html,
             bootstrap_from,
             dump_snapshot,
             resolve_only,
@@ -1169,8 +1187,19 @@ async fn main() -> Result<()> {
                 }
             } else {
                 let report = if commits_feed {
-                    info!(year, "ingesting 247 national commits feed (cookie-free)");
-                    let client = cstat_ingest::Recruit247Client::public();
+                    let client = if html {
+                        info!(
+                            year,
+                            "ingesting 247 national commits feed (HTML, cookie-free)"
+                        );
+                        cstat_ingest::Recruit247Client::public()
+                    } else {
+                        info!(
+                            year,
+                            "ingesting 247 national commits feed (JSON, guest token)"
+                        );
+                        cstat_ingest::Recruit247Client::guest(year).await?
+                    };
                     cstat_ingest::ingest::recruits::ingest_commits(&client, &db.pool, year).await?
                 } else if let Some(path) = bootstrap_from {
                     info!("bootstrapping recruits from {}", path.display());
@@ -1192,7 +1221,16 @@ async fn main() -> Result<()> {
                             "no valid institution_groups parsed from `--groups`; pass any of: highschool, juco, prep"
                         );
                     }
-                    let client = cstat_ingest::Recruit247Client::from_env()?;
+                    let client = if html {
+                        info!(
+                            year,
+                            "ingesting 247 composite rankings (HTML, subscriber cookie)"
+                        );
+                        cstat_ingest::Recruit247Client::from_env()?
+                    } else {
+                        info!(year, "ingesting 247 composite rankings (JSON, guest token)");
+                        cstat_ingest::Recruit247Client::guest(year).await?
+                    };
                     cstat_ingest::ingest::recruits::ingest_live(
                         &client,
                         &db.pool,

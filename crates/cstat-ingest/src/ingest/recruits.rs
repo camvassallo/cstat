@@ -81,10 +81,11 @@ pub struct RecruitSnapshot {
 
 /// Ingest one class year of recruits from the live 247 endpoint.
 ///
-/// Paginates per group until the parser returns an empty page (247 doesn't
-/// publish a page count — empty fragment past the last data page is the
-/// only stop signal). Defensive cap at `MAX_PAGES_PER_GROUP` prevents
-/// runaway if 247's empty-page convention ever changes.
+/// Paginates per group until the feed says it is done. The two transports
+/// signal that differently — the JSON feed publishes `pagination.pageCount`,
+/// the HTML scrape serves an empty fragment past the last data page — and
+/// [`RecruitPage::is_last_page`] normalizes both. Defensive cap at
+/// `MAX_PAGES_PER_GROUP` prevents runaway if either convention changes.
 ///
 /// If `dump_snapshot` is set, write the combined fetch to disk before
 /// upserting — useful for bootstrap-data capture without a second network
@@ -104,14 +105,18 @@ pub async fn ingest_live(
         let mut group_rows = 0u64;
         for page in 1..=MAX_PAGES_PER_GROUP {
             let p = client.fetch_page(year, group, page).await?;
-            if p.is_last_page {
-                info!(year, ?group, page, "reached empty page — stopping");
-                break;
-            }
+            // Consume before testing the stop signal: on the JSON transport the
+            // final page carries real rows *and* is flagged last (pageCount is
+            // known up front), so breaking first would silently drop it.
+            let last = p.is_last_page;
             total_pages += 1;
             group_rows += p.players.len() as u64;
             for row in p.players {
                 all_rows.push((group, row));
+            }
+            if last {
+                info!(year, ?group, page, "reached last page — stopping");
+                break;
             }
         }
         by_group.insert(group.as_db_value().to_string(), group_rows);
@@ -220,6 +225,17 @@ pub async fn bootstrap_from_snapshot(
 /// Insert or update one `recruits` row from a parsed `RecruitRow`. The parser
 /// filters out malformed rows (missing `recruit_key`) before they reach here,
 /// so this only fails on a DB error.
+///
+/// **Five columns COALESCE instead of overwriting** — `height`, `weight`,
+/// `high_school`, `previous_rank` and `committed_school_slug`. The JSON
+/// rankings feed does not carry them (the first three come from the commits
+/// feed, the last two only from the HTML scrape), so a plain
+/// `EXCLUDED`-overwrite would blank them on every JSON pass. That is not
+/// cosmetic: `height` and `previous_rank` are inputs to the served freshman and
+/// trajectory projection models, and `previous_rank` has no JSON source at all
+/// on any route probed — losing it would flip `recruit_rank_movement` to 0 for
+/// the whole table. Every other column overwrites, so a re-ingest still tracks
+/// 247'"'"'s live ranking churn.
 pub async fn upsert_player(
     row: &RecruitRow,
     pool: &PgPool,
@@ -258,20 +274,20 @@ pub async fn upsert_player(
             institution_group = EXCLUDED.institution_group,
             first_name = EXCLUDED.first_name,
             last_name = EXCLUDED.last_name,
-            position = EXCLUDED.position,
-            height = EXCLUDED.height,
-            weight = EXCLUDED.weight,
+            position = COALESCE(EXCLUDED.position, recruits.position),
+            height = COALESCE(EXCLUDED.height, recruits.height),
+            weight = COALESCE(EXCLUDED.weight, recruits.weight),
             city = EXCLUDED.city,
             state = EXCLUDED.state,
-            high_school = EXCLUDED.high_school,
+            high_school = COALESCE(EXCLUDED.high_school, recruits.high_school),
             composite_rank = EXCLUDED.composite_rank,
             composite_rating = EXCLUDED.composite_rating,
             star_rating = EXCLUDED.star_rating,
-            previous_rank = EXCLUDED.previous_rank,
+            previous_rank = COALESCE(EXCLUDED.previous_rank, recruits.previous_rank),
             position_rank = EXCLUDED.position_rank,
             state_rank = EXCLUDED.state_rank,
             committed_school = EXCLUDED.committed_school,
-            committed_school_slug = EXCLUDED.committed_school_slug,
+            committed_school_slug = COALESCE(EXCLUDED.committed_school_slug, recruits.committed_school_slug),
             commit_status = EXCLUDED.commit_status,
             profile_url = EXCLUDED.profile_url,
             photo_url = EXCLUDED.photo_url,
@@ -335,16 +351,18 @@ pub async fn ingest_commits(
     let mut hit_cap = true;
     for page in 1..=MAX_COMMIT_PAGES {
         let p = client.fetch_commits_page(year, page).await?;
-        if p.is_last_page {
-            info!(year, page, "reached commits sentinel page — stopping");
-            hit_cap = false;
-            break;
-        }
+        // Consume before testing the stop signal — see the note in `ingest_live`.
+        let last = p.is_last_page;
         total_pages += 1;
         for row in p.players {
             if seen.insert(row.recruit_key) {
                 rows.push(row);
             }
+        }
+        if last {
+            info!(year, page, "reached last commits page — stopping");
+            hit_cap = false;
+            break;
         }
     }
     if hit_cap {
@@ -396,7 +414,19 @@ pub async fn ingest_commits(
 /// written: the commits feed's visible `.score` is 247's proprietary 0–100
 /// rating, a different metric from the 0–1 composite, and its ranks read "NA"
 /// for the unranked players that are the whole point here. `star_rating` (an
-/// unambiguous 1–5 solid-star count) is persisted when present.
+/// unambiguous 1–5 solid-star count) is persisted when present. (The JSON
+/// transport does expose a real composite under `ranking.*`, parsed onto the
+/// row for snapshot fidelity, but the rankings feed owns those columns and
+/// covers every ranked player — so the division of labor is unchanged.)
+///
+/// One exception to the provenance gate, added with the JSON transport: the
+/// physical columns `height` / `weight` / `high_school` are **gap-filled** onto
+/// a composite-owned row when they are NULL there. The JSON rankings feed
+/// carries none of the three and this feed is their only JSON source, so
+/// without the backfill a ranked, committed recruit ingested rankings-first
+/// would keep a NULL `height` forever — and `height` is an input to the served
+/// freshman projection model. The fill never overwrites a non-NULL value, so
+/// composite data stays authoritative where it exists.
 pub async fn upsert_commit(
     row: &RecruitRow,
     pool: &PgPool,
@@ -467,6 +497,32 @@ pub async fn upsert_commit(
     .bind(&raw_player)
     .execute(pool)
     .await?;
+
+    // Gap-fill the physical columns onto a composite-owned row (see the doc
+    // comment). No-op when the row is commits-owned — the upsert above already
+    // wrote them — and never overwrites a value that is already there.
+    if row.height.is_some() || row.weight.is_some() || row.high_school.is_some() {
+        sqlx::query(
+            r#"
+            UPDATE recruits SET
+                height      = COALESCE(height, $3),
+                weight      = COALESCE(weight, $4),
+                high_school = COALESCE(high_school, $5)
+            WHERE year = $1
+              AND recruit_key = $2
+              AND institution_group <> 'commits'
+              AND (height IS NULL OR weight IS NULL OR high_school IS NULL)
+            "#,
+        )
+        .bind(year)
+        .bind(row.recruit_key)
+        .bind(&row.height)
+        .bind(row.weight)
+        .bind(&row.high_school)
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -899,7 +955,7 @@ mod tests {
             commit_status: Some("Signed".into()),
             profile_url: Some("/player/test-player-12345/".into()),
             photo_url: None,
-            raw_html: String::new(),
+            raw_source: String::new(),
         }];
         let snap = RecruitSnapshot {
             year: 2026,

@@ -842,10 +842,19 @@ export interface ProjectedDeparture {
   /// `natstat_id` so the cross-season hop is a single round-trip.
   destination_team_id?: string | null;
 }
+// Why a player is in the `uncertain` bucket. `draft_declared` is the original
+// occupant — declared for the NBA draft, not yet withdrawn — and is the only
+// cause for which the Tankathon mock board is evidence. `eligibility_unsettled`
+// (issue #220) is a senior whose fifth year is in front of a waiver desk or a
+// court; the draft board says nothing about him, so the API sends no mock
+// fields and the UI must not render a mock chip.
+export type UncertainCause = 'draft_declared' | 'eligibility_unsettled';
+
 export interface ProjectedUncertain {
   player_id: string;
   name: string;
   reason: string;
+  cause: UncertainCause;
   // Source-season MPG / CamPom from the player's PlayerRow on the
   // base-season roster (always populated for uncertain since the
   // bucket only contains qualified returners — same gate as

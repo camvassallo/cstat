@@ -1,9 +1,50 @@
-//! 247Sports composite recruit-rankings HTML client.
+//! 247Sports composite recruit-rankings client.
 //!
-//! Sister to [`crate::tfs::TfsClient`]. Same JWT plumbing, same rate limiter,
-//! same retry/backoff — but the recruit endpoint returns gzipped HTML
-//! fragments instead of JSON, so it lives in its own module with its own
-//! [`scraper`]-based row parser.
+//! Sister to [`crate::tfs::TfsClient`]. Same rate limiter, same retry/backoff.
+//!
+//! # Two transports
+//!
+//! The client speaks either of two 247 surfaces for the same two feeds, chosen
+//! by which constructor built it:
+//!
+//! * **JSON** (default) — `ipa.247sports.com/rdb/v1/{recruits,commits}/`,
+//!   authenticated with a **guest** bearer JWT minted per run off a public page
+//!   ([`Recruit247Client::guest`]). No hand-captured credential, which is what
+//!   makes an unattended run possible.
+//! * **HTML** (fallback) — the original `247sports.com/season/…` scrape,
+//!   authenticated with a subscriber `Cookie:` header ([`Recruit247Client::from_env`])
+//!   for the composite rankings, cookie-free ([`Recruit247Client::public`]) for
+//!   the commits feed. Kept because it is the only source for two columns the
+//!   JSON does not expose (`previous_rank`, `committed_school_slug`) and because
+//!   a 247 JSON change shouldn'''t leave the ingest with no path at all.
+//!
+//! Both transports produce [`RecruitRow`], so [`crate::ingest::recruits`] is
+//! transport-agnostic — see [`Self::fetch_page`] / [`Self::fetch_commits_page`],
+//! which dispatch on the credential the client carries.
+//!
+//! ## What differs between them
+//!
+//! The JSON feeds are a **superset in rows** (712 vs 611 for the 2026 class on
+//! 2026-08-19) and a **subset in columns**. Specifically:
+//!
+//! | Column | JSON rankings | JSON commits | HTML |
+//! | --- | --- | --- | --- |
+//! | `height` / `weight` / `high_school` | absent | present | present |
+//! | `previous_rank` | absent | absent | present |
+//! | `committed_school_slug` | absent | absent | present |
+//!
+//! `height` and `previous_rank` are **served model inputs** (the freshman and
+//! trajectory projections read them), so the composite upsert COALESCEs rather
+//! than overwrites — a JSON pass must not blank what an HTML pass captured.
+//! See `ingest::recruits::upsert_player`.
+//!
+//! ## The scale trap
+//!
+//! JSON `compositeRating` is on a **0–100** scale; the `recruits.composite_rating`
+//! column and every consumer of it are **0–1** (verified against 363 rows that
+//! overlap the HTML-scraped 2026 class: Tyran Stokes is `1.0` in the DB and
+//! `100` in the JSON). [`parse_recruits_json`] divides by 100. Getting this
+//! wrong would silently feed a 100x feature into the freshman model.
 //!
 //! URL pattern (recovered from browser DevTools):
 //! ```text
@@ -24,12 +65,27 @@ use regex::Regex;
 use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::OnceLock;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{info, warn};
 
 const RECRUITS_URL_BASE: &str = "https://247sports.com/season";
+
+/// JSON rankings feed — the composite recruit universe for a class, ranked and
+/// unranked alike. Rows under `players[]`, keyed on `key`.
+const JSON_RANKINGS_URL: &str = "https://ipa.247sports.com/rdb/v1/recruits/";
+
+/// JSON commits feed — every commit in a class, including the unranked,
+/// international and prep players the rankings feed carries without ratings.
+/// Rows under `list[]`, keyed on `playerKey` (NOT `key`, which is the
+/// recruit-interest id — they are different numbers on the same row).
+const JSON_COMMITS_URL: &str = "https://ipa.247sports.com/rdb/v1/commits/";
+
+/// Rows per JSON request. 247 honors this up to at least 250; 100 keeps a class
+/// to ~8 requests without asking for an unusually large page.
+const JSON_PAGE_SIZE: u32 = 100;
 const RECRUITS_VIEW_PATH: &str = "~/Views/SkyNet/PlayerSportRanking/_SimpleSetForSeason.ascx";
 const USER_AGENT: &str = "cstat-ingest/0.1 (+https://campom.org)";
 
@@ -58,6 +114,12 @@ pub enum RecruitError {
 
     #[error("HTTP {status}: {body}")]
     HttpStatus { status: u16, body: String },
+
+    #[error("could not mint a 247 guest JWT: {0}")]
+    GuestJwt(String),
+
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// Which 247 composite-ranking view to scrape.
@@ -140,9 +202,12 @@ pub struct RecruitRow {
     pub commit_status: Option<String>,
     pub profile_url: Option<String>,
     pub photo_url: Option<String>,
-    /// The raw `<li>` HTML, preserved for forensics. Lives in `raw_player`
-    /// alongside the parsed fields so a parser bug doesn't require a re-scrape.
-    pub raw_html: String,
+    /// The unparsed source row, preserved for forensics — the original `<li>`
+    /// HTML on the scrape path, the row's JSON object on the API path. Lives in
+    /// `raw_player` alongside the parsed fields so a parser bug doesn't require
+    /// a re-fetch.
+    #[serde(alias = "raw_html")]
+    pub raw_source: String,
 }
 
 /// 247Sports recruit-rankings HTML client. Mirrors [`crate::tfs::TfsClient`]
@@ -158,6 +223,9 @@ pub struct RecruitRow {
 pub struct Recruit247Client {
     http: Client,
     cookie_header: String,
+    /// Bearer token for the JSON transport. `Some` selects JSON; `None` falls
+    /// back to the HTML scrape. Set by [`Recruit247Client::guest`].
+    jwt: Option<String>,
     rate_limiter: RateLimiter,
 }
 
@@ -211,18 +279,72 @@ impl Recruit247Client {
                 .build()
                 .expect("failed to build HTTP client"),
             cookie_header,
+            jwt: None,
             rate_limiter: RateLimiter::new(max_per_hour),
         }
     }
 
+    /// Build a JSON-transport client on a **guest** bearer token, minted per
+    /// run off a public 247 page — no hand-captured credential.
+    ///
+    /// This is the default path and the reason the recruit feeds can now run
+    /// unattended: the subscriber cookie the HTML scrape needs expires ~6h after
+    /// issue with no renewal, so anything scheduled on it spends most of its life
+    /// failing on a dead credential. Precedence matches
+    /// [`crate::tfs::TfsClient::from_env_or_guest`] — an explicit `TFS_247_JWT`
+    /// wins when set, since a subscriber token also reaches the guest routes.
+    ///
+    /// `year` is the class year, used only to pick the public page to mint from.
+    pub async fn guest(year: i32) -> Result<Self, RecruitError> {
+        let jwt = match std::env::var("TFS_247_JWT") {
+            Ok(j) if !j.trim().is_empty() => {
+                info!("using subscriber TFS_247_JWT for the 247 JSON feeds");
+                j
+            }
+            _ => {
+                let j = crate::tfs::TfsClient::fetch_guest_jwt(year)
+                    .await
+                    .map_err(|e| RecruitError::GuestJwt(e.to_string()))?;
+                info!(year, "minted a 247 guest JWT for the recruit JSON feeds");
+                j
+            }
+        };
+        let mut c = Self::new(String::new(), rate_from_env());
+        c.jwt = Some(jwt);
+        Ok(c)
+    }
+
+    /// Build a JSON-transport client on an explicit token (handy for tests).
+    pub fn with_jwt(jwt: String, max_per_hour: u32) -> Self {
+        let mut c = Self::new(String::new(), max_per_hour);
+        c.jwt = Some(jwt);
+        c
+    }
+
+    /// True when this client speaks JSON rather than scraping HTML.
+    pub fn is_json(&self) -> bool {
+        self.jwt.is_some()
+    }
+
     /// Fetch a single page of composite recruit rankings. Page is 1-indexed.
-    /// Requires the subscriber cookie (see [`Self::from_env`]).
+    ///
+    /// Dispatches on the credential the client carries: a JSON client
+    /// ([`Self::guest`]) reads `rdb/v1/recruits/`, a cookie client
+    /// ([`Self::from_env`]) scrapes the rankings page.
+    ///
+    /// `group` is honored only on the HTML path, and even there 247 ignores it
+    /// (all three values return identical content — see [`InstitutionGroup`]).
+    /// The JSON feed has an `institutionGroup` param with the same non-effect,
+    /// verified 2026-08-19, so it is not sent.
     pub async fn fetch_page(
         &self,
         year: i32,
         group: InstitutionGroup,
         page: u32,
     ) -> Result<RecruitPage, RecruitError> {
+        if self.jwt.is_some() {
+            return self.fetch_rankings_json(year, page).await;
+        }
         let url = format!(
             "{RECRUITS_URL_BASE}/{year}-basketball/compositerecruitrankings/\
              ?ViewPath={view}&InstitutionGroup={grp}&Page={page}",
@@ -255,6 +377,9 @@ impl Recruit247Client {
         year: i32,
         page: u32,
     ) -> Result<RecruitPage, RecruitError> {
+        if self.jwt.is_some() {
+            return self.fetch_commits_json(year, page).await;
+        }
         let url = format!("{RECRUITS_URL_BASE}/{year}-basketball/commits/?Page={page}");
         let referer = format!("https://247sports.com/season/{year}-basketball/commits/");
         let body = self.fetch_html(&url, &referer, year, page).await?;
@@ -263,6 +388,109 @@ impl Recruit247Client {
             is_last_page: players.is_empty(),
             players,
         })
+    }
+
+    /// Fetch one page of the JSON rankings feed. Page is 1-indexed.
+    async fn fetch_rankings_json(&self, year: i32, page: u32) -> Result<RecruitPage, RecruitError> {
+        let body = self.fetch_json(JSON_RANKINGS_URL, year, page).await?;
+        Ok(json_page(&body, "players", parse_recruits_json, page))
+    }
+
+    /// Fetch one page of the JSON commits feed. Page is 1-indexed.
+    async fn fetch_commits_json(&self, year: i32, page: u32) -> Result<RecruitPage, RecruitError> {
+        let body = self.fetch_json(JSON_COMMITS_URL, year, page).await?;
+        Ok(json_page(&body, "list", parse_commits_json, page))
+    }
+
+    /// Shared GET-with-retry for the JSON transport. Mirrors [`Self::fetch_html`]'s
+    /// retry policy, with one difference: a 401/403 is always an auth failure here
+    /// (every `rdb/v1` route rejects an unauthenticated request), so it fails fast
+    /// as [`RecruitError::JwtExpired`] rather than being retried as a bot-block.
+    async fn fetch_json(&self, base: &str, year: i32, page: u32) -> Result<Value, RecruitError> {
+        let jwt = self
+            .jwt
+            .as_deref()
+            .expect("fetch_json called on a client with no JWT");
+        let url = format!(
+            "{base}?listType=1&page={page}&pageSize={JSON_PAGE_SIZE}\
+             &sport=basketball&sportKey=2&year={year}&yearSport={year}-basketball",
+        );
+
+        let mut attempt: u32 = 0;
+        loop {
+            self.rate_limiter.acquire().await;
+
+            if attempt > 0 {
+                let backoff_secs = 2u64.pow(attempt);
+                info!(
+                    year,
+                    page, attempt, backoff_secs, "retrying 247 JSON request"
+                );
+            } else {
+                info!(year, page, url, "fetching 247 JSON page");
+            }
+
+            let response = match self
+                .http
+                .get(&url)
+                .bearer_auth(jwt)
+                .header("origin", "https://247sports.com")
+                .header("referer", "https://247sports.com/")
+                .header("accept", "application/json")
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt >= MAX_RETRIES {
+                        return Err(RecruitError::Http(e));
+                    }
+                    warn!(year, page, attempt, error = %e, "network error — retrying");
+                    tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
+                    attempt += 1;
+                    continue;
+                }
+            };
+
+            let status = response.status();
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                return Err(RecruitError::JwtExpired {
+                    status: status.as_u16(),
+                });
+            }
+
+            if status.as_u16() == 429 || status.is_server_error() {
+                let body = response.text().await.unwrap_or_default();
+                if attempt >= MAX_RETRIES {
+                    return Err(RecruitError::HttpStatus {
+                        status: status.as_u16(),
+                        body,
+                    });
+                }
+                let backoff_secs = 2u64.pow(attempt);
+                warn!(
+                    year,
+                    page,
+                    attempt,
+                    status = status.as_u16(),
+                    backoff_secs,
+                    "retryable HTTP error — backing off"
+                );
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                attempt += 1;
+                continue;
+            }
+
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(RecruitError::HttpStatus {
+                    status: status.as_u16(),
+                    body,
+                });
+            }
+
+            return Ok(response.json().await?);
+        }
     }
 
     /// Shared GET-with-retry for both feeds. Returns the response body on
@@ -357,6 +585,199 @@ impl Recruit247Client {
             return Ok(response.text().await?);
         }
     }
+}
+
+/// Split a JSON feed response into a [`RecruitPage`].
+///
+/// `rows_key` differs per feed (`players` on the rankings feed, `list` on
+/// commits — 247 is not consistent about this). `is_last_page` is taken from
+/// `pagination.pageCount` when present so a full class costs no speculative
+/// extra request, falling back to "the page came back empty" otherwise.
+fn json_page(
+    body: &Value,
+    rows_key: &str,
+    parse: fn(&Value) -> Option<RecruitRow>,
+    page: u32,
+) -> RecruitPage {
+    let rows = body
+        .get(rows_key)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let players: Vec<RecruitRow> = rows.iter().filter_map(parse).collect();
+    let page_count = body
+        .pointer("/pagination/pageCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    RecruitPage {
+        is_last_page: players.is_empty() || (page_count > 0 && page >= page_count),
+        players,
+    }
+}
+
+/// Read a `"key": value` string, treating an empty string as absent.
+fn jstr(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Read a nested string by JSON pointer, treating an empty string as absent.
+fn jptr_str(v: &Value, ptr: &str) -> Option<String> {
+    v.pointer(ptr)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Read a number as `i32`. 247 sends weights (and occasionally ranks) as JSON
+/// floats (`260.0`), so accept either representation.
+fn jnum_i32(v: &Value) -> Option<i32> {
+    v.as_i64()
+        .or_else(|| v.as_f64().map(|f| f.round() as i64))
+        .and_then(|n| i32::try_from(n).ok())
+}
+
+/// Classify a row's recruiting status from its institution objects.
+///
+/// Mirrors the vocabulary [`parse_recruits_html`] derives from row markers, so
+/// the two transports write the same `commit_status` values.
+fn commit_status_from(signed: bool, committed: bool) -> &'static str {
+    if signed {
+        "Signed"
+    } else if committed {
+        "Committed"
+    } else {
+        "Uncommitted"
+    }
+}
+
+/// Parse one row of the JSON rankings feed (`rdb/v1/recruits/`, `players[]`).
+///
+/// Returns `None` for a row with no `key` — the natural key, and the one field
+/// the ingest cannot work without.
+///
+/// **`compositeRating` is rescaled 0–100 → 0–1** to match the column and every
+/// consumer of it; see the module docs for the verification.
+///
+/// `height`, `weight`, `high_school`, `previous_rank` and
+/// `committed_school_slug` are absent from this feed and left `None`. The
+/// composite upsert COALESCEs them so a JSON pass cannot blank a value an HTML
+/// pass or the commits feed captured.
+pub fn parse_recruits_json(row: &Value) -> Option<RecruitRow> {
+    let recruit_key = row.get("key").and_then(Value::as_i64)?;
+
+    let committed = jptr_str(row, "/committedInstitution/name");
+    let signed = jptr_str(row, "/signedInstitution/name");
+    let status = commit_status_from(signed.is_some(), committed.is_some());
+
+    Some(RecruitRow {
+        recruit_key,
+        first_name: jstr(row, "firstName"),
+        last_name: jstr(row, "lastName"),
+        composite_rank: row.get("compositeNationalRank").and_then(jnum_i32),
+        // Not exposed by this feed — see the doc comment.
+        previous_rank: None,
+        composite_rating: row
+            .get("compositeRating")
+            .and_then(Value::as_f64)
+            .map(|r| (r / 100.0) as f32),
+        star_rating: row
+            .get("compositeStarRating")
+            .and_then(jnum_i32)
+            .and_then(|s| i16::try_from(s).ok()),
+        position_rank: row.get("compositePositionRank").and_then(jnum_i32),
+        state_rank: row.get("compositeStateRank").and_then(jnum_i32),
+        position: jstr(row, "primaryPosition"),
+        height: None,
+        weight: None,
+        high_school: None,
+        city: jptr_str(row, "/homeTown/city"),
+        state: jptr_str(row, "/homeTown/state"),
+        // `signedInstitution` is the firmer of the two and implies the commit.
+        committed_school: signed.or(committed),
+        committed_school_slug: None,
+        commit_status: Some(status.to_string()),
+        profile_url: jstr(row, "profileUrl"),
+        photo_url: jstr(row, "defaultAssetUrl"),
+        raw_source: row.to_string(),
+    })
+}
+
+/// Parse one row of the JSON commits feed (`rdb/v1/commits/`, `list[]`).
+///
+/// Keyed on **`playerKey`**, not `key` — on this feed `key` is the
+/// recruit-interest id, a different number. `playerKey` is what matches the
+/// rankings feed's `key` and the scraped `recruit_key` already in the table
+/// (verified against 607 overlapping 2026 rows).
+///
+/// This feed is the only source of `height` / `weight` / `high_school` on the
+/// JSON transport, which matters because both are served projection-model
+/// inputs. `currentInstitution` is the player's *present* school — a high
+/// school, JUCO, prep or overseas club for a recruit, but the committed college
+/// for an early enrollee — so it is read as `high_school` only when its `group`
+/// says it is not a college.
+pub fn parse_commits_json(row: &Value) -> Option<RecruitRow> {
+    let recruit_key = row.get("playerKey").and_then(Value::as_i64)?;
+
+    let committed = jptr_str(row, "/committedInstitution/name");
+    let signed_flag = row
+        .get("earlySignee")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let status = commit_status_from(signed_flag, committed.is_some());
+
+    let current_group = jptr_str(row, "/currentInstitution/group").unwrap_or_default();
+    let high_school = if current_group.eq_ignore_ascii_case("College") {
+        None
+    } else {
+        jptr_str(row, "/currentInstitution/name")
+    };
+
+    Some(RecruitRow {
+        recruit_key,
+        first_name: jstr(row, "firstName"),
+        last_name: jstr(row, "lastName"),
+        // Populated for the ranked minority so a snapshot round-trips faithfully.
+        // `upsert_commit` deliberately does not write the rank columns — the
+        // rankings feed owns them.
+        composite_rank: row
+            .pointer("/ranking/overallCompositeRank")
+            .and_then(jnum_i32),
+        previous_rank: None,
+        composite_rating: row
+            .pointer("/ranking/compositeRating")
+            .and_then(Value::as_f64)
+            .map(|r| (r / 100.0) as f32),
+        star_rating: row
+            .pointer("/ranking/compositeStarRating")
+            .and_then(jnum_i32)
+            .and_then(|s| i16::try_from(s).ok()),
+        position_rank: row
+            .pointer("/ranking/positionCompositeRank")
+            .and_then(jnum_i32),
+        state_rank: row
+            .pointer("/ranking/stateCompositeRank")
+            .and_then(jnum_i32),
+        position: jptr_str(row, "/position/abbreviation")
+            .or_else(|| jptr_str(row, "/position/name")),
+        // `height` is inches as a float; `formattedHeight` is the "6-10" the
+        // column has always held.
+        height: jstr(row, "formattedHeight"),
+        weight: row.get("weight").and_then(jnum_i32).filter(|&w| w > 0),
+        high_school,
+        city: jstr(row, "city"),
+        state: jstr(row, "stateAbbr").or_else(|| jstr(row, "state")),
+        committed_school: committed,
+        committed_school_slug: None,
+        commit_status: Some(status.to_string()),
+        profile_url: jstr(row, "playerUrl"),
+        photo_url: jstr(row, "primaryPlayerAvatar").or_else(|| jstr(row, "playerAvatar")),
+        raw_source: row.to_string(),
+    })
 }
 
 /// Minimal URL-encoder for the `ViewPath` query parameter. Avoids pulling in a
@@ -550,7 +971,7 @@ fn parse_items(body: &str, sel: &Selectors) -> Vec<RecruitRow> {
             })
             .map(|s| s.to_string());
 
-        let raw_html = item.html();
+        let raw_source = item.html();
 
         out.push(RecruitRow {
             recruit_key,
@@ -573,7 +994,7 @@ fn parse_items(body: &str, sel: &Selectors) -> Vec<RecruitRow> {
             commit_status,
             profile_url: Some(profile_url),
             photo_url,
-            raw_html,
+            raw_source,
         });
     }
     out

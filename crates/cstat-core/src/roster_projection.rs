@@ -147,6 +147,36 @@ pub struct UncertainPlayer {
     /// Free-text reason ("declared for NBA draft", "in portal but
     /// uncommitted", etc.). Keep human-readable for the UI tooltip.
     pub reason: String,
+    /// Machine-readable counterpart to `reason`. What *kind* of uncertainty
+    /// this is, which decides how the player's return probability may be
+    /// estimated — see [`UncertainCause`].
+    pub cause: UncertainCause,
+}
+
+/// Why a player is in the `uncertain` bucket. Behaviour-bearing: it selects
+/// the evidence the serving layer is allowed to weigh him by.
+///
+/// The bucket used to have exactly one occupant type, so "uncertain" and
+/// "declared for the NBA draft" were interchangeable and `/api/projections`
+/// weighted the whole cohort by the Tankathon mock board. Issue #220 routes a
+/// second, unrelated population here, and the mock draft is not evidence about
+/// them: a senior whose fifth year is in front of a waiver desk is no more
+/// likely to be absent for being a good player. Without this discriminator the
+/// bucket silently conflates "might go pro" with "might not be ruled eligible",
+/// and the conflation is worst for the highest-value players — exactly the ones
+/// who move a projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UncertainCause {
+    /// Declared for the NBA draft and has not withdrawn. Resolution is the
+    /// draft itself, so draft-board position is genuine evidence about whether
+    /// he comes back, and the mock-pick tiers apply.
+    DraftDeclared,
+    /// Eligibility under the NCAA 5-in-5 rule is unsettled — a curated
+    /// `contested` row, or the derived senior-portal-withdrawal signal.
+    /// Resolution is a waiver desk or a court, about which a mock draft says
+    /// nothing at all.
+    EligibilityUnsettled,
 }
 
 /// Audit-trail metadata for one incoming HS recruit. The synthesized
@@ -281,10 +311,12 @@ pub struct ProjectedRoster {
     /// freshman-impact model's per-recruit projected `cam_v3` with audit
     /// metadata for the UI.
     pub recruits: Vec<(PlayerRow, RecruitMeta)>,
-    /// Players who are returning in the ceiling scenario but gone in
-    /// the floor scenario (declared draft entrants whose withdrawal
-    /// status is still TBD). Their PlayerRow lives in `returning` only
-    /// in the ceiling materialization.
+    /// Players who are returning in the ceiling scenario but gone in the
+    /// floor scenario. Two populations, distinguished by
+    /// [`UncertainPlayer::cause`]: declared draft entrants whose withdrawal
+    /// status is still TBD, and — since issue #220 — seniors whose 5-in-5
+    /// eligibility is unsettled. Their PlayerRow lives in `returning` only in
+    /// the ceiling materialization.
     pub uncertain: Vec<(PlayerRow, UncertainPlayer)>,
     /// Audit trail: who left and why. Sized for UI display, not used by
     /// inference.
@@ -1488,6 +1520,7 @@ pub async fn compose_all_projections(
                                 player_id: pid,
                                 name: name.clone(),
                                 reason: format!("eligibility contested ({reason})"),
+                                cause: UncertainCause::EligibilityUnsettled,
                             },
                         ));
                     }
@@ -1542,6 +1575,7 @@ pub async fn compose_all_projections(
                         reason: "entered the portal and withdrew as a senior \
                                  (5-in-5 eligibility unconfirmed)"
                             .into(),
+                        cause: UncertainCause::EligibilityUnsettled,
                     },
                 ));
                 continue;
@@ -1564,6 +1598,7 @@ pub async fn compose_all_projections(
                         player_id: pid,
                         name: name.clone(),
                         reason: "declared for NBA draft (status pending)".into(),
+                        cause: UncertainCause::DraftDeclared,
                     },
                 ));
                 continue;
@@ -1966,6 +2001,7 @@ mod tests {
                 player_id: Uuid::new_v4(),
                 name: "X".into(),
                 reason: "draft".into(),
+                cause: UncertainCause::DraftDeclared,
             },
         )];
         let r = ProjectedRoster {
@@ -2094,6 +2130,7 @@ mod tests {
                 player_id: Uuid::new_v4(),
                 name: "X".into(),
                 reason: "draft".into(),
+                cause: UncertainCause::DraftDeclared,
             },
         )];
         let r = ProjectedRoster {
