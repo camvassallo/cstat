@@ -8,6 +8,9 @@ import { agNullsBottom } from './tableSort';
 import { classColor, CLASS_ORDER } from './archetypeColors';
 import ArchetypeFilter from './ArchetypeFilter';
 import { useArchetypeFilter } from './useArchetypeFilter';
+// The committed/available rule lives in lib/ so it is unit-testable without a
+// render harness; the chips below are just its presentation.
+import { availabilityOf, type Availability } from '../lib/transferAvailability';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
 
@@ -28,23 +31,6 @@ type RankedTransfer = TransferRow & {
   rank_delta: number | null;
   campom_delta: number | null;
 };
-
-// The portal's two states worth filtering on. 247's own vocabulary is
-// Entered / Committed / Withdrawn, but Withdrawn never reaches this page (the
-// route drops it, since a withdrawal is a player staying put rather than a
-// portal entry), so what's left is a clean binary: has he picked a school, or
-// is he still on the board?
-type Availability = 'committed' | 'available';
-
-// Committed if 247 says so OR a destination is showing — deliberately an OR
-// rather than either field alone, because the two disagree on a small number of
-// rows in both directions (2026: 5 `Entered` rows carry a destination; 2025: 3
-// `Committed` rows carry none) and the filter must never contradict the "Next"
-// column rendered beside it. A row showing a school while filed under
-// "Available" reads as a bug whichever field is technically right.
-function availabilityOf(t: RankedTransfer): Availability {
-  return t.status === 'Committed' || t.next_team != null ? 'committed' : 'available';
-}
 
 const AVAILABILITY_META: Record<Availability, { label: string; cls: string; title: string }> = {
   committed: {
