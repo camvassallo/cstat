@@ -29,6 +29,36 @@ type RankedTransfer = TransferRow & {
   campom_delta: number | null;
 };
 
+// The portal's two states worth filtering on. 247's own vocabulary is
+// Entered / Committed / Withdrawn, but Withdrawn never reaches this page (the
+// route drops it, since a withdrawal is a player staying put rather than a
+// portal entry), so what's left is a clean binary: has he picked a school, or
+// is he still on the board?
+type Availability = 'committed' | 'available';
+
+// Committed if 247 says so OR a destination is showing — deliberately an OR
+// rather than either field alone, because the two disagree on a small number of
+// rows in both directions (2026: 5 `Entered` rows carry a destination; 2025: 3
+// `Committed` rows carry none) and the filter must never contradict the "Next"
+// column rendered beside it. A row showing a school while filed under
+// "Available" reads as a bug whichever field is technically right.
+function availabilityOf(t: RankedTransfer): Availability {
+  return t.status === 'Committed' || t.next_team != null ? 'committed' : 'available';
+}
+
+const AVAILABILITY_META: Record<Availability, { label: string; cls: string; title: string }> = {
+  committed: {
+    label: 'Committed',
+    cls: 'bg-emerald-900/30 border-emerald-700 text-emerald-300',
+    title: 'Has picked a destination school',
+  },
+  available: {
+    label: 'Available',
+    cls: 'bg-amber-900/30 border-amber-700 text-amber-300',
+    title: 'Still in the portal with no destination — who is left on the board',
+  },
+};
+
 
 // Renders a team cell as a link to /teams/:id when we resolved the 247 short
 // name to a cstat team_id, or as plain text when we didn't (rare; small
@@ -378,6 +408,7 @@ export default function TransferPortal({ year }: Props) {
   const [rows, setRows] = useState<RankedTransfer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [availability, setAvailability] = useState<Availability | null>(null);
   const isMobile = useIsMobile();
   // Archetype filter shared with the players page — the class shown is the
   // transfer's prior (source-season) archetype, the right lens for portal
@@ -474,7 +505,11 @@ export default function TransferPortal({ year }: Props) {
 
   const columns = useMemo(() => buildColumns(isMobile, year), [isMobile, year]);
 
-  const filtered = useMemo(() => {
+  // Everything except the availability chips. Split out so the chip counts can
+  // be taken from the same set the chips filter — a count that ignored the
+  // search box or the archetype filter would promise rows that clicking cannot
+  // produce.
+  const baseRows = useMemo(() => {
     if (!rows) return null;
     // `rank_cstat` is assigned to every row we can project (see useEffect
     // above), so this check drops exactly the rows with no trajectory
@@ -498,6 +533,20 @@ export default function TransferPortal({ year }: Props) {
     );
   }, [rows, search, filterRows]);
 
+  const filtered = useMemo(() => {
+    if (!baseRows) return null;
+    if (!availability) return baseRows;
+    return baseRows.filter((t) => availabilityOf(t) === availability);
+  }, [baseRows, availability]);
+
+  // Counts partition `baseRows` exactly, so the two chips always sum to the
+  // unfiltered total and neither can read 0 while rows are on screen.
+  const availabilityCounts = useMemo(() => {
+    const by: Record<Availability, number> = { committed: 0, available: 0 };
+    for (const t of baseRows ?? []) by[availabilityOf(t)] += 1;
+    return by;
+  }, [baseRows]);
+
   if (error) {
     return (
       <div className="p-4 text-rose-300">Failed to load transfers: {error}</div>
@@ -510,6 +559,26 @@ export default function TransferPortal({ year }: Props) {
   const hasArch = selectedClasses.size > 0;
   const shown = filtered?.length ?? 0;
 
+  // Availability chip. Clicking the active chip clears the filter, matching the
+  // recruit-class chips so the two portal-ish pages behave the same way.
+  const availabilityChip = (key: Availability) => {
+    const active = availability === key;
+    const m = AVAILABILITY_META[key];
+    return (
+      <button
+        key={key}
+        onClick={() => setAvailability(active ? null : key)}
+        aria-pressed={active}
+        className={`px-2 py-0.5 rounded border text-xs transition-colors ${
+          active ? m.cls + ' ring-1 ring-current' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+        }`}
+        title={active ? 'Clear filter' : m.title}
+      >
+        {m.label} <span className="opacity-70">{availabilityCounts[key]}</span>
+      </button>
+    );
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-3">
@@ -520,6 +589,10 @@ export default function TransferPortal({ year }: Props) {
           placeholder="Search transfers / teams…"
           className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
+        <div className="flex items-center gap-1">
+          {availabilityChip('committed')}
+          {availabilityChip('available')}
+        </div>
         <ArchetypeFilter
           selected={selectedClasses}
           onToggle={toggleClass}
@@ -530,7 +603,10 @@ export default function TransferPortal({ year }: Props) {
           onClear={clearArchetypes}
         />
         <span className="text-xs text-gray-500">
-          {hasArch
+          {/* Any active narrowing switches to the "matching" phrasing —
+              otherwise a filtered grid would be captioned with the unfiltered
+              count, which is the one number a user reads as authoritative. */}
+          {hasArch || availability || search.trim()
             ? `${shown} matching transfers`
             : `${ranked} ranked transfers${hidden > 0 ? ` · ${hidden} hidden (unranked by 247 or no projection)` : ''}`}{' '}
           ·{' '}
