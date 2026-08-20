@@ -31,6 +31,17 @@ const BASE_URL: &str = "https://ipa.247sports.com/rdb/v1/transfers/";
 const DEFAULT_PAGE_SIZE: u32 = 25;
 const USER_AGENT: &str = "cstat-ingest/0.1 (+https://campom.org)";
 
+/// Public portal page whose bootstrap JSON embeds a server-minted **guest**
+/// JWT. `{year}` is the portal class year. Fetched with a browser UA — the
+/// page is ordinary HTML served to anyone.
+const GUEST_PAGE_TMPL: &str = "https://247sports.com/season/{year}-basketball/transferportal/";
+
+/// Browser UA for the guest-page fetch only. The API calls keep [`USER_AGENT`]
+/// — this one exists because the public page is served by a CDN that varies
+/// its response for non-browser agents.
+const GUEST_PAGE_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
 /// Default rate budget: 3,600 requests/hr ≈ 1 req/sec. 247 doesn't publish a
 /// limit; this is our self-imposed politeness ceiling. Overridable via
 /// `TFS_247_RATE_PER_HOUR` if we ever need to slow further.
@@ -58,6 +69,9 @@ pub enum TfsError {
 
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("could not extract a guest JWT from {url} (247 page layout changed?)")]
+    GuestJwtNotFound { url: String },
 }
 
 /// Lean HTTP client for the 247Sports transfer-portal API.
@@ -102,16 +116,100 @@ pub struct TfsPage {
     pub players: Vec<Value>,
 }
 
+/// Read the rate budget from `TFS_247_RATE_PER_HOUR` (default 3600).
+fn rate_from_env() -> u32 {
+    std::env::var("TFS_247_RATE_PER_HOUR")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_RATE_PER_HOUR)
+}
+
+/// Pull the first `"jwt":"…"` value out of a 247 page body.
+///
+/// Split out from the fetch so the brittle half is unit-testable without a
+/// network call — this is the piece a 247 redesign breaks.
+fn extract_guest_jwt(body: &str) -> Option<String> {
+    // JWTs are `header.payload.signature`, all base64url. Anchored on the JSON
+    // key so we don't pick up an unrelated token-shaped string elsewhere on the
+    // page, and length-floored so a truncated or placeholder value doesn't pass.
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(
+            r#""jwt"\s*:\s*"([A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})""#,
+        )
+        .expect("static regex")
+    });
+    re.captures(body)?.get(1).map(|m| m.as_str().to_string())
+}
+
 impl TfsClient {
     /// Build a client from `TFS_247_JWT` (required) and optional
     /// `TFS_247_RATE_PER_HOUR` (default 3600).
+    ///
+    /// Prefer [`Self::from_env_or_guest`] for anything that needs to run
+    /// unattended — this constructor hard-fails when the subscriber token is
+    /// absent or stale.
     pub fn from_env() -> Result<Self, TfsError> {
         let jwt = std::env::var("TFS_247_JWT").map_err(|_| TfsError::MissingJwt)?;
-        let rate = std::env::var("TFS_247_RATE_PER_HOUR")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(DEFAULT_RATE_PER_HOUR);
-        Ok(Self::new(jwt, rate))
+        Ok(Self::new(jwt, rate_from_env()))
+    }
+
+    /// Build a client without requiring a hand-captured subscriber token.
+    ///
+    /// Precedence: `TFS_247_JWT` when set (a subscriber token — keep using it,
+    /// it is the only way to reach subscriber-gated fields), otherwise mint a
+    /// **guest** token off the public portal page via [`Self::fetch_guest_jwt`].
+    ///
+    /// This is what makes an unattended run possible. The subscriber token
+    /// expires ~6h after issue with no renewal path, so any scheduled job built
+    /// on `from_env` spends most of its life failing on a dead credential —
+    /// which is precisely why ROADMAP S5/P3 declined to schedule the 247 feeds
+    /// at all. A guest token is minted on demand, per run, from a page that
+    /// needs no login.
+    ///
+    /// Verified 2026-08-19 against the live feed: guest reaches `/transfers/`,
+    /// `/recruits/`, `/commits/` and `/decommits/` with full ratings, ranks and
+    /// destinations. It does **not** reach `/unrankedRecruits/`, `/sports/` or
+    /// `/institutionGroups/` (403) — set `TFS_247_JWT` if you need those.
+    pub async fn from_env_or_guest(year: i32) -> Result<Self, TfsError> {
+        let rate = rate_from_env();
+        match std::env::var("TFS_247_JWT") {
+            Ok(jwt) if !jwt.trim().is_empty() => {
+                info!("using subscriber TFS_247_JWT");
+                Ok(Self::new(jwt, rate))
+            }
+            _ => {
+                let jwt = Self::fetch_guest_jwt(year).await?;
+                info!(year, "minted a 247 guest JWT from the public portal page");
+                Ok(Self::new(jwt, rate))
+            }
+        }
+    }
+
+    /// GET the public portal page and pull the guest JWT out of its bootstrap
+    /// JSON. No credentials, no headless browser — the page ships the token it
+    /// uses for its own client-side calls.
+    ///
+    /// Brittle to a 247 redesign by construction (it reads a `"jwt":"…"` key
+    /// out of markup), which is why the failure is a distinct error variant:
+    /// callers can fall back to `TFS_247_JWT` or to a snapshot rather than
+    /// treating it as an outage.
+    pub async fn fetch_guest_jwt(year: i32) -> Result<String, TfsError> {
+        let url = GUEST_PAGE_TMPL.replace("{year}", &year.to_string());
+        let http = Client::builder()
+            .user_agent(GUEST_PAGE_UA)
+            .gzip(true)
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("failed to build HTTP client");
+        let body = http
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        extract_guest_jwt(&body).ok_or(TfsError::GuestJwtNotFound { url })
     }
 
     /// Build with an explicit JWT + rate (handy for tests).
@@ -282,6 +380,41 @@ pub fn parse_page(body: Value) -> TfsPage {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Shape of the real bootstrap blob (2026-08-19): the token sits in a
+    /// larger JSON object inline in the page, alongside other keys.
+    const PAGE_SAMPLE: &str = r#"<script>window.__data = {"site":"247sports.com",
+        "jwt":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJnaWQiOiI1NzNmZWRhYiIsInNzIjoiR3Vlc3QifQ.abc-DEF_123",
+        "year":2027};</script>"#;
+
+    #[test]
+    fn extract_guest_jwt_pulls_token_from_page_bootstrap() {
+        let jwt = extract_guest_jwt(PAGE_SAMPLE).expect("token");
+        assert!(jwt.starts_with("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."));
+        assert_eq!(jwt.split('.').count(), 3, "must be a full three-part JWT");
+    }
+
+    #[test]
+    fn extract_guest_jwt_returns_none_when_absent() {
+        // The failure mode that matters: 247 redesigns the page and the key is
+        // simply gone. Must be None (→ `GuestJwtNotFound`, which callers can
+        // fall back on) rather than a partial match.
+        assert!(extract_guest_jwt("<html><body>no token here</body></html>").is_none());
+        assert!(extract_guest_jwt(r#"{"jwt":""}"#).is_none());
+        assert!(extract_guest_jwt(r#"{"jwt":"not-a-jwt"}"#).is_none());
+    }
+
+    #[test]
+    fn extract_guest_jwt_ignores_token_shaped_strings_under_other_keys() {
+        // Anchoring on the `"jwt"` key is what keeps an unrelated base64 blob
+        // (analytics payloads, CSRF tokens) from being handed to the API as a
+        // bearer credential.
+        let body = r#"{"csrf":"aaaaaaaa.bbbbbbbb.cccccccc","jwt":"head1234.body5678.sig90abc"}"#;
+        assert_eq!(
+            extract_guest_jwt(body).as_deref(),
+            Some("head1234.body5678.sig90abc")
+        );
+    }
 
     #[test]
     fn parse_page_unwraps_player_envelope() {

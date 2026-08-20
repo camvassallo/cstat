@@ -1,0 +1,115 @@
+{
+ "pagination": {
+  "currentPage": 1,
+  "itemsPerPage": 100,
+  "count": 712,
+  "pageCount": 8
+ },
+ "players": [
+  {
+   "key": 46160429,
+   "cbs_Key": 0,
+   "firstName": "Ralph",
+   "lastName": "Scott",
+   "profileUrl": "/player/Ralph-Scott-46160429",
+   "defaultAssetUrl": "/Uploads/Assets/759/187/13187759.jpeg",
+   "homeTown": {
+    "city": "Bradenton",
+    "state": "FL"
+   },
+   "primaryPosition": "SF",
+   "compositeRating": 97.37729065649442,
+   "compositeStarRating": 5,
+   "compositeNationalRank": 76,
+   "compositePositionRank": 28,
+   "compositeStateRank": 12,
+   "committedInstitution": {
+    "institutionKey": 24106,
+    "teamKey": 185,
+    "cbsKey": 21362,
+    "name": "Tennessee",
+    "abbreviation": "TENN",
+    "fullName": "Tennessee Volunteers"
+   },
+   "signedInstitution": {
+    "institutionKey": 24106,
+    "teamKey": 185,
+    "cbsKey": 21362,
+    "name": "Tennessee",
+    "abbreviation": "TENN",
+    "fullName": "Tennessee Volunteers"
+   },
+   "currentInstitution": {
+    "institutionKey": 24106,
+    "teamKey": 185,
+    "cbsKey": 21362,
+    "name": "Tennessee",
+    "abbreviation": "TENN",
+    "fullName": "Tennessee Volunteers"
+   }
+  },
+  {
+   "key": 46138185,
+   "cbs_Key": 29079460,
+   "firstName": "Kendre",
+   "lastName": "Harrison",
+   "profileUrl": "/player/Kendre-Harrison-46138185",
+   "defaultAssetUrl": "/Uploads/Assets/253/198/14198253.jpg",
+   "homeTown": {
+    "city": "Reidsville",
+    "state": "NC"
+   },
+   "primaryPosition": "C",
+   "compositeRating": 92.92164421342001,
+   "compositeStarRating": 4,
+   "compositeNationalRank": 151,
+   "compositePositionRank": 27,
+   "compositeStateRank": 3,
+   "committedInstitution": {
+    "institutionKey": 24090,
+    "teamKey": 153,
+    "cbsKey": 21338,
+    "name": "Oregon",
+    "abbreviation": "ORE",
+    "fullName": "Oregon Ducks"
+   },
+   "signedInstitution": null,
+   "currentInstitution": {
+    "institutionKey": 24090,
+    "teamKey": 153,
+    "cbsKey": 21338,
+    "name": "Oregon",
+    "abbreviation": "ORE",
+    "fullName": "Oregon Ducks"
+   }
+  },
+  {
+   "key": 46138195,
+   "cbs_Key": 29373969,
+   "firstName": "Xavier",
+   "lastName": "Green",
+   "profileUrl": "/player/Xavier-Green-46138195",
+   "defaultAssetUrl": "/Uploads/Assets/379/434/12434379.jpeg",
+   "homeTown": {
+    "city": "The Colony",
+    "state": "TX"
+   },
+   "primaryPosition": "PG",
+   "compositeRating": null,
+   "compositeStarRating": null,
+   "compositeNationalRank": null,
+   "compositePositionRank": null,
+   "compositeStateRank": null,
+   "committedInstitution": null,
+   "signedInstitution": null,
+   "currentInstitution": {
+    "institutionKey": 24058,
+    "teamKey": 100,
+    "cbsKey": 21436,
+    "name": "Tulsa",
+    "abbreviation": "TULSA",
+    "fullName": "Tulsa Golden Hurricane"
+   }
+  }
+ ]
+}

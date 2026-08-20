@@ -13,7 +13,7 @@ use axum::{
 use cstat_core::inference::Predictor;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, ProjectedRoster, compose_all_projections, fetch_draft_entrants,
+    DraftScenario, ProjectedRoster, UncertainCause, compose_all_projections, fetch_draft_entrants,
     fetch_player_departures, load_mock_draft, normalize_player_name, project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
@@ -64,7 +64,7 @@ struct ProjectedTeam {
     floor_adj_em: Option<f32>,
     /// Probability-weighted blend of `ceiling` and `floor`:
     /// `p̄·ceiling + (1−p̄)·floor`, where `p̄` is the mean chance the
-    /// uncertain (declared-draft) cohort returns (see
+    /// uncertain cohort returns (see
     /// `mean_return_probability`). Collapses to the common value when
     /// there are no uncertain players. The headline sortable number;
     /// `None` for too-thin rosters.
@@ -81,7 +81,7 @@ struct ProjectedTeam {
     /// convention). `None` for too-thin rosters.
     projected_adj_d: Option<f32>,
     /// Count of qualifying returning players (excludes Sr, outbound
-    /// portal, firm draft departures, and uncertain draft cohort).
+    /// portal, firm draft departures, and the uncertain cohort).
     returning_count: usize,
     /// Σ base-season cam_v3 of the returning players (talent retained,
     /// measured by their prior-season production). The Future grid's
@@ -122,7 +122,8 @@ struct ProjectedTeam {
     /// Count of players in the uncertain bucket — the spread
     /// (ceiling - floor) is roughly proportional to this.
     uncertain_count: usize,
-    /// Σ base-season cam_v3 of the uncertain (declared-draft) cohort.
+    /// Σ base-season cam_v3 of the uncertain cohort (declared-draft plus,
+    /// since issue #220, unsettled 5-in-5 eligibility).
     /// They were on last season's roster, so this completes the
     /// "last season's roster value" base the ledger normalizes against:
     /// `base = returning + departures + uncertain` (all prior-season).
@@ -264,11 +265,36 @@ fn return_probability_from_pick(pick: Option<i32>) -> f32 {
     }
 }
 
-/// Mean return probability across a team's uncertain (declared-draft)
-/// cohort. Used to probability-weight the floor/ceiling midpoint — a
-/// flat 50/50 average over-penalizes exactly the draft-talent-heavy
-/// (i.e. top) teams. Returns `0.5` for an empty cohort, where it's
-/// unused anyway (floor == ceiling, so the weight cancels).
+/// Return probability for a player whose *eligibility* is unsettled rather
+/// than his draft status (issue #220). Deliberately the neutral 0.5: a waiver
+/// decision or an injunction is a genuine coin-flip we have no feed for, and
+/// inventing a tuned constant would assert precision we don't have.
+///
+/// It is also the value that keeps `compute_projections::IN_SEASON_P_RETURN`
+/// honest. That constant hard-codes 0.5 on the argument that the uncertain
+/// bucket empties once a season is underway — true of draft declarants, false
+/// of contested eligibility, which can stay open into the season (an
+/// injunction is a mid-season state by definition) and which the new in-season
+/// portal refresh can add to on any night. Weighting this cohort at 0.5 is
+/// what keeps the materialized `team_preseason_projection` equal to the served
+/// `/api/projections` midpoint, which the module doc there claims holds by
+/// construction.
+const ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY: f32 = 0.5;
+
+/// Mean return probability across a team's uncertain cohort. Used to
+/// probability-weight the floor/ceiling midpoint — a flat 50/50 average
+/// over-penalizes exactly the draft-talent-heavy (i.e. top) teams. Returns
+/// `0.5` for an empty cohort, where it's unused anyway (floor == ceiling, so
+/// the weight cancels).
+///
+/// Weighted **per cause**, not per player-name. The mock board answers "will
+/// he come back to college instead of being drafted", so it may only be
+/// consulted for players who actually declared. Running an
+/// eligibility-contested senior through it inverts the signal on the players
+/// who matter most: being good enough to appear on the board would score him
+/// 0.05 — i.e. collapse his team's midpoint onto the floor that assumes he is
+/// absent — over a question the draft has no bearing on. Scouts list good
+/// seniors; that is not evidence about a waiver desk.
 fn mean_return_probability(
     p: &ProjectedRoster,
     mock_by_name: &std::collections::HashMap<String, (i32, String)>,
@@ -279,14 +305,27 @@ fn mean_return_probability(
     let sum: f32 = p
         .uncertain
         .iter()
-        .map(|(_, u)| {
+        .map(|(_, u)| player_return_probability(u, mock_by_name))
+        .sum();
+    sum / p.uncertain.len() as f32
+}
+
+/// One uncertain player's return probability, dispatched on why he is
+/// uncertain. Split out from the mean so the dispatch is unit-testable without
+/// standing up a whole `ProjectedRoster`.
+fn player_return_probability(
+    u: &cstat_core::roster_projection::UncertainPlayer,
+    mock_by_name: &std::collections::HashMap<String, (i32, String)>,
+) -> f32 {
+    match u.cause {
+        UncertainCause::DraftDeclared => {
             let pick = mock_by_name
                 .get(&normalize_player_name(&u.name))
                 .map(|(pick, _)| *pick);
             return_probability_from_pick(pick)
-        })
-        .sum();
-    sum / p.uncertain.len() as f32
+        }
+        UncertainCause::EligibilityUnsettled => ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY,
+    }
 }
 
 /// Load the Tankathon mock-draft snapshot for `base_season` into a
@@ -1350,11 +1389,23 @@ async fn projection_team_detail(
         .iter()
         .map(|(row, meta)| {
             let (mean, lower, upper) = serialize_proj(&meta.player_id);
-            let mock_hit = mock_by_name.get(&normalize_player_name(&meta.name));
+            // Mock-draft fields only for players who actually declared. A name
+            // match alone is not enough: the chip's own copy reads "declared
+            // players who fall off the board often withdraw", so attaching it
+            // to an eligibility case tells the user he entered a draft he never
+            // entered. `cause` lets the UI render the right chip instead of
+            // inferring one from a null.
+            let mock_hit = match meta.cause {
+                UncertainCause::DraftDeclared => {
+                    mock_by_name.get(&normalize_player_name(&meta.name))
+                }
+                UncertainCause::EligibilityUnsettled => None,
+            };
             json!({
                 "player_id": meta.player_id,
                 "name": meta.name,
                 "reason": meta.reason,
+                "cause": meta.cause,
                 "mpg": row.mpg,
                 "cam_v3": row.cam_v3,
                 "primary_class": row.primary_class,
@@ -1654,5 +1705,43 @@ mod tests {
         assert!((return_probability_from_pick(Some(60)) - 0.50).abs() < 1e-6);
         // Declared but off the 60-pick board → most likely returns.
         assert!((return_probability_from_pick(None) - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn eligibility_uncertainty_is_not_weighted_by_the_draft_board() {
+        use cstat_core::roster_projection::{UncertainCause, UncertainPlayer};
+
+        let uncertain = |cause| UncertainPlayer {
+            player_id: Uuid::new_v4(),
+            name: "Top Senior".into(),
+            reason: "…".into(),
+            cause,
+        };
+        // Same name, on the board as a projected top-5 pick.
+        let mut mock = std::collections::HashMap::new();
+        mock.insert(
+            normalize_player_name("Top Senior"),
+            (5_i32, "Wizards".to_string()),
+        );
+
+        // A declarant on that board is treated as effectively gone — unchanged.
+        assert!(
+            (player_return_probability(&uncertain(UncertainCause::DraftDeclared), &mock) - 0.05)
+                .abs()
+                < 1e-6
+        );
+        // The same board entry must NOT touch a player whose open question is
+        // eligibility. Weighting him 0.05 would collapse his team's midpoint
+        // onto the floor that assumes he is absent, on the strength of scouts
+        // rating a good senior — which is not evidence about a waiver desk.
+        assert!(
+            (player_return_probability(&uncertain(UncertainCause::EligibilityUnsettled), &mock)
+                - ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY)
+                .abs()
+                < 1e-6
+        );
+        // And it is the neutral 0.5, which is what keeps the materialized
+        // `team_preseason_projection` equal to the served midpoint.
+        assert!((ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY - 0.5).abs() < 1e-6);
     }
 }

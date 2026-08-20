@@ -1813,14 +1813,22 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             <Empty label="No departures" />
           ) : (
             <>
-              {/* Draft prospects (?) render above firm departures — they're
+              {/* Unresolved players (?) render above firm departures — they're
                   the highest-stakes uncertainty on the roster and deserve
                   visual priority over confirmed departures the user can no
-                  longer act on. Each row carries the same name link +
-                  archetype chip + counterfactual "if they stayed"
-                  projection as the firm-departure rows, plus the Tankathon
-                  mock-pick chip. */}
+                  longer act on. Two kinds live here: declared draft entrants,
+                  and (issue #220) seniors whose 5-in-5 eligibility is
+                  unsettled. Each row carries the same name link + archetype
+                  chip + counterfactual "if they stayed" projection as the
+                  firm-departure rows; the Tankathon mock-pick chip is
+                  draft-only. */}
               {uncertainSorted.map((u) => {
+                // The bucket holds two unrelated kinds of uncertainty, and
+                // every chip below has to be told which one it is looking at.
+                // Rendering the draft copy for an eligibility case does not
+                // merely look odd — it asserts the player declared for a draft
+                // he never entered.
+                const isDraft = u.cause === 'draft_declared';
                 // Tankathon mock-pick informational chip. Top-30 picks are
                 // green (the model effectively treats them as gone since
                 // withdrawal rates from the lottery are near zero), 31-60
@@ -1828,6 +1836,12 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                 // missing-from-board styled muted to flag "declared but
                 // not projected to be drafted — high withdrawal odds."
                 // Phase 1 is informational only; no auto-promotion.
+                //
+                // Shown for declarants only. The API already withholds
+                // `mock_pick` for the eligibility cohort, so keying the chip on
+                // a null pick would silently render the muted "mock: NR"
+                // variant — whose tooltip is the one that says "declared
+                // players who fall off the board often withdraw".
                 const mockTone =
                   u.mock_pick == null
                     ? 'text-slate-400 border-slate-600/40'
@@ -1844,6 +1858,11 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                     : u.mock_pick <= 30
                       ? `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
                       : `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
+                // What has to happen for him to be on next season's roster —
+                // the premise behind the projected-CamPom number beside it.
+                const returnClause = isDraft
+                  ? 'If they withdraw and return'
+                  : 'If they are ruled eligible';
                 return (
                   <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -1885,8 +1904,8 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                             className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
                             title={
                               u.projected_campom_lower != null && u.projected_campom_upper != null
-                                ? `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
-                                : `If they withdraw and return: projected ${u.projected_campom_mean.toFixed(1)}.`
+                                ? `${returnClause}: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
+                                : `${returnClause}: projected ${u.projected_campom_mean.toFixed(1)}.`
                             }
                           >
                             {u.projected_campom_mean.toFixed(1)}
@@ -1902,14 +1921,19 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                           </span>
                         )
                       )}
+                      {isDraft && (
+                        <span
+                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
+                          title={mockTitle}
+                        >
+                          {mockLabel}
+                        </span>
+                      )}
                       <span
-                        className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
-                        title={mockTitle}
+                        className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400"
+                        title={u.reason}
                       >
-                        {mockLabel}
-                      </span>
-                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400" title={u.reason}>
-                        ? draft (TBD)
+                        {isDraft ? '? draft (TBD)' : '? eligibility'}
                       </span>
                     </div>
                   </div>

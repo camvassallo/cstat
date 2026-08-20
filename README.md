@@ -91,8 +91,9 @@ Other ingest subcommands:
 | `campom-parity [--year YYYY]` | Validate CamPom intermediates against an external reference CSV |
 | `explore ENDPOINT [--range PARAMS]` | Dump raw API JSON for exploration |
 | `bootstrap-csv [--year YYYY] …` | Bootstrap a historical season from NatStat dashboard CSV exports (no live API) |
-| `transfers --year YYYY [--bootstrap-from PATH]` | Ingest the 247Sports transfer portal class (needs `TFS_247_JWT`) |
-| `recruits --year YYYY [--bootstrap-from PATH]` | Ingest the 247Sports HS recruit class (needs `TFS_247_JWT` / `TFS_247_COOKIE`) |
+| `transfers --year YYYY [--bootstrap-from PATH]` | Ingest the 247Sports transfer portal class (no credential needed — mints a guest token; `TFS_247_JWT` still wins if set) |
+| `recruits --year YYYY [--bootstrap-from PATH]` | Ingest the 247Sports HS recruit class (composite rankings need `TFS_247_COOKIE`; `--commits-feed` is credential-free) |
+| `returns [--dir data/returns]` | Load curated 5-in-5 eligibility returns into `player_returns` (see `docs/eligibility_5in5.md`) |
 | `coaches [--year YYYY]` | Ingest the Barttorvik coachdict head-coach mapping |
 | `compute-projections [--year YYYY]` | Materialize each team's served preseason AdjEM band into `team_preseason_projection` |
 | `projections-backtest [--years …] [--output PATH]` | Leave-one-season-out projection accuracy backtest (per-team JSON dump) |

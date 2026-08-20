@@ -418,9 +418,21 @@ enum Commands {
         dir: std::path::PathBuf,
     },
 
-    /// Print the offseason attrition worklist: `player_departures` rows that
-    /// resolve to nobody (silent no-ops from a typo'd name), then the returners
-    /// the projection currently assumes are coming back, ranked by CamPom.
+    /// Load the hand-curated eligibility returns into `player_returns` —
+    /// players whose `class_year` says they graduated but who are coming back
+    /// under the NCAA 5-in-5 rule (issue #220). `granted` rows project as
+    /// ordinary returners; `contested` rows go to the uncertain (`?`) bucket
+    /// and widen the team's floor/ceiling band.
+    Returns {
+        /// Directory of `{year}_returns.json` files.
+        #[arg(long, default_value = "data/returns")]
+        dir: std::path::PathBuf,
+    },
+
+    /// Print the offseason attrition worklist: curated rows that resolve to
+    /// nobody (silent no-ops from a typo'd name) in `player_departures` and in
+    /// `player_returns`, then the returners the projection currently assumes
+    /// are coming back, ranked by CamPom.
     /// Read-only. Run it in July and skim the top of the list against the news.
     DeparturesAudit {
         /// Base season N — the completed season being projected into N+1.
@@ -446,7 +458,12 @@ enum Commands {
     /// the recruiting class year (= spring of HS graduation, = 247's URL
     /// `{year}-basketball` slug). Class-of-2026 recruits first appear in
     /// cstat-season 2027 box scores.
-    /// Requires TFS_247_JWT env var (same JWT as Transfers; ~6h expiry).
+    ///
+    /// Reads 247's JSON API by default, on a guest token minted per run — no
+    /// credential needed. Pass `--html` for the legacy scrape, which needs a
+    /// subscriber `TFS_247_COOKIE` (or `TFS_247_JWT`) for the composite
+    /// rankings but is the only source of `previous_rank` /
+    /// `committed_school_slug`.
     Recruits {
         #[arg(short, long, default_value_t = default_season())]
         year: i32,
@@ -473,6 +490,18 @@ enum Commands {
         /// is ignored in this mode (the feed has no per-cohort split).
         #[arg(long, conflicts_with_all = ["bootstrap_from", "dump_snapshot", "resolve_only"])]
         commits_feed: bool,
+
+        /// Use the legacy HTML scrape instead of 247's JSON API.
+        ///
+        /// The JSON default needs no hand-captured credential (a guest token is
+        /// minted per run) and returns more rows — 712 vs 611 for the 2026 class
+        /// on 2026-08-19. The scrape is retained because it is the only source
+        /// for `previous_rank` and `committed_school_slug`, and as an escape
+        /// hatch if 247 changes the JSON shape. In this mode the composite
+        /// rankings need `TFS_247_COOKIE` (or legacy `TFS_247_JWT`); the commits
+        /// feed stays cookie-free.
+        #[arg(long, conflicts_with = "bootstrap_from")]
+        html: bool,
 
         /// Load from a local snapshot file instead of hitting the live API.
         #[arg(long)]
@@ -997,7 +1026,10 @@ async fn main() -> Result<()> {
                     cstat_ingest::ingest::transfers::bootstrap_from_snapshot(&db.pool, year, &path)
                         .await?
                 } else {
-                    let tfs = cstat_ingest::TfsClient::from_env()?;
+                    // Guest-first: mints a token off the public portal page when
+                    // `TFS_247_JWT` is unset, so this runs with no credential at
+                    // all. A subscriber token still wins when present.
+                    let tfs = cstat_ingest::TfsClient::from_env_or_guest(year).await?;
                     match cstat_ingest::ingest::transfers::ingest_live(
                         &tfs,
                         &db.pool,
@@ -1080,6 +1112,26 @@ async fn main() -> Result<()> {
             );
         }
 
+        Commands::Returns { dir } => {
+            let reports = cstat_ingest::ingest::returns::bootstrap_from_dir(&db.pool, &dir).await?;
+            let total: usize = reports.iter().map(|r| r.rows).sum();
+            let contested: usize = reports.iter().map(|r| r.contested).sum();
+            for r in &reports {
+                println!(
+                    "returns {}: {} return(s), {} contested",
+                    r.year, r.rows, r.contested
+                );
+            }
+            println!(
+                "returns: {} return(s) across {} year(s) loaded into player_returns \
+                 ({contested} still contested). A row that matches no roster player is a \
+                 silent no-op — run `departures-audit --year N` to confirm each one placed \
+                 its player; it exits 2 if any didn't.",
+                total,
+                reports.len()
+            );
+        }
+
         Commands::DeparturesAudit {
             year,
             min_cam,
@@ -1110,6 +1162,7 @@ async fn main() -> Result<()> {
             year,
             groups,
             commits_feed,
+            html,
             bootstrap_from,
             dump_snapshot,
             resolve_only,
@@ -1134,8 +1187,19 @@ async fn main() -> Result<()> {
                 }
             } else {
                 let report = if commits_feed {
-                    info!(year, "ingesting 247 national commits feed (cookie-free)");
-                    let client = cstat_ingest::Recruit247Client::public();
+                    let client = if html {
+                        info!(
+                            year,
+                            "ingesting 247 national commits feed (HTML, cookie-free)"
+                        );
+                        cstat_ingest::Recruit247Client::public()
+                    } else {
+                        info!(
+                            year,
+                            "ingesting 247 national commits feed (JSON, guest token)"
+                        );
+                        cstat_ingest::Recruit247Client::guest(year).await?
+                    };
                     cstat_ingest::ingest::recruits::ingest_commits(&client, &db.pool, year).await?
                 } else if let Some(path) = bootstrap_from {
                     info!("bootstrapping recruits from {}", path.display());
@@ -1157,7 +1221,16 @@ async fn main() -> Result<()> {
                             "no valid institution_groups parsed from `--groups`; pass any of: highschool, juco, prep"
                         );
                     }
-                    let client = cstat_ingest::Recruit247Client::from_env()?;
+                    let client = if html {
+                        info!(
+                            year,
+                            "ingesting 247 composite rankings (HTML, subscriber cookie)"
+                        );
+                        cstat_ingest::Recruit247Client::from_env()?
+                    } else {
+                        info!(year, "ingesting 247 composite rankings (JSON, guest token)");
+                        cstat_ingest::Recruit247Client::guest(year).await?
+                    };
                     cstat_ingest::ingest::recruits::ingest_live(
                         &client,
                         &db.pool,

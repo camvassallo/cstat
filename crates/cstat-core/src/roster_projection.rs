@@ -147,6 +147,36 @@ pub struct UncertainPlayer {
     /// Free-text reason ("declared for NBA draft", "in portal but
     /// uncommitted", etc.). Keep human-readable for the UI tooltip.
     pub reason: String,
+    /// Machine-readable counterpart to `reason`. What *kind* of uncertainty
+    /// this is, which decides how the player's return probability may be
+    /// estimated — see [`UncertainCause`].
+    pub cause: UncertainCause,
+}
+
+/// Why a player is in the `uncertain` bucket. Behaviour-bearing: it selects
+/// the evidence the serving layer is allowed to weigh him by.
+///
+/// The bucket used to have exactly one occupant type, so "uncertain" and
+/// "declared for the NBA draft" were interchangeable and `/api/projections`
+/// weighted the whole cohort by the Tankathon mock board. Issue #220 routes a
+/// second, unrelated population here, and the mock draft is not evidence about
+/// them: a senior whose fifth year is in front of a waiver desk is no more
+/// likely to be absent for being a good player. Without this discriminator the
+/// bucket silently conflates "might go pro" with "might not be ruled eligible",
+/// and the conflation is worst for the highest-value players — exactly the ones
+/// who move a projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UncertainCause {
+    /// Declared for the NBA draft and has not withdrawn. Resolution is the
+    /// draft itself, so draft-board position is genuine evidence about whether
+    /// he comes back, and the mock-pick tiers apply.
+    DraftDeclared,
+    /// Eligibility under the NCAA 5-in-5 rule is unsettled — a curated
+    /// `contested` row, or the derived senior-portal-withdrawal signal.
+    /// Resolution is a waiver desk or a court, about which a mock draft says
+    /// nothing at all.
+    EligibilityUnsettled,
 }
 
 /// Audit-trail metadata for one incoming HS recruit. The synthesized
@@ -281,10 +311,12 @@ pub struct ProjectedRoster {
     /// freshman-impact model's per-recruit projected `cam_v3` with audit
     /// metadata for the UI.
     pub recruits: Vec<(PlayerRow, RecruitMeta)>,
-    /// Players who are returning in the ceiling scenario but gone in
-    /// the floor scenario (declared draft entrants whose withdrawal
-    /// status is still TBD). Their PlayerRow lives in `returning` only
-    /// in the ceiling materialization.
+    /// Players who are returning in the ceiling scenario but gone in the
+    /// floor scenario. Two populations, distinguished by
+    /// [`UncertainPlayer::cause`]: declared draft entrants whose withdrawal
+    /// status is still TBD, and — since issue #220 — seniors whose 5-in-5
+    /// eligibility is unsettled. Their PlayerRow lives in `returning` only in
+    /// the ceiling materialization.
     pub uncertain: Vec<(PlayerRow, UncertainPlayer)>,
     /// Audit trail: who left and why. Sized for UI display, not used by
     /// inference.
@@ -453,6 +485,103 @@ pub async fn fetch_player_departures(
     sqlx::query_as::<_, PlayerDeparture>(
         "SELECT player_name AS name, current_team, reason, destination, source, note \
          FROM player_departures WHERE year = $1",
+    )
+    .bind(year)
+    .fetch_all(pool)
+    .await
+}
+
+/// Whether a curated return is settled or still contested. Behaviour-bearing:
+/// it selects which bucket the player lands in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReturnStatus {
+    /// Eligibility is settled and the player is on next season's roster.
+    /// Projected as an ordinary returner.
+    Granted,
+    /// A claim exists but could still go either way. Projected into the
+    /// `uncertain` bucket — present in the ceiling, absent from the floor — so
+    /// the team's band spans both outcomes instead of asserting one.
+    Contested,
+}
+
+impl ReturnStatus {
+    /// Parse the DB / JSON vocabulary. Unknown values are treated as
+    /// `Contested` rather than `Granted`: an unrecognised status means we do
+    /// not actually know, and the honest projection of "we don't know" is the
+    /// widened band, not a confident roster addition.
+    fn from_str_lenient(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "granted" => Self::Granted,
+            _ => Self::Contested,
+        }
+    }
+}
+
+/// One curated eligibility return — a player the `class_year == 'Sr'` inference
+/// would delete from his team who is in fact coming back (issue #220, the NCAA
+/// 5-in-5 rule). Deserializes from `data/returns/{year}_returns.json` AND maps
+/// from a `player_returns` row (the `player_name` column aliases to `name`).
+///
+/// This is the *stay-put* channel. A senior who takes his extra year at another
+/// school already arrives correctly through the 247 portal feed and needs no
+/// row here.
+#[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
+pub struct PlayerReturn {
+    pub name: String,
+    pub current_team: String,
+    /// `granted` | `contested`; see [`ReturnStatus`].
+    #[serde(default = "default_return_status")]
+    pub status: String,
+    /// Display-only: `5in5`, `waiver`, `injunction`, `medical`, `other`.
+    #[serde(default = "default_return_reason")]
+    pub reason: String,
+    /// Provenance for the capture — a URL or outlet slug. Not served.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Free-text human note. Not served.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl PlayerReturn {
+    pub fn parsed_status(&self) -> ReturnStatus {
+        ReturnStatus::from_str_lenient(&self.status)
+    }
+}
+
+/// A capture row that omits `status` is treated as contested, matching
+/// [`ReturnStatus::from_str_lenient`]: asserting a player is back is a claim
+/// that should have to be made explicitly.
+fn default_return_status() -> String {
+    "contested".to_string()
+}
+
+/// Matches the `player_returns.reason` column default.
+fn default_return_reason() -> String {
+    "5in5".to_string()
+}
+
+/// Load + parse `data/returns/{year}_returns.json`. The version-controlled
+/// capture; `cstat-ingest returns` loads it into `player_returns`, which is
+/// what the projection actually reads (see [`fetch_player_returns`]).
+pub fn load_player_returns(path: &Path) -> Result<Vec<PlayerReturn>, std::io::Error> {
+    let content = std::fs::read_to_string(path)?;
+    let parsed: Vec<PlayerReturn> = serde_json::from_str(&content)
+        .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
+    Ok(parsed)
+}
+
+/// DB-backed sibling of [`load_player_returns`] — the curated returns for one
+/// base season. Empty vec when nothing is loaded for `year`, which degrades to
+/// the pre-#220 behaviour (every `Sr` assumed graduating).
+pub async fn fetch_player_returns(
+    pool: &PgPool,
+    year: i32,
+) -> Result<Vec<PlayerReturn>, sqlx::Error> {
+    sqlx::query_as::<_, PlayerReturn>(
+        "SELECT player_name AS name, current_team, status, reason, source, note \
+         FROM player_returns WHERE year = $1",
     )
     .bind(year)
     .fetch_all(pool)
@@ -692,6 +821,15 @@ fn match_player_departure(
     )
 }
 
+/// Same `(name, team)` resolution for the curated eligibility returns.
+fn match_player_return(
+    ret: &PlayerReturn,
+    players_by_name: &HashMap<String, Vec<(Uuid, Uuid)>>,
+    teams: &[TeamRow],
+) -> Option<Uuid> {
+    match_roster_entry(&ret.name, &ret.current_team, players_by_name, teams)
+}
+
 /// The shared `(name, team)` → base-season `player_id` resolution behind both
 /// hand-curated captures. `None` when the player isn't on a cstat-known D-I
 /// roster or the team string doesn't resolve.
@@ -845,6 +983,42 @@ pub async fn compose_all_projections(
     .bind(base_season)
     .fetch_all(pool)
     .await?;
+
+    // Portal WITHDRAWALS, kept separate from the outbound set above. A player
+    // who entered and pulled back out is staying at his source school — which
+    // is ordinarily uninteresting, since he'd fall through to `returning`
+    // anyway. It stops being uninteresting when he is a SENIOR.
+    //
+    // Under the pre-2027 rules a senior in the portal was nearly always a grad
+    // transfer, and a senior who *withdrew* was a contradiction we never had to
+    // resolve. The 5-in-5 rule (issue #220) makes it a signal: a senior who
+    // entered the portal and withdrew has demonstrated, without any curation on
+    // our part, both that he believes he has eligibility left and that he
+    // intends to use it where he is. That is exactly the stay-put population
+    // the `class_year == 'Sr'` inference deletes and no feed otherwise reports.
+    //
+    // Treated as `contested`, not `granted`: entering the portal is evidence of
+    // intent, not proof the NCAA agreed. A curated `player_returns` row
+    // overrides this either way (checked first below).
+    let withdrawn_pids: HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT cstat_player_id FROM transfers \
+         WHERE year = $1 AND cstat_player_id IS NOT NULL AND status = 'Withdrawn'",
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
+
+    // Curated eligibility returns (issue #220). Fetched here rather than passed
+    // in like `player_departures` on purpose: every caller of this function —
+    // the route, `compute-projections`, the backtest, the departures audit —
+    // must see the same roster, and a parameter is something a call site can
+    // pass `&[]` for. That failure would be silent and would look exactly like
+    // "this team lost its seniors", which is the bug rather than a symptom of
+    // it. Same trap shape as the `--seasons` default in the archetype trainer:
+    // the wrong thing succeeds quietly.
+    let returns_rows = fetch_player_returns(pool, base_season).await?;
 
     // Recruits: HS class year = `base_season` (the spring of HS
     // graduation; class-of-2026 first plays in cstat-season 2027 = N+1).
@@ -1163,6 +1337,17 @@ pub async fn compose_all_projections(
         })
         .collect();
 
+    // --- Curated eligibility returns (issue #220, NCAA 5-in-5). -----------
+    // Resolved the same way as the curated exits above. `(status, reason)` —
+    // status selects the bucket, reason is display vocabulary.
+    let eligibility_returns: HashMap<Uuid, (ReturnStatus, String)> = returns_rows
+        .iter()
+        .filter_map(|r| {
+            match_player_return(r, &players_by_name, &teams)
+                .map(|pid| (pid, (r.parsed_status(), r.reason.clone())))
+        })
+        .collect();
+
     // Transfers: bucket outbound by source_team_id (= which team is
     // losing a player) and incoming by destination_team_id (= which
     // team is gaining one). The route's existing ingestion populated
@@ -1280,21 +1465,23 @@ pub async fn compose_all_projections(
                 departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
                 continue;
             }
-            // Senior graduating? class_year fits {'Sr', 'SR', 'Senior'};
-            // cstat normalizes to 'Sr' but tolerate variants.
-            let is_senior = row
-                .class_year
-                .as_deref()
-                .is_some_and(|c| matches!(c, "Sr" | "SR" | "Senior" | "sr" | "senior"));
-            if is_senior {
-                departures.push(DepartureReason::GraduatedSenior {
-                    player_id: pid,
-                    name: name.clone(),
-                });
-                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
-                continue;
-            }
-            // Outbound portal commit?
+            // Outbound portal commit? Checked BEFORE the senior branch: a
+            // portal row is an *observation* that the player moved, while the
+            // senior check is an *inference* that he's out of eligibility, and
+            // an observation should always win — same principle as the curated
+            // `left_program` rows above. Ordering the other way made a
+            // graduating senior who portals read "Sr graduation" on his old
+            // team while simultaneously appearing on another team's arrivals
+            // list, with no destination chip and no link.
+            //
+            // Under the old four-in-five rule that was a rare grad-transfer
+            // edge case. The NCAA's age-based "5-in-5" model (adopted
+            // 2026-06-23, effective season 2027) makes it the common case:
+            // 53 of the 56 players who entered the 2026 portal after June 1
+            // were `Sr`-labelled in 2026 (issue #220). Roster-neutral — the
+            // player departs either way, and `departures_cam_v3_sum` is not
+            // one of the 27 roster-impact features — so this only corrects
+            // the label and restores the destination link.
             if outbound_pids.contains(&pid) {
                 let dest = outbound_by_team.get(&team.id).and_then(|v| {
                     v.iter()
@@ -1311,9 +1498,90 @@ pub async fn compose_all_projections(
                 departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
                 continue;
             }
-            // Firm NBA draft departure?
+            // --- Eligibility overrides on the senior inference (issue #220).
+            // Two of them, and they straddle the draft check below: both sit
+            // above the `Sr` inference, because a player who is STAYING must
+            // not be deleted by a rule the 5-in-5 change invalidated — but only
+            // the hand-entered one outranks an observation that he left.
+            //
+            // Curated row first, matching the `left_program` precedent at the
+            // top of this loop: hand-entered beats every derived channel, and a
+            // `granted` row is how an operator overrides the automatic signal
+            // further down.
+            if let Some((status, reason)) = eligibility_returns.get(&pid) {
+                match status {
+                    ReturnStatus::Granted => {
+                        returning.push(row.clone().into_player_row());
+                    }
+                    ReturnStatus::Contested => {
+                        uncertain.push((
+                            row.clone().into_player_row(),
+                            UncertainPlayer {
+                                player_id: pid,
+                                name: name.clone(),
+                                reason: format!("eligibility contested ({reason})"),
+                                cause: UncertainCause::EligibilityUnsettled,
+                            },
+                        ));
+                    }
+                }
+                continue;
+            }
+            // Firm NBA draft departure? Checked here — above BOTH the derived
+            // withdrawn-senior signal and the `Sr` inference — for the same
+            // reason the portal check sits above them: a `gone` draft row is an
+            // observation that the player is in the NBA, and an observation
+            // beats an inference about his eligibility.
+            //
+            // Ordering it below the withdrawn-senior branch turned a real
+            // departure into a ceiling-roster player: a senior who entered the
+            // portal, withdrew, and then went pro would be bucketed
+            // `uncertain`, materialized in his old team's ceiling, and dropped
+            // from `departures_cam_v3_sum`. That is precisely the invariant
+            // `tests/withdrawn_transfers_return.rs` exists to hold (Santa
+            // Clara's Allen Graves), and under 5-in-5 the senior side of it is
+            // the common case rather than the rare one.
+            //
+            // It also sits above the plain `Sr` branch now, which relabels a
+            // graduating senior who was drafted from "Sr graduation" to
+            // `draft_gone`. Roster-neutral — he departs either way and the
+            // cam_v3 sum is unchanged — but it is the informative label, and it
+            // keeps the withdrawn-to-the-NBA half of that test true once a
+            // drafted player is `Sr`-labelled, which 5-in-5 makes routine.
             if firm_draft_gone.contains(&pid) {
                 departures.push(DepartureReason::DraftGone {
+                    player_id: pid,
+                    name: name.clone(),
+                });
+                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
+                continue;
+            }
+            // Derived signal, no curation required: a senior who entered the
+            // portal and then withdrew. He is staying where he is AND he
+            // evidently believes he has a year left — but the NCAA has not
+            // necessarily agreed, so this is `uncertain`, never `returning`.
+            // Non-seniors need no special handling: they fall through to
+            // `returning` on their own, which is already correct.
+            let is_senior = row
+                .class_year
+                .as_deref()
+                .is_some_and(|c| matches!(c, "Sr" | "SR" | "Senior" | "sr" | "senior"));
+            if is_senior && withdrawn_pids.contains(&pid) {
+                uncertain.push((
+                    row.clone().into_player_row(),
+                    UncertainPlayer {
+                        player_id: pid,
+                        name: name.clone(),
+                        reason: "entered the portal and withdrew as a senior \
+                                 (5-in-5 eligibility unconfirmed)"
+                            .into(),
+                        cause: UncertainCause::EligibilityUnsettled,
+                    },
+                ));
+                continue;
+            }
+            if is_senior {
+                departures.push(DepartureReason::GraduatedSenior {
                     player_id: pid,
                     name: name.clone(),
                 });
@@ -1330,6 +1598,7 @@ pub async fn compose_all_projections(
                         player_id: pid,
                         name: name.clone(),
                         reason: "declared for NBA draft (status pending)".into(),
+                        cause: UncertainCause::DraftDeclared,
                     },
                 ));
                 continue;
@@ -1732,6 +2001,7 @@ mod tests {
                 player_id: Uuid::new_v4(),
                 name: "X".into(),
                 reason: "draft".into(),
+                cause: UncertainCause::DraftDeclared,
             },
         )];
         let r = ProjectedRoster {
@@ -1860,6 +2130,7 @@ mod tests {
                 player_id: Uuid::new_v4(),
                 name: "X".into(),
                 reason: "draft".into(),
+                cause: UncertainCause::DraftDeclared,
             },
         )];
         let r = ProjectedRoster {
@@ -1997,6 +2268,33 @@ mod tests {
         let row = freshman_row(Uuid::new_v4(), None);
         assert_eq!(row.cam_v3, Some(FRESHMAN_FALLBACK_CAM_V3));
         assert_eq!(row.class_year.as_deref(), Some("Fr"));
+    }
+
+    #[test]
+    fn return_status_unknown_values_are_contested_not_granted() {
+        assert_eq!(
+            ReturnStatus::from_str_lenient("granted"),
+            ReturnStatus::Granted
+        );
+        assert_eq!(
+            ReturnStatus::from_str_lenient("  GRANTED "),
+            ReturnStatus::Granted
+        );
+        assert_eq!(
+            ReturnStatus::from_str_lenient("contested"),
+            ReturnStatus::Contested
+        );
+        // The asymmetry is the point: an unrecognised status means we do not
+        // know, and "we do not know" projects as a widened band, never as a
+        // confident roster addition. Defaulting the other way would let a typo
+        // silently assert a player is eligible.
+        for unknown in ["", "pending", "granted?", "true", "GRANTED_BY_WAIVER"] {
+            assert_eq!(
+                ReturnStatus::from_str_lenient(unknown),
+                ReturnStatus::Contested,
+                "unknown status {unknown:?} must fall back to Contested"
+            );
+        }
     }
 
     #[test]

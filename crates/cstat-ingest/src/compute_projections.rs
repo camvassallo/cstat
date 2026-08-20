@@ -31,9 +31,23 @@ use uuid::Uuid;
 /// Midpoint return-probability for an in-season projection. By the time a
 /// season is underway the draft-uncertain cohort is resolved (departed
 /// players are gone, returners are on the roster), so `compose_all_projections`
-/// leaves the `uncertain` bucket empty → floor == ceiling and this weight
-/// cancels. 0.5 is the neutral default that matches the projections route's
-/// empty-cohort behavior.
+/// leaves that half of the `uncertain` bucket empty → floor == ceiling and this
+/// weight cancels. 0.5 is the neutral default that matches the projections
+/// route's empty-cohort behavior.
+///
+/// The draft half is no longer the whole bucket (issue #220): unsettled 5-in-5
+/// eligibility also lands there, and unlike a draft declaration it does NOT
+/// reliably resolve before tipoff — an injunction is a mid-season state, and
+/// the nightly portal refresh can add a withdrawn senior on any night. So the
+/// "empties, therefore cancels" argument no longer covers the bucket, and this
+/// constant is load-bearing rather than vestigial.
+///
+/// It stays correct because `/api/projections` weights that cohort at
+/// `ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY`, which is also 0.5. The two
+/// values are coupled on purpose: the module doc above claims the persisted
+/// midpoint equals the served one by construction, and if either moves without
+/// the other, `team_preseason_projection` — which feeds the preseason × pit
+/// predict blend — silently stops matching the projections page.
 const IN_SEASON_P_RETURN: f32 = 0.5;
 
 /// Base-season AdjEM per team (the baseline the shrink blends toward),
@@ -245,6 +259,11 @@ pub async fn run(
         for p in &projections {
             real_ids.extend(p.returning.iter().map(|r| r.player_id));
             real_ids.extend(p.arrivals.iter().map(|a| a.player_id));
+            // `uncertain` must be here too, or the write loop below silently
+            // drops them: a missing identity is a `continue`, which does not
+            // increment the row counter and so does not show up as a
+            // discrepancy in the run summary either.
+            real_ids.extend(p.uncertain.iter().map(|(u, _)| u.player_id));
         }
         let player_identity = fetch_player_identity(pool, &real_ids).await?;
 
@@ -306,11 +325,24 @@ pub async fn run(
             .await?;
         let mut player_rows = 0usize;
         for p in &projections {
+            // `uncertain` rides along with the two resolved cohorts (issue
+            // #220). Omitting it used to be harmless — the bucket held
+            // declared-but-not-withdrawn draft entrants, who mostly leave and
+            // whose bucket empties by late June. Under the NCAA 5-in-5 rule it
+            // holds seniors with unsettled eligibility, most of whom are
+            // expected to play, and dropping them reproduces the exact
+            // silent-deletion bug the rest of this work fixes: the team's band
+            // widens to acknowledge the uncertainty while the player vanishes
+            // from `/players?season=N+1`.
+            //
+            // Written with its own `source` so the UI can mark them `?` rather
+            // than assert them as returners (migration 052 widened the CHECK).
             for (row, source) in p
                 .returning
                 .iter()
                 .map(|r| (r, "returning"))
                 .chain(p.arrivals.iter().map(|a| (a, "transfer")))
+                .chain(p.uncertain.iter().map(|(u, _)| (u, "uncertain")))
             {
                 let Some((name, natstat_id)) = player_identity.get(&row.player_id) else {
                     // No players row (shouldn't happen for a composed roster

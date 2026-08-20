@@ -16,7 +16,16 @@
 //!      while the player stays on the projected roster. This section is the one
 //!      that catches your own mistakes, so it prints first and is never elided.
 //!
-//!   2. **At-risk returners** — everyone the projection currently believes is
+//!   2. **Unplaced eligibility returns** — the same check for `player_returns`
+//!      (issue #220, the NCAA 5-in-5 rule), which has the identical failure
+//!      mode running the other way: a typo'd `granted` row leaves the player
+//!      deleted from his team by the `class_year == 'Sr'` inference, which is
+//!      the exact bug the capture was built to fix. Audited here rather than in
+//!      a command of its own because the two captures are curated in the same
+//!      sitting off the same news, and a second tool nobody remembers to run is
+//!      not a safety net.
+//!
+//!   3. **At-risk returners** — everyone the projection currently believes is
 //!      coming back, ranked by base-season CamPom, so the names whose departure
 //!      would move a projection the most are at the top. By default the list is
 //!      narrowed to non-US players, the cohort with a standing outside option in
@@ -36,8 +45,8 @@ use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_features::{QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use cstat_core::roster_projection::{
-    DepartureReason, PlayerDeparture, compose_all_projections, fetch_draft_entrants,
-    fetch_player_departures, normalize_player_name,
+    DepartureReason, PlayerDeparture, PlayerReturn, ReturnStatus, compose_all_projections,
+    fetch_draft_entrants, fetch_player_departures, fetch_player_returns, normalize_player_name,
 };
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
@@ -77,14 +86,17 @@ struct PlayerMeta {
     qualified: bool,
 }
 
-/// Run the audit and print its report to stdout. Returns the number of capture
-/// rows that failed to resolve **despite naming a qualified player** — i.e. real
-/// mistakes a caller should treat as fatal. Rows naming a sub-gate or unknown
-/// player are reported but not counted; they are harmless by construction.
+/// Run the audit and print its report to stdout. Returns the number of curated
+/// rows — across `player_departures` AND `player_returns` — that failed to do
+/// what they claim, i.e. real mistakes a caller should treat as fatal. Rows
+/// naming a player below the projection's GP/MPG gate are reported but not
+/// counted; those are correctly no-ops, because a sub-gate player never enters
+/// `compose_all_projections` in the first place.
 pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> Result<usize> {
     let base = opts.base_season;
     let entrants = fetch_draft_entrants(pool, base).await?;
     let captured = fetch_player_departures(pool, base).await?;
+    let returns = fetch_player_returns(pool, base).await?;
 
     // `false` = don't retro-exclude redshirt recruits. The audit is about the
     // returning cohort, which that gate doesn't touch.
@@ -96,8 +108,10 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
         base + 1
     );
     println!(
-        "  {} capture row(s) in player_departures, {} team projection(s)",
+        "  {} capture row(s) in player_departures, {} in player_returns, \
+         {} team projection(s)",
         captured.len(),
+        returns.len(),
         projections.len(),
     );
 
@@ -200,7 +214,104 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
         }
     }
 
-    // --- 2. At-risk returners, ranked by what their exit would cost. -----
+    // --- 2. Eligibility returns that didn't place their player. ----------
+    // Same failure mode as section 1, mirrored. A `player_returns` row claims
+    // "this player the `Sr` inference deletes is actually coming back"; if the
+    // (name, team) match misses, the claim is silently void and the player
+    // stays deleted — indistinguishable, from the outside, from never having
+    // curated him. `status` makes the assertion sharper than the departures
+    // case, so we can check the bucket too and not just the absence of a
+    // departure: `granted` must land in `returning`, `contested` in
+    // `uncertain`.
+    let mut departed_names: HashSet<String> = HashSet::new();
+    for d in projections.iter().flat_map(|p| p.departures.iter()) {
+        departed_names.insert(normalize_player_name(departure_name(d)));
+    }
+    let mut uncertain_names: HashSet<String> = HashSet::new();
+    let mut returning_names: HashSet<String> = HashSet::new();
+    for p in &projections {
+        for (_, u) in &p.uncertain {
+            uncertain_names.insert(normalize_player_name(&u.name));
+        }
+        for r in &p.returning {
+            if let Some(m) = meta_by_id.get(&r.player_id) {
+                returning_names.insert(normalize_player_name(&m.name));
+            }
+        }
+    }
+
+    let mut unplaced_real: Vec<(&PlayerReturn, &str)> = Vec::new();
+    let mut unplaced_benign: Vec<&PlayerReturn> = Vec::new();
+    for r in &returns {
+        let key = normalize_player_name(&r.name);
+        if !known_names.contains(&key) {
+            unplaced_real.push((r, "no player by that name in the season — check spelling"));
+            continue;
+        }
+        if departed_names.contains(&key) {
+            unplaced_real.push((
+                r,
+                "still a departure — the row matched nobody (check the team string)",
+            ));
+            continue;
+        }
+        // Known name, not departing, but never entered the projection: a
+        // sub-gate player was never on the roster to restore. Harmless, and
+        // checked before the bucket assertions below so it isn't reported as
+        // one of them.
+        if !qualified_names.contains(&key) {
+            unplaced_benign.push(r);
+            continue;
+        }
+        match r.parsed_status() {
+            ReturnStatus::Granted if !returning_names.contains(&key) => {
+                unplaced_real.push((r, "curated `granted` but not in the team's returning core"))
+            }
+            ReturnStatus::Contested if !uncertain_names.contains(&key) => unplaced_real.push((
+                r,
+                "curated `contested` but not in any team's uncertain bucket",
+            )),
+            _ => {}
+        }
+    }
+
+    println!();
+    if returns.is_empty() {
+        // Not a warning. An empty capture is the correct starting point for a
+        // season nobody has curated yet — see data/returns/README.md.
+        println!("ELIGIBILITY RETURNS: none captured for {base}.");
+    } else if unplaced_real.is_empty() {
+        println!(
+            "ELIGIBILITY RETURNS: all {} player_returns row(s) placed their player.",
+            returns.len()
+        );
+    } else {
+        println!(
+            "UNPLACED ELIGIBILITY RETURNS ({}) — these are silently doing NOTHING:",
+            unplaced_real.len()
+        );
+        for (r, why) in &unplaced_real {
+            println!("  {:<28} {:<24} {why}", r.name, r.current_team);
+        }
+        println!(
+            "  Fix data/returns/{base}_returns.json to match cstat's players.name / \
+             teams.short_name, then re-run `cstat-ingest returns`."
+        );
+    }
+    if !unplaced_benign.is_empty() {
+        println!();
+        println!(
+            "  Note: {} return row(s) name a player below the projection's \
+             {QUAL_MIN_GAMES_PLAYED} GP / {QUAL_MIN_MPG:.0} MPG gate. Harmless — they were \
+             never on the projected roster, so there was nothing to restore:",
+            unplaced_benign.len()
+        );
+        for r in &unplaced_benign {
+            println!("    {:<28} {}", r.name, r.current_team);
+        }
+    }
+
+    // --- 3. At-risk returners, ranked by what their exit would cost. -----
 
     let mut at_risk: Vec<(f64, &PlayerMeta, f64)> = Vec::new();
     for p in &projections {
@@ -259,7 +370,20 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
          data/departures/{base}_departures.json and run `cstat-ingest departures`."
     );
 
-    Ok(unmatched_real.len())
+    // Both captures share one exit code: the caller's contract is "did any
+    // curated row fail to do what it says", and which file it lives in doesn't
+    // change the answer.
+    Ok(unmatched_real.len() + unplaced_real.len())
+}
+
+/// The departing player's display name, whatever the reason variant.
+fn departure_name(d: &DepartureReason) -> &str {
+    match d {
+        DepartureReason::GraduatedSenior { name, .. }
+        | DepartureReason::Transferred { name, .. }
+        | DepartureReason::DraftGone { name, .. }
+        | DepartureReason::LeftProgram { name, .. } => name,
+    }
 }
 
 /// Clip a display string to `max` chars so the fixed-width table stays aligned

@@ -79,12 +79,82 @@ pub struct RecruitSnapshot {
     pub players: Vec<RecruitRow>,
 }
 
+/// Is 247's record for recruiting class `year` still a live statement of where
+/// these players are going?
+///
+/// **This is the most important rule in this module.** A 247 recruit row is a
+/// living document, not an archival record of what happened in a signing
+/// period. Once a player is on campus 247 keeps editing his recruit row, and
+/// two columns drift in ways that are actively wrong for our purposes:
+///
+/// * `committedInstitution` becomes the school he **transferred to**. Sampled
+///   against the class-of-2014..2025 rows already in the table, 1,592 rows had
+///   a different school in the JSON than the HTML scrape recorded — and on the
+///   ones we could check against box scores, the *old* value matched the team
+///   he actually played his freshman season for (7 of 8), not the new one.
+///   Taking the new value silently re-points a recruit at a team he reached
+///   two years later, which is exactly backwards for a freshman-arrival model.
+/// * `compositeNationalRank` disagrees with the scrape on 3,541 historical
+///   rows, and not randomly: the drift is ~0 at the top of a class and grows
+///   monotonically with depth (+45.7 by rank 500 for 2019). The scraped rank is
+///   internally consistent with `composite_rating` (mean |rank − rating-order|
+///   = 0.58); the JSON's is not (48.0). Whatever pool 247 now ranks against, it
+///   is not the one the stored ratings came from, and mixing the two produces a
+///   column that agrees with neither.
+///
+/// So: for a **live** class the feed is authoritative and overwrites, which is
+/// the entire point of refreshing it nightly — commits, decommits and re-ranks
+/// all have to land. For a **settled** class the feed may add rows and fill
+/// NULLs but must never overwrite, because the stored value is the contemporary
+/// one and is what the served freshman and trajectory models were trained on.
+///
+/// The boundary is `current_natstat_season()`, which is also where it belongs:
+/// class C first plays in season C+1, so a class stops being live at exactly
+/// the November rollover that puts its players into box scores.
+///
+/// This is the same shape as the rule `scripts/sync_to_prod.sh --columns`
+/// applies — merge past seasons, let the live side own the current one.
+pub fn class_is_live(year: i32) -> bool {
+    year >= crate::current_natstat_season()
+}
+
+/// The recruiting classes the nightly refreshes for cstat season `season`.
+///
+/// A recruiting class `C` first plays in cstat season `C + 1`, so for season
+/// `S` the class *arriving* is `S` itself and `S + 1` is the one actively being
+/// recruited. Both are live: the season number rolls over in November, in the
+/// middle of the early signing period, and the next class opens in the spring —
+/// a single-year guess is wrong on one side of each boundary.
+///
+/// Classes older than `S` are settled (they signed a year ago and are on
+/// rosters) and are not re-fetched.
+pub fn nightly_ingest_class_years(season: i32) -> [i32; 2] {
+    [season, season + 1]
+}
+
+/// The recruiting classes the nightly runs the resolution passes over.
+///
+/// One year wider than [`nightly_ingest_class_years`] on the **near** side, and
+/// that year is the whole point. [`resolve_player_joins`] matches class `C`
+/// against season `C + 1` box scores, so the class it can finally resolve is
+/// `season - 1` — the freshmen playing right now. That class is no longer
+/// ingested, so resolving only the ingested years would mean the nightly
+/// forever ingests classes it cannot yet resolve and never revisits the one it
+/// can, leaving `cstat_player_id` NULL for every arriving freshman.
+///
+/// Both passes early-return when nothing is outstanding, so the extra year
+/// costs a query, not a fetch.
+pub fn nightly_resolve_class_years(season: i32) -> [i32; 3] {
+    [season - 1, season, season + 1]
+}
+
 /// Ingest one class year of recruits from the live 247 endpoint.
 ///
-/// Paginates per group until the parser returns an empty page (247 doesn't
-/// publish a page count — empty fragment past the last data page is the
-/// only stop signal). Defensive cap at `MAX_PAGES_PER_GROUP` prevents
-/// runaway if 247's empty-page convention ever changes.
+/// Paginates per group until the feed says it is done. The two transports
+/// signal that differently — the JSON feed publishes `pagination.pageCount`,
+/// the HTML scrape serves an empty fragment past the last data page — and
+/// [`RecruitPage::is_last_page`] normalizes both. Defensive cap at
+/// `MAX_PAGES_PER_GROUP` prevents runaway if either convention changes.
 ///
 /// If `dump_snapshot` is set, write the combined fetch to disk before
 /// upserting — useful for bootstrap-data capture without a second network
@@ -104,14 +174,23 @@ pub async fn ingest_live(
         let mut group_rows = 0u64;
         for page in 1..=MAX_PAGES_PER_GROUP {
             let p = client.fetch_page(year, group, page).await?;
-            if p.is_last_page {
-                info!(year, ?group, page, "reached empty page — stopping");
-                break;
+            // Consume before testing the stop signal: on the JSON transport the
+            // final page carries real rows *and* is flagged last (pageCount is
+            // known up front), so breaking first would silently drop it.
+            let last = p.is_last_page;
+            // Counts pages that returned data. The HTML scrape stops by walking
+            // one page PAST the end, and counting that empty sentinel would
+            // report one more page than was actually read.
+            if !p.players.is_empty() {
+                total_pages += 1;
             }
-            total_pages += 1;
             group_rows += p.players.len() as u64;
             for row in p.players {
                 all_rows.push((group, row));
+            }
+            if last {
+                info!(year, ?group, page, "reached last page — stopping");
+                break;
             }
         }
         by_group.insert(group.as_db_value().to_string(), group_rows);
@@ -220,6 +299,17 @@ pub async fn bootstrap_from_snapshot(
 /// Insert or update one `recruits` row from a parsed `RecruitRow`. The parser
 /// filters out malformed rows (missing `recruit_key`) before they reach here,
 /// so this only fails on a DB error.
+///
+/// **Five columns COALESCE instead of overwriting** — `height`, `weight`,
+/// `high_school`, `previous_rank` and `committed_school_slug`. The JSON
+/// rankings feed does not carry them (the first three come from the commits
+/// feed, the last two only from the HTML scrape), so a plain
+/// `EXCLUDED`-overwrite would blank them on every JSON pass. That is not
+/// cosmetic: `height` and `previous_rank` are inputs to the served freshman and
+/// trajectory projection models, and `previous_rank` has no JSON source at all
+/// on any route probed — losing it would flip `recruit_rank_movement` to 0 for
+/// the whole table. Every other column overwrites, so a re-ingest still tracks
+/// 247'"'"'s live ranking churn.
 pub async fn upsert_player(
     row: &RecruitRow,
     pool: &PgPool,
@@ -256,27 +346,40 @@ pub async fn upsert_player(
         )
         ON CONFLICT (year, recruit_key) DO UPDATE SET
             institution_group = EXCLUDED.institution_group,
-            first_name = EXCLUDED.first_name,
-            last_name = EXCLUDED.last_name,
-            position = EXCLUDED.position,
-            height = EXCLUDED.height,
-            weight = EXCLUDED.weight,
-            city = EXCLUDED.city,
-            state = EXCLUDED.state,
-            high_school = EXCLUDED.high_school,
-            composite_rank = EXCLUDED.composite_rank,
-            composite_rating = EXCLUDED.composite_rating,
-            star_rating = EXCLUDED.star_rating,
-            previous_rank = EXCLUDED.previous_rank,
-            position_rank = EXCLUDED.position_rank,
-            state_rank = EXCLUDED.state_rank,
-            committed_school = EXCLUDED.committed_school,
-            committed_school_slug = EXCLUDED.committed_school_slug,
-            commit_status = EXCLUDED.commit_status,
-            profile_url = EXCLUDED.profile_url,
-            photo_url = EXCLUDED.photo_url,
-            raw_player = EXCLUDED.raw_player,
-            fetched_at = NOW()
+            -- $24 = `class_is_live(year)`. Live: the feed is authoritative and
+            -- overwrites (a NULL clears — that is how a decommit lands).
+            -- Settled: fill a NULL, never overwrite. See `class_is_live`.
+            first_name    = CASE WHEN $24 THEN EXCLUDED.first_name    ELSE COALESCE(recruits.first_name, EXCLUDED.first_name) END,
+            last_name     = CASE WHEN $24 THEN EXCLUDED.last_name     ELSE COALESCE(recruits.last_name, EXCLUDED.last_name) END,
+            position      = CASE WHEN $24 THEN EXCLUDED.position      ELSE COALESCE(recruits.position, EXCLUDED.position) END,
+            city          = CASE WHEN $24 THEN EXCLUDED.city          ELSE COALESCE(recruits.city, EXCLUDED.city) END,
+            state         = CASE WHEN $24 THEN EXCLUDED.state         ELSE COALESCE(recruits.state, EXCLUDED.state) END,
+            composite_rank    = CASE WHEN $24 THEN EXCLUDED.composite_rank    ELSE COALESCE(recruits.composite_rank, EXCLUDED.composite_rank) END,
+            composite_rating  = CASE WHEN $24 THEN EXCLUDED.composite_rating  ELSE COALESCE(recruits.composite_rating, EXCLUDED.composite_rating) END,
+            star_rating       = CASE WHEN $24 THEN EXCLUDED.star_rating       ELSE COALESCE(recruits.star_rating, EXCLUDED.star_rating) END,
+            position_rank     = CASE WHEN $24 THEN EXCLUDED.position_rank     ELSE COALESCE(recruits.position_rank, EXCLUDED.position_rank) END,
+            state_rank        = CASE WHEN $24 THEN EXCLUDED.state_rank        ELSE COALESCE(recruits.state_rank, EXCLUDED.state_rank) END,
+            committed_school  = CASE WHEN $24 THEN EXCLUDED.committed_school  ELSE COALESCE(recruits.committed_school, EXCLUDED.committed_school) END,
+            commit_status     = CASE WHEN $24 THEN EXCLUDED.commit_status     ELSE COALESCE(recruits.commit_status, EXCLUDED.commit_status) END,
+            -- Never overwritten on either side: this feed does not carry them,
+            -- so `EXCLUDED` is always NULL here and a plain assignment would
+            -- blank what the commits feed or the HTML scrape supplied. `height`
+            -- and `previous_rank` are served projection-model inputs.
+            height        = COALESCE(EXCLUDED.height, recruits.height),
+            weight        = COALESCE(EXCLUDED.weight, recruits.weight),
+            high_school   = COALESCE(EXCLUDED.high_school, recruits.high_school),
+            previous_rank = COALESCE(EXCLUDED.previous_rank, recruits.previous_rank),
+            committed_school_slug = COALESCE(EXCLUDED.committed_school_slug, recruits.committed_school_slug),
+            profile_url = COALESCE(EXCLUDED.profile_url, recruits.profile_url),
+            photo_url   = COALESCE(EXCLUDED.photo_url, recruits.photo_url),
+            -- Frozen on the same rule as the columns it explains. `raw_player`
+            -- is the forensic copy of the record the parsed values came from,
+            -- so overwriting it on a settled class would destroy the only
+            -- remaining copy of the contemporary 247 record — the very thing
+            -- the freeze exists to keep — and leave an audit trail that no
+            -- longer reproduces its own row. NOT NULL, so no COALESCE needed.
+            raw_player  = CASE WHEN $24 THEN EXCLUDED.raw_player ELSE recruits.raw_player END,
+            fetched_at  = NOW()
         "#,
     )
     .bind(year)
@@ -302,6 +405,7 @@ pub async fn upsert_player(
     .bind(&row.profile_url)
     .bind(&row.photo_url)
     .bind(&raw_player)
+    .bind(class_is_live(year))
     .execute(pool)
     .await?;
     Ok(())
@@ -335,16 +439,20 @@ pub async fn ingest_commits(
     let mut hit_cap = true;
     for page in 1..=MAX_COMMIT_PAGES {
         let p = client.fetch_commits_page(year, page).await?;
-        if p.is_last_page {
-            info!(year, page, "reached commits sentinel page — stopping");
-            hit_cap = false;
-            break;
+        // Consume before testing the stop signal — see the note in `ingest_live`.
+        let last = p.is_last_page;
+        if !p.players.is_empty() {
+            total_pages += 1;
         }
-        total_pages += 1;
         for row in p.players {
             if seen.insert(row.recruit_key) {
                 rows.push(row);
             }
+        }
+        if last {
+            info!(year, page, "reached last commits page — stopping");
+            hit_cap = false;
+            break;
         }
     }
     if hit_cap {
@@ -396,7 +504,19 @@ pub async fn ingest_commits(
 /// written: the commits feed's visible `.score` is 247's proprietary 0–100
 /// rating, a different metric from the 0–1 composite, and its ranks read "NA"
 /// for the unranked players that are the whole point here. `star_rating` (an
-/// unambiguous 1–5 solid-star count) is persisted when present.
+/// unambiguous 1–5 solid-star count) is persisted when present. (The JSON
+/// transport does expose a real composite under `ranking.*`, parsed onto the
+/// row for snapshot fidelity, but the rankings feed owns those columns and
+/// covers every ranked player — so the division of labor is unchanged.)
+///
+/// One exception to the provenance gate, added with the JSON transport: the
+/// physical columns `height` / `weight` / `high_school` are **gap-filled** onto
+/// a composite-owned row when they are NULL there. The JSON rankings feed
+/// carries none of the three and this feed is their only JSON source, so
+/// without the backfill a ranked, committed recruit ingested rankings-first
+/// would keep a NULL `height` forever — and `height` is an input to the served
+/// freshman projection model. The fill never overwrites a non-NULL value, so
+/// composite data stays authoritative where it exists.
 pub async fn upsert_commit(
     row: &RecruitRow,
     pool: &PgPool,
@@ -432,19 +552,25 @@ pub async fn upsert_commit(
             first_name = EXCLUDED.first_name,
             last_name = EXCLUDED.last_name,
             position = EXCLUDED.position,
-            height = EXCLUDED.height,
-            weight = EXCLUDED.weight,
-            city = EXCLUDED.city,
-            state = EXCLUDED.state,
-            high_school = EXCLUDED.high_school,
-            star_rating = EXCLUDED.star_rating,
-            committed_school = EXCLUDED.committed_school,
-            committed_school_slug = EXCLUDED.committed_school_slug,
-            commit_status = EXCLUDED.commit_status,
-            profile_url = EXCLUDED.profile_url,
-            photo_url = EXCLUDED.photo_url,
-            raw_player = EXCLUDED.raw_player,
-            fetched_at = NOW()
+            -- $18 = `class_is_live(year)`, same rule as `upsert_player`: the
+            -- feed owns a class still being recruited, and may only fill NULLs
+            -- on one already on campus. This feed carries `committedInstitution`
+            -- too, so it drifts to the transfer destination in exactly the same
+            -- way once a player moves.
+            height           = CASE WHEN $18 THEN EXCLUDED.height           ELSE COALESCE(recruits.height, EXCLUDED.height) END,
+            weight           = CASE WHEN $18 THEN EXCLUDED.weight           ELSE COALESCE(recruits.weight, EXCLUDED.weight) END,
+            city             = CASE WHEN $18 THEN EXCLUDED.city             ELSE COALESCE(recruits.city, EXCLUDED.city) END,
+            state            = CASE WHEN $18 THEN EXCLUDED.state            ELSE COALESCE(recruits.state, EXCLUDED.state) END,
+            high_school      = CASE WHEN $18 THEN EXCLUDED.high_school      ELSE COALESCE(recruits.high_school, EXCLUDED.high_school) END,
+            star_rating      = CASE WHEN $18 THEN EXCLUDED.star_rating      ELSE COALESCE(recruits.star_rating, EXCLUDED.star_rating) END,
+            committed_school = CASE WHEN $18 THEN EXCLUDED.committed_school ELSE COALESCE(recruits.committed_school, EXCLUDED.committed_school) END,
+            commit_status    = CASE WHEN $18 THEN EXCLUDED.commit_status    ELSE COALESCE(recruits.commit_status, EXCLUDED.commit_status) END,
+            committed_school_slug = COALESCE(EXCLUDED.committed_school_slug, recruits.committed_school_slug),
+            profile_url = COALESCE(EXCLUDED.profile_url, recruits.profile_url),
+            photo_url   = COALESCE(EXCLUDED.photo_url, recruits.photo_url),
+            -- Frozen with the columns it explains — see `upsert_player`.
+            raw_player  = CASE WHEN $18 THEN EXCLUDED.raw_player ELSE recruits.raw_player END,
+            fetched_at  = NOW()
         WHERE recruits.institution_group = 'commits'
         "#,
     )
@@ -465,8 +591,37 @@ pub async fn upsert_commit(
     .bind(&row.profile_url)
     .bind(&row.photo_url)
     .bind(&raw_player)
+    .bind(class_is_live(year))
     .execute(pool)
     .await?;
+
+    // Gap-fill the physical columns onto a composite-owned row (see the doc
+    // comment). No-op when the row is commits-owned — the upsert above already
+    // wrote them — and never overwrites a value that is already there.
+    if row.height.is_some() || row.weight.is_some() || row.high_school.is_some() {
+        sqlx::query(
+            r#"
+            -- Fill-only by construction (COALESCE keeps a non-NULL), so it
+            -- needs no liveness gate: it can never overwrite a stored value.
+            UPDATE recruits SET
+                height      = COALESCE(height, $3),
+                weight      = COALESCE(weight, $4),
+                high_school = COALESCE(high_school, $5)
+            WHERE year = $1
+              AND recruit_key = $2
+              AND institution_group <> 'commits'
+              AND (height IS NULL OR weight IS NULL OR high_school IS NULL)
+            "#,
+        )
+        .bind(year)
+        .bind(row.recruit_key)
+        .bind(&row.height)
+        .bind(row.weight)
+        .bind(&row.high_school)
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -899,7 +1054,7 @@ mod tests {
             commit_status: Some("Signed".into()),
             profile_url: Some("/player/test-player-12345/".into()),
             photo_url: None,
-            raw_html: String::new(),
+            raw_source: String::new(),
         }];
         let snap = RecruitSnapshot {
             year: 2026,
@@ -913,5 +1068,77 @@ mod tests {
         assert_eq!(back.players.len(), 1);
         assert_eq!(back.players[0].recruit_key, 12345);
         assert_eq!(back.players[0].committed_school.as_deref(), Some("Duke"));
+    }
+}
+
+#[cfg(test)]
+mod class_year_window_tests {
+    use super::*;
+
+    /// The arriving class and the one being recruited — never a settled class.
+    #[test]
+    fn ingest_window_is_the_two_live_classes() {
+        assert_eq!(nightly_ingest_class_years(2027), [2027, 2028]);
+        assert_eq!(nightly_ingest_class_years(2026), [2026, 2027]);
+    }
+
+    /// Regression: the resolution window must reach back one year further than
+    /// the ingest window, or the freshmen currently in box scores never get a
+    /// `cstat_player_id`. In season 2027 that is class 2026 — a class the
+    /// ingest window deliberately excludes.
+    #[test]
+    fn resolve_window_covers_the_class_now_in_box_scores() {
+        let season = 2027;
+        let resolve = nightly_resolve_class_years(season);
+        let ingest = nightly_ingest_class_years(season);
+        // `resolve_player_joins(C)` looks at season C + 1, so this is the class
+        // whose freshmen are on the floor in `season`.
+        let playing_now = season - 1;
+        assert!(
+            resolve.contains(&playing_now),
+            "resolution window {resolve:?} must include class {playing_now}"
+        );
+        assert!(
+            !ingest.contains(&playing_now),
+            "sanity: the ingest window is not expected to cover class {playing_now}, \
+             which is why the resolution window has to"
+        );
+    }
+
+    /// The liveness boundary must line up with the ingest window: every class
+    /// the nightly refreshes has to be one the feed is allowed to overwrite,
+    /// or the nightly would fetch a class and then decline to apply it.
+    #[test]
+    fn every_ingested_class_is_live() {
+        let season = crate::current_natstat_season();
+        for y in nightly_ingest_class_years(season) {
+            assert!(
+                class_is_live(y),
+                "class {y} is ingested nightly but treated as settled — its \
+                 refresh would be silently dropped"
+            );
+        }
+    }
+
+    /// The converse: the extra class the resolution window reaches back for is
+    /// settled by construction — its players are in box scores, which is
+    /// exactly why 247 has started rewriting their recruit rows.
+    #[test]
+    fn the_class_now_in_box_scores_is_settled() {
+        let season = crate::current_natstat_season();
+        assert!(!class_is_live(season - 1));
+        assert!(!class_is_live(season - 2));
+    }
+
+    /// Every ingested class is also resolved — a class fetched but never
+    /// resolved would sit with NULL joins until someone noticed.
+    #[test]
+    fn resolve_window_is_a_superset_of_the_ingest_window() {
+        for season in [2024, 2025, 2026, 2027, 2028] {
+            let resolve = nightly_resolve_class_years(season);
+            for y in nightly_ingest_class_years(season) {
+                assert!(resolve.contains(&y), "class {y} ingested but not resolved");
+            }
+        }
     }
 }

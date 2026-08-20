@@ -8,14 +8,19 @@ import { agNullsBottom } from './tableSort';
 import { classColor, CLASS_ORDER } from './archetypeColors';
 import ArchetypeFilter from './ArchetypeFilter';
 import { useArchetypeFilter } from './useArchetypeFilter';
+// The committed/available rule lives in lib/ so it is unit-testable without a
+// render harness; the chips below are just its presentation.
+import { availabilityOf, type Availability } from '../lib/transferAvailability';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
 
-// Players ranked by 247Sports who carry one of our derived ranks (we have a
-// matching cstat player with a projected CamPom value). `rank_cstat` is the
-// row's rank among ranked-by-247 transfers when the cohort is sorted by
-// projected next-season CamPom desc — the forward-looking "who should I be
-// excited about" view. `rank_delta` is `rank_247 − rank_cstat`: positive
+// Transfers carrying one of our derived ranks (we have a matching cstat
+// player with a projected CamPom value). `rank_cstat` is the row's rank among
+// projectable transfers when the cohort is sorted by projected next-season
+// CamPom desc — the forward-looking "who should I be excited about" view.
+// Deliberately NOT restricted to players 247 ranked: 247 freezes its portal
+// ranking after the spring window, and the 5-in-5 August entrants it misses
+// include the highest-projected players in the class. `rank_delta` is `rank_247 − rank_cstat`: positive
 // means cstat rates the player higher than 247 does (best value), negative
 // the opposite. `campom_delta` is the trajectory projection delta
 // (projected − current); negative is the regression-to-the-mean case for
@@ -25,6 +30,19 @@ type RankedTransfer = TransferRow & {
   rank_cstat: number | null;
   rank_delta: number | null;
   campom_delta: number | null;
+};
+
+const AVAILABILITY_META: Record<Availability, { label: string; cls: string; title: string }> = {
+  committed: {
+    label: 'Committed',
+    cls: 'bg-emerald-900/30 border-emerald-700 text-emerald-300',
+    title: 'Has picked a destination school',
+  },
+  available: {
+    label: 'Available',
+    cls: 'bg-amber-900/30 border-amber-700 text-amber-300',
+    title: 'Still in the portal with no destination — who is left on the board',
+  },
 };
 
 
@@ -83,7 +101,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedTransfer>[]
       width: 56,
       pinned: 'left',
       headerTooltip:
-        "Our rank among 247-ranked transfers, sorted by projected next-season CamPom. Forward-looking — favors players the trajectory model expects to be more impactful next year, not just who's good right now.",
+        "Our rank among transfers we can project, sorted by projected next-season CamPom. Forward-looking — favors players the trajectory model expects to be more impactful next year, not just who's good right now. Includes players 247 never ranked (anyone entering after their spring ranking froze).",
       comparator: agNullsBottom,
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
@@ -376,6 +394,7 @@ export default function TransferPortal({ year }: Props) {
   const [rows, setRows] = useState<RankedTransfer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [availability, setAvailability] = useState<Availability | null>(null);
   const isMobile = useIsMobile();
   // Archetype filter shared with the players page — the class shown is the
   // transfer's prior (source-season) archetype, the right lens for portal
@@ -398,15 +417,12 @@ export default function TransferPortal({ year }: Props) {
       .then((r) => {
         if (canceled) return;
         // Sort by PROJECTED CamPom desc — the forward-looking ranking. Rows
-        // lacking either projection or 247 rank stay in the array but skip
-        // the rank counter so the displayed `rank_cstat` matches on-screen
-        // position. Tiebreak in the no-projection cohort uses source-season
-        // CamPom desc so those rows are at least internally sorted. The
-        // endpoint returns the full portal (including unranked-by-247
-        // entries) for the 2027-projection roster aggregator; those don't
-        // compete for a rank here. Δ247 reads directly off `rank_cstat`,
-        // so this switch propagates the projection-based interpretation
-        // into the value-vs-247 column too.
+        // with no projection stay in the array but skip the rank counter, so
+        // the displayed `rank_cstat` matches on-screen position; they sort
+        // last, which is what keeps `++i` below contiguous. Tiebreak in the
+        // no-projection cohort uses source-season CamPom desc so those rows
+        // are at least internally sorted. Having a 247 rank is NOT part of
+        // either test any more — see the `rank_cstat` note below.
         const sorted = [...r.transfers].sort((a, b) => {
           const ap = a.projected_campom_mean;
           const bp = b.projected_campom_mean;
@@ -421,11 +437,25 @@ export default function TransferPortal({ year }: Props) {
         });
         let i = 0;
         const withRank: RankedTransfer[] = sorted.map((t) => {
-          // Rank only when BOTH projection and 247 rank present — keeps
-          // the rank a single-meaning number (= position when sorted by
-          // projected CamPom among 247-ranked transfers).
-          const rank_cstat =
-            t.projected_campom_mean != null && t.rank_247 != null ? ++i : null;
+          // Rank every row we can actually project. This used to additionally
+          // require `rank_247`, which quietly made 247's ranking a *visibility*
+          // gate rather than just a comparison column: `filtered` below drops
+          // rows without a `rank_cstat`.
+          //
+          // 247 freezes its portal ranking after the spring window, so every
+          // player entering later carries `rank_247 = null`. Under the NCAA
+          // 5-in-5 rule that is no longer a negligible tail — it is the August
+          // wave, and it contains the best players in the class. On the 2026
+          // class the old condition showed 473 of the 1,243 rows we can
+          // project and hid the other 770, including Donovan Dent (projected
+          // 13.1), Xaivian Lee (12.6), Mark Mitchell (11.6) and Darrion
+          // Williams (10.2) — i.e. the top of the board was invisible while
+          // the page claimed to be a ranking (issue #220).
+          //
+          // The rank keeps a single meaning: position when sorted by projected
+          // CamPom among transfers we can project. `rank_delta` below is what
+          // genuinely needs 247's number, and it still returns null without it.
+          const rank_cstat = t.projected_campom_mean != null ? ++i : null;
           // campom_delta needs BOTH current and projected CamPom. The
           // route serves projection NULLs for unmatched / sub-qual rows;
           // we don't fabricate one here just because current CamPom is
@@ -437,8 +467,15 @@ export default function TransferPortal({ year }: Props) {
           return {
             ...t,
             rank_cstat,
+            // Needs 247's number in its own right, not just `rank_cstat`.
+            // Since `rank_cstat` no longer implies `rank_247` is present,
+            // testing only the former would evaluate `null - rank_cstat`,
+            // which JS coerces to `-rank_cstat` rather than NaN — a plausible
+            // negative delta rendered for a player 247 never ranked.
             rank_delta:
-              rank_cstat != null ? t.rank_247! - rank_cstat : null,
+              rank_cstat != null && t.rank_247 != null
+                ? t.rank_247 - rank_cstat
+                : null,
             campom_delta,
           };
         });
@@ -454,14 +491,19 @@ export default function TransferPortal({ year }: Props) {
 
   const columns = useMemo(() => buildColumns(isMobile, year), [isMobile, year]);
 
-  const filtered = useMemo(() => {
+  // Everything except the availability chips. Split out so the chip counts can
+  // be taken from the same set the chips filter — a count that ignored the
+  // search box or the archetype filter would promise rows that clicking cannot
+  // produce.
+  const baseRows = useMemo(() => {
     if (!rows) return null;
-    // `rank_cstat` is only assigned when both projected CamPom and 247
-    // rank are present (see useEffect above), so this single check drops
-    // the unranked-by-247 long tail and the no-projection rows in one
-    // pass. Sub-qual transfers (those without a trajectory projection)
-    // fall out of the ranked view; they still ride along on the page-
-    // level state for the 2027 roster aggregator.
+    // `rank_cstat` is assigned to every row we can project (see useEffect
+    // above), so this check drops exactly the rows with no trajectory
+    // projection — sub-qual transfers the model couldn't run on. It no
+    // longer also drops everyone 247 left unranked, which since the 5-in-5
+    // August window is where most of the class's value sits. Unprojectable
+    // rows still ride along on page-level state for the 2027 roster
+    // aggregator.
     const ranked = filterRows(rows.filter((t) => t.rank_cstat != null));
     const q = search.trim().toLowerCase();
     if (!q) return ranked;
@@ -477,6 +519,20 @@ export default function TransferPortal({ year }: Props) {
     );
   }, [rows, search, filterRows]);
 
+  const filtered = useMemo(() => {
+    if (!baseRows) return null;
+    if (!availability) return baseRows;
+    return baseRows.filter((t) => availabilityOf(t) === availability);
+  }, [baseRows, availability]);
+
+  // Counts partition `baseRows` exactly, so the two chips always sum to the
+  // unfiltered total and neither can read 0 while rows are on screen.
+  const availabilityCounts = useMemo(() => {
+    const by: Record<Availability, number> = { committed: 0, available: 0 };
+    for (const t of baseRows ?? []) by[availabilityOf(t)] += 1;
+    return by;
+  }, [baseRows]);
+
   if (error) {
     return (
       <div className="p-4 text-rose-300">Failed to load transfers: {error}</div>
@@ -489,6 +545,26 @@ export default function TransferPortal({ year }: Props) {
   const hasArch = selectedClasses.size > 0;
   const shown = filtered?.length ?? 0;
 
+  // Availability chip. Clicking the active chip clears the filter, matching the
+  // recruit-class chips so the two portal-ish pages behave the same way.
+  const availabilityChip = (key: Availability) => {
+    const active = availability === key;
+    const m = AVAILABILITY_META[key];
+    return (
+      <button
+        key={key}
+        onClick={() => setAvailability(active ? null : key)}
+        aria-pressed={active}
+        className={`px-2 py-0.5 rounded border text-xs transition-colors ${
+          active ? m.cls + ' ring-1 ring-current' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+        }`}
+        title={active ? 'Clear filter' : m.title}
+      >
+        {m.label} <span className="opacity-70">{availabilityCounts[key]}</span>
+      </button>
+    );
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-3">
@@ -499,6 +575,10 @@ export default function TransferPortal({ year }: Props) {
           placeholder="Search transfers / teams…"
           className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
+        <div className="flex items-center gap-1">
+          {availabilityChip('committed')}
+          {availabilityChip('available')}
+        </div>
         <ArchetypeFilter
           selected={selectedClasses}
           onToggle={toggleClass}
@@ -509,7 +589,10 @@ export default function TransferPortal({ year }: Props) {
           onClear={clearArchetypes}
         />
         <span className="text-xs text-gray-500">
-          {hasArch
+          {/* Any active narrowing switches to the "matching" phrasing —
+              otherwise a filtered grid would be captioned with the unfiltered
+              count, which is the one number a user reads as authoritative. */}
+          {hasArch || availability || search.trim()
             ? `${shown} matching transfers`
             : `${ranked} ranked transfers${hidden > 0 ? ` · ${hidden} hidden (unranked by 247 or no projection)` : ''}`}{' '}
           ·{' '}

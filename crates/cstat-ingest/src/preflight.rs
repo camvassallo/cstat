@@ -254,7 +254,10 @@ pub async fn run(
     // entirely (247 is offseason roster-construction), and even here an expired
     // token is expected and fail-soft (transfers falls back to the last snapshot). ---
     if include_tfs {
-        let tfs = match TfsClient::from_env() {
+        // Guest-first, matching the ingest path: probing with `from_env` alone
+        // would report 247 as DOWN whenever no subscriber token is exported,
+        // which is now the normal unattended case rather than a fault.
+        let tfs = match TfsClient::from_env_or_guest(year).await {
             Ok(tfs) => match tfs.probe_auth(year).await {
                 AuthProbe::Valid { count } => {
                     FeedHealth::Ok(format!("JWT valid, {count} in portal"))

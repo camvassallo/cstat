@@ -34,6 +34,12 @@ const SOURCE_META: Record<ProjectionSource, { label: string; cls: string; title:
     cls: 'border-sky-500/60 text-sky-300',
     title: 'Incoming freshman recruit — freshman-model projection',
   },
+  uncertain: {
+    label: '?',
+    cls: 'border-slate-400/60 text-slate-300',
+    title:
+      'Eligibility or draft status unresolved — counted in this team\u2019s ceiling but not its floor',
+  },
 };
 
 const fmtBand = (v: number | null) => (v != null ? v.toFixed(1) : '—');
@@ -122,7 +128,8 @@ function buildColumns(
       field: 'source',
       headerName: 'Type',
       width: 74,
-      headerTooltip: 'Ret = returning · Tfr = incoming transfer · Fr = incoming freshman',
+      headerTooltip:
+        'Ret = returning · Tfr = incoming transfer · Fr = incoming freshman · ? = status unresolved (ceiling only)',
       cellRenderer: (p: { value: ProjectionSource }) => {
         const m = SOURCE_META[p.value];
         if (!m) return <span className="text-gray-500">—</span>;

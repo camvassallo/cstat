@@ -1,0 +1,10 @@
+{
+  "generated_at": "2026-08-20T04:04:05.531973Z",
+  "n": 2626,
+  "flat_served_mae": 5.736503396571599,
+  "global_best_w": 0.3,
+  "loso_flat_mae": 5.736503396571599,
+  "loso_conditional_mae": 5.652544428945277,
+  "loso_lift": 0.08395896762632127,
+  "overhaul_threshold": 0.4
+}

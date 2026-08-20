@@ -853,9 +853,13 @@ impl<'a> SeasonIngester<'a> {
         // --- 0. preflight connectivity check (M3 1.2) ---
         // Probe the serving-critical feeds up front so a dead dependency is
         // diagnosed here rather than surfacing as an opaque mid-run failure. 247
-        // is skipped (`include_tfs = false`): it's offseason roster-construction,
-        // never in the nightly chain, so probing it nightly would just burn a 247
-        // call on an already-expired in-season token. Does NOT gate control flow
+        // is skipped (`include_tfs = false`) even though steps 7d/7e now do call
+        // it: those are best-effort by construction and already fail soft, so a
+        // probe would add a request per night and change nothing about the
+        // outcome. Preflight is for feeds whose absence should stop the run.
+        // (The original reason — "247 is offseason-only and its token is
+        // expired anyway" — no longer holds on either half.) Does NOT gate
+        // control flow
         // — the per-step isolation below already fail-softs best-effort feeds and
         // hard-fails the serving-critical chain — but a down serving-critical feed
         // is recorded as a failed ledger step and added to the degraded summary.
@@ -1229,6 +1233,248 @@ impl<'a> SeasonIngester<'a> {
                     .record("lineups", StepStatus::Failed, None, t0, Some(&msg))
                     .await;
                 failures.push(format!("lineups: {msg}"));
+            }
+        }
+
+        // --- 7d. 247 transfer portal (best-effort) ---
+        // New in the 5-in-5 era. ROADMAP S5/P3 explicitly declined to schedule
+        // this, on two premises that were true when written and are not now:
+        //
+        //   1. "Zero in-season churn — the portal is a ~30-day spring window."
+        //      The NCAA's age-based eligibility rule (issue #220) opened a
+        //      second window: 51 players entered the 2026 portal between
+        //      2026-08-01 and 2026-08-19, 53 of the 56 that resolve to a cstat
+        //      player being `Sr`-labelled. There is no reason to assume it
+        //      closes at tipoff.
+        //   2. "Can't be autonomous — TFS_247_JWT expires and needs manual
+        //      recapture." `TfsClient::from_env_or_guest` mints a guest token
+        //      off the public portal page per run. No credential, no expiry.
+        //
+        // Best-effort on purpose: a 247 outage, or a page redesign that breaks
+        // the guest-token regex, must not degrade a game-night box-score
+        // refresh. It is also placed AFTER everything served-critical for the
+        // same reason.
+        //
+        // Two class years, not one. The portal class feeding season S is S-1,
+        // so in-season `self.season - 1` is the live one — but the November
+        // season flip and the March opening of the next class both straddle
+        // that boundary, and a single-year guess is wrong on one side of each.
+        // This is the same boundary that turns into served-critical failures in
+        // issue #248. Incremental mode short-circuits as soon as a page
+        // predates our cursor, so a quiet night is a couple of requests per
+        // year rather than the ~117 pages of a full sweep.
+        for portal_year in [self.season - 1, self.season] {
+            let t0 = Utc::now();
+            let step = format!("transfers_{portal_year}");
+            match crate::tfs::TfsClient::from_env_or_guest(portal_year).await {
+                Ok(client) => {
+                    match super::transfers::ingest_live(&client, self.pool, portal_year, true).await
+                    {
+                        Ok(rep) => {
+                            ledger
+                                .record(&step, StepStatus::Ok, Some(rep.upserts as i64), t0, None)
+                                .await;
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            warn!(season = self.season, portal_year, error = %msg,
+                                  "247 transfers refresh failed; portal may be stale");
+                            ledger
+                                .record(&step, StepStatus::Failed, None, t0, Some(&msg))
+                                .await;
+                            failures.push(format!("{step}: {msg}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    warn!(season = self.season, portal_year, error = %msg,
+                          "could not obtain a 247 token; skipping portal refresh");
+                    ledger
+                        .record(&step, StepStatus::Failed, None, t0, Some(&msg))
+                        .await;
+                    failures.push(format!("{step}: {msg}"));
+                }
+            }
+        }
+
+        // --- 7e. 247 recruit rankings + commits (best-effort) ---
+        // Joins the nightly for the same reason 7d did: the feeds stopped
+        // needing a hand-captured credential. `Recruit247Client::guest` mints a
+        // guest token off a public page per run, so the composite rankings —
+        // which used to require a subscriber cookie recaptured by hand from
+        // DevTools every ~6 hours — are now schedulable.
+        //
+        // Unlike the portal there is no incremental mode: 247 re-ranks a class
+        // continuously and publishes no per-row cursor, so each pass is a full
+        // sweep of both feeds (~15 requests per class year at pageSize=100).
+        // That is the cost of keeping `composite_rank` / `composite_rating`
+        // current, and it is why this sits last, after everything served-
+        // critical, and never fails the run.
+        //
+        // Two class years, like the portal, but shifted forward — see
+        // `recruits::nightly_ingest_class_years` for why, and
+        // `nightly_resolve_class_years` for why the resolution window below is
+        // one year wider on the near side.
+        //
+        // The token is minted once and reused: it is not year-scoped, and the
+        // page it comes from is the portal page for a class that reliably
+        // exists — a far-future class year has no such page to mint from.
+        let t_mint = Utc::now();
+        let recruit_client = match crate::tfs_recruits::Recruit247Client::guest(self.season).await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg,
+                      "could not obtain a 247 token; skipping recruit refresh");
+                let t0 = t_mint;
+                ledger
+                    .record("recruits", StepStatus::Failed, None, t0, Some(&msg))
+                    .await;
+                failures.push(format!("recruits: {msg}"));
+                None
+            }
+        };
+
+        if let Some(client) = recruit_client {
+            for class_year in super::recruits::nightly_ingest_class_years(self.season) {
+                // Composite rankings — the ranked universe, committed or not.
+                let t0 = Utc::now();
+                let step = format!("recruits_{class_year}");
+                match super::recruits::ingest_live(
+                    &client,
+                    self.pool,
+                    class_year,
+                    &[crate::tfs_recruits::InstitutionGroup::HighSchool],
+                    None,
+                )
+                .await
+                {
+                    Ok(rep) => {
+                        ledger
+                            .record(&step, StepStatus::Ok, Some(rep.upserts as i64), t0, None)
+                            .await;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        warn!(season = self.season, class_year, error = %msg,
+                              "247 recruit rankings refresh failed; rankings may be stale");
+                        ledger
+                            .record(&step, StepStatus::Failed, None, t0, Some(&msg))
+                            .await;
+                        failures.push(format!("{step}: {msg}"));
+                    }
+                }
+
+                // Commits feed — the unranked/international/JUCO commits the
+                // rankings feed carries without ratings, and the only source of
+                // height/weight/high_school on the JSON transport.
+                let t0 = Utc::now();
+                let step = format!("recruit_commits_{class_year}");
+                match super::recruits::ingest_commits(&client, self.pool, class_year).await {
+                    Ok(rep) => {
+                        ledger
+                            .record(&step, StepStatus::Ok, Some(rep.upserts as i64), t0, None)
+                            .await;
+                    }
+                    // A class nobody has committed to yet is the expected state
+                    // for `self.season + 1` early in its cycle, not a fault. The
+                    // guard exists to catch a structural break on a class that
+                    // *should* have commits, so record it and move on rather
+                    // than warning every night for months.
+                    Err(super::recruits::RecruitIngestError::EmptyCommitsFeed { .. }) => {
+                        info!(
+                            season = self.season,
+                            class_year, "no commits yet for this class — skipping"
+                        );
+                        ledger
+                            .record(
+                                &step,
+                                StepStatus::Skipped,
+                                Some(0),
+                                t0,
+                                Some("no commits published for this class yet"),
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        warn!(season = self.season, class_year, error = %msg,
+                              "247 commits refresh failed; commits may be stale");
+                        ledger
+                            .record(&step, StepStatus::Failed, None, t0, Some(&msg))
+                            .await;
+                        failures.push(format!("{step}: {msg}"));
+                    }
+                }
+            }
+        }
+
+        // Resolution passes: `committed_school` text → `teams.id`, and recruit →
+        // `players.id`. Pure DB work on rows already written — no 247 call — so
+        // they run even when the token mint above failed.
+        //
+        // One year wider than the ingest window on the near side, and that year
+        // is the point — see `recruits::nightly_resolve_class_years`.
+        //
+        // Recorded to the ledger like every other step, and a failure degrades
+        // the run. `resolve_team_joins` is the ONLY writer of
+        // `recruits.committed_team_id`, and the roster projection selects
+        // `WHERE r.committed_team_id IS NOT NULL` — so a pass that fails takes
+        // every recruit it would have resolved out of its team's projected
+        // roster. A warn-only failure would report a clean night while doing
+        // exactly the silent deletion the rest of this work exists to stop. The
+        // next night re-runs the same class years, so a transient error
+        // self-heals; the point of the ledger row is that a persistent one
+        // cannot hide.
+        //
+        // One row for the whole loop rather than six: `rows` is the total
+        // resolved across both passes and all three class years, which is the
+        // number worth watching over time — a healthy window trends toward 0 as
+        // the backlog drains, so a sudden 0 on a night that ingested rows is
+        // the signal, not the count itself.
+        let t0 = Utc::now();
+        let mut resolved_total: i64 = 0;
+        let mut resolve_err: Option<String> = None;
+        for class_year in super::recruits::nightly_resolve_class_years(self.season) {
+            match super::recruits::resolve_team_joins(self.pool, class_year).await {
+                Ok(n) => resolved_total += n as i64,
+                Err(e) => {
+                    warn!(class_year, error = %e, "recruit team-join resolution failed");
+                    resolve_err.get_or_insert_with(|| format!("team joins ({class_year}): {e}"));
+                }
+            }
+            match super::recruits::resolve_player_joins(self.pool, class_year).await {
+                Ok(n) => resolved_total += n as i64,
+                Err(e) => {
+                    warn!(class_year, error = %e, "recruit player-join resolution failed");
+                    resolve_err.get_or_insert_with(|| format!("player joins ({class_year}): {e}"));
+                }
+            }
+        }
+        match &resolve_err {
+            None => {
+                ledger
+                    .record(
+                        "recruit_resolve",
+                        StepStatus::Ok,
+                        Some(resolved_total),
+                        t0,
+                        None,
+                    )
+                    .await;
+            }
+            Some(msg) => {
+                ledger
+                    .record(
+                        "recruit_resolve",
+                        StepStatus::Failed,
+                        Some(resolved_total),
+                        t0,
+                        Some(msg),
+                    )
+                    .await;
+                failures.push(format!("recruit_resolve: {msg}"));
             }
         }
 
