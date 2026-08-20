@@ -17,9 +17,22 @@ served-critical input set in dependency order and records every step to the
 preflight   (connectivity probe — records a step, never gates control flow)
 games → player_perfs → team_perfs   (load-bearing — a failure aborts the run)
 forecasts → elo → torvik → torvik_games   (best-effort — logged, run continues)
+transfers_{year}                    (247 portal, 2 class years — best-effort)
+recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
 compute_all   (load-bearing)
 invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
+
+The two 247 groups sit last on purpose: both reach a third party that owes us
+nothing, and neither may degrade a game-night box-score refresh. They need no
+credential — each mints a **guest** token per run off a public 247 page — and a
+failure records a failed ledger step and lands in the degraded summary without
+aborting. None of their steps is served-critical, so `/api/health/ingest` will
+not 503 on a 247 outage. The recruit classes are shifted one year forward from
+the portal's, because a recruiting class first plays in the season after it
+signs; `recruit_commits_*` records **skipped** rather than failed for a class
+nobody has committed to yet, which is the normal state of the far class for
+much of its cycle.
 
 Window defaults to **yesterday..today (UTC)** so NatStat's overnight stat
 corrections are picked up. Torvik + `/elo` refresh **before** `compute_all`, so

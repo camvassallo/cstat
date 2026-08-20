@@ -79,6 +79,36 @@ pub struct RecruitSnapshot {
     pub players: Vec<RecruitRow>,
 }
 
+/// The recruiting classes the nightly refreshes for cstat season `season`.
+///
+/// A recruiting class `C` first plays in cstat season `C + 1`, so for season
+/// `S` the class *arriving* is `S` itself and `S + 1` is the one actively being
+/// recruited. Both are live: the season number rolls over in November, in the
+/// middle of the early signing period, and the next class opens in the spring —
+/// a single-year guess is wrong on one side of each boundary.
+///
+/// Classes older than `S` are settled (they signed a year ago and are on
+/// rosters) and are not re-fetched.
+pub fn nightly_ingest_class_years(season: i32) -> [i32; 2] {
+    [season, season + 1]
+}
+
+/// The recruiting classes the nightly runs the resolution passes over.
+///
+/// One year wider than [`nightly_ingest_class_years`] on the **near** side, and
+/// that year is the whole point. [`resolve_player_joins`] matches class `C`
+/// against season `C + 1` box scores, so the class it can finally resolve is
+/// `season - 1` — the freshmen playing right now. That class is no longer
+/// ingested, so resolving only the ingested years would mean the nightly
+/// forever ingests classes it cannot yet resolve and never revisits the one it
+/// can, leaving `cstat_player_id` NULL for every arriving freshman.
+///
+/// Both passes early-return when nothing is outstanding, so the extra year
+/// costs a query, not a fetch.
+pub fn nightly_resolve_class_years(season: i32) -> [i32; 3] {
+    [season - 1, season, season + 1]
+}
+
 /// Ingest one class year of recruits from the live 247 endpoint.
 ///
 /// Paginates per group until the feed says it is done. The two transports
@@ -109,7 +139,12 @@ pub async fn ingest_live(
             // final page carries real rows *and* is flagged last (pageCount is
             // known up front), so breaking first would silently drop it.
             let last = p.is_last_page;
-            total_pages += 1;
+            // Counts pages that returned data. The HTML scrape stops by walking
+            // one page PAST the end, and counting that empty sentinel would
+            // report one more page than was actually read.
+            if !p.players.is_empty() {
+                total_pages += 1;
+            }
             group_rows += p.players.len() as u64;
             for row in p.players {
                 all_rows.push((group, row));
@@ -353,7 +388,9 @@ pub async fn ingest_commits(
         let p = client.fetch_commits_page(year, page).await?;
         // Consume before testing the stop signal — see the note in `ingest_live`.
         let last = p.is_last_page;
-        total_pages += 1;
+        if !p.players.is_empty() {
+            total_pages += 1;
+        }
         for row in p.players {
             if seen.insert(row.recruit_key) {
                 rows.push(row);
@@ -969,5 +1006,52 @@ mod tests {
         assert_eq!(back.players.len(), 1);
         assert_eq!(back.players[0].recruit_key, 12345);
         assert_eq!(back.players[0].committed_school.as_deref(), Some("Duke"));
+    }
+}
+
+#[cfg(test)]
+mod class_year_window_tests {
+    use super::*;
+
+    /// The arriving class and the one being recruited — never a settled class.
+    #[test]
+    fn ingest_window_is_the_two_live_classes() {
+        assert_eq!(nightly_ingest_class_years(2027), [2027, 2028]);
+        assert_eq!(nightly_ingest_class_years(2026), [2026, 2027]);
+    }
+
+    /// Regression: the resolution window must reach back one year further than
+    /// the ingest window, or the freshmen currently in box scores never get a
+    /// `cstat_player_id`. In season 2027 that is class 2026 — a class the
+    /// ingest window deliberately excludes.
+    #[test]
+    fn resolve_window_covers_the_class_now_in_box_scores() {
+        let season = 2027;
+        let resolve = nightly_resolve_class_years(season);
+        let ingest = nightly_ingest_class_years(season);
+        // `resolve_player_joins(C)` looks at season C + 1, so this is the class
+        // whose freshmen are on the floor in `season`.
+        let playing_now = season - 1;
+        assert!(
+            resolve.contains(&playing_now),
+            "resolution window {resolve:?} must include class {playing_now}"
+        );
+        assert!(
+            !ingest.contains(&playing_now),
+            "sanity: the ingest window is not expected to cover class {playing_now}, \
+             which is why the resolution window has to"
+        );
+    }
+
+    /// Every ingested class is also resolved — a class fetched but never
+    /// resolved would sit with NULL joins until someone noticed.
+    #[test]
+    fn resolve_window_is_a_superset_of_the_ingest_window() {
+        for season in [2024, 2025, 2026, 2027, 2028] {
+            let resolve = nightly_resolve_class_years(season);
+            for y in nightly_ingest_class_years(season) {
+                assert!(resolve.contains(&y), "class {y} ingested but not resolved");
+            }
+        }
     }
 }

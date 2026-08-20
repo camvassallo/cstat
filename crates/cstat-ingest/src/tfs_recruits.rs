@@ -168,9 +168,13 @@ impl InstitutionGroup {
 #[derive(Debug, Clone)]
 pub struct RecruitPage {
     pub players: Vec<RecruitRow>,
-    /// True when the parser found zero rows — caller should stop paging.
-    /// 247 doesn't publish a page count or empty-marker; an empty row vector
-    /// is the only reliable signal that we walked past the last data page.
+    /// True when the caller should stop paging. The two transports know this
+    /// differently and [`json_page`] / the scrape constructors normalize it:
+    /// the JSON feeds publish `pagination.pageCount`, so the last page is known
+    /// up front and carries real rows; the HTML scrape publishes no count or
+    /// end-marker, so walking past the last data page and getting an empty
+    /// fragment is the only signal available. Callers must therefore consume a
+    /// page's rows BEFORE testing this flag.
     pub is_last_page: bool,
 }
 
@@ -609,9 +613,35 @@ fn json_page(
         .pointer("/pagination/pageCount")
         .and_then(Value::as_u64)
         .unwrap_or(0) as u32;
+
+    // A page whose rows all failed to parse is NOT the end of the feed. Testing
+    // `players.is_empty()` first would make it one: 247 renames a field, one
+    // page mid-class yields zero rows, and the walk stops there — ingesting a
+    // partial class and reporting success. Recruits feed the freshman
+    // projection, so a silently short class is wrong team rosters, not a
+    // cosmetic shortfall. When `pageCount` is published it is the only thing
+    // worth believing; the empty-page heuristic is the fallback for a response
+    // that omits it.
+    let is_last_page = if page_count > 0 {
+        page >= page_count
+    } else {
+        players.is_empty()
+    };
+
+    // Rows arrived and none of them parsed — the shape changed under us. Loud,
+    // because the run now *continues* past it and would otherwise look clean.
+    if players.is_empty() && !rows.is_empty() {
+        warn!(
+            page,
+            rows = rows.len(),
+            rows_key,
+            "247 JSON page returned rows but none parsed — feed shape may have changed"
+        );
+    }
+
     RecruitPage {
-        is_last_page: players.is_empty() || (page_count > 0 && page >= page_count),
         players,
+        is_last_page,
     }
 }
 
@@ -1168,6 +1198,75 @@ fn first_float(item: &ElementRef<'_>, sel: &Selector) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Body shaped like a real JSON feed response: `n` rows under `rows_key`,
+    /// with `pageCount` pages in total.
+    fn feed_body(rows_key: &str, n: usize, page_count: u64) -> Value {
+        let rows: Vec<Value> = (0..n)
+            .map(|i| serde_json::json!({ "key": 1000 + i as i64 }))
+            .collect();
+        serde_json::json!({
+            "pagination": { "pageCount": page_count },
+            rows_key: rows,
+        })
+    }
+
+    #[test]
+    fn json_page_stops_on_the_published_page_count() {
+        // The last page carries real rows AND is flagged last, so the caller
+        // must consume before testing. Page 3 of 3 is the end; page 2 is not.
+        let mid = json_page(
+            &feed_body("players", 100, 3),
+            "players",
+            parse_recruits_json,
+            2,
+        );
+        assert!(!mid.is_last_page);
+        assert_eq!(mid.players.len(), 100);
+
+        let last = json_page(
+            &feed_body("players", 12, 3),
+            "players",
+            parse_recruits_json,
+            3,
+        );
+        assert!(last.is_last_page);
+        assert_eq!(last.players.len(), 12, "the final page's rows must survive");
+    }
+
+    #[test]
+    fn json_page_does_not_treat_an_unparseable_page_as_the_end() {
+        // The regression this guards: 247 renames a field, one page mid-class
+        // yields zero parsed rows, and an `is_empty()`-first stop signal ends
+        // the walk there — ingesting a partial class and reporting success.
+        // Recruits feed the freshman projection, so a short class is wrong
+        // rosters, not a cosmetic shortfall. `pageCount` says otherwise and
+        // `pageCount` wins.
+        let body = serde_json::json!({
+            "pagination": { "pageCount": 8 },
+            "players": [ { "noKeyHere": 1 }, { "noKeyHere": 2 } ],
+        });
+        let p = json_page(&body, "players", parse_recruits_json, 3);
+        assert!(p.players.is_empty());
+        assert!(
+            !p.is_last_page,
+            "a page that parsed nothing is not the end of an 8-page feed"
+        );
+    }
+
+    #[test]
+    fn json_page_falls_back_to_empty_when_no_page_count() {
+        // No `pagination.pageCount` (an error-shaped or truncated body): the
+        // empty-page heuristic is all that's left, and it still terminates.
+        let body = serde_json::json!({ "list": [] });
+        let p = json_page(&body, "list", parse_commits_json, 1);
+        assert!(p.is_last_page);
+
+        let body = serde_json::json!({ "list": [ { "playerKey": 42 } ] });
+        let p = json_page(&body, "list", parse_commits_json, 1);
+        assert!(!p.is_last_page);
+        assert_eq!(p.players.len(), 1);
+    }
 
     #[test]
     fn recruit_key_from_url_trailing_id() {
