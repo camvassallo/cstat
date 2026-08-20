@@ -19,6 +19,7 @@ games → player_perfs → team_perfs   (load-bearing — a failure aborts the r
 forecasts → elo → torvik → torvik_games   (best-effort — logged, run continues)
 transfers_{year}                    (247 portal, 2 class years — best-effort)
 recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
+recruit_resolve                     (recruit → team / player joins, 3 class years)
 compute_all   (load-bearing)
 invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
@@ -33,6 +34,15 @@ the portal's, because a recruiting class first plays in the season after it
 signs; `recruit_commits_*` records **skipped** rather than failed for a class
 nobody has committed to yet, which is the normal state of the far class for
 much of its cycle.
+
+`recruit_resolve` is the exception to "best-effort" in that group: it makes no
+247 call, so it runs even when the token mint failed, and it is the only writer
+of `recruits.committed_team_id` — which the roster projection selects on. A pass
+that fails takes every recruit it would have resolved out of its team's
+projected roster, so it records a ledger row and degrades the run instead of
+logging a warning nobody reads. Its `rows` is the total resolved across both
+passes and all three class years; it trends toward 0 as the backlog drains, so
+a 0 on a night that ingested rows is the signal rather than the count itself.
 
 Window defaults to **yesterday..today (UTC)** so NatStat's overnight stat
 corrections are picked up. Torvik + `/elo` refresh **before** `compute_all`, so

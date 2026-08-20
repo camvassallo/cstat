@@ -1412,17 +1412,69 @@ impl<'a> SeasonIngester<'a> {
 
         // Resolution passes: `committed_school` text → `teams.id`, and recruit →
         // `players.id`. Pure DB work on rows already written — no 247 call — so
-        // they run even when the token mint above failed, and a failure here is
-        // a join gap rather than missing data.
+        // they run even when the token mint above failed.
         //
         // One year wider than the ingest window on the near side, and that year
         // is the point — see `recruits::nightly_resolve_class_years`.
+        //
+        // Recorded to the ledger like every other step, and a failure degrades
+        // the run. `resolve_team_joins` is the ONLY writer of
+        // `recruits.committed_team_id`, and the roster projection selects
+        // `WHERE r.committed_team_id IS NOT NULL` — so a pass that fails takes
+        // every recruit it would have resolved out of its team's projected
+        // roster. A warn-only failure would report a clean night while doing
+        // exactly the silent deletion the rest of this work exists to stop. The
+        // next night re-runs the same class years, so a transient error
+        // self-heals; the point of the ledger row is that a persistent one
+        // cannot hide.
+        //
+        // One row for the whole loop rather than six: `rows` is the total
+        // resolved across both passes and all three class years, which is the
+        // number worth watching over time — a healthy window trends toward 0 as
+        // the backlog drains, so a sudden 0 on a night that ingested rows is
+        // the signal, not the count itself.
+        let t0 = Utc::now();
+        let mut resolved_total: i64 = 0;
+        let mut resolve_err: Option<String> = None;
         for class_year in super::recruits::nightly_resolve_class_years(self.season) {
-            if let Err(e) = super::recruits::resolve_team_joins(self.pool, class_year).await {
-                warn!(class_year, error = %e, "recruit team-join resolution failed");
+            match super::recruits::resolve_team_joins(self.pool, class_year).await {
+                Ok(n) => resolved_total += n as i64,
+                Err(e) => {
+                    warn!(class_year, error = %e, "recruit team-join resolution failed");
+                    resolve_err.get_or_insert_with(|| format!("team joins ({class_year}): {e}"));
+                }
             }
-            if let Err(e) = super::recruits::resolve_player_joins(self.pool, class_year).await {
-                warn!(class_year, error = %e, "recruit player-join resolution failed");
+            match super::recruits::resolve_player_joins(self.pool, class_year).await {
+                Ok(n) => resolved_total += n as i64,
+                Err(e) => {
+                    warn!(class_year, error = %e, "recruit player-join resolution failed");
+                    resolve_err.get_or_insert_with(|| format!("player joins ({class_year}): {e}"));
+                }
+            }
+        }
+        match &resolve_err {
+            None => {
+                ledger
+                    .record(
+                        "recruit_resolve",
+                        StepStatus::Ok,
+                        Some(resolved_total),
+                        t0,
+                        None,
+                    )
+                    .await;
+            }
+            Some(msg) => {
+                ledger
+                    .record(
+                        "recruit_resolve",
+                        StepStatus::Failed,
+                        Some(resolved_total),
+                        t0,
+                        Some(msg),
+                    )
+                    .await;
+                failures.push(format!("recruit_resolve: {msg}"));
             }
         }
 
