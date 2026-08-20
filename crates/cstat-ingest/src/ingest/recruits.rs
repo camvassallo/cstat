@@ -370,10 +370,15 @@ pub async fn upsert_player(
             high_school   = COALESCE(EXCLUDED.high_school, recruits.high_school),
             previous_rank = COALESCE(EXCLUDED.previous_rank, recruits.previous_rank),
             committed_school_slug = COALESCE(EXCLUDED.committed_school_slug, recruits.committed_school_slug),
-            -- Provenance of the most recent fetch — always current.
             profile_url = COALESCE(EXCLUDED.profile_url, recruits.profile_url),
             photo_url   = COALESCE(EXCLUDED.photo_url, recruits.photo_url),
-            raw_player  = EXCLUDED.raw_player,
+            -- Frozen on the same rule as the columns it explains. `raw_player`
+            -- is the forensic copy of the record the parsed values came from,
+            -- so overwriting it on a settled class would destroy the only
+            -- remaining copy of the contemporary 247 record — the very thing
+            -- the freeze exists to keep — and leave an audit trail that no
+            -- longer reproduces its own row. NOT NULL, so no COALESCE needed.
+            raw_player  = CASE WHEN $24 THEN EXCLUDED.raw_player ELSE recruits.raw_player END,
             fetched_at  = NOW()
         "#,
     )
@@ -563,7 +568,8 @@ pub async fn upsert_commit(
             committed_school_slug = COALESCE(EXCLUDED.committed_school_slug, recruits.committed_school_slug),
             profile_url = COALESCE(EXCLUDED.profile_url, recruits.profile_url),
             photo_url   = COALESCE(EXCLUDED.photo_url, recruits.photo_url),
-            raw_player  = EXCLUDED.raw_player,
+            -- Frozen with the columns it explains — see `upsert_player`.
+            raw_player  = CASE WHEN $18 THEN EXCLUDED.raw_player ELSE recruits.raw_player END,
             fetched_at  = NOW()
         WHERE recruits.institution_group = 'commits'
         "#,

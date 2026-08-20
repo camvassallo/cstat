@@ -754,11 +754,24 @@ pub fn parse_commits_json(row: &Value) -> Option<RecruitRow> {
     let recruit_key = row.get("playerKey").and_then(Value::as_i64)?;
 
     let committed = jptr_str(row, "/committedInstitution/name");
-    let signed_flag = row
-        .get("earlySignee")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let status = commit_status_from(signed_flag, committed.is_some());
+    // This feed carries NO signing signal, so a commits-owned row is only ever
+    // `Committed` or `Uncommitted` — never `Signed`.
+    //
+    // Worth stating outright because the obvious candidate looks like one and
+    // is not: `earlySignee` reads false on 100/100 rows of the 2026 class, whose
+    // early period closed in November 2025, and `signedInstitution` — the field
+    // the rankings feed actually uses, present on 66 of its top 100 for the same
+    // class — is not a key on this feed at all. Deriving `signed` from
+    // `earlySignee` therefore produced a constant `false` wearing the costume of
+    // a real check.
+    //
+    // The consequence is a provenance asymmetry, not a wrong row:
+    // `commit_status` on a commits-owned row cannot express signing, while on a
+    // rankings-owned row it can. The projection is unaffected (it only tests
+    // `<> 'Uncommitted'`), but any UI that reads the Signed/Committed split as a
+    // confidence gradient is reading provenance on part of the table. See
+    // `docs/247_api.md`.
+    let status = commit_status_from(false, committed.is_some());
 
     let current_group = jptr_str(row, "/currentInstitution/group").unwrap_or_default();
     let high_school = if current_group.eq_ignore_ascii_case("College") {
@@ -1209,6 +1222,26 @@ mod tests {
             "pagination": { "pageCount": page_count },
             rows_key: rows,
         })
+    }
+
+    #[test]
+    fn commits_feed_never_claims_signed() {
+        // Pins the asymmetry rather than the accident: this feed has no signing
+        // field, so a row must come back `Committed` even when the row carries
+        // the flag that used to be read as one. If 247 ever adds a real signing
+        // signal, this test is the thing that should fail and force the choice
+        // to be made deliberately.
+        let row = serde_json::json!({
+            "playerKey": 12345,
+            "earlySignee": true,
+            "committedInstitution": { "name": "Duke" },
+        });
+        let parsed = parse_commits_json(&row).expect("row parses");
+        assert_eq!(parsed.commit_status.as_deref(), Some("Committed"));
+
+        let uncommitted = serde_json::json!({ "playerKey": 999 });
+        let parsed = parse_commits_json(&uncommitted).expect("row parses");
+        assert_eq!(parsed.commit_status.as_deref(), Some("Uncommitted"));
     }
 
     #[test]
