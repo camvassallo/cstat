@@ -448,7 +448,12 @@ export function fetchPlayers(params: {
 // played) season, read from the materialized `player_season_projection` table.
 // Returners/transfers link to their base-season detail page; freshmen (recruits)
 // have no player page and are non-linked.
-export type ProjectionSource = 'returning' | 'transfer' | 'freshman';
+// `uncertain` is the fourth cohort (issue #220): a player who is on the
+// projected roster only under the ceiling scenario — a declared-but-not-
+// withdrawn NBA draft entrant, or, since the NCAA's age-based 5-in-5 rule, a
+// senior whose extra year of eligibility is unsettled. Rendered with a `?`
+// rather than asserted as a returner.
+export type ProjectionSource = 'returning' | 'transfer' | 'freshman' | 'uncertain';
 
 export interface ProjectedPlayer {
   player_id: string;

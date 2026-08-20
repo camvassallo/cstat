@@ -1232,6 +1232,68 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // --- 7d. 247 transfer portal (best-effort) ---
+        // New in the 5-in-5 era. ROADMAP S5/P3 explicitly declined to schedule
+        // this, on two premises that were true when written and are not now:
+        //
+        //   1. "Zero in-season churn — the portal is a ~30-day spring window."
+        //      The NCAA's age-based eligibility rule (issue #220) opened a
+        //      second window: 51 players entered the 2026 portal between
+        //      2026-08-01 and 2026-08-19, 53 of the 56 that resolve to a cstat
+        //      player being `Sr`-labelled. There is no reason to assume it
+        //      closes at tipoff.
+        //   2. "Can't be autonomous — TFS_247_JWT expires and needs manual
+        //      recapture." `TfsClient::from_env_or_guest` mints a guest token
+        //      off the public portal page per run. No credential, no expiry.
+        //
+        // Best-effort on purpose: a 247 outage, or a page redesign that breaks
+        // the guest-token regex, must not degrade a game-night box-score
+        // refresh. It is also placed AFTER everything served-critical for the
+        // same reason.
+        //
+        // Two class years, not one. The portal class feeding season S is S-1,
+        // so in-season `self.season - 1` is the live one — but the November
+        // season flip and the March opening of the next class both straddle
+        // that boundary, and a single-year guess is wrong on one side of each.
+        // This is the same boundary that turns into served-critical failures in
+        // issue #248. Incremental mode short-circuits as soon as a page
+        // predates our cursor, so a quiet night is a couple of requests per
+        // year rather than the ~117 pages of a full sweep.
+        for portal_year in [self.season - 1, self.season] {
+            let t0 = Utc::now();
+            let step = format!("transfers_{portal_year}");
+            match crate::tfs::TfsClient::from_env_or_guest(portal_year).await {
+                Ok(client) => {
+                    match super::transfers::ingest_live(&client, self.pool, portal_year, true).await
+                    {
+                        Ok(rep) => {
+                            ledger
+                                .record(&step, StepStatus::Ok, Some(rep.upserts as i64), t0, None)
+                                .await;
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            warn!(season = self.season, portal_year, error = %msg,
+                                  "247 transfers refresh failed; portal may be stale");
+                            ledger
+                                .record(&step, StepStatus::Failed, None, t0, Some(&msg))
+                                .await;
+                            failures.push(format!("{step}: {msg}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    warn!(season = self.season, portal_year, error = %msg,
+                          "could not obtain a 247 token; skipping portal refresh");
+                    ledger
+                        .record(&step, StepStatus::Failed, None, t0, Some(&msg))
+                        .await;
+                    failures.push(format!("{step}: {msg}"));
+                }
+            }
+        }
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();

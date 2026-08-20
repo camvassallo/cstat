@@ -245,6 +245,11 @@ pub async fn run(
         for p in &projections {
             real_ids.extend(p.returning.iter().map(|r| r.player_id));
             real_ids.extend(p.arrivals.iter().map(|a| a.player_id));
+            // `uncertain` must be here too, or the write loop below silently
+            // drops them: a missing identity is a `continue`, which does not
+            // increment the row counter and so does not show up as a
+            // discrepancy in the run summary either.
+            real_ids.extend(p.uncertain.iter().map(|(u, _)| u.player_id));
         }
         let player_identity = fetch_player_identity(pool, &real_ids).await?;
 
@@ -306,11 +311,24 @@ pub async fn run(
             .await?;
         let mut player_rows = 0usize;
         for p in &projections {
+            // `uncertain` rides along with the two resolved cohorts (issue
+            // #220). Omitting it used to be harmless — the bucket held
+            // declared-but-not-withdrawn draft entrants, who mostly leave and
+            // whose bucket empties by late June. Under the NCAA 5-in-5 rule it
+            // holds seniors with unsettled eligibility, most of whom are
+            // expected to play, and dropping them reproduces the exact
+            // silent-deletion bug the rest of this work fixes: the team's band
+            // widens to acknowledge the uncertainty while the player vanishes
+            // from `/players?season=N+1`.
+            //
+            // Written with its own `source` so the UI can mark them `?` rather
+            // than assert them as returners (migration 052 widened the CHECK).
             for (row, source) in p
                 .returning
                 .iter()
                 .map(|r| (r, "returning"))
                 .chain(p.arrivals.iter().map(|a| (a, "transfer")))
+                .chain(p.uncertain.iter().map(|(u, _)| (u, "uncertain")))
             {
                 let Some((name, natstat_id)) = player_identity.get(&row.player_id) else {
                     // No players row (shouldn't happen for a composed roster

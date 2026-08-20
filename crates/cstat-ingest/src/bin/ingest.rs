@@ -418,6 +418,17 @@ enum Commands {
         dir: std::path::PathBuf,
     },
 
+    /// Load the hand-curated eligibility returns into `player_returns` —
+    /// players whose `class_year` says they graduated but who are coming back
+    /// under the NCAA 5-in-5 rule (issue #220). `granted` rows project as
+    /// ordinary returners; `contested` rows go to the uncertain (`?`) bucket
+    /// and widen the team's floor/ceiling band.
+    Returns {
+        /// Directory of `{year}_returns.json` files.
+        #[arg(long, default_value = "data/returns")]
+        dir: std::path::PathBuf,
+    },
+
     /// Print the offseason attrition worklist: `player_departures` rows that
     /// resolve to nobody (silent no-ops from a typo'd name), then the returners
     /// the projection currently assumes are coming back, ranked by CamPom.
@@ -997,7 +1008,10 @@ async fn main() -> Result<()> {
                     cstat_ingest::ingest::transfers::bootstrap_from_snapshot(&db.pool, year, &path)
                         .await?
                 } else {
-                    let tfs = cstat_ingest::TfsClient::from_env()?;
+                    // Guest-first: mints a token off the public portal page when
+                    // `TFS_247_JWT` is unset, so this runs with no credential at
+                    // all. A subscriber token still wins when present.
+                    let tfs = cstat_ingest::TfsClient::from_env_or_guest(year).await?;
                     match cstat_ingest::ingest::transfers::ingest_live(
                         &tfs,
                         &db.pool,
@@ -1075,6 +1089,25 @@ async fn main() -> Result<()> {
             println!(
                 "departures: {} exit(s) across {} year(s) loaded into player_departures. \
                  Run `departures-audit` to confirm they resolved to real roster players.",
+                total,
+                reports.len()
+            );
+        }
+
+        Commands::Returns { dir } => {
+            let reports = cstat_ingest::ingest::returns::bootstrap_from_dir(&db.pool, &dir).await?;
+            let total: usize = reports.iter().map(|r| r.rows).sum();
+            let contested: usize = reports.iter().map(|r| r.contested).sum();
+            for r in &reports {
+                println!(
+                    "returns {}: {} return(s), {} contested",
+                    r.year, r.rows, r.contested
+                );
+            }
+            println!(
+                "returns: {} return(s) across {} year(s) loaded into player_returns \
+                 ({contested} still contested). A row that resolves to nobody is a silent \
+                 no-op — confirm with `departures-audit`, which reports unmatched curation.",
                 total,
                 reports.len()
             );

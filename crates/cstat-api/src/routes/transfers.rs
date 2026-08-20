@@ -250,7 +250,23 @@ async fn transfer_list(
           -- view, which drops them. The rows stay in the table for the
           -- projection engine; this filter is display-only.
           AND status <> 'Withdrawn'
-        ORDER BY transfer_rank NULLS LAST, full_name
+        -- Rating first, rank as the tiebreak. `transfer_rank` alone buries the
+        -- most important half of a late-forming class: 247 freezes its portal
+        -- ranking after the spring window, so anyone entering later carries
+        -- `transfer_rank IS NULL` and fell to the bottom, ordered
+        -- ALPHABETICALLY among 1,023 other unranked rows. For the 2026 class
+        -- that put Mark Mitchell (rating 0.980) at position 1,220 of 1,542 and
+        -- JJ Starling (0.980) at 1,059, below hundreds of unrated players —
+        -- the NCAA's age-based 5-in-5 rule opened an August portal window and
+        -- every one of those entrants is unranked (issue #220).
+        --
+        -- `rating` is safe as the primary key because it is very nearly a
+        -- monotone restatement of the rank it replaces: over the 519 ranked
+        -- 2026 rows corr(transfer_rank, rating) = -0.963, on a shared 0.70-0.98
+        -- scale that also covers 414 of the unranked rows. So ranked players
+        -- keep essentially their 247 order while the late arrivals sort into
+        -- it on merit instead of by first name.
+        ORDER BY rating DESC NULLS LAST, transfer_rank NULLS LAST, full_name
         "#,
     )
     .bind(year)
