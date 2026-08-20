@@ -226,10 +226,10 @@ async fn transfer_list(
         ));
     }
 
-    // Pull every row for the requested portal class year. Ranked rows first
-    // (so the response is rank-ordered like the old top-N JSON), then the
-    // unranked tail by name. Frontend re-sorts by CamPom, so this ordering
-    // only matters for parity with the embedded-JSON era.
+    // Pull every row for the requested portal class year, ordered by 247's
+    // rating (see the ORDER BY note below for why rating and not rank). The
+    // frontend re-sorts by projected CamPom, so this ordering is only what a
+    // direct API consumer sees — there is no LIMIT, so it selects nothing.
     let transfers: Vec<TransferRow> = sqlx::query_as::<_, TransferRow>(
         r#"
         SELECT

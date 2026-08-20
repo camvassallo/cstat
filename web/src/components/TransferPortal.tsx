@@ -400,15 +400,12 @@ export default function TransferPortal({ year }: Props) {
       .then((r) => {
         if (canceled) return;
         // Sort by PROJECTED CamPom desc — the forward-looking ranking. Rows
-        // lacking either projection or 247 rank stay in the array but skip
-        // the rank counter so the displayed `rank_cstat` matches on-screen
-        // position. Tiebreak in the no-projection cohort uses source-season
-        // CamPom desc so those rows are at least internally sorted. The
-        // endpoint returns the full portal (including unranked-by-247
-        // entries) for the 2027-projection roster aggregator; those don't
-        // compete for a rank here. Δ247 reads directly off `rank_cstat`,
-        // so this switch propagates the projection-based interpretation
-        // into the value-vs-247 column too.
+        // with no projection stay in the array but skip the rank counter, so
+        // the displayed `rank_cstat` matches on-screen position; they sort
+        // last, which is what keeps `++i` below contiguous. Tiebreak in the
+        // no-projection cohort uses source-season CamPom desc so those rows
+        // are at least internally sorted. Having a 247 rank is NOT part of
+        // either test any more — see the `rank_cstat` note below.
         const sorted = [...r.transfers].sort((a, b) => {
           const ap = a.projected_campom_mean;
           const bp = b.projected_campom_mean;

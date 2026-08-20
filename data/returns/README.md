@@ -48,6 +48,25 @@ of it once his eligibility is settled.
 An unrecognized `status` is rejected by the loader before anything is written,
 so a typo can't half-apply a capture.
 
+## Check that a row did something
+
+The loader validates `status`, but it cannot validate `name` or `current_team`
+— those are matched to a roster player at *projection* time, so a misspelling
+produces a row that looks perfectly correct in the JSON and in the table while
+doing nothing at all, leaving the player deleted by the very inference the row
+was written to override. Same silent no-op as a typo'd departure.
+
+```bash
+cargo run --bin cstat-ingest -- departures-audit --year 2026
+```
+
+Section 2 of that report lists every `player_returns` row that failed to place
+its player, with the likely cause (unknown name → spelling; still counted as a
+departure → team string; wrong bucket → status). It exits 2 when any exist, so
+a scripted curation pass can't ship a dead row.
+`crates/cstat-core/tests/curated_returns.rs` asserts the same invariant against
+a local DB.
+
 ## Curate conservatively
 
 `status` is behavior-bearing and the senior class is large — 2026 carried 1,679

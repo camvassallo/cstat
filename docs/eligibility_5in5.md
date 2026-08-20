@@ -64,24 +64,32 @@ change to the served 27-feature roster-impact vector**.
 | 2 | 247 portal, non-withdrawn | observed | `Transferred` departure |
 | 3 | `player_returns` = `granted` | curated | **returning** |
 | 4 | `player_returns` = `contested` | curated | **uncertain** |
-| 5 | senior + portal withdrawal | derived | **uncertain** |
-| 6 | `class_year == 'Sr'` | inferred | `GraduatedSenior` departure |
-| 7 | draft list `gone` | observed | `DraftGone` departure |
+| 5 | draft list `gone` | observed | `DraftGone` departure |
+| 6 | senior + portal withdrawal | derived | **uncertain** |
+| 7 | `class_year == 'Sr'` | inferred | `GraduatedSenior` departure |
 | 8 | draft list `declared` | observed | uncertain |
 | 9 | — | | returning |
 
 The principle: **observations beat inferences, and curation beats both.** The
-senior check moved from position 2 to position 6 as part of this work; it is the
+senior check moved from position 2 to position 7 as part of this work; it is the
 only inferred channel and now sits below everything it can be checked against.
 
-Two ordering choices are load-bearing and should not be "tidied":
+Three ordering choices are load-bearing and should not be "tidied":
 
 * **Portal above returns (2 before 3/4).** A player who actually moved has
   moved, whatever a stale curated row says.
-* **Senior above the draft branches (6 before 7/8).** Moving it below
-  `declared_draft` would route a senior who merely declared into `uncertain` —
-  i.e. treat him as possibly returning — which changes roster math rather than
-  labels.
+* **Draft `gone` above the two stay-put channels (5 before 6/7).** A `gone` row
+  says the player is in the NBA. Below the withdrawal branch, a senior who
+  entered the portal, withdrew, and *then* went pro is bucketed `uncertain` —
+  materialized in his old team's ceiling and dropped from
+  `departures_cam_v3_sum`. That is a roster error, not a label error, and it
+  breaks the withdrawn-to-the-NBA half of `withdrawn_transfers_return.rs`.
+  Above the plain `Sr` branch it also relabels a drafted senior from
+  "Sr graduation" to `draft_gone`, which is roster-neutral and the informative
+  label.
+* **Senior above `declared` (7 before 8).** Moving it below `declared_draft`
+  would route a senior who merely declared into `uncertain` — i.e. treat him as
+  possibly returning — which changes roster math rather than labels.
 
 ## The one automatic signal
 
@@ -112,9 +120,18 @@ which is precisely what the fresh portal data surfaced. Routing him to
 | Loader | `cargo run --bin cstat-ingest -- returns` |
 | Read by | `fetch_player_returns` -> `compose_all_projections` |
 | Gate | `crates/cstat-core/tests/curated_returns.rs` |
+| Audit | `cargo run --bin cstat-ingest -- departures-audit --year N` (section 2) |
 
 `year` is the **base** season, matching `player_departures.year` and
 `draft_entrants.year`: rows in `2026_returns.json` affect the 2027 projection.
+
+A capture row is matched to a roster player by normalized `(name, team)` at
+projection time, so the loader cannot tell a typo from a real player — a
+misspelled row loads cleanly and then does nothing, leaving the player deleted
+by the inference it was written to override. `departures-audit` reports both
+captures in one pass for exactly this reason (it exits 2 when any row failed to
+place its player); a separate command for the returns half would be a safety net
+nobody runs.
 
 `fetch_player_returns` is called **inside** `compose_all_projections` rather
 than threaded through as a parameter, unlike `player_departures`. That is

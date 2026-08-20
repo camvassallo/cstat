@@ -429,9 +429,10 @@ enum Commands {
         dir: std::path::PathBuf,
     },
 
-    /// Print the offseason attrition worklist: `player_departures` rows that
-    /// resolve to nobody (silent no-ops from a typo'd name), then the returners
-    /// the projection currently assumes are coming back, ranked by CamPom.
+    /// Print the offseason attrition worklist: curated rows that resolve to
+    /// nobody (silent no-ops from a typo'd name) in `player_departures` and in
+    /// `player_returns`, then the returners the projection currently assumes
+    /// are coming back, ranked by CamPom.
     /// Read-only. Run it in July and skim the top of the list against the news.
     DeparturesAudit {
         /// Base season N — the completed season being projected into N+1.
@@ -1106,8 +1107,9 @@ async fn main() -> Result<()> {
             }
             println!(
                 "returns: {} return(s) across {} year(s) loaded into player_returns \
-                 ({contested} still contested). A row that resolves to nobody is a silent \
-                 no-op — confirm with `departures-audit`, which reports unmatched curation.",
+                 ({contested} still contested). A row that matches no roster player is a \
+                 silent no-op — run `departures-audit --year N` to confirm each one placed \
+                 its player; it exits 2 if any didn't.",
                 total,
                 reports.len()
             );

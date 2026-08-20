@@ -1467,13 +1467,15 @@ pub async fn compose_all_projections(
                 continue;
             }
             // --- Eligibility overrides on the senior inference (issue #220).
-            // Both of these sit above the `Sr` check and below the portal
-            // check: a player who actually moved has moved, whatever his
-            // eligibility, but a player who is STAYING must not be deleted by
-            // an inference that the 5-in-5 rule has invalidated.
+            // Two of them, and they straddle the draft check below: both sit
+            // above the `Sr` inference, because a player who is STAYING must
+            // not be deleted by a rule the 5-in-5 change invalidated — but only
+            // the hand-entered one outranks an observation that he left.
             //
-            // Curated row first — hand-entered beats derived, and a `granted`
-            // row is how an operator overrides the automatic signal below.
+            // Curated row first, matching the `left_program` precedent at the
+            // top of this loop: hand-entered beats every derived channel, and a
+            // `granted` row is how an operator overrides the automatic signal
+            // further down.
             if let Some((status, reason)) = eligibility_returns.get(&pid) {
                 match status {
                     ReturnStatus::Granted => {
@@ -1490,6 +1492,35 @@ pub async fn compose_all_projections(
                         ));
                     }
                 }
+                continue;
+            }
+            // Firm NBA draft departure? Checked here — above BOTH the derived
+            // withdrawn-senior signal and the `Sr` inference — for the same
+            // reason the portal check sits above them: a `gone` draft row is an
+            // observation that the player is in the NBA, and an observation
+            // beats an inference about his eligibility.
+            //
+            // Ordering it below the withdrawn-senior branch turned a real
+            // departure into a ceiling-roster player: a senior who entered the
+            // portal, withdrew, and then went pro would be bucketed
+            // `uncertain`, materialized in his old team's ceiling, and dropped
+            // from `departures_cam_v3_sum`. That is precisely the invariant
+            // `tests/withdrawn_transfers_return.rs` exists to hold (Santa
+            // Clara's Allen Graves), and under 5-in-5 the senior side of it is
+            // the common case rather than the rare one.
+            //
+            // It also sits above the plain `Sr` branch now, which relabels a
+            // graduating senior who was drafted from "Sr graduation" to
+            // `draft_gone`. Roster-neutral — he departs either way and the
+            // cam_v3 sum is unchanged — but it is the informative label, and it
+            // keeps the withdrawn-to-the-NBA half of that test true once a
+            // drafted player is `Sr`-labelled, which 5-in-5 makes routine.
+            if firm_draft_gone.contains(&pid) {
+                departures.push(DepartureReason::DraftGone {
+                    player_id: pid,
+                    name: name.clone(),
+                });
+                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
                 continue;
             }
             // Derived signal, no curation required: a senior who entered the
@@ -1517,15 +1548,6 @@ pub async fn compose_all_projections(
             }
             if is_senior {
                 departures.push(DepartureReason::GraduatedSenior {
-                    player_id: pid,
-                    name: name.clone(),
-                });
-                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
-                continue;
-            }
-            // Firm NBA draft departure?
-            if firm_draft_gone.contains(&pid) {
-                departures.push(DepartureReason::DraftGone {
                     player_id: pid,
                     name: name.clone(),
                 });
