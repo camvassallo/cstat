@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-08-20T04:00:30.001770Z",
+  "denominator": "roster_proj",
+  "headline": "raw (coach\u00d7program over-expectation)",
+  "n_team_seasons": 3623,
+  "n_coaches": 693,
+  "variance_components_raw": {
+    "s2w": 48.79662259729259,
+    "s2b": 3.8807292041413914,
+    "icc": 0.0736697854282749,
+    "k": 12.574085959210548,
+    "C": 611,
+    "N": 3541
+  },
+  "variance_components_debiased": {
+    "s2w": 49.19214155258075,
+    "s2b": 3.4432019366477826,
+    "icc": 0.06541615782088343,
+    "k": 14.286743112276772,
+    "C": 611,
+    "N": 3541
+  },
+  "guards": {
+    "icc": 0.0736697854282749,
+    "split_half_raw": 0.08595932476574077,
+    "split_half_debiased": 0.07459504999416312,
+    "split_half_n": 604,
+    "prestige_corr": 0.4427583284473318,
+    "passed": true
+  },
+  "debias_buckets": [
+    {
+      "q": 1,
+      "n": 905,
+      "roster_proj_lo": -33.66875457763672,
+      "roster_proj_hi": -10.005160331726074,
+      "mean_resid": -0.22270869723999695
+    },
+    {
+      "q": 2,
+      "n": 906,
+      "roster_proj_lo": -9.984234809875488,
+      "roster_proj_hi": -2.4283804893493652,
+      "mean_resid": -0.4207721414944984
+    },
+    {
+      "q": 3,
+      "n": 906,
+      "roster_proj_lo": -2.4180047512054443,
+      "roster_proj_hi": 9.818857192993164,
+      "mean_resid": -0.2137602112895375
+    },
+    {
+      "q": 4,
+      "n": 906,
+      "roster_proj_lo": 9.833596229553223,
+      "roster_proj_hi": 35.68706130981445,
+      "mean_resid": 0.2253302950995911
+    }
+  ],
+  "top15": [
+    {
+      "coach": "Kelvin Sampson",
+      "n": 11,
+      "raw_mean": 9.334337507594716,
+      "shrunk": 4.3555331375817365,
+      "ci_low": 1.5356343429957118,
+      "ci_high": 7.175431932167761,
+      "first_season": 2016,
+      "last_season": 2026
+    },
+    {
+      "coach": "Niko Medved",
+      "n": 11,
+      "raw_mean": 7.667936366254634,
+      "shrunk": 3.577966932620178,
+      "ci_low": 0.7580681380341532,
+      "ci_high": 6.397865727206202,
+      "first_season": 2016,
+      "last_season": 2026
+    },
+    {
+      "coach": "Kyle Smith",
+      "n": 11,
+      "raw_mean": 6.216582133553245,
+      "shrunk": 2.900744639151884,
+      "ci_low": 0.08084584456585908,
+      "ci_high": 5.720643433737909,
+      "first_season": 2016,
+      "last_season": 2026
+    },
+    {
+      "coach": "Eric Olen",
+      "n": 3,
+      "raw_mean": 14.401978294054667,
+      "shrunk": 2.7742196232461342,
+      "ci_low": -0.695142794061431,
+      "ci_high": 6.243582040553699,
+      "first_season": 2024,
+      "last_season": 2026
+    },
+    {
+      "coach": "Grant McCasland",
+      "n": 10,
+      "raw_mean": 6.254874856472016,
+      "shrunk": 2.7708208730019197,
+      "ci_low": -0.11085988149162729,
+      "ci_high": 5.652501627495466,
+      "first_season": 2017,
+      "last_season": 2026
+    },
+    {
+      "coach": "Rick Pitino",
+      "n": 8,
+      "raw_mean": 6.79734750688076,
+      "shrunk": 2.6430714911396556,
+      "ci_low": -0.37542502040869197,
+      "ci_high": 5.6615680026880035,
+      "first_season": 2016,
+      "last_season": 2026
+    },
+    {
+      "coach": "Ryan Odom",
+      "n": 10,
+      "raw_mean": 5.945567388534546,
+      "shrunk": 2.633802050403139,
+      "ci_low": -0.2478787040904078,
+      "ci_high": 5.515482804896687,
+      "first_season": 2017,
+      "last_season": 2026
+    },
+    {
+      "coach": "Dustin Kerns",
+      "n": 9,
+      "raw_mean": 6.109795697530111,
+      "shrunk": 2.548806071401375,
+      "ci_low": -0.39890390224761685,
+      "ci_high": 5.496516045050367,
+      "first_season": 2018,
+      "last_season": 2026
+    },
+    {
+      "coach": "Mark Few",
+      "n": 10,
+      "raw_mean": 5.673129138946534,
+      "shrunk": 2.513115768761311,
+      "ci_low": -0.36856498573223595,
+      "ci_high": 5.394796523254858,
+      "first_season": 2016,
+      "last_season": 2026
+    },
+    {
+      "coach": "Josh Schertz",
+      "n": 5,
+      "raw_mean": 8.702001819610595,
+      "shrunk": 2.4758049550366206,
+      "ci_low": -0.7901830105054852,
+      "ci_high": 5.741792920578726,
+      "first_season": 2022,
+      "last_season": 2026
+    },
+    {
+      "coach": "Darian DeVries",
+      "n": 7,
+      "raw_mean": 6.874146240204572,
+      "shrunk": 2.458302460799693,
+      "ci_low": -0.6363380589769281,
+      "ci_high": 5.552942980576313,
+      "first_season": 2019,
+      "last_season": 2026
+    },
+    {
+      "coach": "Leon Rice",
+      "n": 10,
+      "raw_mean": 5.459937953948975,
+      "shrunk": 2.4186750966637662,
+      "ci_low": -0.46300565782978076,
+      "ci_high": 5.300355851157313,
+      "first_season": 2016,
+      "last_season": 2026
+    },
+    {
+      "coach": "Craig Smith",
+      "n": 10,
+      "raw_mean": 5.033544359207154,
+      "shrunk": 2.229788780065044,
+      "ci_low": -0.6518919744285028,
+      "ci_high": 5.111469534558591,
+      "first_season": 2016,
+      "last_season": 2025
+    },
+    {
+      "coach": "Rick Barnes",
+      "n": 11,
+      "raw_mean": 4.7678235877643935,
+      "shrunk": 2.224733529696718,
+      "ci_low": -0.5951652648893067,
+      "ci_high": 5.044632324282743,
+      "first_season": 2016,
+      "last_season": 2026
+    },
+    {
+      "coach": "Tom Izzo",
+      "n": 11,
+      "raw_mean": 4.738736794211648,
+      "shrunk": 2.2111612228156026,
+      "ci_low": -0.6087375717704222,
+      "ci_high": 5.031060017401627,
+      "first_season": 2016,
+      "last_season": 2026
+    }
+  ]
+}
