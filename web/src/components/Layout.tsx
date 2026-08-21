@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { Suspense, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAvailableSeasons, usePageSeasons, useSeason, type Season } from './season';
+import RouteErrorBoundary, { ChunkReloadReset } from './RouteErrorBoundary';
 
 const navLinkClass = (active: boolean) =>
   `px-3 py-2 rounded text-sm font-medium transition-colors ${
@@ -318,7 +319,16 @@ export default function Layout() {
           context. Internal scroll regions (game log, roster, AG Grid) still
           create their own scroll context and remain swipeable. */}
       <main className="flex-1 px-3 sm:px-6 py-4 sm:py-6 max-w-7xl mx-auto w-full overflow-x-clip">
-        <Outlet />
+        {/* Route components are lazy-loaded (issue #267), so the Suspense
+            boundary sits here rather than around the whole app — the nav and
+            season picker stay mounted and interactive while the next route's
+            chunk downloads. */}
+        <RouteErrorBoundary>
+          <Suspense fallback={<div className="text-gray-400">Loading…</div>}>
+            <ChunkReloadReset />
+            <Outlet />
+          </Suspense>
+        </RouteErrorBoundary>
       </main>
     </div>
   );
