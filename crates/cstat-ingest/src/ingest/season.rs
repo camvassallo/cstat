@@ -901,6 +901,7 @@ impl<'a> SeasonIngester<'a> {
             compute: None,
             projections_year: None,
             game_projections: None,
+            game_projection_fetch_failures: 0,
             run_id: ledger.run_id(),
         };
 
@@ -1729,6 +1730,7 @@ impl<'a> SeasonIngester<'a> {
                                 .record(step, StepStatus::Ok, Some(r.written as i64), t0, None)
                                 .await;
                             report.game_projections = Some(r.written);
+                            report.game_projection_fetch_failures = r.fetch_failures;
                         }
                         Err(e) => {
                             let msg = e.to_string();
@@ -2254,6 +2256,14 @@ impl<'a> SeasonIngester<'a> {
             // games is a stale-input bug and sends every team page back to
             // projecting its schedule live.
             game_proj_line = match report.game_projections {
+                // The failure count rides along ONLY when non-zero: a sweep
+                // that covered less than it should is invisible otherwise —
+                // it keeps the previous night's rows, so the row-count gate
+                // sees no drop and the team pages keep rendering.
+                Some(n) if report.game_projection_fetch_failures > 0 => format!(
+                    "{n} games, {} fetches FAILED",
+                    report.game_projection_fetch_failures
+                ),
                 Some(n) => format!("{n} games"),
                 None => "not run".to_string(),
             },
@@ -2482,6 +2492,12 @@ pub struct NightlyReport {
     /// Completed-game projection rows written this run, or `None` when the
     /// sweep was skipped (`--no-compute`) or failed.
     pub game_projections: Option<usize>,
+    /// Per-team feature fetches the sweep could not complete. Surfaced in the
+    /// run summary rather than left to the tracing log: this pipeline has
+    /// already lost three nights to a `warn!` nobody was tailing (#186), and
+    /// the sweep's own failure mode is quiet by construction — it keeps the
+    /// previous rows, so neither the row-count gate nor the page notices.
+    pub game_projection_fetch_failures: usize,
     /// Grouping id for this run's rows in the `ingest_runs` ledger.
     pub run_id: Uuid,
 }
@@ -2522,7 +2538,17 @@ impl std::fmt::Display for NightlyReport {
             None => writeln!(f, "Projections: not run")?,
         }
         match self.game_projections {
-            Some(n) => writeln!(f, "Game projections: {n} completed games materialized")?,
+            Some(n) => {
+                write!(f, "Game projections: {n} completed games materialized")?;
+                if self.game_projection_fetch_failures > 0 {
+                    write!(
+                        f,
+                        " ({} team feature fetches FAILED)",
+                        self.game_projection_fetch_failures
+                    )?;
+                }
+                writeln!(f)?;
+            }
             None => writeln!(f, "Game projections: not run")?,
         }
         if let Some(c) = &self.compute {

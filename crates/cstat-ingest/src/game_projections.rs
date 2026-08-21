@@ -139,13 +139,11 @@ async fn fetch_preseason_adj_em(pool: &PgPool, season: i32) -> Result<HashMap<Uu
 
 /// Run `f` over `items` with at most [`FETCH_CONCURRENCY`] in flight.
 ///
-/// Returns the entries that resolved plus a count of the ones that did not. A
-/// team missing from the map has every game it played skipped, which is the
-/// same outcome the live path produces when feature extraction returns
-/// `RowNotFound` — but "this team has no stats row" and "the pool timed out"
-/// reach that outcome for very different reasons, and only the first is
-/// expected. Both are logged with the failing team id, and the count travels
-/// back so a run that quietly covered less than it should say so.
+/// Returns the entries that resolved plus a count of the ones that FAILED —
+/// which is deliberately not the same as the ones that are missing. A team
+/// absent from the map has every game it played skipped either way, but "this
+/// team has no stats row yet" is an ordinary state and "the pool timed out" is
+/// not, and only the second should raise the count the run summary reports.
 async fn fetch_map<T, F, Fut>(
     pool: &PgPool,
     what: &'static str,
@@ -157,27 +155,42 @@ where
     F: Fn(PgPool, Uuid) -> Fut,
     Fut: std::future::Future<Output = Result<T, sqlx::Error>> + Send + 'static,
 {
+    // Absent and Failed are kept apart all the way to the caller. Collapsing
+    // them into one `None` is what makes a counter meaningless: a team with no
+    // stats row yet is an ordinary state, and if it inflates the same number
+    // that a pool timeout does, the number can no longer be read as "something
+    // went wrong tonight".
+    enum Outcome<T> {
+        Found(Uuid, T),
+        Absent,
+        Failed,
+    }
+
     let sem = Arc::new(Semaphore::new(FETCH_CONCURRENCY));
-    let mut set: JoinSet<Option<(Uuid, T)>> = JoinSet::new();
+    let mut set: JoinSet<Outcome<T>> = JoinSet::new();
     for &id in items {
         // Building the future is not running it — the permit below is what
         // gates the query.
         let fut = f(pool.clone(), id);
         let sem = Arc::clone(&sem);
         set.spawn(async move {
-            let _permit = sem.acquire_owned().await.ok()?;
+            let Ok(_permit) = sem.acquire_owned().await else {
+                // Only reachable if the semaphore were closed, which it never
+                // is; treat it as a failure rather than as absence.
+                return Outcome::Failed;
+            };
             match fut.await {
-                Ok(v) => Some((id, v)),
+                Ok(v) => Outcome::Found(id, v),
+                // `RowNotFound` is the ordinary "this team has nothing to
+                // aggregate yet" case and stays at debug; anything else is an
+                // actual failure and is worth a line in the cron log.
+                Err(sqlx::Error::RowNotFound) => {
+                    tracing::debug!(what, team_id = %id, "no row; skipping team");
+                    Outcome::Absent
+                }
                 Err(e) => {
-                    // `RowNotFound` is the ordinary "this team has nothing to
-                    // aggregate yet" case and stays at debug; anything else is
-                    // an actual failure and is worth a line in the cron log.
-                    if matches!(e, sqlx::Error::RowNotFound) {
-                        tracing::debug!(what, team_id = %id, "no row; skipping team");
-                    } else {
-                        warn!(what, team_id = %id, error = %e, "feature fetch failed");
-                    }
-                    None
+                    warn!(what, team_id = %id, error = %e, "feature fetch failed");
+                    Outcome::Failed
                 }
             }
         });
@@ -186,13 +199,13 @@ where
     let mut failed = 0usize;
     while let Some(joined) = set.join_next().await {
         match joined {
-            Ok(Some((id, v))) => {
+            Ok(Outcome::Found(id, v)) => {
                 out.insert(id, v);
             }
-            // A `None` payload already logged above; a `JoinError` is a panic
-            // in the fetch task, which is not supposed to happen and must not
-            // be silent either.
-            Ok(None) => failed += 1,
+            Ok(Outcome::Absent) => {}
+            Ok(Outcome::Failed) => failed += 1,
+            // A `JoinError` is a panic in the fetch task, which is not
+            // supposed to happen and must not be silent either.
             Err(e) => {
                 warn!(what, error = %e, "feature fetch task panicked");
                 failed += 1;
