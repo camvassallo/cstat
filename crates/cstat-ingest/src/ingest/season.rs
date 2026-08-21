@@ -116,10 +116,10 @@ fn plan_pbp_heal(
 ///
 /// Two conditions, and both are load-bearing:
 ///
-/// - **The season holds zero PBP rows.** A lost night is partial by nature, so
-///   any season we genuinely ingested has rows. This is what keeps the real
-///   issue-#247 case — we hold the season and dropped some of it — always
-///   reported.
+/// - **The season holds no PBP at all.** A lost night is partial by nature, so
+///   any season we genuinely ingested has rows — one is enough. This is what
+///   keeps the real issue-#247 case — we hold the season and dropped some of it
+///   — always reported.
 /// - **The season is over**, its last game older than the heal cap. This is what
 ///   keeps the rollover disaster reported: if a new season's opening nights all
 ///   fail, that season also holds zero PBP, but it is *in progress*, the note is
@@ -132,12 +132,12 @@ fn plan_pbp_heal(
 /// the dates on the standing warnings line, so nothing is hidden — only the
 /// misleading call to action is dropped.
 fn season_pbp_not_held_here(
-    season_pbp_rows: i64,
+    season_has_pbp: bool,
     season_last_game: Option<chrono::NaiveDate>,
     today: chrono::NaiveDate,
     cap_days: i64,
 ) -> bool {
-    if season_pbp_rows > 0 {
+    if season_has_pbp {
         return false;
     }
     match season_last_game {
@@ -420,6 +420,38 @@ impl<'a> SeasonIngester<'a> {
         Ok(UpdateReport { ingest, compute })
     }
 
+    /// Whether this database holds *any* play-by-play for the season, and when
+    /// the season's last game was: the two inputs to
+    /// [`season_pbp_not_held_here`].
+    ///
+    /// `EXISTS`, not `COUNT(*)`: the predicate only asks zero-or-not, and on a
+    /// developer database `play_by_play` is tens of millions of rows (32.8M
+    /// across 12 seasons locally), so counting the season's ~3M would scan them
+    /// all to answer a boolean. `EXISTS` stops at the first row.
+    ///
+    /// Both come from one round trip. Returns `None` on a query error so the
+    /// caller can fall back to reporting the note — failing toward the alert is
+    /// the safe direction, since a suppressed note is a hole nobody hears about.
+    async fn season_pbp_holdings(&self) -> Option<(bool, Option<chrono::NaiveDate>)> {
+        sqlx::query_as(
+            r#"
+            SELECT
+                EXISTS (SELECT 1 FROM play_by_play p
+                          JOIN games g ON g.id = p.game_id
+                         WHERE g.season = $1),
+                (SELECT MAX(game_date) FROM games WHERE season = $1)
+            "#,
+        )
+        .bind(self.season)
+        .fetch_one(self.pool)
+        .await
+        .map_err(|e| {
+            warn!(season = self.season, error = %e, "could not read season PBP holdings");
+            e
+        })
+        .ok()
+    }
+
     /// In-season **nightly** orchestration — the production "keep the site
     /// current" path. Refreshes the full *served-critical* input set in
     /// dependency order, recomputes derived stats, and records every step to
@@ -445,33 +477,6 @@ impl<'a> SeasonIngester<'a> {
     /// mid-season: `teams` (the reference team list — new teams only appear at a
     /// season bootstrap) and `team_details` (TCR is unserved, W-L is overwritten
     /// by `compute_derived_game_fields`, and conference is static in-season).
-    /// How much play-by-play this database holds for the season, and when the
-    /// season's last game was: the two inputs to [`season_pbp_not_held_here`].
-    ///
-    /// Both come from one round trip. Returns `None` on a query error so the
-    /// caller can fall back to reporting the note — failing toward the alert is
-    /// the safe direction, since a suppressed note is a hole nobody hears about.
-    async fn season_pbp_holdings(&self) -> Option<(i64, Option<chrono::NaiveDate>)> {
-        let row: (i64, Option<chrono::NaiveDate>) = sqlx::query_as(
-            r#"
-            SELECT
-                (SELECT COUNT(*) FROM play_by_play p
-                   JOIN games g ON g.id = p.game_id
-                  WHERE g.season = $1),
-                (SELECT MAX(game_date) FROM games WHERE season = $1)
-            "#,
-        )
-        .bind(self.season)
-        .fetch_one(self.pool)
-        .await
-        .map_err(|e| {
-            warn!(season = self.season, error = %e, "could not read season PBP holdings");
-            e
-        })
-        .ok()?;
-        Some(row)
-    }
-
     pub async fn nightly(
         &self,
         start_date: &str,
@@ -701,14 +706,18 @@ impl<'a> SeasonIngester<'a> {
                         let not_held_here = if plan.unreachable.is_empty() {
                             false
                         } else {
-                            let (rows, last_game) =
-                                self.season_pbp_holdings().await.unwrap_or((1, None));
-                            season_pbp_not_held_here(
-                                rows,
-                                last_game,
-                                crate::today_utc(),
-                                MAX_PBP_HEAL_DAYS,
-                            )
+                            // `None` (query failed) falls through to `false`, i.e.
+                            // report the note — see `season_pbp_holdings`.
+                            self.season_pbp_holdings()
+                                .await
+                                .is_some_and(|(has_pbp, last_game)| {
+                                    season_pbp_not_held_here(
+                                        has_pbp,
+                                        last_game,
+                                        crate::today_utc(),
+                                        MAX_PBP_HEAL_DAYS,
+                                    )
+                                })
                         };
                         if not_held_here {
                             info!(
@@ -2633,7 +2642,7 @@ mod pbp_note_suppression_tests {
     #[test]
     fn finished_season_we_never_ingested_is_suppressed() {
         assert!(season_pbp_not_held_here(
-            0,
+            false,
             Some(nd("2026-04-06")),
             nd("2026-08-20"),
             CAP
@@ -2645,14 +2654,14 @@ mod pbp_note_suppression_tests {
     #[test]
     fn a_season_we_hold_is_never_suppressed() {
         assert!(!season_pbp_not_held_here(
-            3_258_166,
+            true,
             Some(nd("2026-04-06")),
             nd("2026-08-20"),
             CAP
         ));
-        // Even a single row means this database ingests PBP for the season.
+        // A single row is enough: this database ingests PBP for the season.
         assert!(!season_pbp_not_held_here(
-            1,
+            true,
             Some(nd("2026-04-06")),
             nd("2026-08-20"),
             CAP
@@ -2667,21 +2676,21 @@ mod pbp_note_suppression_tests {
     fn in_progress_season_with_zero_pbp_still_alerts() {
         // Season underway, last game two days ago: well inside the cap.
         assert!(!season_pbp_not_held_here(
-            0,
+            false,
             Some(nd("2026-11-10")),
             nd("2026-11-12"),
             CAP
         ));
         // Boundary: a last game exactly at the cap edge is still "in progress".
         assert!(!season_pbp_not_held_here(
-            0,
+            false,
             Some(nd("2026-11-05")),
             nd("2026-11-12"),
             CAP
         ));
         // One day past the cap flips it.
         assert!(season_pbp_not_held_here(
-            0,
+            false,
             Some(nd("2026-11-04")),
             nd("2026-11-12"),
             CAP
@@ -2692,6 +2701,11 @@ mod pbp_note_suppression_tests {
     /// to suppress and nothing to report.
     #[test]
     fn season_with_no_games_is_not_suppressed() {
-        assert!(!season_pbp_not_held_here(0, None, nd("2026-08-20"), CAP));
+        assert!(!season_pbp_not_held_here(
+            false,
+            None,
+            nd("2026-08-20"),
+            CAP
+        ));
     }
 }
