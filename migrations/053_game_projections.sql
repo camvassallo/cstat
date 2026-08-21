@@ -39,8 +39,13 @@ CREATE TABLE IF NOT EXISTS game_projections (
     away_team_id UUID NOT NULL REFERENCES teams(id),
 
     -- Prediction inputs that are properties of the matchup rather than the
-    -- teams. Persisted so a row can be spotted as stale if a game's venue or
-    -- conference flag is later corrected by ingest.
+    -- teams, and — together with the two team columns above — the sweep's
+    -- prune key. A row is deleted when it stops describing a completed game
+    -- as it now stands: scores nulled by a correction, or teams / venue /
+    -- conference rewritten under it by an ingest repair. Storing the inputs
+    -- is what lets that be a content check rather than a "did tonight's run
+    -- rewrite this row" check, which would make any transient error delete
+    -- correct rows.
     is_neutral BOOLEAN NOT NULL,
     is_conference BOOLEAN NOT NULL,
 

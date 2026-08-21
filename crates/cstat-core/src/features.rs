@@ -277,21 +277,39 @@ pub async fn get_roster_agg_pit(
     // Flatten the map into parallel arrays for UNNEST. Players with no pit
     // entry fall through the LEFT JOIN as NULL, matching how train-time
     // unmapped Torvik rows behave.
-    let (pids, gbpms, ogbpms, dgbpms): (Vec<Uuid>, Vec<f64>, Vec<f64>, Vec<f64>) = pit.iter().fold(
-        (
-            Vec::with_capacity(pit.len()),
-            Vec::with_capacity(pit.len()),
-            Vec::with_capacity(pit.len()),
-            Vec::with_capacity(pit.len()),
-        ),
-        |(mut p, mut g, mut o, mut d), (player_id, cam)| {
-            p.push(*player_id);
-            g.push(cam.cam_gbpm_v3_no_sos);
-            o.push(cam.ogbpm);
-            d.push(cam.dgbpm);
-            (p, g, o, d)
-        },
-    );
+    //
+    // SORTED BY player_id, and that is load-bearing rather than tidiness.
+    // `HashMap` iteration order varies between instances in the same process
+    // (each `RandomState` gets its own seed), so an unsorted flatten hands
+    // Postgres the `pit` CTE in a different row order on every call. The
+    // minutes-weighted `SUM(...)` below then accumulates in a different order,
+    // and floating-point addition is not associative — the aggregates differ
+    // in their last bits. Those last bits are not harmless: a feature sitting
+    // on a LightGBM split threshold takes a different branch, and the served
+    // margin jumps a discrete amount. Measured before this sort, one 2026
+    // matchup returned 16.8 or 17.1 points from the *same* request depending
+    // on the run, and the neutral path (which builds two maps) produced four
+    // distinct answers across fifteen calls. A stable order makes the pit
+    // path reproducible, which is also what lets the precomputed
+    // `game_projections` row equal a live recomputation (#266).
+    let mut ordered: Vec<(&Uuid, &PitCamPom)> = pit.iter().collect();
+    ordered.sort_unstable_by_key(|(player_id, _)| *player_id);
+    let (pids, gbpms, ogbpms, dgbpms): (Vec<Uuid>, Vec<f64>, Vec<f64>, Vec<f64>) =
+        ordered.into_iter().fold(
+            (
+                Vec::with_capacity(pit.len()),
+                Vec::with_capacity(pit.len()),
+                Vec::with_capacity(pit.len()),
+                Vec::with_capacity(pit.len()),
+            ),
+            |(mut p, mut g, mut o, mut d), (player_id, cam)| {
+                p.push(*player_id);
+                g.push(cam.cam_gbpm_v3_no_sos);
+                o.push(cam.ogbpm);
+                d.push(cam.dgbpm);
+                (p, g, o, d)
+            },
+        );
 
     sqlx::query_as::<_, RosterAgg>(
         r#"

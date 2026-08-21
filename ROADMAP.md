@@ -1778,6 +1778,24 @@ predated the pit path).
     feeds end-of-season values for 45 of the 49 features. Filed separately; it
     is a correctness question, not a latency one, and the precompute stores
     exactly what the live path already served.
+  - **Found and fixed on the way in: the point-in-time path was
+    nondeterministic.** `get_roster_agg_pit` flattened a `HashMap` into the
+    `pit` UNNEST arrays, and `HashMap` iteration order varies between instances
+    in one process, so Postgres summed the minutes-weighted roster aggregates
+    in a different order on every call. Floating-point addition is not
+    associative, the last bits moved, and a feature sitting on a LightGBM split
+    threshold flipped branches. Measured: one 2026 matchup returned **16.8 or
+    17.1** points from the *same* request depending on the run, and the neutral
+    path (which builds two cohorts) produced **four distinct answers across
+    fifteen calls** — and was not order-invariant between the two team
+    orderings, despite `combine_neutral` forcing exact antisymmetry on the pair
+    it was given. Sorting the flatten by `player_id` fixes it: 15/15 identical
+    on both paths, and neutral is exactly mirrored again. This was a live
+    serving bug, not a precompute one, but it is fatal to a precompute (a
+    stored row could never equal a live recomputation) and it is why the
+    "we predicted X" receipt was not previously trustworthy — the number
+    changed on reload. Guarded by
+    `game_projection_parity.rs::pit_predictions_are_reproducible`.
   - Shared-engine refactor that made it possible: the matchup prediction engine
     (venue semantics, neutral symmetrisation, win-prob calibration, preseason
     blend) moved from `cstat-api/src/routes/predict.rs` to

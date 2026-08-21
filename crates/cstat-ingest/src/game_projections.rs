@@ -88,8 +88,13 @@ pub struct SweepReport {
     /// `team_season_stats` row yet, or a game on the first representable date,
     /// which has no "day before").
     pub skipped: usize,
-    /// Rows deleted because this sweep no longer produces them.
+    /// Rows deleted because the game they describe is no longer a completed
+    /// game with those teams, venue and conference flag.
     pub pruned: usize,
+    /// Per-team feature fetches that did not resolve. Non-zero means the sweep
+    /// covered less than it should have; the affected games keep the previous
+    /// run's rows rather than losing them (see the prune).
+    pub fetch_failures: usize,
 }
 
 /// Every completed game in the season, in date order.
@@ -132,11 +137,21 @@ async fn fetch_preseason_adj_em(pool: &PgPool, season: i32) -> Result<HashMap<Uu
         .collect())
 }
 
-/// Run `f` over `items` with at most [`FETCH_CONCURRENCY`] in flight, keeping
-/// only the entries that resolved. A team whose fetch fails is simply absent
-/// from the map, and every game it played is skipped — the same outcome the
-/// live path produces when feature extraction returns `RowNotFound`.
-async fn fetch_map<T, F, Fut>(pool: &PgPool, items: &[Uuid], f: F) -> HashMap<Uuid, T>
+/// Run `f` over `items` with at most [`FETCH_CONCURRENCY`] in flight.
+///
+/// Returns the entries that resolved plus a count of the ones that did not. A
+/// team missing from the map has every game it played skipped, which is the
+/// same outcome the live path produces when feature extraction returns
+/// `RowNotFound` — but "this team has no stats row" and "the pool timed out"
+/// reach that outcome for very different reasons, and only the first is
+/// expected. Both are logged with the failing team id, and the count travels
+/// back so a run that quietly covered less than it should say so.
+async fn fetch_map<T, F, Fut>(
+    pool: &PgPool,
+    what: &'static str,
+    items: &[Uuid],
+    f: F,
+) -> (HashMap<Uuid, T>, usize)
 where
     T: Send + 'static,
     F: Fn(PgPool, Uuid) -> Fut,
@@ -151,16 +166,40 @@ where
         let sem = Arc::clone(&sem);
         set.spawn(async move {
             let _permit = sem.acquire_owned().await.ok()?;
-            fut.await.ok().map(|v| (id, v))
+            match fut.await {
+                Ok(v) => Some((id, v)),
+                Err(e) => {
+                    // `RowNotFound` is the ordinary "this team has nothing to
+                    // aggregate yet" case and stays at debug; anything else is
+                    // an actual failure and is worth a line in the cron log.
+                    if matches!(e, sqlx::Error::RowNotFound) {
+                        tracing::debug!(what, team_id = %id, "no row; skipping team");
+                    } else {
+                        warn!(what, team_id = %id, error = %e, "feature fetch failed");
+                    }
+                    None
+                }
+            }
         });
     }
     let mut out = HashMap::new();
+    let mut failed = 0usize;
     while let Some(joined) = set.join_next().await {
-        if let Ok(Some((id, v))) = joined {
-            out.insert(id, v);
+        match joined {
+            Ok(Some((id, v))) => {
+                out.insert(id, v);
+            }
+            // A `None` payload already logged above; a `JoinError` is a panic
+            // in the fetch task, which is not supposed to happen and must not
+            // be silent either.
+            Ok(None) => failed += 1,
+            Err(e) => {
+                warn!(what, error = %e, "feature fetch task panicked");
+                failed += 1;
+            }
         }
     }
-    out
+    (out, failed)
 }
 
 /// The season-invariant half of the feature inputs: one row per team, reused
@@ -172,21 +211,25 @@ struct SeasonCache {
 }
 
 impl SeasonCache {
-    async fn load(pool: &PgPool, season: i32, teams: &[Uuid]) -> Result<Self> {
-        let team_stats = fetch_map(pool, teams, |p, id| async move {
-            features::get_team_stats(&p, id, season).await
-        })
-        .await;
-        let form = fetch_map(pool, teams, |p, id| async move {
+    async fn load(pool: &PgPool, season: i32, teams: &[Uuid]) -> Result<(Self, usize)> {
+        let (team_stats, stats_failed) =
+            fetch_map(pool, "team_season_stats", teams, |p, id| async move {
+                features::get_team_stats(&p, id, season).await
+            })
+            .await;
+        let (form, form_failed) = fetch_map(pool, "rolling_form", teams, |p, id| async move {
             features::get_rolling_form(&p, id, season).await
         })
         .await;
         let preseason_adj_em = fetch_preseason_adj_em(pool, season).await?;
-        Ok(Self {
-            team_stats,
-            form,
-            preseason_adj_em,
-        })
+        Ok((
+            Self {
+                team_stats,
+                form,
+                preseason_adj_em,
+            },
+            stats_failed + form_failed,
+        ))
     }
 
     /// The preseason margin (home perspective) for a matchup, or `None` when
@@ -368,16 +411,6 @@ async fn write_rows(pool: &PgPool, season: i32, rows: &[OutRow]) -> Result<usize
 /// Sweep one season: recompute and persist every completed game's pre-game
 /// projection, then prune rows this run no longer produces.
 pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Result<SweepReport> {
-    // Read the start mark off the DATABASE clock, not the process clock. The
-    // prune below compares it against `computed_at`, which every row gets from
-    // Postgres `now()`; on a deployment where the app and the database sit on
-    // different hosts a few hundred ms of skew the wrong way would make every
-    // row this sweep just wrote look older than the sweep, and the prune would
-    // delete its own output.
-    let started: chrono::NaiveDateTime = sqlx::query_scalar("SELECT now()::timestamp")
-        .fetch_one(pool)
-        .await
-        .context("reading the database clock")?;
     let games = fetch_completed_games(pool, season).await?;
     let mut report = SweepReport::default();
     if games.is_empty() {
@@ -391,7 +424,8 @@ pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Re
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let cache = SeasonCache::load(pool, season, &teams).await?;
+    let (cache, fetch_failures) = SeasonCache::load(pool, season, &teams).await?;
+    report.fetch_failures = fetch_failures;
 
     // Group by cutoff, not by game date: the cutoff is what the point-in-time
     // cohort is keyed on, and it is the one thing worth paying for once.
@@ -423,11 +457,12 @@ pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Re
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
-        let rosters = fetch_map(pool, &day_teams, |p, id| {
+        let (rosters, roster_failed) = fetch_map(pool, "roster_agg_pit", &day_teams, |p, id| {
             let pit = Arc::clone(&pit);
             async move { features::get_roster_agg_pit(&p, id, season, &pit).await }
         })
         .await;
+        report.fetch_failures += roster_failed;
 
         let mut out = Vec::with_capacity(day.len());
         for g in day {
@@ -448,15 +483,43 @@ pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Re
         report.written += write_rows(pool, season, &out).await?;
     }
 
-    // Prune by "not refreshed this run" rather than deleting the season up
-    // front: a sweep that fails partway leaves the previous night's rows
-    // serving, instead of a hole in the middle of the team pages.
-    let pruned = sqlx::query("DELETE FROM game_projections WHERE season = $1 AND computed_at < $2")
-        .bind(season)
-        .bind(started)
-        .execute(pool)
-        .await
-        .context("pruning stale game_projections rows")?;
+    // Prune rows that no longer DESCRIBE a completed game as it now stands —
+    // not rows this particular run failed to refresh.
+    //
+    // The difference matters. A timestamp prune ("delete what I didn't rewrite
+    // tonight") turns any transient error into data loss: one pool timeout
+    // while fetching a team's season stats drops that team from the cache,
+    // skips all ~35 of its games, and then deletes 35 correct rows, sending
+    // its page back to the slow live path for a day. Keyed on the row's own
+    // content instead, a skipped game simply keeps last night's projection,
+    // which is exactly what the fallback would have recomputed anyway.
+    //
+    // The predicate deletes precisely the rows that have stopped being true:
+    // a game whose scores were nulled by a correction (postponed after the
+    // fact), and a game whose teams, venue or conference flag were rewritten
+    // under it — which is what those four columns are stored for. A deleted
+    // game needs no clause here; the `game_id` foreign key cascades.
+    let pruned = sqlx::query(
+        r#"
+        DELETE FROM game_projections gp
+        WHERE gp.season = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM games g
+              WHERE g.id = gp.game_id
+                AND g.season = gp.season
+                AND g.home_score IS NOT NULL
+                AND g.away_score IS NOT NULL
+                AND g.home_team_id = gp.home_team_id
+                AND g.away_team_id = gp.away_team_id
+                AND g.is_neutral_site = gp.is_neutral
+                AND COALESCE(g.is_conference, false) = gp.is_conference
+          )
+        "#,
+    )
+    .bind(season)
+    .execute(pool)
+    .await
+    .context("pruning stale game_projections rows")?;
     report.pruned = pruned.rows_affected() as usize;
 
     info!(
@@ -465,14 +528,17 @@ pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Re
         dates = report.dates,
         skipped = report.skipped,
         pruned = report.pruned,
+        fetch_failures = report.fetch_failures,
         "materialized completed-game projections"
     );
     if report.skipped > 0 {
         warn!(
             season,
             skipped = report.skipped,
-            "some completed games could not be projected (missing team stats, roster, or form); \
-             their schedule rows fall back to a live projection"
+            fetch_failures = report.fetch_failures,
+            "some completed games could not be projected; they keep the previous sweep's rows, \
+             or fall back to a live projection if they never had one. A non-zero fetch_failures \
+             means the cause was a failed query rather than absent data — see the warnings above"
         );
     }
     Ok(report)
@@ -487,6 +553,7 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, seasons: &[i32]) -> Resul
         total.dates += r.dates;
         total.skipped += r.skipped;
         total.pruned += r.pruned;
+        total.fetch_failures += r.fetch_failures;
     }
     Ok(total)
 }

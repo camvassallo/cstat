@@ -183,6 +183,61 @@ async fn batch_written_projections_match_the_live_path() {
 
 #[tokio::test]
 #[ignore = "requires a local DB with a played season and the ONNX bundles"]
+async fn pit_predictions_are_reproducible() {
+    // The point-in-time path was nondeterministic: `get_roster_agg_pit`
+    // flattened a `HashMap` into the `pit` UNNEST arrays, and `HashMap`
+    // iteration order varies between instances in one process, so Postgres
+    // summed the minutes-weighted aggregates in a different order every call.
+    // Floating-point addition is not associative, the last bits moved, and a
+    // feature sitting on a LightGBM split threshold flipped branches — one
+    // 2026 matchup returned 16.8 or 17.1 points from the same request
+    // depending on the run.
+    //
+    // That is a serving bug on its own, and it is fatal to a precompute: a
+    // stored row could never equal a live recomputation, and this file's
+    // parity test would flake rather than catch drift. The fix is a sorted
+    // flatten; this is the guard on it.
+    let pool = pool().await;
+    let predictor = predictor();
+    let season = season();
+
+    let sampled = sample(&pool, season).await;
+    assert!(
+        !sampled.is_empty(),
+        "no stored rows to compare — sweep first"
+    );
+
+    const REPEATS: usize = 5;
+    for s in sampled.iter().take(4) {
+        let as_of = s.game_date.pred_opt().expect("representable cutoff");
+        let mut seen: Vec<(f32, i32, i32)> = Vec::new();
+        for _ in 0..REPEATS {
+            let p = predict_projection(
+                &pool,
+                &predictor,
+                s.home_team_id,
+                s.away_team_id,
+                season,
+                s.is_neutral,
+                s.is_conference,
+                BlendClock::AsOf(as_of),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("live projection for {} failed: {e}", s.game_id));
+            seen.push((p.margin, p.home_score, p.away_score));
+        }
+        let first = seen[0];
+        assert!(
+            seen.iter().all(|&v| v == first),
+            "{} produced {REPEATS} runs that disagree: {seen:?} — the pit feature \
+             path has become order-dependent again",
+            s.game_id
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a local DB with a played season and the ONNX bundles"]
 async fn sweep_is_idempotent() {
     // The nightly re-runs this every night over the same played games. A second
     // pass must produce identical values, or the team page's Projected column
@@ -206,14 +261,25 @@ async fn sweep_is_idempotent() {
         after.len(),
         "sample size changed between sweeps"
     );
-    for (b, a) in before.iter().zip(after.iter()) {
-        assert_eq!(
-            b.game_id, a.game_id,
-            "sample ordering changed between sweeps"
-        );
+    // Keyed on game_id rather than compared position by position: `sample`
+    // builds its result from three UNION ALL branches with no top-level ORDER
+    // BY, and Postgres does not promise a stable row order for that. A
+    // positional zip would turn a plan change into a spurious failure that
+    // says nothing about idempotence.
+    let after_by_id: std::collections::HashMap<Uuid, &Sampled> =
+        after.iter().map(|s| (s.game_id, s)).collect();
+    for b in &before {
+        let a = after_by_id
+            .get(&b.game_id)
+            .unwrap_or_else(|| panic!("{} vanished from the sample on a re-sweep", b.game_id));
         assert_eq!(
             b.stored_margin, a.stored_margin,
             "margin moved on a re-sweep for {}",
+            b.game_id
+        );
+        assert_eq!(
+            b.stored_win_prob, a.stored_win_prob,
+            "win probability moved on a re-sweep for {}",
             b.game_id
         );
         assert_eq!(

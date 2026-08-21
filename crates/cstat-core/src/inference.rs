@@ -1136,16 +1136,6 @@ impl Predictor {
             .collect())
     }
 
-    /// Run the margin model and return TreeSHAP feature attributions.
-    ///
-    /// Margin comes from the ONNX session (fast, well-tested path); SHAP
-    /// values come from the parsed `.lgb` mirror via the canonical
-    /// Lundberg/Erion/Lee algorithm. Both are reading the same trained
-    /// LightGBM model — they agree to floating-point precision.
-    ///
-    /// Win probability is intentionally omitted — derive it from the
-    /// returned margin via the calibrated logistic in the API layer
-    /// (`PREDICT_SIGMA`) so the headline numbers stay self-consistent.
     /// Margin only — the end-of-season bundle's margin head, with neither the
     /// TreeSHAP attribution nor the win classifier.
     ///
@@ -1176,11 +1166,21 @@ impl Predictor {
         Ok(preds[0])
     }
 
+    /// Run the margin model and return TreeSHAP feature attributions.
+    ///
+    /// Margin comes from the ONNX session (fast, well-tested path); SHAP
+    /// values come from the parsed `.lgb` mirror via the canonical
+    /// Lundberg/Erion/Lee algorithm. Both are reading the same trained
+    /// LightGBM model — they agree to floating-point precision.
+    ///
+    /// Win probability is intentionally omitted — derive it from the
+    /// returned margin via the calibrated logistic in
+    /// `cstat_core::projection::margin_to_win_prob` so the headline numbers
+    /// stay self-consistent.
     pub fn predict_with_contributions(
         &self,
         features: &[f32; NUM_FEATURES],
     ) -> Result<PredictionWithContributions, ort::Error> {
-        // Margin via ONNX (single-row prediction).
         let predicted_margin = self.predict_margin(features)?;
 
         // SHAP attributions via TreeSHAP on the parsed .lgb. Promote to

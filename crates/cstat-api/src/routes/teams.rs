@@ -253,6 +253,17 @@ async fn team_detail(
         let Some(p) = stored.get(&entry.game_id) else {
             continue;
         };
+        // Re-check the played predicate against THIS response's schedule rows
+        // rather than trusting the row's existence. A game can be completed
+        // when the sweep runs and be corrected to postponed before the next
+        // one — scores nulled — and the stored row survives until that sweep
+        // prunes it. Serving it would put a retroactive "we predicted X"
+        // projection, labelled pre-game, on a game that has not been played.
+        // Falling through instead hands the row to the live path, which is
+        // what it got before this table existed.
+        if entry.team_score.is_none() || entry.opponent_score.is_none() {
+            continue;
+        }
         // Stored rows are in the home team's frame; flip when the requested
         // team was the visitor. Keyed off the stored `home_team_id` rather
         // than the schedule row's `is_home`, so a disagreement between the two
