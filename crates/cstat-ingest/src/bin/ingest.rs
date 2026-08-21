@@ -1020,6 +1020,17 @@ async fn main() -> Result<()> {
                 "game_projections: {} rows written across {} cutoff dates ({} skipped, {} pruned)",
                 report.written, report.dates, report.skipped, report.pruned
             );
+            // Same reason the nightly surfaces this: a sweep that could not
+            // read some teams' features covers less than it looks like it did,
+            // and it leaves the previous rows in place rather than a hole, so
+            // nothing else here would say so.
+            if report.fetch_failures > 0 {
+                println!(
+                    "  WARNING: {} team feature fetches FAILED — those games kept their \
+                     previous rows; re-run once the database is healthy",
+                    report.fetch_failures
+                );
+            }
         }
 
         Commands::MeasureBlendAccuracy { years } => {
