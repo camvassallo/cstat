@@ -90,13 +90,43 @@ export default class RouteErrorBoundary extends Component<
     console.error('Route render failed', error, info.componentStack);
   }
 
-  componentDidUpdate(prev: { resetKey: string }) {
-    // Navigating away from the route that threw clears the error. Guarded on
-    // `failed` so the normal path never calls setState here.
-    if (this.state.failed && prev.resetKey !== this.props.resetKey) {
+  componentDidUpdate(prev: { resetKey: string }, prevState: { failed: boolean }) {
+    // Navigating away from the route that threw clears the error.
+    //
+    // Gated on the PREVIOUS state, not the current one. React runs
+    // `componentDidUpdate` before `componentDidCatch` within a single commit,
+    // and `prev` there is the last COMMITTED props — so when a route throws
+    // synchronously during the navigation render, the new resetKey and the
+    // error arrive in the same commit and a current-state check would reset
+    // `failed` right back to false, re-render the crashing subtree and catch a
+    // second time. That is reachable: `React.lazy` caches a rejected import,
+    // so returning to a route whose chunk already failed throws with no
+    // intervening fallback commit. The double catch made a plain stale-tab
+    // reload also fire an #errors-web report, since the second pass saw the
+    // guard the first had just set. `prevState.failed` is false in the error
+    // commit and true only once the fallback has actually been on screen,
+    // which is precisely when a navigation should clear it.
+    if (prevState.failed && prev.resetKey !== this.props.resetKey) {
       this.setState({ failed: false, offline: false });
     }
   }
+
+  componentDidMount() {
+    window.addEventListener('online', this.handleOnline);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('online', this.handleOnline);
+  }
+
+  // Reconnecting clears the offline message on its own. Without this the only
+  // escape is a route change: the offline branch renders no Reload button (by
+  // design), and clicking the SAME nav link again produces an identical
+  // resetKey, so the reset above never fires and the message would sit there
+  // after the network came back.
+  private handleOnline = () => {
+    if (this.state.offline) this.setState({ failed: false, offline: false });
+  };
 
   render() {
     if (this.state.failed) {
