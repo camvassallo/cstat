@@ -462,7 +462,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - Generated `full_name` STORED column + 7 indexes (year+rank, year+status, source/destination keys, lower(full_name), last_update_date DESC, partial cstat_player_id reverse-join).
   - `cstat_player_id UUID REFERENCES players(id)`, resolved post-ingest via case-insensitive name + source-team match.
 
-  **Client** (`crates/cstat-ingest/src/tfs.rs`): lean `TfsClient` — JWT from `TFS_247_JWT` env var, token-bucket rate limiter defaulting to 1 req/sec (configurable via `TFS_247_RATE_PER_HOUR`), 30s request timeout, exponential backoff on 5xx/429 (max 4 retries), short-circuit on 401/403 with `JwtExpired`, polite User-Agent (`cstat-ingest/0.1 (+https://camalytics.org)`).
+  **Client** (`crates/cstat-ingest/src/tfs.rs`): lean `TfsClient` — JWT from `TFS_247_JWT` env var, token-bucket rate limiter defaulting to 1 req/sec (configurable via `TFS_247_RATE_PER_HOUR`), 30s request timeout, exponential backoff on 5xx/429 (max 4 retries), short-circuit on 401/403 with `JwtExpired`, self-identifying User-Agent (`cstat-ingest/0.1`).
 
   **Ingest module** (`crates/cstat-ingest/src/ingest/transfers.rs`):
   - `ingest_live(client, pool, year, incremental)` — paginate the full ~105 pages with optional cursor short-circuit on `--incremental`.

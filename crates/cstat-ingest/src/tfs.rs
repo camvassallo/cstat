@@ -29,7 +29,12 @@ use tracing::{info, warn};
 
 const BASE_URL: &str = "https://ipa.247sports.com/rdb/v1/transfers/";
 const DEFAULT_PAGE_SIZE: u32 = 25;
-const USER_AGENT: &str = "cstat-ingest/0.1 (+https://camalytics.org)";
+/// Names the client without a contact URL, matching `torvik.rs`'s `cstat/0.1`
+/// and `client.rs`'s `cstat/0.1.0`. Distinct enough for an operator to identify
+/// and rate-limit or block this ingest specifically; this is not a browser
+/// impersonation (see [`GUEST_PAGE_UA`] below for the one place that is, and
+/// why).
+const USER_AGENT: &str = "cstat-ingest/0.1";
 
 /// Public portal page whose bootstrap JSON embeds a server-minted **guest**
 /// JWT. `{year}` is the portal class year. Fetched with a browser UA — the

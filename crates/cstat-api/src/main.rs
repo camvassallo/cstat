@@ -198,6 +198,11 @@ async fn boot_and_serve() -> Result<()> {
         .route("/sitemap-teams.xml", get(routes::sitemap::teams))
         .route("/sitemap-players.xml", get(routes::sitemap::players))
         .route("/sitemap-coaches.xml", get(routes::sitemap::coaches))
+        // ServeDir would serve this file raw, i.e. with no canonical and with
+        // index.html's static homepage og:url — a second indexable URL for the
+        // homepage, on both hosts. Route it through the injector, which folds
+        // its canonical onto "/".
+        .route("/index.html", get(routes::meta::spa_document))
         .route("/players/{id}", get(routes::meta::player_document))
         .route("/teams/{id}", get(routes::meta::team_document))
         .route("/coaches/{id}", get(routes::meta::coach_document))
