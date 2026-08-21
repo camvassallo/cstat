@@ -1,4 +1,5 @@
 import { Component, useEffect, type ErrorInfo, type ReactNode } from 'react';
+import { reportCaughtError } from '../lib/errorReporter';
 
 // One-shot reload guard. Keyed in sessionStorage so a chunk that is genuinely
 // missing (rather than merely stale) can't put the tab in a reload loop.
@@ -27,11 +28,16 @@ function isChunkLoadError(error: unknown): boolean {
  * just an out-of-date tab — so we reload once, which picks up the new
  * index.html and its new chunk hashes.
  *
- * Anything that is not a chunk-load failure is a real crash: render a plain
- * message and let React's default handling report it.
+ * Anything else is a real crash: report it (see `reportCaughtError` — a
+ * boundary otherwise swallows it) and render a message.
+ *
+ * `resetKey` must change whenever the route does. This boundary is mounted in
+ * `Layout`, ABOVE `<Outlet />`, so it outlives every navigation: without a
+ * reset, one bad route would leave the error UI in place for the whole site
+ * until a manual reload, including on routes that render perfectly well.
  */
 export default class RouteErrorBoundary extends Component<
-  { children: ReactNode },
+  { children: ReactNode; resetKey: string },
   { failed: boolean }
 > {
   state = { failed: false };
@@ -55,8 +61,20 @@ export default class RouteErrorBoundary extends Component<
         window.location.reload();
         return;
       }
+      // A second failure on the same chunk is a missing asset, not a stale tab.
+      // Worth reporting: it means a deploy shipped an index.html referencing a
+      // chunk that isn't being served.
     }
+    reportCaughtError(error, info.componentStack ?? undefined);
     console.error('Route render failed', error, info.componentStack);
+  }
+
+  componentDidUpdate(prev: { resetKey: string }) {
+    // Navigating away from the route that threw clears the error. Guarded on
+    // `failed` so the normal path never calls setState here.
+    if (this.state.failed && prev.resetKey !== this.props.resetKey) {
+      this.setState({ failed: false });
+    }
   }
 
   render() {

@@ -132,13 +132,41 @@ fn is_immutable_asset_path(path: &str) -> bool {
     path.starts_with("/assets/")
 }
 
+/// Whether a response is the SPA HTML shell rather than the file that was asked
+/// for. `ServeDir` is wired with `.fallback(ServeFile::new(index.html))` so a
+/// path it cannot find yields `index.html` with a 200 — right for client-side
+/// routes (`/predict`, `/teams/<id>`), wrong for `/assets/*`, which are real
+/// files and never routes.
+fn is_spa_html_fallback(resp: &Response) -> bool {
+    resp.headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"))
+}
+
 /// Long-cache content-hashed SPA build assets (`/assets/*`). Applied app-wide
 /// (outermost) so it wraps the static fallback service; a no-op on every other
 /// path, including `/api/*` (which carry their own short-TTL `Cache-Control`).
+///
+/// A missing `/assets/*` is turned into a 404 rather than being allowed through
+/// as the HTML shell. Both halves of that matter, and the combination is what
+/// makes it severe. `ServeDir`'s fallback answers an unknown hashed chunk with
+/// `200 text/html`, and the immutable stamp below keyed only on the `/assets/`
+/// prefix — so a CDN would cache `index.html` under a **live** chunk URL for a
+/// year and every visitor behind that edge would get a permanently broken app.
+/// Dropping only the header is not enough: Cloudflare caches `.js` by extension
+/// on its own, so the response has to stop being a success. Reachable during a
+/// rolling deploy, when a client holding the new `index.html` can have its chunk
+/// request routed to a container still serving the old build — and route
+/// code-splitting (issue #267) took the app from 2 hashed URLs fetched with the
+/// document to ~35 fetched lazily, long afterwards.
 pub async fn static_asset_cache(req: Request, next: Next) -> Response {
     let is_asset = is_immutable_asset_path(req.uri().path());
     let mut resp = next.run(req).await;
     if is_asset && resp.status().is_success() {
+        if is_spa_html_fallback(&resp) {
+            return StatusCode::NOT_FOUND.into_response();
+        }
         resp.headers_mut().insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static(IMMUTABLE_ASSET_CACHE_CONTROL),
@@ -352,6 +380,25 @@ mod tests {
         assert!(!is_immutable_asset_path("/favicon.svg"));
         // API paths carry their own short-TTL header, not the immutable one.
         assert!(!is_immutable_asset_path("/api/teams/rankings"));
+    }
+
+    #[test]
+    fn spa_html_fallback_is_detected_by_content_type() {
+        let with_ct = |ct: &str| {
+            let mut r = StatusCode::OK.into_response();
+            r.headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_str(ct).unwrap());
+            r
+        };
+        // A missing /assets/* falls through to index.html — the case that must
+        // never be stamped immutable (see `static_asset_cache`).
+        assert!(is_spa_html_fallback(&with_ct("text/html")));
+        assert!(is_spa_html_fallback(&with_ct("text/html; charset=utf-8")));
+        // Real build assets are served as themselves and stay cacheable.
+        assert!(!is_spa_html_fallback(&with_ct("text/javascript")));
+        assert!(!is_spa_html_fallback(&with_ct("text/css")));
+        // No content-type at all is not a reason to reject.
+        assert!(!is_spa_html_fallback(&StatusCode::OK.into_response()));
     }
 
     #[test]

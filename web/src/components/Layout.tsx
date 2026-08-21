@@ -323,7 +323,7 @@ export default function Layout() {
             boundary sits here rather than around the whole app — the nav and
             season picker stay mounted and interactive while the next route's
             chunk downloads. */}
-        <RouteErrorBoundary>
+        <RouteErrorBoundary resetKey={pathname + search}>
           <Suspense fallback={<div className="text-gray-400">Loading…</div>}>
             <ChunkReloadReset />
             <Outlet />

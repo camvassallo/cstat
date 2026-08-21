@@ -70,6 +70,30 @@ function report(r: ClientErrorReport): void {
 }
 
 /**
+ * Report an error that a React error boundary caught.
+ *
+ * A boundary changes which reporting path React takes, and only one of the two
+ * reaches the listeners above. An UNCAUGHT error goes through
+ * `defaultOnUncaughtError` -> `reportGlobalError`, which fires the window
+ * `error` event; a CAUGHT one goes through `defaultOnCaughtError`, which only
+ * calls `console.error` (react-dom 19.2.4). So adding `RouteErrorBoundary`
+ * would have silently taken every route crash out of #errors-web unless the
+ * boundary reports it itself. Routed through the same `report` as the global
+ * path, so the dedup and per-load cap still apply.
+ */
+export function reportCaughtError(error: unknown, componentStack?: string): void {
+  const err = error instanceof Error ? error : null
+  report({
+    kind: 'error',
+    message: err?.message || String(error) || 'Unknown error',
+    source: '',
+    stack: [err?.stack, componentStack].filter(Boolean).join('\n'),
+    page: window.location.href,
+    user_agent: navigator.userAgent,
+  })
+}
+
+/**
  * Install the global `error` / `unhandledrejection` listeners. Call once at
  * startup, before the app mounts. Idempotent-safe to call once.
  */
