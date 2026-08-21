@@ -20,7 +20,13 @@ function isChunkLoadError(error: unknown): boolean {
     /Failed to fetch dynamically imported module/i.test(msg) ||
     /error loading dynamically imported module/i.test(msg) ||
     /Importing a module script failed/i.test(msg) ||
-    /ChunkLoadError/i.test(msg)
+    /ChunkLoadError/i.test(msg) ||
+    // Vite's preload helper rejects with this when a chunk's own stylesheet
+    // fails. Latent today — Tailwind emits one eagerly-linked index-*.css and
+    // no route chunk carries CSS — but the moment a lazy route imports a
+    // stylesheet, Vite splits one out and a stale tab hits this instead. Left
+    // unmatched it would skip the reload and report on the FIRST failure.
+    /Unable to preload CSS/i.test(msg)
   );
 }
 
@@ -45,9 +51,9 @@ function isChunkLoadError(error: unknown): boolean {
  */
 export default class RouteErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
-  { failed: boolean; offline: boolean }
+  { failed: boolean; offline: boolean; checking: boolean }
 > {
-  state = { failed: false, offline: false };
+  state = { failed: false, offline: false, checking: false };
 
   static getDerivedStateFromError() {
     return { failed: true };
@@ -55,15 +61,21 @@ export default class RouteErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     if (isChunkLoadError(error)) {
-      // Offline is the OTHER reason a dynamic import fails, and reloading is
-      // the worst available response to it. Before code splitting, in-app
-      // navigation needed no network for JS, so a user on flaky wifi or in a
-      // tunnel kept a working app and only data fetches failed. Reloading now
-      // would throw that away: the reload is itself a network navigation, it
-      // fails too, and the browser replaces the app with its own error page —
-      // permanent loss of a loaded app for a transient condition. Leave the
-      // guard unset and nothing reported: this is the user's network, not a
-      // deploy, and it will be a stale tab again next time.
+      // A dead network is the OTHER reason a dynamic import fails, and
+      // reloading is the worst available response to it. Before code
+      // splitting, in-app navigation needed no network for JS, so a user on
+      // flaky wifi or in a tunnel kept a working app and only data fetches
+      // failed. Reloading throws that away: the reload is itself a network
+      // navigation, it fails too, and the browser replaces the app with its
+      // own error page — permanent loss of a loaded app for a transient
+      // condition.
+      //
+      // `navigator.onLine === false` is a fast path, not the test. It only
+      // reports whether an interface exists, so it is TRUE on a captive
+      // portal, a dead uplink, hotel wifi, and whenever the origin alone is
+      // unreachable — which is most of what "offline" means in practice. So
+      // when it claims we are online we confirm by actually reaching the
+      // origin before discarding the app; see `reloadIfOriginReachable`.
       if (navigator.onLine === false) {
         this.setState({ offline: true });
         return;
@@ -72,14 +84,14 @@ export default class RouteErrorBoundary extends Component<
       let alreadyReloaded = false;
       try {
         alreadyReloaded = sessionStorage.getItem(key) === '1';
-        sessionStorage.setItem(key, '1');
       } catch {
         // Private mode / storage disabled — fall through to the message rather
         // than risk an unguarded reload loop.
         alreadyReloaded = true;
       }
       if (!alreadyReloaded) {
-        window.location.reload();
+        this.setState({ checking: true });
+        this.reloadIfOriginReachable(key);
         return;
       }
       // A second failure on the same chunk is a missing asset, not a stale tab.
@@ -107,8 +119,34 @@ export default class RouteErrorBoundary extends Component<
     // commit and true only once the fallback has actually been on screen,
     // which is precisely when a navigation should clear it.
     if (prevState.failed && prev.resetKey !== this.props.resetKey) {
-      this.setState({ failed: false, offline: false });
+      this.setState({ failed: false, offline: false, checking: false });
     }
+  }
+
+  /**
+   * Reload only once the origin actually answers.
+   *
+   * The reload exists to recover a tab left stale by a deploy, and that is only
+   * worth doing if there is a server to reload from. A HEAD of the shell is one
+   * round trip on a path that is already an error, and it separates the two
+   * cases `navigator.onLine` cannot: a real deploy (origin answers, reload
+   * recovers) from a dead connection (nothing answers, reloading would destroy
+   * a working app). `redirected` catches the captive portal that returns 200
+   * for someone else's page; over HTTPS most portals fail the fetch outright.
+   *
+   * The guard is written only on the branch that actually reloads, so a failed
+   * probe does not spend this route's single retry.
+   */
+  private reloadIfOriginReachable(key: string) {
+    fetch('/index.html', { method: 'HEAD', cache: 'no-store' })
+      .then((res) => {
+        if (!res.ok || res.redirected) throw new Error('origin unreachable');
+        sessionStorage.setItem(key, '1');
+        window.location.reload();
+      })
+      .catch(() => {
+        this.setState({ offline: true, checking: false });
+      });
   }
 
   componentDidMount() {
@@ -119,13 +157,23 @@ export default class RouteErrorBoundary extends Component<
     window.removeEventListener('online', this.handleOnline);
   }
 
-  // Reconnecting clears the offline message on its own. Without this the only
-  // escape is a route change: the offline branch renders no Reload button (by
-  // design), and clicking the SAME nav link again produces an identical
-  // resetKey, so the reset above never fires and the message would sit there
-  // after the network came back.
+  // Reconnecting retries on its own. Without this the only escape is a route
+  // change: the offline branch renders no Reload button (by design), and
+  // clicking the SAME nav link again produces an identical resetKey, so the
+  // reset above never fires and the message would sit there after the network
+  // came back.
+  //
+  // Note what the retry actually is. `React.lazy` stores a rejection
+  // permanently, so clearing the state re-renders the same rejected element,
+  // it throws again, and recovery goes through the reload path above — a full
+  // page load, not an in-place re-import. That is the only thing that can work,
+  // and it is now gated on the origin answering, which matters most here: the
+  // `online` event fires exactly when a flapping connection is likeliest to
+  // drop again.
   private handleOnline = () => {
-    if (this.state.offline) this.setState({ failed: false, offline: false });
+    if (this.state.offline) {
+      this.setState({ failed: false, offline: false, checking: false });
+    }
   };
 
   render() {
@@ -135,6 +183,11 @@ export default class RouteErrorBoundary extends Component<
       // their behalf: a reload with no network replaces the still-working app
       // with the browser's error page. Routes already in memory still work, so
       // say so and leave the nav as the way out.
+      // Probe in flight: say nothing actionable yet. Rendering the Reload
+      // button here would offer the very action we are still deciding is safe.
+      if (this.state.checking) {
+        return <div className="text-gray-400">Loading…</div>;
+      }
       if (this.state.offline) {
         return (
           <div className="text-gray-400">
