@@ -87,7 +87,7 @@ const JSON_COMMITS_URL: &str = "https://ipa.247sports.com/rdb/v1/commits/";
 /// to ~8 requests without asking for an unusually large page.
 const JSON_PAGE_SIZE: u32 = 100;
 const RECRUITS_VIEW_PATH: &str = "~/Views/SkyNet/PlayerSportRanking/_SimpleSetForSeason.ascx";
-const USER_AGENT: &str = "cstat-ingest/0.1 (+https://campom.org)";
+const USER_AGENT: &str = "cstat-ingest/0.1 (+https://camalytics.org)";
 
 /// Same self-imposed politeness ceiling as [`crate::tfs::TfsClient`]: 1 req/sec
 /// by default, overridable via `TFS_247_RATE_PER_HOUR`. The two clients share

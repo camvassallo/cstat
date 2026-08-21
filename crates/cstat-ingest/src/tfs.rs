@@ -29,7 +29,7 @@ use tracing::{info, warn};
 
 const BASE_URL: &str = "https://ipa.247sports.com/rdb/v1/transfers/";
 const DEFAULT_PAGE_SIZE: u32 = 25;
-const USER_AGENT: &str = "cstat-ingest/0.1 (+https://campom.org)";
+const USER_AGENT: &str = "cstat-ingest/0.1 (+https://camalytics.org)";
 
 /// Public portal page whose bootstrap JSON embeds a server-minted **guest**
 /// JWT. `{year}` is the portal class year. Fetched with a browser UA — the

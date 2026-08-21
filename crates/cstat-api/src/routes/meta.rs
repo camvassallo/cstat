@@ -9,14 +9,23 @@
 //! shared player/team/coach link unfurls with that entity's name and stats.
 //!
 //! Robustness: a non-UUID segment (e.g. `/players/compare`), a missing entity,
-//! or a DB error all fall back to serving the default `index.html` unchanged —
-//! React still mounts and renders the page normally. The image stays the static
-//! default card (per-entity generated images are a later phase; see
+//! or a DB error all fall back to the default `index.html` head — React still
+//! mounts and renders the page normally. The image stays the static default card
+//! (per-entity generated images are a later phase; see
 //! `docs/seo_social_previews_plan.md`).
+//!
+//! `spa_document` applies the same injection to every OTHER page route (`/`,
+//! `/players`, `/predict`, `/portle`, …): those keep the file's default
+//! title/description but get a `rel="canonical"` + `og:url` built from the
+//! request path. That canonical is not cosmetic. The site answers on both
+//! `camalytics.org` and `campom.org` — the old brand stays open rather than
+//! being 301'd away (`docs/domain_migration.md`) — so the cross-domain canonical
+//! is the only thing telling a crawler the two hosts are one site and not two
+//! competing copies of it. Every document route must emit one.
 
 use axum::{
     extract::{Path, Query, State},
-    http::header,
+    http::{Uri, header},
     response::{Html, IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -41,6 +50,10 @@ pub struct SpaTemplate {
     /// `(prefix-incl-START-marker, suffix-incl-END-marker)`. `None` when the
     /// markers (or the file) are absent — handlers then serve `full` unchanged.
     region: Option<(String, String)>,
+    /// The marker region's own contents as shipped in `index.html` (title,
+    /// description, OG/Twitter defaults), minus its `og:url`. Re-emitted by
+    /// `render_default_with_canonical` alongside a path-correct URL pair.
+    default_meta: String,
 }
 
 impl SpaTemplate {
@@ -61,13 +74,19 @@ impl SpaTemplate {
                         "index.html has no SSR_META markers; per-page social meta disabled"
                     );
                 }
-                Self { full, region }
+                let default_meta = Self::default_meta(&full).unwrap_or_default();
+                Self {
+                    full,
+                    region,
+                    default_meta,
+                }
             }
             Err(e) => {
                 warn!(path, error = %e, "could not read index.html; per-page social meta disabled");
                 Self {
                     full: String::new(),
                     region: None,
+                    default_meta: String::new(),
                 }
             }
         }
@@ -82,6 +101,44 @@ impl SpaTemplate {
         Some((full[..start].to_string(), full[end..].to_string()))
     }
 
+    /// The marker region's contents with its `og:url` line dropped. The static
+    /// `og:url` in `index.html` names the homepage, which is wrong on every
+    /// other route, so the server re-emits a path-correct one next to the
+    /// canonical. `index.html` stays the source of truth for the *text*
+    /// defaults; the server owns the URL-shaped tags.
+    fn default_meta(full: &str) -> Option<String> {
+        let start = full.find(Self::START)? + Self::START.len();
+        let end = full.find(Self::END)?;
+        if end < start {
+            return None;
+        }
+        let kept: Vec<&str> = full[start..end]
+            .lines()
+            .map(|l| l.trim_end())
+            .filter(|l| !l.trim().is_empty() && !l.contains(r#"property="og:url""#))
+            .collect();
+        if kept.is_empty() {
+            return None;
+        }
+        Some(kept.join("\n").trim_start().to_string())
+    }
+
+    /// The default head plus a `rel="canonical"` + `og:url` for `path` — the
+    /// cross-domain signal that pins every serving host to one indexable URL.
+    /// Degrades to the unchanged file if the markers or the region are missing.
+    fn render_default_with_canonical(&self, path: &str) -> String {
+        if self.region.is_none() || self.default_meta.is_empty() {
+            return self.full.clone();
+        }
+        let url = esc(&canonical_url(path));
+        let meta = format!(
+            "{}\n    <link rel=\"canonical\" href=\"{url}\" />\n    \
+             <meta property=\"og:url\" content=\"{url}\" />",
+            self.default_meta
+        );
+        self.render(&meta)
+    }
+
     /// The page with the SSR_META region replaced by `meta`. Falls back to the
     /// unchanged file if the markers weren't found.
     fn render(&self, meta: &str) -> String {
@@ -90,10 +147,6 @@ impl SpaTemplate {
             None => self.full.clone(),
         }
     }
-
-    fn default_page(&self) -> String {
-        self.full.clone()
-    }
 }
 
 /// `GET /players/:id` (HTML document) — inject the player's meta, else default.
@@ -101,8 +154,13 @@ pub async fn player_document(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(p): Query<MetaParams>,
+    uri: Uri,
 ) -> Response {
-    page(&state, build_player_meta(&state, &id, p.season).await)
+    page(
+        &state,
+        uri.path(),
+        build_player_meta(&state, &id, p.season).await,
+    )
 }
 
 /// `GET /teams/:id` (HTML document).
@@ -110,25 +168,63 @@ pub async fn team_document(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(p): Query<MetaParams>,
+    uri: Uri,
 ) -> Response {
-    page(&state, build_team_meta(&state, &id, p.season).await)
+    page(
+        &state,
+        uri.path(),
+        build_team_meta(&state, &id, p.season).await,
+    )
 }
 
 /// `GET /coaches/:id` (HTML document). Coaches are season-agnostic.
 pub async fn coach_document(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    uri: Uri,
 ) -> Response {
-    page(&state, build_coach_meta(&state, &id).await)
+    page(&state, uri.path(), build_coach_meta(&state, &id).await)
+}
+
+/// Every non-entity SPA route (`/`, `/players`, `/predict`, `/portle`, and any
+/// path React Router owns): the default head, plus a canonical for this path.
+///
+/// This is the SPA's catch-all, reached once `ServeDir` has failed to match a
+/// real file, so it also answers unknown paths — which still return 200 with
+/// `index.html` so React Router can render its own not-found state, exactly as
+/// the plain `ServeFile` fallback it replaced did.
+pub async fn spa_document(State(state): State<Arc<AppState>>, uri: Uri) -> Response {
+    page(&state, uri.path(), None)
 }
 
 /// Wrap the rendered HTML with a short edge-cacheable `Cache-Control`.
-fn page(state: &AppState, meta: Option<String>) -> Response {
+///
+/// `path` drives the canonical when there is no entity meta, so a page whose
+/// entity failed to resolve is still pinned to the canonical host rather than
+/// being left for a crawler to attribute to whichever of our two hosts it
+/// happened to fetch.
+fn page(state: &AppState, path: &str, meta: Option<String>) -> Response {
     let html = match meta {
         Some(m) => state.spa_index.render(&m),
-        None => state.spa_index.default_page(),
+        None => state.spa_index.render_default_with_canonical(path),
     };
     ([(header::CACHE_CONTROL, "public, max-age=300")], Html(html)).into_response()
+}
+
+/// Absolute canonical URL for a request path, on the canonical origin.
+///
+/// The query string is dropped: `?season=` and friends select a view of the
+/// same page, and the sitemap lists only the clean form, so every variant
+/// collapses onto one indexable URL. A trailing slash is trimmed (except on the
+/// root) for the same reason — `/players` and `/players/` are one page.
+fn canonical_url(path: &str) -> String {
+    let base = public_base_url();
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        format!("{base}/")
+    } else {
+        format!("{base}{trimmed}")
+    }
 }
 
 async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> Option<String> {
@@ -320,13 +416,36 @@ mod tests {
         assert_eq!(esc("a\"b<c>"), "a&quot;b&lt;c&gt;");
     }
 
-    #[test]
-    fn template_splits_and_renders() {
-        let html = "<head>\n<!--SSR_META_START-->\n<title>x</title>\n<!--SSR_META_END-->\n</head>";
-        let t = SpaTemplate {
+    /// Build a template the way `load` does, from an in-memory document.
+    /// The origin the assertions expect. Read through `public_base_url` rather
+    /// than hardcoded so these stay green for a dev with `PUBLIC_BASE_URL` set;
+    /// the default value itself is pinned by `sitemap`'s own tests.
+    fn base() -> String {
+        public_base_url()
+    }
+
+    fn template(html: &str) -> SpaTemplate {
+        SpaTemplate {
             full: html.to_string(),
             region: SpaTemplate::split(html),
-        };
+            default_meta: SpaTemplate::default_meta(html).unwrap_or_default(),
+        }
+    }
+
+    /// Shaped like the real `index.html` head: a default title/description plus
+    /// the homepage `og:url` the server is expected to replace per path.
+    const DOC: &str = "<head>\n\
+        <!--SSR_META_START-->\n\
+        <title>x</title>\n\
+        <meta name=\"description\" content=\"d\" />\n\
+        <meta property=\"og:url\" content=\"https://camalytics.org/\" />\n\
+        <meta property=\"og:image\" content=\"https://camalytics.org/og-image.png\" />\n\
+        <!--SSR_META_END-->\n\
+        </head>";
+
+    #[test]
+    fn template_splits_and_renders() {
+        let t = template(DOC);
         assert!(t.region.is_some());
         let out = t.render("<title>NEW</title>");
         assert!(out.contains("<title>NEW</title>"));
@@ -337,12 +456,54 @@ mod tests {
     #[test]
     fn template_without_markers_serves_full() {
         let html = "<head><title>x</title></head>";
-        let t = SpaTemplate {
-            full: html.to_string(),
-            region: SpaTemplate::split(html),
-        };
+        let t = template(html);
         assert!(t.region.is_none());
         assert_eq!(t.render("ignored"), html);
-        assert_eq!(t.default_page(), html);
+        assert_eq!(t.render_default_with_canonical("/players"), html);
+    }
+
+    #[test]
+    fn default_meta_keeps_the_text_defaults_and_drops_the_static_og_url() {
+        let meta = SpaTemplate::default_meta(DOC).expect("markers present");
+        assert!(meta.contains("<title>x</title>"));
+        assert!(meta.contains(r#"name="description""#));
+        assert!(meta.contains(r#"property="og:image""#));
+        assert!(!meta.contains(r#"property="og:url""#));
+    }
+
+    /// The whole point of the two-host arrangement: a non-entity page still
+    /// names one indexable URL, so `campom.org/players` and
+    /// `camalytics.org/players` are one page to a crawler, not two.
+    #[test]
+    fn non_entity_pages_get_exactly_one_canonical_and_one_og_url() {
+        let out = template(DOC).render_default_with_canonical("/players");
+        assert_eq!(
+            out.matches(r#"<link rel="canonical""#).count(),
+            1,
+            "exactly one canonical: {out}"
+        );
+        assert_eq!(
+            out.matches(r#"property="og:url""#).count(),
+            1,
+            "the static homepage og:url must be replaced, not duplicated: {out}"
+        );
+        let b = base();
+        assert!(out.contains(&format!(r#"<link rel="canonical" href="{b}/players" />"#)));
+        assert!(out.contains(&format!(
+            r#"<meta property="og:url" content="{b}/players" />"#
+        )));
+        // Text defaults survive untouched.
+        assert!(out.contains("<title>x</title>"));
+    }
+
+    #[test]
+    fn canonical_collapses_query_strings_and_trailing_slashes() {
+        // `Uri::path()` already excludes the query; the trailing slash and the
+        // root are what this has to get right.
+        let b = base();
+        assert_eq!(canonical_url("/"), format!("{b}/"));
+        assert_eq!(canonical_url(""), format!("{b}/"));
+        assert_eq!(canonical_url("/players"), format!("{b}/players"));
+        assert_eq!(canonical_url("/players/"), format!("{b}/players"));
     }
 }

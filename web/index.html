@@ -22,9 +22,11 @@
       usePageTitle()'s per-route client-side title.
 
       STATIC block (same on every page) is below; the per-page-OVERRIDABLE block
-      lives between the SSR_META markers and is replaced server-side for entity
-      routes (/players/:id, /teams/:id, /coaches/:id) — see
-      crates/cstat-api/src/routes/meta.rs and docs/seo_social_previews_plan.md.
+      lives between the SSR_META markers and is rewritten server-side on EVERY
+      document route — fully for entity routes (/players/:id, /teams/:id,
+      /coaches/:id), and for all other routes just enough to swap in a
+      path-correct rel=canonical + og:url. See crates/cstat-api/src/routes/meta.rs
+      and docs/seo_social_previews_plan.md.
       og:image must be an ABSOLUTE https URL to a real raster file. The default
       below is the static card (web/public/og-image.png); player pages swap it
       for a generated per-player card (/og/players/{id}.png) — which is why
@@ -36,22 +38,32 @@
 
     <!--
       Per-page-overridable defaults. The server swaps everything between the
-      markers for entity routes. Do NOT add a static rel=canonical to "/" here —
-      it would tell Google every page duplicates the homepage; the per-page
-      canonical is injected with the rest below.
+      markers for entity routes, and on every other route re-emits this block
+      with a path-correct rel=canonical + og:url.
+
+      Do NOT add a static rel=canonical here — it would name one URL for every
+      page; the per-page one is injected server-side. The og:url below is the
+      homepage default the server drops and replaces per path, and it is NOT
+      dead: it is what a raw `index.html` (dev `vite` server, or the file served
+      straight off disk) falls back to.
+
+      That canonical carries real weight now — the site answers on both
+      camalytics.org and the still-open campom.org with no redirect between
+      them, so it is the only thing marking the two hosts as one site. See
+      docs/domain_migration.md.
     -->
     <!--SSR_META_START-->
     <title>Camalytics — College Basketball Analytics</title>
     <meta name="description" content="College basketball analytics: adjusted team ratings, CAM player valuation, projections, archetypes, lineups, and game predictions." />
-    <meta property="og:url" content="https://campom.org/" />
+    <meta property="og:url" content="https://camalytics.org/" />
     <meta property="og:title" content="Camalytics — College Basketball Analytics" />
     <meta property="og:description" content="Adjusted team ratings, CAM player valuation, projections and archetypes, and game predictions." />
-    <meta property="og:image" content="https://campom.org/og-image.png" />
+    <meta property="og:image" content="https://camalytics.org/og-image.png" />
     <meta property="og:image:width" content="1424" />
     <meta property="og:image:height" content="752" />
     <meta name="twitter:title" content="Camalytics — College Basketball Analytics" />
     <meta name="twitter:description" content="Adjusted team ratings, CAM player valuation, projections and archetypes, and game predictions." />
-    <meta name="twitter:image" content="https://campom.org/og-image.png" />
+    <meta name="twitter:image" content="https://camalytics.org/og-image.png" />
     <!--SSR_META_END-->
   </head>
   <body>

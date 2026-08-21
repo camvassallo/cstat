@@ -1,4 +1,4 @@
-# campom.org crawl policy.
+# camalytics.org crawl policy.
 #
 # Search crawlers (Googlebot, Applebot, Bingbot, …) are welcome on the SPA
 # pages — /predict, /players/*, /teams/*, /coaches/* etc. — but NOT on the JSON
@@ -14,4 +14,11 @@
 User-agent: *
 Disallow: /api/
 
-Sitemap: https://campom.org/sitemap.xml
+# One sitemap URL, on the canonical host, served identically from every host the
+# site answers on (camalytics.org and the still-open campom.org — see
+# docs/domain_migration.md). Fetched from campom.org this is a cross-domain
+# sitemap reference, which Search Console honours only while BOTH properties are
+# verified; keeping the old property verified is a listed migration step, not an
+# optional nicety. The URL must match the canonical host or Search Console flags
+# the mismatch.
+Sitemap: https://camalytics.org/sitemap.xml

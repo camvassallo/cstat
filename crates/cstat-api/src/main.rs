@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -124,9 +124,20 @@ async fn boot_and_serve() -> Result<()> {
 
     // Static file serving for React SPA. ServeDir handles asset paths
     // that map to real files on disk (`/assets/*`, `/favicon.png`,
-    // `/index.html`); anything else falls through to ServeFile on
-    // index.html so React Router can take over on hard navigation,
-    // share links, and refresh.
+    // `/robots.txt`); anything else falls through to `meta::spa_document`,
+    // which serves index.html so React Router can take over on hard
+    // navigation, share links, and refresh.
+    //
+    // The fallback is that handler rather than a plain `ServeFile` because the
+    // site answers on two hosts (camalytics.org and the still-open campom.org)
+    // with no redirect between them, so every HTML document has to carry a
+    // `rel="canonical"` naming the canonical origin — see `routes::meta`. A raw
+    // file service cannot vary its body by request path.
+    //
+    // `append_index_html_on_directories(false)` is load-bearing for that: left
+    // on, ServeDir answers `/` out of index.html directly, and the homepage —
+    // the one URL most worth consolidating — would be the only page with no
+    // canonical. Off, `/` falls through to the handler like every other route.
     //
     // Important: use `ServeDir::fallback(…)`, NOT `.not_found_service(…)`.
     // tower-http's `not_found_service` wraps its argument in
@@ -135,8 +146,9 @@ async fn boot_and_serve() -> Result<()> {
     // to `/predict`, `/teams/<id>`, etc. served the right HTML body
     // but with a 404 status, and browsers bailed before React Router
     // could mount. `fallback(…)` skips that wrapper.
-    let spa_files =
-        ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
+    let spa_files = ServeDir::new(&spa_dir)
+        .append_index_html_on_directories(false)
+        .fallback(get(routes::meta::spa_document).with_state(state.clone()));
     // Wrap the static service so content-hashed `/assets/*` get a 1-year
     // immutable `Cache-Control` (the hash is the cache-buster), while
     // index.html / favicon fall through to ServeDir's ETag revalidation so a
