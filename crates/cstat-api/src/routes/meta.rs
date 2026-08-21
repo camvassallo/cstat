@@ -175,7 +175,10 @@ async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> O
         parts.push(format!("{cam:+.1} CAM"));
     }
     let desc = if parts.is_empty() {
-        format!("{} — college basketball analytics on Camalytics.", prof.name)
+        format!(
+            "{} — college basketball analytics on Camalytics.",
+            prof.name
+        )
     } else {
         parts.join(" · ")
     };
