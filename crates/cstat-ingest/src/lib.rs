@@ -246,8 +246,9 @@ pub async fn team_id_by_code_and_season(
 /// rather than a generic "results" key. This finds the first non-metadata key.
 /// Where the ONNX model artifacts live when `MODEL_DIR` is unset.
 ///
-/// Repo-relative, which is right for a `cargo run` from the workspace root and
-/// for the deployed image, whose working directory is the repo root.
+/// Repo-relative, which resolves for both callers that matter: a `cargo run`
+/// from the workspace root, and the deployed image, whose `WORKDIR` is `/app`
+/// with the artifacts copied to `/app/training/models` (see `Dockerfile`).
 pub const DEFAULT_MODEL_DIR: &str = "training/models";
 
 /// The model directory this process should load from: `MODEL_DIR` when set,

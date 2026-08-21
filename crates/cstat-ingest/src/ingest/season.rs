@@ -1650,10 +1650,13 @@ impl<'a> SeasonIngester<'a> {
         // are played (it is what the predict blend decays away from).
         //
         // Best-effort, like every other non-served-critical step: this is the
-        // first thing in the nightly that needs the ONNX models, so a missing or
-        // unreadable `MODEL_DIR` must degrade the run rather than abort a
-        // game-night box-score refresh. It is also why `MODEL_DIR` is no longer
-        // optional on the cron service — see `docs/deploy_nightly_cron.md`.
+        // first thing in the nightly that needs the ONNX models, so an
+        // unreadable model directory must degrade the run rather than abort a
+        // game-night box-score refresh. `MODEL_DIR` still does not need setting
+        // on the cron service — the Dockerfile copies the artifacts to
+        // `/app/training/models` and the image's WORKDIR is `/app`, so the
+        // repo-relative default resolves. What changed is that the nightly now
+        // loads models at all, which the deploy doc's env table used to deny.
         if run_compute {
             let t0 = Utc::now();
             let step = "projections";

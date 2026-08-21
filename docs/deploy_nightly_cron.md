@@ -181,16 +181,17 @@ cron service reuses it — no separate build.
    - `SLACK_WEBHOOK_CRON` — Slack incoming-webhook URL for `#cron-job-alerts`
      (see Alerting; legacy name `INGEST_ALERT_WEBHOOK` still works)
    - `HEARTBEAT_URL` — optional dead-man's-switch ping (see below).
-   - `MODEL_DIR` — **now needed** if your image puts the ONNX artifacts anywhere
-     other than the repo-relative default `training/models`. Step 8b
+   - `MODEL_DIR` — still **not required**, but no longer for the reason this
+     line used to give ("the nightly job runs no ONNX inference"). Step 8b
      (`projections`) materializes the forecast season's
-     `player_season_projection` / `team_preseason_projection`, which is the
-     nightly's only ONNX inference — this line previously read "not needed
-     (the nightly job runs no ONNX inference)", which stopped being true when
-     that step was added. A missing or unreadable model directory degrades the
-     run and records a failed `projections` ledger step; it never aborts the
-     box-score chain, so the symptom is a stale projected-players page plus a
-     DEGRADED summary rather than an outage.
+     `player_season_projection` / `team_preseason_projection`, and that *is*
+     ONNX inference. It needs no setting because the Dockerfile copies the
+     artifacts to `/app/training/models` and the image's `WORKDIR` is `/app`, so
+     the repo-relative default resolves — set it only if you move them. If the
+     directory is unreadable the run degrades and records a failed
+     `projections` ledger step; it never aborts the box-score chain, so the
+     symptom is a stale projected-players page plus a DEGRADED summary rather
+     than an outage.
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
 4. **Enable Static Outbound IPs** — Service → Settings → Networking, on the cron
    service only (the API never calls Torvik). Requires a redeploy to take effect.
