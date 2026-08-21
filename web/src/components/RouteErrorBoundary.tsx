@@ -8,14 +8,18 @@ import { reportCaughtError, routePattern } from '../lib/errorReporter';
 // caches a rejected import forever, so once a chunk is known-missing, visiting
 // any working route in between cleared the flag and the next visit to the
 // broken one spent another whole page reload, discarding in-page state each
-// time. Per-route, a route that has already burned its reload stays burned.
+// time. Per-route, a route that has already burned its reload stays burned —
+// including across a later deploy that repairs the chunk, since the retry that
+// would fetch the repair is the very thing being suppressed. The Reload button
+// on the error UI is the way out of that, and being the user's call it cannot
+// loop.
+const RELOAD_KEY_PREFIX = 'cstat:chunk-reload:';
+const reloadKey = (pathname: string) => RELOAD_KEY_PREFIX + routePattern(pathname);
+
 // How long to wait for the origin before treating it as unreachable. Short:
 // this only runs on a path that has already failed, with the user looking at a
 // spinner until it resolves.
 const PROBE_TIMEOUT_MS = 5000;
-
-const RELOAD_KEY_PREFIX = 'cstat:chunk-reload:';
-const reloadKey = (pathname: string) => RELOAD_KEY_PREFIX + routePattern(pathname);
 
 // A failed `React.lazy` import surfaces as a TypeError whose message varies by
 // browser. Match the shapes rather than one engine's wording.
@@ -184,7 +188,19 @@ export default class RouteErrorBoundary extends Component<
         .then((res) => {
           window.clearTimeout(timer);
           if (superseded()) return;
-          if (!res.ok || res.redirected) throw new Error('origin unreachable');
+          // An origin that ANSWERS is reachable, whatever it answered. A 502 or
+          // 503 from the proxy mid-rollout, or a redirect from an edge rule on
+          // the second host, means the network is fine — and the user must not
+          // be told they are offline, because that message deliberately has no
+          // Reload button, `navigator.onLine` was true throughout so the
+          // `online` event never fires, and re-clicking the same nav link keeps
+          // the same resetKey. It would be a dead end. Fall through to the
+          // ordinary error UI, where Reload is offered and is the right action
+          // once the rollout settles.
+          if (!res.ok || res.redirected) {
+            this.setState({ checking: false });
+            return;
+          }
           // The guard write gets its own try, not the probe's catch: the two
           // failures are different things. An unwritable guard (Safari private
           // mode, quota) says nothing about the network, so reporting it as
@@ -202,6 +218,9 @@ export default class RouteErrorBoundary extends Component<
           window.location.reload();
         })
         .catch(() => {
+          // Reaching here means the fetch itself failed or timed out — nothing
+          // answered at all — which is the one case that genuinely reads as
+          // offline.
           window.clearTimeout(timer);
           if (superseded()) return;
           this.setState({ offline: true, checking: false });
@@ -284,8 +303,16 @@ export default class RouteErrorBoundary extends Component<
  * element: it mounts only after the pending lazy import resolves, which is the
  * signal that the reload worked. Clearing the flag any earlier would re-arm the
  * guard before the failing chunk had been retried, turning a stale tab into a
- * reload loop; never clearing it would leave the tab unable to recover from a
- * second deploy in the same session.
+ * reload loop.
+ *
+ * Note the limit. This only ever clears the guard of a route whose chunk
+ * RESOLVED, so the one route that burned its reload keeps its guard for the
+ * rest of the tab session: `React.lazy` holds the rejection, so that chunk
+ * never resolves here to clear it. A later deploy repairing that chunk needs
+ * the Reload button rather than an automatic retry — recovering it
+ * automatically would mean re-probing the failed chunk on every visit, which
+ * buys little over the button and is the shape of loop the guard exists to
+ * prevent.
  */
 export function ChunkReloadReset() {
   useEffect(() => {

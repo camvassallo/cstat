@@ -444,18 +444,27 @@ mod tests {
         assert!(!is_spa_html_fallback(&StatusCode::OK.into_response()));
     }
 
-    /// End-to-end over the real middleware + `ServeDir` wiring from `main.rs`,
-    /// because the three branches ARE the site's caching contract and the
-    /// helper tests above only pin their pieces. A regression in any of them is
-    /// invisible locally and then pinned at an edge — for a year, in the
-    /// `immutable` case.
+    /// The middleware over a `ServeDir` + fallback, because the branches ARE
+    /// the site's caching contract and the helper tests above only pin their
+    /// pieces. A regression in any of them is invisible locally and then pinned
+    /// at an edge — for a year, in the `immutable` case.
+    ///
+    /// The fallback here returns HTML with its OWN `Cache-Control`, mirroring
+    /// `meta::spa_document` in `main.rs`, which since #279 renders every
+    /// document through `meta::page` with `public, max-age=300` so it can
+    /// inject `rel="canonical"`. That is the case production actually
+    /// exercises, and asserting the layer leaves that header alone is the point
+    /// — an earlier version of this test used a bare `ServeFile` and asserted
+    /// the shell came back `no-cache`, which prod does not do.
     #[tokio::test]
     async fn spa_cache_control_covers_asset_hit_asset_miss_and_shell() {
         use axum::Router;
         use axum::body::Body;
         use axum::http::Request;
+        use axum::response::Html;
+        use axum::routing::get as get_route;
         use tower::ServiceExt;
-        use tower_http::services::{ServeDir, ServeFile};
+        use tower_http::services::ServeDir;
 
         // Minimal stand-in for a Vite build: one hashed asset + the shell.
         let dir = std::env::temp_dir().join(format!("cstat-spa-test-{}", std::process::id()));
@@ -464,8 +473,33 @@ mod tests {
         std::fs::write(assets.join("index-abc123.js"), "export default 1;").unwrap();
         std::fs::write(dir.join("index.html"), "<!doctype html><html></html>").unwrap();
 
+        // Stands in for `meta::spa_document`: HTML, with its own header.
+        let document = get_route(|| async {
+            (
+                [(header::CACHE_CONTROL, "public, max-age=300")],
+                Html("<!doctype html><html></html>"),
+            )
+        });
+        // ...and one that sets none, to exercise the backstop branch.
+        let bare_document = get_route(|| async { Html("<!doctype html><html></html>") });
+
         let app: Router<()> = Router::new()
-            .fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))))
+            .fallback_service(
+                ServeDir::new(&dir)
+                    // Mirrors main.rs. Left on, ServeDir answers `/` out of
+                    // index.html itself and never reaches the handler — which is
+                    // why #279 turned it off, so the homepage gets a canonical
+                    // like every other document.
+                    .append_index_html_on_directories(false)
+                    .fallback(document),
+            )
+            .layer(axum::middleware::from_fn(spa_cache_control));
+        let bare_app: Router<()> = Router::new()
+            .fallback_service(
+                ServeDir::new(&dir)
+                    .append_index_html_on_directories(false)
+                    .fallback(bare_document),
+            )
             .layer(axum::middleware::from_fn(spa_cache_control));
 
         let get = |uri: &str| {
@@ -494,10 +528,25 @@ mod tests {
         assert_eq!(miss.status(), StatusCode::NOT_FOUND);
         assert_eq!(cc(&miss).as_deref(), Some("no-store"));
 
-        // 3. The shell revalidates, so a deploy is picked up at once. Both the
-        //    root and a client-side route path, which is the fallback.
+        // 3. A document that chose its own policy keeps it — the layer must not
+        //    overwrite what a handler decided. This is the live behaviour: every
+        //    SPA document is `public, max-age=300` from `meta::page`. The deploy
+        //    window that TTL opens on documents naming hashed assets is tracked
+        //    in #276, not papered over here.
         for uri in ["/", "/predict"] {
             let shell = get(uri).await;
+            assert_eq!(shell.status(), StatusCode::OK, "{uri}");
+            assert_eq!(cc(&shell).as_deref(), Some("public, max-age=300"), "{uri}");
+        }
+
+        // 4. The backstop: HTML arriving with no policy of its own gets
+        //    `no-cache`, so a document can never be heuristically cached.
+        for uri in ["/", "/predict"] {
+            let shell = bare_app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
             assert_eq!(shell.status(), StatusCode::OK, "{uri}");
             assert_eq!(cc(&shell).as_deref(), Some("no-cache"), "{uri}");
         }
