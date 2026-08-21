@@ -326,9 +326,10 @@ impl TorkvikClient {
             // scoped to Google IP space (see below), which a UA change cannot
             // affect either way.
             //
-            // TODO: switch to a contactable UA — `cstat-ingest/0.1
-            // (+https://campom.org)`, matching `tfs.rs` — if we ever need Bart to
-            // tell us apart from the abuse his rule was aimed at. Triggers: a
+            // TODO: switch to a contactable UA — this string plus a `(+URL)`
+            // contact — if we ever need Bart to tell us apart from the abuse his
+            // rule was aimed at. `tfs.rs` is likewise uncontactable, so there is
+            // no attributed UA left in the tree to copy. Triggers: a
             // Railway-owned static egress IP starts getting refused, or we ask him
             // to allowlist ours. He reads his own access logs and invites contact
             // when a rule catches someone legitimate, so being identifiable is an

@@ -299,7 +299,10 @@ This naturally enables:
 - [x] Deploy to Railway (managed Postgres plugin, public domain on `*.up.railway.app`, ONNX models bundled in image)
 - [x] Seed production DB via `pg_dump`/`psql` from local snapshot (full schema + computed tables + cache)
 - [x] Serve React build from cstat-api (static file fallback)
-- [x] Custom domain on `campom.org` (Cloudflare CNAME → Railway, TLS via Railway/Let's Encrypt)
+- [x] Custom domain on `camalytics.org` (Cloudflare CNAME → Railway, TLS via Railway/Let's Encrypt).
+      `campom.org` stays attached to the same service indefinitely rather than being 301'd away, so
+      links shared under the old brand keep resolving; a cross-domain `rel="canonical"` on every page
+      is what consolidates the two hosts into one site for search. See `docs/domain_migration.md`.
 - [ ] **Auto data consumer (in-season cron)** → **consolidated into "In-season pipeline hardening" (Phase 6, the P0 item)**, where the nightly `update` + `compute` cron is fully specced with idempotency, failure detection, rate-limit headroom, and the torvik-persist step. (The original framing: a Railway cron on the same Docker image as the API, sharing the Postgres plugin + `NATSTAT_API_KEY`; ~57 forecast calls + per-team perfs/night, well under the 500/hr ceiling.)
 
 ### 4e: Bracketology & Tournament Resume
@@ -459,7 +462,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - Generated `full_name` STORED column + 7 indexes (year+rank, year+status, source/destination keys, lower(full_name), last_update_date DESC, partial cstat_player_id reverse-join).
   - `cstat_player_id UUID REFERENCES players(id)`, resolved post-ingest via case-insensitive name + source-team match.
 
-  **Client** (`crates/cstat-ingest/src/tfs.rs`): lean `TfsClient` — JWT from `TFS_247_JWT` env var, token-bucket rate limiter defaulting to 1 req/sec (configurable via `TFS_247_RATE_PER_HOUR`), 30s request timeout, exponential backoff on 5xx/429 (max 4 retries), short-circuit on 401/403 with `JwtExpired`, polite User-Agent (`cstat-ingest/0.1 (+https://campom.org)`).
+  **Client** (`crates/cstat-ingest/src/tfs.rs`): lean `TfsClient` — JWT from `TFS_247_JWT` env var, token-bucket rate limiter defaulting to 1 req/sec (configurable via `TFS_247_RATE_PER_HOUR`), 30s request timeout, exponential backoff on 5xx/429 (max 4 retries), short-circuit on 401/403 with `JwtExpired`, self-identifying User-Agent (`cstat-ingest/0.1`).
 
   **Ingest module** (`crates/cstat-ingest/src/ingest/transfers.rs`):
   - `ingest_live(client, pool, year, incremental)` — paginate the full ~105 pages with optional cursor short-circuit on `--incremental`.
@@ -818,7 +821,7 @@ Cluster D-I players into 10-12 archetypes from skill features (shot diet, rate s
   - **Comparison surfaces**: alongside cstat, include baseline columns for **NatStat ELO** (`home_win_exp` against ML-implied prob, treated as a margin proxy via `spread = Φ⁻¹(p) × 11`) and **flat-favorite** ("always bet favorite") + **flat-underdog** sanity-check baselines. Calibrated baselines make it obvious whether cstat's number is real signal or just "the market is bad on this slice."
   - **Stretch — Kelly sizing report**: convert each bet's `edge` + market odds into a fractional-Kelly stake (cap at 1% of bankroll for sanity), compute compounded bankroll growth across the test window. Don't ship as a recommendation engine — ship as a "what if you'd bet flat-stake vs Kelly" comparison so the variance story is visible alongside the headline ROI. Easy to add once per-bet result rows exist.
   - **Sample-of-record**: snapshot the 400-game smoke-test result (`/tmp/ats_results.json`) into `training/eval_history/ats_smoke_20260529.json` before that tmp file disappears. The delta between this end-of-season-state run and the eventual point-in-time run is the "leakage budget" measurement — load-bearing for any future "is the audit working?" check.
-  - **Acceptance**: the harness is honest infrastructure once it (a) runs cleanly against LOSO models, (b) sources CamPom point-in-time, (c) is consumed by the calibration dashboard, and (d) the |edge|≥8 bucket has collapsed from ~95% toward the 50–60% range. **Anti-acceptance**: do not surface ATS numbers publicly on the site under any framing — internal measurement only. The site is a college basketball analytics platform, not a betting tool, and `campom.org` should not become indexable as the latter.
+  - **Acceptance**: the harness is honest infrastructure once it (a) runs cleanly against LOSO models, (b) sources CamPom point-in-time, (c) is consumed by the calibration dashboard, and (d) the |edge|≥8 bucket has collapsed from ~95% toward the 50–60% range. **Anti-acceptance**: do not surface ATS numbers publicly on the site under any framing — internal measurement only. The site is a college basketball analytics platform, not a betting tool, and the site should not become indexable as the latter.
 - [ ] Tournament bracket simulator (Monte Carlo, inspired by gravity project)
 - [ ] Season simulation engine
 - [ ] Model accuracy dashboard with calibration tracking

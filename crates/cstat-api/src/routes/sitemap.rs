@@ -18,14 +18,30 @@ use uuid::Uuid;
 
 use crate::AppState;
 
-/// Public origin for absolute URLs, e.g. `https://campom.org` (no trailing
+/// The canonical public origin. The site answers on more than one host:
+/// `camalytics.org` is the brand, and the original `campom.org` stays open
+/// indefinitely for the links, social cards, and bookmarks already in the wild
+/// (see `docs/domain_migration.md`). Both hosts serve the same app, so every
+/// absolute URL we emit — sitemap `<loc>`, `rel="canonical"`, `og:url` — names
+/// this origin regardless of which host answered the request. That cross-domain
+/// canonical is what keeps the two hosts from competing as duplicates in the
+/// index, since we deliberately do not 301 the old one away.
+pub const CANONICAL_ORIGIN: &str = "https://camalytics.org";
+
+/// Public origin for absolute URLs, e.g. `https://camalytics.org` (no trailing
 /// slash). Overridable via `PUBLIC_BASE_URL` for staging/local. Shared with the
 /// per-page meta injector.
 pub fn public_base_url() -> String {
-    std::env::var("PUBLIC_BASE_URL")
-        .ok()
+    normalize_base_url(std::env::var("PUBLIC_BASE_URL").ok())
+}
+
+/// Pure half of `public_base_url`, split out so the fallback and the
+/// trailing-slash trim are testable without mutating process-wide env.
+fn normalize_base_url(configured: Option<String>) -> String {
+    configured
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "https://campom.org".to_string())
+        .unwrap_or_else(|| CANONICAL_ORIGIN.to_string())
+        .trim()
         .trim_end_matches('/')
         .to_string()
 }
@@ -151,4 +167,30 @@ fn urlset(paths: impl Iterator<Item = String>) -> String {
     }
     out.push_str("</urlset>\n");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unset_base_url_falls_back_to_the_canonical_origin() {
+        assert_eq!(normalize_base_url(None), "https://camalytics.org");
+        assert_eq!(
+            normalize_base_url(Some("   ".into())),
+            "https://camalytics.org"
+        );
+    }
+
+    #[test]
+    fn configured_base_url_wins_and_loses_its_trailing_slash() {
+        assert_eq!(
+            normalize_base_url(Some("https://staging.example.com/".into())),
+            "https://staging.example.com"
+        );
+        assert_eq!(
+            normalize_base_url(Some("  http://localhost:8080  ".into())),
+            "http://localhost:8080"
+        );
+    }
 }
