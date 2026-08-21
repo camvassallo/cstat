@@ -9,6 +9,11 @@ import { reportCaughtError, routePattern } from '../lib/errorReporter';
 // any working route in between cleared the flag and the next visit to the
 // broken one spent another whole page reload, discarding in-page state each
 // time. Per-route, a route that has already burned its reload stays burned.
+// How long to wait for the origin before treating it as unreachable. Short:
+// this only runs on a path that has already failed, with the user looking at a
+// spinner until it resolves.
+const PROBE_TIMEOUT_MS = 5000;
+
 const RELOAD_KEY_PREFIX = 'cstat:chunk-reload:';
 const reloadKey = (pathname: string) => RELOAD_KEY_PREFIX + routePattern(pathname);
 
@@ -21,6 +26,14 @@ function isChunkLoadError(error: unknown): boolean {
     /error loading dynamically imported module/i.test(msg) ||
     /Importing a module script failed/i.test(msg) ||
     /ChunkLoadError/i.test(msg) ||
+    // A chunk URL answered with HTML rather than JavaScript. This PR stops the
+    // server producing that, but an edge that cached `200 text/html` under a
+    // hashed chunk URL before the fix stays poisoned for the full year the
+    // `immutable` header bought, so it outlives this deploy. Wording differs
+    // per engine; these are Chrome, Firefox and Safari.
+    /Expected a JavaScript module script/i.test(msg) ||
+    /disallowed MIME type/i.test(msg) ||
+    /not a valid JavaScript MIME type/i.test(msg) ||
     // Vite's preload helper rejects with this when a chunk's own stylesheet
     // fails. Latent today — Tailwind emits one eagerly-linked index-*.css and
     // no route chunk carries CSS — but the moment a lazy route imports a
@@ -54,6 +67,10 @@ export default class RouteErrorBoundary extends Component<
   { failed: boolean; offline: boolean; checking: boolean }
 > {
   state = { failed: false, offline: false, checking: false };
+
+  // Bumped whenever the boundary resets or unmounts, so an in-flight
+  // reachability probe can tell that its attempt has been superseded.
+  private probeGeneration = 0;
 
   static getDerivedStateFromError() {
     return { failed: true };
@@ -119,6 +136,7 @@ export default class RouteErrorBoundary extends Component<
     // commit and true only once the fallback has actually been on screen,
     // which is precisely when a navigation should clear it.
     if (prevState.failed && prev.resetKey !== this.props.resetKey) {
+      this.probeGeneration += 1;
       this.setState({ failed: false, offline: false, checking: false });
     }
   }
@@ -138,15 +156,60 @@ export default class RouteErrorBoundary extends Component<
    * probe does not spend this route's single retry.
    */
   private reloadIfOriginReachable(key: string) {
-    fetch('/index.html', { method: 'HEAD', cache: 'no-store' })
-      .then((res) => {
-        if (!res.ok || res.redirected) throw new Error('origin unreachable');
-        sessionStorage.setItem(key, '1');
-        window.location.reload();
+    // Everything below is scoped to one attempt. The boundary can be reset out
+    // from under an in-flight probe — the user clicks a nav link, the reset
+    // fires, and a route whose chunk is already loaded renders fine — at which
+    // point a late `then` would hard-reload a working page AND spend the
+    // failed route's one-shot guard for an attempt that never happened,
+    // sending its next visit straight to the error UI. `generation` makes a
+    // superseded probe a no-op.
+    const generation = this.probeGeneration;
+    const superseded = () => generation !== this.probeGeneration;
+
+    // A black-holed network never rejects, so without a deadline `checking`
+    // would render "Loading…" until the browser's own fetch timeout.
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+
+    // The whole call is wrapped, not just the promise: this runs while React is
+    // already handling an error, and a throw here would escalate past this
+    // boundary and unmount the app. A probe that cannot even start is treated
+    // the same as one that fails.
+    try {
+      fetch('/index.html', {
+        method: 'HEAD',
+        cache: 'no-store',
+        signal: controller.signal,
       })
-      .catch(() => {
-        this.setState({ offline: true, checking: false });
-      });
+        .then((res) => {
+          window.clearTimeout(timer);
+          if (superseded()) return;
+          if (!res.ok || res.redirected) throw new Error('origin unreachable');
+          // The guard write gets its own try, not the probe's catch: the two
+          // failures are different things. An unwritable guard (Safari private
+          // mode, quota) says nothing about the network, so reporting it as
+          // "offline" would be a lie — and we cannot just reload anyway, since
+          // a reload we are unable to record repeats on the next document and
+          // becomes the loop the guard exists to prevent. Fall through to the
+          // ordinary error UI instead, where the reload is the user's call and
+          // therefore bounded.
+          try {
+            sessionStorage.setItem(key, '1');
+          } catch {
+            this.setState({ checking: false });
+            return;
+          }
+          window.location.reload();
+        })
+        .catch(() => {
+          window.clearTimeout(timer);
+          if (superseded()) return;
+          this.setState({ offline: true, checking: false });
+        });
+    } catch {
+      window.clearTimeout(timer);
+      this.setState({ offline: true, checking: false });
+    }
   }
 
   componentDidMount() {
@@ -154,6 +217,7 @@ export default class RouteErrorBoundary extends Component<
   }
 
   componentWillUnmount() {
+    this.probeGeneration += 1;
     window.removeEventListener('online', this.handleOnline);
   }
 
