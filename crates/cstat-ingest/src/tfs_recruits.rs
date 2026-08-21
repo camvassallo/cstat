@@ -46,6 +46,16 @@
 //! `100` in the JSON). [`parse_recruits_json`] divides by 100. Getting this
 //! wrong would silently feed a 100x feature into the freshman model.
 //!
+//! ## The star trap
+//!
+//! The field next to it, `compositeStarRating`, is **not** the composite star
+//! rating and is not read. The two JSON feeds disagree with each other on it —
+//! `recruits/` calls class-of-2026 rank 76 (composite 0.9738) a 5-star while
+//! `commits/` calls rank 69 (composite 0.9763) a 4-star — and the rendered
+//! rankings page, which the HTML transport reads by counting star glyphs, shows
+//! every player from rank 51 down as a 4-star. Both are 4-stars.
+//! [`composite_star_rating`] bands the composite rating instead.
+//!
 //! URL pattern (recovered from browser DevTools):
 //! ```text
 //! https://247sports.com/season/{YEAR}-basketball/compositerecruitrankings/
@@ -666,6 +676,56 @@ fn jptr_str(v: &Value, ptr: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 247 Composite star bands, as `(rating floor, stars)` in descending order.
+/// Anything rated below the last floor is a 2-star.
+///
+/// These are bands of the **0–1 composite rating**, which is the number
+/// `recruits.composite_rating` holds — not of 247's proprietary 0–100 rating
+/// and not of a national rank.
+///
+/// Calibrated against the captured composite-rankings page in
+/// `tests/fixtures/recruits_2026_hs_p2.html`: 50 real rows, ranks 51–100 of the
+/// 2026 class, ratings 0.9535–0.9816, every one rendered by 247 as 4-star. The
+/// bands reproduce all 50 (`star_bands_match_the_captured_rankings_page`).
+///
+/// The 4/5 boundary is the one the repo's evidence only brackets rather than
+/// pins: the capture starts at rank 51, so it proves the floor is **above
+/// 0.9816** without showing a 5-star row. 0.9900 is 247's published figure and
+/// is consistent with every row we hold. Confirm it against the HTML-scraped
+/// history with `scripts/audit_recruit_stars.sql` (query 3) before assuming it.
+pub const COMPOSITE_STAR_BANDS: [(f32, i16); 3] = [(0.9900, 5), (0.8900, 4), (0.7900, 3)];
+
+/// Derive a 247 Composite star rating from a 0–1 composite rating.
+///
+/// **This deliberately ignores the JSON feeds' own `compositeStarRating`**,
+/// which does not agree with the composite the rest of the row is on. On the
+/// captured class-of-2026 rankings row for national rank 76 the feed pairs
+/// `compositeRating: 97.377…` (= 0.9738) with `compositeStarRating: 5`, while
+/// the composite rankings page renders rank 76 at 0.9736 as **4**-star — and
+/// renders every player from rank 51 down as 4-star. Whatever star scale that
+/// field is on, it is not the one `recruits.star_rating` has held since the
+/// column was created, and taking it inflates the 5-star pool by roughly an
+/// order of magnitude on any class ingested over the JSON transport.
+///
+/// That matters beyond the recruit table: `star_rating` is served to the
+/// freshman and trajectory projection models as `recruit_star_rating`, a
+/// **monotone-increasing** feature (`training/train_freshman_model.py`), so an
+/// inflated star is an inflated freshman projection and an inflated preseason
+/// AdjEM for whoever signed the class.
+///
+/// `None` in, `None` out: an unrated recruit has no star. The HTML transport is
+/// untouched — it counts the rendered star glyphs, which is the ground truth
+/// this function is calibrated to.
+pub fn composite_star_rating(composite_rating: Option<f32>) -> Option<i16> {
+    let rating = composite_rating?;
+    Some(
+        COMPOSITE_STAR_BANDS
+            .iter()
+            .find(|(floor, _)| rating >= *floor)
+            .map_or(2, |&(_, stars)| stars),
+    )
+}
+
 /// Read a number as `i32`. 247 sends weights (and occasionally ranks) as JSON
 /// floats (`260.0`), so accept either representation.
 fn jnum_i32(v: &Value) -> Option<i32> {
@@ -696,6 +756,11 @@ fn commit_status_from(signed: bool, committed: bool) -> &'static str {
 /// **`compositeRating` is rescaled 0–100 → 0–1** to match the column and every
 /// consumer of it; see the module docs for the verification.
 ///
+/// **`star_rating` is derived from that rating, not read from the feed's
+/// `compositeStarRating`** — that field is on some other star scale and
+/// over-awards 5-stars by roughly an order of magnitude. See
+/// [`composite_star_rating`].
+///
 /// `height`, `weight`, `high_school`, `previous_rank` and
 /// `committed_school_slug` are absent from this feed and left `None`. The
 /// composite upsert COALESCEs them so a JSON pass cannot blank a value an HTML
@@ -707,6 +772,11 @@ pub fn parse_recruits_json(row: &Value) -> Option<RecruitRow> {
     let signed = jptr_str(row, "/signedInstitution/name");
     let status = commit_status_from(signed.is_some(), committed.is_some());
 
+    let composite_rating = row
+        .get("compositeRating")
+        .and_then(Value::as_f64)
+        .map(|r| (r / 100.0) as f32);
+
     Some(RecruitRow {
         recruit_key,
         first_name: jstr(row, "firstName"),
@@ -714,14 +784,9 @@ pub fn parse_recruits_json(row: &Value) -> Option<RecruitRow> {
         composite_rank: row.get("compositeNationalRank").and_then(jnum_i32),
         // Not exposed by this feed — see the doc comment.
         previous_rank: None,
-        composite_rating: row
-            .get("compositeRating")
-            .and_then(Value::as_f64)
-            .map(|r| (r / 100.0) as f32),
-        star_rating: row
-            .get("compositeStarRating")
-            .and_then(jnum_i32)
-            .and_then(|s| i16::try_from(s).ok()),
+        composite_rating,
+        // NOT the feed's `compositeStarRating` — see [`composite_star_rating`].
+        star_rating: composite_star_rating(composite_rating),
         position_rank: row.get("compositePositionRank").and_then(jnum_i32),
         state_rank: row.get("compositeStateRank").and_then(jnum_i32),
         position: jstr(row, "primaryPosition"),
@@ -783,6 +848,11 @@ pub fn parse_commits_json(row: &Value) -> Option<RecruitRow> {
         jptr_str(row, "/currentInstitution/name")
     };
 
+    let composite_rating = row
+        .pointer("/ranking/compositeRating")
+        .and_then(Value::as_f64)
+        .map(|r| (r / 100.0) as f32);
+
     Some(RecruitRow {
         recruit_key,
         first_name: jstr(row, "firstName"),
@@ -794,14 +864,9 @@ pub fn parse_commits_json(row: &Value) -> Option<RecruitRow> {
             .pointer("/ranking/overallCompositeRank")
             .and_then(jnum_i32),
         previous_rank: None,
-        composite_rating: row
-            .pointer("/ranking/compositeRating")
-            .and_then(Value::as_f64)
-            .map(|r| (r / 100.0) as f32),
-        star_rating: row
-            .pointer("/ranking/compositeStarRating")
-            .and_then(jnum_i32)
-            .and_then(|s| i16::try_from(s).ok()),
+        composite_rating,
+        // NOT the feed's `compositeStarRating` — see [`composite_star_rating`].
+        star_rating: composite_star_rating(composite_rating),
         position_rank: row
             .pointer("/ranking/positionCompositeRank")
             .and_then(jnum_i32),

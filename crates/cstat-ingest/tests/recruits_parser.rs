@@ -5,7 +5,9 @@
 //! of the class-of-2026 high-school composite, captured 2026-05-11. Public
 //! data (player rankings on a public 247 page); no auth tokens in the body.
 
-use cstat_ingest::tfs_recruits::{RecruitRow, parse_recruits_html};
+use cstat_ingest::tfs_recruits::{
+    COMPOSITE_STAR_BANDS, RecruitRow, composite_star_rating, parse_recruits_html,
+};
 
 const FIXTURE: &str = include_str!("fixtures/recruits_2026_hs_p2.html");
 
@@ -168,4 +170,65 @@ fn ranks_are_monotonic_on_page_2() {
             "ranks should be non-decreasing in source order"
         );
     }
+}
+
+/// Calibration guard for [`composite_star_rating`], which the JSON transport
+/// uses in place of the feeds' own `compositeStarRating`.
+///
+/// This fixture is the ground truth that pins the bands: 50 real rows of the
+/// 2026 composite, each carrying both the rendered star glyphs (which the HTML
+/// parser counts) and the 0-1 composite rating they were assigned from. If a
+/// band constant drifts away from what 247 actually renders, this fails.
+///
+/// It cannot pin the 4/5 boundary — page 2 starts at rank 51 and holds no
+/// 5-star row — so it asserts the half it can: that every rating here is
+/// *below* the 5-star floor, which is what makes the JSON feed's 5-star claim
+/// at rank 76 (rating 0.9738) impossible. See `scripts/audit_recruit_stars.sql`
+/// query 3 for the DB-side check that does pin it.
+#[test]
+fn star_bands_match_the_captured_rankings_page() {
+    let rows = parse_recruits_html(FIXTURE);
+    assert!(!rows.is_empty(), "fixture parsed to no rows");
+
+    let five_star_floor = COMPOSITE_STAR_BANDS[0].0;
+    for r in &rows {
+        let rendered = r.star_rating.expect("every fixture row renders stars");
+        let rating = r
+            .composite_rating
+            .expect("every fixture row carries a composite rating");
+        let derived = composite_star_rating(Some(rating)).unwrap();
+        assert_eq!(
+            derived,
+            rendered,
+            "247 renders {} {} (rating {rating}) as {rendered}-star, bands say {derived}",
+            r.first_name.as_deref().unwrap_or("?"),
+            r.last_name.as_deref().unwrap_or("?"),
+        );
+        assert!(
+            rating < five_star_floor,
+            "ranks 51-100 are all 4-star, so none may reach the 5-star floor"
+        );
+    }
+}
+
+/// The bands must be a non-increasing step function of the rating and must
+/// cover the whole 0-1 range: a rating that falls through every floor is a
+/// 2-star, never `None`. `None` is reserved for an unrated recruit.
+#[test]
+fn star_bands_are_total_and_monotone() {
+    assert_eq!(composite_star_rating(None), None);
+    assert_eq!(composite_star_rating(Some(1.0)), Some(5));
+    assert_eq!(composite_star_rating(Some(0.0)), Some(2));
+
+    let mut last = 5;
+    for step in 0..=1000 {
+        let rating = 1.0 - (step as f32) / 1000.0;
+        let stars = composite_star_rating(Some(rating)).unwrap();
+        assert!(
+            stars <= last,
+            "stars must not increase as rating falls: {rating} gave {stars} after {last}"
+        );
+        last = stars;
+    }
+    assert_eq!(last, 2, "the bottom of the range must be a 2-star");
 }
