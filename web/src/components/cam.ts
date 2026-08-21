@@ -9,10 +9,9 @@
 
 import {
   BAND_CHIP_CLASS,
+  BAND_CHIP_TOP_SOLID,
   BAND_EMPTY_CHIP_CLASS,
-  bandIndex,
   signedBandTextColor,
-  signedToUnit,
 } from './scale';
 
 export type CamTier =
@@ -48,7 +47,8 @@ const TIER_BAND: Record<CamTier, number> = {
 
 export function camTierColor(tier: CamTier | null): string {
   if (tier == null) return BAND_EMPTY_CHIP_CLASS;
-  if (tier === 'Elite') return 'bg-green-500 text-gray-950 border-green-400 font-semibold';
+  // Elite is ~0.1% of qualified players — rare enough to earn the solid fill.
+  if (tier === 'Elite') return BAND_CHIP_TOP_SOLID;
   return BAND_CHIP_CLASS[TIER_BAND[tier]];
 }
 
@@ -61,14 +61,24 @@ export function camTierColor(tier: CamTier | null): string {
 
 const signed = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}`;
 
-/// Compact inline split, e.g. "O +8.1 / D +4.2" — null when either half is
-/// gated (they're only meaningful together).
+/// The formatted halves, or null when either is gated — the halves are only
+/// meaningful together. Single source of truth for that rule; both the inline
+/// split and the tooltip build on it rather than each re-deriving the guard.
+function splitHalves(
+  o: number | null | undefined,
+  d: number | null | undefined,
+): { o: string; d: string } | null {
+  if (o == null || d == null) return null;
+  return { o: signed(o), d: signed(d) };
+}
+
+/// Compact inline split, e.g. "O +8.1 / D +4.2" — null where gated.
 export function camSplit(
   o: number | null | undefined,
   d: number | null | undefined,
 ): string | null {
-  if (o == null || d == null) return null;
-  return `O ${signed(o)} / D ${signed(d)}`;
+  const h = splitHalves(o, d);
+  return h && `O ${h.o} / D ${h.d}`;
 }
 
 /// Tooltip for CAM cells: tier line plus the O/D split when available.
@@ -78,11 +88,11 @@ export function camTitle(
   d?: number | null,
 ): string {
   const tier = camTier(cam);
-  let s = tier ? `${tier}.` : '';
-  if (camSplit(o, d)) {
-    s += `${s ? ' ' : ''}CAMO ${signed(o!)} / CAMD ${signed(d!)} per 100.`;
-  }
-  return s;
+  const h = splitHalves(o, d);
+  const parts: string[] = [];
+  if (tier) parts.push(`${tier}.`);
+  if (h) parts.push(`CAMO ${h.o} / CAMD ${h.d} per 100.`);
+  return parts.join(' ');
 }
 
 // Per-half saturation scale, tuned to each half's rotation-pool spread —
@@ -98,12 +108,6 @@ export function camHalfColor(
   side: 'o' | 'd',
 ): string {
   return signedBandTextColor(v, HALF_SCALE[side]);
-}
-
-/// Band index (0–4) for a CAMO/CAMD half — for surfaces that need the bucket
-/// itself (bar fills, chips) rather than a text color.
-export function camHalfBand(v: number, side: 'o' | 'd'): number {
-  return bandIndex(signedToUnit(v, HALF_SCALE[side]));
 }
 
 // Approximate D-I distribution of each half, fit to the documented rotation-

@@ -6,7 +6,7 @@ const navLinkClass = (active: boolean) =>
   `px-3 py-2 rounded text-sm font-medium transition-colors ${
     active
       ? 'bg-[var(--brand-blue-accent)] text-white'
-      : 'text-[#9db8d4] hover:bg-white/10 hover:text-white'
+      : 'text-[var(--brand-chrome-text)] hover:bg-white/10 hover:text-white'
   }`;
 
 // Mobile menu links use a larger touch target (44px+) and stretch full width
@@ -15,7 +15,7 @@ const mobileNavLinkClass = (active: boolean) =>
   `block px-4 py-3 rounded text-base font-medium transition-colors ${
     active
       ? 'bg-[var(--brand-blue-accent)] text-white'
-      : 'text-[#bcd0e6] hover:bg-white/10 hover:text-white'
+      : 'text-[var(--brand-chrome-text-strong)] hover:bg-white/10 hover:text-white'
   }`;
 
 // One nav destination. `to` may carry a query (e.g. `/players?mode=draft`,
@@ -116,7 +116,7 @@ function NavDropdown({
                 className={`block px-3 py-2 text-sm transition-colors ${
                   isItemActive(it.to)
                     ? 'bg-[var(--brand-blue-accent)] text-white'
-                    : 'text-[#bcd0e6] hover:bg-white/10 hover:text-white'
+                    : 'text-[var(--brand-chrome-text-strong)] hover:bg-white/10 hover:text-white'
                 }`}
               >
                 {it.label}
@@ -143,7 +143,7 @@ function SeasonSelector() {
   // entity has no data in. Global list otherwise.
   const seasons = pageSeasons ?? globalSeasons;
   return (
-    <label className="flex items-center gap-2 text-xs text-[#9db8d4]">
+    <label className="flex items-center gap-2 text-xs text-[var(--brand-chrome-text)]">
       <span className="uppercase tracking-wide hidden sm:inline">Season</span>
       <select
         value={season}
@@ -176,16 +176,16 @@ function SiteFooter() {
             height={22}
             className="w-[22px] h-[22px] rounded ring-1 ring-[var(--brand-navy-line)]"
           />
-          <span className="text-sm text-[#9db8d4]">
+          <span className="text-sm text-[var(--brand-chrome-text)]">
             <span className="font-semibold text-gray-200">Camalytics</span>
-            <span className="mx-1.5 text-[#4a688c]">·</span>
+            <span className="mx-1.5 text-[var(--brand-chrome-divider)]">·</span>
             College basketball analytics
           </span>
         </div>
         <nav className="flex items-center gap-5 text-sm" aria-label="Footer">
           <NavLink
             to="/acknowledgments"
-            className="text-[#9db8d4] hover:text-[var(--brand-blue-bright)] transition-colors"
+            className="text-[var(--brand-chrome-text)] hover:text-[var(--brand-blue-bright)] transition-colors"
           >
             Data &amp; Acknowledgments
           </NavLink>
@@ -193,7 +193,7 @@ function SiteFooter() {
             href="https://github.com/camvassallo/cstat"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[#9db8d4] hover:text-[var(--brand-blue-bright)] transition-colors"
+            className="text-[var(--brand-chrome-text)] hover:text-[var(--brand-blue-bright)] transition-colors"
           >
             GitHub
           </a>
@@ -273,7 +273,7 @@ export default function Layout() {
   // collapse state — the drawer is already a vertical list).
   const mobileGroup = (label: string, items: NavItem[]) => (
     <div className="mt-1">
-      <div className="px-4 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-[#6f8fb3]">
+      <div className="px-4 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-[var(--brand-chrome-divider)]">
         {label}
       </div>
       {items.map((it) => (
@@ -323,7 +323,7 @@ export default function Layout() {
             aria-label={menuOpen ? 'Close menu' : 'Open menu'}
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
-            className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded text-[#bcd0e6] hover:bg-white/10 hover:text-white"
+            className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded text-[var(--brand-chrome-text-strong)] hover:bg-white/10 hover:text-white"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"

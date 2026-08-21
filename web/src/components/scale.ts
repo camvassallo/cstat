@@ -10,17 +10,14 @@
 // Five discrete steps read cleanly and match how the percentile bars have
 // always looked.
 //
-// Two variants of each band: `-500` for filled bars and solid chips (read
-// against the page background), `-400` for text and thin glyphs (which need
-// more lift against the dark surface).
-
-/** Band fills — Tailwind red/orange/yellow/blue/green-500, worst → best. */
-export const BAND_FILL = ['#ef4444', '#f97316', '#eab308', '#3b82f6', '#22c55e'] as const;
+// Two variants of each band: `-500` classes for filled bars and solid chips
+// (read against the page background), `-400` hexes for text and thin glyphs
+// (which need more lift against the dark surface).
 
 /** Band text colors — the `-400` variants, for numerals on a dark surface. */
 export const BAND_TEXT = ['#f87171', '#fb923c', '#facc15', '#60a5fa', '#4ade80'] as const;
 
-/** Tailwind class names for the filled bars, parallel to `BAND_FILL`. */
+/** Tailwind class names for the filled bars, worst → best. */
 export const BAND_BAR_CLASS = [
   'bg-red-500',
   'bg-orange-500',
@@ -37,6 +34,24 @@ export const BAND_CHIP_CLASS = [
   'bg-blue-500/20 text-blue-300 border-blue-500/40',
   'bg-green-500/20 text-green-300 border-green-500/40',
 ] as const;
+
+/** Two emphasis treatments for a metric's TOP tier, both built on band 4 so
+ *  they stay inside the five-color vocabulary. Which one a surface wants
+ *  depends on how RARE its top tier actually is:
+ *
+ *    SOLID  — for a tier that is genuinely exceptional and should stop the
+ *             eye. CAM "Elite" (>=20) is 4 of ~3,000 qualified players.
+ *    STRONG — for a tier that is very good but common enough that a solid
+ *             block would tile the screen. AdjEM "Elite" (>=25) is 30 of 364
+ *             teams, so on the rankings board sorted by AdjEM the entire first
+ *             page would be solid green and the color would stop
+ *             discriminating anything.
+ *
+ *  Both read as "better than the band-4 tint" while staying the same hue. */
+export const BAND_CHIP_TOP_SOLID =
+  'bg-green-500 text-gray-950 border-green-400 font-semibold';
+export const BAND_CHIP_TOP_STRONG =
+  'bg-green-500/35 text-green-200 border-green-400/60 font-semibold';
 
 /** Neutral treatments for a missing value, so every surface renders "no data"
  *  identically rather than each picking its own gray. */
@@ -55,22 +70,10 @@ export function bandIndex(t: number): 0 | 1 | 2 | 3 | 4 {
   return 0;
 }
 
-/** Text color for a normalized 0–1 score. */
-export function bandTextColor(t: number | null | undefined): string {
-  if (t == null || !Number.isFinite(t)) return BAND_EMPTY_TEXT;
-  return BAND_TEXT[bandIndex(t)];
-}
-
 /** Bar class for a normalized 0–1 score. */
 export function bandBarClass(t: number | null | undefined): string {
   if (t == null || !Number.isFinite(t)) return BAND_EMPTY_BAR_CLASS;
   return BAND_BAR_CLASS[bandIndex(t)];
-}
-
-/** Chip classes for a normalized 0–1 score. */
-export function bandChipClass(t: number | null | undefined): string {
-  if (t == null || !Number.isFinite(t)) return BAND_EMPTY_CHIP_CLASS;
-  return BAND_CHIP_CLASS[bandIndex(t)];
 }
 
 /** Map a signed value on a ±`scale` axis into the 0–1 band domain, so a

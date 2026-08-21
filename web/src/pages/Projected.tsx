@@ -14,6 +14,7 @@ import {
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
 import { pctileTextColor } from '../components/pctile';
+import { BAND_CHIP_CLASS, BAND_CHIP_TOP_STRONG } from '../components/scale';
 import { recruitTooltipLine } from '../lib/recruitDisplay';
 
 // Projectable-year definitions are shared with the team projection ledger via
@@ -25,15 +26,17 @@ const PROJECTABLE_YEARS = projectableSeasons();
 // cstat-season year → "2026-27"-style college-season label.
 const seasonLabel = (year: number) => `${year - 1}-${String(year).slice(2)}`;
 
-// AdjEM tier coloring (tuned for D-I 2025 distribution where teams
-// range ~-30 to +45). Reused for floor/ceiling/midpoint/actual chips.
+// AdjEM tier coloring for the floor/ceiling/midpoint/actual chips. Shares the
+// site scale and the same cut points as the Rankings board, so a projected +18
+// and an actual +18 read identically across the two pages — they used to run on
+// two different palettes for the same quantity.
 function adjEmTone(v: number): string {
-  if (v >= 25) return 'bg-emerald-900/50 border-emerald-700 text-emerald-200';
-  if (v >= 15) return 'bg-emerald-950/40 border-emerald-800 text-emerald-300';
-  if (v >= 5) return 'bg-teal-950/40 border-teal-800 text-teal-300';
-  if (v >= -5) return 'bg-slate-800/40 border-slate-700 text-slate-300';
-  if (v >= -15) return 'bg-amber-950/40 border-amber-800 text-amber-300';
-  return 'bg-rose-950/40 border-rose-800 text-rose-300';
+  if (v >= 25) return BAND_CHIP_TOP_STRONG;
+  if (v >= 15) return BAND_CHIP_CLASS[4];
+  if (v >= 5) return BAND_CHIP_CLASS[3];
+  if (v >= -5) return BAND_CHIP_CLASS[2];
+  if (v >= -15) return BAND_CHIP_CLASS[1];
+  return BAND_CHIP_CLASS[0];
 }
 
 const adjEmChip = (v: number | null) => {
