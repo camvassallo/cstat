@@ -117,7 +117,15 @@ export function reportCaughtError(error: unknown, componentStack?: string): void
     // the discriminator a boundary does have — see `routePattern` for why the
     // raw pathname is the wrong granularity.
     source: routePattern(window.location.pathname),
-    stack: [err?.stack, componentStack].filter(Boolean).join('\n'),
+    // Component stack FIRST: the server caps `stack` at 600 chars, and in a
+    // production build every frame of a minified JS stack carries a full
+    // hashed-chunk URL (~70-90 chars each), so 8-10 frames exhaust the budget
+    // on their own. Whichever trace goes second is the one that gets cut — and
+    // for a boundary-caught error the component stack is the part worth
+    // keeping, since it names the route and component tree that failed, while
+    // the minified JS frames say little without sourcemaps and the error text
+    // is already in `message`.
+    stack: [componentStack, err?.stack].filter(Boolean).join('\n'),
     page: window.location.href,
     user_agent: navigator.userAgent,
   })
