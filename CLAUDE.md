@@ -172,6 +172,45 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 - `compute_campom` — usage/minutes/sample/SOS-adjusted GBPM composites (`cam_gbpm`, `cam_gbpm_v2`, `cam_gbpm_v3` and o/d splits at every tier). Tunable constants live at the top of `compute.rs` as `CAMPOM_*` consts; methodology in `docs/campom_methodology.md`.
 - `compute_derived_game_fields` — derives `is_conference`, `point_diff`, and **`wins`/`losses`** on `team_season_stats` from the authoritative `team_game_stats` rows. W-L is unconditionally overwritten so it stays self-consistent with AdjEM and four factors (the team-detail NatStat ingest also writes W-L but lags game ingest; compute always has the last word).
 
+## Brand & UI naming (CAM vs `campom`)
+
+The site is **Camalytics**; its player-value metric displays as **CAM**, with
+the offensive/defensive halves as **CAMO** and **CAMD**. This is a
+PRESENTATION-LAYER rename only — the database columns, API payload fields, ML
+feature names, and every Rust/Python symbol keep the original `campom` /
+`cam_gbpm_v3` vocabulary and are **not** being renamed.
+
+    wire / DB field     UI label
+    campom              CAM
+    campom_o            CAMO
+    campom_d            CAMD
+    cam_gbpm_v3_psos    (the underlying column behind CAM)
+
+The translation happens at exactly one boundary: `web/src/components/cam.ts`
+(tiers, colors, tooltips). `web/src/api/client.ts` speaks the backend's
+language and carries the same mapping table in a header comment. Don't push
+`campom` spellings up into components, and don't push `CAM` down into the
+ingest/compute/training code.
+
+Two other UI-copy rules that fall out of the rebrand:
+- **No provider names in user-visible strings.** NatStat, Bart Torvik,
+  247Sports, and Tankathon are credited in one place — the `/acknowledgments`
+  page (`web/src/pages/Acknowledgments.tsx`), linked from the global footer.
+  Code comments naming the real source are fine and encouraged.
+- **No competitor, internal, or pipeline vocabulary on screen.** That means no
+  "KenPom scale", no "cstat", no roadmap/phase references, no model version
+  suffixes (`v3`), no `q10`/`q90` shorthand, and no operator instructions
+  (CLI commands, "qual gate", "batch inference") in empty states or tooltips.
+  Say what the number means and what the user should do with it.
+
+Logo and social-card assets are generated, not hand-edited:
+`scripts/generate_logo.py` emits the rounded (favicon/navbar, transparent
+corners), square (apple-touch-icon — iOS masks it itself and paints
+transparency black), and background-free (OG card) SVGs;
+`scripts/generate_og_card.html` composes the 1424x752 share card. Rasterize
+with headless Chrome and `--default-background-color=00000000` to keep the
+corners transparent.
+
 ## Player Archetypes
 
 12 D&D-class archetypes assigned via combined-cohort k-means clustering. The **fit** (clustering + Hungarian class matching, authoritative for `archetype_models`) lives in `training/archetypes.py` and runs annually; the **assign** half (standardize → nearest frozen centroid → class → softmax affinities → `player_archetypes`) was ported to Rust (`cstat_core::compute::compute_archetypes`) and runs every nightly as `compute_all`'s last step, byte-exact with the Python writer (guarded by `crates/cstat-core/tests/archetype_assign_parity.rs`) — so prod produces archetypes with no laptop, and `player_archetypes` is prod-owned in-season. Methodology and retraining playbook in `docs/archetypes_methodology.md`. Run with `cd training && ./.venv/bin/python -m archetypes --seasons 2015,…,2026 [--diagnostics]` — `training/` has no `__init__.py`, so `python -m training.archetypes` from the repo root fails; you must `cd` in first. **A full retrain must pass EVERY ingested season explicitly** — the shipped model is a single combined-cohort fit over all 12 seasons (one shared centroid set in `archetype_models`, verified identical across season rows). The CLI's `--seasons` *default is only `2025,2026`*, which is a 2-season fit that does NOT match the shipped model and clusters differently (it tripped extra signature-alignment violations) — don't use the default for a refresh. Clustering runs on the union and writes per-season rows to `player_archetypes` with shared centroids. The signature-alignment guardrail hard-fails the write on label/cluster mismatch; bypass with `--no-verify` only after reviewing the diagnostics (e.g. the benign Rogue `blk_pct` flag — that weight is deliberately softened). Combined-cohort training is load-bearing for cross-season class stability (45.7% returning-player primary stability vs 28% for per-season fits) — read the doc before changing it.

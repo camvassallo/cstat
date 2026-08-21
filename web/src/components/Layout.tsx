@@ -5,8 +5,8 @@ import { useAvailableSeasons, usePageSeasons, useSeason, type Season } from './s
 const navLinkClass = (active: boolean) =>
   `px-3 py-2 rounded text-sm font-medium transition-colors ${
     active
-      ? 'bg-blue-600 text-white'
-      : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+      ? 'bg-[var(--brand-blue-accent)] text-white'
+      : 'text-[#9db8d4] hover:bg-white/10 hover:text-white'
   }`;
 
 // Mobile menu links use a larger touch target (44px+) and stretch full width
@@ -14,8 +14,8 @@ const navLinkClass = (active: boolean) =>
 const mobileNavLinkClass = (active: boolean) =>
   `block px-4 py-3 rounded text-base font-medium transition-colors ${
     active
-      ? 'bg-blue-600 text-white'
-      : 'text-gray-300 hover:bg-gray-800 hover:text-gray-100'
+      ? 'bg-[var(--brand-blue-accent)] text-white'
+      : 'text-[#bcd0e6] hover:bg-white/10 hover:text-white'
   }`;
 
 // One nav destination. `to` may carry a query (e.g. `/players?mode=draft`,
@@ -105,7 +105,7 @@ function NavDropdown({
         <div className="absolute left-0 top-full pt-1 z-50">
           <div
             role="menu"
-            className="min-w-[11rem] rounded-md border border-gray-800 bg-gray-950 py-1 shadow-lg"
+            className="brand-surface min-w-[11rem] rounded-md border py-1 shadow-xl shadow-black/40"
           >
             {items.map((it) => (
               <NavLink
@@ -115,8 +115,8 @@ function NavDropdown({
                 onClick={() => setOpen(false)}
                 className={`block px-3 py-2 text-sm transition-colors ${
                   isItemActive(it.to)
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-300 hover:bg-gray-800 hover:text-gray-100'
+                    ? 'bg-[var(--brand-blue-accent)] text-white'
+                    : 'text-[#bcd0e6] hover:bg-white/10 hover:text-white'
                 }`}
               >
                 {it.label}
@@ -143,12 +143,13 @@ function SeasonSelector() {
   // entity has no data in. Global list otherwise.
   const seasons = pageSeasons ?? globalSeasons;
   return (
-    <label className="flex items-center gap-2 text-xs text-gray-400">
+    <label className="flex items-center gap-2 text-xs text-[#9db8d4]">
       <span className="uppercase tracking-wide hidden sm:inline">Season</span>
       <select
         value={season}
         onChange={(e) => setSeason(Number(e.target.value) as Season)}
-        className="bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2 focus:outline-none focus:border-blue-500"
+        aria-label="Season"
+        className="bg-[var(--brand-navy)] border border-[var(--brand-navy-line)] text-gray-100 text-sm rounded px-3 py-2 hover:border-[var(--brand-blue)] transition-colors"
       >
         {seasons.map((s) => (
           <option key={s} value={s}>
@@ -157,6 +158,48 @@ function SeasonSelector() {
         ))}
       </select>
     </label>
+  );
+}
+
+// Slim global footer. Its main job is carrying the data-acknowledgments link
+// so the provider credits have one honest home, instead of being scattered
+// across every page as outbound links that send readers elsewhere.
+function SiteFooter() {
+  return (
+    <footer className="brand-chrome border-t mt-8">
+      <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <img
+            src="/logo.svg"
+            alt=""
+            width={22}
+            height={22}
+            className="w-[22px] h-[22px] rounded ring-1 ring-[var(--brand-navy-line)]"
+          />
+          <span className="text-sm text-[#9db8d4]">
+            <span className="font-semibold text-gray-200">Camalytics</span>
+            <span className="mx-1.5 text-[#4a688c]">·</span>
+            College basketball analytics
+          </span>
+        </div>
+        <nav className="flex items-center gap-5 text-sm" aria-label="Footer">
+          <NavLink
+            to="/acknowledgments"
+            className="text-[#9db8d4] hover:text-[var(--brand-blue-bright)] transition-colors"
+          >
+            Data &amp; Acknowledgments
+          </NavLink>
+          <a
+            href="https://github.com/camvassallo/cstat"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[#9db8d4] hover:text-[var(--brand-blue-bright)] transition-colors"
+          >
+            GitHub
+          </a>
+        </nav>
+      </div>
+    </footer>
   );
 }
 
@@ -230,7 +273,7 @@ export default function Layout() {
   // collapse state — the drawer is already a vertical list).
   const mobileGroup = (label: string, items: NavItem[]) => (
     <div className="mt-1">
-      <div className="px-4 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+      <div className="px-4 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-[#6f8fb3]">
         {label}
       </div>
       {items.map((it) => (
@@ -248,9 +291,27 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-900">
-      <nav className="bg-gray-950 border-b border-gray-800 px-4 sm:px-6 py-3 flex items-center gap-4 sm:gap-8">
-        <NavLink to="/" className="text-xl font-bold text-blue-400 tracking-tight">
-          CamPom
+      <nav className="brand-chrome border-b px-4 sm:px-6 py-3 flex items-center gap-4 sm:gap-8">
+        <NavLink
+          to="/"
+          className="flex items-center gap-2.5 shrink-0"
+          aria-label="Camalytics home"
+        >
+          {/* The mark ships on its own navy field (it's a JPEG, no alpha), so
+              it reads as a rounded tile against the navbar rather than trying
+              to blend — see the note in the acknowledgments page source. */}
+          <img
+            src="/logo.svg"
+            alt=""
+            width={32}
+            height={32}
+            className="w-8 h-8 rounded-md ring-1 ring-[var(--brand-navy-line)]"
+          />
+          {/* Shown at every width — on mobile the row is just logo + season +
+              burger, so there is room for the name and hiding it wasted it. */}
+          <span className="text-lg sm:text-xl font-bold text-white tracking-tight">
+            Cam<span className="text-[var(--brand-blue)]">alytics</span>
+          </span>
         </NavLink>
         {/* Desktop nav — visible from md up */}
         <div className="hidden md:flex gap-1">{links}</div>
@@ -262,7 +323,7 @@ export default function Layout() {
             aria-label={menuOpen ? 'Close menu' : 'Open menu'}
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
-            className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded text-gray-300 hover:bg-gray-800 hover:text-gray-100"
+            className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded text-[#bcd0e6] hover:bg-white/10 hover:text-white"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -293,7 +354,7 @@ export default function Layout() {
       </nav>
       {/* Mobile menu drawer */}
       {menuOpen && (
-        <div className="md:hidden bg-gray-950 border-b border-gray-800 px-3 py-2 flex flex-col gap-1">
+        <div className="brand-chrome md:hidden border-b px-3 py-2 flex flex-col gap-1">
           <NavLink to="/" end onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Rankings
           </NavLink>
@@ -320,6 +381,7 @@ export default function Layout() {
       <main className="flex-1 px-3 sm:px-6 py-4 sm:py-6 max-w-7xl mx-auto w-full overflow-x-clip">
         <Outlet />
       </main>
+      <SiteFooter />
     </div>
   );
 }

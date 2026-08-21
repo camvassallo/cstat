@@ -12,7 +12,7 @@ import { SeasonLink } from '../components/SeasonLink';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
 
-// AdjEM presentation tiers — same chip styling pattern as CamPom on the
+// AdjEM presentation tiers — same chip styling pattern as CAM on the
 // Players tab. Thresholds use the conventional KenPom absolute scale where
 // +20 is roughly Final Four caliber and 0 is the league-average D-I team.
 type AdjEmTier =

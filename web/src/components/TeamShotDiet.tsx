@@ -139,7 +139,7 @@ export function TeamShotDiet({ roster }: { roster: RosterEntry[] }) {
   if (team.totalFga === 0) {
     return (
       <div className="text-xs text-gray-500 italic">
-        No Torvik shot-zone data available for this roster.
+        No shot-zone data available for this roster.
       </div>
     );
   }
@@ -425,7 +425,7 @@ export function TeamShotDiet({ roster }: { roster: RosterEntry[] }) {
       {missing.length > 0 && (
         <div className="mt-3 text-[10px] text-gray-500 text-center">
           +{missing.length} rotation player
-          {missing.length === 1 ? '' : 's'} missing Torvik shot data:{' '}
+          {missing.length === 1 ? '' : 's'} missing shot data:{' '}
           {missing
             .slice(0, 3)
             .map((p) => p.name)

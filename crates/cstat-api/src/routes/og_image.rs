@@ -1,6 +1,6 @@
 //! Generated per-player social-card images (`GET /og/players/{id}.png`).
 //!
-//! Renders a 1200x630 PNG stat card (name, team, CamPom rating, archetype) from
+//! Renders a 1200x630 PNG stat card (name, team, CAM rating, archetype) from
 //! an SVG template via `resvg`, using a vendored DejaVu font (loaded once) so it
 //! works in the slim Docker runtime without system fonts. The per-page meta
 //! injector (`routes::meta`) points a player's `og:image` at this route.
@@ -29,11 +29,14 @@ const FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans-Bold.ttf"
 pub const CARD_W: u32 = 1200;
 pub const CARD_H: u32 = 630;
 
-const BG: &str = "#0b0b0c"; // matches the site theme-color
-const ACCENT: &str = "#60a5fa"; // the navbar CamPom wordmark blue
+// Brand palette, matching the navbar chrome (web/src/index.css) so a shared
+// card and the page it links to look like the same product.
+const BG: &str = "#041f3f"; // --brand-navy-deep, matches the site theme-color
+const ACCENT: &str = "#8fc0e8"; // --brand-blue-bright
 const FG: &str = "#ffffff";
-const MUTED: &str = "#9ca3af";
+const MUTED: &str = "#9db8d4";
 const LIGHT: &str = "#e5e7eb";
+const RULE: &str = "#0b3f78"; // --brand-navy-line
 
 #[derive(Deserialize)]
 pub struct OgParams {
@@ -62,7 +65,7 @@ pub async fn player_card(
         Some(png) => (
             [
                 (header::CONTENT_TYPE, "image/png"),
-                // Edge-cache a few hours; CamPom values only move on the nightly.
+                // Edge-cache a few hours; CAM values only move on the nightly.
                 (header::CACHE_CONTROL, "public, max-age=21600"),
             ],
             png,
@@ -130,11 +133,11 @@ fn build_svg(name: &str, subtitle: &str, campom: Option<f64>, detail: &str) -> S
     let subtitle = xml_escape(subtitle);
     let detail = xml_escape(detail);
 
-    // Big CamPom value block (omitted when unavailable).
+    // Big CAM value block (omitted when unavailable).
     let stat_block = match campom {
         Some(v) => format!(
             r#"<text x="80" y="475" font-family="DejaVu Sans" font-weight="bold" font-size="128" fill="{ACCENT}">{v:+.1}</text>
-  <text x="80" y="523" font-family="DejaVu Sans" font-size="28" fill="{MUTED}">CamPom rating</text>"#
+  <text x="80" y="523" font-family="DejaVu Sans" font-size="28" fill="{MUTED}">CAM rating</text>"#
         ),
         None => String::new(),
     };
@@ -150,10 +153,10 @@ fn build_svg(name: &str, subtitle: &str, campom: Option<f64>, detail: &str) -> S
         r##"<svg width="{CARD_W}" height="{CARD_H}" viewBox="0 0 {CARD_W} {CARD_H}" xmlns="http://www.w3.org/2000/svg">
   <rect width="{CARD_W}" height="{CARD_H}" fill="{BG}"/>
   <rect x="0" y="0" width="14" height="{CARD_H}" fill="{ACCENT}"/>
-  <text x="80" y="104" font-family="DejaVu Sans" font-weight="bold" font-size="32" letter-spacing="6" fill="{ACCENT}">CAMPOM</text>
+  <text x="80" y="104" font-family="DejaVu Sans" font-weight="bold" font-size="32" letter-spacing="6" fill="{ACCENT}">CAMALYTICS</text>
   <text x="80" y="268" font-family="DejaVu Sans" font-weight="bold" font-size="80" fill="{FG}">{name}</text>
   <text x="80" y="332" font-family="DejaVu Sans" font-size="40" fill="{MUTED}">{subtitle}</text>
-  <line x1="80" y1="372" x2="1120" y2="372" stroke="#1f2937" stroke-width="2"/>
+  <line x1="80" y1="372" x2="1120" y2="372" stroke="{RULE}" stroke-width="2"/>
   {stat_block}
   {detail_line}
 </svg>"##

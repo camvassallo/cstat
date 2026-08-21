@@ -24,7 +24,7 @@ import {
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { classColor, provisionalMeta } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
-import { campomTier, campomTierColor, campomHalfColor } from '../components/campom';
+import { camTier, camTierColor, camHalfColor } from '../components/cam';
 import { pctileTextColor } from '../components/pctile';
 import { SeasonLink } from '../components/SeasonLink';
 import { useIsMobile } from '../components/useIsMobile';
@@ -83,8 +83,8 @@ export default function PlayerProgression() {
     };
   }, [id]);
 
-  // CamPom-over-time series. One point per season we have a torvik
-  // CamPom value for; gaps appear as nulls so recharts draws across
+  // CAM-over-time series. One point per season we have a torvik
+  // CAM value for; gaps appear as nulls so recharts draws across
   // them with `connectNulls`. The trajectory projection (if any) is
   // appended as a dashed extension point keyed `target_season`.
   const campomSeries = useMemo(() => {
@@ -100,9 +100,9 @@ export default function PlayerProgression() {
       projection_upper: null as number | null,
     }));
     if (data.trajectory) {
-      // Seed the projection mean + band at the latest actual CamPom point.
+      // Seed the projection mean + band at the latest actual CAM point.
       // The dashed mean-line becomes a continuation of the solid line, and
-      // the q10–q90 band widens from a single point to its full width at the
+      // the projection band widens from a single point to its full width at the
       // projection — visually communicating that the projection is uncertain
       // in a way a single dashed point can't.
       for (let i = rows.length - 1; i >= 0; i--) {
@@ -133,7 +133,7 @@ export default function PlayerProgression() {
   // Reads naturally as career progression left → right.
   const seasonsAsc = [...data.seasons].sort((a, b) => a.season - b.season);
 
-  // Pick a Y-domain that contains every rendered shape: actual CamPom
+  // Pick a Y-domain that contains every rendered shape: actual CAM
   // points, projected mean, and the q10–q90 cone bounds. Always include
   // y=0 so the D-I-average reference line is visible — without that the
   // axis can drift for elites (e.g. min=12, max=20) and the dotted
@@ -146,7 +146,7 @@ export default function PlayerProgression() {
   const camMin = renderedCam.length ? Math.min(0, Math.min(...renderedCam) - 1) : -2;
   const camMax = renderedCam.length ? Math.max(0, Math.max(...renderedCam) + 1) : 6;
   // Only render the chart if there's at least one real data point on
-  // it — a multi-season player with no Torvik CamPom in any season
+  // it — a multi-season player with no Torvik CAM in any season
   // would otherwise render an empty plot with grid lines and nothing
   // else. The trajectory projection alone (renderedCam.length === 1
   // for a 0-data + 1-projection case) doesn't justify a "time series".
@@ -195,25 +195,25 @@ export default function PlayerProgression() {
               })()}
             {data.trajectory && (() => {
               const t = data.trajectory;
-              const tier = campomTier(t.projected_mean);
+              const tier = camTier(t.projected_mean);
               const band = `${t.projected_lower.toFixed(1)}–${t.projected_upper.toFixed(1)}`;
               // Same regression-to-the-mean note as PlayerDetail — the
               // chart on this page already shows the predicted point
-              // dropping below an elite's current CamPom (e.g. Boozer
+              // dropping below an elite's current CAM (e.g. Boozer
               // +30 → +16), so users need the inline explanation to
               // know that's a known model behaviour, not a UI bug.
               // Per-bucket MAE / bias lives in
               // `trajectory_model_meta.json::mae_by_current_campom`.
               const regressionNote =
                 t.prior_campom != null && t.prior_campom >= 15
-                  ? ' Regression-to-the-mean: elite inputs project ≈2 CamPom below current — mostly real regression (residual bias vs actual ≈−0.7 on ≥+15; +20+ inputs extrapolate beyond training). Read the q90 ceiling for the optimistic case.'
+                  ? ' Elite players are projected conservatively — read the high end of the band for the optimistic case.'
                   : t.prior_campom != null && t.prior_campom >= 10
                     ? ' Mild regression expected on this tier (projections sit ≈0.3 below current on +10..+15 inputs).'
                     : '';
               return (
                 <span
-                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)}`}
-                  title={`Projected next-season CamPom. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.1 — directional, not a point estimate.${regressionNote}`}
+                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${camTierColor(tier)}`}
+                  title={`Projected next-season CAM. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.1 — directional, not a point estimate.${regressionNote}`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {seasonLabel(t.target_season)}
@@ -247,7 +247,7 @@ export default function PlayerProgression() {
       {/* Time-series chart */}
       {hasCamSeries && (
         <div className="bg-gray-800 rounded-lg p-5">
-          <h2 className="text-lg font-bold mb-3">CamPom over time</h2>
+          <h2 className="text-lg font-bold mb-3">CAM over time</h2>
           <ResponsiveContainer width="100%" height={isMobile ? 220 : 280}>
             <ComposedChart data={campomSeries} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
@@ -281,7 +281,7 @@ export default function PlayerProgression() {
                   return [v.toFixed(2), name];
                 }}
               />
-              {/* D-I average reference at y=0. CamPom v3 is centered such
+              {/* D-I average reference at y=0. CAM is centered such
                   that 0 = league-average by construction; the Y-domain
                   clamps already include 0 so the line is always
                   visible. Dashed slate styling matches PlayerDetail's
@@ -299,7 +299,7 @@ export default function PlayerProgression() {
                 }}
               />
               {/* Projection cone: q10–q90 band widening from the latest
-                  actual point (where lower = upper = current CamPom, so it
+                  actual point (where lower = upper = current CAM, so it
                   starts as a vertex) out to the projected target season.
                   Sits behind the dashed projection mean-line. */}
               {data.trajectory && (
@@ -310,7 +310,7 @@ export default function PlayerProgression() {
                       ? [d.projection_lower, d.projection_upper]
                       : undefined
                   }
-                  name="Projection range (q10–q90)"
+                  name="Projection range"
                   fill="#a78bfa"
                   fillOpacity={0.18}
                   stroke="none"
@@ -321,7 +321,7 @@ export default function PlayerProgression() {
               <Line
                 type="monotone"
                 dataKey="campom"
-                name="CamPom v3"
+                name="CAM"
                 stroke="#3b82f6"
                 strokeWidth={2}
                 dot={{ r: 4 }}
@@ -395,11 +395,11 @@ export default function PlayerProgression() {
             <StatRow label="ORTG" seasons={seasonsAsc} pick={(s) => s.season_stats?.offensive_rating ?? null} />
             <StatRow label="DRTG" seasons={seasonsAsc} pick={(s) => s.season_stats?.defensive_rating ?? null} />
             <StatRow label="Net" seasons={seasonsAsc} pick={(s) => s.season_stats?.net_rating ?? null} signed />
-            <StatRow label="CamPom" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom ?? null} pctile={(s) => s.torvik_stats?.campom_pct ?? null} signed />
+            <StatRow label="CAM" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom ?? null} pctile={(s) => s.torvik_stats?.campom_pct ?? null} signed />
             {/* O/D halves (envelope-gated server-side; no percentile companion,
-                so shaded by the CamPom-half gradient instead). */}
-            <StatRow label="CPO" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_o ?? null} signed colorFor={(v) => (v != null ? campomHalfColor(v, 'o') : undefined)} />
-            <StatRow label="CPD" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_d ?? null} signed colorFor={(v) => (v != null ? campomHalfColor(v, 'd') : undefined)} />
+                so shaded by the CAM-half gradient instead). */}
+            <StatRow label="CAMO" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_o ?? null} signed colorFor={(v) => (v != null ? camHalfColor(v, 'o') : undefined)} />
+            <StatRow label="CAMD" seasons={seasonsAsc} pick={(s) => s.torvik_stats?.campom_d ?? null} signed colorFor={(v) => (v != null ? camHalfColor(v, 'd') : undefined)} />
           </tbody>
         </table>
       </div>
@@ -444,8 +444,8 @@ function StatRow({
   pick: (s: ProgressionSeason) => number | null;
   pctile?: (s: ProgressionSeason) => number | null;
   /// Per-value text color override — takes precedence over the percentile
-  /// shading. Used by the CPO/CPD rows (no percentile companion) to apply
-  /// the CamPom-half gradient instead, keeping player surfaces gradient-shaded.
+  /// shading. Used by the CAMO/CAMD rows (no percentile companion) to apply
+  /// the CAM-half gradient instead, keeping player surfaces gradient-shaded.
   colorFor?: (v: number | null) => string | undefined;
   fmt?: (v: number | null) => string;
   decimals?: number;
@@ -485,7 +485,7 @@ function SeasonCard({ entry, isMobile }: { entry: ProgressionSeason; isMobile: b
   }, [entry]);
   const hasRadar = radarData.some((a) => a.value > 0);
   const hasShot = entry.torvik_stats != null;
-  const tier = entry.torvik_stats?.campom != null ? campomTier(entry.torvik_stats.campom) : null;
+  const tier = entry.torvik_stats?.campom != null ? camTier(entry.torvik_stats.campom) : null;
   return (
     <div className="bg-gray-800 rounded-lg p-4">
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
@@ -517,7 +517,7 @@ function SeasonCard({ entry, isMobile }: { entry: ProgressionSeason; isMobile: b
             </span>
           )}
           {entry.torvik_stats?.campom != null && tier && (
-            <span className={`px-1.5 rounded border ${campomTierColor(tier)}`}>
+            <span className={`px-1.5 rounded border ${camTierColor(tier)}`}>
               {fmt(entry.torvik_stats.campom)}
             </span>
           )}

@@ -8,7 +8,7 @@ import {
   type ProjectionSource,
 } from '../api/client';
 import { gridTheme } from '../theme';
-import { campomTier, campomTierColor, campomTitle } from './campom';
+import { camTier, camTierColor, camTitle } from './cam';
 import { classColor } from './archetypeColors';
 import { agNullsBottom } from './tableSort';
 import { TableToolbar, TableSearchInput } from './TableToolbar';
@@ -46,11 +46,11 @@ const fmtBand = (v: number | null) => (v != null ? v.toFixed(1) : '—');
 
 const campomCellRenderer = (p: { value: number | null }) => {
   if (p.value == null) return <span className="text-slate-500">—</span>;
-  const tier = campomTier(p.value);
+  const tier = camTier(p.value);
   return (
     <span
-      className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
-      title={campomTitle(p.value)}
+      className={`px-1.5 rounded border text-xs ${camTierColor(tier)}`}
+      title={camTitle(p.value)}
     >
       {p.value.toFixed(1)}
     </span>
@@ -67,7 +67,7 @@ function buildColumns(
     {
       headerName: 'Rk',
       colId: 'proj_rank',
-      headerTooltip: 'Projected-CamPom rank within the loaded pool (best = 1).',
+      headerTooltip: 'Projected-CAM rank within the loaded pool (best = 1).',
       width: 56,
       pinned: 'left',
       sortable: false,
@@ -169,8 +169,8 @@ function buildColumns(
     },
     {
       field: 'campom',
-      headerName: 'Proj CamPom',
-      headerTooltip: 'Projected CamPom (model mean) for the upcoming season.',
+      headerName: 'Proj CAM',
+      headerTooltip: 'Projected CAM (model mean) for the upcoming season.',
       width: 130,
       sort: 'desc',
       sortingOrder: ['desc', 'asc', null],
@@ -180,7 +180,7 @@ function buildColumns(
     {
       field: 'campom_lower',
       headerName: 'Floor',
-      headerTooltip: 'q10 of the projection band (low-end outcome).',
+      headerTooltip: 'Low end of the projection band (10th percentile).',
       width: 78,
       sortingOrder: ['desc', 'asc', null],
       comparator: agNullsBottom,
@@ -190,7 +190,7 @@ function buildColumns(
     {
       field: 'campom_upper',
       headerName: 'Ceil',
-      headerTooltip: 'q90 of the projection band (high-end outcome).',
+      headerTooltip: 'High end of the projection band (90th percentile).',
       width: 78,
       sortingOrder: ['desc', 'asc', null],
       comparator: agNullsBottom,
@@ -199,8 +199,8 @@ function buildColumns(
     },
     {
       field: 'composite_rank',
-      headerName: '247 Rk',
-      headerTooltip: '247Sports composite national rank (recruits only).',
+      headerName: 'Scout Rk',
+      headerTooltip: 'Scouting-consensus national rank (recruits only).',
       width: 84,
       sortingOrder: ['asc', 'desc', null],
       comparator: agNullsBottom,
@@ -254,7 +254,7 @@ export default function ProjectedPlayers({ year }: { year: number }) {
     };
   }, [year]);
 
-  // Projected-CamPom rank over the loaded pool (best = 1), keyed by player_id.
+  // Projected-CAM rank over the loaded pool (best = 1), keyed by player_id.
   // Fixed to each player regardless of search/sort (mirrors the Players grid).
   const rank = useMemo(() => {
     const m = new Map<string, number>();
@@ -284,12 +284,6 @@ export default function ProjectedPlayers({ year }: { year: number }) {
           />
         }
       />
-      <p className="text-xs text-gray-500 mb-3">
-        Projected CamPom for the upcoming {year} season — returners, incoming
-        transfers, and committed freshmen, composed from the {baseSeason} roster
-        via cstat's trajectory and freshman-impact models. Ranked by the model
-        mean; Floor / Ceil are the q10 / q90 band.
-      </p>
 
       {!loading && rows.length === 0 ? (
         <div className="rounded border border-gray-700 bg-gray-900/40 p-6 text-sm text-gray-400">

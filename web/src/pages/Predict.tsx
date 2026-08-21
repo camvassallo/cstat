@@ -14,7 +14,7 @@ import {
 import { useSeason, seasonHref } from '../components/season';
 import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { usePageTitle } from '../components/usePageTitle';
-import { campomTier, campomTierColor, campomTitle } from '../components/campom';
+import { camTier, camTierColor, camTitle } from '../components/cam';
 import { classColor, classTitle, provisionalMeta } from '../components/archetypeColors';
 import { shortDate } from '../components/format';
 import { RosterWaffle } from '../components/RosterWaffle';
@@ -145,7 +145,7 @@ export default function Predict() {
         <span className="text-gray-300">
           {season - 1}-{String(season).slice(2)}
         </span>{' '}
-        matchups. Switch seasons via the nav for back-tests.
+        matchups.
       </p>
 
       <form onSubmit={handleSubmit} className="bg-gray-800 rounded-lg p-6 space-y-4">
@@ -207,10 +207,9 @@ export default function Predict() {
           />
           {asOfDate && (
             <p className="mt-1 text-xs text-amber-400">
-              Point-in-time projection: CamPom rebuilt from game-by-game Torvik data
-              up to {asOfDate}. Team-level features (AdjEM, SOS, four factors)
-              remain end-of-season aggregates — see roadmap §4b for the residual
-              leak budget.
+              Point-in-time projection: player value rebuilt from game-by-game
+              data up to {asOfDate}. Team-level features remain season
+              aggregates.
             </p>
           )}
         </div>
@@ -330,7 +329,7 @@ function ShotDietRow({ result }: { result: PredictionResult }) {
           {hasHome ? (
             <TeamShotDiet roster={result.roster_home} />
           ) : (
-            <EmptyNote>No Torvik shot data</EmptyNote>
+            <EmptyNote>No shot data</EmptyNote>
           )}
         </TeamPanel>
         <TeamPanel
@@ -342,7 +341,7 @@ function ShotDietRow({ result }: { result: PredictionResult }) {
           {hasAway ? (
             <TeamShotDiet roster={result.roster_away} />
           ) : (
-            <EmptyNote>No Torvik shot data</EmptyNote>
+            <EmptyNote>No shot data</EmptyNote>
           )}
         </TeamPanel>
       </div>
@@ -396,7 +395,7 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Roster Compare panel — side-by-side roster table (top 8 by CamPom per
+// Roster Compare panel — side-by-side roster table (top 8 by CAM per
 // team) with archetype chips and rate stats. The Archetype + Shot Diet
 // rows above already render the visual identity per team; this panel
 // drills into the specific players carrying it.
@@ -422,7 +421,7 @@ function RosterCompare({ result }: { result: PredictionResult }) {
         <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
           Roster Compare
         </h2>
-        <div className="text-[11px] text-gray-500">Top {ROSTER_PANEL_LIMIT} by CamPom</div>
+        <div className="text-[11px] text-gray-500">Top {ROSTER_PANEL_LIMIT} by CAM</div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
         <RosterColumn
@@ -484,8 +483,8 @@ function RosterColumn({
 }
 
 function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
-  const tier = campomTier(p.campom);
-  const tierColor = campomTierColor(tier);
+  const tier = camTier(p.campom);
+  const tierColor = camTierColor(tier);
   const mpg = p.minutes_per_game != null ? p.minutes_per_game.toFixed(1) : '—';
   const campomScore = p.campom != null ? p.campom.toFixed(1) : '—';
   return (
@@ -521,7 +520,7 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
       </div>
       <div
         className={`text-[11px] font-mono px-1.5 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
-        title={campomTitle(p.campom, p.campom_o, p.campom_d) || undefined}
+        title={camTitle(p.campom, p.campom_o, p.campom_d) || undefined}
       >
         {campomScore}
       </div>
@@ -1281,7 +1280,7 @@ function ResultHeadline({
     pit: {
       label: 'Point-in-time',
       cls: 'bg-amber-900/60 text-amber-300',
-      title: `Point-in-time CamPom v3 as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`,
+      title: `Point-in-time CAM as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`,
     },
   };
   // Keyed on the server-confirmed basis alone (not as_of_date): the live
