@@ -5,7 +5,7 @@ import type { ColDef } from 'ag-grid-community';
 import { fetchPlayers, type PlayerRow } from '../api/client';
 import { conferenceLabel } from '../lib/conferences';
 import { gridTheme } from '../theme';
-import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
+import { camTier, camTierColor, camTitle, camHalfColor } from '../components/cam';
 import { agNullsBottom } from '../components/tableSort';
 import { classColor, CLASS_ORDER, provisionalMeta } from '../components/archetypeColors';
 import ArchetypeFilter from '../components/ArchetypeFilter';
@@ -35,14 +35,14 @@ const PAGE_FETCH_LIMIT = 5000;
 
 const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
   if (p.value == null) return <span className="text-slate-500">—</span>;
-  const tier = campomTier(p.value);
+  const tier = camTier(p.value);
   const pctVal = p.data?.campom_pct;
   const pctStr = pctVal != null ? Math.round(pctVal * 100) : null;
   return (
     <span className="inline-flex items-baseline gap-2">
       <span
-        className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
-        title={campomTitle(p.value, p.data?.campom_o, p.data?.campom_d)}
+        className={`px-1.5 rounded border text-xs ${camTierColor(tier)}`}
+        title={camTitle(p.value, p.data?.campom_o, p.data?.campom_d)}
       >
         {p.value.toFixed(1)}
       </span>
@@ -51,13 +51,13 @@ const campomCellRenderer = (p: { value: number | null; data?: PlayerRow }) => {
   );
 };
 
-// O/D CamPom halves — signed values on the shared diverging red→green
-// gradient (per-half saturation, see campomHalfColor), gated server-side
+// O/D CAM halves — signed values on the shared diverging red→green
+// gradient (per-half saturation, see camHalfColor), gated server-side
 // (±30 sanity envelope; unstable rows arrive null and render "—").
 const campomHalfRenderer = (side: 'o' | 'd') =>
   function CampomHalfCell(p: { value: number | null }) {
     return p.value != null ? (
-      <span className="tabular-nums text-xs" style={{ color: campomHalfColor(p.value, side) }}>
+      <span className="tabular-nums text-xs" style={{ color: camHalfColor(p.value, side) }}>
         {`${p.value > 0 ? '+' : ''}${p.value.toFixed(1)}`}
       </span>
     ) : (
@@ -101,7 +101,7 @@ function buildColumns(
     {
       headerName: 'Rk',
       colId: 'campom_rank',
-      headerTooltip: 'CamPom rank within the loaded pool (best CamPom = 1).',
+      headerTooltip: 'CAM rank within the loaded pool (best CAM = 1).',
       // Wide enough for a 4-digit rank (~3k-player pool) so it never truncates.
       width: 72,
       pinned: 'left',
@@ -109,7 +109,7 @@ function buildColumns(
       // The synthetic rank is not a searchable attribute — keep it out of the
       // quick-filter corpus so typing "5" doesn't match rank-5 rows.
       getQuickFilterText: () => '',
-      // The player's CamPom rank over the loaded qualified pool, NOT their
+      // The player's CAM rank over the loaded qualified pool, NOT their
       // position in the currently displayed rows. Reading a filtered row index
       // here would renumber 1..N over whatever the search matched (issue #121);
       // `campomRank` is bound to the row's data, so it stays fixed under
@@ -220,17 +220,17 @@ function buildColumns(
     },
   ];
 
-  // Identity / volume block — always visible. CamPom kicks off a new visual
+  // Identity / volume block — always visible. CAM kicks off a new visual
   // block so it gets the category divider; its renderer already applies its
   // own tier-based color, so no gradient cellStyle.
   const identity: ColDef<PlayerRow>[] = [
     {
       field: 'campom',
-      headerName: 'CamPom',
+      headerName: 'CAM',
       headerTooltip: 'Composite player valuation. Hover the chip for tier and the O/D split.',
       width: 120,
       sort: 'desc',
-      // First click sorts best-first, matching CPO/CPD.
+      // First click sorts best-first, matching CAMO/CAMD.
       sortingOrder: ['desc', 'asc', null],
       comparator: agNullsBottom,
       cellRenderer: campomCellRenderer,
@@ -239,20 +239,20 @@ function buildColumns(
     },
     {
       field: 'campom_o',
-      headerName: 'CPO',
+      headerName: 'CAMO',
       headerTooltip:
-        "CamPom's offensive half (O + D = CamPom, same per-100 scale). Hidden where the decomposition is numerically unstable (±30 sanity envelope).",
+        "CAM's offensive half (O + D = CAM, same per-100 scale). Hidden where the decomposition is numerically unstable (±30 sanity envelope).",
       width: 70,
-      // First click sorts best-first (higher = better), matching CamPom.
+      // First click sorts best-first (higher = better), matching CAM.
       sortingOrder: ['desc', 'asc', null],
       comparator: agNullsBottom,
       cellRenderer: campomHalfRenderer('o'),
     },
     {
       field: 'campom_d',
-      headerName: 'CPD',
+      headerName: 'CAMD',
       headerTooltip:
-        "CamPom's defensive half — positive is GOOD (defensive value added; O + D = CamPom). Hidden where the decomposition is numerically unstable.",
+        "CAM's defensive half — positive is GOOD (defensive value added; O + D = CAM). Hidden where the decomposition is numerically unstable.",
       width: 70,
       sortingOrder: ['desc', 'asc', null],
       comparator: agNullsBottom,
@@ -313,7 +313,7 @@ export default function Players() {
   usePageTitle('Players');
   const { seasons: availableSeasons } = useAvailableSeasons();
   // The upcoming (not-yet-played) projection year — its own view (projected
-  // CamPom) rather than the observed-stat grid.
+  // CAM) rather than the observed-stat grid.
   const upcoming = upcomingProjectionSeason();
   const isProjected = season === upcoming;
 
@@ -383,7 +383,7 @@ export default function Players() {
   // round-trip. Empty selection = no filter (see useArchetypeFilter).
   const displayedRows = useMemo(() => filterRows(rows), [filterRows, rows]);
 
-  // CamPom rank over the displayed (post-filter) pool (best = 1), keyed by
+  // CAM rank over the displayed (post-filter) pool (best = 1), keyed by
   // player_id. A function of the loaded pool + archetype filter only —
   // deliberately NOT of search/sort, so the rank stays fixed to each player
   // (issue #121). With an archetype filter active the rank is within the
@@ -522,7 +522,7 @@ export default function Players() {
 
   if (isProjected) {
     // Upcoming season has no observed stats — swap the box-score grid for the
-    // projected-CamPom ranking (returners + transfers + freshmen).
+    // projected-CAM ranking (returners + transfers + freshmen).
     return (
       <div>
         {modeTabs}

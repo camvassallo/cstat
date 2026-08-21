@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchRecruits, type RecruitRow } from '../api/client';
-import { campomTier, campomTierColor } from './campom';
+import { camTier, camTierColor } from './cam';
 import { agNullsBottom } from './tableSort';
 import { gridTheme } from '../theme';
 import { SeasonLink } from './SeasonLink';
 import { useIsMobile } from './useIsMobile';
 
-// Star rating glyph row. Filled stars are amber-300 (matches the CamPom tier
+// Star rating glyph row. Filled stars are amber-300 (matches the CAM tier
 // chip palette); empties are slate-700. Rendered with `★` rather than SVGs to
 // stay cheap on AG Grid's per-row render budget.
 function StarRating({ value }: { value: number | null }) {
@@ -61,8 +61,8 @@ function teamCellRenderer(opts: {
 
 // Row enriched with the model-vs-247 disagreement signal. `campom_rank` is
 // the recruit's position when the class is sorted by projected freshman
-// CamPom desc; `rank_delta = composite_rank − campom_rank` is the value
-// index. Mirrors TransferPortal's sign convention — positive = CamPom
+// CAM desc; `rank_delta = composite_rank − campom_rank` is the value
+// index. Mirrors TransferPortal's sign convention — positive = CAM
 // rates the recruit higher than 247 does. Both fields are NULL when either
 // rank input is missing (unranked recruit OR predict failure).
 interface RankedRecruit extends RecruitRow {
@@ -84,7 +84,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       minWidth: 70,
       pinned: 'left',
       headerTooltip:
-        "Our rank among 247-ranked recruits, sorted by projected freshman CamPom. Forward-looking — favors recruits the freshman-impact model expects to be more productive in year one, not just who 247 has ranked highest. '—' for unranked-by-247 recruits or rare projection failures.",
+        'Our rank, sorted by projected freshman CAM — who the model expects to produce in year one, not who is ranked highest.',
       cellRenderer: (p: { value: number | null }) =>
         p.value != null ? (
           <span className="font-bold">{p.value}</span>
@@ -117,7 +117,7 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       headerName: 'Stars',
       field: 'star_rating',
       ...flexCol(1, 90),
-      headerTooltip: '247Sports star rating (1–5)',
+      headerTooltip: 'Scouting-consensus star rating (1–5)',
       cellRenderer: (p: { value: number | null }) => <StarRating value={p.value} />,
     },
     {
@@ -167,20 +167,20 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       field: 'projected_campom_mean',
       ...flexCol(1, 110),
       headerTooltip:
-        "cstat's freshman-impact projection (CamPom v3 for the recruit's first college season). Hover a cell to see the q10–q90 band. Wider band = thinner training-set support; tighter band = denser cohort. Selection-bias caveat: elite top-30 projections are calibrated on returners since the highest-rated freshmen leave for the draft.",
+        "Projected CAM for the recruit's first college season. Hover for the projection band.",
       sort: 'desc',
       cellRenderer: (p: { value: number | null; data?: RankedRecruit }) => {
         if (p.value == null) return <span className="text-gray-600 text-xs">—</span>;
-        const tier = campomTier(p.value);
+        const tier = camTier(p.value);
         const lo = p.data?.projected_campom_lower;
         const hi = p.data?.projected_campom_upper;
         const bandStr =
           lo != null && hi != null
-            ? `Projected freshman CamPom: ${p.value.toFixed(1)} (${lo.toFixed(1)}–${hi.toFixed(1)})${tier ? ` · ${tier}` : ''}`
-            : `Projected freshman CamPom: ${p.value.toFixed(1)}${tier ? ` · ${tier}` : ''}`;
+            ? `Projected freshman CAM: ${p.value.toFixed(1)} (${lo.toFixed(1)}–${hi.toFixed(1)})${tier ? ` · ${tier}` : ''}`
+            : `Projected freshman CAM: ${p.value.toFixed(1)}${tier ? ` · ${tier}` : ''}`;
         return (
           <span
-            className={`px-1.5 rounded border text-xs ${campomTierColor(tier)}`}
+            className={`px-1.5 rounded border text-xs ${camTierColor(tier)}`}
             title={bandStr}
           >
             {p.value.toFixed(1)}
@@ -189,10 +189,10 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
       },
     },
     {
-      headerName: '247',
+      headerName: 'Scout',
       field: 'composite_rank',
       ...flexCol(1, 70),
-      headerTooltip: '247Sports composite national rank within the recruiting class. — for unranked recruits.',
+      headerTooltip: 'Scouting-consensus national rank within the recruiting class. — for unranked recruits.',
       // agNullsBottom keeps unranked (—) recruits pinned to the bottom in BOTH
       // directions; a naive nulls-last comparator floats them to the top on the
       // desc sort AG Grid negates (issue #196).
@@ -205,11 +205,11 @@ function buildColumns(isMobile: boolean, year: number): ColDef<RankedRecruit>[] 
         ),
     },
     {
-      headerName: 'Δ247',
+      headerName: 'ΔScout',
       field: 'rank_delta',
       ...flexCol(1, 70),
       headerTooltip:
-        'Value vs. 247: composite_rank − cstat projected rank. Positive (green) = CamPom rates the recruit higher than 247 does; negative (red) = CamPom is lower. Useful for spotting model-vs-scouts disagreement; also a sanity-check surface — sort desc to find sleepers, asc to find scout-favorites the model is bearish on. NULL when either rank is missing (unranked-by-247 recruit, or projection unavailable).',
+        'Value vs. the scouting consensus: consensus rank − our projected rank. Positive (green) = we rate the recruit higher than the scouts do; negative (red) = we rate them lower. Sort descending to find sleepers, ascending for scout favorites the model is bearish on. Blank when either rank is missing.',
       // Direction-aware nulls-last so the em-dash rows don't top the desc sort
       // the headerTooltip tells users to run for sleepers (issue #196).
       comparator: agNullsBottom,
@@ -260,9 +260,9 @@ export default function RecruitClass({ year }: Props) {
       .then((r) => {
         if (canceled) return;
         setError(null);
-        // Rank by projected freshman CamPom desc. Mirrors the TransferPortal
+        // Rank by projected freshman CAM desc. Mirrors the TransferPortal
         // pattern: `campom_rank` is only assigned when BOTH inputs are
-        // present (projected CamPom + 247 composite_rank), so the Δ column
+        // present (projected CAM + 247 composite_rank), so the Δ column
         // is NULL for unranked-by-247 recruits and for the rare predict
         // failure — frontend column already renders that as an em-dash.
         // Predict-rank counter `i` is incremented only on eligible rows
@@ -332,11 +332,7 @@ export default function RecruitClass({ year }: Props) {
     if (error.includes('no recruits')) {
       return (
         <div className="p-4 text-gray-500 text-sm">
-          No recruits ingested for class of {year}. Run{' '}
-          <code className="px-1 bg-gray-800 rounded">
-            cstat-ingest recruits --year {year}
-          </code>{' '}
-          to populate.
+          No recruit data available for the class of {year} yet.
         </div>
       );
     }
@@ -386,15 +382,6 @@ export default function RecruitClass({ year }: Props) {
         </div>
         <span className="text-xs text-gray-500">
           {shown === total ? `${total} recruits` : `${shown} of ${total} recruits`}
-          {' · '}
-          <a
-            href={`https://247sports.com/Season/${year}-Basketball/CompositeRecruitRankings/?InstitutionGroup=HighSchool`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-400 hover:underline"
-          >
-            247Sports source
-          </a>
         </span>
       </div>
       <div style={{ height: 'calc(100dvh - 220px)', minHeight: '400px', width: '100%' }}>

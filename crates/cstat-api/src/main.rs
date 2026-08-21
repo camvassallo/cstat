@@ -123,7 +123,7 @@ async fn boot_and_serve() -> Result<()> {
     });
 
     // Static file serving for React SPA. ServeDir handles asset paths
-    // that map to real files on disk (`/assets/*`, `/favicon.svg`,
+    // that map to real files on disk (`/assets/*`, `/favicon.png`,
     // `/index.html`); anything else falls through to ServeFile on
     // index.html so React Router can take over on hard navigation,
     // share links, and refresh.

@@ -2,9 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Favicon set. The mark is a square JPEG on its own navy field (no alpha),
+      rasterized to PNG at build-prep time — see web/public/. PNG rather than
+      the source JPEG because it's ~10x smaller at icon sizes and universally
+      supported as an icon type.
+    -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/logo-512.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b0b0c" />
+    <!-- Matches the navbar's --brand-navy-deep so mobile browser chrome
+         continues the header rather than cutting it off with a black band. -->
+    <meta name="theme-color" content="#041f3f" />
 
     <!--
       Social-preview / SEO meta. Social unfurlers (X, Discord, Slack, iMessage,
@@ -21,7 +31,7 @@
       og:image + its dimensions live INSIDE the marker region.
     -->
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="CamPom" />
+    <meta property="og:site_name" content="Camalytics" />
     <meta name="twitter:card" content="summary_large_image" />
 
     <!--
@@ -31,16 +41,16 @@
       canonical is injected with the rest below.
     -->
     <!--SSR_META_START-->
-    <title>CamPom — College Basketball Analytics</title>
-    <meta name="description" content="College basketball analytics: KenPom-style team ratings, player projections and archetypes, RAPM/CamPom metrics, and game predictions." />
+    <title>Camalytics — College Basketball Analytics</title>
+    <meta name="description" content="College basketball analytics: adjusted team ratings, CAM player valuation, projections, archetypes, lineups, and game predictions." />
     <meta property="og:url" content="https://campom.org/" />
-    <meta property="og:title" content="CamPom — College Basketball Analytics" />
-    <meta property="og:description" content="KenPom-style ratings, player projections and archetypes, and game predictions." />
+    <meta property="og:title" content="Camalytics — College Basketball Analytics" />
+    <meta property="og:description" content="Adjusted team ratings, CAM player valuation, projections and archetypes, and game predictions." />
     <meta property="og:image" content="https://campom.org/og-image.png" />
     <meta property="og:image:width" content="1424" />
     <meta property="og:image:height" content="752" />
-    <meta name="twitter:title" content="CamPom — College Basketball Analytics" />
-    <meta name="twitter:description" content="KenPom-style ratings, player projections and archetypes, and game predictions." />
+    <meta name="twitter:title" content="Camalytics — College Basketball Analytics" />
+    <meta name="twitter:description" content="Adjusted team ratings, CAM player valuation, projections and archetypes, and game predictions." />
     <meta name="twitter:image" content="https://campom.org/og-image.png" />
     <!--SSR_META_END-->
   </head>

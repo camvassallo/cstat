@@ -330,7 +330,7 @@ describe('buildShare', () => {
       dateKey: '2026-07-01',
       url: 'https://x/portle',
     });
-    expect(out).toContain('CamPom · Portle · 2026-07-01 · Power 5 · 2/10');
+    expect(out).toContain('Camalytics · Portle · 2026-07-01 · Power 5 · 2/10');
     expect(out).toContain('https://x/portle');
     expect(out).not.toContain('answer');
     expect(out.split('\n')).toHaveLength(4); // header + 2 grid rows + url
@@ -342,7 +342,7 @@ describe('buildShare', () => {
       won: false,
       daily: false,
     });
-    expect(out).toContain('CamPom · Portle · Practice · All D1 · X/10');
+    expect(out).toContain('Camalytics · Portle · Practice · All D1 · X/10');
   });
   it('annotates hinted solves', () => {
     const out = buildShare([compareGuess(answer, answer)], {

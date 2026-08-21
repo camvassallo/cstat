@@ -25,7 +25,7 @@ import {
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { PlayerPicker } from '../components/PlayerPicker';
-import { campomTier, campomTierColor, campomHalfPctile } from '../components/campom';
+import { camTier, camTierColor, camHalfPctile } from '../components/cam';
 import { ClassTooltip } from '../components/Archetype';
 import { classColor, provisionalMeta } from '../components/archetypeColors';
 import { useIsMobile } from '../components/useIsMobile';
@@ -105,7 +105,7 @@ interface StatCellProps {
   pctile?: number | null;
   color: string;
   chip?: ChipInfo | null;
-  /// Optional cell tooltip — used by CPO/CPD to flag the modeled percentile.
+  /// Optional cell tooltip — used by CAMO/CAMD to flag the modeled percentile.
   title?: string;
 }
 
@@ -208,7 +208,7 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
   const { player } = p;
   const campom = p.torvik_stats?.campom ?? null;
   const campomPct = p.torvik_stats?.campom_pct ?? null;
-  const tier = campomTier(campom);
+  const tier = camTier(campom);
   const pctStr = campomPct != null ? Math.round(campomPct * 100) : null;
   const arch = p.archetype;
   const primaryClassColor = arch ? classColor(arch.primary_class) : null;
@@ -277,10 +277,10 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string;
           )}
           {campom != null && (
             <span
-              className={`inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 px-2 py-0.5 rounded border text-xs ${campomTierColor(tier)}`}
-              title="CamPom: composite player valuation"
+              className={`inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 px-2 py-0.5 rounded border text-xs ${camTierColor(tier)}`}
+              title="CAM: composite player valuation"
             >
-              <span className="uppercase tracking-wide opacity-70">CamPom</span>
+              <span className="uppercase tracking-wide opacity-70">CAM</span>
               <span className="font-bold">{campom.toFixed(1)}</span>
               {pctStr != null && <span className="opacity-80 whitespace-nowrap">{pctStr} pct</span>}
               {tier && <span className="opacity-80 whitespace-nowrap">· {tier}</span>}
@@ -395,14 +395,14 @@ export default function PlayerCompare() {
   const hasTorvik = players.some((p) => p.torvik_stats);
   const advancedRows: StatRow[] = hasTorvik
     ? [
-        { label: 'CamPom', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom), pctile: p.torvik_stats?.campom_pct, color: PLAYER_COLORS[i] })) },
-        // O/D halves of CamPom (envelope-gated server-side). The compute
+        { label: 'CAM', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom), pctile: p.torvik_stats?.campom_pct, color: PLAYER_COLORS[i] })) },
+        // O/D halves of CAM (envelope-gated server-side). The compute
         // pipeline doesn't materialize a PERCENT_RANK for the halves, so the
-        // bar is driven by a MODELED percentile (`campomHalfPctile`, fit to the
+        // bar is driven by a MODELED percentile (`camHalfPctile`, fit to the
         // documented O/D spread) — left-fill + advantage chips, consistent with
         // the other rows.
-        { label: 'CPO', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_o), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_o), pctile: campomHalfPctile(p.torvik_stats?.campom_o, 'o'), color: PLAYER_COLORS[i], title: 'Offensive half of CamPom (per 100). Bar = modeled D-I percentile, estimated from the O/D spread.' })) },
-        { label: 'CPD', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_d), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_d), pctile: campomHalfPctile(p.torvik_stats?.campom_d, 'd'), color: PLAYER_COLORS[i], title: 'Defensive half of CamPom (per 100, positive = value added). Bar = modeled D-I percentile, estimated from the O/D spread.' })) },
+        { label: 'CAMO', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_o), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_o), pctile: camHalfPctile(p.torvik_stats?.campom_o, 'o'), color: PLAYER_COLORS[i], title: 'Offensive half of CAM (per 100). Bar = modeled D-I percentile, estimated from the O/D spread.' })) },
+        { label: 'CAMD', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.campom_d), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.campom_d), pctile: camHalfPctile(p.torvik_stats?.campom_d, 'd'), color: PLAYER_COLORS[i], title: 'Defensive half of CAM (per 100, positive = value added). Bar = modeled D-I percentile, estimated from the O/D spread.' })) },
         { label: 'Adj ORTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_oe ?? p.season_stats?.offensive_rating), pctile: p.torvik_stats?.adj_oe_pct ?? p.percentiles?.offensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'Adj DRTG', deltaFmt: dFmt1, raws: players.map((p) => p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), cells: players.map((p, i) => ({ value: fmt(p.torvik_stats?.adj_de ?? p.season_stats?.defensive_rating), pctile: p.torvik_stats?.adj_de_pct ?? p.percentiles?.defensive_rating_pct, color: PLAYER_COLORS[i] })) },
         { label: 'SOS', deltaFmt: dFmt2, raws: players.map((p) => p.season_stats?.player_sos), cells: players.map((p, i) => ({ value: fmt(p.season_stats?.player_sos, 2), pctile: p.percentiles?.player_sos_pct, color: PLAYER_COLORS[i] })) },
@@ -463,8 +463,7 @@ export default function PlayerCompare() {
       <div>
         <h1 className="text-2xl font-bold">Player Comparison</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Compare up to {maxPlayers} players side by side. Bars show D-I percentile
-          (CPO/CPD modeled from the O/D spread).
+          Compare up to {maxPlayers} players side by side. Bars show D-I percentile.
         </p>
       </div>
 
@@ -624,7 +623,7 @@ export default function PlayerCompare() {
                         </div>
                       </>
                     ) : (
-                      <div className="text-xs text-gray-500 py-12">No Torvik data</div>
+                      <div className="text-xs text-gray-500 py-12">No shot data</div>
                     )}
                   </div>
                 ))}

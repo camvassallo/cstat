@@ -900,6 +900,8 @@ impl<'a> SeasonIngester<'a> {
             torvik_rebounds_updated: 0,
             compute: None,
             projections_year: None,
+            game_projections: None,
+            game_projection_fetch_failures: 0,
             run_id: ledger.run_id(),
         };
 
@@ -1692,15 +1694,72 @@ impl<'a> SeasonIngester<'a> {
                             failures.push(format!("{step}: {msg}"));
                         }
                     }
+
+                    // --- completed-game projections (#266) ---
+                    // Re-materializes the CURRENT season's played games, which
+                    // `team_detail` reads instead of running the model per game
+                    // per page view. Deliberately after `compute_all`: the pit
+                    // feature vector's non-CamPom channels come from the
+                    // season-aggregate tables compute rewrites, so sweeping
+                    // first would persist yesterday's inputs.
+                    //
+                    // The whole season, not just tonight's games, and that is
+                    // not waste: those same season aggregates move every night,
+                    // so November's projections drift too. Sweeping by cutoff
+                    // date makes the full pass ~150 point-in-time rebuilds
+                    // rather than one per game.
+                    //
+                    // Best-effort. A failure leaves the previous sweep's rows
+                    // serving and sends the uncovered games back to the live
+                    // projection path — slower, not wrong — so it must not
+                    // degrade a game-night box-score refresh.
+                    let t0 = Utc::now();
+                    let step = "game_projections";
+                    match crate::game_projections::run(self.pool, &predictor, &[self.season]).await
+                    {
+                        Ok(r) => {
+                            info!(
+                                season = self.season,
+                                written = r.written,
+                                dates = r.dates,
+                                skipped = r.skipped,
+                                pruned = r.pruned,
+                                "materialized completed-game projections"
+                            );
+                            ledger
+                                .record(step, StepStatus::Ok, Some(r.written as i64), t0, None)
+                                .await;
+                            report.game_projections = Some(r.written);
+                            report.game_projection_fetch_failures = r.fetch_failures;
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            warn!(season = self.season, error = %msg,
+                                  "completed-game projection sweep failed; team pages fall back \
+                                   to projecting their schedules live");
+                            ledger
+                                .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                                .await;
+                            failures.push(format!("{step}: {msg}"));
+                        }
+                    }
                 }
                 Err(e) => {
                     let msg = format!("failed to load models from {model_dir}: {e}");
                     warn!(season = self.season, error = %msg,
                           "cannot materialize projections without the ONNX models");
-                    ledger
-                        .record(step, StepStatus::Failed, None, t0, Some(&msg))
-                        .await;
-                    failures.push(format!("{step}: {msg}"));
+                    // Both model-dependent steps share this one load, so both
+                    // record a failure. Recording only `projections` would
+                    // leave `game_projections` absent from the ledger, which
+                    // reads as "not attempted" rather than "could not run" —
+                    // and the freshness view would have nothing to show for a
+                    // night that silently stopped refreshing the team pages.
+                    for step in ["projections", "game_projections"] {
+                        ledger
+                            .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                            .await;
+                        failures.push(format!("{step}: {msg}"));
+                    }
                 }
             }
         }
@@ -2176,7 +2235,7 @@ impl<'a> SeasonIngester<'a> {
              {torvik_line}\n\
              *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
              *Compute:*  {compute_str}{repair_line}\n\
-             *Projections:*  {projections_line}\n\
+             *Projections:*  {projections_line}   ·   *Game projections:*  {game_proj_line}\n\
              *Rate budget:*  {remaining}/{budget}",
             games = report.ingest.games,
             pp = report.ingest.player_performances,
@@ -2190,6 +2249,22 @@ impl<'a> SeasonIngester<'a> {
             // never reports a stale projection table as if it were fresh.
             projections_line = match report.projections_year {
                 Some(y) => format!("{y} materialized"),
+                None => "not run".to_string(),
+            },
+            // A zero here is the interesting case, not a boring one: it means
+            // the sweep ran and produced nothing, which on a night with played
+            // games is a stale-input bug and sends every team page back to
+            // projecting its schedule live.
+            game_proj_line = match report.game_projections {
+                // The failure count rides along ONLY when non-zero: a sweep
+                // that covered less than it should is invisible otherwise —
+                // it keeps the previous night's rows, so the row-count gate
+                // sees no drop and the team pages keep rendering.
+                Some(n) if report.game_projection_fetch_failures > 0 => format!(
+                    "{n} games, {} fetches FAILED",
+                    report.game_projection_fetch_failures
+                ),
+                Some(n) => format!("{n} games"),
                 None => "not run".to_string(),
             },
             remaining = tokens_after,
@@ -2414,6 +2489,15 @@ pub struct NightlyReport {
     /// The forecast season whose projections this run materialized, or `None`
     /// when the step was skipped (`--no-compute`) or failed.
     pub projections_year: Option<i32>,
+    /// Completed-game projection rows written this run, or `None` when the
+    /// sweep was skipped (`--no-compute`) or failed.
+    pub game_projections: Option<usize>,
+    /// Per-team feature fetches the sweep could not complete. Surfaced in the
+    /// run summary rather than left to the tracing log: this pipeline has
+    /// already lost three nights to a `warn!` nobody was tailing (#186), and
+    /// the sweep's own failure mode is quiet by construction — it keeps the
+    /// previous rows, so neither the row-count gate nor the page notices.
+    pub game_projection_fetch_failures: usize,
     /// Grouping id for this run's rows in the `ingest_runs` ledger.
     pub run_id: Uuid,
 }
@@ -2452,6 +2536,20 @@ impl std::fmt::Display for NightlyReport {
         match self.projections_year {
             Some(y) => writeln!(f, "Projections: {y} materialized")?,
             None => writeln!(f, "Projections: not run")?,
+        }
+        match self.game_projections {
+            Some(n) => {
+                write!(f, "Game projections: {n} completed games materialized")?;
+                if self.game_projection_fetch_failures > 0 {
+                    write!(
+                        f,
+                        " ({} team feature fetches FAILED)",
+                        self.game_projection_fetch_failures
+                    )?;
+                }
+                writeln!(f)?;
+            }
+            None => writeln!(f, "Game projections: not run")?,
         }
         if let Some(c) = &self.compute {
             writeln!(f, "{c}")?;

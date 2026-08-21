@@ -20,7 +20,8 @@ import {
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
-import { campomTier, campomTierColor, campomSplit } from '../components/campom';
+import { camTier, camTierColor, camSplit } from '../components/cam';
+import { bandBarClass } from '../components/scale';
 import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
 import { conferenceLabel } from '../lib/conferences';
 import { compareValues, type SortDir } from '../components/tableSort';
@@ -41,7 +42,9 @@ const signedFmt = (v: number | null | undefined, d = 1) =>
 
 function PercentileBar({ label, value, pctile, title }: { label: string; value: string; pctile: number | null; title?: string }) {
   const p = pctile != null ? Math.round(pctile * 100) : null;
-  const color = p == null ? 'bg-gray-600' : p >= 80 ? 'bg-green-500' : p >= 60 ? 'bg-blue-500' : p >= 40 ? 'bg-yellow-500' : p >= 20 ? 'bg-orange-500' : 'bg-red-500';
+  // Shared site scale (red → orange → yellow → blue → green), so these bars,
+  // the CAM chips, and the CAMO/CAMD numerals all grade on one vocabulary.
+  const color = bandBarClass(pctile);
 
   return (
     <div className="flex items-center gap-3 py-1" title={title}>
@@ -215,21 +218,21 @@ export default function PlayerDetail() {
             <h1 className="text-3xl font-bold">{player.name}</h1>
             {archetype && <ArchetypeBadge archetype={archetype} />}
             {torvik?.campom != null && (() => {
-              const tier = campomTier(torvik.campom);
+              const tier = camTier(torvik.campom);
               const pctStr = torvik.campom_pct != null ? Math.round(torvik.campom_pct * 100) : null;
-              const split = campomSplit(torvik.campom_o, torvik.campom_d);
+              const split = camSplit(torvik.campom_o, torvik.campom_d);
               return (
                 <span
-                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border ${campomTierColor(tier)}`}
+                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border ${camTierColor(tier)}`}
                   title={
-                    'CamPom: composite player valuation. ' +
+                    'CAM: composite player valuation. ' +
                     (split
                       ? 'O/D halves sum to the total; D is positive-good (defensive value added). '
                       : '') +
                     'See methodology in docs/campom_methodology.md.'
                   }
                 >
-                  <span className="text-xs uppercase tracking-wide opacity-70">CamPom</span>
+                  <span className="text-xs uppercase tracking-wide opacity-70">CAM</span>
                   <span className="font-bold">{torvik.campom.toFixed(1)}</span>
                   {split && <span className="text-xs opacity-80">{split}</span>}
                   {pctStr != null && <span className="text-xs opacity-80">{pctStr} pct</span>}
@@ -238,14 +241,14 @@ export default function PlayerDetail() {
               );
             })()}
             {trajectory && (() => {
-              // Phase 5c growth-model projection. Pooled LOPO MAE ~2.1
-              // CamPom points; the q=0.1 / q=0.9 band is what users
+              // growth-model projection. Pooled LOPO MAE ~2.1
+              // CAM points; the q=0.1 / q=0.9 band is what users
               // should read for "how confident" — a wide band on a
               // freshman with thin signal is correct, not a flaw. Tier
               // colors track the projected mean so the chip visually
               // reflects projected quality without needing a separate
               // percentile lookup.
-              const tier = campomTier(trajectory.projected_mean);
+              const tier = camTier(trajectory.projected_mean);
               const targetLabel = `${trajectory.target_season - 1}-${(trajectory.target_season % 100).toString().padStart(2, '0')}`;
               const band = `${trajectory.projected_lower.toFixed(1)}–${trajectory.projected_upper.toFixed(1)}`;
               const direction =
@@ -261,13 +264,13 @@ export default function PlayerDetail() {
               // returners because (a) historically very few +20+
               // returners sustained +20+, and (b) the +20+ training tail
               // is empty (cohort leaves for the NBA). Append the caveat
-              // when current CamPom enters the bias zone — ≥10 gets a
+              // when current CAM enters the bias zone — ≥10 gets a
               // mild note, ≥15 gets the full "read the ceiling" prompt.
               // Per-bucket MAE / bias lives in
               // `trajectory_model_meta.json::mae_by_current_campom`.
               const regressionNote =
                 trajectory.prior_campom != null && trajectory.prior_campom >= 15
-                  ? ' Regression-to-the-mean: elite inputs project ≈2 CamPom below current — mostly real regression (residual bias vs actual ≈−0.7 on ≥+15; +20+ inputs are extrapolation beyond training). Read the q90 ceiling for the optimistic case.'
+                  ? ' Elite players are projected conservatively — read the high end of the band for the optimistic case.'
                   : trajectory.prior_campom != null && trajectory.prior_campom >= 10
                     ? ' Mild regression expected on this tier (projections sit ≈0.3 below current on +10..+15 inputs).'
                     : '';
@@ -279,8 +282,8 @@ export default function PlayerDetail() {
               return (
                 <SeasonLink
                   to={`/players/${player.id}/progression`}
-                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${campomTierColor(tier)} hover:bg-gray-700/40 transition-colors`}
-                  title={`Projected next-season CamPom. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.1 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).${regressionNote} Click for full career progression.`}
+                  className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${camTierColor(tier)} hover:bg-gray-700/40 transition-colors`}
+                  title={`Projected next-season CAM. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.1 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).${regressionNote} Click for full career progression.`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {targetLabel}
@@ -430,7 +433,7 @@ export default function PlayerDetail() {
                       label="RAPM"
                       value={signedFmt(onOff.rapm_net)}
                       pctile={onOff.rapm_net_pct ?? null}
-                      title={`Adjusted on/off (RAPM), per 100 poss — ridge-regressed with teammates and opponents held constant. Net = O − D. Raw net on/off ${signedFmt(onOff.net_on_off)}. Career-informed (decayed prior-season stints); read alongside CamPom, not instead of it.`}
+                      title={`Adjusted on/off (RAPM), per 100 poss — ridge-regressed with teammates and opponents held constant. Net = O − D. Raw net on/off ${signedFmt(onOff.net_on_off)}. Career-informed (decayed prior-season stints); read alongside CAM, not instead of it.`}
                     />
                     {onOff.rapm_o != null && (
                       <PercentileBar

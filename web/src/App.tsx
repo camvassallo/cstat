@@ -1,7 +1,6 @@
 import { lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import Layout from './components/Layout';
-
 // Every route is code-split (issue #267). Before this the whole app — all 18
 // routes, AG Grid and Recharts — shipped as one chunk on every first visit,
 // so a landing on Rankings paid for Recharts and 14 pages it never rendered.
@@ -26,6 +25,7 @@ const Coaches = lazy(() => import('./pages/Coaches'));
 const CoachDetail = lazy(() => import('./pages/CoachDetail'));
 const Portle = lazy(() => import('./pages/Portle'));
 const WhichClass = lazy(() => import('./pages/WhichClass'));
+const Acknowledgments = lazy(() => import('./pages/Acknowledgments'));
 
 // The draft board now lives as a mode tab on /players. Redirect the legacy
 // /draft URL there, carrying the site-selected season through.
@@ -71,6 +71,7 @@ export default function App() {
               /mystery-baller links working, carrying practice query params. */}
           <Route path="/mystery-baller" element={<PortleRedirect />} />
           <Route path="/which-class" element={<WhichClass />} />
+          <Route path="/acknowledgments" element={<Acknowledgments />} />
         </Route>
       </Routes>
     </BrowserRouter>

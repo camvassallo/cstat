@@ -11,10 +11,17 @@ import { useSeason } from '../components/season';
 import { SeasonLink } from '../components/SeasonLink';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
+import {
+  BAND_CHIP_CLASS,
+  BAND_CHIP_TOP_STRONG,
+  BAND_EMPTY_CHIP_CLASS,
+} from '../components/scale';
 
-// AdjEM presentation tiers — same chip styling pattern as CamPom on the
-// Players tab. Thresholds use the conventional KenPom absolute scale where
-// +20 is roughly Final Four caliber and 0 is the league-average D-I team.
+// AdjEM presentation tiers. Colored from the shared site scale (`scale.ts`)
+// so a team's chip and a player's CAM chip mean the same thing at a glance —
+// they used to run on separate palettes. Thresholds use the conventional
+// absolute scale where +20 is roughly Final Four caliber and 0 is the
+// league-average D-I team.
 type AdjEmTier =
   | 'Elite'
   | 'Strong'
@@ -33,16 +40,24 @@ function adjEmTier(em: number | null | undefined): AdjEmTier | null {
   return 'Weak';
 }
 
+// Six tiers over the five bands, mirroring how `camTierColor` handles the same
+// shape: the bottom five map one-to-one (red → green) and the top tier is set
+// apart by emphasis — a solid fill instead of a tint — rather than a sixth hue.
+const ADJ_EM_TIER_BAND: Record<AdjEmTier, number> = {
+  Weak: 0,
+  'Below average': 1,
+  Average: 2,
+  'Above average': 3,
+  Strong: 4,
+  Elite: 4,
+};
+
 function adjEmTierColor(tier: AdjEmTier | null): string {
-  switch (tier) {
-    case 'Elite':         return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
-    case 'Strong':        return 'bg-sky-500/20 text-sky-300 border-sky-500/40';
-    case 'Above average': return 'bg-blue-500/20 text-blue-300 border-blue-500/40';
-    case 'Average':       return 'bg-slate-500/20 text-slate-300 border-slate-500/40';
-    case 'Below average': return 'bg-amber-500/20 text-amber-300 border-amber-500/40';
-    case 'Weak':          return 'bg-rose-500/20 text-rose-300 border-rose-500/40';
-    default:              return 'bg-slate-700/40 text-slate-400 border-slate-600/40';
-  }
+  if (tier == null) return BAND_EMPTY_CHIP_CLASS;
+  // ~8% of teams clear +25, so this takes the STRONG tint rather than the solid
+  // fill CAM gets — a solid block would cover this board's whole first screen.
+  if (tier === 'Elite') return BAND_CHIP_TOP_STRONG;
+  return BAND_CHIP_CLASS[ADJ_EM_TIER_BAND[tier]];
 }
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');

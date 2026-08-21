@@ -146,8 +146,8 @@ async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> O
         .flatten()?;
 
     let title = match prof.team_name.as_deref().filter(|s| !s.is_empty()) {
-        Some(team) => format!("{} — {} ({}) | CamPom", prof.name, team, season),
-        None => format!("{} ({}) | CamPom", prof.name, season),
+        Some(team) => format!("{} — {} ({}) | Camalytics", prof.name, team, season),
+        None => format!("{} ({}) | Camalytics", prof.name, season),
     };
 
     let mut parts: Vec<String> = Vec::new();
@@ -172,10 +172,13 @@ async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> O
         .flatten()
         .and_then(|t| t.campom)
     {
-        parts.push(format!("{cam:+.1} CamPom"));
+        parts.push(format!("{cam:+.1} CAM"));
     }
     let desc = if parts.is_empty() {
-        format!("{} — college basketball analytics on CamPom.", prof.name)
+        format!(
+            "{} — college basketball analytics on Camalytics.",
+            prof.name
+        )
     } else {
         parts.join(" · ")
     };
@@ -205,7 +208,7 @@ async fn build_team_meta(state: &AppState, id: &str, season: Option<i32>) -> Opt
         .ok()
         .flatten()?;
 
-    let title = format!("{} {} | CamPom", t.name, season);
+    let title = format!("{} {} | Camalytics", t.name, season);
 
     let mut parts: Vec<String> = Vec::new();
     if let Some(em) = t.adj_efficiency_margin {
@@ -222,7 +225,7 @@ async fn build_team_meta(state: &AppState, id: &str, season: Option<i32>) -> Opt
         parts.push(c.to_string());
     }
     let desc = if parts.is_empty() {
-        format!("{} — college basketball analytics on CamPom.", t.name)
+        format!("{} — college basketball analytics on Camalytics.", t.name)
     } else {
         format!("{} · {}", t.name, parts.join(" · "))
     };
@@ -236,7 +239,7 @@ async fn build_coach_meta(state: &AppState, id: &str) -> Option<String> {
     let uuid = Uuid::parse_str(id).ok()?;
     let name = queries::get_coach_name(pool, uuid).await.ok().flatten()?;
 
-    let title = format!("{name} | CamPom");
+    let title = format!("{name} | Camalytics");
     let mut desc = format!("{name} — college basketball coach");
     if let Some(r) = queries::get_coach_rating(pool, uuid).await.ok().flatten() {
         desc.push_str(&format!(
@@ -246,7 +249,7 @@ async fn build_coach_meta(state: &AppState, id: &str) -> Option<String> {
             if r.n_seasons == 1 { "" } else { "s" }
         ));
     }
-    desc.push_str(" — on CamPom.");
+    desc.push_str(" — on Camalytics.");
 
     let url = format!("{}/coaches/{}", public_base_url(), uuid);
     Some(render_tags(&title, &desc, &url, &OgImage::default_card()))

@@ -5,7 +5,7 @@ export type SortDir = 'asc' | 'desc';
 // results on descending sort, so a naive "nulls last" (+1) floats blanks to
 // the top exactly when sorting best-to-worst; the isDescending argument lets
 // us pre-invert. Use for any sortable numeric column whose blanks mean
-// "no data" rather than zero (CamPom, Adj On/Off, projections).
+// "no data" rather than zero (CAM, Adj On/Off, projections).
 export function agNullsBottom(
   a: number | null | undefined,
   b: number | null | undefined,

@@ -336,6 +336,20 @@ enum Commands {
         years: Vec<i32>,
     },
 
+    /// Materialize the pre-game projection for every completed game into
+    /// `game_projections`, so `GET /api/teams/{id}` reads a row per schedule
+    /// game instead of running the model per game per page view (#266).
+    ///
+    /// The nightly runs this for the current season; use it directly to
+    /// backfill historical seasons, or to re-materialize after a retrain.
+    /// Batches by cutoff date — every game on a date shares one point-in-time
+    /// cohort — so a full season costs ~150 rebuilds rather than ~5,600.
+    GameProjections {
+        /// Seasons to sweep (comma-separated). Defaults to the current season.
+        #[arg(long, value_delimiter = ',')]
+        years: Option<Vec<i32>>,
+    },
+
     /// Per-week crossover calibration for the preseason × pit early-season
     /// blend (ROADMAP §6). Replays a played season's games week by week and
     /// reports preseason-only / pit-only / best-blend MAE on the shared subset,
@@ -993,6 +1007,30 @@ async fn main() -> Result<()> {
                 &years,
             )
             .await?;
+        }
+
+        Commands::GameProjections { years } => {
+            let years = years.unwrap_or_else(|| vec![cstat_ingest::current_natstat_season()]);
+            let model_dir = cstat_ingest::model_dir_from_env();
+            let predictor =
+                cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
+                    .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
+            let report = cstat_ingest::game_projections::run(&db.pool, &predictor, &years).await?;
+            println!(
+                "game_projections: {} rows written across {} cutoff dates ({} skipped, {} pruned)",
+                report.written, report.dates, report.skipped, report.pruned
+            );
+            // Same reason the nightly surfaces this: a sweep that could not
+            // read some teams' features covers less than it looks like it did,
+            // and it leaves the previous rows in place rather than a hole, so
+            // nothing else here would say so.
+            if report.fetch_failures > 0 {
+                println!(
+                    "  WARNING: {} team feature fetches FAILED — those games kept their \
+                     previous rows; re-run once the database is healthy",
+                    report.fetch_failures
+                );
+            }
         }
 
         Commands::MeasureBlendAccuracy { years } => {

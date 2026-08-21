@@ -14,7 +14,7 @@ import {
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
 import { pctileTextColor } from '../components/pctile';
-import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
+import { BAND_CHIP_CLASS, BAND_CHIP_TOP_STRONG } from '../components/scale';
 import { recruitTooltipLine } from '../lib/recruitDisplay';
 
 // Projectable-year definitions are shared with the team projection ledger via
@@ -26,15 +26,17 @@ const PROJECTABLE_YEARS = projectableSeasons();
 // cstat-season year → "2026-27"-style college-season label.
 const seasonLabel = (year: number) => `${year - 1}-${String(year).slice(2)}`;
 
-// AdjEM tier coloring (tuned for D-I 2025 distribution where teams
-// range ~-30 to +45). Reused for floor/ceiling/midpoint/actual chips.
+// AdjEM tier coloring for the floor/ceiling/midpoint/actual chips. Shares the
+// site scale and the same cut points as the Rankings board, so a projected +18
+// and an actual +18 read identically across the two pages — they used to run on
+// two different palettes for the same quantity.
 function adjEmTone(v: number): string {
-  if (v >= 25) return 'bg-emerald-900/50 border-emerald-700 text-emerald-200';
-  if (v >= 15) return 'bg-emerald-950/40 border-emerald-800 text-emerald-300';
-  if (v >= 5) return 'bg-teal-950/40 border-teal-800 text-teal-300';
-  if (v >= -5) return 'bg-slate-800/40 border-slate-700 text-slate-300';
-  if (v >= -15) return 'bg-amber-950/40 border-amber-800 text-amber-300';
-  return 'bg-rose-950/40 border-rose-800 text-rose-300';
+  if (v >= 25) return BAND_CHIP_TOP_STRONG;
+  if (v >= 15) return BAND_CHIP_CLASS[4];
+  if (v >= 5) return BAND_CHIP_CLASS[3];
+  if (v >= -5) return BAND_CHIP_CLASS[2];
+  if (v >= -15) return BAND_CHIP_CLASS[1];
+  return BAND_CHIP_CLASS[0];
 }
 
 const adjEmChip = (v: number | null) => {
@@ -65,13 +67,13 @@ function nullsLast(
 const dashCell = <span className="text-slate-600 text-xs">—</span>;
 const fmtSigned = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
 
-// Tooltip line for a cohort's prior-season CamPom O/D split. Empty when
+// Tooltip line for a cohort's prior-season CAM O/D split. Empty when
 // both halves are 0 (no O/D coverage for the cohort — e.g. the server
 // degraded the split fetch, or every member is envelope-gated).
 const odTipLine = (o: number, d: number) =>
   o !== 0 || d !== 0 ? `\nprior O/D split: O ${fmtSigned(o)} / D ${fmtSigned(d)}` : '';
 
-// Last season's roster value (CamPom) — the shared denominator that makes
+// Last season's roster value (CAM) — the shared denominator that makes
 // the roster-flow columns mesh: `returning + departures + uncertain`, all
 // on the prior-season frame (every player who was on last year's team).
 // Returns null when the base is too small to normalize against (very weak
@@ -85,7 +87,7 @@ const pctOfBase = (t: ProjectedTeam, numerator: number): number | null => {
   return base == null ? null : numerator / base;
 };
 
-// One roster-flow cell: a CamPom value (forward-projected for staying /
+// One roster-flow cell: a CAM value (forward-projected for staying /
 // incoming cohorts, prior for departures) with its share of last season's
 // roster value beneath it. The shared base is the mesh — kept% + lost%
 // partition the old roster; transfers / recruits are additions on the same
@@ -408,7 +410,7 @@ function buildColumns(
       ...flexCol(1, 120),
       ...divider,
       headerTooltip:
-        "Returning players, shown as their *projected* next-season CamPom (trajectory forecast) with the share of last season's roster value retained beneath — i.e. roster continuity. 51% kept = a stable veteran core; 20% = a near-total rebuild. Excludes graduating seniors, outbound portal, and firm draft departures.",
+        "Returning players, shown as their *projected* next-season CAM (trajectory forecast) with the share of last season's roster value retained beneath — i.e. roster continuity. 51% kept = a stable veteran core; 20% = a near-total rebuild. Excludes graduating seniors, outbound portal, and firm draft departures.",
       comparator: (_a, _b, na, nb) =>
         ((na.data as ProjectedTeam | undefined)?.returning_projected_cam_v3_sum ?? 0) -
         ((nb.data as ProjectedTeam | undefined)?.returning_projected_cam_v3_sum ?? 0),
@@ -432,7 +434,7 @@ function buildColumns(
       colId: 'incoming',
       ...flexCol(1, 130),
       headerTooltip:
-        "Incoming portal arrivals — their *projected* next-season CamPom, with how much they add relative to last season's roster value beneath. Hover for the prior-school total + headcount.",
+        "Incoming portal arrivals — their *projected* next-season CAM, with how much they add relative to last season's roster value beneath. Hover for the prior-school total + headcount.",
       comparator: (_a, _b, na, nb) =>
         ((na.data as ProjectedTeam | undefined)?.arrivals_projected_cam_v3_sum ?? 0) -
         ((nb.data as ProjectedTeam | undefined)?.arrivals_projected_cam_v3_sum ?? 0),
@@ -455,7 +457,7 @@ function buildColumns(
       colId: 'recruits',
       ...flexCol(1, 130),
       headerTooltip:
-        "Incoming HS recruits — projected freshman-season CamPom from cstat's freshman-impact model (no prior season, so this is a forward projection), with how much they add relative to last season's roster value beneath. Hover for the top commits.",
+        "Incoming HS recruits — projected freshman-season CAM from our freshman-impact model (no prior season, so this is a forward projection), with how much they add relative to last season's roster value beneath. Hover for the top commits.",
       comparator: (_a, _b, na, nb) =>
         ((na.data as ProjectedTeam | undefined)?.recruits_cam_v3_sum ?? 0) -
         ((nb.data as ProjectedTeam | undefined)?.recruits_cam_v3_sum ?? 0),
@@ -467,7 +469,7 @@ function buildColumns(
         const pctText = pct != null ? `+${Math.round(pct * 100)}%` : null;
         const names = t.top_recruits.map(recruitTooltipLine).join('\n');
         const tip =
-          `${t.recruits_count} recruits · Σ projected CamPom ${fmtSigned(val)}` +
+          `${t.recruits_count} recruits · Σ projected CAM ${fmtSigned(val)}` +
           (pct != null ? `\nadds ${Math.round(pct * 100)}% relative to last season's roster value` : '') +
           (names ? `\n${names}` : '');
         return flowCellView(fmtSigned(val), pctText, 'text-slate-300', tip);
@@ -478,7 +480,7 @@ function buildColumns(
       colId: 'departures',
       ...flexCol(1, 130),
       headerTooltip:
-        "Graduating seniors + outbound portal + firm draft departures — the CamPom leaving the program (prior-season production), with the share of last season's roster value lost beneath. Mirror of Returning: kept% + lost% ≈ 100%.",
+        "Graduating seniors + outbound portal + firm draft departures — the CAM leaving the program (prior-season production), with the share of last season's roster value lost beneath. Mirror of Returning: kept% + lost% ≈ 100%.",
       comparator: (_a, _b, na, nb) =>
         ((na.data as ProjectedTeam | undefined)?.departures_cam_v3_sum ?? 0) -
         ((nb.data as ProjectedTeam | undefined)?.departures_cam_v3_sum ?? 0),
@@ -490,7 +492,7 @@ function buildColumns(
         const pct = pctOfBase(t, t.departures_cam_v3_sum);
         const pctText = pct != null ? `−${Math.round(pct * 100)}%` : null;
         const tip =
-          `${t.departures_count} departures (Sr + portal-out + draft) · Σ prior CamPom ${fmtSigned(t.departures_cam_v3_sum)} leaving` +
+          `${t.departures_count} departures (Sr + portal-out + draft) · Σ prior CAM ${fmtSigned(t.departures_cam_v3_sum)} leaving` +
           (pct != null ? `\n${Math.round(pct * 100)}% of last season's roster value lost` : '') +
           odTipLine(t.departures_cam_o_sum, t.departures_cam_d_sum);
         return flowCellView(fmtSigned(display), pctText, 'text-rose-400', tip);
@@ -623,19 +625,6 @@ function ProjectionView({ year }: { year: number }) {
     );
   }, [teams, search]);
 
-  // Forecast accuracy: midpoint vs actual over teams that have both.
-  // `null` for the live year (no actuals) — the banner is then hidden.
-  const accuracy = useMemo(() => {
-    if (!teams) return null;
-    const errs = teams
-      .filter((t) => t.midpoint_adj_em != null && t.actual_adj_em != null)
-      .map((t) => (t.midpoint_adj_em as number) - (t.actual_adj_em as number));
-    if (errs.length === 0) return null;
-    const mae = errs.reduce((s, e) => s + Math.abs(e), 0) / errs.length;
-    const bias = errs.reduce((s, e) => s + e, 0) / errs.length;
-    return { n: errs.length, mae, bias };
-  }, [teams]);
-
   if (error) {
     return (
       <div className="p-4 text-rose-300">Failed to load projections: {error}</div>
@@ -688,56 +677,6 @@ function ProjectionView({ year }: { year: number }) {
           }}
         />
       </div>
-      <DisclaimerFooter>
-        {accuracy && (
-          <Disclaimer tone="emerald" label="Backtest receipt:">
-            this is the forecast we'd have made going into {seasonLabel(year)},
-            graded against what actually happened. Across {accuracy.n} teams,
-            mean absolute error{' '}
-            <strong>{accuracy.mae.toFixed(1)} AdjEM</strong>, mean bias{' '}
-            {accuracy.bias >= 0 ? '+' : ''}
-            {accuracy.bias.toFixed(1)} (
-            {accuracy.bias >= 0
-              ? 'over-projected on average'
-              : 'under-projected on average'}
-            ). See the <strong>Actual</strong> and <strong>Proj − Act</strong>{' '}
-            columns per team.
-          </Disclaimer>
-        )}
-        <Disclaimer label="v3 honesty caveats:">
-          Holistic projection: returners (minus seniors, outbound portal, and
-          firm draft departures) + incoming portal commits +{' '}
-          <strong>incoming HS recruits</strong>. Every player is scored on a{' '}
-          <strong>projected</strong> next-season CamPom v3 — the trajectory
-          model for returners and arrivals, the freshman-impact model for
-          recruits — so returner growth and freshman upside both count (a
-          junior breaking out as a senior, or an elite recruit, moves the
-          number). The roster's projected-CamPom distribution is scored by the
-          Phase B impact-aggregation model, then blended{' '}
-          <strong>55/45 with last season's actual AdjEM</strong> (no
-          calibration offset — the model is near-unbiased). The pipeline
-          backtests at <strong>5.7 AdjEM MAE</strong> against actual next-season
-          results across the <strong>2016–2026</strong> seasons. Rosters with
-          &lt;7 qualifying players (returning + arrivals + recruits) are flagged
-          "thin roster" and not scored.
-        </Disclaimer>
-        <Disclaimer label="Regression to the mean:">
-          these are <strong>preseason</strong> projections, so the ordering is
-          compressed toward average — the bottom of the table trends{' '}
-          <em>up</em> and the top trends <em>down</em> relative to last season.
-          That's not a bug: roughly <strong>23% of team-AdjEM variance is
-          preseason-invisible</strong> (no roster signal can see it), an
-          irreducible floor, so read ranks as <em>directional</em>, not
-          point-estimates. Elite returners regress hardest — the trajectory
-          model under-projects the +15-and-up CamPom tail by design, so a
-          reigning star projects below his current number. Heavy-turnover /
-          new-coach rosters (marked{' '}
-          <span className="text-amber-400/80" aria-hidden>
-            ⟳
-          </span>
-          ) lean off last year's stale record and carry the widest error bands.
-        </Disclaimer>
-      </DisclaimerFooter>
     </div>
   );
 }

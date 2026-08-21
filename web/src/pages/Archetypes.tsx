@@ -118,7 +118,7 @@ function ClassCard({ def, info }: { def: ClassDef; info: ArchetypeClassInfo | nu
             to={`/players?archetypes=${encodeURIComponent(def.name)}`}
             className="text-xl font-bold hover:underline"
             style={{ color }}
-            title={`See all ${def.name}s ranked by CamPom`}
+            title={`See all ${def.name}s ranked by CAM`}
           >
             {def.name}
           </SeasonLink>
@@ -214,12 +214,8 @@ export default function Archetypes() {
       <div>
         <h1 className="text-2xl font-bold">Player Archetypes</h1>
         <p className="text-sm text-gray-400 mt-1 max-w-3xl">
-          Every qualified D-I player is clustered into one of twelve D&amp;D-flavored
-          classes based on their shot diet, rate stats, impact metrics, and minutes
-          share. Clusters come from k-means in standardized feature space; each
-          centroid is matched to the archetype it best resembles. Cards are ordered
-          by mean CamPom (the site's canonical player valuation), highest to lowest;
-          exemplars within each class are ranked the same way.
+          Every qualified D-I player, clustered into one of twelve classes by shot
+          diet, rate stats, impact, and minutes share. Ordered by mean CAM.
         </p>
         {!loading && season != null && (
           <p className="text-xs text-gray-500 mt-2">

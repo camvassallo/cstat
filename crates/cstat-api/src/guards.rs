@@ -124,7 +124,7 @@ pub async fn load_shed(State(sem): State<Arc<Semaphore>>, req: Request, next: Ne
 
 /// Whether a request path serves a content-hashed, immutable build asset. Vite
 /// emits `/assets/<name>-<hash>.{js,css}`; the hash changes on every content
-/// change, so these are safe to cache forever. `index.html`, `/favicon.svg`,
+/// change, so these are safe to cache forever. `index.html`, `/favicon.png`,
 /// and other un-hashed files are deliberately excluded so a deploy is picked up
 /// immediately — the HTML shell gets an explicit `no-cache` from
 /// `spa_cache_control`, and the rest fall through to `ServeDir`'s
@@ -420,7 +420,7 @@ mod tests {
         // Un-hashed files must stay revalidatable so deploys are picked up.
         assert!(!is_immutable_asset_path("/"));
         assert!(!is_immutable_asset_path("/index.html"));
-        assert!(!is_immutable_asset_path("/favicon.svg"));
+        assert!(!is_immutable_asset_path("/favicon.png"));
         // API paths carry their own short-TTL header, not the immutable one.
         assert!(!is_immutable_asset_path("/api/teams/rankings"));
     }

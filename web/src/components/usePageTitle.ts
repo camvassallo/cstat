@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 
-const SITE = 'CamPom';
+const SITE = 'Camalytics';
 
 /** Set the browser tab title. Pass `null` to keep the bare site name (used
  *  while data is loading on dynamic pages so the tab doesn't flicker through
