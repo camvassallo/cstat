@@ -45,20 +45,7 @@ function PortleRedirect() {
 
 export default function App() {
   return (
-    // `unstable_useTransitions={false}` is what makes the <Suspense> fallback
-    // in Layout actually appear. BrowserRouter otherwise wraps its location
-    // setState in `React.startTransition`, and React deliberately keeps an
-    // already-revealed boundary's content on screen during a transition rather
-    // than swapping in its fallback — so before code splitting that was free,
-    // but now a click on a nav link would sit on the PREVIOUS page with no
-    // spinner and no moving active-link highlight while the next route's chunk
-    // (plus, from a non-grid route, the 702 KB AG Grid chunk) downloads. The
-    // transition's own answer to that is a pending indicator driven by
-    // `useTransition`, which BrowserRouter does not expose — `useNavigation` is
-    // data-router only — so opting out and showing the fallback is the best
-    // available signal. If this prop is ever renamed away, React Router will
-    // ignore it and the symptom returns as a silent UX regression, not a crash.
-    <BrowserRouter unstable_useTransitions={false}>
+    <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Rankings />} />

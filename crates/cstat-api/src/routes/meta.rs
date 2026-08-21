@@ -122,29 +122,13 @@ pub async fn coach_document(
     page(&state, build_coach_meta(&state, &id).await)
 }
 
-/// Wrap the rendered HTML with a revalidate-first `Cache-Control`.
-///
-/// `no-cache` rather than a short TTL, and for the same reason the SPA shell
-/// carries it (`guards::spa_cache_control`): this document NAMES the
-/// content-hashed `/assets/*` chunks, and those disappear with the previous
-/// image on every deploy. Any TTL at all lets a shared cache hand a visitor a
-/// document from the previous build, whose chunk URLs are now gone — and since
-/// a missing asset is deliberately a hard 404, the entry `<script type=module>`
-/// fails outright. That is a blank page with no React on it, so
-/// `RouteErrorBoundary` does not exist to recover, and a refresh re-serves the
-/// same still-fresh document until the entry expires. These are the shared and
-/// crawled URLs, which is exactly where that is least affordable.
-///
-/// The cost is that a crawler sweep no longer gets edge-absorbed and each hit
-/// runs this route's meta queries. `no-cache` still permits storing and a 304
-/// on revalidation, and these documents are a rounding error next to `/api/*`
-/// traffic, so correctness wins here.
+/// Wrap the rendered HTML with a short edge-cacheable `Cache-Control`.
 fn page(state: &AppState, meta: Option<String>) -> Response {
     let html = match meta {
         Some(m) => state.spa_index.render(&m),
         None => state.spa_index.default_page(),
     };
-    ([(header::CACHE_CONTROL, "no-cache")], Html(html)).into_response()
+    ([(header::CACHE_CONTROL, "public, max-age=300")], Html(html)).into_response()
 }
 
 async fn build_player_meta(state: &AppState, id: &str, season: Option<i32>) -> Option<String> {

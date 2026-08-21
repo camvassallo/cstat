@@ -1,9 +1,16 @@
 import { Component, useEffect, type ErrorInfo, type ReactNode } from 'react';
-import { reportCaughtError } from '../lib/errorReporter';
+import { reportCaughtError, routePattern } from '../lib/errorReporter';
 
-// One-shot reload guard. Keyed in sessionStorage so a chunk that is genuinely
-// missing (rather than merely stale) can't put the tab in a reload loop.
-const RELOAD_KEY = 'cstat:chunk-reload';
+// One-shot reload guard, in sessionStorage so a chunk that is genuinely missing
+// (rather than merely stale) can't put the tab in a reload loop.
+//
+// Keyed PER ROUTE. A single global flag was not actually one-shot: `React.lazy`
+// caches a rejected import forever, so once a chunk is known-missing, visiting
+// any working route in between cleared the flag and the next visit to the
+// broken one spent another whole page reload, discarding in-page state each
+// time. Per-route, a route that has already burned its reload stays burned.
+const RELOAD_KEY_PREFIX = 'cstat:chunk-reload:';
+const reloadKey = (pathname: string) => RELOAD_KEY_PREFIX + routePattern(pathname);
 
 // A failed `React.lazy` import surfaces as a TypeError whose message varies by
 // browser. Match the shapes rather than one engine's wording.
@@ -38,9 +45,9 @@ function isChunkLoadError(error: unknown): boolean {
  */
 export default class RouteErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
-  { failed: boolean }
+  { failed: boolean; offline: boolean }
 > {
-  state = { failed: false };
+  state = { failed: false, offline: false };
 
   static getDerivedStateFromError() {
     return { failed: true };
@@ -58,12 +65,14 @@ export default class RouteErrorBoundary extends Component<
       // guard unset and nothing reported: this is the user's network, not a
       // deploy, and it will be a stale tab again next time.
       if (navigator.onLine === false) {
+        this.setState({ offline: true });
         return;
       }
+      const key = reloadKey(window.location.pathname);
       let alreadyReloaded = false;
       try {
-        alreadyReloaded = sessionStorage.getItem(RELOAD_KEY) === '1';
-        sessionStorage.setItem(RELOAD_KEY, '1');
+        alreadyReloaded = sessionStorage.getItem(key) === '1';
+        sessionStorage.setItem(key, '1');
       } catch {
         // Private mode / storage disabled — fall through to the message rather
         // than risk an unguarded reload loop.
@@ -85,12 +94,25 @@ export default class RouteErrorBoundary extends Component<
     // Navigating away from the route that threw clears the error. Guarded on
     // `failed` so the normal path never calls setState here.
     if (this.state.failed && prev.resetKey !== this.props.resetKey) {
-      this.setState({ failed: false });
+      this.setState({ failed: false, offline: false });
     }
   }
 
   render() {
     if (this.state.failed) {
+      // Offline gets its own message and NO reload button. Offering one would
+      // hand the user the exact action `componentDidCatch` refuses to take on
+      // their behalf: a reload with no network replaces the still-working app
+      // with the browser's error page. Routes already in memory still work, so
+      // say so and leave the nav as the way out.
+      if (this.state.offline) {
+        return (
+          <div className="text-gray-400">
+            This page could not load because you appear to be offline. Pages you
+            have already opened still work.
+          </div>
+        );
+      }
       return (
         <div className="text-gray-400">
           Something went wrong loading this page.{' '}
@@ -121,7 +143,9 @@ export default class RouteErrorBoundary extends Component<
 export function ChunkReloadReset() {
   useEffect(() => {
     try {
-      sessionStorage.removeItem(RELOAD_KEY);
+      // Only THIS route's guard — clearing every route's would undo the
+      // per-route keying above and let a known-missing chunk reload again.
+      sessionStorage.removeItem(reloadKey(window.location.pathname));
     } catch {
       // Storage unavailable — nothing to clear.
     }

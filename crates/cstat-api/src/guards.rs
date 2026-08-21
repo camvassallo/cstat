@@ -126,8 +126,9 @@ pub async fn load_shed(State(sem): State<Arc<Semaphore>>, req: Request, next: Ne
 /// emits `/assets/<name>-<hash>.{js,css}`; the hash changes on every content
 /// change, so these are safe to cache forever. `index.html`, `/favicon.svg`,
 /// and other un-hashed files are deliberately excluded so a deploy is picked up
-/// immediately (they fall through to `ServeDir`'s ETag/Last-Modified
-/// revalidation instead).
+/// immediately — the HTML shell gets an explicit `no-cache` from
+/// `spa_cache_control`, and the rest fall through to `ServeDir`'s
+/// `Last-Modified` revalidation (it emits no ETag).
 fn is_immutable_asset_path(path: &str) -> bool {
     path.starts_with("/assets/")
 }
@@ -441,6 +442,67 @@ mod tests {
         assert!(!is_spa_html_fallback(&with_ct("text/css")));
         // No content-type at all is not a reason to reject.
         assert!(!is_spa_html_fallback(&StatusCode::OK.into_response()));
+    }
+
+    /// End-to-end over the real middleware + `ServeDir` wiring from `main.rs`,
+    /// because the three branches ARE the site's caching contract and the
+    /// helper tests above only pin their pieces. A regression in any of them is
+    /// invisible locally and then pinned at an edge — for a year, in the
+    /// `immutable` case.
+    #[tokio::test]
+    async fn spa_cache_control_covers_asset_hit_asset_miss_and_shell() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+        use tower_http::services::{ServeDir, ServeFile};
+
+        // Minimal stand-in for a Vite build: one hashed asset + the shell.
+        let dir = std::env::temp_dir().join(format!("cstat-spa-test-{}", std::process::id()));
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("index-abc123.js"), "export default 1;").unwrap();
+        std::fs::write(dir.join("index.html"), "<!doctype html><html></html>").unwrap();
+
+        let app: Router<()> = Router::new()
+            .fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))))
+            .layer(axum::middleware::from_fn(spa_cache_control));
+
+        let get = |uri: &str| {
+            let app = app.clone();
+            let uri = uri.to_string();
+            async move {
+                app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+            }
+        };
+        let cc = |r: &Response| {
+            r.headers()
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap().to_string())
+        };
+
+        // 1. A real hashed asset is pinned forever.
+        let hit = get("/assets/index-abc123.js").await;
+        assert_eq!(hit.status(), StatusCode::OK);
+        assert_eq!(cc(&hit).as_deref(), Some(IMMUTABLE_ASSET_CACHE_CONTROL));
+
+        // 2. A missing one must NOT come back as the 200-HTML shell, and must
+        //    not be cacheable — the deploy window makes that URL live again.
+        let miss = get("/assets/index-deadbeef.js").await;
+        assert_eq!(miss.status(), StatusCode::NOT_FOUND);
+        assert_eq!(cc(&miss).as_deref(), Some("no-store"));
+
+        // 3. The shell revalidates, so a deploy is picked up at once. Both the
+        //    root and a client-side route path, which is the fallback.
+        for uri in ["/", "/predict"] {
+            let shell = get(uri).await;
+            assert_eq!(shell.status(), StatusCode::OK, "{uri}");
+            assert_eq!(cc(&shell).as_deref(), Some("no-cache"), "{uri}");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

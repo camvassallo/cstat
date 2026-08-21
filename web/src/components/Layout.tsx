@@ -322,9 +322,26 @@ export default function Layout() {
         {/* Route components are lazy-loaded (issue #267), so the Suspense
             boundary sits here rather than around the whole app — the nav and
             season picker stay mounted and interactive while the next route's
-            chunk downloads. */}
+            chunk downloads.
+
+            `key={pathname}` is what makes the fallback actually appear.
+            BrowserRouter wraps its location update in `React.startTransition`,
+            and React deliberately keeps an ALREADY-REVEALED boundary's content
+            on screen through a transition instead of showing its fallback — so
+            without the key, clicking a nav link sat on the previous page with
+            no spinner and no moving active-link highlight until the chunk
+            arrived. A key change mounts a NEW boundary, which has nothing to
+            preserve and renders its fallback immediately.
+
+            Keyed on `pathname` and NOT `search` on purpose: the URL-backed
+            filters on /players (archetype chips, match mode, mode tabs) only
+            move the query string, so they keep the same boundary and stay
+            inside the transition, where React can interrupt them. Opting out
+            of transitions globally would have fixed the spinner and made those
+            filters ~5x more expensive — measured at 413ms of blocked main
+            thread per chip vs 83ms. */}
         <RouteErrorBoundary resetKey={pathname + search}>
-          <Suspense fallback={<div className="text-gray-400">Loading…</div>}>
+          <Suspense key={pathname} fallback={<div className="text-gray-400">Loading…</div>}>
             <ChunkReloadReset />
             <Outlet />
           </Suspense>
