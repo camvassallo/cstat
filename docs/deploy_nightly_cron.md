@@ -22,6 +22,7 @@ recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — be
 recruit_resolve                     (recruit → team / player joins, 3 class years)
 compute_all   (load-bearing)
 projections   (forecast-season roster projections — best-effort, needs the ONNX models)
+game_projections   (completed-game projections for the current season — best-effort, same models)
 invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
 
@@ -44,6 +45,27 @@ projected roster, so it records a ledger row and degrades the run instead of
 logging a warning nobody reads. Its `rows` is the total resolved across both
 passes and all three class years; it trends toward 0 as the backlog drains, so
 a 0 on a night that ingested rows is the signal rather than the count itself.
+
+`game_projections` materializes the pre-game projection for every **completed**
+game of the current season into the table of the same name, which
+`GET /api/teams/{id}` reads instead of running the model once per schedule row
+(#266 — that loop was 846 database round-trips per page view and capped the
+endpoint at ~3 requests/second). Best-effort by design: if it fails, the team
+page falls back to projecting its schedule live — slower, never wrong — so it
+must not degrade a game-night box-score refresh.
+
+It sweeps the whole season every night rather than only the games just played.
+That looks wasteful and isn't: only the CamPom channel of the point-in-time
+feature vector is genuinely point-in-time, and the rest is read from the
+season-aggregate tables `compute_all` has just rewritten, so a November game's
+projection really does move in March. The cost is keyed on the **cutoff date**
+rather than the game — every game played on a date shares one point-in-time
+cohort — so a full season is ~150 rebuilds, not ~5,700. Expect tens of seconds.
+
+Its `rows` is the number of games materialized. A **0 on a night with played
+games** is the alarming reading, not a quiet one: it means the sweep completed
+over nothing, and the row-count gate tracks `game_projections` for exactly that
+shape.
 
 Window defaults to **yesterday..today (UTC)** so NatStat's overnight stat
 corrections are picked up. Torvik + `/elo` refresh **before** `compute_all`, so
@@ -191,7 +213,8 @@ cron service reuses it — no separate build.
      directory is unreadable the run degrades and records a failed
      `projections` ledger step; it never aborts the box-score chain, so the
      symptom is a stale projected-players page plus a DEGRADED summary rather
-     than an outage.
+     than an outage. Step 8c (`game_projections`) shares the same loaded
+     `Predictor`, so an unreadable model directory fails both together.
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
 4. **Enable Static Outbound IPs** — Service → Settings → Networking, on the cron
    service only (the API never calls Torvik). Requires a redeploy to take effect.

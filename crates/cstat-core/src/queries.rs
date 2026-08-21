@@ -239,7 +239,10 @@ pub struct ScheduleEntry {
     #[sqlx(default)]
     pub projected_score_opp: Option<i32>,
     /// True iff the projection above came from the point-in-time bundle
-    /// (`as_of_date = game_date − 1`). Mirrors the server-side rule for
+    /// (`as_of_date = game_date − 1`). Note the bundle is what this attests to,
+    /// not the whole feature vector: only the CamPom channel is rebuilt from
+    /// pre-game state, and the remaining 41 features are season aggregates
+    /// (issue #274). Mirrors the server-side rule for
     /// "this game is in the past" so the frontend doesn't have to derive
     /// its own predicate from `team_score` / `opponent_score` and
     /// produce a copy that drifts. Set by the API layer alongside the
@@ -1396,6 +1399,49 @@ pub async fn get_team_schedule(
     .bind(season)
     .fetch_all(pool)
     .await
+}
+
+/// One materialized pre-game projection from `game_projections`, in the
+/// **home team's** frame. Callers flip to their own perspective.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct StoredGameProjection {
+    pub game_id: Uuid,
+    pub home_team_id: Uuid,
+    pub projected_margin: f64,
+    pub home_win_prob: f64,
+    pub projected_home_score: i32,
+    pub projected_away_score: i32,
+}
+
+/// Every precomputed projection for a team's season, keyed by `game_id`.
+///
+/// This is the read half of #266: `team_detail` used to run the model once per
+/// completed game (846 database round-trips for a full schedule, most of them
+/// inside repeated full-season point-in-time rebuilds). The nightly
+/// `game_projections` sweep materializes those, so the page costs one indexed
+/// scan here plus a live projection for each game that hasn't been played yet.
+///
+/// A completed game with no row — the sweep skipped it, or hasn't run since it
+/// was played — is simply absent, and the caller falls back to projecting it
+/// live.
+pub async fn get_team_game_projections(
+    pool: &PgPool,
+    team_id: Uuid,
+    season: i32,
+) -> Result<HashMap<Uuid, StoredGameProjection>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, StoredGameProjection>(
+        r#"
+        SELECT game_id, home_team_id, projected_margin, home_win_prob,
+               projected_home_score, projected_away_score
+        FROM game_projections
+        WHERE season = $1 AND (home_team_id = $2 OR away_team_id = $2)
+        "#,
+    )
+    .bind(season)
+    .bind(team_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
 }
 
 pub async fn get_team_roster(

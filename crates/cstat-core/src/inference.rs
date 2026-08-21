@@ -1146,21 +1146,42 @@ impl Predictor {
     /// Win probability is intentionally omitted — derive it from the
     /// returned margin via the calibrated logistic in the API layer
     /// (`PREDICT_SIGMA`) so the headline numbers stay self-consistent.
-    pub fn predict_with_contributions(
-        &self,
-        features: &[f32; NUM_FEATURES],
-    ) -> Result<PredictionWithContributions, ort::Error> {
+    /// Margin only — the end-of-season bundle's margin head, with neither the
+    /// TreeSHAP attribution nor the win classifier.
+    ///
+    /// The margin is the only model output the projection surfaces use: the
+    /// win probability is re-derived from it by `margin_to_win_prob` (see
+    /// `cstat_core::projection`), and the contributions feed only the Predict
+    /// page's Keys panel. Running the win session and the tree walk for a
+    /// caller that discards both is pure waste, and at ~6,000 games per
+    /// nightly `game_projections` sweep it is the difference between minutes.
+    pub fn predict_margin(&self, features: &[f32; NUM_FEATURES]) -> Result<f32, ort::Error> {
         use ort::value::TensorRef;
-
-        // Margin via ONNX (single-row prediction).
         let shape = [1_usize, NUM_FEATURES];
         let input = TensorRef::from_array_view((shape, features.as_slice()))?;
         let mut session = self.margin_session.lock().unwrap();
         let outputs = session.run(ort::inputs![input])?;
         let (_, preds) = outputs[0].try_extract_tensor::<f32>()?;
-        let predicted_margin = preds[0];
-        drop(outputs);
-        drop(session);
+        Ok(preds[0])
+    }
+
+    /// Point-in-time twin of [`Self::predict_margin`].
+    pub fn predict_pit_margin(&self, features: &[f32; NUM_FEATURES]) -> Result<f32, ort::Error> {
+        use ort::value::TensorRef;
+        let shape = [1_usize, NUM_FEATURES];
+        let input = TensorRef::from_array_view((shape, features.as_slice()))?;
+        let mut session = self.pit_margin_session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input])?;
+        let (_, preds) = outputs[0].try_extract_tensor::<f32>()?;
+        Ok(preds[0])
+    }
+
+    pub fn predict_with_contributions(
+        &self,
+        features: &[f32; NUM_FEATURES],
+    ) -> Result<PredictionWithContributions, ort::Error> {
+        // Margin via ONNX (single-row prediction).
+        let predicted_margin = self.predict_margin(features)?;
 
         // SHAP attributions via TreeSHAP on the parsed .lgb. Promote to
         // f64 for the recursion (LightGBM stores thresholds in f64);
@@ -1192,16 +1213,7 @@ impl Predictor {
         &self,
         features: &[f32; NUM_FEATURES],
     ) -> Result<PredictionWithContributions, ort::Error> {
-        use ort::value::TensorRef;
-
-        let shape = [1_usize, NUM_FEATURES];
-        let input = TensorRef::from_array_view((shape, features.as_slice()))?;
-        let mut session = self.pit_margin_session.lock().unwrap();
-        let outputs = session.run(ort::inputs![input])?;
-        let (_, preds) = outputs[0].try_extract_tensor::<f32>()?;
-        let predicted_margin = preds[0];
-        drop(outputs);
-        drop(session);
+        let predicted_margin = self.predict_pit_margin(features)?;
 
         let mut features_f64 = [0.0_f64; NUM_FEATURES];
         for (i, &v) in features.iter().enumerate() {

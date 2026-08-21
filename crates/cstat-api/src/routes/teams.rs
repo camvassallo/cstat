@@ -14,17 +14,20 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::routes::predict::{ProjectionSummary, predict_projection};
+use cstat_core::projection::ProjectionSummary;
 
-/// Max schedule-game projections in flight at once inside `team_detail`.
+use crate::routes::predict::predict_projection;
+
+/// Max LIVE schedule-game projections in flight at once inside `team_detail`.
 ///
-/// Each completed game's projection runs a full-season `compute_pit_campom`
-/// aggregate (its dominant cost), so overlapping them is the win; the bound
-/// keeps a single page load from monopolizing the shared connection pool
-/// (each projection peaks at ~6 connections during its inner `try_join`).
-/// 6 concurrent games overlaps the heavy scans while leaving pool headroom
-/// for other endpoints; sqlx queues any acquire overflow, so this can't
-/// deadlock even if every game peaks together.
+/// Since #266 this bounds only the games `game_projections` doesn't cover —
+/// upcoming games, and any completed game the nightly sweep hasn't reached —
+/// so on a materialized in-season page it governs a handful of rows rather
+/// than the whole schedule. It still matters: each live projection peaks at
+/// ~6 connections during its inner `try_join`, so an un-materialized page
+/// (a season the sweep has never run for) would otherwise demand ~6× that
+/// against a 25-connection pool on its own. sqlx queues any acquire overflow,
+/// so this can't deadlock even if every game peaks together.
 const SCHEDULE_PROJECTION_CONCURRENCY: usize = 6;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -130,6 +133,34 @@ async fn rankings(
     })))
 }
 
+/// Re-frame a stored `game_projections` row from the home team's perspective
+/// into the requested team's.
+///
+/// The table stores one row per game in the home frame; a schedule renders the
+/// same game from whichever side the viewer is looking at. Margin negates, the
+/// win probability mirrors around 0.5, and the two scores swap — the same
+/// transform the live fan-out applies to a `ProjectionSummary`.
+fn stored_in_team_frame(
+    p: &queries::StoredGameProjection,
+    requested_is_home: bool,
+) -> (f64, f64, i32, i32) {
+    if requested_is_home {
+        (
+            p.projected_margin,
+            p.home_win_prob,
+            p.projected_home_score,
+            p.projected_away_score,
+        )
+    } else {
+        (
+            -p.projected_margin,
+            1.0 - p.home_win_prob,
+            p.projected_away_score,
+            p.projected_home_score,
+        )
+    }
+}
+
 #[derive(Deserialize)]
 struct TeamDetailParams {
     season: Option<i32>,
@@ -195,16 +226,55 @@ async fn team_detail(
             )
         })?;
 
-    // Project every game using the existing predictor. Each *completed*
-    // game rebuilds CamPom v3 from pre-game state via the pit bundle, and
-    // that path runs a full-season `compute_pit_campom` aggregate — so a
-    // serial loop over a ~30-game schedule was the team-detail page's
-    // dominant latency. We fan the per-game projections out concurrently
-    // instead, bounded by a semaphore so a single page load can't drain the
-    // shared connection pool out from under other endpoints. Results are
-    // written back by row index, so schedule order is preserved.
-    // Per-game failures are silently dropped — the row still renders, just
-    // without a projection.
+    // Completed games are served from `game_projections`, the table the
+    // nightly materializes (#266). Projecting them live is what made this the
+    // slowest route on the site: each one routes through the point-in-time
+    // feature path, whose first step is a full-season aggregate over
+    // `torvik_player_game_stats`, and neutral-site games run it twice for
+    // order-invariance — 846 database round-trips for a 40-game schedule,
+    // ~3 requests/second, and pool starvation for every other endpoint while
+    // it ran. One indexed read replaces the bulk of that.
+    //
+    // A completed game that ISN'T in the table (played since the last sweep,
+    // or skipped because a team had no stats row) falls through to the live
+    // path below, so the column never silently empties.
+    let stored = queries::get_team_game_projections(pool, resolved_id, season)
+        .await
+        .unwrap_or_else(|e| {
+            // Non-fatal: a failed read costs latency, not correctness — every
+            // game falls back to the live projection it used to get.
+            tracing::warn!(
+                team_id = %resolved_id, season, error = %e,
+                "precomputed game projections unavailable; projecting the schedule live"
+            );
+            Default::default()
+        });
+    for entry in schedule.iter_mut() {
+        let Some(p) = stored.get(&entry.game_id) else {
+            continue;
+        };
+        // Stored rows are in the home team's frame; flip when the requested
+        // team was the visitor. Keyed off the stored `home_team_id` rather
+        // than the schedule row's `is_home`, so a disagreement between the two
+        // can't silently invert a margin.
+        let (margin_team, p_team, score_team, score_opp) =
+            stored_in_team_frame(p, p.home_team_id == resolved_id);
+        entry.projected_margin = Some((margin_team * 10.0).round() / 10.0);
+        entry.projected_win_prob = Some((p_team * 1000.0).round() / 1000.0);
+        entry.projected_score_team = Some(score_team);
+        entry.projected_score_opp = Some(score_opp);
+        // Every stored row carries a non-null `as_of_date` by construction —
+        // the writer refuses to persist a game it can't date — so a stored
+        // projection is always the pre-game one.
+        entry.is_pre_game_projection = true;
+    }
+
+    // Whatever is left — upcoming games, plus any completed game the sweep
+    // hasn't covered — is projected live. The fan-out is bounded by a
+    // semaphore so a single page load can't drain the shared connection pool
+    // out from under other endpoints. Results are written back by row index,
+    // so schedule order is preserved. Per-game failures are silently dropped
+    // — the row still renders, just without a projection.
     //
     // Sign convention: `projected_margin` is from the *requested team's*
     // perspective (positive = requested team favored), regardless of host.
@@ -224,6 +294,10 @@ async fn team_detail(
         Option<ProjectionSummary>,
     )> = JoinSet::new();
     for (idx, entry) in schedule.iter().enumerate() {
+        // Already served from `game_projections`.
+        if entry.projected_margin.is_some() {
+            continue;
+        }
         let Some(opp_id) = entry.opponent_id else {
             continue;
         };
@@ -310,4 +384,50 @@ async fn team_detail(
         "available_seasons": available_seasons,
         "total_teams": total_teams,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(margin: f64, win: f64, home: i32, away: i32) -> queries::StoredGameProjection {
+        queries::StoredGameProjection {
+            game_id: Uuid::nil(),
+            home_team_id: Uuid::nil(),
+            projected_margin: margin,
+            home_win_prob: win,
+            projected_home_score: home,
+            projected_away_score: away,
+        }
+    }
+
+    #[test]
+    fn stored_frame_is_identity_for_the_host() {
+        let p = row(6.5, 0.72, 78, 71);
+        assert_eq!(stored_in_team_frame(&p, true), (6.5, 0.72, 78, 71));
+    }
+
+    #[test]
+    fn stored_frame_inverts_for_the_visitor() {
+        let p = row(6.5, 0.72, 78, 71);
+        let (m, w, team, opp) = stored_in_team_frame(&p, false);
+        assert_eq!(m, -6.5);
+        assert!((w - 0.28).abs() < 1e-12);
+        // The visitor's own score comes first.
+        assert_eq!((team, opp), (71, 78));
+    }
+
+    #[test]
+    fn stored_frame_round_trips() {
+        // Reading the same row from both sides must describe one game: the two
+        // margins cancel, the two win probabilities sum to 1, and each side's
+        // score pair is the other's reversed. A regression here would show up
+        // as a team page claiming both teams were favored.
+        let p = row(-3.25, 0.38, 64, 67);
+        let (m_home, w_home, s_home, s_away) = stored_in_team_frame(&p, true);
+        let (m_away, w_away, a_own, a_opp) = stored_in_team_frame(&p, false);
+        assert!((m_home + m_away).abs() < 1e-12);
+        assert!((w_home + w_away - 1.0).abs() < 1e-12);
+        assert_eq!((s_home, s_away), (a_opp, a_own));
+    }
 }
