@@ -216,6 +216,11 @@ cron service reuses it — no separate build.
      than an outage. Step 8c (`game_projections`) shares the same loaded
      `Predictor`, so an unreadable model directory fails both together.
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
+     `CF_ZONE_ID` names ONE zone, and the site answers on two hosts: point it at the
+     `camalytics.org` zone, where real traffic lands. The still-open `campom.org` zone
+     falls back to the 5-min `Cache-Control` TTL — the right trade for a legacy host,
+     rather than a second purge call in the nightly's critical path. See
+     `docs/domain_migration.md`.
 4. **Enable Static Outbound IPs** — Service → Settings → Networking, on the cron
    service only (the API never calls Torvik). Requires a redeploy to take effect.
    This is **not** optional hardening: barttorvik refuses Google IP space, and
@@ -358,7 +363,7 @@ actually landed, not just that the webhook var is set; `webhook_configured` and
 
 ```bash
 curl -H "X-Selftest-Token: $ALERT_SELFTEST_TOKEN" \
-  "https://campom.org/api/alert-selftest?channel=api"
+  "https://camalytics.org/api/alert-selftest?channel=api"
 # → {"posted":true,"channel":"errors-api","webhook_configured":true,"detail":"sent"}
 ```
 

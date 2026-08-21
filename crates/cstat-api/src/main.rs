@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -124,9 +124,20 @@ async fn boot_and_serve() -> Result<()> {
 
     // Static file serving for React SPA. ServeDir handles asset paths
     // that map to real files on disk (`/assets/*`, `/favicon.png`,
-    // `/index.html`); anything else falls through to ServeFile on
-    // index.html so React Router can take over on hard navigation,
-    // share links, and refresh.
+    // `/robots.txt`); anything else falls through to `meta::spa_document`,
+    // which serves index.html so React Router can take over on hard
+    // navigation, share links, and refresh.
+    //
+    // The fallback is that handler rather than a plain `ServeFile` because the
+    // site answers on two hosts (camalytics.org and the still-open campom.org)
+    // with no redirect between them, so every HTML document has to carry a
+    // `rel="canonical"` naming the canonical origin — see `routes::meta`. A raw
+    // file service cannot vary its body by request path.
+    //
+    // `append_index_html_on_directories(false)` is load-bearing for that: left
+    // on, ServeDir answers `/` out of index.html directly, and the homepage —
+    // the one URL most worth consolidating — would be the only page with no
+    // canonical. Off, `/` falls through to the handler like every other route.
     //
     // Important: use `ServeDir::fallback(…)`, NOT `.not_found_service(…)`.
     // tower-http's `not_found_service` wraps its argument in
@@ -135,14 +146,23 @@ async fn boot_and_serve() -> Result<()> {
     // to `/predict`, `/teams/<id>`, etc. served the right HTML body
     // but with a 404 status, and browsers bailed before React Router
     // could mount. `fallback(…)` skips that wrapper.
-    let spa_files =
-        ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
+    let spa_files = ServeDir::new(&spa_dir)
+        .append_index_html_on_directories(false)
+        .fallback(get(routes::meta::spa_document).with_state(state.clone()));
     // Wrap the static service with the SPA cache policy: content-hashed
     // `/assets/*` get a 1-year immutable `Cache-Control` (the hash is the
-    // cache-buster), a missing one becomes an uncacheable 404 rather than the
-    // HTML shell, and index.html itself gets `no-cache` so a deploy is picked
-    // up immediately. A nested `Router` makes the layer wrap the fallback
-    // service unambiguously.
+    // cache-buster), and a MISSING one becomes an uncacheable 404 rather than
+    // being let through as the HTML shell. A nested `Router` makes the layer
+    // wrap the fallback service unambiguously.
+    //
+    // The layer's third branch — `no-cache` on an HTML document — is a backstop
+    // only. Since #279 every document is rendered by `meta::page`, which sets
+    // its own `public, max-age=300` in order to inject `rel="canonical"`, and
+    // the layer deliberately does not overwrite a header a handler already
+    // chose. The branch therefore fires only if some future HTML response
+    // arrives without one. That TTL on documents that name build-specific
+    // asset URLs is the deploy hazard tracked in #276 — now site-wide rather
+    // than the three OG routes it was filed for.
     let spa: Router<()> = Router::new()
         .fallback_service(spa_files)
         .layer(from_fn(guards::spa_cache_control));
@@ -187,6 +207,11 @@ async fn boot_and_serve() -> Result<()> {
         .route("/sitemap-teams.xml", get(routes::sitemap::teams))
         .route("/sitemap-players.xml", get(routes::sitemap::players))
         .route("/sitemap-coaches.xml", get(routes::sitemap::coaches))
+        // ServeDir would serve this file raw, i.e. with no canonical and with
+        // index.html's static homepage og:url — a second indexable URL for the
+        // homepage, on both hosts. Route it through the injector, which folds
+        // its canonical onto "/".
+        .route("/index.html", get(routes::meta::spa_document))
         .route("/players/{id}", get(routes::meta::player_document))
         .route("/teams/{id}", get(routes::meta::team_document))
         .route("/coaches/{id}", get(routes::meta::coach_document))

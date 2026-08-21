@@ -118,7 +118,7 @@ that, so use a **sitemap index**:
    the nightly). Either is fine; the route-with-TTL is less plumbing.
 4. **Reference it in `robots.txt`:** add a line to `web/public/robots.txt`:
    ```
-   Sitemap: https://campom.org/sitemap.xml
+   Sitemap: https://camalytics.org/sitemap.xml
    ```
 5. **Submit** the sitemap in Google Search Console (also the place to confirm
    indexing + see crawl stats).
@@ -173,5 +173,5 @@ teams) for rich-result eligibility — a later, low-priority add.
   scoped (players 5096, teams 364, coaches 687 — all under the 50k cap), clean
   canonical URLs, `application/xml`, 1h cache. Referenced in
   `web/public/robots.txt` via `Sitemap:`. Submit it in Google Search Console.
-- **Config:** `PUBLIC_BASE_URL` (default `https://campom.org`) feeds the absolute
+- **Config:** `PUBLIC_BASE_URL` (default `https://camalytics.org`) feeds the absolute
   URLs in both the sitemap and the injected `og:url`/canonical.
