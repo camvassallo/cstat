@@ -244,6 +244,22 @@ pub async fn team_id_by_code_and_season(
 ///
 /// NatStat v4 puts results under endpoint-specific keys (e.g., "teamcodes", "games", "players")
 /// rather than a generic "results" key. This finds the first non-metadata key.
+/// Where the ONNX model artifacts live when `MODEL_DIR` is unset.
+///
+/// Repo-relative, which is right for a `cargo run` from the workspace root and
+/// for the deployed image, whose working directory is the repo root.
+pub const DEFAULT_MODEL_DIR: &str = "training/models";
+
+/// The model directory this process should load from: `MODEL_DIR` when set,
+/// otherwise [`DEFAULT_MODEL_DIR`].
+///
+/// Shared so the CLI arms that load a `Predictor` and the nightly's projection
+/// step cannot drift to different defaults — they previously each inlined the
+/// same literal.
+pub fn model_dir_from_env() -> String {
+    std::env::var("MODEL_DIR").unwrap_or_else(|_| DEFAULT_MODEL_DIR.to_string())
+}
+
 pub fn extract_results(page: &Value) -> Vec<&Value> {
     const META_KEYS: &[&str] = &["meta", "user", "query", "success", "error", "warnings"];
     if let Some(obj) = page.as_object() {

@@ -21,6 +21,7 @@ transfers_{year}                    (247 portal, 2 class years — best-effort)
 recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
 recruit_resolve                     (recruit → team / player joins, 3 class years)
 compute_all   (load-bearing)
+projections   (forecast-season roster projections — best-effort, needs the ONNX models)
 invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
 
@@ -180,7 +181,16 @@ cron service reuses it — no separate build.
    - `SLACK_WEBHOOK_CRON` — Slack incoming-webhook URL for `#cron-job-alerts`
      (see Alerting; legacy name `INGEST_ALERT_WEBHOOK` still works)
    - `HEARTBEAT_URL` — optional dead-man's-switch ping (see below).
-   - `MODEL_DIR` is **not** needed (the nightly job runs no ONNX inference).
+   - `MODEL_DIR` — **now needed** if your image puts the ONNX artifacts anywhere
+     other than the repo-relative default `training/models`. Step 8b
+     (`projections`) materializes the forecast season's
+     `player_season_projection` / `team_preseason_projection`, which is the
+     nightly's only ONNX inference — this line previously read "not needed
+     (the nightly job runs no ONNX inference)", which stopped being true when
+     that step was added. A missing or unreadable model directory degrades the
+     run and records a failed `projections` ledger step; it never aborts the
+     box-score chain, so the symptom is a stale projected-players page plus a
+     DEGRADED summary rather than an outage.
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
 4. **Enable Static Outbound IPs** — Service → Settings → Networking, on the cron
    service only (the API never calls Torvik). Requires a redeploy to take effect.
