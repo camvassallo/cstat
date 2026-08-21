@@ -109,16 +109,26 @@ export default class RouteErrorBoundary extends Component<
       }
       const key = reloadKey(window.location.pathname);
       let alreadyReloaded = false;
+      let storageUsable = true;
       try {
         alreadyReloaded = sessionStorage.getItem(key) === '1';
       } catch {
-        // Private mode / storage disabled — fall through to the message rather
-        // than risk an unguarded reload loop.
-        alreadyReloaded = true;
+        // Site data blocked (Chrome/Firefox "block all cookies", some in-app
+        // WebViews). We cannot record a reload, so we must not start one — an
+        // unrecordable reload repeats on the next document and becomes a loop.
+        storageUsable = false;
       }
-      if (!alreadyReloaded) {
+      if (storageUsable && !alreadyReloaded) {
         this.setState({ checking: true });
         this.reloadIfOriginReachable(key);
+        return;
+      }
+      if (!storageUsable) {
+        // Show the error UI, but say nothing to #errors-web. Unreadable storage
+        // is not evidence about the chunk: this is most likely an ordinary
+        // stale tab, which is the case that is supposed to report nothing, and
+        // alerting here would fire once per such user per deploy — precisely
+        // the false alarm the guard exists to avoid.
         return;
       }
       // A second failure on the same chunk is a missing asset, not a stale tab.
@@ -299,7 +309,19 @@ export default class RouteErrorBoundary extends Component<
           <button
             type="button"
             className="text-blue-400 underline"
-            onClick={() => window.location.reload()}
+            // Re-checked at CLICK time, not at catch time. The connection can
+            // drop during the up-to-5s probe window, and this button is exactly
+            // what `componentDidCatch` refuses to do on the user's behalf while
+            // offline: the reload is a network navigation, it fails, and the
+            // browser replaces a still-working app with its error page. If the
+            // device has gone offline since, show that instead of doing it.
+            onClick={() => {
+              if (navigator.onLine === false) {
+                this.setState({ offline: true });
+                return;
+              }
+              window.location.reload();
+            }}
           >
             Reload
           </button>
