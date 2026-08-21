@@ -256,12 +256,11 @@ export function SimilarPlayers({
   return (
     <div className="bg-gray-800 rounded-lg p-5">
       <h2 className="text-lg font-bold mb-1">{title}</h2>
-      <p className="text-xs text-gray-500 mb-3">
-        Closest in standardized feature space (rate stats, shot diet, impact, minutes share).
-        {compareEnabled && (
-          <> Tick up to {MAX_SIMILAR_COMPARE_SELECTIONS} to compare side-by-side.</>
-        )}
-      </p>
+      {compareEnabled && (
+        <p className="text-xs text-gray-500 mb-3">
+          Tick up to {MAX_SIMILAR_COMPARE_SELECTIONS} to compare side by side.
+        </p>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         {players.map((p) => {
           const c = classColor(p.primary_class);

@@ -1,10 +1,64 @@
 @import "tailwindcss";
 
+/* Brand palette, sampled from the Camalytics mark (web/public/logo.png):
+ * the navy field, the white arc, and the light-blue ball.
+ *
+ * These drive the site CHROME only — navbar, footer, wordmark, links, focus
+ * rings. Data surfaces (tables, cards, charts) stay on the neutral gray scale
+ * on purpose: a navy background tints every red/green stat gradient laid over
+ * it, so the numbers stop reading true. Navy frames the page; gray holds the
+ * data.
+ */
+:root {
+  --brand-navy: #052e5c;        /* logo field */
+  --brand-navy-deep: #041f3f;   /* navbar / footer ground, a shade under it */
+  --brand-navy-line: #0b3f78;   /* hairline borders on navy */
+  --brand-blue: #6e9ec5;        /* logo ball — the muted mark blue */
+  --brand-blue-bright: #8fc0e8; /* lifted for text/links: ~7:1 on navy-deep */
+  --brand-blue-accent: #2563eb; /* active/selected fills */
+  /* Text on the navy chrome, in descending prominence. Kept here rather than
+   * as one-off hexes in Layout so the whole palette really does live in one
+   * place. Contrast against --brand-navy-deep: 6.0:1, 8.9:1, 3.2:1 (the last
+   * is decorative separators only, never text). */
+  --brand-chrome-text: #9db8d4;
+  --brand-chrome-text-strong: #bcd0e6;
+  --brand-chrome-divider: #4a688c;
+}
+
 body {
   margin: 0;
   background: #111827;
   color: #e5e7eb;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Navy chrome surfaces. Applied via classes rather than Tailwind arbitrary
+ * values so the palette has one place to change. */
+.brand-chrome {
+  background-color: var(--brand-navy-deep);
+  border-color: var(--brand-navy-line);
+}
+
+.brand-surface {
+  background-color: var(--brand-navy);
+  border-color: var(--brand-navy-line);
+}
+
+/* Visible keyboard focus on real controls. The app previously relied on
+ * component-level `focus:border-*`, which left buttons and links with no focus
+ * indicator at all — a real accessibility gap on a keyboard-navigated site.
+ *
+ * Deliberately NOT `[tabindex]`: AG Grid puts tabindex on its own internals
+ * (`ag-tab-guard` sentinels, header rows, the header viewport) and focuses them
+ * programmatically while moving focus through the grid, so matching it painted
+ * stray outlines on zero-size divs and doubled up on AG Grid's own focus ring.
+ *
+ * No `border-radius` here either — that would change the element's actual
+ * corner shape on focus (visible on anything without a `rounded-*` class).
+ * Outlines already follow the element's own border-radius. */
+:where(a, button, select, input, textarea, summary, [role='button']):focus-visible {
+  outline: 2px solid var(--brand-blue-bright);
+  outline-offset: 2px;
 }
 
 /* Score-ticker marquee. The track holds two back-to-back copies of the tile

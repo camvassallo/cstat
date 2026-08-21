@@ -204,18 +204,12 @@ export function CoachDetail() {
           </h2>
           {scoredCount > 0 ? (
             <>
-              <p className="text-xs text-gray-500 mb-3">
-                Actual team AdjEM minus the roster-only projection. Positive bars = the team beat
-                the talent on hand. Single seasons are noisy; the headline rating shrinks the
-                average toward zero.
-              </p>
               <Sparkline seasons={seasons} />
             </>
           ) : (
             <p className="text-xs text-gray-500 mb-3">
-              None of this coach's teams could be projected (heavy-rebuild rosters below the
-              roster-projection threshold), so there's no above-expectation grade — the actual team
-              strength is shown below.
+              No above-expectation grade — none of this coach's teams cleared the
+              roster-projection threshold.
             </p>
           )}
 

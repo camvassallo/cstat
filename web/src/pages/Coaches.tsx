@@ -228,7 +228,7 @@ function CareerTable({
             <SortHeader label="Rel." sortKey="reliability" current={sort} onSort={onSort} align="right"
               title="Reliability = n / (n + k). Shrinkage weight; low = thin tenure, treat the rating as soft." />
             <SortHeader label="Tenure" sortKey="last_team_season" current={sort} onSort={onSort} align="right"
-              title="Coaching tenure — first scored season to most recent. 'active' = still coaching this season (from the coachdict mapping, so it's right even when the latest season isn't scored yet). Sorts by recency; hover a cell for the scored-season count." />
+              title="Coaching tenure — first scored season to most recent. 'active' = still coaching this season, even when the latest season isn't scored yet. Sorts by recency; hover a cell for the scored-season count." />
           </tr>
         </thead>
         <tbody>
@@ -467,31 +467,14 @@ export function Coaches() {
         <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-bold">Coaches</h1>
           <p className="text-sm text-gray-400 mt-1 max-w-2xl">
-            <span className="font-semibold text-gray-300">Coach-Above-Expectation (CAE)</span> — how
-            much a team out- or under-performs the talent on its roster, attributed to the coach. A
-            descriptive grade, not a prediction. Positive = beat the roster projection.
+            <span className="font-semibold text-gray-300">Coach-Above-Expectation</span> — how much
+            a team out- or under-performs the talent on its roster.
           </p>
-          {mode === 'career' ? (
-            <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-              <span className="text-gray-300 font-semibold">All</span> rated coaches, ranked over
-              their <span className="text-gray-300">whole career</span> (season-agnostic), sorted by{' '}
-              <span className="text-gray-300">Blend</span> (a "results + overperformance" lens:
-              strong, tough-schedule teams that also beat their roster). Sort any column — career{' '}
-              <span className="text-gray-300">CAE</span> is the headline overperformance metric
-              (shrunk over tenure, so thin tenures pull toward 0; see Rel. for confidence). The{' '}
-              <span className="text-gray-300">AdjEM/AdjO/AdjD</span> columns show how strong the
-              coach's teams actually were — descriptive context, never a projection input. The Team
-              column shows each coach's most recent team. Coverage 2016–2026.
-            </p>
-          ) : (
-            <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-              Each coach's <span className="text-gray-300 font-semibold">{season}</span> single
-              season, sorted by <span className="text-gray-300">Blend</span> (that year's strong
-              teams that also beat their roster). Sort <span className="text-gray-300">CAE</span> for
-              who out-performed their roster the most. Single seasons are noisy (the career view
-              shrinks them); treat this as a snapshot, not a rating.
-            </p>
-          )}
+          <p className="text-xs text-gray-500 mt-1">
+            {mode === 'career'
+              ? 'Every rated coach, ranked over their whole career · 2016–2026'
+              : `Single ${season} season · 2016–2026`}
+          </p>
         </div>
         {/* Career / Season ranking toggle — pinned top-right in both modes.
             `shrink-0` + the left column's `min-w-0 flex-1` keep it fixed even

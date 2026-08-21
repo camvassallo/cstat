@@ -1,3 +1,24 @@
+// ---------------------------------------------------------------------------
+// BRAND NAME MAPPING — read before renaming anything in this file.
+//
+// The site displays Camalytics' player-value metric as **CAM**, with its
+// offensive and defensive halves as **CAMO** and **CAMD**. The database
+// columns, API payload fields, ML feature names, and every Rust/Python symbol
+// still use the original `campom` / `cam_gbpm_v3` vocabulary, and are NOT
+// being renamed — the wire contract below deliberately keeps the backend
+// spelling.
+//
+//     wire field        UI label
+//     campom            CAM
+//     campom_o          CAMO
+//     campom_d          CAMD
+//     campom_pct        CAM percentile
+//
+// Presentation-side naming (tiers, colors, tooltips) lives in
+// `components/cam.ts`. Keep the translation at that boundary: this file speaks
+// the backend's language, the components speak the brand's.
+// ---------------------------------------------------------------------------
+
 const BASE = '/api';
 
 async function fetchJson<T>(path: string, params?: Record<string, string | undefined>): Promise<T> {

@@ -11,14 +11,14 @@ import { conferenceLabel } from './conferences';
 // ---------------------------------------------------------------------------
 
 /** Branded title for the shareable result (the page header just says "Portle"
- *  — CamPom is already in the navbar). Uses the same ` · ` separator as the
+ *  — Camalytics is already in the navbar). Uses the same ` · ` separator as the
  *  rest of the share header. */
-export const GAME_TITLE = 'CamPom · Portle';
+export const GAME_TITLE = 'Camalytics · Portle';
 
 export type GameMode = 'campom10' | 'p5' | 'starters';
 
 export const MODE_LABELS: Record<GameMode, string> = {
-  campom10: 'CamPom 10+',
+  campom10: 'CAM 10+',
   p5: 'Power 5',
   starters: 'All D1',
 };
@@ -37,12 +37,12 @@ const P5_CONFERENCES = new Set(['ACC', 'BIG10', 'BIG12', 'SEC', 'BIGEAST']);
 // (any conference) is a proper superset of Power 5 (power conferences only).
 const MIN_MPG = 20;
 
-// CamPom floor for the "CamPom 10+" pool — impact players only, regardless of
+// CAM floor for the "CAM 10+" pool — impact players only, regardless of
 // conference or minutes. Answers are the genuine standouts of the season.
 const CAMPOM_MIN = 10;
 
 /** A player is answerable only if we have the fields the grid + reveal lean
- *  on: a CamPom value and a primary archetype. (Guesses aren't restricted —
+ *  on: a CAM value and a primary archetype. (Guesses aren't restricted —
  *  the search box can surface anyone; only the hidden answer must be rich.) */
 export function isAnswerable(p: PlayerRow): boolean {
   return p.campom != null && p.primary_class != null;
@@ -156,7 +156,7 @@ export function poolHasSeedKeys(pool: PlayerRow[]): boolean {
  *  `natstat_id` is `undefined` for the whole pool (a frontend deployed ahead of
  *  the API that serves the field), every hash collapses to `hash32("salt:undefined")`
  *  and the tie-break (`undefined < undefined`) never advances — pinning the
- *  answer to `eligible[0]`, i.e. the pool's default sort head (top CamPom), the
+ *  answer to `eligible[0]`, i.e. the pool's default sort head (top CAM), the
  *  same day for everyone regardless of date. That is issue #181's "always the
  *  best player." We do NOT paper over it with a `player_id` fallback: that keeps
  *  the game playable but still divergent from up-to-date clients (and re-seeds on
@@ -288,7 +288,7 @@ export const GUESS_COLUMNS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'height', label: 'Height' },
   { key: 'archetype', label: 'Archetype' },
   { key: 'ppg', label: 'PPG' },
-  { key: 'campom', label: 'CamPom' },
+  { key: 'campom', label: 'CAM' },
   { key: 'campom_o', label: 'Offense' },
   { key: 'campom_d', label: 'Defense' },
 ];
@@ -308,12 +308,12 @@ export function compareGuess(guess: PlayerRow, answer: PlayerRow): GuessCell[] {
     }),
     archetypeCell(guess, answer),
     numericCell('ppg', 'PPG', guess.ppg, answer.ppg, { tight: 0.5, band: 2, format: fmt1 }),
-    numericCell('campom', 'CamPom', guess.campom, answer.campom, {
+    numericCell('campom', 'CAM', guess.campom, answer.campom, {
       tight: 0.5,
       band: 2,
       format: fmt1,
     }),
-    // O/D halves (o + d = campom; d positive-good). Same band as the CamPom
+    // O/D halves (o + d = campom; d positive-good). Same band as the CAM
     // headline; null (outside the ±30 envelope / uncovered) reads as a miss.
     numericCell('campom_o', 'Offense', guess.campom_o, answer.campom_o, {
       tight: 0.5,

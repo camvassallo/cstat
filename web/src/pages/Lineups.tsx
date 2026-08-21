@@ -29,7 +29,7 @@ function adjTitle(r: LineupRanking): string {
   if (r.adj_net == null) return 'Opponent-adjusted rating unavailable for this team/season.';
   const raw = r.net_rtg == null ? '—' : signed(r.net_rtg);
   const sch = signed(r.adj_net - (r.net_rtg ?? 0));
-  return `Raw on-court net ${raw} · schedule adjustment ${sch} → AdjEM ${signed(r.adj_net)} (opponent-adjusted, KenPom scale).`;
+  return `Raw on-court net ${raw} · schedule adjustment ${sch} → AdjEM ${signed(r.adj_net)} (opponent-adjusted).`;
 }
 
 /** The combo's players as solid archetype-colored rectangle pills (one per
@@ -183,25 +183,14 @@ export function Lineups() {
           <h1 className="text-3xl font-bold">Lineups</h1>
           <p className="text-sm text-gray-400 mt-1 max-w-2xl">
             The most effective on-floor combinations across every team, ranked by{' '}
-            <span className="text-gray-300 font-semibold">AdjEM</span> — their net points per 100
-            possessions, <span className="text-gray-300">opponent-adjusted</span> for schedule
-            strength (same KenPom scale as the team rankings). Toggle between full{' '}
-            <span className="text-gray-300">5-man</span> lineups and the{' '}
-            <span className="text-gray-300">duo / trio</span> combinations within them.
+            <span className="text-gray-300 font-semibold">AdjEM</span> — opponent-adjusted net
+            points per 100 possessions.
           </p>
-          <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-            {minMinutes != null && (
-              <>
-                Minimum <span className="text-gray-300">{Math.round(minMinutes)}</span> shared
-                minutes to qualify (filters thin-sample outliers).{' '}
-              </>
-            )}
-            AdjO / AdjD / AdjEM shift each lineup's raw on-court rate by its team's schedule
-            adjustment (adjusted − raw efficiency); hover AdjEM for the raw → adjusted breakdown.
-            Possessions and minutes are reconstructed from substitution play-by-play (~86%
-            accurate), so totals are approximate. Lineups exist only for PBP-covered seasons (2018+
-            are densest).
-          </p>
+          {minMinutes != null && (
+            <p className="text-xs text-gray-500 mt-1">
+              Minimum {Math.round(minMinutes)} shared minutes to qualify
+            </p>
+          )}
         </div>
         {/* 5-man / Trios / Duos toggle — pinned top-right, default 5-man. */}
         <div className="inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs self-start shrink-0">
@@ -246,7 +235,7 @@ export function Lineups() {
                 <SortHeader label="+/−" sortKey="plus_minus" current={sort} onSort={onSort} align="right"
                   title="Raw point differential while the group was on the floor." />
                 <SortHeader label="AdjO" sortKey="adj_ortg" current={sort} onSort={onSort} align="right"
-                  title="Opponent-adjusted offensive rating: points scored per 100 possessions with the group on, corrected for schedule (KenPom scale, like the team rankings)." />
+                  title="Opponent-adjusted offensive rating: points scored per 100 possessions with the group on, corrected for schedule — same scale as the team rankings." />
                 <SortHeader label="AdjD" sortKey="adj_drtg" current={sort} onSort={onSort} align="right"
                   title="Opponent-adjusted defensive rating: points allowed per 100 possessions with the group on (lower is better)." />
                 <SortHeader label="AdjEM" sortKey="adj_net" current={sort} onSort={onSort} align="right"

@@ -14,6 +14,7 @@ import Coaches from './pages/Coaches';
 import CoachDetail from './pages/CoachDetail';
 import Portle from './pages/Portle';
 import WhichClass from './pages/WhichClass';
+import Acknowledgments from './pages/Acknowledgments';
 
 // The draft board now lives as a mode tab on /players. Redirect the legacy
 // /draft URL there, carrying the site-selected season through.
@@ -59,6 +60,7 @@ export default function App() {
               /mystery-baller links working, carrying practice query params. */}
           <Route path="/mystery-baller" element={<PortleRedirect />} />
           <Route path="/which-class" element={<WhichClass />} />
+          <Route path="/acknowledgments" element={<Acknowledgments />} />
         </Route>
       </Routes>
     </BrowserRouter>

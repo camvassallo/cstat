@@ -26,13 +26,12 @@ import { classColor, classTagline, textOnClass, provisionalMeta } from '../compo
 import { ClassTooltip } from '../components/Archetype';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
-import { campomTier, campomTierColor, campomTitle, campomHalfColor } from '../components/campom';
+import { camTier, camTierColor, camTitle, camHalfColor } from '../components/cam';
 import { onOffColor, signedRtg, adjOnOff, adjOnOffTitle } from '../components/onoff';
 import { compareValues, type SortDir } from '../components/tableSort';
 import { SortHeader, StickyHeader } from '../components/TableHeaders';
 import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
-import { Disclaimer, DisclaimerFooter } from '../components/Disclaimer';
 import { SeasonLink } from '../components/SeasonLink';
 import {
   AVAILABLE_SEASONS_FALLBACK,
@@ -233,7 +232,7 @@ function HistoricalTeamDetail() {
   const [lineups, setLineups] = useState<TeamLineup[]>([]);
   const [loading, setLoading] = useState(true);
   // Tab title tracks the loaded team and reflects the season selector so a
-  // shared `/teams/<id>?season=2025` link reads "Duke 2025 — CamPom".
+  // shared `/teams/<id>?season=2025` link reads "Duke 2025 — CAM".
   usePageTitle(team ? `${team.name} ${team.season}` : null);
 
   useEffect(() => {
@@ -422,11 +421,6 @@ function HistoricalTeamDetail() {
                   Indexed vs D-I average · 1.0× = league norm
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mb-3">
-                Minute-weighted share of each class (primary at full
-                weight, secondary at half). 100 squares = team's minutes
-                budget. Hover a square for share and index vs D-I.
-              </p>
 
               <div className="flex justify-center">
                 <RosterWaffle archetypeDist={archetypeDist} />
@@ -520,12 +514,6 @@ function HistoricalTeamDetail() {
                   Volume by zone size · FG% by color
                 </span>
               </div>
-              <p className="text-xs text-gray-500 mb-3">
-                Zone brightness scales with the team's shot volume from
-                that area; color tracks FG% against rough D-I
-                benchmarks. Hover a zone for the team aggregate and
-                top contributors.
-              </p>
               <TeamShotDiet roster={roster} />
             </div>
           )}
@@ -591,7 +579,7 @@ function TeamLineupsPanel({ teamId, season }: { teamId: string; season: number }
           {approximate && (
             <span
               className="text-xs px-1.5 py-0.5 rounded bg-gray-900 text-gray-400 uppercase tracking-wide"
-              title="Lineups reconstructed from play-by-play substitutions (~86% accurate). Exact when sourced from the live API on-floor feed or NatStat's official lineup units."
+              title="Lineups reconstructed from play-by-play substitutions (~86% accurate). Exact where official on-floor lineup data is available."
             >
               Approximate · replay
             </span>
@@ -615,8 +603,7 @@ function TeamLineupsPanel({ teamId, season }: { teamId: string; season: number }
         </div>
       </div>
       <p className="text-xs text-gray-500 mb-4">
-        Colored by archetype, most-used first · AdjO / AdjD / AdjEM are opponent-adjusted per 100
-        possessions (same scale as the team rankings).
+        Colored by archetype, most-used first
       </p>
 
       <div>
@@ -663,7 +650,7 @@ function TeamLineupsPanel({ teamId, season }: { teamId: string; season: number }
               </div>
               <div
                 className="hidden sm:block w-20"
-                title="Opponent-adjusted offensive / defensive rating: points scored / allowed per 100 possessions, schedule-corrected (KenPom scale)."
+                title="Opponent-adjusted offensive / defensive rating: points scored / allowed per 100 possessions, schedule-corrected — same scale as the team rankings."
               >
                 <div className="text-sm font-semibold tabular-nums">
                   <span className="text-green-400">{rtg(l.adj_ortg)}</span>
@@ -809,7 +796,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
     );
   };
 
-  // If the current sort column isn't visible in the new view, fall back to CamPom desc.
+  // If the current sort column isn't visible in the new view, fall back to CAM desc.
   const onViewChange = (next: RosterView) => {
     setView(next);
     const rawOnly: RosterSortKey[] = ['ppg', 'rpg', 'apg', 'spg', 'bpg', 'topg'];
@@ -879,7 +866,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
             />
             <StickyHeader>Archetype</StickyHeader>
               <SortHeader
-                label="CamPom"
+                label="CAM"
                 sortKey="campom"
                 current={sort}
                 onSort={onSort}
@@ -894,21 +881,21 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
               {view === 'adv' ? (
                 <>
                   <SortHeader
-                    label="CPO"
+                    label="CAMO"
                     sortKey="campom_o"
                     current={sort}
                     onSort={onSort}
                     align="right"
-                    title="CamPom's offensive half (O + D = CamPom). Hidden where the decomposition is numerically unstable."
+                    title="CAM's offensive half (O + D = CAM). Hidden where the decomposition is numerically unstable."
                     className="border-l border-gray-800"
                   />
                   <SortHeader
-                    label="CPD"
+                    label="CAMD"
                     sortKey="campom_d"
                     current={sort}
                     onSort={onSort}
                     align="right"
-                    title="CamPom's defensive half — positive is GOOD (defensive value added)."
+                    title="CAM's defensive half — positive is GOOD (defensive value added)."
                   />
                   {hasOnOff && (
                     <>
@@ -1030,8 +1017,8 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                 <td className="py-2 px-2 text-right border-l border-gray-800">
                   {p.campom != null ? (
                     <span
-                      className={`px-1.5 rounded border text-xs ${campomTierColor(campomTier(p.campom))}`}
-                      title={campomTitle(p.campom, p.campom_o, p.campom_d)}
+                      className={`px-1.5 rounded border text-xs ${camTierColor(camTier(p.campom))}`}
+                      title={camTitle(p.campom, p.campom_o, p.campom_d)}
                     >
                       {p.campom.toFixed(1)}
                     </span>
@@ -1051,7 +1038,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                   <>
                     <td className="py-2 px-2 text-right border-l border-gray-800 tabular-nums">
                       {p.campom_o != null ? (
-                        <span style={{ color: campomHalfColor(p.campom_o, 'o') }}>
+                        <span style={{ color: camHalfColor(p.campom_o, 'o') }}>
                           {signedRtg(p.campom_o)}
                         </span>
                       ) : (
@@ -1060,7 +1047,7 @@ function RosterTable({ roster }: { roster: RosterEntry[] }) {
                     </td>
                     <td className="py-2 px-2 text-right tabular-nums">
                       {p.campom_d != null ? (
-                        <span style={{ color: campomHalfColor(p.campom_d, 'd') }}>
+                        <span style={{ color: camHalfColor(p.campom_d, 'd') }}>
                           {signedRtg(p.campom_d)}
                         </span>
                       ) : (
@@ -1282,7 +1269,7 @@ function ScheduleRow({
         : 'text-gray-300';
     const subdued = completed ? 'text-gray-600' : 'text-gray-500';
     const title = completed
-      ? `Pre-game projection from ${teamName}'s perspective (point-in-time CamPom as of ${g.game_date}).`
+      ? `Pre-game projection from ${teamName}'s perspective (point-in-time CAM as of ${g.game_date}).`
       : `Predicted from ${teamName}'s perspective`;
     return (
       <span className={`font-mono ${colorClass}`} title={title}>
@@ -1401,7 +1388,7 @@ function LedgerRow({
   );
 }
 
-// Roster-construction ledger: a CamPom-value waterfall that decomposes the
+// Roster-construction ledger: a CAM-value waterfall that decomposes the
 // projection. Last season's roster value, minus departures, the returning
 // core + trajectory growth, plus transfers + recruits → projected roster
 // value, which the calibrator maps to the headline AdjEM. Every cohort is a
@@ -1422,7 +1409,7 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
     <div className="space-y-1.5 rounded border border-slate-700 bg-slate-900/40 p-4">
       <div className="mb-1 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-200">Roster construction</h3>
-        <span className="text-xs text-slate-500">CamPom value · % of last season</span>
+        <span className="text-xs text-slate-500">CAM value · % of last season</span>
       </div>
       <LedgerRow label="Last season's value" detail={`${lastCount} players`} value={base.toFixed(1)} />
       <LedgerRow
@@ -1562,17 +1549,17 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
     data;
   const displayName = team.name ?? team.short_name ?? '(unknown team)';
 
-  // Sort each roster section by CamPom desc so the visual headline of
+  // Sort each roster section by CAM desc so the visual headline of
   // each card is the most impactful player. Nulls sink to the bottom in
   // every section.
-  //   - Returning / Arrivals: sort by projected next-season CamPom (the
+  //   - Returning / Arrivals: sort by projected next-season CAM (the
   //     forward-looking chip is the page's main number), fall back to
-  //     current CamPom when projection missing.
-  //   - Recruits: sort by projected freshman CamPom from the freshman
-  //     model (matches the only CamPom number shown on the row).
+  //     current CAM when projection missing.
+  //   - Recruits: sort by projected freshman CAM from the freshman
+  //     model (matches the only CAM number shown on the row).
   //   - Departures: sort by counterfactual projection ("what they'd
   //     have been worth had they stayed"), falling back to base-season
-  //     CamPom when the trajectory qual gate dropped the row — biggest
+  //     CAM when the trajectory qual gate dropped the row — biggest
   //     losses first.
   const cmpDesc = (a: number | null | undefined, b: number | null | undefined) => {
     if (a == null && b == null) return 0;
@@ -1734,7 +1721,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         </div>
       </div>
 
-      {/* Roster-construction ledger — the CamPom waterfall behind the projection. */}
+      {/* Roster-construction ledger — the CAM waterfall behind the projection. */}
       <RosterLedger p={p} />
 
       {/* Roster cards */}
@@ -1835,7 +1822,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                 // amber (real consideration but withdrawal common), and
                 // missing-from-board styled muted to flag "declared but
                 // not projected to be drafted — high withdrawal odds."
-                // Phase 1 is informational only; no auto-promotion.
+                // is informational only; no auto-promotion.
                 //
                 // Shown for declarants only. The API already withholds
                 // `mock_pick` for the eligibility cohort, so keying the chip on
@@ -1854,12 +1841,12 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                     : `mock #${u.mock_pick}`;
                 const mockTitle =
                   u.mock_pick == null
-                    ? 'Not on the current Tankathon mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
+                    ? 'Not on the current mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
                     : u.mock_pick <= 30
-                      ? `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
-                      : `Tankathon mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
+                      ? `Mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
+                      : `Mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
                 // What has to happen for him to be on next season's roster —
-                // the premise behind the projected-CamPom number beside it.
+                // the premise behind the projected-CAM number beside it.
                 const returnClause = isDraft
                   ? 'If they withdraw and return'
                   : 'If they are ruled eligible';
@@ -1893,7 +1880,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                             <>
                               <span
                                 className="text-[10px] text-gray-500"
-                                title="Prior-season CamPom v3"
+                                title="Prior-season CAM"
                               >
                                 {u.cam_v3.toFixed(1)}
                               </span>
@@ -1901,7 +1888,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                             </>
                           )}
                           <span
-                            className={`px-1.5 rounded border ${campomTierColor(campomTier(u.projected_campom_mean))}`}
+                            className={`px-1.5 rounded border ${camTierColor(camTier(u.projected_campom_mean))}`}
                             title={
                               u.projected_campom_lower != null && u.projected_campom_upper != null
                                 ? `${returnClause}: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
@@ -1914,8 +1901,8 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                       ) : (
                         u.cam_v3 != null && (
                           <span
-                            className={`px-1.5 rounded border ${campomTierColor(campomTier(u.cam_v3))}`}
-                            title={`Prior-season CamPom v3: ${u.cam_v3.toFixed(1)}`}
+                            className={`px-1.5 rounded border ${camTierColor(camTier(u.cam_v3))}`}
+                            title={`Prior-season CAM: ${u.cam_v3.toFixed(1)}`}
                           >
                             {u.cam_v3.toFixed(1)}
                           </span>
@@ -2008,7 +1995,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                             <>
                               <span
                                 className="text-[10px] text-gray-500"
-                                title="Prior-season CamPom v3"
+                                title="Prior-season CAM"
                               >
                                 {d.cam_v3.toFixed(1)}
                               </span>
@@ -2016,7 +2003,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                             </>
                           )}
                           <span
-                            className={`px-1.5 rounded border ${campomTierColor(campomTier(d.projected_campom_mean))}`}
+                            className={`px-1.5 rounded border ${camTierColor(camTier(d.projected_campom_mean))}`}
                             title={
                               d.projected_campom_lower != null && d.projected_campom_upper != null
                                 ? `Counterfactual: if they'd stayed, projected ${d.projected_campom_mean.toFixed(1)} (${d.projected_campom_lower.toFixed(1)}–${d.projected_campom_upper.toFixed(1)}). Current ${d.cam_v3 != null ? d.cam_v3.toFixed(1) : '—'}.`
@@ -2029,8 +2016,8 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                       ) : (
                         d.cam_v3 != null && (
                           <span
-                            className={`px-1.5 rounded border ${campomTierColor(campomTier(d.cam_v3))}`}
-                            title={`Prior-season CamPom v3: ${d.cam_v3.toFixed(1)} (no counterfactual projection — trajectory qual gate failed or batch inference dropped the row).`}
+                            className={`px-1.5 rounded border ${camTierColor(camTier(d.cam_v3))}`}
+                            title={`Prior-season CAM: ${d.cam_v3.toFixed(1)} (no projection available).`}
                           >
                             {d.cam_v3.toFixed(1)}
                           </span>
@@ -2073,47 +2060,6 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         </RosterCard>
       </div>
 
-      <DisclaimerFooter>
-        <Disclaimer label={isPlayedSeason ? 'Backtest:' : 'Projection mode:'}>
-          {isPlayedSeason ? (
-            <>
-              What cstat would have projected <em>before</em> the {seasonLabel}{' '}
-              season, using only data available beforehand — returner forecasts
-              are <strong>held-out</strong> (the model never trained on this
-              season), so the Proj-vs-Actual miss above is an honest grade, not
-              a hindsight fit. Roster = returners + portal commits + HS recruits
-              as known going in.
-            </>
-          ) : (
-            <>
-              This page is the {seasonLabel} forward-looking view, not a played
-              season. Roster = returners (minus seniors, outbound portal, firm
-              NBA-draft departures) + incoming portal commits + HS-recruit class
-              commits. Recruits carry the Phase 6 freshman-impact model's
-              per-recruit projected CamPom.
-            </>
-          )}{' '}
-          See the{' '}
-          <SeasonLink
-            to={`/projected?season=${year}`}
-            className="text-amber-200 underline hover:text-amber-100"
-          >
-            Projected {seasonLabel} grid
-          </SeasonLink>{' '}
-          for full methodology + cross-team rankings.
-        </Disclaimer>
-        <Disclaimer label="Regression to the mean:">
-          this is a <strong>preseason</strong> projection, so it's compressed
-          toward average — weak rosters trend <em>up</em> and elite rosters
-          trend <em>down</em> relative to last season. Roughly{' '}
-          <strong>23% of team-AdjEM variance is preseason-invisible</strong>, an
-          irreducible floor, so read the number as <em>directional</em>. Elite
-          returners regress hardest (the trajectory model under-projects the
-          +15-and-up CamPom tail by design — read the q90 ceiling for the
-          optimistic case). Heavy-turnover / new-coach rosters lean off last
-          year's stale record and carry the widest bands.
-        </Disclaimer>
-      </DisclaimerFooter>
     </div>
   );
 }
@@ -2159,22 +2105,22 @@ function PlayerCard({
 }) {
   // Regression-to-the-mean honesty note — same conditional as the
   // Transfer/PlayerDetail surfaces. Anchors on the model's *input*
-  // (current/source-season CamPom), not the projection.
+  // (current/source-season CAM), not the projection.
   const regressionNote =
     cam_v3 != null && cam_v3 >= 15
-      ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CamPom bias on inputs ≥+15). Read the q90 ceiling for the optimistic case.'
+      ? ' Regression-to-the-mean: model under-projects elite-tier returners (≈−3 CAM bias on inputs ≥+15). Read the high end of the band for the optimistic case.'
       : cam_v3 != null && cam_v3 >= 10
-        ? ' Mild regression expected on this tier (≈−0.3 CamPom bias on +10..+15 inputs).'
+        ? ' Mild regression expected on this tier (≈−0.3 CAM bias on +10..+15 inputs).'
         : '';
   const projectedTitle =
     projected_mean != null
-      ? `Projected next-season CamPom: ${projected_mean.toFixed(1)}${
+      ? `Projected next-season CAM: ${projected_mean.toFixed(1)}${
           projected_lower != null && projected_upper != null
             ? ` (${projected_lower.toFixed(1)}–${projected_upper.toFixed(1)})`
             : ''
         }${cam_v3 != null ? `. Current ${cam_v3.toFixed(1)}, Δ ${projected_mean - cam_v3 >= 0 ? '+' : ''}${(projected_mean - cam_v3).toFixed(1)}.` : '.'}${regressionNote}`
       : cam_v3 != null
-        ? 'No next-season projection (player did not pass the trajectory model qual gate or batch inference failed). Current CamPom shown.'
+        ? 'No next-season projection available for this player. Current CAM shown.'
         : '';
   return (
     <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded">
@@ -2195,14 +2141,14 @@ function PlayerCard({
           <span className="flex items-center gap-1.5">
             {cam_v3 != null && (
               <>
-                <span className="text-[10px] text-gray-500" title="Prior-season CamPom v3">
+                <span className="text-[10px] text-gray-500" title="Prior-season CAM">
                   {cam_v3.toFixed(1)}
                 </span>
                 <span className="text-gray-600 text-[10px]">→</span>
               </>
             )}
             <span
-              className={`px-1.5 rounded border ${campomTierColor(campomTier(projected_mean))}`}
+              className={`px-1.5 rounded border ${camTierColor(camTier(projected_mean))}`}
               title={projectedTitle}
             >
               {projected_mean.toFixed(1)}
@@ -2211,7 +2157,7 @@ function PlayerCard({
         ) : (
           cam_v3 != null && (
             <span
-              className={`px-1.5 rounded border ${campomTierColor(campomTier(cam_v3))}`}
+              className={`px-1.5 rounded border ${camTierColor(camTier(cam_v3))}`}
               title={projectedTitle}
             >
               {cam_v3.toFixed(1)}
@@ -2245,7 +2191,7 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
         {r.position && (
           <span
             className="text-[11px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-900/40 border border-sky-700/60 text-sky-200 shrink-0"
-            title="247Sports listed position"
+            title="Listed position"
           >
             {r.position}
           </span>
@@ -2265,18 +2211,18 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
             className={
               dnp
                 ? 'px-1.5 rounded border border-gray-700 text-gray-500 line-through'
-                : `px-1.5 rounded border ${campomTierColor(campomTier(r.projected_cam_v3))}`
+                : `px-1.5 rounded border ${camTierColor(camTier(r.projected_cam_v3))}`
             }
             title={
               dnp
-                ? `Did not play — the projected freshman CamPom ${r.projected_cam_v3.toFixed(1)} is not counted toward this team's projection.`
+                ? `Did not play — the projected freshman CAM ${r.projected_cam_v3.toFixed(1)} is not counted toward this team's projection.`
                 : r.projected_campom_lower != null && r.projected_campom_upper != null
-                  ? `Phase 6 freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}).${
+                  ? `freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}).${
                       r.projected_cam_v3 >= 10
                         ? ' Wide bands on elite recruits reflect top-tail uncertainty.'
                         : ''
                     }`
-                  : `Projected freshman CamPom v3: ${r.projected_cam_v3.toFixed(1)} (model unavailable for this class — replacement-level fallback, no per-player band).`
+                  : `Projected freshman CAM: ${r.projected_cam_v3.toFixed(1)} (model unavailable for this class — replacement-level fallback, no per-player band).`
             }
           >
             {r.projected_cam_v3.toFixed(1)}

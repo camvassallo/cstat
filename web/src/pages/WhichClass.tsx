@@ -38,7 +38,7 @@ export default function WhichClass() {
     if (!primary) return;
     let cancelled = false;
     // Fetch the whole class pool (not a top-N) — dual-class matches are often
-    // low-CamPom role players, so a small limit would truncate them and force a
+    // low-CAM role players, so a small limit would truncate them and force a
     // wrong fallback to primary-only. It's one fetch on quiz completion.
     fetchPlayers({ archetype: primary, includeSecondaryArchetype: true, season, limit: 5000 })
       .then((r) => {
@@ -178,7 +178,7 @@ function ResultCard({
   const color = classColor(result.primary);
 
   // Prefer players who share BOTH classes (either slot order); fall back to
-  // those whose primary class matches. Pool is CamPom-sorted from the API.
+  // those whose primary class matches. Pool is CAM-sorted from the API.
   const pool = matchPool ?? [];
   const wanted = new Set([result.primary, result.secondary]);
   const dual = pool.filter(
