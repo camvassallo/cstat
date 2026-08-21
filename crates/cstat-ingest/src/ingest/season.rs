@@ -899,6 +899,7 @@ impl<'a> SeasonIngester<'a> {
             lineups_fetched: 0,
             torvik_rebounds_updated: 0,
             compute: None,
+            projections_year: None,
             run_id: ledger.run_id(),
         };
 
@@ -1621,6 +1622,89 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // --- 8b. forecast-season projections (best-effort) ---
+        // Materializes `player_season_projection` + `team_preseason_projection`
+        // for the upcoming season. Added because the three surfaces that show
+        // next season's roster disagreed whenever the portal moved: the transfer
+        // board reads `transfers` directly and the Future team page runs
+        // `roster_projection` live at request time, so both saw a commit the
+        // moment the nightly refreshed 247 — while `/players?season=N+1` is a
+        // thin read over a table only `compute-projections` writes, a command
+        // that ran on a laptop and reached prod by sync. Jaxon Kohler committed
+        // to BYU, appeared on two of the three pages, and was absent from the
+        // third: at the last materialization he was `Entered` with no
+        // destination, and `roster_projection` only adds a transfer to a team's
+        // arrivals once a destination resolves, so no row existed for him at
+        // all. Every portal commit re-opened that gap until someone
+        // re-materialized by hand.
+        //
+        // Runs AFTER `compute_all` (it reads the derived stats that step
+        // rewrites) and after the 247 refreshes (transfers and recruits are its
+        // arrival inputs), and before the invariant/row-count gates so they see
+        // the fresh rows.
+        //
+        // Only the forecast season, `self.season + 1`. `run` is delete-then-
+        // insert per season, so passing a wider range would rewrite settled
+        // seasons nightly for no gain — and the current season's preseason
+        // projection is a preseason artifact that should stop moving once games
+        // are played (it is what the predict blend decays away from).
+        //
+        // Best-effort, like every other non-served-critical step: this is the
+        // first thing in the nightly that needs the ONNX models, so an
+        // unreadable model directory must degrade the run rather than abort a
+        // game-night box-score refresh. `MODEL_DIR` still does not need setting
+        // on the cron service — the Dockerfile copies the artifacts to
+        // `/app/training/models` and the image's WORKDIR is `/app`, so the
+        // repo-relative default resolves. What changed is that the nightly now
+        // loads models at all, which the deploy doc's env table used to deny.
+        if run_compute {
+            let t0 = Utc::now();
+            let step = "projections";
+            let forecast_year = self.season + 1;
+            let model_dir = crate::model_dir_from_env();
+            let model_path = std::path::Path::new(&model_dir);
+            match cstat_core::inference::Predictor::load(model_path) {
+                Ok(predictor) => {
+                    match crate::compute_projections::run(
+                        self.pool,
+                        &predictor,
+                        model_path,
+                        &[forecast_year],
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            info!(
+                                season = self.season,
+                                forecast_year, "materialized forecast-season projections"
+                            );
+                            ledger.record(step, StepStatus::Ok, None, t0, None).await;
+                            report.projections_year = Some(forecast_year);
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            warn!(season = self.season, forecast_year, error = %msg,
+                                  "projection materialization failed; the projected-players \
+                                   page may be stale");
+                            ledger
+                                .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                                .await;
+                            failures.push(format!("{step}: {msg}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("failed to load models from {model_dir}: {e}");
+                    warn!(season = self.season, error = %msg,
+                          "cannot materialize projections without the ONNX models");
+                    ledger
+                        .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                        .await;
+                    failures.push(format!("{step}: {msg}"));
+                }
+            }
+        }
+
         // --- 9. post-compute invariant gates (M5 quality gates) ---
         // Structural "did compute do its job" checks against the just-written
         // derived tables (`cstat_core::invariants` — the same set the `simulate`
@@ -2092,6 +2176,7 @@ impl<'a> SeasonIngester<'a> {
              {torvik_line}\n\
              *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
              *Compute:*  {compute_str}{repair_line}\n\
+             *Projections:*  {projections_line}\n\
              *Rate budget:*  {remaining}/{budget}",
             games = report.ingest.games,
             pp = report.ingest.player_performances,
@@ -2100,6 +2185,13 @@ impl<'a> SeasonIngester<'a> {
             fc = report.ingest.game_forecasts,
             pbp = report.pbp_rows,
             lu = report.lineups_fetched,
+            // `None` covers both the skipped (`--no-compute`) and failed cases;
+            // a failure additionally lands in the issue list, so the summary
+            // never reports a stale projection table as if it were fresh.
+            projections_line = match report.projections_year {
+                Some(y) => format!("{y} materialized"),
+                None => "not run".to_string(),
+            },
             remaining = tokens_after,
         );
         if failures.is_empty() {
@@ -2319,6 +2411,9 @@ pub struct NightlyReport {
     /// Games whose NatStat lineups object was captured this run.
     pub lineups_fetched: u64,
     pub compute: Option<ComputeReport>,
+    /// The forecast season whose projections this run materialized, or `None`
+    /// when the step was skipped (`--no-compute`) or failed.
+    pub projections_year: Option<i32>,
     /// Grouping id for this run's rows in the `ingest_runs` ledger.
     pub run_id: Uuid,
 }
@@ -2354,6 +2449,10 @@ impl std::fmt::Display for NightlyReport {
             "PBP/lineups: {} play-by-play rows, {} lineup games captured",
             self.pbp_rows, self.lineups_fetched
         )?;
+        match self.projections_year {
+            Some(y) => writeln!(f, "Projections: {y} materialized")?,
+            None => writeln!(f, "Projections: not run")?,
+        }
         if let Some(c) = &self.compute {
             writeln!(f, "{c}")?;
         }

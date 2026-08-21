@@ -967,8 +967,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::ProjectionsBacktest { years, output } => {
-            let model_dir =
-                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
@@ -983,8 +982,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::ComputeProjections { years } => {
-            let model_dir =
-                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
@@ -998,8 +996,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::MeasureBlendAccuracy { years } => {
-            let model_dir =
-                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
@@ -1138,8 +1135,7 @@ async fn main() -> Result<()> {
             all_nationalities,
             limit,
         } => {
-            let model_dir =
-                std::env::var("MODEL_DIR").unwrap_or_else(|_| "training/models".to_string());
+            let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
