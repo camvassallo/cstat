@@ -100,6 +100,53 @@ fn plan_pbp_heal(
     }
 }
 
+/// Does this database simply not hold play-by-play for `season`, as opposed to
+/// holding it with nights missing?
+///
+/// The unreachable-dates note exists to tell an operator about a hole no nightly
+/// action can close, and it ends with a `cstat-ingest playbyplay` backfill
+/// command. On a deployment that never ingests a season's PBP at all, that
+/// advice is wrong: production fetches only its own nightly window, raw
+/// `play_by_play` is in `sync_to_prod.sh`'s EXCLUDED list by design, and the
+/// lineup/RAPM products it would feed arrive by sync instead — `player_rapm` is
+/// fit by `training/rapm.py`, which production cannot run at all. Prod therefore
+/// reports every game date of a completed season as deficient, forever, and the
+/// suggested fix would spend ~8,400 NatStat calls re-fetching 3.26M rows into a
+/// table nothing there reads.
+///
+/// Two conditions, and both are load-bearing:
+///
+/// - **The season holds zero PBP rows.** A lost night is partial by nature, so
+///   any season we genuinely ingested has rows. This is what keeps the real
+///   issue-#247 case — we hold the season and dropped some of it — always
+///   reported.
+/// - **The season is over**, its last game older than the heal cap. This is what
+///   keeps the rollover disaster reported: if a new season's opening nights all
+///   fail, that season also holds zero PBP, but it is *in progress*, the note is
+///   exactly right, and a backfill is exactly what is wanted. `invariants.rs`
+///   documents that scenario as the reason a zero-PBP gate was removed from the
+///   shared query — so this one lives at the alert, which is where that comment
+///   says the fix belongs, and it never touches the scan or the heal.
+///
+/// Suppressing only the note is deliberate: `pbp_deficient_dates` still reports
+/// the dates on the standing warnings line, so nothing is hidden — only the
+/// misleading call to action is dropped.
+fn season_pbp_not_held_here(
+    season_pbp_rows: i64,
+    season_last_game: Option<chrono::NaiveDate>,
+    today: chrono::NaiveDate,
+    cap_days: i64,
+) -> bool {
+    if season_pbp_rows > 0 {
+        return false;
+    }
+    match season_last_game {
+        Some(last) => last < today - chrono::Duration::days(cap_days),
+        // No games at all: nothing to be deficient about either way.
+        None => false,
+    }
+}
+
 /// The slice of `[from, to]` a run may claim as ingested coverage, or `None`
 /// when nothing in it had finished.
 ///
@@ -398,6 +445,33 @@ impl<'a> SeasonIngester<'a> {
     /// mid-season: `teams` (the reference team list — new teams only appear at a
     /// season bootstrap) and `team_details` (TCR is unserved, W-L is overwritten
     /// by `compute_derived_game_fields`, and conference is static in-season).
+    /// How much play-by-play this database holds for the season, and when the
+    /// season's last game was: the two inputs to [`season_pbp_not_held_here`].
+    ///
+    /// Both come from one round trip. Returns `None` on a query error so the
+    /// caller can fall back to reporting the note — failing toward the alert is
+    /// the safe direction, since a suppressed note is a hole nobody hears about.
+    async fn season_pbp_holdings(&self) -> Option<(i64, Option<chrono::NaiveDate>)> {
+        let row: (i64, Option<chrono::NaiveDate>) = sqlx::query_as(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM play_by_play p
+                   JOIN games g ON g.id = p.game_id
+                  WHERE g.season = $1),
+                (SELECT MAX(game_date) FROM games WHERE season = $1)
+            "#,
+        )
+        .bind(self.season)
+        .fetch_one(self.pool)
+        .await
+        .map_err(|e| {
+            warn!(season = self.season, error = %e, "could not read season PBP holdings");
+            e
+        })
+        .ok()?;
+        Some(row)
+    }
+
     pub async fn nightly(
         &self,
         start_date: &str,
@@ -618,7 +692,34 @@ impl<'a> SeasonIngester<'a> {
                         // won't fill, whatever its slate size.
                         let dates: Vec<NaiveDate> = deficient.iter().map(|d| d.date).collect();
                         let plan = plan_pbp_heal(&dates, floor, df);
-                        if !plan.unreachable.is_empty() {
+                        // Does this database hold this season's PBP at all? A
+                        // deployment that never ingests it (production — see
+                        // `season_pbp_not_held_here`) reports every game date of
+                        // a finished season as deficient forever, and the note's
+                        // backfill command is the wrong advice there. Queried
+                        // once, only when there is a note to gate.
+                        let not_held_here = if plan.unreachable.is_empty() {
+                            false
+                        } else {
+                            let (rows, last_game) =
+                                self.season_pbp_holdings().await.unwrap_or((1, None));
+                            season_pbp_not_held_here(
+                                rows,
+                                last_game,
+                                crate::today_utc(),
+                                MAX_PBP_HEAL_DAYS,
+                            )
+                        };
+                        if not_held_here {
+                            info!(
+                                season = self.season,
+                                count = plan.unreachable.len(),
+                                "this database holds no play-by-play for the season and the \
+                                 season is over — suppressing the backfill note; the derived \
+                                 lineup/RAPM products are expected to arrive by sync"
+                            );
+                        }
+                        if !plan.unreachable.is_empty() && !not_held_here {
                             warn!(
                                 season = self.season,
                                 count = plan.unreachable.len(),
@@ -2512,5 +2613,85 @@ mod tests {
         assert!(!is_core_season_date(""));
         assert!(!is_core_season_date("not-a-date"));
         assert!(!is_core_season_date("2026-13-40"));
+    }
+}
+
+#[cfg(test)]
+mod pbp_note_suppression_tests {
+    use super::season_pbp_not_held_here;
+
+    const CAP: i64 = 7;
+
+    fn nd(s: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    /// Production: holds no play-by-play for a season that ended months ago,
+    /// because raw PBP is EXCLUDED from the sync and prod only ever fetches its
+    /// own nightly window. Every game date reads as deficient and no backfill is
+    /// the right advice, so the note is suppressed.
+    #[test]
+    fn finished_season_we_never_ingested_is_suppressed() {
+        assert!(season_pbp_not_held_here(
+            0,
+            Some(nd("2026-04-06")),
+            nd("2026-08-20"),
+            CAP
+        ));
+    }
+
+    /// The issue-#247 case, and the one that must NEVER be suppressed: we hold
+    /// the season and lost some nights. A partial hole always has rows.
+    #[test]
+    fn a_season_we_hold_is_never_suppressed() {
+        assert!(!season_pbp_not_held_here(
+            3_258_166,
+            Some(nd("2026-04-06")),
+            nd("2026-08-20"),
+            CAP
+        ));
+        // Even a single row means this database ingests PBP for the season.
+        assert!(!season_pbp_not_held_here(
+            1,
+            Some(nd("2026-04-06")),
+            nd("2026-08-20"),
+            CAP
+        ));
+    }
+
+    /// The rollover disaster `invariants.rs` warns about: a new season whose
+    /// opening nights all failed also holds zero PBP — but it is in progress, so
+    /// the note and its backfill command are exactly right. This is why the
+    /// season-is-over half of the predicate is load-bearing.
+    #[test]
+    fn in_progress_season_with_zero_pbp_still_alerts() {
+        // Season underway, last game two days ago: well inside the cap.
+        assert!(!season_pbp_not_held_here(
+            0,
+            Some(nd("2026-11-10")),
+            nd("2026-11-12"),
+            CAP
+        ));
+        // Boundary: a last game exactly at the cap edge is still "in progress".
+        assert!(!season_pbp_not_held_here(
+            0,
+            Some(nd("2026-11-05")),
+            nd("2026-11-12"),
+            CAP
+        ));
+        // One day past the cap flips it.
+        assert!(season_pbp_not_held_here(
+            0,
+            Some(nd("2026-11-04")),
+            nd("2026-11-12"),
+            CAP
+        ));
+    }
+
+    /// A season with no games cannot have a deficient date, so there is nothing
+    /// to suppress and nothing to report.
+    #[test]
+    fn season_with_no_games_is_not_suppressed() {
+        assert!(!season_pbp_not_held_here(0, None, nd("2026-08-20"), CAP));
     }
 }
