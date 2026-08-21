@@ -756,6 +756,11 @@ pub async fn table_counts(pool: &PgPool) -> Result<Vec<(&'static str, i64)>> {
         "team_season_stats",
         "player_season_stats",
         "game_forecasts",
+        // Nightly-written since #266, so the harness that exists to catch
+        // nightly regressions offline should cover it. The sweep upserts the
+        // same set of completed games on every pass, so a count that moves
+        // across the idempotency re-run is a real drift, not churn.
+        "game_projections",
     ] {
         let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
             .fetch_one(pool)

@@ -101,6 +101,18 @@ pub async fn compute_pit_campom(
           AND tpgs.game_date <= $2
         GROUP BY tps.player_id
         HAVING COUNT(*) >= $3
+        -- ORDER BY is not cosmetic here. The cohort mean below folds over
+        -- these rows in Rust, and floating-point addition is not associative,
+        -- so an unordered GROUP BY makes `mean_min_pct` depend on whatever row
+        -- order the planner happens to produce. That mean scales EVERY
+        -- player's CamPom, and CamPom values sit on LightGBM split thresholds
+        -- — the same last-bit-to-discrete-jump path that made the pit
+        -- prediction path return 16.8 or 17.1 points for one 2026 matchup
+        -- depending on the run (#266). That instance came from `HashMap`
+        -- iteration order and is fixed at the call site; this one is latent
+        -- (stable per plan, not across plan changes), and pinning it costs a
+        -- sort of ~4,000 rows against a 76,000-row scan.
+        ORDER BY tps.player_id
         "#,
     )
     .bind(season)

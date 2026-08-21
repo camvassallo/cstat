@@ -35,6 +35,14 @@ use uuid::Uuid;
 /// the first run of a new season has no prior same-season snapshot, so the gate
 /// only records a baseline (`detect_count_regressions` skips a table absent from
 /// the prior snapshot).
+///
+/// `game_projections` is the materialized completed-game projection the team
+/// page reads (#266). It grows monotonically in-season — one row per game once
+/// played — and the sweep prunes only what it just failed to reproduce, so a
+/// material shrink means the sweep completed while projecting fewer games than
+/// the night before. That is the "silently computed over nothing" shape this
+/// gate exists for, and it is otherwise invisible: an under-covered sweep
+/// degrades the team page to the slow live path rather than breaking it.
 pub const ROW_COUNT_TABLES: &[&str] = &[
     "games",
     "team_game_stats",
@@ -43,6 +51,7 @@ pub const ROW_COUNT_TABLES: &[&str] = &[
     "player_season_stats",
     "lineup_aggregates",
     "player_on_off",
+    "game_projections",
 ];
 
 /// The window-scoped, load-bearing box-score steps. A date only counts as

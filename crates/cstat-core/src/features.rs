@@ -23,8 +23,14 @@ pub struct GameFeatures {
 }
 
 /// Team-level stats pulled from `team_season_stats`.
-#[derive(Debug, sqlx::FromRow)]
-struct TeamStats {
+///
+/// Public so batch callers (the nightly `game_projections` writer) can fetch
+/// one per team for a whole season and reuse it across every game that team
+/// played, instead of re-reading the same row once per matchup. Fields stay
+/// private — the only supported use is handing the value back to
+/// [`assemble_features`].
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TeamStats {
     wins: i32,
     losses: i32,
     adj_offense: Option<f64>,
@@ -61,8 +67,8 @@ impl TeamStats {
 ///
 /// `Default` (all fields `None`) is the *neutral* roster used by
 /// [`comparable_rosters`] — every field maps to 0.0 in the feature vector.
-#[derive(Debug, Default, sqlx::FromRow)]
-struct RosterAgg {
+#[derive(Debug, Default, Clone, sqlx::FromRow)]
+pub struct RosterAgg {
     roster_size: Option<i64>,
     w_ppg: Option<f64>,
     w_rpg: Option<f64>,
@@ -120,15 +126,15 @@ fn comparable_rosters(home: RosterAgg, away: RosterAgg) -> (RosterAgg, RosterAgg
 }
 
 /// Rolling form aggregates from recent `player_game_stats`.
-#[derive(Debug, sqlx::FromRow)]
-struct RollingForm {
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RollingForm {
     w_rolling_gs: Option<f64>,
     w_rolling_ts: Option<f64>,
     w_ppg_trend: Option<f64>,
     w_gs_trend: Option<f64>,
 }
 
-async fn get_team_stats(
+pub async fn get_team_stats(
     pool: &PgPool,
     team_id: Uuid,
     season: i32,
@@ -153,7 +159,7 @@ async fn get_team_stats(
 
 /// Point-in-time roster impact values keyed by cstat player_id. Constructed
 /// once per request and shared across home/away roster aggregations.
-type PitByPlayer = HashMap<Uuid, PitCamPom>;
+pub type PitByPlayer = HashMap<Uuid, PitCamPom>;
 
 /// Compute pit CamPom v3 (no-SOS) for the entire season cohort as of a
 /// cutoff date, keyed by cstat `players.id`.
@@ -169,7 +175,7 @@ type PitByPlayer = HashMap<Uuid, PitCamPom>;
 /// torvik_pid rows for the same player_id in one season) are aggregated
 /// into a single combined row by the database, not silently overwritten
 /// in app code.
-async fn build_pit_by_player(
+pub async fn build_pit_by_player(
     pool: &PgPool,
     season: i32,
     as_of_date: NaiveDate,
@@ -262,7 +268,7 @@ async fn get_roster_agg(
 /// star-pick logic is intentionally unchanged — only the leaky channel is
 /// swapped, matching the `pit_cam_v3` training variant the audit measured
 /// at AUC 0.785.
-async fn get_roster_agg_pit(
+pub async fn get_roster_agg_pit(
     pool: &PgPool,
     team_id: Uuid,
     season: i32,
@@ -271,21 +277,39 @@ async fn get_roster_agg_pit(
     // Flatten the map into parallel arrays for UNNEST. Players with no pit
     // entry fall through the LEFT JOIN as NULL, matching how train-time
     // unmapped Torvik rows behave.
-    let (pids, gbpms, ogbpms, dgbpms): (Vec<Uuid>, Vec<f64>, Vec<f64>, Vec<f64>) = pit.iter().fold(
-        (
-            Vec::with_capacity(pit.len()),
-            Vec::with_capacity(pit.len()),
-            Vec::with_capacity(pit.len()),
-            Vec::with_capacity(pit.len()),
-        ),
-        |(mut p, mut g, mut o, mut d), (player_id, cam)| {
-            p.push(*player_id);
-            g.push(cam.cam_gbpm_v3_no_sos);
-            o.push(cam.ogbpm);
-            d.push(cam.dgbpm);
-            (p, g, o, d)
-        },
-    );
+    //
+    // SORTED BY player_id, and that is load-bearing rather than tidiness.
+    // `HashMap` iteration order varies between instances in the same process
+    // (each `RandomState` gets its own seed), so an unsorted flatten hands
+    // Postgres the `pit` CTE in a different row order on every call. The
+    // minutes-weighted `SUM(...)` below then accumulates in a different order,
+    // and floating-point addition is not associative — the aggregates differ
+    // in their last bits. Those last bits are not harmless: a feature sitting
+    // on a LightGBM split threshold takes a different branch, and the served
+    // margin jumps a discrete amount. Measured before this sort, one 2026
+    // matchup returned 16.8 or 17.1 points from the *same* request depending
+    // on the run, and the neutral path (which builds two maps) produced four
+    // distinct answers across fifteen calls. A stable order makes the pit
+    // path reproducible, which is also what lets the precomputed
+    // `game_projections` row equal a live recomputation (#266).
+    let mut ordered: Vec<(&Uuid, &PitCamPom)> = pit.iter().collect();
+    ordered.sort_unstable_by_key(|(player_id, _)| *player_id);
+    let (pids, gbpms, ogbpms, dgbpms): (Vec<Uuid>, Vec<f64>, Vec<f64>, Vec<f64>) =
+        ordered.into_iter().fold(
+            (
+                Vec::with_capacity(pit.len()),
+                Vec::with_capacity(pit.len()),
+                Vec::with_capacity(pit.len()),
+                Vec::with_capacity(pit.len()),
+            ),
+            |(mut p, mut g, mut o, mut d), (player_id, cam)| {
+                p.push(*player_id);
+                g.push(cam.cam_gbpm_v3_no_sos);
+                o.push(cam.ogbpm);
+                d.push(cam.dgbpm);
+                (p, g, o, d)
+            },
+        );
 
     sqlx::query_as::<_, RosterAgg>(
         r#"
@@ -363,7 +387,7 @@ async fn get_roster_agg_pit(
     .await
 }
 
-async fn get_rolling_form(
+pub async fn get_rolling_form(
     pool: &PgPool,
     team_id: Uuid,
     season: i32,
@@ -468,12 +492,23 @@ pub async fn build_all_features(
 }
 
 /// Point-in-time companion to `build_all_features`. Roster impact (gbpm /
-/// ogbpm / dgbpm) is rebuilt by aggregating `torvik_player_game_stats` up
-/// to `as_of_date` instead of reading the season-aggregate
-/// `torvik_player_stats` columns. All other features stay end-of-season —
-/// this matches the `pit_cam_v3` training variant whose backtest AUC of
-/// 0.785 is the production-ready honest number per the predict-honesty
-/// audit (`training/eval_history/honest_audit_findings_20260529.md`).
+/// ogbpm / dgbpm, team-weighted and star) is rebuilt by aggregating
+/// `torvik_player_game_stats` up to `as_of_date` instead of reading the
+/// season-aggregate `torvik_player_stats` columns.
+///
+/// **Only that channel is point-in-time.** The other 41 features — every
+/// `team_season_stats` column, every `player_season_stats`-derived roster
+/// aggregate, and rolling form — are read whole-season on this path too. That
+/// is a train/serve skew, not a design choice: `training/features.py` builds
+/// per-date `adj_eff_snapshots`, pre-game ELO, and
+/// `expanding().mean().shift(1)` cumulative team/roster stats, so the vector
+/// this function produces for a past cutoff is NOT the vector the pit bundle's
+/// 0.785 backtest AUC was measured on. Tracked in issue #274; a comment here
+/// used to claim the two matched.
+///
+/// Unaffected for an *upcoming* game: with `as_of_date = None` the caller takes
+/// `build_all_features`, where season-to-date and "everything before today" are
+/// the same thing and the frame does match training.
 ///
 /// Pair with `Predictor::predict_pit` to keep the model that receives
 /// these features the one that was trained on them.
@@ -533,6 +568,41 @@ async fn build_all_features_inner(
         )?,
     };
 
+    Ok(assemble_features(
+        &home_ts,
+        &away_ts,
+        home_roster,
+        away_roster,
+        &home_form,
+        &away_form,
+        is_neutral,
+        is_conference,
+    ))
+}
+
+/// Turn already-fetched feature parts into the two model input vectors.
+///
+/// Split out of [`build_all_features_inner`] so the per-request path and the
+/// nightly `game_projections` batch writer share one copy of the vector
+/// assembly. The batch writer fetches the parts on its own schedule — team
+/// stats and rolling form once per team-season, the pit roster aggregate once
+/// per (team, cutoff date) — and hands them back here, so a precomputed
+/// projection and a live one are built from byte-identical arithmetic.
+///
+/// Everything from `comparable_rosters` onward lives here; the feature ORDER
+/// is wire-locked to `model_meta.json` and must not be reordered.
+#[allow(clippy::too_many_arguments)] // cohesive matchup inputs; a param
+// struct here would only rename the same eight values at every call site.
+pub fn assemble_features(
+    home_ts: &TeamStats,
+    away_ts: &TeamStats,
+    home_roster: RosterAgg,
+    away_roster: RosterAgg,
+    home_form: &RollingForm,
+    away_form: &RollingForm,
+    is_neutral: bool,
+    is_conference: bool,
+) -> GameFeatures {
     // Drop a one-sided roster signal when only one team has a qualified
     // rotation yet (opening ~2 weeks) — see `comparable_rosters`.
     let (home_roster, away_roster) = comparable_rosters(home_roster, away_roster);
@@ -627,7 +697,7 @@ async fn build_all_features_inner(
     diff_and_sum[NUM_FEATURES + 7] = s(home_ts.off_rebound_pct, away_ts.off_rebound_pct);
     diff_and_sum[NUM_FEATURES + 8] = s(home_ts.def_rebound_pct, away_ts.def_rebound_pct);
 
-    Ok(GameFeatures { diff, diff_and_sum })
+    GameFeatures { diff, diff_and_sum }
 }
 
 #[cfg(test)]

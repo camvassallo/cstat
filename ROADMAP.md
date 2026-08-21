@@ -16,7 +16,7 @@ Ordered by the seasonal clock (the 2026-27 season tips ~Nov 2026, ~3.5 months ou
 
 **The first action is therefore not a measurement.** It is (a) a 30-second dashboard check that the plan has no hard volume ceiling independent of the per-GB rate, then (b) the work itself, cheapest-first: `transfers`/`recruits`/`coaches` are marked *incidental* below — already Rust CLI subcommands, merely missing from `nightly` — while PBP-on-prod is a product call, not a correctness one (a PBP-less prod loses three display surfaces and 3/60 trajectory features to sentinel, and keeps rankings, CamPom, game predictions and preseason projections intact). Note prod does **not** need the 9.8 GB historical backfill to become self-sufficient: it needs to *retain what its nightly already ingests*, ~1 GB/season (2026 measures 978 MB), on a database currently at ~2 GB. Carries a hard tipoff deadline: **archetypes for a new season are empty until a manual retrain, and the ≥10 GP gate means they cannot exist before ~Nov 29 regardless.** → see *"Prod self-sufficiency"* (Phase 6).
 3. **P1 — Bracketology / Resume surface** (Quad 1–4 records → Resume page → NET-replica ranking → bracket projector → bubble watch). The biggest unbuilt user-facing surface and exactly what audiences want in-season; the *code* is fully buildable now against the 2015–2026 ingested seasons, so it's polished and ready to light up at tipoff. Sequence descriptive-first. → see the *Quad / Resume / Bracketology* cluster (Phase 4).
-4. **P2 — Tier-2 precompute of completed-game projections** — finishes the `team_detail` latency work *and* delivers the deferred "we predicted X / actual was Y" receipt in one shot. → see *"API latency — team-detail schedule projections"*.
+4. ~~**P2 — Tier-2 precompute of completed-game projections**~~ — **SHIPPED 2026-08-20 (#266).** The nightly materializes every completed game's pre-game projection into `game_projections`; `team_detail` reads it and projects live only for games not yet played. Measured on the same URL and data: **364 statements → 8**, 0.61s → 0.03s locally, and the response is byte-identical to the live path. The "we predicted X / actual was Y" receipt comes with it — the Projected column no longer drifts night to night, so it can be read as a record. → see *"API latency — team-detail schedule projections"*.
 5. **P2 — Calibration-tracking dashboard** (+ the train/serve parity regression lock) — how you *show* the model is honest once live predictions are running.
 
 Everything else (new-coach uncertainty bands, player CPO/CPD projection, archetype team views / what-if sandbox, 2007–2014 backfill, Le Moyne coverage gap) is **P3** polish/research with no urgency.
@@ -1755,13 +1755,58 @@ predated the pit path).
   pool was raised 10 → 25 (`DATABASE_MAX_CONNECTIONS`, `db.rs`) so the inner
   6-query `try_join` per game has room to overlap. Expect ~4–6× on the loop for a
   fully-played schedule.
-- [ ] **Precompute + cache pit projections** *(the remaining structural win)* —
-  completed-game projections are deterministic given pre-game state, so they never
-  change once played. Persist them (a `game_projections` table, or extend
-  `game_forecasts`) at ingest/compute time and have `team_detail` read instead of
-  recompute. Upcoming games still project live (only a handful per page). Removes
-  the bulk of the loop entirely and doubles as the deferred "retroactive
-  `game_forecasts`" surface (Phase 4 "point-in-time historical predictions").
+- [x] **Precompute + cache pit projections** *(shipped 2026-08-20, #266)* — the
+  nightly's `game_projections` step materializes every completed game's pre-game
+  projection into a table (migration 053) and `team_detail` reads it, projecting
+  live only for games not yet played. Michigan's 2025 page, same URL and data:
+  **364 SQL statements → 8**, 0.61s → 0.03s on a local DB (the prod win is larger
+  — the removed statements were each paying a network round-trip). The full
+  JSON response is byte-identical to the live path, and
+  `crates/cstat-ingest/tests/game_projection_parity.rs` pins it there.
+  - The premise had to be corrected on the way in. "Completed-game projections
+    are deterministic given pre-game state" is only true of the **CamPom
+    channel**: `build_all_features_inner` reads team stats, roster aggregates
+    and rolling form from the season-aggregate tables even on the pit path, so a
+    November game's projection still moves as the season fills in. The sweep
+    therefore rewrites the whole current season nightly rather than appending.
+    That is cheap because the cost is keyed on the **cutoff date**, not the
+    game: every game played on date D shares one point-in-time cohort, so a
+    full 2026 season is ~150 rebuilds (22s in a debug build) instead of ~5,700.
+  - The same investigation found a genuine train/serve skew on that path —
+    training builds per-date `adj_eff_snapshots`, pre-game ELO, and
+    `expanding().mean().shift(1)` cumulative team/roster stats, while serving
+    feeds end-of-season values for 45 of the 49 features. Filed separately; it
+    is a correctness question, not a latency one, and the precompute stores
+    exactly what the live path already served.
+  - **Found and fixed on the way in: the point-in-time path was
+    nondeterministic.** `get_roster_agg_pit` flattened a `HashMap` into the
+    `pit` UNNEST arrays, and `HashMap` iteration order varies between instances
+    in one process, so Postgres summed the minutes-weighted roster aggregates
+    in a different order on every call. Floating-point addition is not
+    associative, the last bits moved, and a feature sitting on a LightGBM split
+    threshold flipped branches. Measured: one 2026 matchup returned **16.8 or
+    17.1** points from the *same* request depending on the run, and the neutral
+    path (which builds two cohorts) produced **four distinct answers across
+    fifteen calls** — and was not order-invariant between the two team
+    orderings, despite `combine_neutral` forcing exact antisymmetry on the pair
+    it was given. Sorting the flatten by `player_id` fixes it: 15/15 identical
+    on both paths, and neutral is exactly mirrored again. This was a live
+    serving bug, not a precompute one, but it is fatal to a precompute (a
+    stored row could never equal a live recomputation) and it is why the
+    "we predicted X" receipt was not previously trustworthy — the number
+    changed on reload. Guarded by
+    `game_projection_parity.rs::pit_predictions_are_reproducible`.
+  - Shared-engine refactor that made it possible: the matchup prediction engine
+    (venue semantics, neutral symmetrisation, win-prob calibration, preseason
+    blend) moved from `cstat-api/src/routes/predict.rs` to
+    `cstat-core/src/projection.rs`, so the batch writer and the request path run
+    the *same* functions rather than two copies that could drift apart.
+- [x] **Drop TreeSHAP from the projection path** *(shipped alongside, #266)* —
+  `Attribution::{Shap,Skip}` on the projection engine. The Keys panel on the
+  Predict page is the only surface that reads `contributions`; TeamDetail, the
+  ScoreTicker and the nightly sweep all discarded them while still paying for a
+  full walk of the LightGBM ensemble per call. The margin comes from the same
+  ONNX session either way, so no served number moved.
 - [ ] **Lazy/split the surface** — return the schedule immediately and let the
   frontend fetch projections in a second call (or stream per-row), so the page
   paints before inference finishes.

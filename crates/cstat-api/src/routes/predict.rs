@@ -13,29 +13,57 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES, Prediction};
+use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES};
+use cstat_core::projection::{
+    self, Attribution, BlendClock, NO_PREDICTION_DATA_PREFIX, ProjectionSummary, Venue,
+};
 use cstat_core::queries;
 
 use crate::AppState;
 
-pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/api/predict", get(predict))
+/// Which clock the preseason blend should read for this request.
+///
+/// The engine lives in `cstat-core`, which deliberately cannot see
+/// `cstat_ingest::today_utc` (that's where the replay harness's simulated-clock
+/// overrides live), so the wall-clock read happens here — at the edge — and
+/// travels in as data.
+fn blend_clock(as_of_date: Option<NaiveDate>) -> BlendClock {
+    match as_of_date {
+        Some(d) => BlendClock::AsOf(d),
+        None => BlendClock::Live(cstat_ingest::today_utc()),
+    }
 }
 
-/// Where the game is being played.
+/// Per-matchup projection for the surfaces that don't need the explainability
+/// payload — TeamDetail's `Projected` column and the ScoreTicker strip.
 ///
-/// `Home` = the team passed as `home` is hosting.
-/// `Away` = the team passed as `away` is hosting (so we swap before feature
-/// extraction and negate the resulting margin so the response stays from
-/// the `home` param's perspective).
-/// `Neutral` = no host. Predictions are symmetrised by averaging both team
-/// orderings — see `predict_neutral_symmetric`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Venue {
-    Home,
-    Away,
-    Neutral,
+/// A thin `AppState` adapter over [`projection::predict_projection`]; the
+/// arithmetic itself is shared with the nightly `game_projections` writer so a
+/// precomputed row and a live call agree exactly.
+pub async fn predict_projection(
+    state: &Arc<AppState>,
+    home_team_id: Uuid,
+    away_team_id: Uuid,
+    season: i32,
+    is_neutral: bool,
+    is_conference: bool,
+    as_of_date: Option<NaiveDate>,
+) -> Result<ProjectionSummary, String> {
+    projection::predict_projection(
+        &state.db.pool,
+        &state.predictor,
+        home_team_id,
+        away_team_id,
+        season,
+        is_neutral,
+        is_conference,
+        blend_clock(as_of_date),
+    )
+    .await
+}
+
+pub fn router() -> Router<Arc<AppState>> {
+    Router::new().route("/api/predict", get(predict))
 }
 
 #[derive(Deserialize)]
@@ -141,14 +169,17 @@ async fn predict(
     // answer. The returned `Explained` carries both the headline numbers
     // and per-feature ablation deltas + the input feature vector itself
     // (already sign-flipped to the home perspective for the Away venue).
-    let explained = predict_with_venue(
-        &state,
+    let explained = projection::predict_with_venue(
+        &state.db.pool,
+        &state.predictor,
         home_team.id,
         away_team.id,
         season,
         venue,
         is_conference,
         params.as_of_date,
+        // The Keys panel renders these — the one surface that does.
+        Attribution::Shap,
     )
     .await
     .map_err(|e| {
@@ -184,13 +215,13 @@ async fn predict(
     } else {
         "leaky"
     };
-    let blend = apply_preseason_blend(
+    let blend = projection::apply_preseason_blend(
         &state.db.pool,
         season,
         home_team.id,
         away_team.id,
         venue,
-        params.as_of_date,
+        blend_clock(params.as_of_date),
         pit_margin,
     )
     .await;
@@ -324,401 +355,6 @@ async fn predict(
     })))
 }
 
-/// Headline prediction plus the inputs and ablation deltas needed to
-/// render the explainability panel. All values are from the caller's
-/// `home_team` perspective, regardless of venue (positive contribution =
-/// pushed margin toward home_team).
-struct Explained {
-    prediction: Prediction,
-    feature_values: [f32; NUM_FEATURES],
-    contributions: [f32; NUM_FEATURES],
-}
-
-/// Run the predictor with explicit venue semantics, including symmetric
-/// averaging for neutral games. All fields in the returned `Explained`
-/// are from the caller's `home_team_id` perspective (positive margin /
-/// contribution = pushed toward home_team).
-async fn predict_with_venue(
-    state: &Arc<AppState>,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
-    venue: Venue,
-    is_conference: bool,
-    as_of_date: Option<NaiveDate>,
-) -> Result<Explained, String> {
-    match venue {
-        Venue::Home => {
-            run_predict(
-                state,
-                home_team_id,
-                away_team_id,
-                season,
-                false,
-                is_conference,
-                as_of_date,
-            )
-            .await
-        }
-        Venue::Away => {
-            // Caller's "home" param is actually the visitor. Swap before
-            // feature extraction (so the model sees the true host as home),
-            // then flip the result back to the caller's home perspective.
-            //   - margin negates (m_home = -m_swap)
-            //   - win prob mirrors around 0.5
-            //   - contributions all negate (the entire margin frame flipped,
-            //     so "pushed toward swap-home" becomes "pushed toward
-            //     caller-away" with a sign flip — applies to flag features
-            //     too, since their contribution is measured against the
-            //     same margin)
-            //   - feature_values for diff_* features negate (the diff
-            //     reverses direction when teams swap), but the two flag
-            //     features stay (someone is still hosting; conference
-            //     match is symmetric).
-            let swapped = run_predict(
-                state,
-                away_team_id,
-                home_team_id,
-                season,
-                false,
-                is_conference,
-                as_of_date,
-            )
-            .await?;
-            let mut feature_values = swapped.feature_values;
-            let mut contributions = swapped.contributions;
-            for (i, v) in feature_values.iter_mut().enumerate() {
-                if !is_flag_feature(i) {
-                    *v = -*v;
-                }
-            }
-            for c in &mut contributions {
-                *c = -*c;
-            }
-            Ok(Explained {
-                prediction: Prediction {
-                    predicted_margin: -swapped.prediction.predicted_margin,
-                    home_win_probability: 1.0 - swapped.prediction.home_win_probability,
-                    // Totals are invariant under team swap (home + away
-                    // = away + home), so no flip — the model output
-                    // travels through unchanged.
-                    predicted_total: swapped.prediction.predicted_total,
-                },
-                feature_values,
-                contributions,
-            })
-        }
-        Venue::Neutral => {
-            predict_neutral_symmetric(
-                state,
-                home_team_id,
-                away_team_id,
-                season,
-                is_conference,
-                as_of_date,
-            )
-            .await
-        }
-    }
-}
-
-/// Average forward + reverse predictions so neutral-site results are
-/// invariant to argument order.
-///
-/// LightGBM tree ensembles aren't antisymmetric in diff features — even when
-/// venue=0, `predict(diff(A,B))` and `-predict(diff(B,A))` will disagree by
-/// a few tenths of a point. Some upstream features (rolling form, star
-/// player, NULL-coalesced fields) also don't perfectly negate when the
-/// teams swap. Averaging the two margins forces
-/// `margin(A,B,neutral) == -margin(B,A,neutral)` exactly; the win
-/// probability is then derived from the symmetric margin (in
-/// `run_predict`'s output we already replace the win-classifier with
-/// `margin_to_win_prob`, so re-deriving here keeps the two perfectly in
-/// step) which gives `p_home(A,B,neutral) + p_home(B,A,neutral) == 1.0`
-/// exactly.
-async fn predict_neutral_symmetric(
-    state: &Arc<AppState>,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
-    is_conference: bool,
-    as_of_date: Option<NaiveDate>,
-) -> Result<Explained, String> {
-    let (fwd, rev) = tokio::try_join!(
-        run_predict(
-            state,
-            home_team_id,
-            away_team_id,
-            season,
-            true,
-            is_conference,
-            as_of_date,
-        ),
-        run_predict(
-            state,
-            away_team_id,
-            home_team_id,
-            season,
-            true,
-            is_conference,
-            as_of_date,
-        ),
-    )?;
-
-    let symmetric_margin =
-        0.5 * (fwd.prediction.predicted_margin - rev.prediction.predicted_margin);
-    // Totals symmetrize *additively* — total(A,B) and total(B,A) should
-    // agree (the same game's combined points, regardless of how we
-    // labelled "home"). LightGBM tree ensembles aren't perfectly
-    // symmetric in features though, so even at venue=0 the two calls
-    // disagree by a few tenths. Average them to force exact equality.
-    let symmetric_total = 0.5 * (fwd.prediction.predicted_total + rev.prediction.predicted_total);
-
-    // Symmetrise feature values and contributions the same way: each is
-    // averaged against its sign-flipped counterpart from the reverse
-    // call, except flag features (venue, is_conference_game) whose
-    // values stay the same regardless of team order. Contributions
-    // always flip uniformly because the margin frame flips.
-    let mut feature_values = [0.0_f32; NUM_FEATURES];
-    let mut contributions = [0.0_f32; NUM_FEATURES];
-    for i in 0..NUM_FEATURES {
-        let fv_rev_in_home_frame = if is_flag_feature(i) {
-            rev.feature_values[i]
-        } else {
-            -rev.feature_values[i]
-        };
-        feature_values[i] = 0.5 * (fwd.feature_values[i] + fv_rev_in_home_frame);
-        contributions[i] = 0.5 * (fwd.contributions[i] - rev.contributions[i]);
-    }
-
-    Ok(Explained {
-        prediction: Prediction {
-            predicted_margin: symmetric_margin,
-            home_win_probability: margin_to_win_prob(symmetric_margin, as_of_date.is_some()),
-            predicted_total: symmetric_total,
-        },
-        feature_values,
-        contributions,
-    })
-}
-
-/// Per-matchup projection summary for surfaces that don't need the full
-/// explainability payload — the score-ticker upcoming-games strip and
-/// the TeamDetail schedule's Projected column. All values are from
-/// `home_team_id`'s perspective.
-///
-/// Score derivation: `home + away` is the model's `predicted_total`,
-/// `home - away` is the model's `predicted_margin`. Rounded once at
-/// the end so the two integers reconcile (`home + away ==
-/// round(total)` exactly).
-#[derive(Debug, Clone, Copy)]
-pub struct ProjectionSummary {
-    pub margin: f32,
-    pub home_win_prob: f64,
-    pub home_score: i32,
-    pub away_score: i32,
-}
-
-/// Convenience wrapper for surfaces that just need a per-matchup
-/// projection. Returns margin + win probability + integer projected
-/// scores from `home_team_id`'s perspective.
-///
-/// Neutral games go through `predict_neutral_symmetric` so the answer is
-/// invariant to argument order — without it, the same matchup queried from
-/// Team A's schedule (host=B, visitor=A) and Team B's schedule (host=A,
-/// visitor=B) returns slightly different magnitudes because LightGBM tree
-/// ensembles aren't antisymmetric in diff features. The extra inference
-/// per neutral game costs ~0.5ms and eliminates a user-visible inconsistency
-/// across surfaces.
-pub async fn predict_projection(
-    state: &Arc<AppState>,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
-    is_neutral: bool,
-    is_conference: bool,
-    as_of_date: Option<NaiveDate>,
-) -> Result<ProjectionSummary, String> {
-    let explained = if is_neutral {
-        predict_neutral_symmetric(
-            state,
-            home_team_id,
-            away_team_id,
-            season,
-            is_conference,
-            as_of_date,
-        )
-        .await?
-    } else {
-        run_predict(
-            state,
-            home_team_id,
-            away_team_id,
-            season,
-            false,
-            is_conference,
-            as_of_date,
-        )
-        .await?
-    };
-    // Same early-season preseason × pit blend as the `/api/predict` handler
-    // (shared [`apply_preseason_blend`]), so TeamDetail's Projected column and
-    // the ScoreTicker tiles agree with the Predict page on the same matchup
-    // (ROADMAP §6). `home_team_id` is always the host here, so the venue is
-    // Home (or Neutral); the blend is a scalar mix of the venue-resolved
-    // margin, preserving neutral symmetry.
-    let pit_margin = explained.prediction.predicted_margin;
-    let venue = if is_neutral {
-        Venue::Neutral
-    } else {
-        Venue::Home
-    };
-    let blend = apply_preseason_blend(
-        &state.db.pool,
-        season,
-        home_team_id,
-        away_team_id,
-        venue,
-        as_of_date,
-        pit_margin,
-    )
-    .await;
-    let blended_margin = blend.map(|b| b.margin).unwrap_or(pit_margin);
-    let home_win_prob = match blend {
-        Some(b) => b.win_prob,
-        None => explained.prediction.home_win_probability,
-    };
-
-    let total = explained.prediction.predicted_total as f64;
-    let margin = blended_margin as f64;
-    Ok(ProjectionSummary {
-        margin: blended_margin,
-        home_win_prob,
-        home_score: ((total + margin) / 2.0).round() as i32,
-        away_score: ((total - margin) / 2.0).round() as i32,
-    })
-}
-
-/// Prefix marking a "we have no prediction inputs for this team/season" error —
-/// a `RowNotFound` out of feature extraction, which means one of the teams has no
-/// stats row for the requested season (e.g. a program that hadn't reached D1
-/// yet, like Utah Tech in 2021). That's a **client** error (a bad team/season
-/// combo), not a server fault, so the route maps it to 404 rather than 500 — a
-/// 500 here would page `#errors-api` on what is effectively a user typo. Any
-/// other sqlx error is a genuine failure and keeps its 500.
-const NO_PREDICTION_DATA_PREFIX: &str = "no prediction data";
-
-/// Turn a feature-extraction sqlx error into the route-facing message, tagging
-/// the missing-data case with [`NO_PREDICTION_DATA_PREFIX`] (see there).
-fn classify_feature_error(e: sqlx::Error, season: i32, what: &str) -> String {
-    match e {
-        sqlx::Error::RowNotFound => format!(
-            "{NO_PREDICTION_DATA_PREFIX}: one or both teams have no data for season {season}"
-        ),
-        other => format!("{what} failed: {other}"),
-    }
-}
-
-async fn run_predict(
-    state: &Arc<AppState>,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
-    is_neutral: bool,
-    is_conference: bool,
-    as_of_date: Option<NaiveDate>,
-) -> Result<Explained, String> {
-    // Single DB-fetch pass produces both the 49-element diff vector
-    // (margin/win input) and the 58-element diff+sum vector (totals
-    // input). The feature extraction is the expensive step.
-    //
-    // When `as_of_date` is set, we route through the pit feature builder
-    // (CamPom v3 aggregated from torvik_player_game_stats up to the
-    // cutoff) and serve the pit model bundle — train/serve parity is the
-    // load-bearing invariant: feeding pit features to the end-of-season
-    // model (or vice versa) would reintroduce the ~3 AUC points of
-    // lookahead inflation the predict-honesty audit caught.
-    let f = match as_of_date {
-        Some(d) => cstat_core::features::build_all_features_pit(
-            &state.db.pool,
-            home_team_id,
-            away_team_id,
-            season,
-            is_neutral,
-            is_conference,
-            d,
-        )
-        .await
-        .map_err(|e| classify_feature_error(e, season, "pit feature extraction"))?,
-        None => cstat_core::features::build_all_features(
-            &state.db.pool,
-            home_team_id,
-            away_team_id,
-            season,
-            is_neutral,
-            is_conference,
-        )
-        .await
-        .map_err(|e| classify_feature_error(e, season, "feature extraction"))?,
-    };
-
-    // Margin + TreeSHAP from the diff vector; totals from the diff+sum
-    // vector. Pit and end-of-season paths use distinct model bundles —
-    // see `Predictor::predict_*` doc comments.
-    let (attributed, predicted_total) = match as_of_date {
-        Some(_) => {
-            let attributed = state
-                .predictor
-                .predict_pit_with_contributions(&f.diff)
-                .map_err(|e| format!("pit prediction failed: {e}"))?;
-            let predicted_total = state
-                .predictor
-                .predict_pit_total(&f.diff_and_sum)
-                .map_err(|e| format!("pit totals prediction failed: {e}"))?;
-            (attributed, predicted_total)
-        }
-        None => {
-            let attributed = state
-                .predictor
-                .predict_with_contributions(&f.diff)
-                .map_err(|e| format!("prediction failed: {e}"))?;
-            let predicted_total = state
-                .predictor
-                .predict_total(&f.diff_and_sum)
-                .map_err(|e| format!("totals prediction failed: {e}"))?;
-            (attributed, predicted_total)
-        }
-    };
-
-    // Override the standalone win-classifier output with a margin-derived
-    // win probability. The two LightGBM models (margin + win) are trained
-    // independently, so near the boundary their answers can disagree by a
-    // few points and produce the user-visible contradiction of "predicted
-    // winner = X" alongside "X has 49% win probability". Tying the win
-    // probability to margin via a calibrated logistic guarantees the two
-    // signals always agree on direction.
-    Ok(Explained {
-        prediction: Prediction {
-            predicted_margin: attributed.predicted_margin,
-            home_win_probability: margin_to_win_prob(
-                attributed.predicted_margin,
-                as_of_date.is_some(),
-            ),
-            predicted_total,
-        },
-        feature_values: f.diff,
-        contributions: attributed.contributions,
-    })
-}
-
-/// Whether the feature at `i` is a 0/1 indicator (venue, conference
-/// game) rather than a `home − away` diff. Flag features don't reverse
-/// sign when the teams swap, so they need special handling in venue
-/// transforms.
-fn is_flag_feature(i: usize) -> bool {
-    matches!(FEATURE_NAMES[i], "venue" | "is_conference_game")
-}
-
 /// Build the JSON-shaped contribution panel from raw ablation deltas.
 ///
 /// Returns `(feature_contributions, by_group)`. `feature_contributions`
@@ -804,194 +440,6 @@ fn round1(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
-/// Standard deviation of college basketball game-margin residuals, by
-/// bundle. Sourced from each model's `backtest_margin.rmse` in
-/// `training/models/{,pit_}model_meta.json` — re-measure and update
-/// whenever the bundle is retrained; the value materially affects how
-/// aggressively `home_win_probability` moves away from 0.5 per point of
-/// predicted margin.
-///
-/// Current values from the 12-season retrain artifacts:
-///   - Prod (end-of-season): 10.46, fit on 2014–2026 cohort.
-///   - Pit (`pit_cam_v3`):   11.03 — point-in-time features carry more
-///     residual variance, so the win-prob calibration is correspondingly
-///     less sharp. Reusing the prod σ for pit margins (as the prior
-///     single-constant code did) over-confidence-ed honest predictions
-///     by ~0.5pp near the 50/50 boundary.
-const PREDICT_SIGMA_PROD: f64 = 10.46;
-const PREDICT_SIGMA_PIT: f64 = 11.03;
-
-/// Logistic approximation of `Φ(margin / σ)` — the probability that the
-/// actual margin exceeds zero given a predicted margin and a residual
-/// stddev `σ`. The 1.6 scaling constant matches the logistic CDF to the
-/// standard normal CDF; the two agree to ≤1pp across the realistic
-/// prediction range. We use logistic instead of erf to avoid pulling in a
-/// numerics dependency for a single call site.
-///
-/// `is_pit` picks the matching bundle's σ — feeding a pit margin through
-/// the prod σ (or vice versa) is the same flavor of train/serve skew the
-/// audit caught for features, just on the calibration side.
-fn margin_to_win_prob(margin: f32, is_pit: bool) -> f64 {
-    const LOGISTIC_GAUSSIAN_SCALE: f64 = 1.6;
-    let sigma = if is_pit {
-        PREDICT_SIGMA_PIT
-    } else {
-        PREDICT_SIGMA_PROD
-    };
-    let z = LOGISTIC_GAUSSIAN_SCALE * (margin as f64) / sigma;
-    1.0 / (1.0 + (-z).exp())
-}
-
-/// Home-court advantage in points, added to the preseason AdjEM-diff margin
-/// for home games. The preseason projection is a *neutral* team-strength
-/// delta (the pit/predict model bakes HCA into its margin via the venue
-/// flag; the AdjEM diff does not), so the blend's preseason leg must add it
-/// explicitly. ~3.5 is the college-basketball consensus; the blend backtest
-/// (`measure-blend-accuracy`) can retune it.
-const PRESEASON_HOME_COURT_ADVANTAGE: f32 = 3.5;
-
-/// Peak weight on the PRESEASON leg, at the season open (Nov 1). Calibrated by
-/// `measure-blend-accuracy` pooled over 2024–2026: a 0.70/0.30 preseason/pit
-/// mix at tip-off beats pure preseason — the two imperfect, partly-uncorrelated
-/// legs ensemble (opening-week blended MAE 9.84 vs preseason-only 10.91).
-const PRESEASON_PEAK_WEIGHT: f32 = 0.70;
-
-/// Days after Nov 1 over which the preseason weight decays linearly to 0.
-/// Calibrated to 42 (≈ mid-December): pit overtakes preseason ~2 weeks into the
-/// season, so the old Jan-15 (75-day) endpoint kept weight on a stale prior for
-/// a month too long. The 0.70/42-day schedule lands pooled blended MAE 8.80 vs
-/// 9.01 for the old 1.0/75-day curve — within 0.03 of the per-week oracle.
-const PRESEASON_DECAY_DAYS: i64 = 42;
-
-/// Weight on the PRESEASON projection in the early-season blend: `PEAK` at the
-/// Nov 1 open, linear decay to 0.0 over `DECAY_DAYS`, then 0.0 (pure pit).
-/// cstat-season `S` runs Nov (S−1) → Apr S, so the open is `(S−1)-11-01`.
-/// Calibrated v2 (ROADMAP §6) — see the two consts above; re-tune with
-/// `cstat-ingest measure-blend-accuracy --years 2024,2025,2026`.
-fn preseason_blend_weight(as_of: NaiveDate, season: i32) -> f32 {
-    let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
-        return 0.0;
-    };
-    let d = (as_of - open).num_days();
-    if d <= 0 {
-        return PRESEASON_PEAK_WEIGHT;
-    }
-    if d >= PRESEASON_DECAY_DAYS {
-        return 0.0;
-    }
-    (PRESEASON_PEAK_WEIGHT * (1.0 - d as f32 / PRESEASON_DECAY_DAYS as f32))
-        .clamp(0.0, PRESEASON_PEAK_WEIGHT)
-}
-
-/// Outcome of an engaged preseason blend: the mixed margin, the win
-/// probability derived from it, and the preseason weight (for basis labels).
-#[derive(Clone, Copy)]
-struct BlendedPrediction {
-    margin: f32,
-    win_prob: f64,
-    weight: f32,
-}
-
-/// The early-season preseason × pit blend, shared by the `/api/predict`
-/// handler and `predict_projection` so every surface (Predict page,
-/// TeamDetail Projected column, ScoreTicker) mixes identically — this block
-/// previously lived as two hand-synced copies and each fix had to be applied
-/// twice.
-///
-/// Semantics:
-/// - **Explicit `as_of_date`** — the weight comes from that date. Pre-open
-///   dates get the 0.70 peak (deliberate preseason probing, floor-guarded to
-///   Sep 1 by the handler's validation).
-/// - **Live path (`as_of_date = None`)** — the weight comes from *today*,
-///   but ONLY inside the in-season window (Nov 1 open onward): opening-week
-///   live predictions anchor on the preseason projection instead of a 1–2
-///   game sample, while a pre-open live request (e.g. browsing next season's
-///   matchups in October) stays un-blended — its non-preseason leg would be
-///   the degenerate empty-season model output, which would dilute the
-///   preseason forecast rather than sharpen it. Past the 42-day decay the
-///   weight is 0 either way, so off-season behavior is untouched.
-/// - Returns `None` when the blend is inactive (weight 0, or either team has
-///   no `team_preseason_projection` row) — callers fall back to the pure
-///   model prediction.
-/// - The win probability converts the blended margin with the σ of the
-///   **model bundle that produced the margin leg**: pit σ on the explicit
-///   `as_of_date` path (the leg is the honest pit model), prod σ on the live
-///   path (the leg is the prod/leaky model). This keeps each path
-///   self-consistent with its own bundle's calibration, and keeps the live
-///   win% continuous across the Dec-13 decay boundary, where the blend turns
-///   off and the response reverts to the prod bundle.
-async fn apply_preseason_blend(
-    pool: &PgPool,
-    season: i32,
-    home_id: Uuid,
-    away_id: Uuid,
-    venue: Venue,
-    as_of_date: Option<NaiveDate>,
-    pit_margin: f32,
-) -> Option<BlendedPrediction> {
-    let weight = match as_of_date {
-        Some(d) => preseason_blend_weight(d, season),
-        None => live_blend_weight(cstat_ingest::today_utc(), season),
-    };
-    if weight <= 0.0 {
-        return None;
-    }
-    let pre_margin = fetch_preseason_margin(pool, season, home_id, away_id, venue).await?;
-    let margin = weight * pre_margin + (1.0 - weight) * pit_margin;
-    Some(BlendedPrediction {
-        margin,
-        win_prob: margin_to_win_prob(margin, as_of_date.is_some()),
-        weight,
-    })
-}
-
-/// LIVE-path blend weight (`as_of_date` absent): today's decay weight, but
-/// **zero before the season's Nov 1 open**. The explicit-`as_of_date` path
-/// deliberately allows pre-open probing; the live path must not — see
-/// [`apply_preseason_blend`].
-fn live_blend_weight(today: NaiveDate, season: i32) -> f32 {
-    let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
-        return 0.0;
-    };
-    if today < open {
-        return 0.0;
-    }
-    preseason_blend_weight(today, season)
-}
-
-/// Preseason game margin (home-team perspective) from the two teams'
-/// persisted projected AdjEM plus venue HCA. `None` when either team has no
-/// projection row (too-thin roster, or a season `compute-projections` hasn't
-/// run for) — the caller then falls back to pit-only.
-async fn fetch_preseason_margin(
-    pool: &PgPool,
-    season: i32,
-    home_id: Uuid,
-    away_id: Uuid,
-    venue: Venue,
-) -> Option<f32> {
-    async fn adjem(pool: &PgPool, season: i32, id: Uuid) -> Option<f32> {
-        sqlx::query_scalar::<_, f32>(
-            "SELECT projected_adj_em FROM team_preseason_projection \
-             WHERE season = $1 AND team_id = $2",
-        )
-        .bind(season)
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
-    }
-    let (home_adjem, away_adjem) =
-        tokio::join!(adjem(pool, season, home_id), adjem(pool, season, away_id));
-    let hca = match venue {
-        Venue::Home => PRESEASON_HOME_COURT_ADVANTAGE,
-        Venue::Away => -PRESEASON_HOME_COURT_ADVANTAGE,
-        Venue::Neutral => 0.0,
-    };
-    Some(home_adjem? - away_adjem? + hca)
-}
-
 #[derive(sqlx::FromRow)]
 struct TeamLookup {
     id: Uuid,
@@ -1044,21 +492,6 @@ async fn find_team(pool: &PgPool, query: &str, season: i32) -> Result<TeamLookup
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn missing_data_is_tagged_for_404_other_errors_are_not() {
-        // A RowNotFound (team has no stats for the season) is tagged so the
-        // route returns 404 instead of 500 (and so it doesn't page #errors-api).
-        let missing = classify_feature_error(sqlx::Error::RowNotFound, 2021, "feature extraction");
-        assert!(
-            missing.starts_with(NO_PREDICTION_DATA_PREFIX),
-            "RowNotFound must be tagged as missing-data, got: {missing}"
-        );
-        // A genuine failure keeps the plain message → stays a 500.
-        let real = classify_feature_error(sqlx::Error::PoolTimedOut, 2021, "feature extraction");
-        assert!(!real.starts_with(NO_PREDICTION_DATA_PREFIX));
-        assert!(real.contains("feature extraction failed"));
-    }
 
     fn params(venue: Option<&str>, neutral: bool) -> PredictParams {
         let venue = venue.map(|v| match v {
@@ -1163,166 +596,5 @@ mod tests {
         // When venue is absent, fall back to the legacy boolean.
         assert_eq!(params(None, false).resolved_venue(), Venue::Home);
         assert_eq!(params(None, true).resolved_venue(), Venue::Neutral);
-    }
-
-    #[test]
-    fn margin_to_win_prob_is_well_calibrated() {
-        for is_pit in [false, true] {
-            // 0 margin → exact 50/50 regardless of bundle.
-            assert!((margin_to_win_prob(0.0, is_pit) - 0.5).abs() < 1e-9);
-
-            // Antisymmetric around 0: p(m) + p(-m) = 1. Guarantees
-            // `predicted_winner` derived from win prob always agrees with
-            // the sign of the margin.
-            for m in [1.0, 5.0, 11.0, 25.0, -3.0, -17.5_f32] {
-                let p = margin_to_win_prob(m, is_pit);
-                let p_neg = margin_to_win_prob(-m, is_pit);
-                assert!(
-                    (p + p_neg - 1.0).abs() < 1e-9,
-                    "is_pit={is_pit} p({m}) + p({}) = {p} + {p_neg} ≠ 1.0",
-                    -m,
-                );
-            }
-
-            // Monotonic in margin.
-            for (lo, hi) in [(0.0_f32, 1.0_f32), (1.0, 5.0), (5.0, 15.0), (-2.0, 2.0)] {
-                assert!(
-                    margin_to_win_prob(lo, is_pit) < margin_to_win_prob(hi, is_pit),
-                    "is_pit={is_pit} p({lo}) ≥ p({hi}) — monotonicity broken",
-                );
-            }
-
-            // Sanity: margin-sign and (prob > 0.5) agree.
-            for m in [-10.0, -1.0, -0.1, 0.1, 1.0, 10.0_f32] {
-                let p = margin_to_win_prob(m, is_pit);
-                assert_eq!(
-                    m > 0.0,
-                    p > 0.5,
-                    "is_pit={is_pit} sign disagreement at margin={m}: prob={p}",
-                );
-            }
-        }
-
-        // Cross-bundle: at any margin > 0, the pit bundle (larger σ) is
-        // less confident than the prod bundle. This is the load-bearing
-        // calibration property that motivated the fix.
-        for m in [1.0_f32, 5.0, 10.0, 20.0] {
-            let p_prod = margin_to_win_prob(m, false);
-            let p_pit = margin_to_win_prob(m, true);
-            assert!(
-                p_pit < p_prod,
-                "pit bundle should be less confident than prod at margin={m}: pit={p_pit} prod={p_prod}",
-            );
-        }
-    }
-
-    #[test]
-    fn neutral_symmetry_combination_is_exact() {
-        // Sanity-check the math: the symmetric averaging must guarantee
-        // margin(A,B) + margin(B,A) == 0, p(A,B) + p(B,A) == 1.0, and
-        // total(A,B) == total(B,A) for any pair of forward/reverse
-        // Prediction values. Margin/win-prob average antisymmetrically;
-        // totals average additively (the same game's combined points
-        // shouldn't change based on which side we labelled "home").
-        let fwd = Prediction {
-            predicted_margin: 7.3,
-            home_win_probability: 0.78,
-            predicted_total: 148.4,
-        };
-        let rev = Prediction {
-            predicted_margin: -7.1, // not perfectly antisymmetric (the bug we're fixing)
-            home_win_probability: 0.21,
-            predicted_total: 148.6, // not perfectly symmetric either
-        };
-
-        let m_ab = 0.5 * (fwd.predicted_margin - rev.predicted_margin);
-        let p_ab = 0.5 * (fwd.home_win_probability + (1.0 - rev.home_win_probability));
-        let t_ab = 0.5 * (fwd.predicted_total + rev.predicted_total);
-
-        // Now reversed call: forward becomes the original reverse, and vice versa.
-        let m_ba = 0.5 * (rev.predicted_margin - fwd.predicted_margin);
-        let p_ba = 0.5 * (rev.home_win_probability + (1.0 - fwd.home_win_probability));
-        let t_ba = 0.5 * (rev.predicted_total + fwd.predicted_total);
-
-        assert!((m_ab + m_ba).abs() < 1e-9, "margins should sum to 0");
-        assert!(
-            (p_ab + p_ba - 1.0).abs() < 1e-9,
-            "win probs should sum to 1"
-        );
-        assert!(
-            (t_ab - t_ba).abs() < 1e-9,
-            "totals should be equal under team swap"
-        );
-    }
-
-    #[test]
-    fn preseason_blend_weight_schedule() {
-        // Calibrated v2: peak 0.70 at the Nov 1 open, linear decay to 0 over 42
-        // days (≈ Dec 13). cstat-season 2026 opens 2025-11-01.
-        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
-
-        // Before / at the Nov 1 open → peak preseason weight (0.70).
-        assert_eq!(
-            preseason_blend_weight(d(2025, 9, 15), 2026),
-            PRESEASON_PEAK_WEIGHT
-        );
-        assert_eq!(
-            preseason_blend_weight(d(2025, 11, 1), 2026),
-            PRESEASON_PEAK_WEIGHT
-        );
-
-        // At / after open + 42 days (2025-12-13) → pure pit.
-        assert_eq!(preseason_blend_weight(d(2025, 12, 13), 2026), 0.0);
-        assert_eq!(preseason_blend_weight(d(2026, 1, 15), 2026), 0.0);
-        assert_eq!(preseason_blend_weight(d(2026, 4, 1), 2026), 0.0);
-
-        // Monotonically decreasing strictly inside the window, bounded by peak.
-        let early_nov = preseason_blend_weight(d(2025, 11, 8), 2026);
-        let mid_nov = preseason_blend_weight(d(2025, 11, 20), 2026);
-        let early_dec = preseason_blend_weight(d(2025, 12, 5), 2026);
-        assert!(early_nov > mid_nov && mid_nov > early_dec);
-        assert!((0.0..=PRESEASON_PEAK_WEIGHT).contains(&mid_nov));
-
-        // Halfway through the 42-day decay (day 21 ≈ Nov 22) → peak/2 = 0.35.
-        let halfway = preseason_blend_weight(d(2025, 11, 22), 2026);
-        assert!(
-            (halfway - PRESEASON_PEAK_WEIGHT / 2.0).abs() < 0.03,
-            "midpoint weight {halfway} should be ≈{}",
-            PRESEASON_PEAK_WEIGHT / 2.0,
-        );
-
-        // Season-relative: the same calendar offset in 2025's season
-        // (opens 2024-11-01) decays identically.
-        assert_eq!(
-            preseason_blend_weight(d(2024, 11, 1), 2025),
-            PRESEASON_PEAK_WEIGHT
-        );
-        assert_eq!(preseason_blend_weight(d(2024, 12, 13), 2025), 0.0);
-    }
-
-    #[test]
-    fn live_blend_weight_gates_pre_open_dates() {
-        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
-
-        // Pre-open live requests must NOT blend: preseason_blend_weight
-        // returns the 0.70 peak for any date at-or-before the open, which is
-        // fine for deliberate as_of_date probing but would blend a September
-        // request for next season against a degenerate empty-season margin.
-        assert_eq!(live_blend_weight(d(2026, 9, 15), 2027), 0.0);
-        assert_eq!(live_blend_weight(d(2026, 10, 31), 2027), 0.0);
-
-        // From the open onward, live matches the explicit-date schedule.
-        assert_eq!(
-            live_blend_weight(d(2026, 11, 1), 2027),
-            PRESEASON_PEAK_WEIGHT
-        );
-        assert_eq!(
-            live_blend_weight(d(2026, 11, 8), 2027),
-            preseason_blend_weight(d(2026, 11, 8), 2027)
-        );
-
-        // Off-season / mid-season: no-op, matching the pre-live-blend world.
-        assert_eq!(live_blend_weight(d(2026, 7, 14), 2026), 0.0);
-        assert_eq!(live_blend_weight(d(2026, 2, 1), 2026), 0.0);
     }
 }
