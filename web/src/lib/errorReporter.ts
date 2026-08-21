@@ -86,7 +86,14 @@ export function reportCaughtError(error: unknown, componentStack?: string): void
   report({
     kind: 'error',
     message: err?.message || String(error) || 'Unknown error',
-    source: '',
+    // `report` dedups on `kind|message|source`. The uncaught path fills
+    // `source` from the ErrorEvent's `filename:lineno:colno`, which separated
+    // otherwise-identical messages; a boundary has no equivalent, and leaving
+    // it empty would collapse two DIFFERENT routes failing with the same
+    // common message ("Cannot read properties of undefined (reading 'map')")
+    // into one report, silently dropping the second bug. The route is the
+    // discriminator a boundary does have.
+    source: window.location.pathname,
     stack: [err?.stack, componentStack].filter(Boolean).join('\n'),
     page: window.location.href,
     user_agent: navigator.userAgent,

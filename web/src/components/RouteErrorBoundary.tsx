@@ -48,6 +48,18 @@ export default class RouteErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     if (isChunkLoadError(error)) {
+      // Offline is the OTHER reason a dynamic import fails, and reloading is
+      // the worst available response to it. Before code splitting, in-app
+      // navigation needed no network for JS, so a user on flaky wifi or in a
+      // tunnel kept a working app and only data fetches failed. Reloading now
+      // would throw that away: the reload is itself a network navigation, it
+      // fails too, and the browser replaces the app with its own error page —
+      // permanent loss of a loaded app for a transient condition. Leave the
+      // guard unset and nothing reported: this is the user's network, not a
+      // deploy, and it will be a stale tab again next time.
+      if (navigator.onLine === false) {
+        return;
+      }
       let alreadyReloaded = false;
       try {
         alreadyReloaded = sessionStorage.getItem(RELOAD_KEY) === '1';

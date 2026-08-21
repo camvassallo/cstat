@@ -144,6 +144,25 @@ fn is_spa_html_fallback(resp: &Response) -> bool {
         .is_some_and(|ct| ct.starts_with("text/html"))
 }
 
+/// The response for an `/assets/*` path that is not on disk.
+///
+/// `no-store` is load-bearing and not merely tidy. This 404 is reachable in the
+/// same rolling-deploy window as the HTML fallback it replaces — a client
+/// holding the new `index.html` whose chunk request lands on a container still
+/// serving the old build — so the URL it is denying is a **live** one that will
+/// resolve moments later. A cacheable error there just re-runs the original bug
+/// with a shorter fuse: the edge pins a 404 on a good chunk URL, every visitor
+/// behind it fails, and `RouteErrorBoundary`'s reload cannot help, because the
+/// fresh `index.html` names the very URL the edge is refusing. Caches apply
+/// their own default TTL to a 404 that carries no directive, so the directive
+/// has to be explicit.
+fn asset_miss_response() -> Response {
+    let mut resp = StatusCode::NOT_FOUND.into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
+}
+
 /// Long-cache content-hashed SPA build assets (`/assets/*`). Applied app-wide
 /// (outermost) so it wraps the static fallback service; a no-op on every other
 /// path, including `/api/*` (which carry their own short-TTL `Cache-Control`).
@@ -165,7 +184,7 @@ pub async fn static_asset_cache(req: Request, next: Next) -> Response {
     let mut resp = next.run(req).await;
     if is_asset && resp.status().is_success() {
         if is_spa_html_fallback(&resp) {
-            return StatusCode::NOT_FOUND.into_response();
+            return asset_miss_response();
         }
         resp.headers_mut().insert(
             header::CACHE_CONTROL,
@@ -399,6 +418,18 @@ mod tests {
         assert!(!is_spa_html_fallback(&with_ct("text/css")));
         // No content-type at all is not a reason to reject.
         assert!(!is_spa_html_fallback(&StatusCode::OK.into_response()));
+    }
+
+    #[test]
+    fn asset_miss_is_a_404_that_caches_cannot_pin() {
+        let resp = asset_miss_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        // The denied URL is live again as soon as the deploy settles, so an
+        // edge must not be allowed to hold this answer for its default 404 TTL.
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
     }
 
     #[test]
