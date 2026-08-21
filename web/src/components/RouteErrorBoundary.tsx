@@ -97,6 +97,12 @@ export default class RouteErrorBoundary extends Component<
       // unreachable — which is most of what "offline" means in practice. So
       // when it claims we are online we confirm by actually reaching the
       // origin before discarding the app; see `reloadIfOriginReachable`.
+      //
+      // Note the asymmetry, which is why this is the ONLY place that sets
+      // `offline`. A false here is trustworthy — the OS sees no interface — so
+      // the message is accurate, suppressing the Reload button is right, and
+      // the `online` event is guaranteed to fire and clear it. A true tells us
+      // nothing, so nothing downstream may claim to know the user is offline.
       if (navigator.onLine === false) {
         this.setState({ offline: true });
         return;
@@ -218,16 +224,24 @@ export default class RouteErrorBoundary extends Component<
           window.location.reload();
         })
         .catch(() => {
-          // Reaching here means the fetch itself failed or timed out — nothing
-          // answered at all — which is the one case that genuinely reads as
-          // offline.
+          // The fetch failed or timed out. Tempting to call that offline, but
+          // this path is only reachable with `navigator.onLine === true`, so
+          // the offline UI would be a trap: it renders no Reload button on the
+          // grounds that `handleOnline` will clear it, and `online` fires only
+          // on a false->true transition that cannot happen here. The user would
+          // be stuck on a wrong diagnosis with no way out but a different
+          // route. A DNS blip or a proxy hiccup also resolves in seconds, so
+          // the ordinary error UI — vague but honest, and with a Reload button
+          // that is now the right move — is the better answer.
           window.clearTimeout(timer);
           if (superseded()) return;
-          this.setState({ offline: true, checking: false });
+          this.setState({ checking: false });
         });
     } catch {
+      // Same reasoning as the catch above: reachable only while `onLine` is
+      // true, so it must not claim the user is offline.
       window.clearTimeout(timer);
-      this.setState({ offline: true, checking: false });
+      this.setState({ checking: false });
     }
   }
 

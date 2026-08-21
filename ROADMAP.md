@@ -1846,9 +1846,12 @@ saturated server still passes its platform healthcheck):
   as the HTML shell — `ServeDir`'s fallback would otherwise answer an unknown
   hashed chunk with `200 text/html`, and stamping that immutable would pin
   index.html under a live chunk URL at the edge for a year. The shell itself
-  gets `no-cache` (store, but revalidate), so a deploy is picked up
-  immediately; it previously relied on heuristic freshness, since `ServeDir`
-  emits only `Last-Modified` and no ETag. Applied by wrapping the static
+  would get `no-cache` (store, but revalidate) if it arrived without a policy
+  of its own — a backstop that does **not** fire today, since #279 renders every
+  document through `meta::page` with `public, max-age=300` so it can inject
+  `rel="canonical"`, and the layer never overwrites a handler's choice. The
+  five-minute window that leaves on documents naming content-hashed assets is
+  tracked in #276. Applied by wrapping the static
   fallback in a nested `Router` so the layer covers it unambiguously. Note this
   covers the SPA fallback router only: the OG meta documents
   (`/players/{id}`, `/teams/{id}`, `/coaches/{id}`) are on the main router and

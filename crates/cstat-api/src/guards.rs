@@ -172,15 +172,22 @@ fn asset_miss_response() -> Response {
 ///    cache-buster, so it can be pinned for a year.
 /// 2. A MISSING `/assets/*` becomes an uncacheable 404 (see below, and
 ///    `asset_miss_response`).
-/// 3. The `index.html` shell is `no-cache` — store it, but revalidate before
-///    use. This is the link the other two depend on. `ServeDir`/`ServeFile`
-///    emit only `Last-Modified` and no `Cache-Control`, which leaves the
-///    document heuristically cacheable (RFC 9111 §4.2.2), so an intermediary
-///    could keep serving the PREVIOUS build's HTML after a deploy. Every chunk
-///    URL named in it would then 404 by rule 2, `RouteErrorBoundary` would
-///    reload straight back into the same stale document, spend its one-shot
-///    guard and strand the tab on the error UI. `location.reload()` bypasses
-///    the browser's own cache but not an intermediary's.
+/// 3. An HTML document that arrived WITHOUT a `Cache-Control` of its own gets
+///    `no-cache` — store it, but revalidate before use — so a document can
+///    never be merely heuristically cacheable (RFC 9111 §4.2.2).
+///
+///    Read this as a backstop, not as a live guarantee: **it does not fire in
+///    production today**. Since #279 every document is rendered by
+///    `meta::spa_document` -> `meta::page`, which sets `public, max-age=300` in
+///    order to inject `rel="canonical"`, and this layer deliberately never
+///    overwrites a header a handler already chose. So the shell IS cacheable
+///    for five minutes, and the deploy hole that opens is real and tracked in
+///    #276: an intermediary can serve the PREVIOUS build's HTML after a deploy,
+///    every chunk URL it names then 404s by rule 2, `RouteErrorBoundary`
+///    reloads straight back into the same stale document, spends its one-shot
+///    guard and strands the tab — `location.reload()` bypasses the browser's
+///    own cache but not an intermediary's. Do not build on rule 3 holding
+///    until #276 closes it.
 ///
 /// A missing `/assets/*` is turned into a 404 rather than being allowed through
 /// as the HTML shell. Both halves of that matter, and the combination is what
