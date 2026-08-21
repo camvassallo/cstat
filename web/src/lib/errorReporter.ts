@@ -70,6 +70,28 @@ function report(r: ClientErrorReport): void {
 }
 
 /**
+ * Collapses a pathname to its route shape by replacing entity ids with `:id`.
+ *
+ * The dedup key has to separate two different routes while still merging many
+ * hits on the SAME route. A raw pathname does the first and breaks the second:
+ * `/players/<uuid>` is a distinct string per player, so a deploy that breaks
+ * `PlayerDetail` for everyone would send a fresh report for each player a user
+ * opened — up to `MAX_REPORTS_PER_LOAD` copies of one bug, where the uncaught
+ * path (keyed on a stable `filename:lineno:colno`) sent exactly one.
+ *
+ * Every entity route here is UUID-keyed (`/teams/:id`, `/players/:id`,
+ * `/players/:id/progression`, `/coaches/:id`), so matching UUID segments is
+ * enough and keeps this independent of the router.
+ */
+export function routePattern(pathname: string): string {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  return pathname
+    .split('/')
+    .map((seg) => (UUID.test(seg) ? ':id' : seg))
+    .join('/')
+}
+
+/**
  * Report an error that a React error boundary caught.
  *
  * A boundary changes which reporting path React takes, and only one of the two
@@ -91,9 +113,10 @@ export function reportCaughtError(error: unknown, componentStack?: string): void
     // otherwise-identical messages; a boundary has no equivalent, and leaving
     // it empty would collapse two DIFFERENT routes failing with the same
     // common message ("Cannot read properties of undefined (reading 'map')")
-    // into one report, silently dropping the second bug. The route is the
-    // discriminator a boundary does have.
-    source: window.location.pathname,
+    // into one report, silently dropping the second bug. The route PATTERN is
+    // the discriminator a boundary does have — see `routePattern` for why the
+    // raw pathname is the wrong granularity.
+    source: routePattern(window.location.pathname),
     stack: [err?.stack, componentStack].filter(Boolean).join('\n'),
     page: window.location.href,
     user_agent: navigator.userAgent,

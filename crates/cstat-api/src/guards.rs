@@ -163,9 +163,23 @@ fn asset_miss_response() -> Response {
     resp
 }
 
-/// Long-cache content-hashed SPA build assets (`/assets/*`). Applied app-wide
-/// (outermost) so it wraps the static fallback service; a no-op on every other
-/// path, including `/api/*` (which carry their own short-TTL `Cache-Control`).
+/// The SPA's whole cache policy, in one layer over the static file service.
+/// Three cases, each of which has to be explicit because `ServeDir` sets no
+/// `Cache-Control` of its own:
+///
+/// 1. A content-hashed build asset (`/assets/*`) is immutable — the hash is the
+///    cache-buster, so it can be pinned for a year.
+/// 2. A MISSING `/assets/*` becomes an uncacheable 404 (see below, and
+///    `asset_miss_response`).
+/// 3. The `index.html` shell is `no-cache` — store it, but revalidate before
+///    use. This is the link the other two depend on. `ServeDir`/`ServeFile`
+///    emit only `Last-Modified` and no `Cache-Control`, which leaves the
+///    document heuristically cacheable (RFC 9111 §4.2.2), so an intermediary
+///    could keep serving the PREVIOUS build's HTML after a deploy. Every chunk
+///    URL named in it would then 404 by rule 2, `RouteErrorBoundary` would
+///    reload straight back into the same stale document, spend its one-shot
+///    guard and strand the tab on the error UI. `location.reload()` bypasses
+///    the browser's own cache but not an intermediary's.
 ///
 /// A missing `/assets/*` is turned into a 404 rather than being allowed through
 /// as the HTML shell. Both halves of that matter, and the combination is what
@@ -179,17 +193,26 @@ fn asset_miss_response() -> Response {
 /// request routed to a container still serving the old build — and route
 /// code-splitting (issue #267) took the app from 2 hashed URLs fetched with the
 /// document to ~35 fetched lazily, long afterwards.
-pub async fn static_asset_cache(req: Request, next: Next) -> Response {
+pub async fn spa_cache_control(req: Request, next: Next) -> Response {
     let is_asset = is_immutable_asset_path(req.uri().path());
     let mut resp = next.run(req).await;
-    if is_asset && resp.status().is_success() {
-        if is_spa_html_fallback(&resp) {
+    if !resp.status().is_success() {
+        return resp;
+    }
+    let is_html = is_spa_html_fallback(&resp);
+    if is_asset {
+        // An asset path that came back as HTML is the SPA fallback standing in
+        // for a file that is not there.
+        if is_html {
             return asset_miss_response();
         }
         resp.headers_mut().insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static(IMMUTABLE_ASSET_CACHE_CONTROL),
         );
+    } else if is_html && !resp.headers().contains_key(header::CACHE_CONTROL) {
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     }
     resp
 }
@@ -410,7 +433,7 @@ mod tests {
             r
         };
         // A missing /assets/* falls through to index.html — the case that must
-        // never be stamped immutable (see `static_asset_cache`).
+        // never be stamped immutable (see `spa_cache_control`).
         assert!(is_spa_html_fallback(&with_ct("text/html")));
         assert!(is_spa_html_fallback(&with_ct("text/html; charset=utf-8")));
         // Real build assets are served as themselves and stay cacheable.

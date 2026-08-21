@@ -137,14 +137,15 @@ async fn boot_and_serve() -> Result<()> {
     // could mount. `fallback(…)` skips that wrapper.
     let spa_files =
         ServeDir::new(&spa_dir).fallback(ServeFile::new(format!("{spa_dir}/index.html")));
-    // Wrap the static service so content-hashed `/assets/*` get a 1-year
-    // immutable `Cache-Control` (the hash is the cache-buster), while
-    // index.html / favicon fall through to ServeDir's ETag revalidation so a
-    // deploy is picked up immediately. A nested `Router` makes the layer wrap
-    // the fallback service unambiguously.
+    // Wrap the static service with the SPA cache policy: content-hashed
+    // `/assets/*` get a 1-year immutable `Cache-Control` (the hash is the
+    // cache-buster), a missing one becomes an uncacheable 404 rather than the
+    // HTML shell, and index.html itself gets `no-cache` so a deploy is picked
+    // up immediately. A nested `Router` makes the layer wrap the fallback
+    // service unambiguously.
     let spa: Router<()> = Router::new()
         .fallback_service(spa_files)
-        .layer(from_fn(guards::static_asset_cache));
+        .layer(from_fn(guards::spa_cache_control));
 
     // Serving guards layered onto the data routes only (NOT health/status):
     //   - cache_headers: short-TTL `Cache-Control` so a CDN/browser can serve
