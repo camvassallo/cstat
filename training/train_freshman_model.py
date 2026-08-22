@@ -149,9 +149,17 @@ SELECT
     peer.mean_rating      AS peer_class_strength_raw,
     t.cam_gbpm_v3_psos    AS target_campom
 FROM recruits r
-JOIN torvik_player_stats t
-    ON t.player_id = r.cstat_player_id
-    AND t.season = r.year + 1
+-- One Torvik profile per (player, season). This join supplies the TARGET, so
+-- a duplicated (player_id, season) pair produced two training rows for one
+-- recruit -- double-weighting them in the fit (#311). Lowest `torvik_pid`,
+-- the tiebreak used since #307.
+JOIN LATERAL (
+    SELECT * FROM torvik_player_stats x
+    WHERE x.player_id = r.cstat_player_id
+      AND x.season = r.year + 1
+    ORDER BY x.torvik_pid
+    LIMIT 1
+) t ON TRUE
 JOIN player_season_stats pss
     ON pss.player_id = r.cstat_player_id AND pss.season = r.year + 1
 LEFT JOIN teams tm_signing

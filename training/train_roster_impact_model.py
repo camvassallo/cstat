@@ -131,7 +131,19 @@ SELECT
     p.class_year
 FROM player_season_stats pss
 JOIN players p ON p.id = pss.player_id
-LEFT JOIN torvik_player_stats tps
+-- One Torvik profile per (player, season). The table is UNIQUE on
+-- (torvik_pid, season), NOT on (player_id, season), so a bare join gives a
+-- duplicated player two rows here -- two roster slots in the aggregate this
+-- feeds, mirroring the same defect on the serving side in
+-- `roster_features.rs::fetch_roster` (#311). Lowest `torvik_pid`, the tiebreak
+-- used throughout since #307. Note `traj` below chains off `tps.torvik_pid`,
+-- so collapsing here also pins which OOF chain a duplicated player gets.
+LEFT JOIN (
+    SELECT DISTINCT ON (player_id, season) *
+    FROM torvik_player_stats
+    WHERE player_id IS NOT NULL
+    ORDER BY player_id, season, torvik_pid
+) tps
     ON tps.player_id = pss.player_id AND tps.season = pss.season
 LEFT JOIN trajectory_oof_predictions traj
     ON traj.torvik_pid = tps.torvik_pid AND traj.target_season = pss.season
@@ -197,8 +209,14 @@ JOIN teams base_team ON base_team.id = p_base.team_id
 JOIN teams tgt_team
     ON tgt_team.natstat_id = base_team.natstat_id
    AND tgt_team.season = p_base.season + 1
-LEFT JOIN torvik_player_stats tps
-    ON tps.player_id = p_base.id AND tps.season = t.year
+-- One profile per (player, season): this is a SUM, so a duplicated player
+-- contributed their CamPom to `outbound_cam_v3_sum` twice (#311).
+LEFT JOIN LATERAL (
+    SELECT * FROM torvik_player_stats x
+    WHERE x.player_id = p_base.id AND x.season = t.year
+    ORDER BY x.torvik_pid
+    LIMIT 1
+) tps ON TRUE
 WHERE t.year = ANY(%(portal_years)s)
 GROUP BY tgt_team.id, p_base.season
 ORDER BY tgt_team.id, p_base.season
@@ -242,8 +260,15 @@ FROM transfers t
 JOIN players p_base
     ON p_base.id = t.cstat_player_id
    AND p_base.season = t.year
-LEFT JOIN torvik_player_stats tps_base
-    ON tps_base.player_id = p_base.id AND tps_base.season = t.year
+-- One profile per (player, season) -- same double-counted SUM as OUTBOUND,
+-- and `tps_base.torvik_pid` is also the transfer-matching key below, so the
+-- collapse pins that to one identity too (#311).
+LEFT JOIN LATERAL (
+    SELECT * FROM torvik_player_stats x
+    WHERE x.player_id = p_base.id AND x.season = t.year
+    ORDER BY x.torvik_pid
+    LIMIT 1
+) tps_base ON TRUE
 JOIN players p_tgt
     ON p_tgt.season = t.year + 1
    AND (

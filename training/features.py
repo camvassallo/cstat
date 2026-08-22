@@ -240,14 +240,29 @@ def load_torvik_stats(engine, seasons=None) -> pd.DataFrame:
         return _load_pit_torvik_stats(engine, seasons)
 
     g, og, dg = _GBPM_COLUMNS[GBPM_VARIANT]
+    # DISTINCT ON: one Torvik profile per (player, season). The table is
+    # UNIQUE on (torvik_pid, season), NOT on (player_id, season), so without
+    # this a few hundred pairs come back as two or three rows and the
+    # `player_cum_df.merge(..., on=["player_id", "season"])` downstream turns
+    # many-to-one into many-to-many -- duplicating the player in the training
+    # frame, where `weighted_agg` then counts them twice in `roster_size` and
+    # weights them twice in every minutes-weighted mean (#311).
+    #
+    # The lowest `torvik_pid` is the tiebreak used in `queries.rs` (#307) and
+    # in `cstat_core::features::get_roster_agg`, whose LATERAL collapse this
+    # mirrors. Keeping the two in step is the whole point: the frames feed one
+    # model, so they must fan out the same way or not at all, and changing
+    # either alone is a train/serve skew.
     sql = f"""
-        SELECT player_id, season,
+        SELECT DISTINCT ON (player_id, season)
+               player_id, season,
                {g}  AS gbpm,
                {og} AS ogbpm,
                {dg} AS dgbpm
         FROM torvik_player_stats
         WHERE player_id IS NOT NULL
           AND season = ANY(%(seasons)s)
+        ORDER BY player_id, season, torvik_pid
     """
     return pd.read_sql(sql, engine, params={"seasons": seasons})
 
@@ -269,6 +284,16 @@ def _load_pit_torvik_stats(engine, seasons) -> pd.DataFrame:
     lookup = pd.read_csv(path, parse_dates=["cutoff_date"])
     lookup = lookup[lookup["season"].isin(seasons)]
 
+    # NOT collapsed to one pid per (player, season), unlike load_torvik_stats
+    # above -- deliberately, and it is a known mismatch rather than an
+    # oversight (#316). This map is keyed on `pid`, so the merge below is
+    # many-to-one and does not fan out; what it does is give a two-pid player
+    # a row per pid at the same cutoff_date, and the downstream merge_asof
+    # takes whichever sorts last. The Rust serving half (`pit_campom.rs`)
+    # POOLS both pids' games under `GROUP BY tps.player_id` instead. Picking
+    # one here would not fix that -- it would turn an arbitrary choice into a
+    # deterministic disagreement -- so the repair is to pool on this side too,
+    # and it wants #313 fixed first so pooling can never merge two humans.
     map_sql = """
         SELECT torvik_pid AS pid, player_id, season
         FROM torvik_player_stats
@@ -900,6 +925,13 @@ def compute_cumulative_roster_stats(pgs: pd.DataFrame, games_df: pd.DataFrame,
         row = {"roster_size": len(group)}
 
         for src, dst in w_cols.items():
+            # NOTE (#317): for the three torvik_* columns this denominator
+            # disagrees with `features.rs::get_roster_agg`, which excludes
+            # players with no Torvik value from SUM(total_minutes) instead of
+            # letting them contribute 0. They differ on the 3.1% of
+            # team-seasons with incomplete coverage. Left as-is here so #311
+            # stayed a pure de-duplication; changing it is a change to what
+            # the feature means and wants its own retrain.
             vals = group[src].fillna(0) * w
             row[dst] = vals.sum() / total_w
 
