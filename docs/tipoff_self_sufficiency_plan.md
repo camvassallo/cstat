@@ -341,8 +341,10 @@ The properties that keep this honest rather than merely quiet:
 - In Slack it rides the `warnings:` line on the OK summary. Visible every night, not
   alarming — the same channel the `Warning`-severity invariants use.
 
-Operator note: `sync_to_prod.sh --prod-status` lists non-OK ledger rows, so these will
-appear there with their own status. That is context, not a fault.
+Operator note: `sync_to_prod.sh --prod-status` reports these on their own summarised
+line ("Upstream has not published this season"), deliberately kept out of the FAILED /
+SKIPPED panel — two rows a night would otherwise fill that panel's ten-row limit and hide
+a real failure during the very window it is being read most.
 
 ### B8 — Prod PBP storage: monitor, don't pre-solve
 

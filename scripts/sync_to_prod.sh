@@ -245,20 +245,39 @@ if [[ "$PROD_STATUS" -eq 1 ]]; then
     ORDER BY max(ended_at) DESC
   " | sed 's/^/    /' || true
   echo
-  # Header names the query, not a fixed list of statuses: the query is
-  # `status <> 'ok'` and each row prints its own status, so a status added later
-  # (`source_not_published`, #248) shows up correctly labelled instead of being
-  # filed under a heading that calls it a failure.
-  echo "→ Recent non-OK steps (last 7d):"
+  # `source_not_published` is excluded here and summarised on its own line below
+  # (#248). It is not a fault, and it is HIGH VOLUME in the one window where this
+  # panel matters most: through the November gap the nightly writes one for
+  # `torvik` and one for `torvik_games` every night — 14 rows over this 7-day
+  # window, all newer than anything else. Left in the same list they would fill
+  # the LIMIT and push a real `forecasts` or `playbyplay` failure out of view,
+  # making the panel least informative exactly when it is being read most.
+  echo "→ Recent FAILED / SKIPPED steps (last 7d):"
   FAILS=$("${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
     SELECT to_char(ended_at AT TIME ZONE 'UTC', 'MM-DD HH24:MI'), rpad(step, 14), status,
            coalesce(left(error, 60), '')
     FROM ingest_runs
-    WHERE status <> 'ok' AND ended_at > now() - interval '7 days'
+    WHERE status NOT IN ('ok', 'source_not_published')
+      AND ended_at > now() - interval '7 days'
     ORDER BY ended_at DESC LIMIT 10
   " || true)
   if [[ -n "$FAILS" ]]; then sed 's/^/    /' <<<"$FAILS"; else echo "    (none)"; fi
   echo
+  # Summarised, not listed: one line per step says everything an operator needs
+  # (which feed, how many nights, how recently) without spending the panel above.
+  # Silent when there are none, so this costs nothing outside the gap.
+  UNPUB=$("${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
+    SELECT rpad(step, 14), count(*) || ' night(s)',
+           'latest ' || to_char(max(ended_at) AT TIME ZONE 'UTC', 'MM-DD HH24:MI') || ' UTC'
+    FROM ingest_runs
+    WHERE status = 'source_not_published' AND ended_at > now() - interval '7 days'
+    GROUP BY step ORDER BY max(ended_at) DESC
+  " || true)
+  if [[ -n "$UNPUB" ]]; then
+    echo "→ Upstream has not published this season (last 7d) — expected at the Nov flip:"
+    sed 's/^/    /' <<<"$UNPUB"
+    echo
+  fi
   # Sequence skew — a sequence sitting at or below its table's max(id) makes the
   # NEXT insert a duplicate-key violation, and keeps doing so until nextval
   # climbs past max(id). That is issue #186's actual damage, and it is invisible
