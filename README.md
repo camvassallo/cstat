@@ -145,7 +145,7 @@ migrations/       SQLx Postgres migrations
 | `GET /api/players` | Player index with search, sort, pagination |
 | `GET /api/players/{id}` | Player profile, season stats, percentiles, game log |
 | `GET /api/games` | Game results with filtering |
-| `GET /api/predict` | ML game predictions (margin + win prob); `?as_of_date=` for point-in-time/blended |
+| `GET /api/predict` | ML game predictions (margin + win prob); `?as_of_date=` for point-in-time/blended; `?home_season=`/`?away_season=` for a cross-year what-if |
 | `GET /api/projections/{year}` | Preseason team AdjEM projections ("Future" tab); `/teams/{team_id}` for the per-player roster breakdown |
 | `GET /api/transfers/{year}` | Transfer-portal class with projected CamPom + Δ ranking |
 | `GET /api/recruits/{year}` | HS recruit class with projected freshman CamPom |

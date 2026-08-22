@@ -196,7 +196,21 @@ fn validate_as_of_date(
         ));
     }
 
-    let earliest = NaiveDate::from_ymd_opt(home_season - 1, 9, 1).expect("Sep 1 always valid");
+    // Fallibly, not with an `expect`: `home_season` is an unvalidated query
+    // param, and chrono's year range is narrower than i32's, so
+    // `?season=300000&as_of_date=2026-01-01` used to panic the handler here.
+    // A panic is the worst available outcome for a bad query string — the
+    // `guards.rs` hook turns it into a 500 AND posts it to #errors-api, which
+    // is the exact false-fire [`predict_error_status`] exists to avoid.
+    let Some(earliest) = home_season
+        .checked_sub(1)
+        .and_then(|y| NaiveDate::from_ymd_opt(y, 9, 1))
+    else {
+        return Err(format!(
+            "season {home_season} is not a real season; pick one the site has \
+             data for"
+        ));
+    };
     if d < earliest {
         return Err(format!(
             "as_of_date {d} is before season {home_season} starts ({earliest}); \
@@ -740,6 +754,33 @@ mod tests {
         // dates. Measuring against the default season instead would reject
         // every honest date in every past season.
         assert!(validate_as_of_date(Some(date("2016-01-15")), 2016, 2016, today).is_ok());
+    }
+
+    #[test]
+    fn an_out_of_range_season_is_a_400_not_a_panic() {
+        let today = date("2026-05-29");
+
+        // chrono's year range is narrower than i32's, and `season` is an
+        // unvalidated query param, so building the Sep-1 floor with an
+        // `expect` panicked the handler on `?season=300000&as_of_date=...`.
+        // A panic is the worst outcome available for a bad query string: the
+        // `guards.rs` hook answers 500 *and* posts to #errors-api, paging a
+        // human for a typo.
+        for season in [300_000, -300_000, i32::MAX, i32::MIN] {
+            let err = validate_as_of_date(Some(date("2026-01-01")), season, season, today)
+                .expect_err("out-of-range season should be rejected, not accepted");
+            assert!(err.contains("not a real season"), "season {season}: {err}");
+        }
+
+        // ...without dragging any plausible season down with it. The site
+        // holds 2015 onward; the check must not become a de-facto season
+        // allowlist that goes stale.
+        for season in [1900, 2015, 2026, 2100] {
+            assert!(
+                validate_as_of_date(None, season, season, today).is_ok(),
+                "season {season} should still be constructible"
+            );
+        }
     }
 
     #[test]

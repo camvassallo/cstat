@@ -262,10 +262,11 @@ pub async fn predict_matchup(
         Some(d) => {
             // `build_all_features_pit` is single-season by signature (its
             // cohort map spans one season's players), so a cross-era request
-            // cannot reach it. Callers that can produce two seasons — only
-            // the predict route, once #296 lands — reject the combination at
-            // the edge, where they can say which query param to drop; this is
-            // the backstop for anything that does not. Tagged
+            // cannot reach it. Callers that can produce two seasons — today
+            // only the predict route, via `home_season` / `away_season` —
+            // reject the combination at the edge, where they can say which
+            // query param to drop; this is the backstop for anything that
+            // does not. Tagged
             // INVALID_MATCHUP_PREFIX so that backstop answers 400 rather than
             // a 500 that pages #errors-api over a malformed request.
             if home.season != away.season {

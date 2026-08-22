@@ -2,10 +2,10 @@
 //! to its own team.
 //!
 //! `features::build_all_features` takes two [`TeamSeason`]s so a matchup can
-//! draw its sides from different years (ROADMAP §7c). No caller does that yet
-//! — the predict route splits `home_season` / `away_season` in #296 — which is
-//! exactly why this exists: until then, nothing in the suite would notice if
-//! a season stopped travelling with its team.
+//! draw its sides from different years (ROADMAP §7c). The predict route is
+//! the caller that does it, via `home_season` / `away_season` — but it reaches
+//! this code through several layers, and nothing else in the suite would
+//! notice if a season stopped travelling with its team.
 //!
 //! That failure mode is worth a dedicated test because of how it presents.
 //! `projection::predict_with_venue` swaps the two sides for the Away path and
