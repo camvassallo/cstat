@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use cstat_core::features::TeamSeason;
 use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES};
 use cstat_core::projection::{
     self, Attribution, BlendClock, NO_PREDICTION_DATA_PREFIX, ProjectionSummary, Venue,
@@ -169,12 +170,15 @@ async fn predict(
     // answer. The returned `Explained` carries both the headline numbers
     // and per-feature ablation deltas + the input feature vector itself
     // (already sign-flipped to the home perspective for the Away venue).
+    // One season for both sides today; #296 splits these into `home_season` /
+    // `away_season` from the query string, which is the whole reason the
+    // feature builder now takes the two as a pair.
+    let (home_ts, away_ts) = TeamSeason::same_season(home_team.id, away_team.id, season);
     let explained = projection::predict_with_venue(
         &state.db.pool,
         &state.predictor,
-        home_team.id,
-        away_team.id,
-        season,
+        home_ts,
+        away_ts,
         venue,
         is_conference,
         params.as_of_date,

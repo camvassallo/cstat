@@ -17,7 +17,7 @@ use chrono::NaiveDate;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::features::{self, GameFeatures};
+use crate::features::{self, GameFeatures, TeamSeason};
 use crate::inference::{NUM_FEATURES, Prediction, Predictor};
 
 /// Where the game is being played.
@@ -116,10 +116,25 @@ pub const NO_PREDICTION_DATA_PREFIX: &str = "no prediction data";
 
 /// Turn a feature-extraction sqlx error into the route-facing message, tagging
 /// the missing-data case with [`NO_PREDICTION_DATA_PREFIX`] (see there).
-fn classify_feature_error(e: sqlx::Error, season: i32, what: &str) -> String {
+fn classify_feature_error(
+    e: sqlx::Error,
+    home: TeamSeason,
+    away: TeamSeason,
+    what: &str,
+) -> String {
     match e {
+        // The same-season wording is preserved verbatim: the predict route
+        // matches on NO_PREDICTION_DATA_PREFIX to turn this into a 404, and
+        // this is the message users see for the overwhelmingly common case.
+        // Cross-era gets its own phrasing because "season {season}" has no
+        // single answer, and "not Division I in 2015" is the likeliest cause.
+        sqlx::Error::RowNotFound if home.season == away.season => format!(
+            "{NO_PREDICTION_DATA_PREFIX}: one or both teams have no data for season {}",
+            home.season
+        ),
         sqlx::Error::RowNotFound => format!(
-            "{NO_PREDICTION_DATA_PREFIX}: one or both teams have no data for season {season}"
+            "{NO_PREDICTION_DATA_PREFIX}: one or both teams have no data (home season {}, away season {})",
+            home.season, away.season
         ),
         other => format!("{what} failed: {other}"),
     }
@@ -220,9 +235,8 @@ pub fn predict_from_features(
 pub async fn predict_matchup(
     pool: &PgPool,
     predictor: &Predictor,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
+    home: TeamSeason,
+    away: TeamSeason,
     is_neutral: bool,
     is_conference: bool,
     as_of_date: Option<NaiveDate>,
@@ -232,27 +246,34 @@ pub async fn predict_matchup(
     // (margin/win input) and the 58-element diff+sum vector (totals
     // input). The feature extraction is the expensive step.
     let f = match as_of_date {
-        Some(d) => features::build_all_features_pit(
-            pool,
-            home_team_id,
-            away_team_id,
-            season,
-            is_neutral,
-            is_conference,
-            d,
-        )
-        .await
-        .map_err(|e| classify_feature_error(e, season, "pit feature extraction"))?,
-        None => features::build_all_features(
-            pool,
-            home_team_id,
-            away_team_id,
-            season,
-            is_neutral,
-            is_conference,
-        )
-        .await
-        .map_err(|e| classify_feature_error(e, season, "feature extraction"))?,
+        Some(d) => {
+            // `build_all_features_pit` is single-season by signature (its
+            // cohort map spans one season's players), so a cross-era request
+            // cannot reach it. Callers that can produce two seasons — only
+            // the predict route, once #296 lands — reject the combination at
+            // the edge with a 400 that can explain itself; this is the
+            // backstop for anything that does not.
+            if home.season != away.season {
+                return Err(format!(
+                    "point-in-time predictions are single-season; got home {} vs away {}",
+                    home.season, away.season
+                ));
+            }
+            features::build_all_features_pit(
+                pool,
+                home.id,
+                away.id,
+                home.season,
+                is_neutral,
+                is_conference,
+                d,
+            )
+            .await
+            .map_err(|e| classify_feature_error(e, home, away, "pit feature extraction"))?
+        }
+        None => features::build_all_features(pool, home, away, is_neutral, is_conference)
+            .await
+            .map_err(|e| classify_feature_error(e, home, away, "feature extraction"))?,
     };
 
     predict_from_features(predictor, &f, as_of_date.is_some(), attribution)
@@ -267,9 +288,8 @@ pub async fn predict_matchup(
 pub async fn predict_with_venue(
     pool: &PgPool,
     predictor: &Predictor,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
+    home: TeamSeason,
+    away: TeamSeason,
     venue: Venue,
     is_conference: bool,
     as_of_date: Option<NaiveDate>,
@@ -280,9 +300,8 @@ pub async fn predict_with_venue(
             predict_matchup(
                 pool,
                 predictor,
-                home_team_id,
-                away_team_id,
-                season,
+                home,
+                away,
                 false,
                 is_conference,
                 as_of_date,
@@ -305,12 +324,17 @@ pub async fn predict_with_venue(
             //     reverses direction when teams swap), but the two flag
             //     features stay (someone is still hosting; conference
             //     match is symmetric).
+            //
+            // Each side's season travels with its team through the swap —
+            // that's what `TeamSeason` is for. Swapping ids while leaving two
+            // loose season scalars in place would look up each team's row in
+            // the other team's year, which for a cross-era matchup is a wrong
+            // answer that still returns 200.
             let swapped = predict_matchup(
                 pool,
                 predictor,
-                away_team_id,
-                home_team_id,
-                season,
+                away,
+                home,
                 false,
                 is_conference,
                 as_of_date,
@@ -341,13 +365,14 @@ pub async fn predict_with_venue(
             })
         }
         Venue::Neutral => {
+            // Same swap discipline as the Away arm: `(away, home)` carries
+            // both seasons along with both ids.
             let (fwd, rev) = tokio::try_join!(
                 predict_matchup(
                     pool,
                     predictor,
-                    home_team_id,
-                    away_team_id,
-                    season,
+                    home,
+                    away,
                     true,
                     is_conference,
                     as_of_date,
@@ -356,9 +381,8 @@ pub async fn predict_with_venue(
                 predict_matchup(
                     pool,
                     predictor,
-                    away_team_id,
-                    home_team_id,
-                    season,
+                    away,
+                    home,
                     true,
                     is_conference,
                     as_of_date,
@@ -532,12 +556,16 @@ pub async fn predict_projection(
     } else {
         Venue::Home
     };
+    // Deliberately still a single `season`: this serves REAL scheduled games
+    // (the Projected column, the ScoreTicker, the nightly `game_projections`
+    // writer), and both sides of a real game are always the same year. Cross-era
+    // matchups enter through `predict_with_venue` directly.
+    let (home, away) = TeamSeason::same_season(home_team_id, away_team_id, season);
     let explained = predict_with_venue(
         pool,
         predictor,
-        home_team_id,
-        away_team_id,
-        season,
+        home,
+        away,
         venue,
         is_conference,
         as_of_date,
@@ -767,17 +795,42 @@ mod tests {
 
     #[test]
     fn missing_data_is_tagged_for_404_other_errors_are_not() {
+        let (home, away) = TeamSeason::same_season(Uuid::nil(), Uuid::nil(), 2021);
         // A RowNotFound (team has no stats for the season) is tagged so the
         // route returns 404 instead of 500 (and so it doesn't page #errors-api).
-        let missing = classify_feature_error(sqlx::Error::RowNotFound, 2021, "feature extraction");
+        let missing =
+            classify_feature_error(sqlx::Error::RowNotFound, home, away, "feature extraction");
         assert!(
             missing.starts_with(NO_PREDICTION_DATA_PREFIX),
             "RowNotFound must be tagged as missing-data, got: {missing}"
         );
+        // Same-season wording is load-bearing for what users read on the
+        // common 404; assert it verbatim so the cross-era arm can't capture it.
+        assert_eq!(
+            missing,
+            format!("{NO_PREDICTION_DATA_PREFIX}: one or both teams have no data for season 2021")
+        );
         // A genuine failure keeps the plain message → stays a 500.
-        let real = classify_feature_error(sqlx::Error::PoolTimedOut, 2021, "feature extraction");
+        let real =
+            classify_feature_error(sqlx::Error::PoolTimedOut, home, away, "feature extraction");
         assert!(!real.starts_with(NO_PREDICTION_DATA_PREFIX));
         assert!(real.contains("feature extraction failed"));
+    }
+
+    #[test]
+    fn cross_era_missing_data_names_both_seasons_and_stays_404_tagged() {
+        let missing = classify_feature_error(
+            sqlx::Error::RowNotFound,
+            TeamSeason::new(Uuid::nil(), 2015),
+            TeamSeason::new(Uuid::nil(), 2026),
+            "feature extraction",
+        );
+        // Still a 404, not a 500 — "that program wasn't Division I in 2015" is
+        // a client error exactly as the same-season case is.
+        assert!(missing.starts_with(NO_PREDICTION_DATA_PREFIX));
+        // "season {season}" has no single answer here, so both are named.
+        assert!(missing.contains("home season 2015"), "got: {missing}");
+        assert!(missing.contains("away season 2026"), "got: {missing}");
     }
 
     #[test]
