@@ -1253,7 +1253,19 @@ export function fetchArchetypes(perClass = 5, season?: number) {
   );
 }
 
-export interface ComparePlayer {
+/// Fields every compare slot carries, resolved or not.
+interface CompareSlotBase {
+  /// The UUID exactly as it was requested. Player UUIDs are season-scoped, so
+  /// a cross-year slot resolves to a *different* UUID than it asked for —
+  /// this is the only key that lines a response entry up with its slot.
+  requested_id: string;
+  /// The season this slot is rendered in (its own `@season`, or the
+  /// request-level season for a bare UUID).
+  season: number;
+}
+
+export interface ComparePlayerResolved extends CompareSlotBase {
+  available: true;
   player: PlayerProfile;
   season_stats: PlayerSeasonStats | null;
   percentiles: Percentiles | null;
@@ -1262,10 +1274,33 @@ export interface ComparePlayer {
   archetype: PlayerArchetype | null;
 }
 
+/// A slot with no row in its season — most often "not in Division I that
+/// year". Returned in place rather than dropped, so the UI can say why a
+/// column is empty instead of silently rendering one fewer than was asked for.
+/// Carries the same key set as a resolved entry, all empty, so anything that
+/// only reads stats needs no narrowing — `available` and a null `player` are
+/// what distinguish it.
+export interface ComparePlayerUnavailable extends CompareSlotBase {
+  available: false;
+  player: null;
+  season_stats: null;
+  percentiles: null;
+  game_log: [];
+  torvik_stats: null;
+  archetype: null;
+}
+
+export type ComparePlayer = ComparePlayerResolved | ComparePlayerUnavailable;
+
+/// `ids` entries may be a bare UUID (rendered in `season`) or `<uuid>@<year>`
+/// for a per-slot season.
 export function fetchPlayerCompare(ids: string[], season?: number) {
   return fetchJson<{
     season: number;
     league_averages: LeagueAverages | null;
+    /// One entry per distinct slot season, keyed by year. "vs league average"
+    /// shading has to be measured against the slot's own era.
+    league_averages_by_season: Record<string, LeagueAverages | null>;
     players: ComparePlayer[];
   }>('/players/compare', {
     ids: ids.join(','),
