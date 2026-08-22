@@ -7,16 +7,16 @@
 //! three read paths joined exactly that way -- `get_team_roster` (served a
 //! duplicated player, e.g. Mercyhurst 2026 at 15 rows for 14 players),
 //! `search_players` (duplicated season-stat rows), and
-//! `pick_or_pin_daily_puzzle` (weighted the affected players 2-3x in the
-//! draw).
+//! `pick_or_pin_daily_puzzle` (inflated the candidate pool).
 //!
 //! The collapse takes the lowest `torvik_pid`, the same deterministic tiebreak
 //! #306 chose, so where duplicate profiles co-occur across seasons a human
 //! keeps one identity every year. The three sites use two different shapes for
 //! it -- LATERAL on the single-team roster, DISTINCT ON on the two season-wide
-//! queries -- so `roster_and_list_agree_on_which_profile_wins` pins them to
-//! the same pick. Let them diverge and the same player shows two different CAM
-//! values depending on which page you are looking at.
+//! queries -- and `roster_and_list_agree_on_which_profile_wins` pins them to
+//! the same pick by comparing what the two served functions actually return,
+//! not by re-stating either idiom. Let them diverge and the same player shows
+//! two different CAM values depending on which page you are looking at.
 //!
 //! The Portle test is the odd one: it passes against the pre-fix SQL too, and
 //! that is the finding rather than a hole. Both copies of a duplicated
@@ -142,6 +142,7 @@ async fn search_players_returns_one_row_per_player() {
         return;
     }
 
+    let mut exercised = 0usize;
     for season in seasons {
         // No team/search/archetype filter and a limit past any real season's
         // eligible pool, so the whole listable set is checked at once. The
@@ -180,8 +181,11 @@ async fn search_players_returns_one_row_per_player() {
             rows.len(),
         );
 
-        // Not vacuous: the pre-fix join really did exceed that count on this
-        // season, so the assertion above is testing something.
+        // Not vacuous: check the pre-fix join really did exceed that count.
+        // A season can hold duplicated profiles that all sit below the
+        // GP>=5 / MPG>=10 gate and so never reached this listing — a
+        // legitimate data state, so that season is skipped rather than
+        // failed, and `exercised` makes sure at least one season did.
         let bare: i64 = sqlx::query(
             r#"
             SELECT count(*)
@@ -199,12 +203,21 @@ async fn search_players_returns_one_row_per_player() {
         .await
         .unwrap()
         .get(0);
-        assert!(
-            bare > total,
-            "season {season}: the bare join returned {bare} against a count of \
-             {total}, so this season no longer exercises the fan-out",
-        );
+        if bare > total {
+            exercised += 1;
+        } else {
+            eprintln!(
+                "season {season}: no duplicated profile clears the listing's \
+                 GP/MPG gate; nothing to exercise here"
+            );
+        }
     }
+
+    assert!(
+        exercised > 0,
+        "no season exercised the fan-out — every assertion above passed \
+         vacuously",
+    );
 }
 
 /// The Portle eligible CTE, with the Torvik join spelled either the pre-fix
@@ -350,54 +363,79 @@ async fn roster_and_list_agree_on_which_profile_wins() {
         return;
     }
 
-    // The two collapse shapes must resolve to the same profile. LATERAL
-    // `ORDER BY torvik_pid LIMIT 1` and `DISTINCT ON (player_id, season)
-    // ORDER BY player_id, season, torvik_pid` both mean min(torvik_pid) —
-    // this fails the moment one of them grows a different tiebreak.
-    let disagreements: i64 = sqlx::query(
-        r#"
-        WITH dups AS (
-            SELECT player_id, season
-            FROM torvik_player_stats
-            WHERE player_id IS NOT NULL
-            GROUP BY player_id, season
-            HAVING count(*) > 1
-        ),
-        lat AS (
-            SELECT d.player_id, d.season, l.torvik_pid
-            FROM dups d
-            LEFT JOIN LATERAL (
-                SELECT * FROM torvik_player_stats t
-                WHERE t.player_id = d.player_id AND t.season = d.season
-                ORDER BY t.torvik_pid
-                LIMIT 1
-            ) l ON TRUE
-        ),
-        don AS (
-            SELECT d.player_id, d.season, x.torvik_pid
-            FROM dups d
-            LEFT JOIN (
-                SELECT DISTINCT ON (player_id, season) *
-                FROM torvik_player_stats
-                WHERE player_id IS NOT NULL
-                ORDER BY player_id, season, torvik_pid
-            ) x ON x.player_id = d.player_id AND x.season = d.season
-        )
-        SELECT count(*)
-        FROM lat JOIN don USING (player_id, season)
-        WHERE lat.torvik_pid IS DISTINCT FROM don.torvik_pid
-        "#,
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
+    // The two call sites spell the collapse differently -- LATERAL `ORDER BY
+    // torvik_pid LIMIT 1` on the roster, `DISTINCT ON (player_id, season)
+    // ORDER BY player_id, season, torvik_pid` on the list -- and both are
+    // meant to be min(torvik_pid). Compare what the two functions actually
+    // return rather than re-running either idiom here: a test that restated
+    // the SQL would keep passing while a call site drifted away from it.
+    //
+    // Only players a duplicated profile actually reaches are checked. The
+    // listing gates on GP>=5 / MPG>=10 and the roster does not, so a bench
+    // player is legitimately absent from one side.
+    let mut compared = 0usize;
+    for (player_id, season) in &pairs {
+        let Some(team_id) =
+            sqlx::query_scalar::<_, Option<Uuid>>("SELECT team_id FROM players WHERE id = $1")
+                .bind(player_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        else {
+            continue;
+        };
 
-    assert_eq!(
-        disagreements,
-        0,
-        "{disagreements} of {} duplicated pairs resolve to a different Torvik \
-         profile on the roster than in the player list",
+        let roster = queries::get_team_roster(&pool, team_id, *season)
+            .await
+            .unwrap();
+        let Some(from_roster) = roster.iter().find(|r| r.player_id == *player_id) else {
+            continue;
+        };
+
+        let (listed, _) = queries::search_players(
+            &pool,
+            None,
+            Some(team_id),
+            *season,
+            PlayerSortField::Campom,
+            Some(SortOrder::Desc),
+            None,
+            false,
+            500,
+            0,
+        )
+        .await
+        .unwrap();
+        let Some(from_list) = listed.iter().find(|r| r.player_id == *player_id) else {
+            continue;
+        };
+
+        assert_eq!(
+            from_roster.campom, from_list.campom,
+            "player {player_id} season {season}: CAM is {:?} on the team page \
+             and {:?} in the player list — the two collapses picked different \
+             Torvik profiles",
+            from_roster.campom, from_list.campom,
+        );
+        assert_eq!(
+            from_roster.campom_pct, from_list.campom_pct,
+            "player {player_id} season {season}: CAM percentile disagrees \
+             between the team page and the player list",
+        );
+        assert_eq!(
+            (from_roster.campom_o, from_roster.campom_d),
+            (from_list.campom_o, from_list.campom_d),
+            "player {player_id} season {season}: CAMO/CAMD disagree between \
+             the team page and the player list",
+        );
+        compared += 1;
+    }
+
+    assert!(
+        compared > 0,
+        "{} duplicated pairs, none of which reached both a roster and the \
+         listing — nothing was actually compared",
         pairs.len(),
     );
+    eprintln!("{compared} duplicated players agree across both served paths");
 }
