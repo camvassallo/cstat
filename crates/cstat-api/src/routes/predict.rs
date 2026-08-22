@@ -162,6 +162,10 @@ impl PredictParams {
 ///   combination, but it can only name the seasons; here we can name the query
 ///   param to drop.
 /// - **Future.** No data exists yet, so no answer can be honest.
+/// - **Not a real season.** The floor below is built from `home_season`, which
+///   is an unvalidated query param whose range is wider than chrono's year
+///   range. Constructing it fallibly is what keeps a bad query string from
+///   panicking the handler; see the comment at the check itself.
 /// - **Before the season opens.** Produces an empty pit cohort that the model
 ///   silently dilutes into a degenerate "bias-only" prediction, labelled as
 ///   honest. Seasons use end-year numbering (2026 = the 2025-26 season), so
@@ -225,8 +229,7 @@ async fn predict(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PredictParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let season = params.season.unwrap_or_else(crate::default_season);
-    let (home_season, away_season) = params.resolved_seasons(season);
+    let (home_season, away_season) = params.resolved_seasons(crate::default_season());
     let venue = params.resolved_venue();
 
     // A matchup whose two sides come from different years is a what-if that
