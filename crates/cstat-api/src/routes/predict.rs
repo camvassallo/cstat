@@ -106,6 +106,14 @@ struct PredictParams {
     #[serde(default)]
     neutral: bool,
     season: Option<i32>,
+    /// Per-side season overrides. Each falls back to `season` when absent, so
+    /// a request naming neither is the legacy single-season path byte-for-byte.
+    /// Naming two different years is a *what-if* matchup (2015 Kentucky vs
+    /// 2026 Duke) — the two sides never met and never could, which is why
+    /// several parts of the response below are switched off rather than
+    /// computed and returned empty.
+    home_season: Option<i32>,
+    away_season: Option<i32>,
     /// Optional point-in-time cutoff (`YYYY-MM-DD`). When set, the
     /// prediction is rebuilt from features available *up to and
     /// including* that date — the leak-free path tied to the pit
@@ -124,6 +132,79 @@ impl PredictParams {
             Venue::Home
         })
     }
+
+    /// `(home_season, away_season)`. Both fall back to `season`, which falls
+    /// back to the site default — so the three-way absence is the legacy path.
+    ///
+    /// Note the fallback runs through `season` rather than straight to the
+    /// default: `?season=2015&home_season=2026` means "2026 Duke visiting the
+    /// 2015 field", not "2026 Duke visiting the 2026 field".
+    fn resolved_seasons(&self, fallback: i32) -> (i32, i32) {
+        let season = self.season.unwrap_or(fallback);
+        (
+            self.home_season.unwrap_or(season),
+            self.away_season.unwrap_or(season),
+        )
+    }
+}
+
+/// Validate `as_of_date` against the resolved matchup, returning the
+/// user-facing 400 message on rejection.
+///
+/// Pure — the clock and the two seasons travel in — because each rejection is
+/// a message the user has to act on, and getting the wording right matters
+/// more than it looks: the alternative to every one of these is a
+/// confidently-labelled garbage forecast, not an error.
+///
+/// - **Cross-era.** The point-in-time cohort (`features.rs`
+///   `build_all_features_pit`) is built for exactly one season and cannot
+///   straddle two. `predict_matchup` carries a backstop for the same
+///   combination, but it can only name the seasons; here we can name the query
+///   param to drop.
+/// - **Future.** No data exists yet, so no answer can be honest.
+/// - **Before the season opens.** Produces an empty pit cohort that the model
+///   silently dilutes into a degenerate "bias-only" prediction, labelled as
+///   honest. Seasons use end-year numbering (2026 = the 2025-26 season), so
+///   the floor is Sep 1 of the prior calendar year — early enough to probe
+///   preseason and opening night, late enough to catch a date that plainly
+///   belongs to a different season.
+fn validate_as_of_date(
+    as_of_date: Option<NaiveDate>,
+    home_season: i32,
+    away_season: i32,
+    today: NaiveDate,
+) -> Result<(), String> {
+    let Some(d) = as_of_date else {
+        return Ok(());
+    };
+
+    // Checked first: a cross-era request is malformed whatever the date is,
+    // and the bounds below have no single season to measure against.
+    if home_season != away_season {
+        return Err(format!(
+            "as_of_date is single-season and this matchup spans two \
+             (home {home_season}, away {away_season}); point-in-time state \
+             is computed within one season, so drop as_of_date for a \
+             cross-year matchup or make the two seasons match"
+        ));
+    }
+
+    if d > today {
+        return Err(format!(
+            "as_of_date {d} is in the future; honest predictions can only \
+             reflect data through today ({today})"
+        ));
+    }
+
+    let earliest = NaiveDate::from_ymd_opt(home_season - 1, 9, 1).expect("Sep 1 always valid");
+    if d < earliest {
+        return Err(format!(
+            "as_of_date {d} is before season {home_season} starts ({earliest}); \
+             pick a date in this season or change the season parameter"
+        ));
+    }
+
+    Ok(())
 }
 
 async fn predict(
@@ -131,78 +212,59 @@ async fn predict(
     Query(params): Query<PredictParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let season = params.season.unwrap_or_else(crate::default_season);
+    let (home_season, away_season) = params.resolved_seasons(season);
     let venue = params.resolved_venue();
 
-    // Bound-check `as_of_date` before doing any DB work. Future dates can't
-    // be honest by construction (no data exists yet); dates before the
-    // start of the requested season produce an empty pit cohort that the
-    // model silently dilutes into a degenerate "bias-only" prediction
-    // labelled as honest. Reject loudly instead — the alternative is the
-    // user shipping a confidently-labelled garbage forecast.
-    if let Some(d) = params.as_of_date {
-        let today = cstat_ingest::today_utc();
-        if d > today {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": format!(
-                        "as_of_date {d} is in the future; honest predictions can only \
-                         reflect data through today ({today})"
-                    ),
-                })),
-            ));
-        }
-        // Seasons in this codebase use end-year numbering (season 2026 =
-        // 2025-26 college season). Allow as_of_date down to Sep 1 of the
-        // prior calendar year so the user can probe preseason / opening
-        // night, but reject further-back dates that obviously belong to
-        // another season — those would silently route to a wrong-season
-        // pit cohort lookup.
-        let earliest =
-            chrono::NaiveDate::from_ymd_opt(season - 1, 9, 1).expect("Sep 1 always valid");
-        if d < earliest {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": format!(
-                        "as_of_date {d} is before season {season} starts ({earliest}); \
-                         pick a date in this season or change the season parameter"
-                    ),
-                })),
-            ));
-        }
-    }
+    // A matchup whose two sides come from different years is a what-if that
+    // never happened and could not have. Everything below that assumes the two
+    // teams shared a league — the conference flag, prior meetings, the
+    // preseason blend, the point-in-time cohort — is switched off from this
+    // one predicate rather than being left to return something empty or
+    // coincidentally-true.
+    let cross_era = home_season != away_season;
 
-    let home_team = find_team(&state.db.pool, &params.home, season)
+    // Bound-check `as_of_date` before doing any DB work; see
+    // [`validate_as_of_date`] for why each rejection exists.
+    validate_as_of_date(
+        params.as_of_date,
+        home_season,
+        away_season,
+        cstat_ingest::today_utc(),
+    )
+    .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))))?;
+
+    // Each side resolves in its own year. `find_team` is already
+    // name-and-season scoped, so this needs no new query — but the 404 has to
+    // name both the side and the year: "not in Division I in 2015" is a
+    // routine outcome on a cross-year surface, not a typo, and a message that
+    // only echoes the team name leaves the user with no idea which of the two
+    // slots to change.
+    let home_team = find_team(&state.db.pool, &params.home, home_season)
         .await
-        .map_err(|_| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("home team not found: {}", params.home) })),
-            )
-        })?;
+        .map_err(|_| team_not_found("home", &params.home, home_season))?;
 
-    let away_team = find_team(&state.db.pool, &params.away, season)
+    let away_team = find_team(&state.db.pool, &params.away, away_season)
         .await
-        .map_err(|_| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("away team not found: {}", params.away) })),
-            )
-        })?;
+        .map_err(|_| team_not_found("away", &params.away, away_season))?;
 
-    let is_conference =
-        home_team.conference.is_some() && home_team.conference == away_team.conference;
+    // Conference membership is a within-season fact. Across years the string
+    // match is nonsense in both directions — the 2015 Big East is not the 2026
+    // Big East, and Duke 2024 vs Duke 2026 would sail in as a conference game
+    // — so the flag is forced off and the model sees `is_conference_game = 0`.
+    let is_conference = !cross_era
+        && home_team.conference.is_some()
+        && home_team.conference == away_team.conference;
 
     // Run the predictor with explicit venue semantics. Neutral games are
     // symmetrised inside the helper so argument order doesn't change the
     // answer. The returned `Explained` carries both the headline numbers
     // and per-feature ablation deltas + the input feature vector itself
     // (already sign-flipped to the home perspective for the Away venue).
-    // One season for both sides today; #296 splits these into `home_season` /
-    // `away_season` from the query string, which is the whole reason the
-    // feature builder now takes the two as a pair.
-    let (home_ts, away_ts) = TeamSeason::same_season(home_team.id, away_team.id, season);
+    // Each side's season is bound to its team id, which is what keeps the
+    // venue swap inside `predict_with_venue` from pairing each team with the
+    // other's year.
+    let home_ts = TeamSeason::new(home_team.id, home_season);
+    let away_ts = TeamSeason::new(away_team.id, away_season);
     let explained = projection::predict_with_venue(
         &state.db.pool,
         &state.predictor,
@@ -219,7 +281,8 @@ async fn predict(
         let status = predict_error_status(&e);
         if status != StatusCode::INTERNAL_SERVER_ERROR {
             tracing::warn!(
-                home = %params.home, away = %params.away, season, %status,
+                home = %params.home, away = %params.away,
+                home_season, away_season, %status,
                 "predict: client-side prediction failure — {e}"
             );
         }
@@ -229,22 +292,42 @@ async fn predict(
     // Early-season preseason × pit blend (ROADMAP §6) — see
     // [`apply_preseason_blend`] for the full semantics (weight schedule,
     // live-path gating, σ choice).
+    //
+    // Cross-era skips it outright. `apply_preseason_blend` takes a single
+    // season and `blend_weight` already decays to 0 for any past one, so for
+    // most cross-era pairs this is a guard rather than new math. It is load-
+    // bearing for the pair it isn't: when one slot is the in-progress season,
+    // the weight is non-zero and the helper would look up BOTH teams'
+    // `team_preseason_projection` rows in that one season — silently pulling
+    // the other side's current-year forecast in place of the past-year team
+    // the user actually asked for.
     let pit_margin = explained.prediction.predicted_margin;
-    let mut prediction_basis = if params.as_of_date.is_some() {
+    let mut prediction_basis = if cross_era {
+        // Its own label. The existing four all describe *how much of the
+        // season the number saw*, which is not the axis a cross-year what-if
+        // varies on; reusing "leaky" in particular would read as an accuracy
+        // warning on a surface where the whole point is that the matchup is
+        // hypothetical.
+        "cross_era"
+    } else if params.as_of_date.is_some() {
         "pit"
     } else {
         "leaky"
     };
-    let blend = projection::apply_preseason_blend(
-        &state.db.pool,
-        season,
-        home_team.id,
-        away_team.id,
-        venue,
-        blend_clock(params.as_of_date),
-        pit_margin,
-    )
-    .await;
+    let blend = if cross_era {
+        None
+    } else {
+        projection::apply_preseason_blend(
+            &state.db.pool,
+            home_season,
+            home_team.id,
+            away_team.id,
+            venue,
+            blend_clock(params.as_of_date),
+            pit_margin,
+        )
+        .await
+    };
     let blended_margin = blend.map(|b| b.margin).unwrap_or(pit_margin);
     if let Some(b) = blend {
         // Peak weight is 0.70 (never pure preseason), so the chip labels the
@@ -282,17 +365,31 @@ async fn predict(
     // it's the slowest step and gates the response shape via venue+team
     // perspective). Failures here downgrade to empty arrays rather than
     // tanking the prediction; the page degrades gracefully.
+    //
+    // Each roster/archetype fetch takes its own side's season — that is the
+    // whole content of the cross-era case here. Prior meetings, by contrast,
+    // are skipped rather than queried: two teams from different years never
+    // played, by construction, so the query is guaranteed empty and its only
+    // possible non-empty answer would be wrong.
     let pool = &state.db.pool;
+    let prior_meetings_fut = async {
+        if cross_era {
+            Vec::new()
+        } else {
+            queries::get_prior_meetings(pool, home_team.id, away_team.id, home_season)
+                .await
+                .unwrap_or_default()
+        }
+    };
     let (roster_home, roster_away, prior_meetings_raw, archetype_home, archetype_away) = tokio::join!(
-        queries::get_team_roster(pool, home_team.id, season),
-        queries::get_team_roster(pool, away_team.id, season),
-        queries::get_prior_meetings(pool, home_team.id, away_team.id, season),
-        queries::get_team_archetype_index(pool, home_team.id, season),
-        queries::get_team_archetype_index(pool, away_team.id, season),
+        queries::get_team_roster(pool, home_team.id, home_season),
+        queries::get_team_roster(pool, away_team.id, away_season),
+        prior_meetings_fut,
+        queries::get_team_archetype_index(pool, home_team.id, home_season),
+        queries::get_team_archetype_index(pool, away_team.id, away_season),
     );
     let roster_home = roster_home.unwrap_or_default();
     let roster_away = roster_away.unwrap_or_default();
-    let prior_meetings_raw = prior_meetings_raw.unwrap_or_default();
     let archetype_home = archetype_home.unwrap_or_default();
     let archetype_away = archetype_away.unwrap_or_default();
 
@@ -345,17 +442,23 @@ async fn predict(
     let predicted_home_score = ((total + margin) / 2.0).round() as i32;
     let predicted_away_score = ((total - margin) / 2.0).round() as i32;
 
-    // `prediction_basis` ("preseason" | "blended" | "pit" | "leaky") is set
-    // above alongside the blend so the frontend chip reads which regime is
-    // active rather than inferring from its own state — a request that drops
-    // `as_of_date` in transit can't paint a leaky prediction as honest.
+    // `prediction_basis` ("preseason" | "blended" | "pit" | "leaky" |
+    // "cross_era") is set above alongside the blend so the frontend chip reads
+    // which regime is active rather than inferring from its own state — a
+    // request that drops `as_of_date` in transit can't paint a leaky
+    // prediction as honest.
 
     Ok(Json(json!({
         "home_team": home_team.name,
         "home_team_id": home_team.id,
         "away_team": away_team.name,
         "away_team_id": away_team.id,
-        "season": season,
+        // The shared season, and the field every legacy caller already reads.
+        // Cross-era it degrades to the home side's year; the two seasons are
+        // deliberately not echoed as separate fields, so that a request naming
+        // neither new param gets a byte-identical response. A cross-era caller
+        // named both seasons itself, and both team ids are season-scoped.
+        "season": home_season,
         "venue": venue_str,
         "as_of_date": params.as_of_date,
         "prediction_basis": prediction_basis,
@@ -460,6 +563,22 @@ fn round1(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
+/// The per-side 404 for a team that has no row in the season its slot asked
+/// for.
+///
+/// Names the side and the year because on a cross-year surface this is a
+/// routine outcome rather than a typo — plenty of programs simply were not
+/// Division I in an older season — and the user has two slots to choose
+/// between when deciding what to change.
+fn team_not_found(side: &str, query: &str, season: i32) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "error": format!("{side} team not found: {query} (season {season})"),
+        })),
+    )
+}
+
 #[derive(sqlx::FromRow)]
 struct TeamLookup {
     id: Uuid,
@@ -526,6 +645,8 @@ mod tests {
             venue,
             neutral,
             season: None,
+            home_season: None,
+            away_season: None,
             as_of_date: None,
         }
     }
@@ -586,28 +707,94 @@ mod tests {
         assert_eq!(p.resolved_venue(), Venue::Neutral);
     }
 
+    fn date(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
     #[test]
     fn as_of_date_bounds() {
-        // The bound logic in `predict` is straightforward arithmetic on
-        // chrono dates; test it directly rather than spinning up the full
-        // route. Future dates and far-past dates should both be rejected.
-        let season = 2026_i32;
-        let earliest = chrono::NaiveDate::from_ymd_opt(season - 1, 9, 1).unwrap();
-        let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
+        let today = date("2026-05-29");
 
-        // OK: within bounds.
-        for d in ["2025-11-01", "2026-01-15", "2026-04-06"] {
-            let d = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap();
-            assert!(d >= earliest && d <= today, "{d} should be in-bounds");
+        // OK: inside season 2026's window, on or before today.
+        for d in ["2025-09-01", "2025-11-01", "2026-01-15", "2026-04-06"] {
+            assert!(
+                validate_as_of_date(Some(date(d)), 2026, 2026, today).is_ok(),
+                "{d} should be in-bounds"
+            );
         }
-        // Reject: future.
-        let fut = chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
-        assert!(fut > today, "future date should be rejected");
-        // Reject: before season window. 2024-12-15 belongs to season 2025,
-        // not 2026, so it slips by intent (silently pulls the wrong-season
-        // cohort) unless the bound rejects it.
-        let early = chrono::NaiveDate::from_ymd_opt(2024, 12, 15).unwrap();
-        assert!(early < earliest, "wrong-season date should be rejected");
+        // Absent as_of_date is always fine — that is the legacy path.
+        assert!(validate_as_of_date(None, 2026, 2026, today).is_ok());
+
+        // Reject: future. Nothing exists to be honest about yet.
+        let err = validate_as_of_date(Some(date("2027-01-01")), 2026, 2026, today).unwrap_err();
+        assert!(err.contains("in the future"), "{err}");
+
+        // Reject: before the season window. 2024-12-15 belongs to season
+        // 2025, not 2026, so it slips by intent (silently pulls the
+        // wrong-season cohort) unless the bound rejects it.
+        let err = validate_as_of_date(Some(date("2024-12-15")), 2026, 2026, today).unwrap_err();
+        assert!(err.contains("before season 2026 starts"), "{err}");
+
+        // The floor tracks the slot's own season, not the site default: a
+        // request that pins both sides to 2016 must be able to probe 2016
+        // dates. Measuring against the default season instead would reject
+        // every honest date in every past season.
+        assert!(validate_as_of_date(Some(date("2016-01-15")), 2016, 2016, today).is_ok());
+    }
+
+    #[test]
+    fn as_of_date_is_rejected_across_two_seasons() {
+        let today = date("2026-05-29");
+
+        // The pit cohort is built for exactly one season and cannot straddle
+        // two. `predict_matchup` carries the same guard as a backstop, but by
+        // then the message can only name seasons — this one names the param.
+        let err = validate_as_of_date(Some(date("2026-01-15")), 2015, 2026, today).unwrap_err();
+        assert!(err.contains("as_of_date"), "{err}");
+        assert!(err.contains("2015") && err.contains("2026"), "{err}");
+
+        // Checked before the bounds, so a cross-era request gets the reason it
+        // can act on rather than a season-relative complaint about a date that
+        // is fine for one of its two slots.
+        let err = validate_as_of_date(Some(date("2027-01-01")), 2015, 2026, today).unwrap_err();
+        assert!(!err.contains("in the future"), "{err}");
+    }
+
+    #[test]
+    fn resolves_a_season_per_side_with_fallbacks() {
+        let fallback = 2026_i32;
+        let seasons = |q: &str| {
+            let p: PredictParams = serde_urlencoded::from_str(q)
+                .unwrap_or_else(|e| panic!("failed to parse {q:?}: {e}"));
+            p.resolved_seasons(fallback)
+        };
+
+        // Legacy: neither new param. Both sides take the site default, and
+        // `season` alone still moves both — this is the byte-identical path.
+        assert_eq!(seasons("home=A&away=B"), (2026, 2026));
+        assert_eq!(seasons("home=A&away=B&season=2019"), (2019, 2019));
+
+        // One side pinned; the other falls back through `season`, NOT straight
+        // to the default. `season=2015&home_season=2026` is "2026 Duke
+        // visiting the 2015 field", so the away side must read 2015.
+        assert_eq!(seasons("home=A&away=B&home_season=2015"), (2015, 2026));
+        assert_eq!(seasons("home=A&away=B&away_season=2015"), (2026, 2015));
+        assert_eq!(
+            seasons("home=A&away=B&season=2015&home_season=2026"),
+            (2026, 2015)
+        );
+
+        // Both pinned, and pinned to the same year: not cross-era, so every
+        // guard stays off and this must behave as an ordinary single-season
+        // request in 2015 rather than in the default season.
+        let (h, a) = seasons("home=A&away=B&home_season=2015&away_season=2015");
+        assert_eq!((h, a), (2015, 2015));
+        assert!(h == a, "same year on both sides is not a cross-era matchup");
+
+        // Both pinned to different years: the cross-era case.
+        let (h, a) = seasons("home=A&away=B&home_season=2015&away_season=2026");
+        assert_eq!((h, a), (2015, 2026));
+        assert!(h != a);
     }
 
     #[test]
