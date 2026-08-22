@@ -37,10 +37,23 @@
 #     backtest       projections-backtest, using the LOSO models
 #     cae            compute_cae.py, scoring against the backtest dump
 #     projections    compute-projections -> team_preseason_projection
+#                      (over $YEARS *plus the forward seasons* — see below)
 #
 # Layer 1 is opt-in because regenerating the OOF invalidates every Layer 2
 # model beneath it. Run it when Layer 0 data changed or a Layer 1 model was
 # edited; not "to be safe". A no-op retrain is not free — it moves artifacts.
+#
+# THE FORWARD SEASONS (#263). `$YEARS` covers the seasons that have *happened*,
+# because that is the range the historical products want: `backtest` scores
+# against actual AdjEM, and a season not yet played has none. But the seasons
+# with no actuals are the ones actually SERVED — the forecast year is the Future
+# page (in August, the only season anyone looks at) and the current season is the
+# preseason anchor `/predict` blends over opening week — and both are
+# materialized by the same `projections` stage. So they are appended to that
+# stage, and to no other. Left off, a full retrain exits 0 with its success
+# summary printed, having refreshed every season except the served ones;
+# `check_provenance.py` is then the only thing that says so, and only if someone
+# remembers to run it. Same shape as #218: the wrong thing succeeds quietly.
 #
 # BEFORE YOU RUN: is local Layer 0 actually current, and does it match prod?
 # Models reach prod by git deploy while data reaches it by sync, so training
@@ -61,7 +74,10 @@
 #   ./training/retrain_downstream.sh --only roster_adjo,backtest
 #   ./training/retrain_downstream.sh --from cae          # resume after a failure
 #   ./training/retrain_downstream.sh --dry-run           # print the plan
-#   ./training/retrain_downstream.sh --years 2016,…,2026 # override season range
+#   ./training/retrain_downstream.sh --years 2016,…,2026 # override the historical
+#                                                        # range (the forward
+#                                                        # seasons are appended
+#                                                        # either way)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -72,7 +88,10 @@ EVAL_DIR="$TRAINING_DIR/eval_history"
 # 2016..2026 — the range every downstream product is already materialized for
 # (team_preseason_projection and coach_season_cae both hold exactly these
 # seasons) and the range `LOSO_EXPORT_SEASONS` exports models for. 2016 is the
-# floor: it needs base-season 2015 player data plus trajectory OOF.
+# floor: it needs base-season 2015 player data plus trajectory OOF. The ceiling
+# is the last season with actuals to score against — which also means this
+# hardcoded list goes stale at the November flip, and the forward-season block
+# below is what covers that gap rather than this line (#263).
 YEARS="2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026"
 
 ALL_STAGES=(trajectory freshman roster_impact roster_adjo backtest cae projections)
@@ -107,6 +126,43 @@ done
 
 is_in() { local n="$1"; shift; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
 
+# ── The forward seasons (#263) ──────────────────────────
+# Mirrors `season_for_date` in crates/cstat-ingest/src/lib.rs — November rolls
+# the current season forward — and the forecast is the season after that. Read
+# through `CSTAT_SIMULATED_DATE` for the same reason `today_utc()` does, so the
+# replay harness and this script never disagree about what year it is.
+#
+# Resolved here, before any stage runs: `$(date)` mid-pipeline clobbers `$?`,
+# which has bitten this repo before.
+TODAY="${CSTAT_SIMULATED_DATE:-$(date -u +%Y-%m-%d)}"
+[[ "$TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+  || die "unparseable date '$TODAY' — CSTAT_SIMULATED_DATE must be YYYY-MM-DD"
+# 10# forces base 10: an "08" or "09" month is not octal.
+CURRENT_SEASON=$(( 10#${TODAY:0:4} + (10#${TODAY:5:2} >= 11 ? 1 : 0) ))
+FORECAST_YEAR=$(( CURRENT_SEASON + 1 ))
+
+# BOTH forward seasons are candidates, not just the forecast one. `$YEARS` is a
+# hardcoded historical range, so it goes stale at the November flip: from Nov 1
+# the current season is $YEARS' ceiling + 1, and that season's row is the
+# preseason anchor `routes/predict.rs::fetch_preseason_margin` blends over the
+# first 42 days. Deriving only the forecast year would leave exactly that row
+# unrefreshed through opening week — the same defect one season over. Today
+# (offseason) the current season is already in $YEARS and only the forecast year
+# is appended; from November both are.
+#
+# Appended, never substituted, and only when absent: an explicit `--years` that
+# already names one must not rewrite and re-stamp that season twice. Adding a
+# fixed pair rather than filling the gap up to the forecast year also keeps a
+# narrow `--years 2020,2021` repair narrow.
+PROJECTION_YEARS="$YEARS"
+FORWARD=()
+for y in "$CURRENT_SEASON" "$FORECAST_YEAR"; do
+  if ! is_in "$y" ${PROJECTION_YEARS//,/ }; then
+    PROJECTION_YEARS="$PROJECTION_YEARS,$y"
+    FORWARD+=("$y")
+  fi
+done
+
 # ── Resolve which stages run ────────────────────────────
 PLAN=()
 if [[ -n "$ONLY" ]]; then
@@ -136,6 +192,13 @@ fi
 
 echo "→ Repo:     $REPO_ROOT"
 echo "→ Seasons:  $YEARS"
+if (( ${#FORWARD[@]} )); then
+  echo "→ Forward:  ${FORWARD[*]} (appended to the projections stage — no actuals to backtest,"
+  echo "            but $FORECAST_YEAR is what the Future page serves and $CURRENT_SEASON is the"
+  echo "            preseason anchor /predict blends over opening week)"
+else
+  echo "→ Forward:  none to append — $CURRENT_SEASON and $FORECAST_YEAR are already in the season list"
+fi
 echo "→ Plan:     ${PLAN[*]}"
 for s in "${PLAN[@]}"; do
   if is_in "$s" "${LAYER1[@]}"; then
@@ -146,6 +209,9 @@ done
 
 if (( DRY_RUN )); then
   echo "→ Dry run — nothing executed."
+  if is_in projections "${PLAN[@]}"; then
+    echo "→ projections would run: compute-projections --years $PROJECTION_YEARS"
+  fi
   exit 0
 fi
 
@@ -211,6 +277,13 @@ run_cae() {
 
 run_projections() {
   stage_banner "projections — materialize team_preseason_projection"
+  echo "   seasons: $PROJECTION_YEARS"
+  if (( ${#FORWARD[@]} )); then
+    echo "   Forward seasons in that list: ${FORWARD[*]}. For a season whose teams are not"
+    echo "   ingested yet, \"wrote 0 rows ... unresolved-target\" is EXPECTED and correct —"
+    echo "   the target-side join has nothing to resolve to. The player projections written"
+    echo "   on the same pass are real, and are what /api/projected-players serves."
+  fi
   # Heads-up: compute-projections writes TWO tables. `team_preseason_projection`
   # legitimately wants the full 2016..2026 range (the preseason blend and
   # measure-blend-accuracy read historical seasons). `player_season_projection`
@@ -219,10 +292,12 @@ run_projections() {
   # serves. Those rows are inert (`/api/projected-players/{year}` filters on
   # target_season) and their values come from the trajectory/freshman models,
   # so a Layer 2 retrain does not change them. They just diverge from prod.
-  # Use --years to narrow if you only meant to refresh the team table.
+  # Narrowing with --years is safe if you only meant the team table; the
+  # forward seasons are appended regardless, since those are the ones where the
+  # player rows are the served product rather than the inert byproduct.
   ( cd "$REPO_ROOT" && cargo run --release --bin cstat-ingest -- \
-      compute-projections --years "$YEARS" )
-  WROTE+=("team_preseason_projection (database)")
+      compute-projections --years "$PROJECTION_YEARS" )
+  WROTE+=("team_preseason_projection + player_season_projection (database)")
 }
 
 for s in "${PLAN[@]}"; do
@@ -258,6 +333,14 @@ stage_banner "verify — cross-layer input provenance"
 ( cd "$TRAINING_DIR" && "$VENV_PY" check_provenance.py ) || true
 
 # ── What happened ───────────────────────────────────────
+# What to push. `player_season_projection` rides along only when Layer 1 ran:
+# its values come from the trajectory/freshman models, so a Layer 2-only
+# retrain leaves them byte-identical.
+SYNC_TABLES="team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance"
+if is_in trajectory "${PLAN[@]}" || is_in freshman "${PLAN[@]}"; then
+  SYNC_TABLES="$SYNC_TABLES,player_season_projection"
+fi
+
 echo
 echo "══ done ═══════════════════════════════════════"
 echo "Stages run: ${PLAN[*]}"
@@ -272,7 +355,16 @@ PR #215). Review with `git status` and stage deliberately.
 
 If roster_impact moved, the downstream products built from it did too — commit
 the model artifacts and push the regenerated database tables to prod:
-  ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance
+NOTE
+echo "  ./scripts/sync_to_prod.sh --tables $SYNC_TABLES"
+if is_in player_season_projection ${SYNC_TABLES//,/ }; then
+  echo
+  echo "  player_season_projection is in that list because this run rebuilt Layer 1,"
+  echo "  which is what moves those values. Its $FORECAST_YEAR rows are the served"
+  echo "  Future-page player board; a Layer 2-only retrain leaves them unchanged and"
+  echo "  they are left out rather than truncated and restored for nothing."
+fi
+cat <<'NOTE'
 
 NOT RUN BY THIS SCRIPT — the hand-tuned serving constants. PROJECTION_SHRINK_WEIGHT
 / _OVERHAUL (roster_projection.rs) and PRESEASON_PEAK_WEIGHT / _DECAY_DAYS /

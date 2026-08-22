@@ -61,6 +61,8 @@ LAYER 3  derived products                         [no training]
   training/compute_cae.py            -> coach_season_cae, coach_ratings
   cstat-ingest compute-projections   -> team_preseason_projection
                                      -> player_season_projection (see caveat, §3)
+      runs over the historical range PLUS the forward seasons, which have no
+      actuals to backtest but are the ones actually served (§3, #263)
 
 LAYER 4  hand-tuned serving constants             [NOT in the chain runner]
   transition_blend_diagnostic.py  reads the Layer 3 dump
@@ -174,6 +176,12 @@ Stages, in order: `trajectory freshman roster_impact roster_adjo backtest cae
 projections`. Layer 1 is opt-in; `--from` into a Layer 1 stage implies
 `--with-layer1`, because "start here and run everything after" must not
 silently drop the stage immediately following.
+
+The season range is **not** uniform across those stages. `backtest` scores
+against actual AdjEM, so it runs over the historical seasons only; the
+`projections` stage additionally materializes the **forward seasons** — the
+current one and the one being forecast — which is where the served rows live.
+See §3.
 
 ### Before you run: is local Layer 0 current, and does it match prod?
 
@@ -346,6 +354,25 @@ Those rows are inert, and their values come from the **trajectory/freshman**
 models, so a Layer 2 retrain does not change them. Narrow with `--years` if you
 only meant the team table.
 
+**The forward seasons invert that.** For the current season and the one being
+forecast, the player rows are the served product, not the byproduct — they are
+the Future page's player board — and `team_preseason_projection`'s forward row
+is the anchor `routes/predict.rs::fetch_preseason_margin` blends over opening
+week. Neither is in the historical range, because neither has actuals for
+`backtest` to score.
+
+That is what #263 was: `retrain_downstream.sh` derived one season list and used
+it for every stage, so a full retrain refreshed 2016..2026 and left the forecast
+year — in August, the only season anyone looks at — sitting on superseded Layer 2
+models, while exiting 0 and printing its success summary. `check_provenance.py`
+caught it, but only because someone ran it. The script now appends the forward
+seasons to the `projections` stage, and to that stage alone.
+
+A forward season whose `teams` rows do not exist yet writes **zero** team rows
+and reports them as `unresolved-target` — `resolve_base_to_target` is an INNER
+JOIN onto `teams WHERE season = target` (#245). That is the expected and correct
+output, not a failure; the player rows on the same pass are still written.
+
 ### Getting it to prod: deploy vs sync
 
 This split is what made #218 unfixable by a sync, and it is worth being precise
@@ -356,13 +383,18 @@ about because the two halves of Layer 2 land differently.
 | `*_model.onnx` + meta (committed) | 1, 2 | **git deploy** |
 | `roster_impact_loso/*.onnx` | 2 | neither — gitignored, local-only, backtest input |
 | `team_preseason_projection` | 3 | **data sync** |
+| `player_season_projection` | 3 | **data sync** — only when Layer 1 moved. Its values come from the trajectory/freshman models, so a Layer 2-only retrain leaves it byte-identical and pushing it would truncate and restore a served table for nothing |
 | `coach_season_cae`, `coach_ratings` | 3 | **data sync** |
 | `player_archetypes` | 0 | data sync in the offseason; **prod-owned in-season** (the Rust assign half runs nightly) |
 | `artifact_provenance` | 3 | **data sync** — not in `sync_to_prod.sh`'s EXCLUDED list, so it travels with the tables it describes. It has to: `team_preseason_projection` reaches prod by sync, and provenance recorded only on one laptop would leave prod holding rows of unknown origin |
 
 ```bash
 ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance
+# ...plus player_season_projection when the retrain included Layer 1
 ```
+
+`retrain_downstream.sh` prints the right list for the run it just did, rather
+than leaving the Layer 1 conditional to be remembered.
 
 The subtlety: **the served AdjO/AdjD split is never materialized.**
 `routes/projections.rs:641` runs `roster_adjo_model.onnx` live at request time
