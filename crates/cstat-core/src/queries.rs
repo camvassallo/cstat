@@ -1517,7 +1517,45 @@ pub async fn get_team_roster(
             pr.paired_possessions AS rapm_paired_poss
         FROM players p
         JOIN player_season_stats pss ON pss.player_id = p.id AND pss.team_id = p.team_id AND pss.season = p.season
-        LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
+        -- One Torvik profile per (player, season), and the collapse is not
+        -- optional. `torvik_player_stats` is UNIQUE on (torvik_pid, season),
+        -- NOT on (player_id, season): a few hundred (player, season) pairs
+        -- carry two or three profiles, so a bare join fans the roster out and
+        -- serves that player twice, with different CAM on each copy.
+        -- Mercyhurst 2026 returned 15 rows for 14 players. The duplicate also
+        -- spends two of the rotation slots the Predict roster panels' top-N
+        -- slice takes from this order as-is.
+        --
+        -- Lowest `torvik_pid` wins: the same deterministic tiebreak #306
+        -- chose, so where duplicate profiles co-occur across seasons a human
+        -- keeps one identity every year.
+        --
+        -- The tiebreak is free for the overwhelming majority and arbitrary
+        -- for a known minority. 262 of the 287 duplicated pairs locally are
+        -- two profiles of ONE human at one school, carrying byte-identical
+        -- stat lines (Bernie Blunt 2026: same GP, same minutes, same CAM
+        -- under pids 74649 and 127223) -- Torvik minted a second pid, and
+        -- which one wins cannot matter. The other ~19 are TWO DIFFERENT
+        -- HUMANS sharing a name and wrongly linked to one `player_id` by the
+        -- ingest (2017 Jared Harper is Auburn's and Fairfield's at once);
+        -- there `min` picks the wrong human about half the time. That is a
+        -- linkage defect, not something a query-side tiebreak can fix -- see
+        -- #313, which repairs it at the source and makes those pairs cease to
+        -- exist. Collapsing is still the right move for them: the pre-fix
+        -- behaviour was two indistinguishable rows, one of them equally
+        -- wrong.
+        --
+        -- LATERAL rather than the DISTINCT ON subquery the sibling call sites
+        -- use, because this query is single-team -- ~14 probes of
+        -- `idx_torvik_player_stats_player` instead of de-duplicating the
+        -- whole season (0.6 ms vs 42 ms locally, on a page that runs this
+        -- twice).
+        LEFT JOIN LATERAL (
+            SELECT * FROM torvik_player_stats t
+            WHERE t.player_id = p.id AND t.season = p.season
+            ORDER BY t.torvik_pid
+            LIMIT 1
+        ) tps ON TRUE
         LEFT JOIN player_percentiles pp ON pp.player_id = p.id AND pp.season = p.season
         LEFT JOIN player_archetypes pa ON pa.player_id = p.id AND pa.season = p.season
         LEFT JOIN player_on_off oo ON oo.player_id = p.id AND oo.season = p.season AND oo.team_id = p.team_id
@@ -1630,7 +1668,18 @@ pub async fn search_players(
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
-        LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pss.season
+        -- One Torvik profile per (player, season) -- see `get_team_roster`
+        -- for why the collapse is mandatory. A bare join duplicates 297
+        -- season-stat rows in the results. DISTINCT ON rather than the
+        -- LATERAL used there: this query is season-wide, and `pss.season = $1`
+        -- propagates into the subquery through the join equivalence, so the
+        -- de-duplication is confined to the one season being listed.
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id, season) *
+            FROM torvik_player_stats
+            WHERE player_id IS NOT NULL
+            ORDER BY player_id, season, torvik_pid
+        ) tps ON tps.player_id = p.id AND tps.season = pss.season
         LEFT JOIN player_percentiles pp ON pp.player_id = pss.player_id AND pp.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
@@ -1744,7 +1793,21 @@ pub async fn pick_or_pin_daily_puzzle(
             FROM player_season_stats pss
             JOIN players p ON p.id = pss.player_id AND p.season = pss.season
             LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
-            LEFT JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = pss.season
+            -- One Torvik profile per (player, season) -- see `get_team_roster`.
+            -- Consistency with the two sibling call sites, not a bug fix: a
+            -- bare join put an affected player in the pool two or three
+            -- times, but both copies carry the same `natstat_id`, so they
+            -- hash to the same `md5(salt:natstat_id)` and the minimum this
+            -- picks is unchanged. The fan-out inflated the pool without
+            -- skewing the draw, and no pinned puzzle needs repairing. Guarded
+            -- both ways in `tests/torvik_duplicate_profiles.rs`, so a future
+            -- change to the ordering key can't quietly make it matter.
+            LEFT JOIN (
+                SELECT DISTINCT ON (player_id, season) *
+                FROM torvik_player_stats
+                WHERE player_id IS NOT NULL
+                ORDER BY player_id, season, torvik_pid
+            ) tps ON tps.player_id = p.id AND tps.season = pss.season
             LEFT JOIN player_archetypes pa ON pa.player_id = pss.player_id AND pa.season = pss.season
             WHERE pss.season = $2
               AND pss.games_played >= 5
