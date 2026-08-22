@@ -232,3 +232,27 @@ fn star_bands_are_total_and_monotone() {
     }
     assert_eq!(last, 2, "the bottom of the range must be a 2-star");
 }
+
+/// Pins the fitted floors themselves.
+///
+/// Every other band test is deliberately constant-agnostic — it asks whether
+/// the bands reproduce the fixture, and the fixture is 4-stars only. That is
+/// exactly how `0.8900` / `0.7900` shipped green while mis-banding 17% of the
+/// scraped history one star too high. The floors are a *fit*, not a convention,
+/// so they need a test that fails when someone re-guesses them.
+///
+/// The fit lives in `scripts/audit_recruit_stars.sql` query 3, against the
+/// 9,266 HTML-scraped rows whose star came from counting 247's rendered glyphs.
+/// If 247 rescales, re-run that query and move these numbers to match it — do
+/// not round them toward a published scale, which is what these two guard
+/// against.
+#[test]
+fn star_band_floors_are_the_fitted_values() {
+    assert_eq!(
+        COMPOSITE_STAR_BANDS,
+        [(0.9900, 5), (0.9350, 4), (0.8100, 3)],
+        "band floors are fitted to the scraped history (audit_recruit_stars.sql \
+         query 3), not to 247's published scale — only the 5-star floor matches \
+         a published figure. Re-fit before changing these."
+    );
+}

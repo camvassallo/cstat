@@ -17,7 +17,11 @@
 -- now bands the composite rating instead, on both JSON feeds.
 --
 -- Query 3 is the one that pins the band constants against 12 classes of
--- HTML-scraped history; run it before trusting the 4/5 floor.
+-- HTML-scraped history. All three floors are fitted to it, not to a published
+-- scale: 0.9900 / 0.9350 / 0.8100. Re-run it after any 247 rescale and move the
+-- constants to match rather than guessing round numbers — the first guess
+-- (0.8900 / 0.7900 on the lower two) mis-banded 17% of the history, and did it
+-- one star too high.
 
 \set ON_ERROR_STOP on
 \pset pager off
@@ -25,6 +29,14 @@
 -- Transport is recoverable per row: `raw_player` is the serialized RecruitRow,
 -- whose `raw_source` field holds either the original JSON object or the
 -- original `<li>` fragment.
+--
+-- The field was NAMED `raw_html` until the JSON transport landed, and rows
+-- written before then still carry that key on disk — `RecruitRow` only reads
+-- them through a `#[serde(alias = "raw_html")]`, which does nothing for SQL
+-- that goes at the JSON directly. Every query here must COALESCE the two or it
+-- silently classifies all 9,266 HTML-scraped rows as `unknown`, which empties
+-- query 3 — the calibration query — while still returning a clean-looking
+-- result.
 CREATE TEMP VIEW audit_recruits AS
 SELECT
     r.year,
@@ -35,8 +47,8 @@ SELECT
     r.committed_school,
     r.commit_status,
     CASE
-        WHEN LEFT(LTRIM(r.raw_player ->> 'raw_source'), 1) = '{' THEN 'json'
-        WHEN LEFT(LTRIM(r.raw_player ->> 'raw_source'), 1) = '<' THEN 'html'
+        WHEN LEFT(LTRIM(COALESCE(r.raw_player ->> 'raw_source', r.raw_player ->> 'raw_html')), 1) = '{' THEN 'json'
+        WHEN LEFT(LTRIM(COALESCE(r.raw_player ->> 'raw_source', r.raw_player ->> 'raw_html')), 1) = '<' THEN 'html'
         ELSE 'unknown'
     END AS transport,
     -- The band `composite_star_rating` applies. Keep in lockstep with
@@ -44,16 +56,16 @@ SELECT
     CASE
         WHEN r.composite_rating IS NULL THEN NULL
         WHEN r.composite_rating >= 0.9900 THEN 5
-        WHEN r.composite_rating >= 0.8900 THEN 4
-        WHEN r.composite_rating >= 0.7900 THEN 3
+        WHEN r.composite_rating >= 0.9350 THEN 4
+        WHEN r.composite_rating >= 0.8100 THEN 3
         ELSE 2
     END AS banded_star,
     -- The forensic copy of the feed row, re-parsed — NULL for an HTML-scraped
     -- row, whose `raw_source` is an `<li>` fragment and would fail the cast.
     -- Guarded here rather than at the call site so no query can trip over it.
     CASE
-        WHEN LEFT(LTRIM(r.raw_player ->> 'raw_source'), 1) = '{'
-        THEN (r.raw_player ->> 'raw_source')::jsonb
+        WHEN LEFT(LTRIM(COALESCE(r.raw_player ->> 'raw_source', r.raw_player ->> 'raw_html')), 1) = '{'
+        THEN (COALESCE(r.raw_player ->> 'raw_source', r.raw_player ->> 'raw_html'))::jsonb
     END AS raw_json
 FROM recruits r;
 
@@ -99,11 +111,20 @@ ORDER BY year DESC, transport;
 
 \echo
 \echo '== 3. Empirical band boundaries, from HTML-scraped rows only ================='
-\echo '   This is the calibration source for COMPOSITE_STAR_BANDS. Each floor'
-\echo '   should sit between `worst` for that star and `best` for the one below.'
-\echo '   If the 5-star `worst` here is not close to 0.9900, change the constant'
-\echo '   in tfs_recruits.rs to match this — the DB is the authority, not the'
-\echo '   published figure.'
+\echo '   This is the calibration source for COMPOSITE_STAR_BANDS, and the DB is'
+\echo '   the authority — not any published scale. Each floor should sit between'
+\echo '   `worst` for that star and `best` for the one below.'
+\echo
+\echo '   The 5/4 edge is sharp: 4-star `best` should land at 0.9899 against a'
+\echo '   0.9900 floor. The 4/3 edge is not, because 247 cuts 3-vs-4 star on rank'
+\echo '   (about the top 150) and the rating only tracks it — expect the ranges to'
+\echo '   overlap, and read `best` for the 3-star row (~0.9349, stable since 2018)'
+\echo '   as the boundary rather than looking for a clean gap.'
+\echo
+\echo '   Query 4 is the check that matters after a change: it should show far'
+\echo '   more `stored_too_low` than `stored_too_high` on html rows. Stars feed a'
+\echo '   monotone-increasing model feature, so erring low damps a projection'
+\echo '   while erring high inflates it.'
 \echo
 
 SELECT

@@ -688,12 +688,36 @@ fn jptr_str(v: &Value, ptr: &str) -> Option<String> {
 /// 2026 class, ratings 0.9535–0.9816, every one rendered by 247 as 4-star. The
 /// bands reproduce all 50 (`star_bands_match_the_captured_rankings_page`).
 ///
-/// The 4/5 boundary is the one the repo's evidence only brackets rather than
-/// pins: the capture starts at rank 51, so it proves the floor is **above
-/// 0.9816** without showing a 5-star row. 0.9900 is 247's published figure and
-/// is consistent with every row we hold. Confirm it against the HTML-scraped
-/// history with `scripts/audit_recruit_stars.sql` (query 3) before assuming it.
-pub const COMPOSITE_STAR_BANDS: [(f32, i16); 3] = [(0.9900, 5), (0.8900, 4), (0.7900, 3)];
+/// The fixture alone cannot pin the floors — it holds 4-stars only. All three
+/// are fitted to the 9,266 HTML-scraped rows in the local DB, where the star is
+/// ground truth because the scrape counts 247's rendered glyphs
+/// (`scripts/audit_recruit_stars.sql`, query 3). Each floor is the value that
+/// minimizes disagreement with those rows:
+///
+/// | Floor | Fitted | Errors on the two adjacent stars |
+/// | --- | --- | --- |
+/// | 5★ | 0.9900 | 10 / 1,823 rows (0.5%) |
+/// | 4★ | 0.9350 | 254 / 5,503 rows (4.6%) |
+/// | 3★ | 0.8100 | 13 / 4,451 rows (0.3%) |
+///
+/// 0.9900 is also 247's published 5-star figure, so the two agree. The other
+/// two floors do **not** match any published scale and must not be "corrected"
+/// towards one: 0.8900 / 0.7900 were the first guess and they mis-band 17% of
+/// the history, almost all of it one star **too high** (1,052 of 1,075 errors).
+///
+/// The 4/3 floor is the loose one, because 247's 3-vs-4 star cut is really a
+/// rank cut (roughly the top 150) that the rating only approximates. 0.9350 is
+/// not a compromise, though — the 3-star ceiling lands within a thousandth of
+/// 0.9349 in nearly every class from 2018 on, so it is a real structural edge.
+/// Its residual error is one-sided in the safe direction: on the 2018+ era the
+/// bands actually write, 0.9350 leaves 28 inflated rows against 145 deflated.
+/// That asymmetry is deliberate. `star_rating` is served to the freshman and
+/// trajectory models as a **monotone-increasing** feature, so an over-awarded
+/// star inflates a projection while an under-awarded one only damps it.
+///
+/// Re-fit rather than re-guess if 247 rescales: run query 3 and take the
+/// numbers it prints.
+pub const COMPOSITE_STAR_BANDS: [(f32, i16); 3] = [(0.9900, 5), (0.9350, 4), (0.8100, 3)];
 
 /// Derive a 247 Composite star rating from a 0–1 composite rating.
 ///
