@@ -639,27 +639,18 @@ async fn player_compare(
         // Player UUIDs are season-scoped, so a slot pointing a 2026 UUID at
         // 2015 only resolves through natstat_id / torvik_pid — the same path
         // the detail routes take. Cross-year makes this the common case.
-        let resolved = queries::resolve_player_id_for_season(pool, slot.requested_id, slot.season)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("query failed: {e}") })),
-                )
-            })?;
-
-        // A slot that does not resolve gets an explicit unavailable entry
-        // rather than vanishing from the array: "not in Division I that year"
-        // is a legitimate, frequent cross-year answer, and a dropped element
-        // leaves the UI rendering three columns for four picks with no
-        // explanation. Positional alignment with `ids` is preserved.
+        //
         // Identity and season options are asked of the REQUESTED id, not the
         // resolved one: they are the two things an unavailable slot still owes
         // its column ("whose year is empty" and "which years would work"), so
         // they have to come from an id that exists whether or not the slot
         // resolved. Both are cross-season joins over the same human, so the
-        // answer is identical either way for a slot that did resolve.
-        let identity = tokio::try_join!(
+        // answer is identical either way for a slot that did resolve. Joined
+        // WITH the resolve rather than awaited after it — all three need only
+        // `slot.requested_id`, so one wave keeps the extra fields off the
+        // request's latency path.
+        let (resolved, requested_name, available_seasons) = tokio::try_join!(
+            queries::resolve_player_id_for_season(pool, slot.requested_id, slot.season),
             queries::get_player_name(pool, slot.requested_id),
             queries::get_player_available_seasons(pool, slot.requested_id),
         )
@@ -669,7 +660,13 @@ async fn player_compare(
                 Json(json!({ "error": format!("query failed: {e}") })),
             )
         })?;
+        let identity = (requested_name, available_seasons);
 
+        // A slot that does not resolve gets an explicit unavailable entry
+        // rather than vanishing from the array: "not in Division I that year"
+        // is a legitimate, frequent cross-year answer, and a dropped element
+        // leaves the UI rendering three columns for four picks with no
+        // explanation. Positional alignment with `ids` is preserved.
         let Some(resolved_id) = resolved else {
             players_data.push(unavailable_compare_slot(slot, &identity));
             continue;

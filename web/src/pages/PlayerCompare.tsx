@@ -540,10 +540,16 @@ export default function PlayerCompare() {
       setSlots([]);
       return;
     }
+    // A season picker can change the request on every keypress, so two fetches
+    // are easily in flight at once and they can land out of order. Without
+    // this the older answer wins and the page settles on a comparison the URL
+    // no longer describes, with nothing left to trigger a correction.
+    let cancelled = false;
     setLoading(true);
     setError(null);
     fetchPlayerCompare(ids, season)
       .then((r) => {
+        if (cancelled) return;
         // The API returns exactly one entry per `ids` slot, in request order:
         // a slot that doesn't resolve comes back unavailable rather than
         // disappearing, so the array already lines up with `ids` by index.
@@ -558,8 +564,15 @@ export default function PlayerCompare() {
           })),
         );
       })
-      .catch((e) => setError(e.message ?? 'Failed to load comparison'))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (!cancelled) setError(e.message ?? 'Failed to load comparison');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [ids, season]);
 
   // Unavailable slots are rendered in cross-year mode and dropped in
@@ -616,9 +629,24 @@ export default function PlayerCompare() {
     if (ids.includes(token) || ids.length >= maxPlayers) return;
     updateIds([...ids, token]);
   };
-  const removeSlot = (index: number) => updateIds(ids.filter((_, i) => i !== index));
-  const changeSlotSeason = (index: number, next: number) =>
-    updateIds(setSlotSeason(ids, index, next));
+  // `slotIndex` indexes the `ids` that produced the RENDERED slots, which is
+  // one request behind the URL while a refetch is in flight — remove a column
+  // and click a second one before the response lands, and that index now
+  // addresses a different token. Trust it only when the token still matches,
+  // and fall back to a value lookup (which is why `slotId` is carried at all).
+  const slotIndexIn = (slot: SlotKey): number =>
+    ids[slot.slotIndex] === slot.slotId ? slot.slotIndex : ids.indexOf(slot.slotId);
+
+  const removeSlot = (slot: SlotKey) => {
+    const i = slotIndexIn(slot);
+    if (i < 0) return;
+    updateIds(ids.filter((_, j) => j !== i));
+  };
+  const changeSlotSeason = (slot: SlotKey, next: number) => {
+    const i = slotIndexIn(slot);
+    if (i < 0) return;
+    updateIds(setSlotSeason(ids, i, next));
+  };
 
   // Don't offer a player the comparison already holds — but in cross-year mode
   // that's per YEAR, since the same player in two seasons is the case the mode
@@ -822,11 +850,11 @@ export default function PlayerCompare() {
                     seasons={p.available_seasons}
                     color={p.color}
                     label={p.available ? p.player.name : p.requested_name ?? 'this player'}
-                    onChange={(next) => changeSlotSeason(p.slotIndex, next)}
+                    onChange={(next) => changeSlotSeason(p, next)}
                   />
                 )}
                 <button
-                  onClick={() => removeSlot(p.slotIndex)}
+                  onClick={() => removeSlot(p)}
                   className="text-gray-500 hover:text-red-400"
                   aria-label="Remove"
                 >
@@ -867,7 +895,7 @@ export default function PlayerCompare() {
         </div>
       )}
 
-      {!loading && visibleSlots.length === 0 && (
+      {!loading && visibleSlots.length === 0 && droppedSlots.length === 0 && (
         <div className="bg-gray-800/50 border border-dashed border-gray-700 rounded-lg p-8 text-center text-gray-500 text-sm">
           Search for players above to begin comparing.
         </div>
@@ -887,7 +915,7 @@ export default function PlayerCompare() {
                   key={p.slotId + p.slotIndex}
                   p={p}
                   color={p.color}
-                  onRemove={() => removeSlot(p.slotIndex)}
+                  onRemove={() => removeSlot(p)}
                   showSeason={crossYear}
                 />
               ) : (
@@ -895,7 +923,7 @@ export default function PlayerCompare() {
                   key={p.slotId + p.slotIndex}
                   p={p}
                   color={p.color}
-                  onRemove={() => removeSlot(p.slotIndex)}
+                  onRemove={() => removeSlot(p)}
                 />
               ),
             )}
