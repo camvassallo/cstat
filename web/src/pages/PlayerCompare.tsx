@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { SeasonLink } from '../components/SeasonLink';
+import { Link, useSearchParams } from 'react-router-dom';
 import { conferenceLabel } from '../lib/conferences';
-import { useSeason } from '../components/season';
+import { seasonHref, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import {
   Radar,
@@ -218,17 +217,26 @@ function PlayerHeader({ p, color, onRemove }: { p: ComparePlayerResolved; color:
       style={{ borderLeftColor: color }}
     >
       <div className="min-w-0">
-        <SeasonLink
-          to={`/players/${player.id}`}
+        {/* Anchor these on the SLOT's season, not the page's. A slot can be
+            written `<uuid>@<year>`, and `player.id` is then the UUID for THAT
+            year — a link carrying the page season would resolve the id back to
+            a different season, or 404 on a player who wasn't in D-I then.
+            `seasonHref` still omits the param on the default season, so
+            same-season links are unchanged. */}
+        <Link
+          to={seasonHref(`/players/${player.id}`, p.season)}
           className="text-base font-bold hover:underline block truncate"
         >
           {player.name}
-        </SeasonLink>
+        </Link>
         <div className="text-xs text-gray-400 truncate">
           {player.team_id ? (
-            <SeasonLink to={`/teams/${player.team_id}`} className="hover:underline">
+            <Link
+              to={seasonHref(`/teams/${player.team_id}`, p.season)}
+              className="hover:underline"
+            >
               {player.team_name}
-            </SeasonLink>
+            </Link>
           ) : (
             player.team_name ?? 'Unknown'
           )}
@@ -332,17 +340,15 @@ export default function PlayerCompare() {
     setError(null);
     fetchPlayerCompare(ids, season)
       .then((r) => {
-        // Preserve URL order in case the API returns differently. Key on
-        // `requested_id`, not `player.id` — the API resolves each slot into
-        // its own season, which can hand back a different UUID for the same
-        // human. This page asks for one season, so unavailable slots are
-        // dropped here as before; cross-year mode renders them instead.
-        const byId = new Map(r.players.map((p) => [p.requested_id, p]));
-        setPlayers(
-          ids
-            .map((id) => byId.get(id))
-            .filter((p): p is ComparePlayerResolved => !!p && p.available),
-        );
+        // The API returns exactly one entry per `ids` slot, in request order:
+        // a slot that doesn't resolve comes back unavailable rather than
+        // disappearing, so the array already lines up with `ids` by index.
+        // Index is the only safe key — a slot may be written `<uuid>@<year>`,
+        // which equals no id in the payload, and cross-season resolution can
+        // hand back a different UUID than was asked for. This page asks for
+        // one season, so unavailable slots are dropped here as before;
+        // cross-year mode renders them instead.
+        setPlayers(r.players.filter((p): p is ComparePlayerResolved => p.available));
       })
       .catch((e) => setError(e.message ?? 'Failed to load comparison'))
       .finally(() => setLoading(false));

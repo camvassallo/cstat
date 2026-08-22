@@ -583,28 +583,53 @@ async fn player_compare(
     // League averages are what the "vs league average" shading is measured
     // against, so a slot rendered in 2015 has to be shaded against 2015 — one
     // object for the request season would be wrong for every off-season slot.
-    // Fetch one per distinct season present (at most MAX_COMPARE_PLAYERS + 1)
-    // and key them by season; `league_averages` stays as the request-season
-    // object so single-season callers see an unchanged payload.
+    // Fetch one per distinct season present (at most MAX_COMPARE_PLAYERS + 1);
+    // `league_averages` stays as the request-season object so single-season
+    // callers see an unchanged payload.
     let mut league_seasons: Vec<i32> = slots.iter().map(|s| s.season).collect();
     league_seasons.push(season);
     league_seasons.sort_unstable();
     league_seasons.dedup();
 
-    let mut league_averages_by_season = serde_json::Map::new();
-    for s in league_seasons {
-        let avg = queries::get_league_averages(pool, s).await.map_err(|e| {
+    // Concurrently, not in an await loop: this is one wave of round trips
+    // instead of up to five. On a same-host DB that is a wash (measured: 5
+    // seasons, 0.31s concurrent vs 0.35s sequential warm, parity cold), but
+    // the API talks to a remote Postgres where every serialized round trip
+    // costs a full RTT — the same shape that made the nightly's per-row loops
+    // stall. Folding the seasons into one `unnest`-driven query is the other
+    // obvious fix and measures ~2x SLOWER (0.62s vs 0.34s): the per-season
+    // form gets a much better plan, so parallelise it rather than replace it.
+    // Peak connections per request are unchanged — the per-slot `try_join!`
+    // below already holds six at once.
+    let mut fetches = tokio::task::JoinSet::new();
+    for s in league_seasons.iter().copied() {
+        let pool = pool.clone();
+        fetches.spawn(async move { (s, queries::get_league_averages(&pool, s).await) });
+    }
+    let mut averages = std::collections::HashMap::with_capacity(league_seasons.len());
+    while let Some(joined) = fetches.join_next().await {
+        let (s, result) = joined.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("league averages task failed: {e}") })),
+            )
+        })?;
+        let avg = result.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("query failed: {e}") })),
             )
         })?;
-        league_averages_by_season.insert(s.to_string(), json!(avg));
+        averages.insert(s, avg);
     }
-    let league_averages = league_averages_by_season
-        .get(&season.to_string())
-        .cloned()
-        .unwrap_or(Value::Null);
+
+    // Sorted `league_seasons` drives the insertion order, so the payload's
+    // season keys come out ascending regardless of how the map iterates.
+    let mut league_averages_by_season = serde_json::Map::new();
+    for s in &league_seasons {
+        league_averages_by_season.insert(s.to_string(), json!(averages.get(s)));
+    }
+    let league_averages = json!(averages.get(&season));
 
     let mut players_data = Vec::with_capacity(slots.len());
     for slot in &slots {
@@ -674,9 +699,11 @@ async fn player_compare(
     })))
 }
 
-/// The placeholder entry for a slot with no row in its season. Same key set as
-/// a resolved entry so the frontend can read it without branching on shape —
-/// only `available` and the null `player` distinguish it.
+/// The placeholder entry for a slot with no row in its season. Carries the same
+/// key set as a resolved entry, all empty, so anything that only reads stats
+/// needs no narrowing — `available` and the null `player` are what distinguish
+/// it. `ComparePlayerUnavailable` in `web/src/api/client.ts` mirrors this key
+/// set; keep the two in step.
 fn unavailable_compare_slot(slot: &CompareSlot) -> Value {
     json!({
         "requested_id": slot.requested_id,

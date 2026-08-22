@@ -1277,9 +1277,17 @@ export interface ComparePlayerResolved extends CompareSlotBase {
 /// A slot with no row in its season — most often "not in Division I that
 /// year". Returned in place rather than dropped, so the UI can say why a
 /// column is empty instead of silently rendering one fewer than was asked for.
+/// Carries the same key set as a resolved entry, all empty, so anything that
+/// only reads stats needs no narrowing — `available` and a null `player` are
+/// what distinguish it.
 export interface ComparePlayerUnavailable extends CompareSlotBase {
   available: false;
   player: null;
+  season_stats: null;
+  percentiles: null;
+  game_log: [];
+  torvik_stats: null;
+  archetype: null;
 }
 
 export type ComparePlayer = ComparePlayerResolved | ComparePlayerUnavailable;
