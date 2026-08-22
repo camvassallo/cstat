@@ -2,12 +2,30 @@
 //!
 //! `torvik_player_stats` is UNIQUE on `(torvik_pid, season)`, **not** on
 //! `(player_id, season)`: a few hundred `(player, season)` pairs carry two or
-//! three Torvik profiles for one human. Any `LEFT JOIN torvik_player_stats
-//! ... ON player_id = ... AND season = ...` therefore multiplies its row, and
-//! three read paths joined exactly that way -- `get_team_roster` (served a
-//! duplicated player, e.g. Mercyhurst 2026 at 15 rows for 14 players),
-//! `search_players` (duplicated season-stat rows), and
-//! `pick_or_pin_daily_puzzle` (inflated the candidate pool).
+//! three Torvik profiles. Any `LEFT JOIN torvik_player_stats ... ON player_id
+//! = ... AND season = ...` therefore multiplies its row, and three read paths
+//! joined exactly that way -- `get_team_roster` (served a duplicated player,
+//! e.g. Mercyhurst 2026 at 15 rows for 14 players), `search_players`
+//! (duplicated season-stat rows), and `pick_or_pin_daily_puzzle` (inflated
+//! the candidate pool).
+//!
+//! Two different things produce those pairs, and only one of them is what it
+//! looks like:
+//!
+//!   * **262 of the 287 locally are one human with two Torvik profiles at one
+//!     school**, carrying byte-identical stat lines -- Bernie Blunt 2026 is
+//!     the same GP, minutes and CAM under pids 74649 and 127223. Genuine
+//!     upstream duplication; collapsing loses nothing at all.
+//!   * **~19 are two DIFFERENT humans** who share a name and were both linked
+//!     to one `player_id` by `ingest/torvik.rs`. 2017 Jared Harper is
+//!     Auburn's (32 GP) and Fairfield's (12 GP) at once. `min(torvik_pid)`
+//!     picks the wrong one about half the time, and no query-side tiebreak
+//!     can do better -- the repair belongs in the linker (#313), after which
+//!     these pairs stop existing. Collapsing is still right for them: the
+//!     pre-fix behaviour was two indistinguishable rows, one equally wrong.
+//!
+//! `duplicate_pairs` deliberately does not separate the two. Both fan out,
+//! both must collapse, and the tests here are about the fan-out.
 //!
 //! The collapse takes the lowest `torvik_pid`, the same deterministic tiebreak
 //! #306 chose, so where duplicate profiles co-occur across seasons a human
@@ -295,38 +313,59 @@ async fn portle_pool_holds_each_candidate_once_and_pins_the_same_answer() {
     // `pick_or_pin_daily_puzzle` freezes its answer, so the draw can't be
     // re-run through the served function to observe it. Reproduce the eligible
     // CTE instead, both ways, and compare.
+    //
+    // The pool counts don't depend on the date, so they are checked once per
+    // season and only the pinned answer is swept across dates.
+    let mut exercised = 0usize;
     for &season in &seasons {
+        let probe = chrono::NaiveDate::from_ymd_opt(2999, 1, 1).unwrap();
+        let (bare_rows, bare_pairs, _) = portle_pool(&pool, JOIN_BARE, season, probe).await;
+        let (rows, pairs, _) = portle_pool(&pool, JOIN_COLLAPSED, season, probe).await;
+
+        // The collapse removes duplicate rows and nothing else.
+        assert_eq!(
+            rows, pairs,
+            "season {season}: pool holds {rows} rows for {pairs} (player, team) candidates",
+        );
+        assert_eq!(
+            bare_pairs, pairs,
+            "season {season}: the collapse dropped a candidate rather than a duplicate",
+        );
+
+        // Whether this season had anything to collapse at all. A season can
+        // hold duplicated profiles that never clear the pool's GP/MPG or
+        // answerable gates, and that is a legitimate data state — count it
+        // instead of asserting, and require that some season did.
+        if bare_rows > rows {
+            exercised += 1;
+        } else {
+            eprintln!(
+                "season {season}: no duplicated profile reaches the Portle \
+                 pool; nothing to exercise here"
+            );
+        }
+
+        // And no live puzzle moves. Both copies of a duplicated candidate
+        // carry the same `natstat_id`, so they hash identically and the
+        // minimum is unchanged — the fan-out inflated the pool without ever
+        // skewing the draw. Asserted rather than assumed, because it is the
+        // reason this call site needed no data fixup.
         for day in 1..=5 {
             let date = chrono::NaiveDate::from_ymd_opt(2999, 1, day).unwrap();
-            let (bare_rows, bare_pairs, bare_pick) =
-                portle_pool(&pool, JOIN_BARE, season, date).await;
-            let (rows, pairs, pick) = portle_pool(&pool, JOIN_COLLAPSED, season, date).await;
-
-            // The collapse removes candidate rows and nothing else.
-            assert_eq!(
-                rows, pairs,
-                "season {season}: pool holds {rows} rows for {pairs} (player, team) candidates",
-            );
-            assert!(
-                bare_rows > bare_pairs || bare_rows == rows,
-                "season {season}: pre-fix pool was already collapsed but the counts moved",
-            );
-            assert_eq!(
-                bare_pairs, pairs,
-                "season {season}: the collapse dropped a candidate rather than a duplicate",
-            );
-
-            // And no live puzzle moves. Both copies of a duplicated candidate
-            // carry the same `natstat_id`, so they hash identically and the
-            // minimum is unchanged — the fan-out never actually skewed the
-            // draw, it only inflated the pool. Asserted rather than assumed,
-            // because it is the reason this call site needed no data fixup.
+            let (_, _, bare_pick) = portle_pool(&pool, JOIN_BARE, season, date).await;
+            let (_, _, pick) = portle_pool(&pool, JOIN_COLLAPSED, season, date).await;
             assert_eq!(
                 bare_pick, pick,
                 "season {season} {date}: the collapse moved the pinned answer",
             );
         }
     }
+
+    assert!(
+        exercised > 0,
+        "no season's Portle pool held a duplicate — every assertion above \
+         passed vacuously",
+    );
 
     // The served path still pins something for the newest affected season —
     // the collapse must not have emptied the CTE.

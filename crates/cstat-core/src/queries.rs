@@ -1520,19 +1520,36 @@ pub async fn get_team_roster(
         -- One Torvik profile per (player, season), and the collapse is not
         -- optional. `torvik_player_stats` is UNIQUE on (torvik_pid, season),
         -- NOT on (player_id, season): a few hundred (player, season) pairs
-        -- carry two or three profiles for one human, so a bare join fans the
-        -- roster out and serves that player twice, with different CAM on each
-        -- copy. Mercyhurst 2026 returned 15 rows for 14 players. The
-        -- duplicate also spends two of the rotation slots the Predict roster
-        -- panels' top-N slice takes from this order as-is.
+        -- carry two or three profiles, so a bare join fans the roster out and
+        -- serves that player twice, with different CAM on each copy.
+        -- Mercyhurst 2026 returned 15 rows for 14 players. The duplicate also
+        -- spends two of the rotation slots the Predict roster panels' top-N
+        -- slice takes from this order as-is.
         --
         -- Lowest `torvik_pid` wins: the same deterministic tiebreak #306
         -- chose, so where duplicate profiles co-occur across seasons a human
-        -- keeps one identity every year. LATERAL rather than the DISTINCT ON
-        -- subquery the sibling call sites use, because this query is
-        -- single-team -- ~14 probes of `idx_torvik_player_stats_player`
-        -- instead of de-duplicating the whole season (0.6 ms vs 42 ms
-        -- locally, on a page that runs this twice).
+        -- keeps one identity every year.
+        --
+        -- The tiebreak is free for the overwhelming majority and arbitrary
+        -- for a known minority. 262 of the 287 duplicated pairs locally are
+        -- two profiles of ONE human at one school, carrying byte-identical
+        -- stat lines (Bernie Blunt 2026: same GP, same minutes, same CAM
+        -- under pids 74649 and 127223) -- Torvik minted a second pid, and
+        -- which one wins cannot matter. The other ~19 are TWO DIFFERENT
+        -- HUMANS sharing a name and wrongly linked to one `player_id` by the
+        -- ingest (2017 Jared Harper is Auburn's and Fairfield's at once);
+        -- there `min` picks the wrong human about half the time. That is a
+        -- linkage defect, not something a query-side tiebreak can fix -- see
+        -- #313, which repairs it at the source and makes those pairs cease to
+        -- exist. Collapsing is still the right move for them: the pre-fix
+        -- behaviour was two indistinguishable rows, one of them equally
+        -- wrong.
+        --
+        -- LATERAL rather than the DISTINCT ON subquery the sibling call sites
+        -- use, because this query is single-team -- ~14 probes of
+        -- `idx_torvik_player_stats_player` instead of de-duplicating the
+        -- whole season (0.6 ms vs 42 ms locally, on a page that runs this
+        -- twice).
         LEFT JOIN LATERAL (
             SELECT * FROM torvik_player_stats t
             WHERE t.player_id = p.id AND t.season = p.season
