@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { PlayerArchetype, SimilarPlayer } from '../api/client';
 import { classColor, classTagline, classTitle, provisionalMeta } from './archetypeColors';
-import { SeasonLink } from './SeasonLink';
+import { slotToken } from '../lib/compareSlots';
+import ModeToggle, { type ModeToggleOption } from './ModeToggle';
 import { seasonHref, useSeason } from './season';
 import { useDismissOnOutside } from './useDismissOnOutside';
 
@@ -218,10 +219,25 @@ export function ArchetypeBadge({
 // One slot is reserved for the current player, leaving 3 for selection here.
 const MAX_SIMILAR_COMPARE_SELECTIONS = 3;
 
+/// Which seasons the neighbour search draws from. `season` is the default and
+/// leaves this panel exactly as it was before cross-year existed.
+export type SimilarMode = 'season' | 'year';
+
+/// Wording is fixed by `ModeToggle`'s cross-year contract, so this panel, the
+/// Compare page and Predict all read the same. Hoisted to avoid re-allocating
+/// per render.
+const SIMILAR_MODE_OPTIONS: readonly ModeToggleOption<SimilarMode>[] = [
+  { value: 'year', label: 'Any year', title: 'Search every season for comparable players' },
+  { value: 'season', label: 'Season', title: 'Search only this season' },
+];
+
 export function SimilarPlayers({
   players,
   title = 'Most Similar Players',
   currentPlayerId,
+  mode,
+  onModeChange,
+  loading = false,
 }: {
   players: SimilarPlayer[];
   title?: string;
@@ -229,16 +245,52 @@ export function SimilarPlayers({
   /// appears below the carousel, deep-linking to /players/compare with this
   /// player as slot 1 and the selected similar players filling slots 2-4.
   currentPlayerId?: string;
+  /// Pass BOTH to put the "Any year | Season" toggle in the panel header. The
+  /// caller owns the mode because it owns the fetch — cross-year is a
+  /// different request, not a different way of rendering the same rows.
+  /// Omitting them keeps the panel read-only and header-toggle-free, which is
+  /// what a caller that fetches one fixed mode wants.
+  mode?: SimilarMode;
+  onModeChange?: (mode: SimilarMode) => void;
+  /// True while a request for a mode OTHER than the one `players` came from is
+  /// in flight. Only meaningful alongside the toggle: the cross-year search is
+  /// an order of magnitude slower than the single-season one (~280 ms vs
+  /// ~22 ms), so a flip with no feedback looks like a dead control.
+  ///
+  /// The caller is expected to pass an EMPTY `players` while this is true,
+  /// which is why the wait shows as "Searching…" rather than as the previous
+  /// mode's rows greyed out. Holding those rows would be worse than a blank:
+  /// the year suffix and the "same player" badge are rendered off `mode`, so
+  /// stale rows would be relabelled with the year policy of a mode they did
+  /// not come from.
+  loading?: boolean;
 }) {
   const navigate = useNavigate();
   const { season } = useSeason();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  if (players.length === 0) return null;
+
+  const showToggle = mode != null && onModeChange != null;
+  const crossYear = mode === 'year';
+
+  // Without the toggle there is nothing to interact with, so an empty list
+  // means an absent panel — the behaviour every caller had before cross-year.
+  // WITH the toggle the panel has to survive an empty result, or a mode that
+  // finds nothing takes away the only control that gets you back out of it.
+  if (players.length === 0 && !showToggle) return null;
 
   const compareEnabled = currentPlayerId != null;
+
+  // Selection is keyed by `player_id`, and flipping the mode swaps the whole
+  // set of neighbours underneath it. Resolve ticks against the CURRENT list so
+  // a stale one can neither be rendered nor eat a compare slot.
+  const byId = new Map(players.map((p) => [p.player_id, p]));
+  const selectedRows = [...selected]
+    .map((id) => byId.get(id))
+    .filter((p): p is SimilarPlayer => p != null);
+
   const toggle = (id: string) => {
     setSelected((prev) => {
-      const next = new Set(prev);
+      const next = new Set([...prev].filter((s) => byId.has(s)));
       if (next.has(id)) {
         next.delete(id);
       } else if (next.size < MAX_SIMILAR_COMPARE_SELECTIONS) {
@@ -248,17 +300,50 @@ export function SimilarPlayers({
     });
   };
   const launchCompare = () => {
-    if (!currentPlayerId || selected.size === 0) return;
-    const ids = [currentPlayerId, ...selected];
+    if (!currentPlayerId || selectedRows.length === 0) return;
+    // Cross-year: pin every slot to its own year, including this player's. The
+    // Compare page reads its mode back off the `@year` suffixes, so pinning is
+    // also what makes the destination open in cross-year mode. In season mode
+    // the tokens stay bare UUIDs and the link is byte-identical to before.
+    const ids = crossYear
+      ? [
+          slotToken(currentPlayerId, season),
+          ...selectedRows.map((p) => slotToken(p.player_id, p.season)),
+        ]
+      : [currentPlayerId, ...selectedRows.map((p) => p.player_id)];
     navigate(seasonHref(`/players/compare?ids=${ids.join(',')}`, season));
   };
 
   return (
-    <div className="bg-gray-800 rounded-lg p-5">
-      <h2 className="text-lg font-bold mb-1">{title}</h2>
-      {compareEnabled && (
+    <div className="bg-gray-800 rounded-lg p-5" aria-busy={loading || undefined}>
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-1">
+        <h2 className="text-lg font-bold">{title}</h2>
+        {showToggle && (
+          <ModeToggle
+            options={SIMILAR_MODE_OPTIONS}
+            value={mode}
+            onChange={onModeChange}
+            ariaLabel="Comparable-player search range"
+            className="self-start shrink-0"
+          />
+        )}
+      </div>
+      {crossYear && (
+        <p className="text-xs text-gray-500 mb-2 max-w-2xl">
+          Searching every season. Expect the closest matches to still lean
+          toward this player's own era — players shoot better and turn the ball
+          over less than they did a decade ago, so the same style of play puts
+          up different numbers in 2015 than it does now.
+        </p>
+      )}
+      {compareEnabled && players.length > 0 && (
         <p className="text-xs text-gray-500 mb-3">
           Tick up to {MAX_SIMILAR_COMPARE_SELECTIONS} to compare side by side.
+        </p>
+      )}
+      {players.length === 0 && (
+        <p className="text-sm text-gray-500">
+          {loading ? 'Searching…' : 'No comparable players found.'}
         </p>
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -268,14 +353,27 @@ export function SimilarPlayers({
           const prov = provisionalMeta(p);
           const isSelected = selected.has(p.player_id);
           const atCap =
-            !isSelected && selected.size >= MAX_SIMILAR_COMPARE_SELECTIONS;
+            !isSelected && selectedRows.length >= MAX_SIMILAR_COMPARE_SELECTIONS;
 
           const tileBody = (
             <>
               <div className="font-medium text-sm truncate pr-6">{p.name}</div>
               <div className="text-xs text-gray-400 truncate">
                 {p.team_name ?? '—'}
+                {/* The year only earns a slot when the list spans years; in
+                    season mode every row is the season already in the URL. */}
+                {crossYear && <span className="text-gray-500"> · {p.season}</span>}
               </div>
+              {/* Cross-year keeps the target's OWN other seasons, which are
+                  often the nearest neighbours there are. "This player, a year
+                  later" answers a different question from "someone else who
+                  plays like this", so it is labelled rather than passed off as
+                  a comp. */}
+              {p.is_self && (
+                <div className="mt-1 inline-block rounded bg-amber-900/40 px-1.5 py-px text-[10px] font-medium text-amber-200 ring-1 ring-amber-500/40">
+                  Same player, another season
+                </div>
+              )}
               <div className="flex items-center gap-2 mt-2">
                 <ClassTooltip cls={p.primary_class} extra={prov.note ?? undefined}>
                   <span
@@ -297,8 +395,18 @@ export function SimilarPlayers({
                     </span>
                   </ClassTooltip>
                 )}
+                {/* Titled because cross-year puts a SECOND year on this tile
+                    (the row's own season, next to the team). These two mean
+                    different things — this one is where a carried-over
+                    archetype label came from — and side by side with no
+                    explanation they read as a contradiction. */}
                 {prov.shortYear && (
-                  <span className="text-[10px] text-gray-500 lowercase">{prov.shortYear}</span>
+                  <span
+                    className="text-[10px] text-gray-500 lowercase"
+                    title={prov.note ?? undefined}
+                  >
+                    {prov.shortYear}
+                  </span>
                 )}
               </div>
               <div className="mt-2 flex items-center gap-2">
@@ -349,33 +457,40 @@ export function SimilarPlayers({
                   )}
                 </label>
               )}
-              <SeasonLink
-                to={`/players/${p.player_id}`}
+              {/* Anchor on the ROW's season, not the page's. Cross-year rows
+                  come from other years and player UUIDs are season-scoped, so
+                  a link carrying the page season would resolve back to a
+                  different season — or 404 on someone who wasn't in D-I then.
+                  In season mode `p.season` IS the page season and `seasonHref`
+                  still drops the param on the default year, so those links are
+                  unchanged. */}
+              <Link
+                to={seasonHref(`/players/${p.player_id}`, p.season)}
                 className="block p-3 hover:bg-gray-700/60 rounded transition-colors"
               >
                 {tileBody}
-              </SeasonLink>
+              </Link>
             </div>
           );
         })}
       </div>
-      {compareEnabled && (
+      {compareEnabled && players.length > 0 && (
         <div className="mt-4 flex items-center justify-between">
           <span className="text-xs text-gray-500">
-            {selected.size === 0
+            {selectedRows.length === 0
               ? `Select up to ${MAX_SIMILAR_COMPARE_SELECTIONS} players to compare`
-              : `${selected.size} of ${MAX_SIMILAR_COMPARE_SELECTIONS} selected`}
+              : `${selectedRows.length} of ${MAX_SIMILAR_COMPARE_SELECTIONS} selected`}
           </span>
           <button
             onClick={launchCompare}
-            disabled={selected.size === 0}
+            disabled={selectedRows.length === 0}
             className={`text-sm px-3 py-1.5 rounded font-medium transition-colors ${
-              selected.size === 0
+              selectedRows.length === 0
                 ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                 : 'bg-blue-600 hover:bg-blue-700 text-white'
             }`}
           >
-            Compare ({selected.size + 1})
+            Compare ({selectedRows.length + 1})
           </button>
         </div>
       )}
