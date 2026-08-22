@@ -4,7 +4,7 @@
 //!
 //! Fixtures captured 2026-08-19 from the class-of-2026 feeds, three rows each:
 //!
-//! * `recruits_2026_p1.json` — a signed 5-star, a committed-but-unsigned
+//! * `recruits_2026_p1.json` — a signed 4-star, a committed-but-unsigned
 //!   4-star, and an unranked uncommitted player (every `commit_status` branch).
 //! * `commits_2026_p1.json` — a ranked commit, an unranked international
 //!   commit, and a JUCO commit (the `currentInstitution.group` branch).
@@ -77,6 +77,51 @@ fn composite_rating_is_rescaled_to_zero_one() {
     );
 }
 
+/// The star trap, and the reason `star_rating` is derived from the rating
+/// rather than read off the feed.
+///
+/// These two captured rows are from the same class, on the same 0-1 composite,
+/// and the feeds' own star fields put them in the wrong order:
+///
+/// | Feed | Player | Rank | Composite | Feed says |
+/// | --- | --- | --- | --- | --- |
+/// | `commits/`  | Caleb Ourigou | 69 | 0.97627 | 4-star |
+/// | `recruits/` | Ralph Scott   | 76 | 0.97377 | **5**-star |
+///
+/// The lower-rated, lower-ranked player is the one the rankings feed calls a
+/// 5-star. Whatever scale that field is on, it is not a band of the composite
+/// rating stored beside it — and the captured composite-rankings page settles
+/// which side is wrong: 247 renders every player from rank 51 (0.9816) through
+/// rank 100 (0.9535) as 4-star. Both of these are 4-stars.
+///
+/// `tfs_recruits::composite_star_rating` therefore ignores `compositeStarRating`
+/// on both feeds and bands the rating instead, which is what the HTML transport
+/// has always effectively done by counting rendered glyphs.
+#[test]
+fn star_rating_is_derived_not_taken_from_the_feed() {
+    let scott = &rankings();
+    let scott = by_key(scott, 46160429);
+    let ourigou = &commits();
+    let ourigou = by_key(ourigou, 46154193);
+
+    // The raw feed values this test exists to override.
+    let raw_star = |row: &RecruitRow, ptr: &str| -> Option<i64> {
+        serde_json::from_str::<Value>(&row.raw_source)
+            .expect("raw_source round-trips")
+            .pointer(ptr)
+            .and_then(Value::as_i64)
+    };
+    assert_eq!(raw_star(scott, "/compositeStarRating"), Some(5));
+    assert_eq!(raw_star(ourigou, "/ranking/compositeStarRating"), Some(4));
+
+    // Scott is rated *below* Ourigou, so he cannot carry more stars.
+    let scott_rating = scott.composite_rating.unwrap();
+    let ourigou_rating = ourigou.composite_rating.unwrap();
+    assert!(scott_rating < ourigou_rating);
+    assert_eq!(scott.star_rating, Some(4));
+    assert_eq!(ourigou.star_rating, Some(4));
+}
+
 #[test]
 fn ranked_signed_recruit_parses() {
     let rows = rankings();
@@ -84,7 +129,9 @@ fn ranked_signed_recruit_parses() {
     assert_eq!(r.first_name.as_deref(), Some("Ralph"));
     assert_eq!(r.last_name.as_deref(), Some("Scott"));
     assert_eq!(r.composite_rank, Some(76));
-    assert_eq!(r.star_rating, Some(5));
+    // 4, not the 5 this row's `compositeStarRating` claims — see
+    // `star_rating_is_derived_not_taken_from_the_feed` above.
+    assert_eq!(r.star_rating, Some(4));
     assert_eq!(r.position_rank, Some(28));
     assert_eq!(r.state_rank, Some(12));
     assert_eq!(r.position.as_deref(), Some("SF"));

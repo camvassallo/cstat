@@ -503,11 +503,15 @@ pub async fn ingest_commits(
 /// `previous_rank` / `position_rank` / `state_rank`) are deliberately **not**
 /// written: the commits feed's visible `.score` is 247's proprietary 0–100
 /// rating, a different metric from the 0–1 composite, and its ranks read "NA"
-/// for the unranked players that are the whole point here. `star_rating` (an
-/// unambiguous 1–5 solid-star count) is persisted when present. (The JSON
-/// transport does expose a real composite under `ranking.*`, parsed onto the
-/// row for snapshot fidelity, but the rankings feed owns those columns and
-/// covers every ranked player — so the division of labor is unchanged.)
+/// for the unranked players that are the whole point here. `star_rating` is
+/// persisted when present — on the HTML transport it is an unambiguous count of
+/// solid star glyphs, and on the JSON transport it is banded from the composite
+/// rating by `tfs_recruits::composite_star_rating`, which is the same number by
+/// a different route. Neither reads the feeds' `compositeStarRating`; the two
+/// JSON feeds disagree with each other on it. (The JSON transport does expose a
+/// real composite under `ranking.*`, parsed onto the row for snapshot fidelity,
+/// but the rankings feed owns those columns and covers every ranked player — so
+/// the division of labor is unchanged.)
 ///
 /// One exception to the provenance gate, added with the JSON transport: the
 /// physical columns `height` / `weight` / `high_school` are **gap-filled** onto
@@ -523,8 +527,9 @@ pub async fn upsert_commit(
     year: i32,
 ) -> Result<(), RecruitIngestError> {
     let raw_player = serde_json::to_value(row)?;
-    // Parser reports 0 solid stars for unranked players; store NULL rather than
-    // a misleading "0-star".
+    // The HTML parser reports 0 solid stars for unranked players; store NULL
+    // rather than a misleading "0-star". A no-op on the JSON transport, where
+    // an unrated recruit already comes through as `None`.
     let star_rating = row.star_rating.filter(|&s| s > 0);
 
     sqlx::query(
