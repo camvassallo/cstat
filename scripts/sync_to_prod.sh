@@ -497,6 +497,18 @@ fi
 # has bitten. `class_year` is deliberately NOT a candidate — it is a class label
 # ('Fr'/'So'), not a season, and `player_season_projection` carries both.
 #
+# WHAT IT DOES NOT COVER, because a silent pass here should not be read as "this
+# push is safe": the comparison is season COVERAGE, so it sees a whole season
+# prod has and local lacks, and nothing finer. Two copies of the SAME season that
+# disagree row-for-row look identical to it. `player_archetypes` is the live
+# example — prod's current-season rows come from the nightly's Rust assign, local's
+# from a Python refit, and a push silently replaces prod's with the laptop's. That
+# one is self-correcting (the next nightly rewrites it, and §3 of
+# docs/tipoff_self_sufficiency_plan.md calls that correct), but the guard is not
+# what makes it safe, and a future table with within-season divergence and no
+# nightly rebuild would be clobbered with this check reporting nothing. Row-level
+# comparison is the ingest-frontier precondition in ROADMAP P1, still open.
+#
 # Fails OPEN (warn, continue to the confirm prompt) when prod cannot be read for
 # a table, because a table prod does not have yet is a legitimate first push and
 # refusing it would break bootstrap. The interactive confirm below still prints
@@ -520,9 +532,18 @@ if [[ -n "$REQUESTED_TABLES" ]]; then
       FROM \"$t\"" 2>/dev/null | tr -d '[:space:]' || true)
 
     # Seasons prod holds that local does not. `NOT IN ()` is a syntax error, so
-    # an empty local list becomes TRUE — every prod season is unreplaceable.
+    # an empty local list becomes TRUE — every prod season is unreplaceable,
+    # which is the right answer: restoring an empty local table over prod
+    # deletes everything it had.
+    #
+    # Explicit `if` rather than `[[ … ]] && …`, matching the convention at the
+    # sequence-leak guard below: under `set -e` an AND-list whose test fails
+    # yields a non-zero status for the whole list, and that is not an idiom to
+    # reintroduce in a guard that decides whether prod rows get deleted.
     PRED="TRUE"
-    [[ -n "$LOCAL_SEASONS" ]] && PRED="$SEASON_COL::text NOT IN ($LOCAL_SEASONS)"
+    if [[ -n "$LOCAL_SEASONS" ]]; then
+      PRED="$SEASON_COL::text NOT IN ($LOCAL_SEASONS)"
+    fi
     if ! MISSING=$("${PSQL[@]}" "$PROD_URL" -t -A -F' ' -c "
       SELECT $SEASON_COL::text, count(*)
       FROM \"$t\" WHERE $PRED
