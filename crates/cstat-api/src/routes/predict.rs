@@ -16,7 +16,8 @@ use uuid::Uuid;
 use cstat_core::features::TeamSeason;
 use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES};
 use cstat_core::projection::{
-    self, Attribution, BlendClock, NO_PREDICTION_DATA_PREFIX, ProjectionSummary, Venue,
+    self, Attribution, BlendClock, INVALID_MATCHUP_PREFIX, NO_PREDICTION_DATA_PREFIX,
+    ProjectionSummary, Venue,
 };
 use cstat_core::queries;
 
@@ -65,6 +66,34 @@ pub async fn predict_projection(
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/predict", get(predict))
+}
+
+/// Map a prediction-engine error string onto an HTTP status.
+///
+/// Pure and separately tested, because getting it wrong is expensive in a
+/// direction that isn't visible from the response: a 5xx here is tapped by
+/// `guards.rs` and posted to `#errors-api`, so mis-classifying a client
+/// mistake pages a human.
+///
+/// - [`NO_PREDICTION_DATA_PREFIX`] → **404**. We looked and hold nothing for
+///   this team/season. Covers a not-yet-D1 program, a typo, AND the routine
+///   ingest-before-compute window. Deliberately never pages: the request path
+///   can't reliably tell a typo from a real data outage, so any attempt to
+///   alert here false-fires on normal states, DB blips, and bad input.
+///   Detecting a genuine data gap (a team that played but lost its stats /
+///   roster rows) is the compute pipeline's job — its post-run invariant
+///   checks (ROADMAP M5), which have full context and no typo noise.
+/// - [`INVALID_MATCHUP_PREFIX`] → **400**. The question itself was malformed
+///   (today: point-in-time across two seasons), so nothing was looked up.
+/// - anything else → **500**, a genuine server fault, and it pages.
+fn predict_error_status(e: &str) -> StatusCode {
+    if e.starts_with(NO_PREDICTION_DATA_PREFIX) {
+        StatusCode::NOT_FOUND
+    } else if e.starts_with(INVALID_MATCHUP_PREFIX) {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
 }
 
 #[derive(Deserialize)]
@@ -187,27 +216,14 @@ async fn predict(
     )
     .await
     .map_err(|e| {
-        // Missing feature-extraction data → 404 (client error): we can't predict
-        // this matchup. Covers a not-yet-D1 program, a typo, AND the routine
-        // ingest-before-compute window. Deliberately never 500/pages: the request
-        // path can't reliably tell a typo from a real data outage, so any attempt
-        // to page here false-fires on normal states, DB blips, and bad input.
-        // Detecting a genuine data gap (a team that played but lost its stats /
-        // roster rows) is the compute pipeline's job — its post-run invariant
-        // checks (ROADMAP M5), which have full context and no typo noise. We log
-        // it so it's at least visible in server logs in the meantime.
-        if e.starts_with(NO_PREDICTION_DATA_PREFIX) {
+        let status = predict_error_status(&e);
+        if status != StatusCode::INTERNAL_SERVER_ERROR {
             tracing::warn!(
-                home = %params.home, away = %params.away, season,
-                "predict: no prediction data for this matchup — returning 404"
+                home = %params.home, away = %params.away, season, %status,
+                "predict: client-side prediction failure — {e}"
             );
-            (StatusCode::NOT_FOUND, Json(json!({ "error": e })))
-        } else {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e })),
-            )
         }
+        (status, Json(json!({ "error": e })))
     })?;
 
     // Early-season preseason × pit blend (ROADMAP §6) — see
@@ -512,6 +528,37 @@ mod tests {
             season: None,
             as_of_date: None,
         }
+    }
+
+    #[test]
+    fn prediction_errors_map_to_the_right_status_and_only_real_faults_page() {
+        // Missing data → 404. Never a 5xx: the `guards.rs` tap posts every 5xx
+        // to #errors-api, and a typo'd team name must not page anyone.
+        assert_eq!(
+            predict_error_status(&format!(
+                "{NO_PREDICTION_DATA_PREFIX}: one or both teams have no data for season 2021"
+            )),
+            StatusCode::NOT_FOUND
+        );
+        // Malformed question → 400. Same no-paging requirement, different
+        // cause: nothing was looked up, so 404 would misdescribe it.
+        assert_eq!(
+            predict_error_status(&format!(
+                "{INVALID_MATCHUP_PREFIX}: point-in-time predictions are single-season; \
+                 got home 2015 vs away 2026"
+            )),
+            StatusCode::BAD_REQUEST
+        );
+        // Anything unrecognised stays a 500 — a genuine fault SHOULD page.
+        assert_eq!(
+            predict_error_status("feature extraction failed: pool timed out"),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        // The two tagged prefixes must stay distinguishable from each other;
+        // if one ever became a prefix of the other this classifier would
+        // silently collapse two outcomes into one.
+        assert!(!NO_PREDICTION_DATA_PREFIX.starts_with(INVALID_MATCHUP_PREFIX));
+        assert!(!INVALID_MATCHUP_PREFIX.starts_with(NO_PREDICTION_DATA_PREFIX));
     }
 
     #[test]

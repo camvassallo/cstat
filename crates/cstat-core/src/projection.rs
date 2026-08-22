@@ -114,6 +114,19 @@ pub enum Attribution {
 /// other sqlx error is a genuine failure and keeps its 500.
 pub const NO_PREDICTION_DATA_PREFIX: &str = "no prediction data";
 
+/// Prefix marking a matchup the engine refuses to answer *as asked* — the
+/// request combined options that have no coherent joint meaning, rather than
+/// naming data we happen not to hold. Today that is exactly one case:
+/// point-in-time plus two different seasons (see [`predict_matchup`]).
+///
+/// It needs its own prefix because the route's two existing outcomes are both
+/// wrong for it. [`NO_PREDICTION_DATA_PREFIX`] would claim we looked and found
+/// nothing, when in fact the question was malformed; and the untagged fallback
+/// is a 500, which the `guards.rs` 5xx tap posts to `#errors-api` — paging a
+/// human for a bad query string is the precise false-fire the route's error
+/// classifier was written to avoid. The route maps this to **400**.
+pub const INVALID_MATCHUP_PREFIX: &str = "invalid matchup";
+
 /// Turn a feature-extraction sqlx error into the route-facing message, tagging
 /// the missing-data case with [`NO_PREDICTION_DATA_PREFIX`] (see there).
 fn classify_feature_error(
@@ -251,11 +264,14 @@ pub async fn predict_matchup(
             // cohort map spans one season's players), so a cross-era request
             // cannot reach it. Callers that can produce two seasons — only
             // the predict route, once #296 lands — reject the combination at
-            // the edge with a 400 that can explain itself; this is the
-            // backstop for anything that does not.
+            // the edge, where they can say which query param to drop; this is
+            // the backstop for anything that does not. Tagged
+            // INVALID_MATCHUP_PREFIX so that backstop answers 400 rather than
+            // a 500 that pages #errors-api over a malformed request.
             if home.season != away.season {
                 return Err(format!(
-                    "point-in-time predictions are single-season; got home {} vs away {}",
+                    "{INVALID_MATCHUP_PREFIX}: point-in-time predictions are single-season; \
+                     got home {} vs away {}",
                     home.season, away.season
                 ));
             }
