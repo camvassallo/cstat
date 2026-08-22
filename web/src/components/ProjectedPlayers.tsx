@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
-import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
+import type { ColDef } from 'ag-grid-community';
 import {
   fetchProjectedPlayers,
   type ProjectedPlayer,
@@ -13,8 +13,6 @@ import { classColor } from './archetypeColors';
 import { agNullsBottom } from './tableSort';
 import { TableToolbar, TableSearchInput } from './TableToolbar';
 import { seasonHref } from './season';
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 // Cohort chip. Returners/transfers carry a real base-season player row (and a
 // link); freshmen are synthesized from a recruit commit (no player page).

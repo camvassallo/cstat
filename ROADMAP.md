@@ -1838,12 +1838,24 @@ saturated server still passes its platform healthcheck):
   (fail fast when the pool is saturated) and a 15s per-connection
   `statement_timeout` (kill runaway queries) — API pool only; the ingest/compute
   CLI keeps the unguarded `connect` so its long batch writes aren't capped.
-- **Immutable SPA asset caching** (`static_asset_cache`): content-hashed
+- **SPA cache policy** (`spa_cache_control`): three cases, all explicit,
+  because `ServeDir` sets no `Cache-Control` of its own. Content-hashed
   `/assets/*` build files get `Cache-Control: public, max-age=31536000,
-  immutable` (the Vite filename hash is the cache-buster). index.html / favicon
-  are excluded so they fall through to `ServeDir`'s ETag revalidation and a
-  deploy is picked up immediately. Applied by wrapping the static fallback in a
-  nested `Router` so the layer covers it unambiguously.
+  immutable` (the Vite filename hash is the cache-buster). A **missing**
+  `/assets/*` becomes a `404` with `no-store` rather than being allowed through
+  as the HTML shell — `ServeDir`'s fallback would otherwise answer an unknown
+  hashed chunk with `200 text/html`, and stamping that immutable would pin
+  index.html under a live chunk URL at the edge for a year. The shell itself
+  would get `no-cache` (store, but revalidate) if it arrived without a policy
+  of its own — a backstop that does **not** fire today, since #279 renders every
+  document through `meta::page` with `public, max-age=300` so it can inject
+  `rel="canonical"`, and the layer never overwrites a handler's choice. The
+  five-minute window that leaves on documents naming content-hashed assets is
+  tracked in #276. Applied by wrapping the static
+  fallback in a nested `Router` so the layer covers it unambiguously. Note this
+  covers the SPA fallback router only: the OG meta documents
+  (`/players/{id}`, `/teams/{id}`, `/coaches/{id}`) are on the main router and
+  keep their own `public, max-age=300` from `routes::meta::page`.
 Follow-up (deferred): an optional Cloudflare cache-purge call wired into
 `sync_to_prod.sh` so a prod push invalidates the edge immediately.
 

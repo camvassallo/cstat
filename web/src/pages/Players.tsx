@@ -1,11 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  type ColDef,
-} from 'ag-grid-community';
+import type { ColDef } from 'ag-grid-community';
 import { fetchPlayers, type PlayerRow } from '../api/client';
 import { conferenceLabel } from '../lib/conferences';
 import { gridTheme } from '../theme';
@@ -29,8 +25,6 @@ import {
   useSeason,
 } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');
 

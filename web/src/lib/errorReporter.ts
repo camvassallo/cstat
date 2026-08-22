@@ -70,6 +70,68 @@ function report(r: ClientErrorReport): void {
 }
 
 /**
+ * Collapses a pathname to its route shape by replacing entity ids with `:id`.
+ *
+ * The dedup key has to separate two different routes while still merging many
+ * hits on the SAME route. A raw pathname does the first and breaks the second:
+ * `/players/<uuid>` is a distinct string per player, so a deploy that breaks
+ * `PlayerDetail` for everyone would send a fresh report for each player a user
+ * opened — up to `MAX_REPORTS_PER_LOAD` copies of one bug, where the uncaught
+ * path (keyed on a stable `filename:lineno:colno`) sent exactly one.
+ *
+ * Every entity route here is UUID-keyed (`/teams/:id`, `/players/:id`,
+ * `/players/:id/progression`, `/coaches/:id`), so matching UUID segments is
+ * enough and keeps this independent of the router.
+ */
+export function routePattern(pathname: string): string {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  return pathname
+    .split('/')
+    .map((seg) => (UUID.test(seg) ? ':id' : seg))
+    .join('/')
+}
+
+/**
+ * Report an error that a React error boundary caught.
+ *
+ * A boundary changes which reporting path React takes, and only one of the two
+ * reaches the listeners above. An UNCAUGHT error goes through
+ * `defaultOnUncaughtError` -> `reportGlobalError`, which fires the window
+ * `error` event; a CAUGHT one goes through `defaultOnCaughtError`, which only
+ * calls `console.error` (react-dom 19.2.4). So adding `RouteErrorBoundary`
+ * would have silently taken every route crash out of #errors-web unless the
+ * boundary reports it itself. Routed through the same `report` as the global
+ * path, so the dedup and per-load cap still apply.
+ */
+export function reportCaughtError(error: unknown, componentStack?: string): void {
+  const err = error instanceof Error ? error : null
+  report({
+    kind: 'error',
+    message: err?.message || String(error) || 'Unknown error',
+    // `report` dedups on `kind|message|source`. The uncaught path fills
+    // `source` from the ErrorEvent's `filename:lineno:colno`, which separated
+    // otherwise-identical messages; a boundary has no equivalent, and leaving
+    // it empty would collapse two DIFFERENT routes failing with the same
+    // common message ("Cannot read properties of undefined (reading 'map')")
+    // into one report, silently dropping the second bug. The route PATTERN is
+    // the discriminator a boundary does have — see `routePattern` for why the
+    // raw pathname is the wrong granularity.
+    source: routePattern(window.location.pathname),
+    // Component stack FIRST: the server caps `stack` at 600 chars, and in a
+    // production build every frame of a minified JS stack carries a full
+    // hashed-chunk URL (~70-90 chars each), so 8-10 frames exhaust the budget
+    // on their own. Whichever trace goes second is the one that gets cut — and
+    // for a boundary-caught error the component stack is the part worth
+    // keeping, since it names the route and component tree that failed, while
+    // the minified JS frames say little without sourcemaps and the error text
+    // is already in `message`.
+    stack: [componentStack, err?.stack].filter(Boolean).join('\n'),
+    page: window.location.href,
+    user_agent: navigator.userAgent,
+  })
+}
+
+/**
  * Install the global `error` / `unhandledrejection` listeners. Call once at
  * startup, before the app mounts. Idempotent-safe to call once.
  */

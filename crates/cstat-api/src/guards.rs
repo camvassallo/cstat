@@ -126,23 +126,101 @@ pub async fn load_shed(State(sem): State<Arc<Semaphore>>, req: Request, next: Ne
 /// emits `/assets/<name>-<hash>.{js,css}`; the hash changes on every content
 /// change, so these are safe to cache forever. `index.html`, `/favicon.png`,
 /// and other un-hashed files are deliberately excluded so a deploy is picked up
-/// immediately (they fall through to `ServeDir`'s ETag/Last-Modified
-/// revalidation instead).
+/// immediately — the HTML shell gets an explicit `no-cache` from
+/// `spa_cache_control`, and the rest fall through to `ServeDir`'s
+/// `Last-Modified` revalidation (it emits no ETag).
 fn is_immutable_asset_path(path: &str) -> bool {
     path.starts_with("/assets/")
 }
 
-/// Long-cache content-hashed SPA build assets (`/assets/*`). Applied app-wide
-/// (outermost) so it wraps the static fallback service; a no-op on every other
-/// path, including `/api/*` (which carry their own short-TTL `Cache-Control`).
-pub async fn static_asset_cache(req: Request, next: Next) -> Response {
+/// Whether a response is the SPA HTML shell rather than the file that was asked
+/// for. `ServeDir` is wired with `.fallback(ServeFile::new(index.html))` so a
+/// path it cannot find yields `index.html` with a 200 — right for client-side
+/// routes (`/predict`, `/teams/<id>`), wrong for `/assets/*`, which are real
+/// files and never routes.
+fn is_spa_html_fallback(resp: &Response) -> bool {
+    resp.headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"))
+}
+
+/// The response for an `/assets/*` path that is not on disk.
+///
+/// `no-store` is load-bearing and not merely tidy. This 404 is reachable in the
+/// same rolling-deploy window as the HTML fallback it replaces — a client
+/// holding the new `index.html` whose chunk request lands on a container still
+/// serving the old build — so the URL it is denying is a **live** one that will
+/// resolve moments later. A cacheable error there just re-runs the original bug
+/// with a shorter fuse: the edge pins a 404 on a good chunk URL, every visitor
+/// behind it fails, and `RouteErrorBoundary`'s reload cannot help, because the
+/// fresh `index.html` names the very URL the edge is refusing. Caches apply
+/// their own default TTL to a 404 that carries no directive, so the directive
+/// has to be explicit.
+fn asset_miss_response() -> Response {
+    let mut resp = StatusCode::NOT_FOUND.into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
+}
+
+/// The SPA's whole cache policy, in one layer over the static file service.
+/// Three cases, each of which has to be explicit because `ServeDir` sets no
+/// `Cache-Control` of its own:
+///
+/// 1. A content-hashed build asset (`/assets/*`) is immutable — the hash is the
+///    cache-buster, so it can be pinned for a year.
+/// 2. A MISSING `/assets/*` becomes an uncacheable 404 (see below, and
+///    `asset_miss_response`).
+/// 3. An HTML document that arrived WITHOUT a `Cache-Control` of its own gets
+///    `no-cache` — store it, but revalidate before use — so a document can
+///    never be merely heuristically cacheable (RFC 9111 §4.2.2).
+///
+///    Read this as a backstop, not as a live guarantee: **it does not fire in
+///    production today**. Since #279 every document is rendered by
+///    `meta::spa_document` -> `meta::page`, which sets `public, max-age=300` in
+///    order to inject `rel="canonical"`, and this layer deliberately never
+///    overwrites a header a handler already chose. So the shell IS cacheable
+///    for five minutes, and the deploy hole that opens is real and tracked in
+///    #276: an intermediary can serve the PREVIOUS build's HTML after a deploy,
+///    every chunk URL it names then 404s by rule 2, `RouteErrorBoundary`
+///    reloads straight back into the same stale document, spends its one-shot
+///    guard and strands the tab — `location.reload()` bypasses the browser's
+///    own cache but not an intermediary's. Do not build on rule 3 holding
+///    until #276 closes it.
+///
+/// A missing `/assets/*` is turned into a 404 rather than being allowed through
+/// as the HTML shell. Both halves of that matter, and the combination is what
+/// makes it severe. `ServeDir`'s fallback answers an unknown hashed chunk with
+/// `200 text/html`, and the immutable stamp below keyed only on the `/assets/`
+/// prefix — so a CDN would cache `index.html` under a **live** chunk URL for a
+/// year and every visitor behind that edge would get a permanently broken app.
+/// Dropping only the header is not enough: Cloudflare caches `.js` by extension
+/// on its own, so the response has to stop being a success. Reachable during a
+/// rolling deploy, when a client holding the new `index.html` can have its chunk
+/// request routed to a container still serving the old build — and route
+/// code-splitting (issue #267) took the app from 2 hashed URLs fetched with the
+/// document to ~35 fetched lazily, long afterwards.
+pub async fn spa_cache_control(req: Request, next: Next) -> Response {
     let is_asset = is_immutable_asset_path(req.uri().path());
     let mut resp = next.run(req).await;
-    if is_asset && resp.status().is_success() {
+    if !resp.status().is_success() {
+        return resp;
+    }
+    let is_html = is_spa_html_fallback(&resp);
+    if is_asset {
+        // An asset path that came back as HTML is the SPA fallback standing in
+        // for a file that is not there.
+        if is_html {
+            return asset_miss_response();
+        }
         resp.headers_mut().insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static(IMMUTABLE_ASSET_CACHE_CONTROL),
         );
+    } else if is_html && !resp.headers().contains_key(header::CACHE_CONTROL) {
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     }
     resp
 }
@@ -352,6 +430,147 @@ mod tests {
         assert!(!is_immutable_asset_path("/favicon.png"));
         // API paths carry their own short-TTL header, not the immutable one.
         assert!(!is_immutable_asset_path("/api/teams/rankings"));
+    }
+
+    #[test]
+    fn spa_html_fallback_is_detected_by_content_type() {
+        let with_ct = |ct: &str| {
+            let mut r = StatusCode::OK.into_response();
+            r.headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_str(ct).unwrap());
+            r
+        };
+        // A missing /assets/* falls through to index.html — the case that must
+        // never be stamped immutable (see `spa_cache_control`).
+        assert!(is_spa_html_fallback(&with_ct("text/html")));
+        assert!(is_spa_html_fallback(&with_ct("text/html; charset=utf-8")));
+        // Real build assets are served as themselves and stay cacheable.
+        assert!(!is_spa_html_fallback(&with_ct("text/javascript")));
+        assert!(!is_spa_html_fallback(&with_ct("text/css")));
+        // No content-type at all is not a reason to reject.
+        assert!(!is_spa_html_fallback(&StatusCode::OK.into_response()));
+    }
+
+    /// The middleware over a `ServeDir` + fallback, because the branches ARE
+    /// the site's caching contract and the helper tests above only pin their
+    /// pieces. A regression in any of them is invisible locally and then pinned
+    /// at an edge — for a year, in the `immutable` case.
+    ///
+    /// The fallback here returns HTML with its OWN `Cache-Control`, mirroring
+    /// `meta::spa_document` in `main.rs`, which since #279 renders every
+    /// document through `meta::page` with `public, max-age=300` so it can
+    /// inject `rel="canonical"`. That is the case production actually
+    /// exercises, and asserting the layer leaves that header alone is the point
+    /// — an earlier version of this test used a bare `ServeFile` and asserted
+    /// the shell came back `no-cache`, which prod does not do.
+    #[tokio::test]
+    async fn spa_cache_control_covers_asset_hit_asset_miss_and_shell() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::response::Html;
+        use axum::routing::get as get_route;
+        use tower::ServiceExt;
+        use tower_http::services::ServeDir;
+
+        // Minimal stand-in for a Vite build: one hashed asset + the shell.
+        let dir = std::env::temp_dir().join(format!("cstat-spa-test-{}", std::process::id()));
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("index-abc123.js"), "export default 1;").unwrap();
+        std::fs::write(dir.join("index.html"), "<!doctype html><html></html>").unwrap();
+
+        // Stands in for `meta::spa_document`: HTML, with its own header.
+        let document = get_route(|| async {
+            (
+                [(header::CACHE_CONTROL, "public, max-age=300")],
+                Html("<!doctype html><html></html>"),
+            )
+        });
+        // ...and one that sets none, to exercise the backstop branch.
+        let bare_document = get_route(|| async { Html("<!doctype html><html></html>") });
+
+        let app: Router<()> = Router::new()
+            .fallback_service(
+                ServeDir::new(&dir)
+                    // Mirrors main.rs. Left on, ServeDir answers `/` out of
+                    // index.html itself and never reaches the handler — which is
+                    // why #279 turned it off, so the homepage gets a canonical
+                    // like every other document.
+                    .append_index_html_on_directories(false)
+                    .fallback(document),
+            )
+            .layer(axum::middleware::from_fn(spa_cache_control));
+        let bare_app: Router<()> = Router::new()
+            .fallback_service(
+                ServeDir::new(&dir)
+                    .append_index_html_on_directories(false)
+                    .fallback(bare_document),
+            )
+            .layer(axum::middleware::from_fn(spa_cache_control));
+
+        let get = |uri: &str| {
+            let app = app.clone();
+            let uri = uri.to_string();
+            async move {
+                app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+            }
+        };
+        let cc = |r: &Response| {
+            r.headers()
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap().to_string())
+        };
+
+        // 1. A real hashed asset is pinned forever.
+        let hit = get("/assets/index-abc123.js").await;
+        assert_eq!(hit.status(), StatusCode::OK);
+        assert_eq!(cc(&hit).as_deref(), Some(IMMUTABLE_ASSET_CACHE_CONTROL));
+
+        // 2. A missing one must NOT come back as the 200-HTML shell, and must
+        //    not be cacheable — the deploy window makes that URL live again.
+        let miss = get("/assets/index-deadbeef.js").await;
+        assert_eq!(miss.status(), StatusCode::NOT_FOUND);
+        assert_eq!(cc(&miss).as_deref(), Some("no-store"));
+
+        // 3. A document that chose its own policy keeps it — the layer must not
+        //    overwrite what a handler decided. This is the live behaviour: every
+        //    SPA document is `public, max-age=300` from `meta::page`. The deploy
+        //    window that TTL opens on documents naming hashed assets is tracked
+        //    in #276, not papered over here.
+        for uri in ["/", "/predict"] {
+            let shell = get(uri).await;
+            assert_eq!(shell.status(), StatusCode::OK, "{uri}");
+            assert_eq!(cc(&shell).as_deref(), Some("public, max-age=300"), "{uri}");
+        }
+
+        // 4. The backstop: HTML arriving with no policy of its own gets
+        //    `no-cache`, so a document can never be heuristically cached.
+        for uri in ["/", "/predict"] {
+            let shell = bare_app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(shell.status(), StatusCode::OK, "{uri}");
+            assert_eq!(cc(&shell).as_deref(), Some("no-cache"), "{uri}");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn asset_miss_is_a_404_that_caches_cannot_pin() {
+        let resp = asset_miss_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        // The denied URL is live again as soon as the deploy settles, so an
+        // edge must not be allowed to hold this answer for its default 404 TTL.
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
     }
 
     #[test]

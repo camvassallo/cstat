@@ -149,14 +149,23 @@ async fn boot_and_serve() -> Result<()> {
     let spa_files = ServeDir::new(&spa_dir)
         .append_index_html_on_directories(false)
         .fallback(get(routes::meta::spa_document).with_state(state.clone()));
-    // Wrap the static service so content-hashed `/assets/*` get a 1-year
-    // immutable `Cache-Control` (the hash is the cache-buster), while
-    // index.html / favicon fall through to ServeDir's ETag revalidation so a
-    // deploy is picked up immediately. A nested `Router` makes the layer wrap
-    // the fallback service unambiguously.
+    // Wrap the static service with the SPA cache policy: content-hashed
+    // `/assets/*` get a 1-year immutable `Cache-Control` (the hash is the
+    // cache-buster), and a MISSING one becomes an uncacheable 404 rather than
+    // being let through as the HTML shell. A nested `Router` makes the layer
+    // wrap the fallback service unambiguously.
+    //
+    // The layer's third branch — `no-cache` on an HTML document — is a backstop
+    // only. Since #279 every document is rendered by `meta::page`, which sets
+    // its own `public, max-age=300` in order to inject `rel="canonical"`, and
+    // the layer deliberately does not overwrite a header a handler already
+    // chose. The branch therefore fires only if some future HTML response
+    // arrives without one. That TTL on documents that name build-specific
+    // asset URLs is the deploy hazard tracked in #276 — now site-wide rather
+    // than the three OG routes it was filed for.
     let spa: Router<()> = Router::new()
         .fallback_service(spa_files)
-        .layer(from_fn(guards::static_asset_cache));
+        .layer(from_fn(guards::spa_cache_control));
 
     // Serving guards layered onto the data routes only (NOT health/status):
     //   - cache_headers: short-TTL `Cache-Control` so a CDN/browser can serve

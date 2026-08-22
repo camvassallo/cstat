@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
-import { AllCommunityModule, ModuleRegistry, type ColDef } from 'ag-grid-community';
+import type { ColDef } from 'ag-grid-community';
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
 import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { gridTheme } from '../theme';
@@ -59,8 +59,6 @@ function adjEmTierColor(tier: AdjEmTier | null): string {
   if (tier === 'Elite') return BAND_CHIP_TOP_STRONG;
   return BAND_CHIP_CLASS[ADJ_EM_TIER_BAND[tier]];
 }
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 const fmt = (v: number | null, d = 1) => (v != null ? v.toFixed(d) : '—');
 const pct = (v: number | null) => (v != null ? (v * 100).toFixed(1) : '—');
