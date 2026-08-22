@@ -35,7 +35,7 @@ export function shortDate(iso: string): string {
 /// disagree in small ways (portle rounds the inches remainder, the rest floor
 /// it; the null handling differs three ways). This is the shared one for new
 /// callers; converging the existing four is a follow-up (#315) rather than a
-/// drive-by, since two of them feed snapshot-tested surfaces.
+/// drive-by, since `portle`'s copy has committed test expectations of its own.
 ///
 /// Rounds the TOTAL inches before splitting, rather than rounding the
 /// remainder the way `portle` does. Rounding the remainder can carry past 11
