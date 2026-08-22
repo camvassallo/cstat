@@ -1484,23 +1484,37 @@ export interface PriorMeeting {
   player_box: PlayerGameBox[];
 }
 
-export function fetchPrediction(
-  home: string,
-  away: string,
-  venue: Venue,
-  season?: number,
-  asOfDate?: string,
-) {
+export interface PredictRequest {
+  home: string;
+  away: string;
+  venue: Venue;
+  /// Site-wide season. Both sides fall back to it, so a request that names
+  /// nothing else is the single-season path the page has always sent.
+  season?: number;
+  /// Per-side season overrides. Naming two different years is a cross-era
+  /// what-if: the two teams never met, so the backend forces the conference
+  /// flag off, skips the preseason blend and returns no prior meetings, and
+  /// labels the answer `prediction_basis: 'cross_era'`. Sending these two is
+  /// mutually exclusive with `asOfDate` — point-in-time state is built inside
+  /// one season and the backend rejects the combination with a 400.
+  homeSeason?: number;
+  awaySeason?: number;
+  /// YYYY-MM-DD. Backend rebuilds CamPom v3 from per-game Torvik rows
+  /// up to this date and serves the pit-trained margin/win/total
+  /// bundle — see the predict-honesty audit. Omit for the legacy
+  /// end-of-season prediction.
+  asOfDate?: string;
+}
+
+export function fetchPrediction(req: PredictRequest) {
   return fetchJson<PredictionResult>('/predict', {
-    home,
-    away,
-    venue,
-    season: season?.toString(),
-    // YYYY-MM-DD. Backend rebuilds CamPom v3 from per-game Torvik rows
-    // up to this date and serves the pit-trained margin/win/total
-    // bundle — see the predict-honesty audit. Omit for the legacy
-    // end-of-season prediction.
-    as_of_date: asOfDate,
+    home: req.home,
+    away: req.away,
+    venue: req.venue,
+    season: req.season?.toString(),
+    home_season: req.homeSeason?.toString(),
+    away_season: req.awaySeason?.toString(),
+    as_of_date: req.asOfDate,
   });
 }
 
