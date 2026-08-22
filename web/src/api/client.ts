@@ -1262,6 +1262,15 @@ interface CompareSlotBase {
   /// The season this slot is rendered in (its own `@season`, or the
   /// request-level season for a bare UUID).
   season: number;
+  /// The name on the REQUESTED UUID's own row, season-independent. Redundant
+  /// with `player.name` when the slot resolved; it is the only identity an
+  /// unavailable slot has, so the column can say whose year came up empty.
+  requested_name: string | null;
+  /// Every season this human has a row in (`natstat_id ∪ torvik_pid`, newest
+  /// first) — the real options for the slot's season picker, so a year that
+  /// cannot work is never offered. Computed from the requested UUID, so it is
+  /// stable as the slot's season changes.
+  available_seasons: number[];
 }
 
 export interface ComparePlayerResolved extends CompareSlotBase {
@@ -1277,9 +1286,11 @@ export interface ComparePlayerResolved extends CompareSlotBase {
 /// A slot with no row in its season — most often "not in Division I that
 /// year". Returned in place rather than dropped, so the UI can say why a
 /// column is empty instead of silently rendering one fewer than was asked for.
-/// Carries the same key set as a resolved entry, all empty, so anything that
-/// only reads stats needs no narrowing — `available` and a null `player` are
-/// what distinguish it.
+/// Carries the same key set as a resolved entry with every STAT field empty, so
+/// anything that only reads stats needs no narrowing — `available` and a null
+/// `player` are what distinguish it. The two `CompareSlotBase` identity fields
+/// are still populated, which is what lets the empty column name its player and
+/// offer the years that would fill it.
 export interface ComparePlayerUnavailable extends CompareSlotBase {
   available: false;
   player: null;

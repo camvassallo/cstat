@@ -1259,6 +1259,32 @@ pub async fn get_player_available_seasons(
     Ok(rows.into_iter().map(|(s,)| s).collect())
 }
 
+/// The display name on a player row, by UUID alone — no season.
+///
+/// Every other player lookup is `(id, season)`, which is right when there is a
+/// row to render. This one exists for the case where there ISN'T: a compare
+/// slot pointed at a season the player has no row in still has to say WHOSE
+/// column is empty, and "not in Division I in 2015" over an anonymous box is
+/// only half an answer. The requested UUID always exists in `players` (it came
+/// from a search or a link), just in some other season, so its own row is the
+/// one identity such a slot can still be given.
+pub async fn get_player_name(
+    pool: &PgPool,
+    player_id: Uuid,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(p.display_name, p.name)
+        FROM players p
+        WHERE p.id = $1
+        "#,
+    )
+    .bind(player_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(name,)| name))
+}
+
 /// Team analogue of `get_player_available_seasons`.
 ///
 /// Gates on `EXISTS (team_game_stats)` so reclassifying programs (D2↔D1 like

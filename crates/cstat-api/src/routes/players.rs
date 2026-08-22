@@ -653,8 +653,25 @@ async fn player_compare(
         // is a legitimate, frequent cross-year answer, and a dropped element
         // leaves the UI rendering three columns for four picks with no
         // explanation. Positional alignment with `ids` is preserved.
+        // Identity and season options are asked of the REQUESTED id, not the
+        // resolved one: they are the two things an unavailable slot still owes
+        // its column ("whose year is empty" and "which years would work"), so
+        // they have to come from an id that exists whether or not the slot
+        // resolved. Both are cross-season joins over the same human, so the
+        // answer is identical either way for a slot that did resolve.
+        let identity = tokio::try_join!(
+            queries::get_player_name(pool, slot.requested_id),
+            queries::get_player_available_seasons(pool, slot.requested_id),
+        )
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("query failed: {e}") })),
+            )
+        })?;
+
         let Some(resolved_id) = resolved else {
-            players_data.push(unavailable_compare_slot(slot));
+            players_data.push(unavailable_compare_slot(slot, &identity));
             continue;
         };
 
@@ -677,14 +694,17 @@ async fn player_compare(
         // The resolver found a (player, season) row but the profile query did
         // not — same user-visible state as an unresolvable slot.
         let Some(player) = player else {
-            players_data.push(unavailable_compare_slot(slot));
+            players_data.push(unavailable_compare_slot(slot, &identity));
             continue;
         };
 
+        let (requested_name, available_seasons) = identity;
         players_data.push(json!({
             "requested_id": slot.requested_id,
             "season": slot.season,
             "available": true,
+            "requested_name": requested_name,
+            "available_seasons": available_seasons,
             "player": player,
             "season_stats": season_stats,
             "percentiles": percentiles,
@@ -703,15 +723,22 @@ async fn player_compare(
 }
 
 /// The placeholder entry for a slot with no row in its season. Carries the same
-/// key set as a resolved entry, all empty, so anything that only reads stats
-/// needs no narrowing — `available` and the null `player` are what distinguish
-/// it. `ComparePlayerUnavailable` in `web/src/api/client.ts` mirrors this key
-/// set; keep the two in step.
-fn unavailable_compare_slot(slot: &CompareSlot) -> Value {
+/// key set as a resolved entry, with every STAT field empty, so anything that
+/// only reads stats needs no narrowing — `available` and the null `player` are
+/// what distinguish it. `requested_name` / `available_seasons` are deliberately
+/// populated: they are what lets the UI name the empty column and offer the
+/// years that would fill it, instead of a dead end. `ComparePlayerUnavailable`
+/// in `web/src/api/client.ts` mirrors this key set; keep the two in step.
+fn unavailable_compare_slot(
+    slot: &CompareSlot,
+    (requested_name, available_seasons): &(Option<String>, Vec<i32>),
+) -> Value {
     json!({
         "requested_id": slot.requested_id,
         "season": slot.season,
         "available": false,
+        "requested_name": requested_name,
+        "available_seasons": available_seasons,
         "player": null,
         "season_stats": null,
         "percentiles": null,
