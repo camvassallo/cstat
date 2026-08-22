@@ -1235,8 +1235,8 @@ export function fetchPlayerProgression(id: string) {
 /// `crossYear` widens the candidate pool to every ingested season. The target
 /// vector still comes from `(id, season)`; each human occupies at most one slot
 /// (their nearest season) and the target's own other years come back flagged
-/// `is_self`. Opt-in because it is ~15x the query cost of the single-season
-/// search — do not put it on a default path.
+/// `is_self`. Opt-in because it costs an order of magnitude more than the
+/// single-season search (~280 ms vs ~22 ms) — do not put it on a default path.
 export function fetchPlayerSimilar(
   id: string,
   k = 8,

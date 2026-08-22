@@ -2308,10 +2308,12 @@ pub struct SimilarPlayerRow {
 ///    often the single best comp; what they must not do is masquerade as
 ///    somebody else.
 ///
-/// Cost: the cross-year path is ~240 ms against 40,790 rows locally versus
-/// ~15 ms single-season (`LATERAL unnest` per row; no index helps). Fine for an
-/// opt-in toggle, not fine on a default path. If it has to get cheaper, the
-/// lever is precomputing the neighbour lists, not tuning this query.
+/// Cost: ~280 ms end-to-end against 40,790 archetype rows locally, versus
+/// ~22 ms single-season — a `LATERAL unnest` per row that no index helps, plus
+/// the `torvik` collapse below. `k` is not the driver: k=50 costs the same as
+/// k=10, because the whole table is scanned either way. Fine for an opt-in
+/// toggle, not fine on a default path. If it has to get cheaper, the lever is
+/// precomputing the neighbour lists, not tuning this query.
 pub async fn get_similar_players(
     pool: &PgPool,
     player_id: Uuid,
@@ -2321,13 +2323,29 @@ pub async fn get_similar_players(
 ) -> Result<Vec<SimilarPlayerRow>, sqlx::Error> {
     let sql = if cross_year {
         r#"
-        WITH target AS (
+        WITH torvik AS (
+            -- One Torvik pid per (player, season), and the aggregate is not
+            -- optional. `torvik_player_stats` is UNIQUE on (torvik_pid,
+            -- season), NOT on (player_id, season): a few hundred (player,
+            -- season) pairs carry two or three Torvik profiles for one human.
+            -- Joining the raw table fans the target CTE out -- every distance
+            -- multiplied by sqrt(n) and every output row duplicated n times --
+            -- and hands one candidate n identities, which walks straight
+            -- through the DISTINCT ON below. `min` because it is deterministic
+            -- and, where the duplicate profiles co-occur across seasons, picks
+            -- the same one every year, so a human keeps one identity.
+            SELECT player_id, season, min(torvik_pid) AS torvik_pid
+            FROM torvik_player_stats
+            WHERE player_id IS NOT NULL
+            GROUP BY player_id, season
+        ),
+        target AS (
             SELECT
                 pa.feature_vector AS fv,
                 COALESCE('t' || tp.torvik_pid::text, 'n' || p.natstat_id) AS ident
             FROM player_archetypes pa
             JOIN players p ON p.id = pa.player_id
-            LEFT JOIN torvik_player_stats tp
+            LEFT JOIN torvik tp
                    ON tp.player_id = pa.player_id AND tp.season = pa.season
             WHERE pa.player_id = $1 AND pa.season = $2
         ),
@@ -2361,7 +2379,7 @@ pub async fn get_similar_players(
                 COALESCE('t' || tp.torvik_pid::text, 'n' || p.natstat_id) AS ident
             FROM distances d
             JOIN players p ON p.id = d.player_id
-            LEFT JOIN torvik_player_stats tp
+            LEFT JOIN torvik tp
                    ON tp.player_id = d.player_id AND tp.season = d.season
         ),
         nearest AS (

@@ -474,8 +474,8 @@ struct PlayerSimilarParams {
     season: Option<i32>,
     k: Option<i64>,
     /// Opt in to searching every ingested season instead of just `season`.
-    /// Defaults to false, so the pre-existing single-season behaviour — and
-    /// its ~15 ms query, against the cross-year path's ~240 ms — is what an
+    /// Defaults to false, so the pre-existing single-season behaviour — and its
+    /// ~22 ms response, against the cross-year path's ~280 ms — is what an
     /// unchanged caller keeps getting.
     cross_year: Option<bool>,
 }
