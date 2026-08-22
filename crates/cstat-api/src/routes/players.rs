@@ -511,9 +511,12 @@ const MAX_COMPARE_PLAYERS: usize = 4;
 #[derive(Debug)]
 struct CompareSlot {
     /// The UUID exactly as the caller wrote it. Echoed back as
-    /// `requested_id` — cross-season resolution can hand back a *different*
-    /// UUID for the same human, so this is the only key the frontend can use
-    /// to line a response entry up with the slot it asked for.
+    /// `requested_id`, because cross-season resolution can hand back a
+    /// *different* UUID for the same human and `player.id` alone no longer
+    /// tells a caller which slot it answered. Note it is not the join key
+    /// for a raw `ids` token either — `<uuid>@<year>` equals no UUID — so
+    /// entries stay positionally aligned with `ids` and callers join by
+    /// index. See `PlayerCompare`'s fetch handler.
     requested_id: Uuid,
     season: i32,
 }

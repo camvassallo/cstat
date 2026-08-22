@@ -34,6 +34,12 @@ import { RadarTick } from '../components/RadarTick';
 import { useDismissOnOutside } from '../components/useDismissOnOutside';
 
 const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
+
+/// A rendered column plus the `ids` token that asked for it. `player.id` is
+/// the id the slot RESOLVED to, which for a cross-season slot is neither the
+/// requested UUID nor the `<uuid>@<year>` token in the URL — so it cannot be
+/// used to remove the column or to key it.
+type CompareSlotEntry = ComparePlayerResolved & { slotId: string };
 const MAX_PLAYERS = 4;
 
 const fmt = (v: number | null | undefined, d = 1) =>
@@ -317,7 +323,7 @@ export default function PlayerCompare() {
     [idsCsv],
   );
 
-  const [players, setPlayers] = useState<ComparePlayerResolved[]>([]);
+  const [players, setPlayers] = useState<CompareSlotEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showChips, setShowChips] = useState(true);
@@ -343,12 +349,17 @@ export default function PlayerCompare() {
         // The API returns exactly one entry per `ids` slot, in request order:
         // a slot that doesn't resolve comes back unavailable rather than
         // disappearing, so the array already lines up with `ids` by index.
-        // Index is the only safe key — a slot may be written `<uuid>@<year>`,
+        // Index is the only safe join — a slot may be written `<uuid>@<year>`,
         // which equals no id in the payload, and cross-season resolution can
-        // hand back a different UUID than was asked for. This page asks for
-        // one season, so unavailable slots are dropped here as before;
-        // cross-year mode renders them instead.
-        setPlayers(r.players.filter((p): p is ComparePlayerResolved => p.available));
+        // hand back a different UUID than was asked for. Carry the URL token
+        // along so removal can still address the slot after the drop below
+        // shifts the indices. This page asks for one season, so unavailable
+        // slots are dropped as before; cross-year mode renders them instead.
+        setPlayers(
+          r.players
+            .map((p, i) => ({ ...p, slotId: ids[i] ?? p.requested_id }))
+            .filter((p): p is CompareSlotEntry => p.available),
+        );
       })
       .catch((e) => setError(e.message ?? 'Failed to load comparison'))
       .finally(() => setLoading(false));
@@ -543,10 +554,10 @@ export default function PlayerCompare() {
           >
             {players.map((p, i) => (
               <PlayerHeader
-                key={p.player.id}
+                key={p.slotId}
                 p={p}
                 color={PLAYER_COLORS[i]}
-                onRemove={() => removePlayer(p.player.id)}
+                onRemove={() => removePlayer(p.slotId)}
               />
             ))}
           </div>
