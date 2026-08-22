@@ -395,7 +395,8 @@ two columns disagree with today's habit, that disagreement is the work.
 | `players.display_name` | **prod** for the current season; laptop `--columns` for historical | `compute_all` step 21 | — |
 | `archetype_models` | **laptop**, annual | `--tables` | — |
 | `player_rapm` | **laptop**, periodic (until §5 is decided) | `--tables` | — |
-| `transfers`, `recruits`, `coaches`, `draft_entrants` | **laptop**, offseason/on-demand | `--tables` | no in-season churn, so no staleness (ROADMAP S5) |
+| `transfers`, `recruits` | **prod** in-season; laptop for a bootstrap or a historical class | nightly `transfers_{year}` / `recruits_{class_year}` / `recruit_commits_{class_year}` steps | a laptop `--tables` push replaces prod's fresher portal/recruit rows with the laptop's. Self-healing — `last_update_cursor` reads the cursor from the table, so a clobber moves it backward and the next incremental sweep re-fetches — but it is a day of stale portal data on the site |
+| `coaches`, `draft_entrants` | **laptop**, offseason/on-demand | `--tables` | no in-season churn, so no staleness |
 | `team_preseason_projection`, `player_season_projection` | **prod** for 2027 (B2) | `compute-projections` run on prod | **local currently has no 2027 rows — a `--tables` push from the laptop after B2 would delete prod's 2027 anchors.** Do not push this table once prod owns 2027 |
 | `ingest_runs`, `ingest_run_table_counts`, `api_cache`, `portle_daily_puzzle` | **prod** | runtime | already EXCLUDED |
 
@@ -424,9 +425,12 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
 7. **Immediately after 6 succeeds:** `cstat-ingest compute-projections --years 2027` on
    Railway → verify `team_preseason_projection` has 2027 rows (B2 — it silently writes
    nothing if run before 6).
-8. Final offseason `--tables` pushes while the laptop is still the owner: `transfers`,
-   `recruits`, `coaches`, `draft_entrants`, `archetype_models`, `player_rapm`,
-   `coach_ratings`, `coach_season_cae`.
+8. Final offseason `--tables` pushes while the laptop is still the owner: `coaches`,
+   `draft_entrants`, `archetype_models`, `player_rapm`, `coach_ratings`,
+   `coach_season_cae`. **Not `transfers` / `recruits`** — the nightly refreshes those
+   on prod year-round, not only in-season (the 2026 class gained 51 players in the
+   first 19 days of August 2026), so prod is the fresher copy even now and pushing
+   them is a rollback, not a handover.
 9. Confirm no `CSTAT_SIMULATED_DATE` on either Railway service.
 
 **Nov 1 (rollover day).** Season flips to 2027. Expect `torvik`/`torvik_games` to record
