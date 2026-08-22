@@ -473,8 +473,21 @@ async fn player_archetype(
 struct PlayerSimilarParams {
     season: Option<i32>,
     k: Option<i64>,
+    /// Opt in to searching every ingested season instead of just `season`.
+    /// Defaults to false, so the pre-existing single-season behaviour — and its
+    /// ~22 ms response, against the cross-year path's ~280 ms — is what an
+    /// unchanged caller keeps getting.
+    cross_year: Option<bool>,
 }
 
+/// `GET /api/players/{id}/similar` — nearest neighbours in the archetype
+/// feature space. `?cross_year=true` widens the candidate pool to every season;
+/// the target vector still comes from the requested `(id, season)`, each
+/// neighbour carries its own `season`, each human appears at most once (their
+/// nearest season), and the target's own other seasons are returned flagged
+/// `is_self` rather than dropped or silently mixed in. See
+/// `queries::get_similar_players` for why cross-era distances are commensurable
+/// and which era skew is disclosed rather than corrected.
 async fn player_similar(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
@@ -482,7 +495,8 @@ async fn player_similar(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let season = params.season.unwrap_or_else(crate::default_season);
     let limit = params.k.unwrap_or(10).clamp(1, 50);
-    let players = queries::get_similar_players(&state.db.pool, id, season, limit)
+    let cross_year = params.cross_year.unwrap_or(false);
+    let players = queries::get_similar_players(&state.db.pool, id, season, limit, cross_year)
         .await
         .map_err(|e| {
             (
@@ -493,6 +507,7 @@ async fn player_similar(
 
     Ok(Json(json!({
         "season": season,
+        "cross_year": cross_year,
         "players": players,
     })))
 }

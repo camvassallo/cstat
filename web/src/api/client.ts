@@ -1008,6 +1008,10 @@ export interface PlayerArchetype {
 
 export interface SimilarPlayer {
   player_id: string;
+  // The neighbour's own season. Equals the requested season on the default
+  // single-season search; on `cross_year` it is the year this row is from, and
+  // a cross-era list is unreadable without rendering it.
+  season: number;
   name: string;
   team_id: string | null;
   team_name: string | null;
@@ -1018,6 +1022,10 @@ export interface SimilarPlayer {
   source_season?: number | null;
   distance: number;
   similarity: number;
+  // Cross-year only: this neighbour is the SAME HUMAN in a different season.
+  // Often the single best comp, so it is kept rather than filtered — but it
+  // has to be labelled, not rendered as if it were somebody else.
+  is_self: boolean;
 }
 
 /// Phase 5c projection: next-season CamPom estimate with a quantile band.
@@ -1224,11 +1232,26 @@ export function fetchPlayerProgression(id: string) {
   }>(`/players/${id}/progression`);
 }
 
-export function fetchPlayerSimilar(id: string, k = 8, season?: number) {
-  return fetchJson<{ season: number; players: SimilarPlayer[] }>(
-    `/players/${id}/similar`,
-    { k: k.toString(), season: season?.toString() },
-  );
+/// `crossYear` widens the candidate pool to every ingested season. The target
+/// vector still comes from `(id, season)`; each human occupies at most one slot
+/// (their nearest season) and the target's own other years come back flagged
+/// `is_self`. Opt-in because it costs an order of magnitude more than the
+/// single-season search (~280 ms vs ~22 ms) — do not put it on a default path.
+export function fetchPlayerSimilar(
+  id: string,
+  k = 8,
+  season?: number,
+  crossYear = false,
+) {
+  return fetchJson<{
+    season: number;
+    cross_year: boolean;
+    players: SimilarPlayer[];
+  }>(`/players/${id}/similar`, {
+    k: k.toString(),
+    season: season?.toString(),
+    cross_year: crossYear ? 'true' : undefined,
+  });
 }
 
 export interface ArchetypeExemplar {
