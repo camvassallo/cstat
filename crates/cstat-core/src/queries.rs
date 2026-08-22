@@ -2333,7 +2333,12 @@ pub async fn get_similar_players(
             -- and hands one candidate n identities, which walks straight
             -- through the DISTINCT ON below. `min` because it is deterministic
             -- and, where the duplicate profiles co-occur across seasons, picks
-            -- the same one every year, so a human keeps one identity.
+            -- the same one every year. Where they DON'T co-occur -- a pid pair
+            -- in one season, one of them alone in the next -- the pick shifts
+            -- and that human takes two slots: 16 of the 269 multi-season
+            -- duplicated humans locally, versus the ~4% with no Torvik link at
+            -- all, so it is the smaller half of an already-accepted gap. Costs
+            -- a list slot, never produces a wrong neighbour.
             SELECT player_id, season, min(torvik_pid) AS torvik_pid
             FROM torvik_player_stats
             WHERE player_id IS NOT NULL
