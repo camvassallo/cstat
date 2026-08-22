@@ -74,6 +74,30 @@ pub enum StepStatus {
     Ok,
     Failed,
     Skipped,
+    /// We ran the step correctly and the **upstream source has no data for the
+    /// requested season yet** (#248). Distinct from `Failed`, which says
+    /// something went wrong on a season the source does carry, and from
+    /// `Skipped`, which says we chose not to run.
+    ///
+    /// It exists because the two are not the same alarm. At the November season
+    /// flip `current_natstat_season()` rolls to the new year days-to-weeks
+    /// before barttorvik publishes it, and every night in that gap recorded
+    /// `torvik`/`torvik_games` — both served-critical — as `failed`. That is
+    /// nightly DEGRADED Slack plus a 503 from `/api/health/ingest` for a
+    /// condition nobody can act on, during the exact window when the tipoff
+    /// checklist needs those two signals to mean something.
+    ///
+    /// The step is still not fresh, and this status does not pretend otherwise
+    /// — `/api/health/ingest` keys staleness off the last *success*, so this
+    /// never resets that clock. What it does is let the health route widen its
+    /// threshold while the source is the thing that is behind, bounded by
+    /// `SOURCE_NOT_PUBLISHED_GRACE_HOURS` there. The moment the source stops
+    /// answering this way, the accumulated staleness is exposed in full.
+    ///
+    /// Note `ingest_runs.status` is free text (migration 039) — a new value
+    /// needs no migration, and that migration's comment listing three values
+    /// cannot be edited once prod has applied it. This enum is the live list.
+    SourceNotPublished,
 }
 
 impl StepStatus {
@@ -83,6 +107,7 @@ impl StepStatus {
             StepStatus::Ok => "ok",
             StepStatus::Failed => "failed",
             StepStatus::Skipped => "skipped",
+            StepStatus::SourceNotPublished => "source_not_published",
         }
     }
 }
@@ -446,6 +471,12 @@ mod tests {
         assert_eq!(StepStatus::Ok.as_str(), "ok");
         assert_eq!(StepStatus::Failed.as_str(), "failed");
         assert_eq!(StepStatus::Skipped.as_str(), "skipped");
+        // Read by `routes/health.rs::SOURCE_NOT_PUBLISHED` as a string literal
+        // across the crate boundary, so the wire value is load-bearing.
+        assert_eq!(
+            StepStatus::SourceNotPublished.as_str(),
+            "source_not_published"
+        );
     }
 
     fn d(s: &str) -> NaiveDate {

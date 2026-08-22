@@ -259,12 +259,48 @@ plus an overall verdict:
   "status": "ok",            // "stale" if any served-critical step > 36h old
   "healthy": true,
   "stale_after_hours": 36,
+  "source_not_published_grace_hours": 336,   // see below
   "last_run_at": "2026-11-09T09:34:12Z",
   "missing_critical_steps": [],
   "steps": [ { "step": "compute", "last_status": "ok",
-              "last_ok_at": "…", "hours_since_ok": 6.1, "stale": false }, … ]
+              "last_ok_at": "…", "hours_since_ok": 6.1, "stale": false,
+              "source_not_published": false }, … ]
 }
 ```
+
+### The one exception to the 36h rule: `source_not_published` (#248)
+
+`last_status` is normally `ok` / `failed` / `skipped`. A fourth value,
+`source_not_published`, means the step ran correctly and the **upstream source
+has no data for that season yet**. Today it is written only by `torvik` and
+`torvik_games`.
+
+It exists for the November season flip. `current_natstat_season()` rolls forward
+on Nov 1, but barttorvik publishes the new season days-to-weeks later, and asking
+it for an unpublished season gets last season's rows back (the player feed) or a
+404 (the per-game file). Refusing those rows is correct — persisting 2026 players
+stamped 2027 is far worse than a red light — but recording it as a *failure* of a
+served-critical step meant a nightly DEGRADED post and a 503 here, every night,
+for a condition with no remediation, during the exact fortnight the tipoff
+checklist depends on both signals.
+
+What it does and does not do:
+
+- **Does not reset the freshness clock.** `last_ok_at` still points at the last
+  real success, so the step is honestly reported as not-fresh.
+- **Widens the staleness threshold** to 36h + `source_not_published_grace_hours`
+  (14 days) while the step's *most recent* status is this one. Past that, the
+  source being gone is itself the outage and this endpoint goes red.
+- **Reverts instantly on any other outcome.** One ordinary `failed` mid-gap drops
+  the step back to the 36h rule, exposing all the staleness accumulated in the
+  meantime without waiting for a fresh success. So a real Torvik outage during
+  the window is still caught.
+- **In Slack**, it rides the `warnings:` line on the OK summary rather than
+  turning the post DEGRADED — visible every night, not alarming.
+
+If you see it outside early November, or on a step other than the two Torvik
+ones, treat it as a real signal: barttorvik has stopped publishing a season it
+previously did.
 
 Returns **200** when healthy, **503** when stale — so an external uptime monitor
 (UptimeRobot, BetterStack, etc.) flips red on a *missed* night without parsing
@@ -463,7 +499,11 @@ Run through this the morning after the season's first slate of games.
    understand — a self-heal note or an empty-off-season feed is benign).
 2. **Health route is green.** `curl https://<host>/api/health/ingest` →
    `healthy: true` with fresh (`< 36h`) `last_ok_at` on every served-critical
-   step. A `503` means a step is stale — check which and why.
+   step. A `503` means a step is stale — check which and why. In the opening
+   weeks, `torvik`/`torvik_games` may legitimately read `last_status:
+   "source_not_published"` with a stale-looking `last_ok_at` and `stale: false`
+   — barttorvik has not published the season yet (see above). Any *other* step
+   in that shape is a real problem.
 3. **Fresh data landed.** Spot-check an opening-night box score in the DB/UI and
    confirm `games`/`player_perfs` counts on the run are non-zero for a night that
    had games (the empty-box heuristic would have degraded the run otherwise).

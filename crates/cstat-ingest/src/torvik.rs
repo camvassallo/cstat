@@ -42,11 +42,66 @@ const FETCH_BACKOFF: Duration = Duration::from_secs(30);
 /// practice, since reqwest follows redirects, and one wasted request is the
 /// cheaper side to err on than mis-classifying a real 5xx as terminal.
 fn is_client_error(e: &anyhow::Error) -> bool {
+    http_status(e).is_some_and(|s| s.is_client_error())
+}
+
+/// The HTTP status behind a Torvik error, if it carries one. Both shapes
+/// [`is_client_error`] documents have to be recognised; factored out because
+/// [`is_not_found`] needs the same two-shape lookup and duplicating it is how
+/// the second shape gets forgotten.
+fn http_status(e: &anyhow::Error) -> Option<reqwest::StatusCode> {
     e.downcast_ref::<reqwest::Error>()
         .and_then(reqwest::Error::status)
         .or_else(|| e.downcast_ref::<TorvikHttpError>().map(|t| t.status))
-        .is_some_and(|s| s.is_client_error())
 }
+
+/// Was this a 404? The per-game file `{year}_all_advgames.json.gz` simply does
+/// not exist for a season barttorvik has not published, so a 404 there is how
+/// the not-yet-published condition shows up on that path — but only *sometimes*:
+/// a 404 on a season Bart has published means the file moved, which is a real
+/// breakage. The caller disambiguates with corroboration rather than a calendar
+/// rule; see `SeasonIngester::nightly`.
+pub fn is_not_found(e: &anyhow::Error) -> bool {
+    http_status(e) == Some(reqwest::StatusCode::NOT_FOUND)
+}
+
+/// Did this error mean "barttorvik has not published that season yet"?
+///
+/// True only for [`SeasonNotPublished`], which is raised from one unambiguous
+/// payload signature. Everything else — a 403 from the edge, a timeout, a
+/// truncated CSV — stays an ordinary failure.
+pub fn is_season_not_published(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<SeasonNotPublished>().is_some()
+}
+
+/// barttorvik answered a request for season `requested` with season `served`
+/// data, where `served` is *older* — the signature of a season the source has
+/// not published yet (#248).
+///
+/// A distinct type rather than a message match: the nightly has to route this
+/// to a different ledger status and a different Slack line than a real failure,
+/// and string-matching an error message is the kind of coupling that breaks
+/// silently the next time the wording is improved. Same reason
+/// [`TorvikHttpError`] exists.
+#[derive(Debug)]
+pub struct SeasonNotPublished {
+    pub requested: i32,
+    pub served: i32,
+    pub rows: usize,
+}
+
+impl std::fmt::Display for SeasonNotPublished {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "barttorvik has not published season {} yet — the feed answered with \
+             season {} data ({} rows). Refusing to persist {} players stamped as {}.",
+            self.requested, self.served, self.rows, self.served, self.requested
+        )
+    }
+}
+
+impl std::error::Error for SeasonNotPublished {}
 
 /// Retry an async Torvik fetch that may transiently fail. Retries on **any**
 /// error — network *or* parse — because the regeneration race shows up as a
@@ -656,8 +711,18 @@ fn validate_player_csv_schema(rec: &csv::StringRecord) -> anyhow::Result<()> {
 /// for the wrong season. Compare the rows' embedded year (col 31, parsed into
 /// [`TorkvikPlayerSeason::year`]) against what was requested and refuse a mismatch,
 /// so an early-bootstrap `torvik --year 2027` can't quietly persist last season's
-/// players stamped as this one. (The per-game path `{year}_all_advgames.json.gz`
-/// 404s on a not-yet-started year, so it fails loudly on its own and needs no guard.)
+/// players stamped as this one.
+///
+/// The refusal is split two ways (#248). A payload OLDER than requested is the
+/// documented fallback for a season that has not started — [`SeasonNotPublished`],
+/// which the nightly records as `source_not_published` rather than a
+/// served-critical failure. Anything else stays a hard error. Both still refuse
+/// to persist the rows; only the classification differs.
+///
+/// (The per-game path `{year}_all_advgames.json.gz` 404s on a not-yet-started
+/// year rather than falling back, so it needs no guard here — but its 404 is the
+/// same condition, and `SeasonIngester::nightly` classifies it by corroborating
+/// against what this guard concluded on the same run.)
 fn validate_requested_year(players: &[TorkvikPlayerSeason], requested: i32) -> anyhow::Result<()> {
     // Modal year among the rows that carry one. A single-season CSV is
     // homogeneous, but a stray null/parse-miss shouldn't get a vote.
@@ -672,11 +737,26 @@ fn validate_requested_year(players: &[TorkvikPlayerSeason], requested: i32) -> a
         // contradict the request; that case surfaces elsewhere.
         return Ok(());
     };
+    if modal < requested {
+        // The documented fallback: a not-yet-started season is served the latest
+        // available one. Refusing to persist it is still the right call — this
+        // only changes how the refusal is CLASSIFIED, so the November flip stops
+        // reading as a served-critical failure (#248).
+        return Err(SeasonNotPublished {
+            requested,
+            served: modal,
+            rows: modal_n,
+        }
+        .into());
+    }
     if modal != requested {
+        // Newer than we asked for. Not the fallback, and not something to wave
+        // through as "the source is behind" — the source is *ahead*, which means
+        // the year parameter stopped being honoured. Stays a hard failure.
         anyhow::bail!(
             "Torvik player CSV year mismatch — requested {requested} but the feed returned \
-             season {modal} data ({modal_n} of {} rows). barttorvik silently serves the latest \
-             available season for a not-yet-started year; refusing to persist {modal} players \
+             season {modal} data ({modal_n} of {} rows), which is NEWER than requested. The \
+             year parameter is not being honoured; refusing to persist {modal} players \
              stamped as {requested}.",
             players.len()
         );
@@ -851,14 +931,20 @@ mod tests {
 
     #[test]
     fn year_guard_rejects_future_year_fallback() {
-        // barttorvik serves 2026 rows for a 2027 request; the guard must catch it.
+        // barttorvik serves 2026 rows for a 2027 request; the guard must catch
+        // it. Asserted through the real CSV path, so the `year` column the guard
+        // reads (col 31) stays wired to the parser.
         let csv = format!("{}\n{}", row_for_year("A", 2026), row_for_year("B", 2026));
         let players = parse_player_csv(&csv).unwrap();
         let err = validate_requested_year(&players, 2027).unwrap_err();
+        // The rows are still refused — that half has not changed and is the
+        // whole point of the guard. What #248 changed is the classification:
+        // this is the source being behind, not a failure of ours.
         assert!(
-            err.to_string().contains("year mismatch"),
-            "expected a year-mismatch error, got: {err}"
+            is_season_not_published(&err),
+            "expected the not-published classification, got: {err}"
         );
+        assert!(err.to_string().contains("2027"), "{err}");
     }
 
     #[test]
@@ -1127,6 +1213,78 @@ mod tests {
             "HTTP status unexpected error (301 Moved Permanently) for url \
              (https://barttorvik.com/test)"
         );
+    }
+
+    /// Rows carrying a season, for the year guard.
+    fn rows_for(year: i32, n: usize) -> Vec<TorkvikPlayerSeason> {
+        (0..n)
+            .map(|_| TorkvikPlayerSeason {
+                year: Some(year),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// The #248 split. Both directions still refuse the payload — what changes
+    /// is which alarm the nightly raises, so the classification is the thing
+    /// worth pinning.
+    #[test]
+    fn year_guard_splits_not_published_from_real_mismatch() {
+        // The November case: asked for 2027, served 2026. Source is behind.
+        let err = validate_requested_year(&rows_for(2026, 500), 2027)
+            .expect_err("an older payload must still be refused");
+        assert!(
+            is_season_not_published(&err),
+            "an OLDER payload is barttorvik's documented not-yet-started \
+             fallback, and must classify as such: {err}"
+        );
+
+        // Ahead of us: the year parameter stopped being honoured. Not the
+        // fallback, and not something to excuse as "the source is behind".
+        let err = validate_requested_year(&rows_for(2027, 500), 2026)
+            .expect_err("a newer payload must be refused");
+        assert!(
+            !is_season_not_published(&err),
+            "a NEWER payload is not the fallback and must stay a hard failure: {err}"
+        );
+    }
+
+    /// `is_season_not_published` must not fire on ordinary Torvik failures —
+    /// it is what suppresses the served-critical alarm, so a false positive
+    /// here hides a real outage behind "the source is behind".
+    #[test]
+    fn not_published_classifier_is_narrow() {
+        assert!(!is_season_not_published(&http_err(403)));
+        assert!(!is_season_not_published(&http_err(404)));
+        assert!(!is_season_not_published(&anyhow::anyhow!("truncated CSV")));
+    }
+
+    /// The per-game path has no payload to inspect — a not-yet-published season
+    /// is a bare 404 — so the nightly keys off this. It must be exactly 404 and
+    /// must see both error shapes (see `http_status`).
+    #[test]
+    fn not_found_classifier_is_exact() {
+        assert!(is_not_found(&http_err(404)));
+        assert!(
+            !is_not_found(&http_err(403)),
+            "403 is an edge block, not absence"
+        );
+        assert!(!is_not_found(&http_err(503)));
+        assert!(!is_not_found(&anyhow::anyhow!("truncated CSV")));
+    }
+
+    /// The ledger `error` column and the Slack line are built from this text.
+    #[test]
+    fn not_published_error_names_both_seasons() {
+        let msg = SeasonNotPublished {
+            requested: 2027,
+            served: 2026,
+            rows: 5432,
+        }
+        .to_string();
+        assert!(msg.contains("2027"), "{msg}");
+        assert!(msg.contains("2026"), "{msg}");
+        assert!(msg.contains("5432"), "{msg}");
     }
 
     #[test]
