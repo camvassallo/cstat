@@ -34,13 +34,15 @@ import { RadarTick } from '../components/RadarTick';
 import { useDismissOnOutside } from '../components/useDismissOnOutside';
 
 const PLAYER_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
-
-/// A rendered column plus the `ids` token that asked for it. `player.id` is
-/// the id the slot RESOLVED to, which for a cross-season slot is neither the
-/// requested UUID nor the `<uuid>@<year>` token in the URL — so it cannot be
-/// used to remove the column or to key it.
-type CompareSlotEntry = ComparePlayerResolved & { slotId: string };
 const MAX_PLAYERS = 4;
+
+/// A rendered column plus the `ids` token that asked for it. `slotId` is the
+/// column's identity everywhere — key, removal, ordering. `player.id` is the
+/// id the slot RESOLVED to, which is neither the requested UUID nor the
+/// `<uuid>@<year>` token in the URL, and is not even unique per column: two
+/// slots naming different seasons of the same human collapse onto one row
+/// when both are pointed at the same year.
+type CompareSlotEntry = ComparePlayerResolved & { slotId: string };
 
 const fmt = (v: number | null | undefined, d = 1) =>
   v != null && Number.isFinite(v) ? v.toFixed(d) : '—';
@@ -504,7 +506,7 @@ export default function PlayerCompare() {
           <div className="flex flex-wrap items-center gap-2">
             {players.map((p, i) => (
               <span
-                key={p.player.id}
+                key={p.slotId}
                 className="inline-flex items-center gap-2 px-2 py-1 rounded text-sm bg-gray-900 border"
                 style={{ borderColor: PLAYER_COLORS[i] }}
               >
@@ -593,7 +595,7 @@ export default function PlayerCompare() {
                   <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
                   {players.map((p, i) => (
                     <Radar
-                      key={p.player.id}
+                      key={p.slotId}
                       name={p.player.name}
                       dataKey={`p${i}`}
                       stroke={PLAYER_COLORS[i]}
@@ -633,7 +635,7 @@ export default function PlayerCompare() {
                 style={{ gridTemplateColumns: `repeat(${players.length}, minmax(0, 1fr))` }}
               >
                 {players.map((p, i) => (
-                  <div key={p.player.id} className="flex flex-col items-center">
+                  <div key={p.slotId} className="flex flex-col items-center">
                     <div
                       className="text-xs font-medium mb-2 truncate w-full text-center"
                       style={{ color: PLAYER_COLORS[i] }}
@@ -675,7 +677,7 @@ export default function PlayerCompare() {
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   {players.map((p, i) => (
                     <Line
-                      key={p.player.id}
+                      key={p.slotId}
                       type="monotone"
                       dataKey={`p${i}`}
                       name={p.player.name}
