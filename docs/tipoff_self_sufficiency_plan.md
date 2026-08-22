@@ -308,25 +308,41 @@ Until it is decided, RAPM is laptop-computed and **frozen at whatever was last p
 Given the 250-paired-possession display floor, a stale RAPM in November mostly means
 *absent*, not *wrong* — which is survivable, but should be disclosed rather than implied.
 
-### B7 — Torvik will fail every night for the first days of November. Expect it.
+### B7 — Torvik will be behind for the first days of November. Handled. **Done (#248).**
 
-The requested-year guard (`torvik.rs:660`, `validate_requested_year`) **returns an error**
-when barttorvik answers a `year=2027` request with 2026 rows — which is exactly what it
-does until 2027 data is published. The per-game path (`{year}_all_advgames.json.gz`)
-404s on its own. Both `torvik` and `torvik_games` are **served-critical**
-(`routes/health.rs:32`), so from Nov 1 until barttorvik publishes:
+The requested-year guard (`validate_requested_year`) refuses the payload when barttorvik
+answers a `year=2027` request with 2026 rows — which is exactly what it does until 2027
+data is published. The per-game path (`{year}_all_advgames.json.gz`) 404s instead. Both
+`torvik` and `torvik_games` are **served-critical** (`routes/health.rs`), so from Nov 1
+until barttorvik publishes, this used to mean a DEGRADED Slack summary every night, a
+**503** from `GET /api/health/ingest`, and a 36h staleness alarm carrying no information
+during exactly the window when we most want it to.
 
-- the nightly posts a DEGRADED Slack summary every night,
-- `GET /api/health/ingest` returns **503**,
-- and the 36h staleness alarm carries no information during exactly the window when we
-  most want it to.
+**Decision: (b), shipped.** Refusing the rows was never in question — ingesting 2026 rows
+labelled 2027 is far worse than a red light. What changed is the classification. The
+guard now distinguishes an *older-than-requested* payload (barttorvik's documented
+not-yet-started fallback) from any other mismatch, the nightly records it as
+`source_not_published` rather than `failed`, and `/api/health/ingest` widens that step's
+staleness threshold by 14 days while the source is the thing that is behind.
 
-The guard is correct — ingesting 2026 rows labelled 2027 is far worse. But we should
-decide now whether to (a) accept and pre-announce the noise, or (b) teach the guard to
-report a distinct "source has not published this season yet" status that degrades the run
-without marking a served-critical step failed. **(b) is a small change and worth it**,
-because a red health endpoint that everyone has been told to ignore for a week is how a
-real outage gets missed.
+The properties that keep this honest rather than merely quiet:
+
+- `last_ok_at` is untouched — the step is still reported as not-fresh, and the grace
+  extends the threshold rather than resetting the clock.
+- The excuse is time-boxed. Two weeks past the ordinary threshold and the endpoint goes
+  red anyway, because a source that never returns *is* the outage.
+- Any other outcome reverts it instantly. One ordinary `failed` mid-gap drops the step
+  back to the 36h rule and exposes everything that accumulated, with no fresh success
+  needed — so a genuine Torvik outage inside the window is still caught.
+- The per-game 404 is classified by **corroboration**, not a calendar rule: only a run
+  where the player feed independently reported the season unpublished may read that 404
+  the same way. A 404 on a season Bart *is* publishing stays served-critical, which is
+  what a renamed file should be.
+- In Slack it rides the `warnings:` line on the OK summary. Visible every night, not
+  alarming — the same channel the `Warning`-severity invariants use.
+
+Operator note: `sync_to_prod.sh --prod-status` lists non-OK ledger rows, so these will
+appear there with their own status. That is context, not a fault.
 
 ### B8 — Prod PBP storage: monitor, don't pre-solve
 
@@ -365,7 +381,9 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
    (#247)** — detection, Slack visibility for `Warning` violations, and the PBP self-heal
    all shipped. Backfill path confirmed, with a correction: it is
    the plain `playbyplay --from/--to` subcommand — the check reads rows, not ledger claims.
-2. B7 "source has not published this season" status for the Torvik year guard.
+2. ~~B7 "source has not published this season" status for the Torvik year guard.~~
+   **Done (#248)** — `source_not_published` ledger status, a 14-day health grace window,
+   and the Slack line moved from DEGRADED to `warnings:`.
 3. B4 ownership split — `CLAUDE.md` line, R4 test rationale, ownership table enforcement.
 4. B5 (a)+(b) if a refit is planned this offseason; otherwise schedule before the refit.
 5. Keep the weekly `cstat-ingest simulate --reset` habit — it is the only thing exercising
@@ -383,9 +401,12 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
    `coach_ratings`, `coach_season_cae`.
 9. Confirm no `CSTAT_SIMULATED_DATE` on either Railway service.
 
-**Nov 1 (rollover day).** Season flips to 2027. Expect `torvik`/`torvik_games` failures
-until barttorvik publishes (B7). Confirm the nightly still completes and the *2026* site
-is untouched.
+**Nov 1 (rollover day).** Season flips to 2027. Expect `torvik`/`torvik_games` to record
+`source_not_published` until barttorvik publishes (B7) — the nightly should post **OK**
+with a `warnings:` line, and `/api/health/ingest` should stay **200** with
+`stale: false` and `source_not_published: true` on those two steps. A DEGRADED post or a
+503 from them means something other than the publish lag is wrong. Confirm the nightly
+still completes and the *2026* site is untouched.
 
 **Opening night + the morning after.** Run the existing checklist in
 `docs/deploy_nightly_cron.md` §*First-day-of-season checklist*, plus three additions this

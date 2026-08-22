@@ -910,6 +910,26 @@ impl<'a> SeasonIngester<'a> {
         // immediately (with this context) before aborting.
         let mut failures: Vec<String> = Vec::new();
 
+        // Conditions worth SAYING every night but not worth alarming about,
+        // because nobody can act on them and they resolve on their own (#248).
+        // They ride the same `warnings:` line as the Warning-severity invariants
+        // — visible on the OK summary as well as the DEGRADED one — instead of
+        // `failures`.
+        //
+        // The distinction is not cosmetic. `failures` is what turns the nightly
+        // Slack post red, and a post that is red every night for a fortnight
+        // over a condition with no action attached is how the *next* red post
+        // gets skimmed. That is the failure mode #248 was filed about, one
+        // channel over from the 503 it names.
+        let mut source_warnings: Vec<String> = Vec::new();
+
+        // Did barttorvik tell us, this run, that it has not published our season
+        // yet? The per-game path cannot say so itself — a not-yet-published
+        // season is a bare 404 there, indistinguishable from a file that moved —
+        // so it corroborates against what the player path concluded rather than
+        // guessing from the calendar.
+        let mut torvik_season_unpublished = false;
+
         // A self-heal that hit the MAX_HEAL_DAYS cap recovered only part of the
         // gap — surface it as a degraded run (see the heal block above).
         if let Some(shortfall) = heal_shortfall {
@@ -1156,6 +1176,30 @@ impl<'a> SeasonIngester<'a> {
                     .record("torvik", StepStatus::Ok, Some(upserted as i64), t0, None)
                     .await;
             }
+            Err(e) if crate::torvik::is_season_not_published(&e) => {
+                // The November flip, before barttorvik publishes the new season.
+                // The rows were correctly refused (they were last season's), and
+                // there is nothing to retry or fix — so this is recorded as the
+                // source being behind, not as a served-critical failure. It does
+                // NOT reset the freshness clock: `/api/health/ingest` keys
+                // staleness off the last success, and this is not one.
+                let msg = e.to_string();
+                torvik_season_unpublished = true;
+                warn!(season = self.season, error = %msg, "Torvik has not published this season yet; CamPom holds last season's fit");
+                ledger
+                    .record(
+                        "torvik",
+                        StepStatus::SourceNotPublished,
+                        None,
+                        t0,
+                        Some(&msg),
+                    )
+                    .await;
+                source_warnings.push(format!(
+                    "torvik: barttorvik has not published season {} yet",
+                    self.season
+                ));
+            }
             Err(e) => {
                 let msg = e.to_string();
                 warn!(season = self.season, error = %msg, "Torvik season-stats refresh failed; served CamPom may be stale");
@@ -1225,6 +1269,31 @@ impl<'a> SeasonIngester<'a> {
                     )
                     .await;
                 failures.extend(lines);
+            }
+            // A 404 here means `{season}_all_advgames.json.gz` does not exist.
+            // That is what a not-yet-published season looks like on this path —
+            // but it is also what a file that MOVED looks like, and those want
+            // opposite alarms. Corroborate rather than guess: only the run where
+            // the player feed independently reported the season unpublished gets
+            // to read this 404 as the same condition. A 404 on a season Bart is
+            // publishing stays a served-critical failure, which is what a
+            // renamed file should be.
+            Err(e) if torvik_season_unpublished && crate::torvik::is_not_found(&e) => {
+                let msg = e.to_string();
+                warn!(season = self.season, error = %msg, "Torvik per-game file absent for an unpublished season; pit CamPom source holds last season's rows");
+                ledger
+                    .record(
+                        "torvik_games",
+                        StepStatus::SourceNotPublished,
+                        None,
+                        t0,
+                        Some(&msg),
+                    )
+                    .await;
+                source_warnings.push(format!(
+                    "torvik_games: no per-game file for season {} yet",
+                    self.season
+                ));
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -2158,9 +2227,19 @@ impl<'a> SeasonIngester<'a> {
         // exactly when you also want to know which standing holes are open, and
         // a healthy run is where a *new* hole (a lost `playbyplay` night) has to
         // announce itself, since nothing else about that run looks wrong.
-        let warn_line = match &invariant_warnings {
-            Some(w) => format!("\n_:mag: warnings: {w}_"),
-            None => String::new(),
+        //
+        // `source_warnings` (#248) shares the line: both are "true, worth
+        // knowing, not actionable tonight". Source warnings lead, because an
+        // unpublished feed explains the numbers above it — a reader seeing
+        // CamPom flat needs that sentence before the invariant list, not after.
+        let warn_line = {
+            let mut parts = source_warnings.clone();
+            parts.extend(invariant_warnings.clone());
+            if parts.is_empty() {
+                String::new()
+            } else {
+                format!("\n_:mag: warnings: {}_", parts.join(" · "))
+            }
         };
         // Which dates this run actually covered, and how long it took. Both were
         // log-only, and both are the first thing you want when reading a summary
@@ -2207,6 +2286,13 @@ impl<'a> SeasonIngester<'a> {
             Some(t) => format!(
                 "*Torvik:*  {} season · {} per-game",
                 t.upserted, report.torvik_games_persisted
+            ),
+            // "skipped" is what an operator reads as "we chose not to", which is
+            // the wrong story for the November flip and sends them looking for a
+            // config mistake. Say what actually happened (#248).
+            None if torvik_season_unpublished => format!(
+                "*Torvik:*  season {} not published upstream yet",
+                self.season
             ),
             None => "*Torvik:*  skipped".to_string(),
         };

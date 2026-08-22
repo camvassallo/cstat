@@ -245,7 +245,11 @@ if [[ "$PROD_STATUS" -eq 1 ]]; then
     ORDER BY max(ended_at) DESC
   " | sed 's/^/    /' || true
   echo
-  echo "→ Recent FAILED / SKIPPED steps (last 7d):"
+  # Header names the query, not a fixed list of statuses: the query is
+  # `status <> 'ok'` and each row prints its own status, so a status added later
+  # (`source_not_published`, #248) shows up correctly labelled instead of being
+  # filed under a heading that calls it a failure.
+  echo "→ Recent non-OK steps (last 7d):"
   FAILS=$("${PSQL[@]}" "$PROD_URL" -t -A -F'  ' -c "
     SELECT to_char(ended_at AT TIME ZONE 'UTC', 'MM-DD HH24:MI'), rpad(step, 14), status,
            coalesce(left(error, 60), '')
