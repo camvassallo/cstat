@@ -21,7 +21,7 @@ import {
 } from 'recharts';
 import {
   fetchPlayerCompare,
-  type ComparePlayer,
+  type ComparePlayerResolved,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { PlayerPicker } from '../components/PlayerPicker';
@@ -204,7 +204,7 @@ function StatTable({
   );
 }
 
-function PlayerHeader({ p, color, onRemove }: { p: ComparePlayer; color: string; onRemove: () => void }) {
+function PlayerHeader({ p, color, onRemove }: { p: ComparePlayerResolved; color: string; onRemove: () => void }) {
   const { player } = p;
   const campom = p.torvik_stats?.campom ?? null;
   const campomPct = p.torvik_stats?.campom_pct ?? null;
@@ -309,7 +309,7 @@ export default function PlayerCompare() {
     [idsCsv],
   );
 
-  const [players, setPlayers] = useState<ComparePlayer[]>([]);
+  const [players, setPlayers] = useState<ComparePlayerResolved[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showChips, setShowChips] = useState(true);
@@ -332,9 +332,17 @@ export default function PlayerCompare() {
     setError(null);
     fetchPlayerCompare(ids, season)
       .then((r) => {
-        // Preserve URL order in case the API returns differently
-        const byId = new Map(r.players.map((p) => [p.player.id, p]));
-        setPlayers(ids.map((id) => byId.get(id)).filter((p): p is ComparePlayer => !!p));
+        // Preserve URL order in case the API returns differently. Key on
+        // `requested_id`, not `player.id` — the API resolves each slot into
+        // its own season, which can hand back a different UUID for the same
+        // human. This page asks for one season, so unavailable slots are
+        // dropped here as before; cross-year mode renders them instead.
+        const byId = new Map(r.players.map((p) => [p.requested_id, p]));
+        setPlayers(
+          ids
+            .map((id) => byId.get(id))
+            .filter((p): p is ComparePlayerResolved => !!p && p.available),
+        );
       })
       .catch((e) => setError(e.message ?? 'Failed to load comparison'))
       .finally(() => setLoading(false));

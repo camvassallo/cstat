@@ -505,6 +505,57 @@ struct PlayerCompareParams {
 
 const MAX_COMPARE_PLAYERS: usize = 4;
 
+/// One requested comparison slot: a player UUID plus the season to render it
+/// in. `ids` accepts `<uuid>@<season>` per slot; a bare `<uuid>` inherits the
+/// request-level `season`, so every pre-existing caller keeps its behaviour.
+#[derive(Debug)]
+struct CompareSlot {
+    /// The UUID exactly as the caller wrote it. Echoed back as
+    /// `requested_id` — cross-season resolution can hand back a *different*
+    /// UUID for the same human, so this is the only key the frontend can use
+    /// to line a response entry up with the slot it asked for.
+    requested_id: Uuid,
+    season: i32,
+}
+
+/// Split `ids` into slots. `<uuid>` and `<uuid>@<season>` are both accepted;
+/// UUIDs contain no `@`, so a single split on it is unambiguous.
+fn parse_compare_slots(
+    ids: &str,
+    default_season: i32,
+) -> Result<Vec<CompareSlot>, (StatusCode, Json<Value>)> {
+    ids.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|slot| {
+            let (id_str, season) = match slot.split_once('@') {
+                Some((id_str, season_str)) => {
+                    let season = season_str.trim().parse::<i32>().map_err(|e| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "error": format!("invalid season in ids slot {slot:?}: {e}"),
+                            })),
+                        )
+                    })?;
+                    (id_str.trim(), season)
+                }
+                None => (slot, default_season),
+            };
+            let requested_id = Uuid::parse_str(id_str).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("invalid uuid in ids: {e}") })),
+                )
+            })?;
+            Ok(CompareSlot {
+                requested_id,
+                season,
+            })
+        })
+        .collect()
+}
+
 async fn player_compare(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PlayerCompareParams>,
@@ -512,27 +563,15 @@ async fn player_compare(
     let season = params.season.unwrap_or_else(crate::default_season);
     let pool = &state.db.pool;
 
-    let ids: Vec<Uuid> = params
-        .ids
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(Uuid::parse_str)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": format!("invalid uuid in ids: {e}") })),
-            )
-        })?;
+    let slots = parse_compare_slots(&params.ids, season)?;
 
-    if ids.is_empty() {
+    if slots.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "ids query param is required" })),
         ));
     }
-    if ids.len() > MAX_COMPARE_PLAYERS {
+    if slots.len() > MAX_COMPARE_PLAYERS {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -541,25 +580,64 @@ async fn player_compare(
         ));
     }
 
-    let league_averages = queries::get_league_averages(pool, season)
-        .await
-        .map_err(|e| {
+    // League averages are what the "vs league average" shading is measured
+    // against, so a slot rendered in 2015 has to be shaded against 2015 — one
+    // object for the request season would be wrong for every off-season slot.
+    // Fetch one per distinct season present (at most MAX_COMPARE_PLAYERS + 1)
+    // and key them by season; `league_averages` stays as the request-season
+    // object so single-season callers see an unchanged payload.
+    let mut league_seasons: Vec<i32> = slots.iter().map(|s| s.season).collect();
+    league_seasons.push(season);
+    league_seasons.sort_unstable();
+    league_seasons.dedup();
+
+    let mut league_averages_by_season = serde_json::Map::new();
+    for s in league_seasons {
+        let avg = queries::get_league_averages(pool, s).await.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("query failed: {e}") })),
             )
         })?;
+        league_averages_by_season.insert(s.to_string(), json!(avg));
+    }
+    let league_averages = league_averages_by_season
+        .get(&season.to_string())
+        .cloned()
+        .unwrap_or(Value::Null);
 
-    let mut players_data = Vec::with_capacity(ids.len());
-    for id in &ids {
+    let mut players_data = Vec::with_capacity(slots.len());
+    for slot in &slots {
+        // Player UUIDs are season-scoped, so a slot pointing a 2026 UUID at
+        // 2015 only resolves through natstat_id / torvik_pid — the same path
+        // the detail routes take. Cross-year makes this the common case.
+        let resolved = queries::resolve_player_id_for_season(pool, slot.requested_id, slot.season)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("query failed: {e}") })),
+                )
+            })?;
+
+        // A slot that does not resolve gets an explicit unavailable entry
+        // rather than vanishing from the array: "not in Division I that year"
+        // is a legitimate, frequent cross-year answer, and a dropped element
+        // leaves the UI rendering three columns for four picks with no
+        // explanation. Positional alignment with `ids` is preserved.
+        let Some(resolved_id) = resolved else {
+            players_data.push(unavailable_compare_slot(slot));
+            continue;
+        };
+
         let (player, season_stats, percentiles, game_log, torvik_stats, archetype) =
             tokio::try_join!(
-                queries::get_player_by_id(pool, *id, season),
-                queries::get_player_season_stats(pool, *id, season),
-                queries::get_player_percentiles(pool, *id, season),
-                queries::get_player_game_log(pool, *id, season),
-                queries::get_torvik_stats(pool, *id, season),
-                queries::get_player_archetype(pool, *id, season),
+                queries::get_player_by_id(pool, resolved_id, slot.season),
+                queries::get_player_season_stats(pool, resolved_id, slot.season),
+                queries::get_player_percentiles(pool, resolved_id, slot.season),
+                queries::get_player_game_log(pool, resolved_id, slot.season),
+                queries::get_torvik_stats(pool, resolved_id, slot.season),
+                queries::get_player_archetype(pool, resolved_id, slot.season),
             )
             .map_err(|e| {
                 (
@@ -568,9 +646,17 @@ async fn player_compare(
                 )
             })?;
 
-        let Some(player) = player else { continue };
+        // The resolver found a (player, season) row but the profile query did
+        // not — same user-visible state as an unresolvable slot.
+        let Some(player) = player else {
+            players_data.push(unavailable_compare_slot(slot));
+            continue;
+        };
 
         players_data.push(json!({
+            "requested_id": slot.requested_id,
+            "season": slot.season,
+            "available": true,
             "player": player,
             "season_stats": season_stats,
             "percentiles": percentiles,
@@ -583,6 +669,98 @@ async fn player_compare(
     Ok(Json(json!({
         "season": season,
         "league_averages": league_averages,
+        "league_averages_by_season": league_averages_by_season,
         "players": players_data,
     })))
+}
+
+/// The placeholder entry for a slot with no row in its season. Same key set as
+/// a resolved entry so the frontend can read it without branching on shape —
+/// only `available` and the null `player` distinguish it.
+fn unavailable_compare_slot(slot: &CompareSlot) -> Value {
+    json!({
+        "requested_id": slot.requested_id,
+        "season": slot.season,
+        "available": false,
+        "player": null,
+        "season_stats": null,
+        "percentiles": null,
+        "game_log": [],
+        "torvik_stats": null,
+        "archetype": null,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slots(ids: &str, default_season: i32) -> Vec<(Uuid, i32)> {
+        parse_compare_slots(ids, default_season)
+            .expect("slots should parse")
+            .into_iter()
+            .map(|s| (s.requested_id, s.season))
+            .collect()
+    }
+
+    const A: &str = "11111111-1111-1111-1111-111111111111";
+    const B: &str = "22222222-2222-2222-2222-222222222222";
+
+    #[test]
+    fn bare_uuids_inherit_the_request_season() {
+        let parsed = slots(&format!("{A},{B}"), 2026);
+        assert_eq!(
+            parsed,
+            vec![
+                (Uuid::parse_str(A).unwrap(), 2026),
+                (Uuid::parse_str(B).unwrap(), 2026),
+            ]
+        );
+    }
+
+    #[test]
+    fn per_slot_season_overrides_the_request_season() {
+        let parsed = slots(&format!("{A}@2015,{B}"), 2026);
+        assert_eq!(
+            parsed,
+            vec![
+                (Uuid::parse_str(A).unwrap(), 2015),
+                (Uuid::parse_str(B).unwrap(), 2026),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_same_uuid_can_appear_twice_in_different_seasons() {
+        // Comparing a player against his own earlier self is a first-class
+        // cross-year case, so duplicate UUIDs must survive as distinct slots.
+        let parsed = slots(&format!("{A}@2024,{A}@2026"), 2026);
+        assert_eq!(
+            parsed,
+            vec![
+                (Uuid::parse_str(A).unwrap(), 2024),
+                (Uuid::parse_str(A).unwrap(), 2026),
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_and_empty_slots_are_tolerated() {
+        let parsed = slots(&format!(" {A} @ 2015 , ,{B}"), 2026);
+        assert_eq!(
+            parsed,
+            vec![
+                (Uuid::parse_str(A).unwrap(), 2015),
+                (Uuid::parse_str(B).unwrap(), 2026),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bad_uuid_or_season_is_a_400() {
+        for ids in [format!("{A},not-a-uuid"), format!("{A}@nineteen")] {
+            let (status, _) = parse_compare_slots(&ids, 2026).expect_err("should reject");
+            assert_eq!(status, StatusCode::BAD_REQUEST, "for ids {ids:?}");
+        }
+    }
 }
