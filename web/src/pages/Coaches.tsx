@@ -11,8 +11,15 @@ import { compareValues, type SortDir } from '../components/tableSort';
 import { usePageTitle } from '../components/usePageTitle';
 import { useSeason, setPageSeasons, type Season } from '../components/season';
 import { caeColor, fmtCae, tenureSpan } from '../components/cae';
+import ModeToggle, { type ModeToggleOption } from '../components/ModeToggle';
 
 type Mode = 'career' | 'season';
+
+// Hoisted so the array identity is stable across renders.
+const MODE_OPTIONS: readonly ModeToggleOption<Mode>[] = [
+  { value: 'career', label: 'Career' },
+  { value: 'season', label: 'Season' },
+];
 
 // Career mode shows every rated coach: `cae_shrunk` already pulls thin tenures
 // toward 0 and the Rel. column flags low-confidence ratings, so an explicit
@@ -479,19 +486,13 @@ export function Coaches() {
         {/* Career / Season ranking toggle — pinned top-right in both modes.
             `shrink-0` + the left column's `min-w-0 flex-1` keep it fixed even
             as the caption length changes between modes. */}
-        <div className="inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs self-start shrink-0">
-          {(['career', 'season'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={`px-3 py-1.5 capitalize ${
-                mode === m ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <ModeToggle
+          options={MODE_OPTIONS}
+          value={mode}
+          onChange={setMode}
+          ariaLabel="Coach ranking scope"
+          className="self-start shrink-0"
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
