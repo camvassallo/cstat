@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   fetchPrediction,
@@ -11,7 +11,22 @@ import {
   type TeamRanking,
   type Venue,
 } from '../api/client';
-import { useSeason, seasonHref } from '../components/season';
+import {
+  matchupKey,
+  parseSlotSeasonParam,
+  slotYears,
+  teamLabel,
+  toRequest,
+  type Matchup,
+  type SlotYears,
+} from '../lib/predictSlots';
+import {
+  seasonHref,
+  setPageSeasons,
+  useAvailableSeasons,
+  useSeason,
+} from '../components/season';
+import ModeToggle from '../components/ModeToggle';
 import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { usePageTitle } from '../components/usePageTitle';
 import { camTier, camTierColor, camTitle } from '../components/cam';
@@ -24,10 +39,77 @@ import { Link } from 'react-router-dom';
 const TEAM_1_COLOR = '#3b82f6'; // blue (matches PlayerCompare PLAYER_COLORS[0])
 const TEAM_2_COLOR = '#ef4444'; // red
 
+// ---------------------------------------------------------------------------
+// Time Machine (cross-year) mode
+// ---------------------------------------------------------------------------
+// `season` is the default and in it this page behaves exactly as it did before
+// cross-year existed: one site-wide `?season=`, one team list, the same URL
+// shape, `as_of_date` available. `year` gives each side its own season and the
+// matchup becomes a what-if that never happened.
+
+type PredictMode = 'season' | 'year';
+
+/// Wording is fixed by `ModeToggle`'s cross-year contract so Predict,
+/// PlayerCompare and the comparable-players list all read the same. "Any year"
+/// over "cross-year": the latter is how we talk about the work, not what the
+/// reader is choosing between.
+const MODE_OPTIONS = [
+  { value: 'year' as const, label: 'Any year', title: 'Give each team its own season' },
+  { value: 'season' as const, label: 'Season', title: 'Both teams from one season' },
+];
+
+/// The empty override that hides the navbar season picker. A module constant
+/// rather than a fresh `[]` per render — `setPageSeasons` de-dupes by value,
+/// but there is no reason to hand it the work.
+const NO_GLOBAL_SEASONS: readonly number[] = [];
+
+// ---------------------------------------------------------------------------
+// Per-season team lists
+// ---------------------------------------------------------------------------
+// Cross-year needs a team list per slot, not one for the page: D-I membership
+// genuinely differs by year, so a 2026 list cannot autocomplete a 2015 team and
+// a 2026 rankings row is the wrong baseline for a 2015 four-factor comparison.
+//
+// Four call sites want a list on any given render (two pickers, two stat
+// columns), and in single-season mode all four want the SAME one — hence the
+// module-level cache, which turns that into a single request. A rejected fetch
+// is evicted rather than kept: caching the failure would leave that season with
+// an empty picker for the rest of the session.
+
+const rankingsBySeason = new Map<number, Promise<TeamRanking[]>>();
+
+function loadRankings(season: number): Promise<TeamRanking[]> {
+  const cached = rankingsBySeason.get(season);
+  if (cached) return cached;
+  const pending = fetchTeamRankings(season).then((r) => r.teams);
+  pending.catch(() => rankingsBySeason.delete(season));
+  rankingsBySeason.set(season, pending);
+  return pending;
+}
+
+function useTeamRankings(season: number): TeamRanking[] {
+  const [teams, setTeams] = useState<TeamRanking[]>([]);
+  useEffect(() => {
+    let alive = true;
+    loadRankings(season)
+      .then((t) => {
+        if (alive) setTeams(t);
+      })
+      .catch(() => {
+        // Pickers still work as free text, and the panels that need a row
+        // render nothing rather than a wrong-era one.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [season]);
+  return teams;
+}
+
 export default function Predict() {
   const { season } = useSeason();
   usePageTitle('Game Prediction');
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const urlHome = searchParams.get('home') ?? '';
   const urlAway = searchParams.get('away') ?? '';
   const urlVenue = searchParams.get('venue') as Venue | null;
@@ -39,114 +121,236 @@ export default function Predict() {
   // honest counterfactual for a historical matchup. Empty → live
   // end-of-season state.
   const urlAsOfDate = searchParams.get('as_of_date') ?? '';
+  // Per-slot years. Their PRESENCE is what marks a link as cross-year — there
+  // is no separate mode param, the same way PlayerCompare reads its mode off
+  // the `@year` tokens inside `ids`. A single-season link carries neither and
+  // keeps the shape every ticker and schedule row already builds.
+  const urlHomeSeason = parseSlotSeasonParam(searchParams.get('home_season'));
+  const urlAwaySeason = parseSlotSeasonParam(searchParams.get('away_season'));
+  const urlIsCrossYear = urlHomeSeason != null || urlAwaySeason != null;
+
+  const [mode, setMode] = useState<PredictMode>(urlIsCrossYear ? 'year' : 'season');
+  // One-way, like PlayerCompare's: a cross-year link pasted into an already-
+  // mounted page turns the mode ON. It cannot turn it off, because leaving the
+  // mode is itself what strips the params.
+  useEffect(() => {
+    if (urlIsCrossYear) setMode('year');
+  }, [urlIsCrossYear]);
+  const crossYear = mode === 'year';
+
+  // Cross-year gives each slot its own year, so one site-wide season means
+  // nothing — publishing an empty list hides the navbar picker. The unmount
+  // cleanup is what stops it staying hidden on whatever the user opens next:
+  // the override is module state, not page state.
+  useEffect(() => {
+    setPageSeasons(crossYear ? NO_GLOBAL_SEASONS : null);
+    return () => setPageSeasons(null);
+  }, [crossYear]);
+
+  const { seasons: allSeasons } = useAvailableSeasons();
 
   const [team1, setTeam1] = useState(urlHome);
   const [team2, setTeam2] = useState(urlAway);
+  const [team1Season, setTeam1Season] = useState(urlHomeSeason ?? season);
+  const [team2Season, setTeam2Season] = useState(urlAwaySeason ?? season);
   const [venue, setVenue] = useState<Venue>(initialVenue);
   const [asOfDate, setAsOfDate] = useState(urlAsOfDate);
-  const [result, setResult] = useState<PredictionResult | null>(null);
+  // The result travels with the years that were REQUESTED, not with the form's
+  // current ones: the response echoes a single `season` (the home side's), and
+  // editing a picker afterwards must not relabel a prediction that is already
+  // on screen.
+  const [loaded, setLoaded] = useState<{
+    result: PredictionResult;
+    years: SlotYears;
+  } | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Pull the team list once for autocomplete on both pickers. Rankings is
-  // already keyed by season and lightweight (~360 rows for D-I), so client-
-  // side filtering is simpler than a per-keystroke server search.
-  const [teams, setTeams] = useState<TeamRanking[]>([]);
-  useEffect(() => {
-    let alive = true;
-    fetchTeamRankings(season)
-      .then((r) => {
-        if (alive) setTeams(r.teams);
-      })
-      .catch(() => {
-        // Picker still works; fallback to free-text typing.
-      });
-    return () => {
-      alive = false;
-    };
-  }, [season]);
+  // Single-season mode ignores the per-slot state entirely and runs on the
+  // site-wide season, so `?season=` keeps driving the page exactly as before.
+  const homeSeason = crossYear ? team1Season : season;
+  const awaySeason = crossYear ? team2Season : season;
+  const formShowYears = homeSeason !== awaySeason;
+
+  // A team list per slot. Same season on both sides — every single-season
+  // render — is one shared request, see `loadRankings`.
+  const team1Teams = useTeamRankings(homeSeason);
+  const team2Teams = useTeamRankings(awaySeason);
+
+  // One prediction path for both entry points (the form, and a URL the page was
+  // opened on) so the two cannot drift. `seq` supersedes rather than cancels:
+  // two fetches are easily in flight at once — submit while a deep-link is
+  // still loading — and the older answer must not be the one that lands.
+  const seqRef = useRef(0);
+  const lastKeyRef = useRef<string | null>(null);
+
+  const runPrediction = useCallback(async (m: Matchup) => {
+    const seq = ++seqRef.current;
+    lastKeyRef.current = matchupKey(m);
+    setLoading(true);
+    setError('');
+    setLoaded(null);
+    try {
+      const r = await fetchPrediction(toRequest(m));
+      if (seqRef.current !== seq) return;
+      setLoaded({ result: r, years: slotYears(m) });
+    } catch (err) {
+      if (seqRef.current !== seq) return;
+      setError(err instanceof Error ? err.message : 'Prediction failed');
+    } finally {
+      if (seqRef.current === seq) setLoading(false);
+    }
+  }, []);
 
   // When teams arrive via URL params (deep-link from a schedule row, ticker
   // tile, or shared link), kick off the prediction automatically. Re-fires
-  // when the URL or season changes so /predict?home=A&away=B remains a
-  // first-class destination.
+  // when the URL or season changes so /predict?home=A&away=B — and its
+  // cross-year form, /predict?home=A&home_season=2015&away=B&away_season=2026 —
+  // remain first-class destinations.
   useEffect(() => {
     if (!urlHome.trim() || !urlAway.trim()) return;
-    setTeam1(urlHome);
-    setTeam2(urlAway);
-    setVenue(initialVenue);
-    setAsOfDate(urlAsOfDate);
-    let alive = true;
-    setLoading(true);
-    setError('');
-    setResult(null);
-    fetchPrediction(
-      urlHome.trim(),
-      urlAway.trim(),
-      initialVenue,
-      season,
-      urlAsOfDate || undefined,
-    )
-      .then((r) => {
-        if (alive) setResult(r);
-      })
-      .catch((err) => {
-        if (alive) setError(err instanceof Error ? err.message : 'Prediction failed');
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => {
-      alive = false;
+    const m: Matchup = {
+      home: urlHome.trim(),
+      away: urlAway.trim(),
+      venue: initialVenue,
+      homeSeason: urlIsCrossYear ? (urlHomeSeason ?? season) : season,
+      awaySeason: urlIsCrossYear ? (urlAwaySeason ?? season) : season,
+      asOfDate: urlAsOfDate,
+      crossYear: urlIsCrossYear,
     };
+    // Mirror the link into the form, so the pickers show what is on screen.
+    setTeam1(m.home);
+    setTeam2(m.away);
+    setTeam1Season(m.homeSeason);
+    setTeam2Season(m.awaySeason);
+    setVenue(m.venue);
+    setAsOfDate(m.asOfDate);
+    // Cross-year submits write these same params back to the URL; without the
+    // guard that write returns here as a second, identical request.
+    if (matchupKey(m) === lastKeyRef.current) return;
+    void runPrediction(m);
     // The early-return on empty `urlHome`/`urlAway` short-circuits the first
     // render before pickers have any value. `initialVenue` is intentionally
     // omitted from the deps — it's recomputed each render from `urlVenue`
     // (which is in the deps), so reading its current value inside the effect
     // is correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlHome, urlAway, urlVenue, urlAsOfDate, season]);
+  }, [
+    urlHome,
+    urlAway,
+    urlVenue,
+    urlAsOfDate,
+    urlHomeSeason,
+    urlAwaySeason,
+    urlIsCrossYear,
+    season,
+    runPrediction,
+  ]);
+
+  const changeMode = (next: PredictMode) => {
+    if (next === mode) return;
+    if (next === 'year') {
+      // Pin both slots to the season already on screen, so the toggle makes the
+      // years editable rather than different.
+      setTeam1Season(season);
+      setTeam2Season(season);
+    } else if (urlIsCrossYear) {
+      // Strip the per-slot params, or the sync effect above reads them straight
+      // back and flips the mode on again.
+      setSearchParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          p.delete('home_season');
+          p.delete('away_season');
+          return p;
+        },
+        { replace: true },
+      );
+    }
+    setMode(next);
+  };
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!team1.trim() || !team2.trim()) return;
-    setLoading(true);
-    setError('');
-    setResult(null);
-    try {
-      const r = await fetchPrediction(
-        team1.trim(),
-        team2.trim(),
-        venue,
-        season,
-        asOfDate.trim() || undefined,
+    const m: Matchup = {
+      home: team1.trim(),
+      away: team2.trim(),
+      venue,
+      homeSeason,
+      awaySeason,
+      asOfDate: asOfDate.trim(),
+      crossYear,
+    };
+    if (crossYear) {
+      // Cross-year state lives nowhere but the URL: there is no site-wide
+      // `?season=` to fall back on (the picker is hidden), and the mode itself
+      // is read back off these two params — so writing them on submit is what
+      // makes a Time Machine matchup shareable at all. `replace` keeps a run of
+      // experiments out of the back button. Single-season deliberately does NOT
+      // do this: that URL shape is what the ticker and schedule rows build, and
+      // it stays exactly as it was.
+      setSearchParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          p.set('home', m.home);
+          p.set('away', m.away);
+          p.set('venue', m.venue);
+          p.set('home_season', String(m.homeSeason));
+          p.set('away_season', String(m.awaySeason));
+          // Can't apply cross-year, and a stale one in a shared link is noise.
+          p.delete('as_of_date');
+          return p;
+        },
+        { replace: true },
       );
-      setResult(r);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Prediction failed');
-    } finally {
-      setLoading(false);
     }
+    await runPrediction(m);
   };
 
-  const team1Prob = result ? result.home_win_probability * 100 : 50;
+  const team1Prob = loaded ? loaded.result.home_win_probability * 100 : 50;
 
   const venueLabel: Record<Venue, string> = {
-    home: team1.trim() ? `${team1.trim()} home` : 'Team 1 home',
+    home: team1.trim()
+      ? `${teamLabel(team1.trim(), homeSeason, formShowYears)} home`
+      : 'Team 1 home',
     neutral: 'Neutral',
-    away: team2.trim() ? `${team2.trim()} home` : 'Team 2 home',
+    away: team2.trim()
+      ? `${teamLabel(team2.trim(), awaySeason, formShowYears)} home`
+      : 'Team 2 home',
   };
 
   return (
     <div className="max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold mb-1">Game Prediction</h1>
-      <p className="text-xs text-gray-500 mb-5">
-        Predicting{' '}
-        <span className="text-gray-300">
-          {season - 1}-{String(season).slice(2)}
-        </span>{' '}
-        matchups.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+        <div>
+          <h1 className="text-2xl font-bold mb-1">Game Prediction</h1>
+          {crossYear ? (
+            <p className="text-xs text-gray-500 max-w-2xl">
+              Each side brings its own year. These two never met and never could
+              — the eras played different games, different pace and different
+              rules — so take the result as a fun what-if rather than a line.
+              The one bias we have measured is small and in a known direction:
+              about a point in the more recent team's favor.
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500">
+              Predicting{' '}
+              <span className="text-gray-300">
+                {season - 1}-{String(season).slice(2)}
+              </span>{' '}
+              matchups.
+            </p>
+          )}
+        </div>
+        <ModeToggle
+          options={MODE_OPTIONS}
+          value={mode}
+          onChange={changeMode}
+          ariaLabel="Prediction mode"
+          className="self-start shrink-0"
+        />
+      </div>
 
       <form onSubmit={handleSubmit} className="bg-gray-800 rounded-lg p-6 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -154,17 +358,23 @@ export default function Predict() {
             label="Team 1"
             value={team1}
             onChange={setTeam1}
-            teams={teams}
+            teams={team1Teams}
             placeholder="e.g. Duke"
             color={TEAM_1_COLOR}
+            season={crossYear ? homeSeason : null}
+            seasons={allSeasons}
+            onSeasonChange={setTeam1Season}
           />
           <TeamPicker
             label="Team 2"
             value={team2}
             onChange={setTeam2}
-            teams={teams}
+            teams={team2Teams}
             placeholder="e.g. Michigan"
             color={TEAM_2_COLOR}
+            season={crossYear ? awaySeason : null}
+            seasons={allSeasons}
+            onSeasonChange={setTeam2Season}
           />
         </div>
 
@@ -194,7 +404,11 @@ export default function Predict() {
           </div>
         </div>
 
-        <div>
+        {/* Point-in-time is a within-season idea — the cohort behind it is built
+            for exactly one year — so cross-year has no honest version of it and
+            the backend rejects the combination outright. Hiding the field is
+            what keeps the mode from offering a guaranteed error. */}
+        <div className={crossYear ? 'hidden' : undefined}>
           <label htmlFor="as-of-date" className="block text-sm text-gray-400 mb-1.5">
             As of <span className="text-gray-600">(optional, for historical projections)</span>
           </label>
@@ -229,7 +443,7 @@ export default function Predict() {
         </div>
       )}
 
-      {result && (
+      {loaded && (
         <div className="mt-6 space-y-4">
           {/* Order matches the user's mental flow: answer first,
               quantitative breakdown second, personnel context third,
@@ -237,12 +451,16 @@ export default function Predict() {
               internalised the projection's reasoning).
               PreviousMatchups returns null when the teams haven't
               played, so absent-history matchups still flow cleanly. */}
-          <ResultHeadline result={result} team1Prob={team1Prob} />
-          <SideBySideStats result={result} teams={teams} />
-          <ArchetypeRow result={result} />
-          <ShotDietRow result={result} />
-          <RosterCompare result={result} />
-          <PreviousMatchups result={result} />
+          <ResultHeadline
+            result={loaded.result}
+            years={loaded.years}
+            team1Prob={team1Prob}
+          />
+          <SideBySideStats result={loaded.result} years={loaded.years} />
+          <ArchetypeRow result={loaded.result} years={loaded.years} />
+          <ShotDietRow result={loaded.result} years={loaded.years} />
+          <RosterCompare result={loaded.result} years={loaded.years} />
+          <PreviousMatchups result={loaded.result} />
         </div>
       )}
     </div>
@@ -257,7 +475,13 @@ export default function Predict() {
 // so the eye compares blocks-in-the-same-region rather than hunting.
 // ---------------------------------------------------------------------------
 
-function ArchetypeRow({ result }: { result: PredictionResult }) {
+function ArchetypeRow({
+  result,
+  years,
+}: {
+  result: PredictionResult;
+  years: SlotYears;
+}) {
   const hasHome = result.archetype_distribution_home?.some((a) => a.team_share > 0);
   const hasAway = result.archetype_distribution_away?.some((a) => a.team_share > 0);
   if (!hasHome && !hasAway) return null;
@@ -273,9 +497,9 @@ function ArchetypeRow({ result }: { result: PredictionResult }) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <TeamPanel
-          teamName={result.home_team}
+          teamName={teamLabel(result.home_team, years.home, years.show)}
           teamId={result.home_team_id}
-          season={result.season}
+          season={years.home}
           color={TEAM_1_COLOR}
         >
           {hasHome ? (
@@ -287,9 +511,9 @@ function ArchetypeRow({ result }: { result: PredictionResult }) {
           )}
         </TeamPanel>
         <TeamPanel
-          teamName={result.away_team}
+          teamName={teamLabel(result.away_team, years.away, years.show)}
           teamId={result.away_team_id}
-          season={result.season}
+          season={years.away}
           color={TEAM_2_COLOR}
         >
           {hasAway ? (
@@ -305,7 +529,13 @@ function ArchetypeRow({ result }: { result: PredictionResult }) {
   );
 }
 
-function ShotDietRow({ result }: { result: PredictionResult }) {
+function ShotDietRow({
+  result,
+  years,
+}: {
+  result: PredictionResult;
+  years: SlotYears;
+}) {
   const hasHome = result.roster_home.some((p) => (p.rim_attempted ?? 0) + (p.mid_attempted ?? 0) + (p.tpa ?? 0) > 0);
   const hasAway = result.roster_away.some((p) => (p.rim_attempted ?? 0) + (p.mid_attempted ?? 0) + (p.tpa ?? 0) > 0);
   if (!hasHome && !hasAway) return null;
@@ -321,9 +551,9 @@ function ShotDietRow({ result }: { result: PredictionResult }) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <TeamPanel
-          teamName={result.home_team}
+          teamName={teamLabel(result.home_team, years.home, years.show)}
           teamId={result.home_team_id}
-          season={result.season}
+          season={years.home}
           color={TEAM_1_COLOR}
         >
           {hasHome ? (
@@ -333,9 +563,9 @@ function ShotDietRow({ result }: { result: PredictionResult }) {
           )}
         </TeamPanel>
         <TeamPanel
-          teamName={result.away_team}
+          teamName={teamLabel(result.away_team, years.away, years.show)}
           teamId={result.away_team_id}
-          season={result.season}
+          season={years.away}
           color={TEAM_2_COLOR}
         >
           {hasAway ? (
@@ -403,7 +633,13 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 
 const ROSTER_PANEL_LIMIT = 8;
 
-function RosterCompare({ result }: { result: PredictionResult }) {
+function RosterCompare({
+  result,
+  years,
+}: {
+  result: PredictionResult;
+  years: SlotYears;
+}) {
   const homeTop = useMemo(
     () => result.roster_home.slice(0, ROSTER_PANEL_LIMIT),
     [result.roster_home],
@@ -425,16 +661,16 @@ function RosterCompare({ result }: { result: PredictionResult }) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
         <RosterColumn
-          teamName={result.home_team}
+          teamName={teamLabel(result.home_team, years.home, years.show)}
           teamId={result.home_team_id}
-          season={result.season}
+          season={years.home}
           color={TEAM_1_COLOR}
           roster={homeTop}
         />
         <RosterColumn
-          teamName={result.away_team}
+          teamName={teamLabel(result.away_team, years.away, years.show)}
           teamId={result.away_team_id}
-          season={result.season}
+          season={years.away}
           color={TEAM_2_COLOR}
           roster={awayTop}
         />
@@ -535,6 +771,10 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
 // ---------------------------------------------------------------------------
 
 function PreviousMatchups({ result }: { result: PredictionResult }) {
+  // Cross-year needs no guard of its own: two teams from different seasons
+  // never played, so the backend skips the query outright rather than running
+  // one whose only non-empty answer would be wrong, and this list arrives
+  // empty. The "this season" wording below is safe for the same reason.
   if (result.prior_meetings.length === 0) return null;
   return (
     <div className="bg-gray-800 rounded-lg p-6">
@@ -813,8 +1053,17 @@ function BoxScoreSide({
 // Side-by-side stats — uses the rankings data we already fetched for the picker
 // ---------------------------------------------------------------------------
 
-function lookupTeam(name: string, teams: TeamRanking[]): TeamRanking | undefined {
-  return teams.find((t) => t.name === name);
+/// Find a team's rankings row.
+///
+/// Keyed on the season-scoped UUID rather than the name, because cross-year
+/// hands this two different eras' lists and those lists overlap by name almost
+/// entirely: matching "Duke" against whichever list happens to be loaded would
+/// quietly print 2026 Duke's four factors under a header reading Duke 2015. The
+/// id can only match the right era, so a list that is still loading (or that
+/// genuinely has no row for this team) renders nothing instead — which is what
+/// the name lookup did for a missing team anyway.
+function lookupTeam(teamId: string, teams: TeamRanking[]): TeamRanking | undefined {
+  return teams.find((t) => t.team_id === teamId);
 }
 
 interface StatRow {
@@ -833,18 +1082,29 @@ interface StatRow {
 
 function SideBySideStats({
   result,
-  teams,
+  years,
 }: {
   result: PredictionResult;
-  teams: TeamRanking[];
+  years: SlotYears;
 }) {
-  const home = lookupTeam(result.home_team, teams);
-  const away = lookupTeam(result.away_team, teams);
+  // One list per side. Same year on both — every single-season render — is one
+  // shared request; different years fetch the two eras separately, which is the
+  // point: a 2026 rankings row is the wrong baseline for a 2015 team.
+  const homeTeams = useTeamRankings(years.home);
+  const awayTeams = useTeamRankings(years.away);
+  const home = lookupTeam(result.home_team_id, homeTeams);
+  const away = lookupTeam(result.away_team_id, awayTeams);
   // Compute season-aware league averages from the rankings list we already
   // fetched, so the possession panels' league-baseline highlighting tracks
   // the actual era's stats instead of frozen 2008-vintage Dean Oliver
-  // figures. `useMemo` because `teams` is stable across renders.
-  const leagueAvg = useMemo(() => computeLeagueAverages(teams), [teams]);
+  // figures. One baseline per side rather than one per page: across eras the
+  // two teams are average against different leagues, and measuring each
+  // team's deviation against its own league is what makes "who wins this
+  // row" an era-relative question instead of a league-drift question.
+  // Same-season matchups feed both sides the identical list, so this is a
+  // no-op there. `useMemo` because each list is stable across renders.
+  const homeLeague = useMemo(() => computeLeagueAverages(homeTeams), [homeTeams]);
+  const awayLeague = useMemo(() => computeLeagueAverages(awayTeams), [awayTeams]);
   if (!home || !away) return null;
 
   const fmt1 = (v: number) => (v > 0 ? '+' : '') + v.toFixed(1);
@@ -883,8 +1143,8 @@ function SideBySideStats({
       // same info but only if you've memorised the baseline. Label
       // includes Δ so the values aren't mistaken for raw possessions.
       label: 'Tempo Δ',
-      home: home.adj_tempo == null ? null : home.adj_tempo - leagueAvg.TEMPO,
-      away: away.adj_tempo == null ? null : away.adj_tempo - leagueAvg.TEMPO,
+      home: home.adj_tempo == null ? null : home.adj_tempo - homeLeague.TEMPO,
+      away: away.adj_tempo == null ? null : away.adj_tempo - awayLeague.TEMPO,
       better: 'neither',
       format: fmt1,
     },
@@ -925,13 +1185,13 @@ function SideBySideStats({
         <div className="space-y-1.5">
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 pb-2 border-b border-gray-700">
             <div className="text-right text-sm font-medium" style={{ color: TEAM_1_COLOR }}>
-              {home.name}
+              {teamLabel(home.name, years.home, years.show)}
             </div>
             <div className="w-20 text-center text-[11px] uppercase tracking-wide text-gray-500">
               stat
             </div>
             <div className="text-left text-sm font-medium" style={{ color: TEAM_2_COLOR }}>
-              {away.name}
+              {teamLabel(away.name, years.away, years.show)}
             </div>
           </div>
           {rows.map((r) => (
@@ -943,18 +1203,22 @@ function SideBySideStats({
         <PossessionPanel
           offTeam={home}
           defTeam={away}
+          offName={teamLabel(home.name, years.home, years.show)}
           offColor={TEAM_1_COLOR}
           defColor={TEAM_2_COLOR}
-          leagueAvg={leagueAvg}
+          offLeagueAvg={homeLeague}
+          defLeagueAvg={awayLeague}
         />
 
         {/* Column 3: when away team has the ball */}
         <PossessionPanel
           offTeam={away}
           defTeam={home}
+          offName={teamLabel(away.name, years.away, years.show)}
           offColor={TEAM_2_COLOR}
           defColor={TEAM_1_COLOR}
-          leagueAvg={leagueAvg}
+          offLeagueAvg={awayLeague}
+          defLeagueAvg={homeLeague}
         />
       </div>
     </div>
@@ -1035,10 +1299,14 @@ interface PossessionRowSpec {
   /// `1 − DRB%` so both sides read as ORB% (raw DRB% would be the
   /// complement-by-definition and just show the same stat twice).
   defValue: number | null | undefined;
-  /// League-average baseline in the same units as off/def. The highlight
-  /// goes to whichever side's deviation from this average is larger
-  /// (signed in their favor — see `PossessionRow`).
-  leagueAvg: number;
+  /// League-average baselines in the same units as off/def, one per side.
+  /// The highlight goes to whichever side's deviation from ITS OWN baseline
+  /// is larger (signed in their favor — see `PossessionRow`). Two values
+  /// rather than one because a cross-era row compares teams that were average
+  /// against different leagues; same-season rows pass the identical number
+  /// twice and the arithmetic collapses back to what it always was.
+  offLeagueAvg: number;
+  defLeagueAvg: number;
   /// `'high'` = higher is better for offense (eFG%, ORB%, FT Rate);
   /// `'low'` = lower is better for offense (TOV%). Direction flips for
   /// the defense — lower-allowed eFG% is good for defense; higher-forced
@@ -1050,15 +1318,22 @@ interface PossessionRowSpec {
 function PossessionPanel({
   offTeam,
   defTeam,
+  offName,
   offColor,
   defColor,
-  leagueAvg,
+  offLeagueAvg,
+  defLeagueAvg,
 }: {
   offTeam: TeamRanking;
   defTeam: TeamRanking;
+  /// Display name for the offensive side, already year-suffixed when the two
+  /// slots disagree. Passed in rather than read off `offTeam.name` so the
+  /// panel header can't be the one place on the page that drops the year.
+  offName: string;
   offColor: string;
   defColor: string;
-  leagueAvg: PossessionLeagueAvg;
+  offLeagueAvg: PossessionLeagueAvg;
+  defLeagueAvg: PossessionLeagueAvg;
 }) {
   const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
   const fmtRatio = (v: number) => v.toFixed(3);
@@ -1075,7 +1350,8 @@ function PossessionPanel({
       label: 'Pts/100',
       offValue: offTeam.adj_offense,
       defValue: defTeam.adj_defense,
-      leagueAvg: leagueAvg.EFF,
+      offLeagueAvg: offLeagueAvg.EFF,
+      defLeagueAvg: defLeagueAvg.EFF,
       better: 'high',
       format: fmtEff,
     },
@@ -1083,7 +1359,8 @@ function PossessionPanel({
       label: 'eFG%',
       offValue: offTeam.effective_fg_pct,
       defValue: defTeam.opp_effective_fg_pct,
-      leagueAvg: leagueAvg.eFG,
+      offLeagueAvg: offLeagueAvg.eFG,
+      defLeagueAvg: defLeagueAvg.eFG,
       better: 'high',
       format: fmtPct,
     },
@@ -1091,7 +1368,8 @@ function PossessionPanel({
       label: 'TOV%',
       offValue: offTeam.turnover_pct,
       defValue: defTeam.opp_turnover_pct,
-      leagueAvg: leagueAvg.TOV,
+      offLeagueAvg: offLeagueAvg.TOV,
+      defLeagueAvg: defLeagueAvg.TOV,
       better: 'low',
       format: fmtPct,
     },
@@ -1104,7 +1382,8 @@ function PossessionPanel({
       // gap visually (33% vs 72% reads as huge but is just two views
       // of the same coin).
       defValue: defTeam.def_rebound_pct == null ? null : 1 - defTeam.def_rebound_pct,
-      leagueAvg: leagueAvg.ORB,
+      offLeagueAvg: offLeagueAvg.ORB,
+      defLeagueAvg: defLeagueAvg.ORB,
       better: 'high',
       format: fmtPct,
     },
@@ -1112,7 +1391,8 @@ function PossessionPanel({
       label: 'FT Rate',
       offValue: offTeam.ft_rate,
       defValue: defTeam.opp_ft_rate,
-      leagueAvg: leagueAvg.FT,
+      offLeagueAvg: offLeagueAvg.FT,
+      defLeagueAvg: defLeagueAvg.FT,
       better: 'high',
       format: fmtRatio,
     },
@@ -1121,7 +1401,7 @@ function PossessionPanel({
   return (
     <div>
       <div className="text-xs uppercase tracking-wide text-gray-500 mb-3 text-center">
-        When <span style={{ color: offColor }}>{offTeam.name}</span> has the ball
+        When <span style={{ color: offColor }}>{offName}</span> has the ball
       </div>
       <div className="space-y-1.5">
         {rows.map((r) => (
@@ -1148,13 +1428,22 @@ function PossessionRow({
   // Duke 13.4% TOV vs Illinois 11.7% opp-TOV — both well below the ~17%
   // league average — is a Duke offensive edge: Duke is strong at the
   // thing Illinois is weak at, even though 13.4 > 11.7 in raw terms.
+  //
+  // Each side is measured against its OWN league, which only differs cross-era
+  // but matters a lot there: 2015 D-I turned it over ~2.7pp more often than
+  // 2026 D-I, so a shared baseline would hand the modern side a turnover edge
+  // it did not earn. Deviation-from-own-era is the era-relative reading.
   let offBetter = false;
   let defBetter = false;
   if (row.offValue != null && row.defValue != null) {
     const offStrength =
-      row.better === 'high' ? row.offValue - row.leagueAvg : row.leagueAvg - row.offValue;
+      row.better === 'high'
+        ? row.offValue - row.offLeagueAvg
+        : row.offLeagueAvg - row.offValue;
     const defStrength =
-      row.better === 'high' ? row.leagueAvg - row.defValue : row.defValue - row.leagueAvg;
+      row.better === 'high'
+        ? row.defLeagueAvg - row.defValue
+        : row.defValue - row.defLeagueAvg;
     if (offStrength > defStrength) offBetter = true;
     else if (defStrength > offStrength) defBetter = true;
   }
@@ -1218,9 +1507,11 @@ function computeWinner(row: StatRow): 'home' | 'away' | null {
 
 function ResultHeadline({
   result,
+  years,
   team1Prob,
 }: {
   result: PredictionResult;
+  years: SlotYears;
   team1Prob: number;
 }) {
   const margin = result.predicted_margin;
@@ -1234,8 +1525,18 @@ function ResultHeadline({
     Math.max(result.home_win_probability, 1 - result.home_win_probability) * 100
   ).toFixed(0);
 
-  const winnerName = winnerIsHome ? result.home_team : result.away_team;
-  const loserName = winnerIsHome ? result.away_team : result.home_team;
+  const winnerSeason = winnerIsHome ? years.home : years.away;
+  const loserSeason = winnerIsHome ? years.away : years.home;
+  const winnerName = teamLabel(
+    winnerIsHome ? result.home_team : result.away_team,
+    winnerSeason,
+    years.show,
+  );
+  const loserName = teamLabel(
+    winnerIsHome ? result.away_team : result.home_team,
+    loserSeason,
+    years.show,
+  );
   const winnerId = winnerIsHome ? result.home_team_id : result.away_team_id;
   const loserId = winnerIsHome ? result.away_team_id : result.home_team_id;
   const winnerScore = winnerIsHome
@@ -1245,12 +1546,14 @@ function ResultHeadline({
     ? result.predicted_away_score
     : result.predicted_home_score;
 
+  const homeName = teamLabel(result.home_team, years.home, years.show);
+  const awayName = teamLabel(result.away_team, years.away, years.show);
   const venueText =
     result.venue === 'neutral'
       ? 'Neutral site'
       : result.venue === 'home'
-        ? `at ${result.home_team}`
-        : `at ${result.away_team}`;
+        ? `at ${homeName}`
+        : `at ${awayName}`;
 
   // Server-confirmed regime label. Reads `result.prediction_basis`
   // (set in routes/predict.rs) so a request that drops as_of_date in
@@ -1282,6 +1585,17 @@ function ResultHeadline({
       cls: 'bg-amber-900/60 text-amber-300',
       title: `Point-in-time CAM as of ${result.as_of_date}. Team-level features (AdjEM, SOS, four factors) still reflect end-of-season state.`,
     },
+    // The other four labels all describe how much of a season the number saw.
+    // This one varies on a different axis entirely — the game never happened —
+    // so it gets its own wording rather than borrowing "leaky", which would
+    // read as an accuracy warning on a surface whose whole premise is that the
+    // matchup is hypothetical.
+    cross_era: {
+      label: 'What-if',
+      cls: 'bg-violet-900/60 text-violet-300',
+      title:
+        'These two teams are from different seasons, so they never met. Each side is its whole season as it actually played, put on one court — a fun what-if, not a line. The eras differ in pace, rules and shot selection, and the tilt we can measure is about a point toward the more recent team.',
+    },
   };
   // Keyed on the server-confirmed basis alone (not as_of_date): the live
   // early-season path blends with no as_of_date on the request, and the
@@ -1311,7 +1625,7 @@ function ResultHeadline({
             Previous Matchups. */}
         <div className="text-3xl font-bold leading-tight">
           <Link
-            to={seasonHref(`/teams/${winnerId}`, result.season)}
+            to={seasonHref(`/teams/${winnerId}`, winnerSeason)}
             style={{ color: winnerColor }}
             className="hover:underline"
           >
@@ -1319,7 +1633,7 @@ function ResultHeadline({
           </Link>
           <span className="text-gray-500 mx-3">—</span>
           <Link
-            to={seasonHref(`/teams/${loserId}`, result.season)}
+            to={seasonHref(`/teams/${loserId}`, loserSeason)}
             style={{ color: loserColor }}
             className="hover:underline"
           >
@@ -1328,7 +1642,7 @@ function ResultHeadline({
         </div>
         <div className="text-sm text-gray-400 mt-2">
           <span style={{ color: winnerColor }} className="font-semibold">
-            {result.predicted_winner} {winnerSpread.toFixed(1)}
+            {winnerName} {winnerSpread.toFixed(1)}
           </span>
           <span className="mx-2 text-gray-600">·</span>
           <span>{winPct}% win probability</span>
@@ -1339,20 +1653,20 @@ function ResultHeadline({
       <div>
         <div className="flex justify-between text-sm mb-1">
           <Link
-            to={seasonHref(`/teams/${result.home_team_id}`, result.season)}
+            to={seasonHref(`/teams/${result.home_team_id}`, years.home)}
             className={`${
               winnerIsHome ? 'text-gray-200 font-medium' : 'text-gray-400'
             } hover:underline`}
           >
-            {result.home_team}
+            {homeName}
           </Link>
           <Link
-            to={seasonHref(`/teams/${result.away_team_id}`, result.season)}
+            to={seasonHref(`/teams/${result.away_team_id}`, years.away)}
             className={`${
               !winnerIsHome ? 'text-gray-200 font-medium' : 'text-gray-400'
             } hover:underline`}
           >
-            {result.away_team}
+            {awayName}
           </Link>
         </div>
         <div className="flex h-7 rounded-full overflow-hidden ring-1 ring-gray-700">
@@ -1381,6 +1695,9 @@ function TeamPicker({
   teams,
   placeholder,
   color,
+  season,
+  seasons,
+  onSeasonChange,
 }: {
   label: string;
   value: string;
@@ -1388,6 +1705,11 @@ function TeamPicker({
   teams: TeamRanking[];
   placeholder: string;
   color: string;
+  /// This slot's year, or null in single-season mode where the site-wide
+  /// picker owns it and no per-slot control is rendered.
+  season: number | null;
+  seasons: readonly number[];
+  onSeasonChange: (next: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1406,12 +1728,27 @@ function TeamPicker({
 
   return (
     <div className="relative">
-      <label className="block text-sm text-gray-400 mb-1">
-        <span style={{ color }} className="font-medium">
-          ●
-        </span>{' '}
-        {label}
-      </label>
+      {/* The year sits on the label row rather than under the input: a
+          cross-year pair of pickers is already two stacked blocks on a phone,
+          and giving each one a third row pushes the Predict button off the
+          first screen. */}
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <label className="text-sm text-gray-400">
+          <span style={{ color }} className="font-medium">
+            ●
+          </span>{' '}
+          {label}
+        </label>
+        {season != null && (
+          <SlotSeasonSelect
+            season={season}
+            seasons={seasons}
+            color={color}
+            label={label}
+            onChange={onSeasonChange}
+          />
+        )}
+      </div>
       <input
         ref={inputRef}
         type="text"
@@ -1456,5 +1793,50 @@ function TeamPicker({
         </div>
       )}
     </div>
+  );
+}
+
+/// The per-slot year control, rendered only in cross-year mode.
+///
+/// Offers every season the site has, not just the ones this team existed in:
+/// unlike PlayerCompare's version there is no per-entity `available_seasons` to
+/// narrow it — the team is a free-text name that may not resolve at all yet. A
+/// year the program was not Division I in is therefore reachable, and lands on
+/// the backend's per-side 404, which names both the side and the year for
+/// exactly this reason.
+function SlotSeasonSelect({
+  season,
+  seasons,
+  color,
+  label,
+  onChange,
+}: {
+  season: number;
+  seasons: readonly number[];
+  color: string;
+  label: string;
+  onChange: (next: number) => void;
+}) {
+  // A slot pointed at a year outside the list (a pasted link, or a season the
+  // fallback list predates) still has to show the year it is on, or the menu
+  // would silently claim otherwise.
+  const options = seasons.includes(season) ? seasons : [season, ...seasons];
+  return (
+    <select
+      value={season}
+      onChange={(e) => onChange(Number(e.target.value))}
+      aria-label={`Season for ${label}`}
+      className="bg-gray-900 border rounded px-1.5 py-0.5 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+      style={{ borderColor: color }}
+    >
+      {options
+        .slice()
+        .sort((a, b) => b - a)
+        .map((y) => (
+          <option key={y} value={y}>
+            {y}
+          </option>
+        ))}
+    </select>
   );
 }
