@@ -31,7 +31,7 @@ import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { usePageTitle } from '../components/usePageTitle';
 import { camTier, camTierColor, camTitle } from '../components/cam';
 import { classColor, classTitle, provisionalMeta } from '../components/archetypeColors';
-import { shortDate } from '../components/format';
+import { heightString, shortDate } from '../components/format';
 import { RosterWaffle } from '../components/RosterWaffle';
 import { TeamShotDiet } from '../components/TeamShotDiet';
 import { Link } from 'react-router-dom';
@@ -326,12 +326,30 @@ export default function Predict() {
         <div>
           <h1 className="text-2xl font-bold mb-1">Game Prediction</h1>
           {crossYear ? (
+            /* Keyed on whether the YEARS differ, not on the mode. The backend
+               draws the same line — `cross_era` is `home_season != away_season`
+               — so a cross-year matchup sitting on one year is served as an
+               ordinary forecast, prior meetings and all. Asserting "these two
+               never met" there would be false, and would sit directly above a
+               Previous Matchups panel listing the times they did. */
             <p className="text-xs text-gray-500 max-w-2xl">
-              Each side brings its own year. These two never met and never could
-              — the eras played different games, different pace and different
-              rules — so take the result as a fun what-if rather than a line.
-              The one bias we have measured is small and in a known direction:
-              about a point in the more recent team's favor.
+              {formShowYears ? (
+                <>
+                  These two never met and never could — the eras played
+                  different games, different pace and different rules — so take
+                  the result as a fun what-if rather than a line. The one bias
+                  we have measured is small and in a known direction: about a
+                  point in the more recent team's favor.
+                </>
+              ) : (
+                <>
+                  Each side carries its own year. Point them at different ones
+                  and the matchup becomes a what-if: the eras played different
+                  games, and the further apart the years, the more of the gap is
+                  the era rather than the teams. On a single year this is the
+                  ordinary forecast, prior meetings and all.
+                </>
+              )}
             </p>
           ) : (
             <p className="text-xs text-gray-500">
@@ -625,10 +643,19 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Roster Compare panel — side-by-side roster table (top 8 by CAM per
-// team) with archetype chips and rate stats. The Archetype + Shot Diet
-// rows above already render the visual identity per team; this panel
-// drills into the specific players carrying it.
+// Roster Compare panel — side-by-side roster table (the 8 players who log
+// the most minutes per team) with archetype chips and rate stats. The
+// Archetype + Shot Diet rows above already render the visual identity per
+// team; this panel drills into the specific players carrying it.
+//
+// Minutes, not CAM, and the distinction matters because this panel SLICES.
+// `get_team_roster` already returns minutes-desc (CAM breaks ties) and the
+// roster query has no minutes or games floor, so re-sorting by CAM here would
+// change *which* players appear, not just their order — a six-game bench
+// player with a noisy CAM would displace a thirty-minute starter. For a
+// matchup preview the rotation is the thing worth showing, and each row still
+// prints its CAM. TeamDetail does sort its roster by CAM, but it renders the
+// whole list rather than a top-N, so there the sort is presentation only.
 // ---------------------------------------------------------------------------
 
 const ROSTER_PANEL_LIMIT = 8;
@@ -657,7 +684,9 @@ function RosterCompare({
         <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
           Roster Compare
         </h2>
-        <div className="text-[11px] text-gray-500">Top {ROSTER_PANEL_LIMIT} by CAM</div>
+        <div className="text-[11px] text-gray-500">
+          Top {ROSTER_PANEL_LIMIT} by minutes
+        </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
         <RosterColumn
@@ -723,6 +752,15 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
   const tierColor = camTierColor(tier);
   const mpg = p.minutes_per_game != null ? p.minutes_per_game.toFixed(1) : '—';
   const campomScore = p.campom != null ? p.campom.toFixed(1) : '—';
+  // Height rather than games played: this list is already ordered by minutes
+  // and the row already prints minutes, so games played was a third reading of
+  // "how much did they play" and told you nothing the other two didn't. Height
+  // is the one thing on the row the archetype chip and CAM don't cover, and
+  // it's the dimension a matchup is actually argued over — more so across
+  // eras, where the two rosters were built to different templates. Populated
+  // for 97-100% of players in every ingested season; the rare miss drops the
+  // field rather than printing a placeholder.
+  const height = heightString(p.height_inches);
   return (
     <li className="grid grid-cols-[1fr_auto_auto] items-center gap-2 text-sm">
       <div className="min-w-0 truncate">
@@ -752,7 +790,7 @@ function RosterRow({ p, season }: { p: RosterEntry; season: number }) {
           })()}
       </div>
       <div className="text-[11px] text-gray-500 font-mono whitespace-nowrap">
-        {mpg} mpg · {p.games_played} gp
+        {mpg} mpg{height && ` · ${height}`}
       </div>
       <div
         className={`text-[11px] font-mono px-1.5 py-0.5 rounded border whitespace-nowrap ${tierColor}`}
@@ -1058,7 +1096,7 @@ function BoxScoreSide({
 /// Keyed on the season-scoped UUID rather than the name, because cross-year
 /// hands this two different eras' lists and those lists overlap by name almost
 /// entirely: matching "Duke" against whichever list happens to be loaded would
-/// quietly print 2026 Duke's four factors under a header reading Duke 2015. The
+/// quietly print 2026 Duke's four factors under a header reading 2015 Duke. The
 /// id can only match the right era, so a list that is still loading (or that
 /// genuinely has no row for this team) renders nothing instead — which is what
 /// the name lookup did for a missing team anyway.
@@ -1170,7 +1208,9 @@ function SideBySideStats({
         <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
           Team Stats
         </h2>
-        <div className="text-[11px] text-gray-500">Season averages</div>
+        <div className="text-[11px] text-gray-500">
+          {years.show ? 'Season averages · highlights are era-relative' : 'Season averages'}
+        </div>
       </div>
       {/* Three-column layout on desktop: general team stats | offense
           when team1 has the ball | offense when team2 has the ball.

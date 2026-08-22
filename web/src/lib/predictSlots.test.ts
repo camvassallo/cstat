@@ -83,7 +83,7 @@ describe('toRequest', () => {
   });
 
   it('still sends both years when a cross-year matchup lands on one season', () => {
-    // Duke 2015 vs Duke 2015 is a legal thing to sit on while editing the
+    // 2015 Duke vs 2015 Duke is a legal thing to sit on while editing the
     // years; the request must not collapse back to the single-season shape and
     // change what the page is asking for.
     const r = toRequest({ ...base, crossYear: true });
@@ -128,8 +128,8 @@ describe('slotYears / teamLabel', () => {
   it('prints the year on both sides as soon as they differ', () => {
     const y = slotYears({ ...base, crossYear: true, homeSeason: 2015 });
     expect(y).toEqual({ home: 2015, away: 2026, show: true });
-    expect(teamLabel('Duke Blue Devils', y.home, y.show)).toBe('Duke Blue Devils 2015');
-    expect(teamLabel('Duke Blue Devils', y.away, y.show)).toBe('Duke Blue Devils 2026');
+    expect(teamLabel('Duke Blue Devils', y.home, y.show)).toBe('2015 Duke Blue Devils');
+    expect(teamLabel('Duke Blue Devils', y.away, y.show)).toBe('2026 Duke Blue Devils');
   });
 
   it('keeps Duke vs Duke distinguishable', () => {

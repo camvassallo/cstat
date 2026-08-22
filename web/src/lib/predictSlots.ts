@@ -64,12 +64,17 @@ export function slotYears(m: Matchup): SlotYears {
   };
 }
 
-/** The one team-name format for cross-year mode: `Duke 2015`. Settled here
+/** The one team-name format for cross-year mode: `2015 Duke`. Settled here
  *  rather than per component so the headline, the score line, the stat table
  *  and the roster panels cannot drift into three different conventions — and so
- *  Duke 2015 vs Duke 2026 reads as two teams rather than a typo. */
+ *  2015 Duke vs 2026 Duke reads as two teams rather than a typo.
+ *
+ *  Year first because that is how a season's team is named out loud — the 2015
+ *  Duke team, 1996 Kentucky — and because the score line puts a number straight
+ *  after the name: `2026 Duke 71` reads cleanly where `Duke 2026 71` runs two
+ *  numbers together. */
 export function teamLabel(name: string, season: number, show: boolean): string {
-  return show ? `${name} ${season}` : name;
+  return show ? `${season} ${name}` : name;
 }
 
 /** Cross-year sends both years explicitly; single-season sends the one `season`

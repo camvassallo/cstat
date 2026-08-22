@@ -25,3 +25,18 @@ export function shortDate(iso: string): string {
   if (!m) return iso;
   return `${MONTH_ABBREV[Number(m[2]) - 1]} ${Number(m[3])}`;
 }
+
+/// Format a height in inches as feet-and-inches (`6'11"`). Returns null when
+/// the height is missing, so callers can drop the field rather than print a
+/// placeholder.
+///
+/// Four other copies of this two-line function already exist — `PlayerDetail`,
+/// `PlayerProgression`, `PlayerCompare` and `portle`'s `fmtHeight` — and they
+/// disagree in small ways (portle rounds the inches remainder, the rest floor
+/// it; the null handling differs three ways). This is the shared one for new
+/// callers; converging the existing four is a follow-up (#315) rather than a
+/// drive-by, since two of them feed snapshot-tested surfaces.
+export function heightString(inches: number | null | undefined): string | null {
+  if (inches == null || !Number.isFinite(inches)) return null;
+  return `${Math.floor(inches / 12)}'${Math.round(inches % 12)}"`;
+}
