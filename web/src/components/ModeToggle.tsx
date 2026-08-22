@@ -40,6 +40,13 @@ import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 //    unmount cleanup — the override is module state, so a page that forgets
 //    leaves the navbar picker hidden on whatever the user navigates to next.
 //    `Coaches.tsx` is the reference implementation for both halves.
+//
+//    This applies to a page whose WHOLE identity goes cross-year. It does not
+//    apply to PlayerDetail's comparable-players panel, which is the third
+//    surface above: that page is still one player in one season — the target
+//    vector, and every other panel on it, is read from `?season=` — and only
+//    the panel's candidate pool widens. Hiding the navbar picker there would
+//    take away the control that decides what the rest of the page is showing.
 
 export type ModeToggleOption<T extends string> = {
   value: T;

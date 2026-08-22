@@ -19,7 +19,7 @@ import {
   type SimilarPlayer,
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
-import { ArchetypeBadge, SimilarPlayers } from '../components/Archetype';
+import { ArchetypeBadge, SimilarPlayers, type SimilarMode } from '../components/Archetype';
 import { camTier, camTierColor, camSplit } from '../components/cam';
 import { bandBarClass } from '../components/scale';
 import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
@@ -74,6 +74,24 @@ function shortDate(iso: string): string {
   return `${month} ${Number(m[3])}`;
 }
 
+/// How many comparable players the panel asks for. Same count in both search
+/// modes — the cross-year query costs the same whatever `k` is, because it
+/// scans every archetype row either way.
+const SIMILAR_PLAYER_COUNT = 8;
+
+/// Identifies one comparable-players request. Stored alongside the rows it
+/// returned so the panel can tell a result for the CURRENT (player, season,
+/// mode) from one left over by the previous request. Shared by the writer and
+/// the reader on purpose: two copies of this format would drift, and the
+/// staleness check would then quietly never match.
+function similarRequestKey(
+  playerId: string | null,
+  season: number,
+  mode: SimilarMode,
+): string {
+  return `${playerId ?? ''}|${season}|${mode}`;
+}
+
 export default function PlayerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -86,7 +104,18 @@ export default function PlayerDetail() {
   const [torvik, setTorvik] = useState<TorkvikStats | null>(null);
   const [archetype, setArchetype] = useState<PlayerArchetype | null>(null);
   const [trajectory, setTrajectory] = useState<PlayerTrajectory | null>(null);
-  const [similar, setSimilar] = useState<SimilarPlayer[]>([]);
+  // The comparable-players list, tagged with the request that produced it.
+  // Carrying the key alongside the rows is what lets the panel tell "the other
+  // mode is still loading" from "this mode found nobody" without a
+  // `setLoading(true)` — a synchronous set-state in an effect body, which the
+  // react-hooks compiler lint rejects.
+  const [similar, setSimilar] = useState<{
+    key: string;
+    players: SimilarPlayer[];
+  } | null>(null);
+  // Panel-local, so flipping it re-runs only the neighbour search below. Not
+  // in the URL: it is one panel's search range, not the page's identity.
+  const [similarMode, setSimilarMode] = useState<SimilarMode>('season');
   const [pbp, setPbp] = useState<PlayerPbpProfile | null>(null);
   const [onOff, setOnOff] = useState<PlayerOnOff | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,17 +155,6 @@ export default function PlayerDetail() {
         setTorvik(r.torvik_stats);
         setArchetype(r.archetype);
         setTrajectory(r.trajectory);
-        if (r.archetype) {
-          fetchPlayerSimilar(r.player.id, 8, season)
-            .then((s) => {
-              if (!cancelled) setSimilar(s.players);
-            })
-            .catch(() => {
-              if (!cancelled) setSimilar([]);
-            });
-        } else {
-          setSimilar([]);
-        }
         setLoading(false);
       })
       .catch(() => {
@@ -153,13 +171,40 @@ export default function PlayerDetail() {
         setTorvik(null);
         setArchetype(null);
         setTrajectory(null);
-        setSimilar([]);
+        setSimilar(null);
         setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [id, season, navigate]);
+
+  // Comparable players — its OWN request, keyed on the search mode as well as
+  // (player, season). Deliberately not folded into the detail fetch above,
+  // even though it depends on its result: `similarMode` would then be a
+  // dependency of the page's main effect, and flipping the toggle would
+  // re-request the whole profile and blank every panel on the page.
+  //
+  // Keyed on the RESOLVED player id rather than the URL's `id`. They differ for
+  // one paint on the canonical-UUID redirect, and a neighbour search against
+  // another season's UUID finds no target vector and comes back empty.
+  const similarTargetId = player != null && archetype != null ? player.id : null;
+  const similarKey = similarRequestKey(similarTargetId, season, similarMode);
+  useEffect(() => {
+    if (!similarTargetId) return;
+    let cancelled = false;
+    const key = similarRequestKey(similarTargetId, season, similarMode);
+    fetchPlayerSimilar(similarTargetId, SIMILAR_PLAYER_COUNT, season, similarMode === 'year')
+      .then((r) => !cancelled && setSimilar({ key, players: r.players }))
+      // Stamp the key on the failure too, so a mode that errors settles on
+      // "found nobody" instead of spinning forever.
+      .catch(() => !cancelled && setSimilar({ key, players: [] }));
+    return () => {
+      cancelled = true;
+    };
+  }, [similarTargetId, season, similarMode]);
+  const similarPlayers = similar?.key === similarKey ? similar.players : [];
+  const similarLoading = similarTargetId != null && similar?.key !== similarKey;
 
   // PBP season profile — own request, fetched in parallel with the main
   // payload. Keyed on (id, season); the endpoint resolves the cross-season
@@ -492,9 +537,24 @@ export default function PlayerDetail() {
       )}
 
 
-      {/* Similar Players */}
-      {similar.length > 0 && (
-        <SimilarPlayers players={similar} currentPlayerId={player.id} />
+      {/* Similar Players. Gated on the ARCHETYPE, not on the list being
+          non-empty: the header now carries the season/any-year toggle, and a
+          mode that happens to find nobody must not take the control that gets
+          you back out of it off the page. No archetype means no feature vector
+          to search from, so there is nothing to toggle either.
+
+          The site-wide season picker deliberately stays visible here, unlike
+          the Compare page's cross-year mode. This page is still one player in
+          one season — the target vector, and every other panel, comes from
+          `?season=`; only this panel's CANDIDATE pool widens. */}
+      {archetype && (
+        <SimilarPlayers
+          players={similarPlayers}
+          currentPlayerId={player.id}
+          mode={similarMode}
+          onModeChange={setSimilarMode}
+          loading={similarLoading}
+        />
       )}
 
       {/* Rolling Performance Chart */}
