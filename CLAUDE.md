@@ -74,6 +74,13 @@ cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,20
                                                     # these TRUNCATE the OOF tables
                                                     # and invalidate everything below
 ./training/retrain_downstream.sh --from cae         # resume after a failed stage
+# The `projections` stage runs over a WIDER season list than the rest of the
+# chain: the historical range plus the forward seasons (the current one and the
+# one being forecast). Those have no actuals for `backtest` to score, but they
+# are the rows actually served — the Future page and the opening-week preseason
+# anchor — so leaving them out is a retrain that refreshes everything except
+# what people are looking at (#263). "wrote 0 rows ... unresolved-target" for a
+# forward season whose teams are not ingested yet is expected, not a failure.
 # "Which nodes are stale?" — every trainer stamps an `input_provenance`
 # fingerprint of its own inputs; this recomputes them against the live DB and
 # propagates staleness downward. Catches the case the boot guard structurally
