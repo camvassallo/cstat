@@ -24,7 +24,6 @@ use cstat_core::inference::FEATURE_NAMES;
 use cstat_core::projection::is_flag_feature;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 
 /// Two ingested seasons far enough apart that the league baselines genuinely
 /// differ — the same pair the cross-era work is scoped against.
@@ -45,15 +44,29 @@ async fn pool() -> PgPool {
         .unwrap()
 }
 
+/// Resolve exactly one team by name prefix.
+///
+/// Deliberately NOT `LIMIT 1`: with a prefix match that would leave the row
+/// choice to the planner, and the failure would be invisible rather than loud.
+/// Every assertion below re-derives its expected value from whichever team was
+/// bound, so a second `Kentucky%` program appearing in a later ingest would not
+/// fail the test — it would keep passing while quietly no longer exercising the
+/// era gap it exists for. Same latent class as #228. Requiring a unique match
+/// turns that into an immediate, legible failure.
 async fn team(pool: &PgPool, name_like: &str, season: i32) -> TeamSeason {
-    let id: Uuid = sqlx::query("SELECT id FROM teams WHERE name LIKE $1 AND season = $2 LIMIT 1")
+    let rows = sqlx::query("SELECT id, name FROM teams WHERE name LIKE $1 AND season = $2")
         .bind(name_like)
         .bind(season)
-        .fetch_one(pool)
+        .fetch_all(pool)
         .await
-        .unwrap_or_else(|e| panic!("no team matching {name_like:?} in {season}: {e}"))
-        .get("id");
-    TeamSeason::new(id, season)
+        .unwrap_or_else(|e| panic!("query for {name_like:?} in {season} failed: {e}"));
+    let names: Vec<String> = rows.iter().map(|r| r.get("name")).collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "{name_like:?} must match exactly one team in {season}; matched {names:?}"
+    );
+    TeamSeason::new(rows[0].get("id"), season)
 }
 
 async fn adj_offense(pool: &PgPool, t: TeamSeason) -> f64 {
