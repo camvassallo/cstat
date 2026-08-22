@@ -2250,6 +2250,10 @@ pub async fn get_player_archetype(
 #[derive(Debug, Serialize, FromRow)]
 pub struct SimilarPlayerRow {
     pub player_id: Uuid,
+    /// The season this neighbour's row is drawn from. Equal to the requested
+    /// season on the single-season path; on the cross-year path it is the
+    /// neighbour's own year, and a cross-era list is unreadable without it.
+    pub season: i32,
     pub name: String,
     pub team_id: Option<Uuid>,
     pub team_name: Option<String>,
@@ -2263,15 +2267,128 @@ pub struct SimilarPlayerRow {
     pub distance: f64,
     /// Convenience: 1 / (1 + distance) — 1.0 is identical, decays smoothly.
     pub similarity: f64,
+    /// TRUE when this neighbour is the TARGET HUMAN in a different season.
+    /// Only reachable on the cross-year path (season-scoped UUIDs mean the
+    /// target's other years are different `player_id`s). "Your closest comp is
+    /// yourself, a year later" is a real result and is kept, but the caller
+    /// has to be able to say so rather than passing it off as someone else.
+    pub is_self: bool,
 }
 
+/// Nearest neighbours of `(player_id, season)` in the archetype feature space.
+///
+/// `cross_year = false` (the default) ranks only candidates from the same
+/// season, which is the behaviour this endpoint has always had.
+///
+/// `cross_year = true` drops the season scope on the *candidate* side. That is
+/// legitimate rather than an approximation: `archetype_models` holds one
+/// distinct `feature_means` / `feature_stds` / `centroids` across all of its
+/// season rows — the combined-cohort fit — so every season's `feature_vector`
+/// is standardized against the same scaler and cross-era distances are already
+/// commensurable. (What did drift is the underlying raw game: a 2026 player's
+/// TS% z-score really is higher than a 2015 player's, so cross-era lists lean
+/// same-era. That is signal about the sport, not a bug, and is disclosed in the
+/// UI rather than neutralized here — era-neutralizing the vector would fork the
+/// space the archetype model itself is fitted in.)
+///
+/// Two policies the cross-year path has to settle, both handled in SQL:
+///
+///  * **One slot per human.** The same player owns a row per season, and
+///    without a dedupe one career can fill the whole top 10. The list answers
+///    "who else plays like this", not "which season of him", so each human is
+///    collapsed to their single nearest season (`DISTINCT ON`, ties broken
+///    toward the later year). Identity is `torvik_pid` when present and
+///    `natstat_id` otherwise — NatStat mints a fresh id on a team change, so a
+///    natstat-only key would give a transfer one slot per school. (The ~4% of
+///    rows with no Torvik link fall back to `natstat_id`, so a human who is
+///    linked in one season and not another can still take two slots. That is
+///    the same coverage gap `resolve_player_id_for_season` lives with, and it
+///    costs a list slot rather than producing a wrong neighbour.)
+///  * **The target's own other seasons stay in**, flagged `is_self`. They are
+///    often the single best comp; what they must not do is masquerade as
+///    somebody else.
+///
+/// Cost: the cross-year path is ~240 ms against 40,790 rows locally versus
+/// ~15 ms single-season (`LATERAL unnest` per row; no index helps). Fine for an
+/// opt-in toggle, not fine on a default path. If it has to get cheaper, the
+/// lever is precomputing the neighbour lists, not tuning this query.
 pub async fn get_similar_players(
     pool: &PgPool,
     player_id: Uuid,
     season: i32,
     limit: i64,
+    cross_year: bool,
 ) -> Result<Vec<SimilarPlayerRow>, sqlx::Error> {
-    sqlx::query_as::<_, SimilarPlayerRow>(
+    let sql = if cross_year {
+        r#"
+        WITH target AS (
+            SELECT
+                pa.feature_vector AS fv,
+                COALESCE('t' || tp.torvik_pid::text, 'n' || p.natstat_id) AS ident
+            FROM player_archetypes pa
+            JOIN players p ON p.id = pa.player_id
+            LEFT JOIN torvik_player_stats tp
+                   ON tp.player_id = pa.player_id AND tp.season = pa.season
+            WHERE pa.player_id = $1 AND pa.season = $2
+        ),
+        distances AS (
+            SELECT
+                pa.player_id,
+                pa.season,
+                pa.primary_class,
+                pa.secondary_class,
+                pa.provisional,
+                pa.source_season,
+                sqrt(SUM(POWER(pa_v::double precision - tg_v::double precision, 2))) AS distance
+            FROM player_archetypes pa
+            CROSS JOIN target
+            CROSS JOIN LATERAL unnest(pa.feature_vector, target.fv) AS u(pa_v, tg_v)
+            WHERE pa.player_id <> $1
+            GROUP BY pa.player_id, pa.season, pa.primary_class, pa.secondary_class,
+                     pa.provisional, pa.source_season
+        ),
+        identified AS (
+            SELECT
+                d.player_id,
+                d.season,
+                d.primary_class,
+                d.secondary_class,
+                d.provisional,
+                d.source_season,
+                d.distance,
+                COALESCE(p.display_name, p.name) AS name,
+                p.team_id,
+                COALESCE('t' || tp.torvik_pid::text, 'n' || p.natstat_id) AS ident
+            FROM distances d
+            JOIN players p ON p.id = d.player_id
+            LEFT JOIN torvik_player_stats tp
+                   ON tp.player_id = d.player_id AND tp.season = d.season
+        ),
+        nearest AS (
+            SELECT DISTINCT ON (i.ident) i.*
+            FROM identified i
+            ORDER BY i.ident, i.distance ASC, i.season DESC
+        )
+        SELECT
+            n.player_id,
+            n.season,
+            n.name,
+            n.team_id,
+            COALESCE(t.short_name, t.name) AS team_name,
+            n.primary_class,
+            n.secondary_class,
+            n.provisional,
+            n.source_season,
+            n.distance,
+            (1.0 / (1.0 + n.distance)) AS similarity,
+            (n.ident = target.ident) AS is_self
+        FROM nearest n
+        CROSS JOIN target
+        LEFT JOIN teams t ON t.id = n.team_id AND t.season = n.season
+        ORDER BY n.distance ASC
+        LIMIT $3
+        "#
+    } else {
         r#"
         WITH target AS (
             SELECT feature_vector AS fv
@@ -2294,6 +2411,7 @@ pub async fn get_similar_players(
         )
         SELECT
             c.player_id,
+            $2::int AS season,
             COALESCE(p.display_name, p.name) AS name,
             p.team_id,
             COALESCE(t.short_name, t.name) AS team_name,
@@ -2302,19 +2420,22 @@ pub async fn get_similar_players(
             c.provisional,
             c.source_season,
             c.distance,
-            (1.0 / (1.0 + c.distance)) AS similarity
+            (1.0 / (1.0 + c.distance)) AS similarity,
+            FALSE AS is_self
         FROM candidates c
         JOIN players p ON p.id = c.player_id
         LEFT JOIN teams t ON t.id = p.team_id AND t.season = $2
         ORDER BY c.distance ASC
         LIMIT $3
-        "#,
-    )
-    .bind(player_id)
-    .bind(season)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
+        "#
+    };
+
+    sqlx::query_as::<_, SimilarPlayerRow>(sql)
+        .bind(player_id)
+        .bind(season)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
 }
 
 #[derive(Debug, Serialize, FromRow)]
