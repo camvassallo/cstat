@@ -113,7 +113,25 @@ cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # Targeted push — only the named tables (Railway-direct split: local heavy jobs
 # push their derived tables without truncating the cron-written serving tables).
 # NOT gated by the guard; this is the intended in-season path:
-./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
+./scripts/sync_to_prod.sh --tables player_rapm
+# **`lineup_aggregates` / `player_on_off` are NOT in that list, and the omission
+# is the point (#249).** They used to be the headline example, and that was
+# right while prod held no play-by-play: `compute_pbp_lineups` early-returns on
+# an empty source, so the laptop was their only prod writer. Prod now ingests
+# its own PBP (the nightly's `playbyplay`/`lineups` steps), and from the first
+# game of a season it rebuilds both rollups every night. The exclusion of raw
+# PBP from every push is unchanged and still load-bearing — what inverted is the
+# OWNERSHIP: pushing these two now TRUNCATEs prod's own fresher current-season
+# rows and restores the laptop's, until the next nightly rebuilds them. Nothing
+# looks wrong while it happens. Full ownership table:
+# `docs/tipoff_self_sufficiency_plan.md` §3.
+# You do not have to remember that table, because `--tables` now REFUSES a push
+# (exit 4) when local is behind prod: for each requested table with a season-like
+# column it asks prod which seasons local cannot reproduce, and names them. A
+# precondition on LOCAL rather than an ownership list, deliberately — ownership
+# here is seasonal, so a static list would be wrong for part of every year and
+# would train you to reach for the override. `--force-tables` overrides and
+# accepts the deletion.
 # Column merge — the third mode, for a derived column on a table that is
 # REFERENCED by foreign keys, where --tables would cascade-wipe the dependents
 # (`players` has 10) and a full sync is refused. UPDATE-only: no TRUNCATE, no
