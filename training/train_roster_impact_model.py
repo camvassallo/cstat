@@ -200,7 +200,17 @@ OUTBOUND_QUERY = """
 SELECT
     tgt_team.id AS team_id,
     (p_base.season + 1)::int4 AS season,
-    COALESCE(SUM(COALESCE(tps.cam_gbpm_v3_psos, 0)), 0)::float8 AS outbound_cam_v3_sum
+    -- ORDER BY inside the aggregate is not cosmetic (#222). Floating-point
+    -- addition is not associative, so an unordered SUM folds the group in
+    -- whatever order the plan emits and the total moves in its last bits
+    -- between runs -- `test_frame_determinism.py` caught this frame returning
+    -- two different digests from one database, differing only here. That lands
+    -- on LightGBM split thresholds, the same last-bit-to-discrete-jump path as
+    -- #266, and it also makes a retrain's provenance fingerprint churn so a
+    -- genuine model diff can't be told from summation noise. `p_base.id` is
+    -- unique per summed row, so the fold order is total.
+    COALESCE(SUM(COALESCE(tps.cam_gbpm_v3_psos, 0) ORDER BY p_base.id), 0)::float8
+        AS outbound_cam_v3_sum
 FROM transfers t
 JOIN players p_base
     ON p_base.id = t.cstat_player_id
@@ -255,7 +265,11 @@ INBOUND_QUERY = """
 SELECT
     tgt_team.id AS team_id,
     p_tgt.season AS season,
-    COALESCE(SUM(COALESCE(tps_base.cam_gbpm_v3_psos, 0)), 0)::float8 AS inbound_cam_v3_sum
+    -- Ordered fold, same reason as OUTBOUND above (#222). This one did not
+    -- happen to differ across the two reads the guard takes, which is exactly
+    -- why it needs pinning too -- it is stable per plan, not across plans.
+    COALESCE(SUM(COALESCE(tps_base.cam_gbpm_v3_psos, 0) ORDER BY p_base.id), 0)::float8
+        AS inbound_cam_v3_sum
 FROM transfers t
 JOIN players p_base
     ON p_base.id = t.cstat_player_id
