@@ -361,6 +361,14 @@ is the anchor `routes/predict.rs::fetch_preseason_margin` blends over opening
 week. Neither is in the historical range, because neither has actuals for
 `backtest` to score.
 
+Both are materialized, not just the forecast year, and that is deliberate. The
+Future page's year is **not** derived from the same rule: `upcomingProjectionSeason()`
+(`web/src/components/season.ts`) is `AVAILABLE_SEASONS_FALLBACK[0] + 1`, a
+hand-maintained frontend constant. The two agree today and drift between the
+November flip and whoever next bumps that list, so covering both forward seasons
+is what keeps the served year covered through the gap. The current season also
+needs its own row on its own merits — it is the opening-week preseason anchor.
+
 That is what #263 was: `retrain_downstream.sh` derived one season list and used
 it for every stage, so a full retrain refreshed 2016..2026 and left the forecast
 year — in August, the only season anyone looks at — sitting on superseded Layer 2
@@ -383,18 +391,18 @@ about because the two halves of Layer 2 land differently.
 | `*_model.onnx` + meta (committed) | 1, 2 | **git deploy** |
 | `roster_impact_loso/*.onnx` | 2 | neither — gitignored, local-only, backtest input |
 | `team_preseason_projection` | 3 | **data sync** |
-| `player_season_projection` | 3 | **data sync** — only when Layer 1 moved. Its values come from the trajectory/freshman models, so a Layer 2-only retrain leaves it byte-identical and pushing it would truncate and restore a served table for nothing |
+| `player_season_projection` | 3 | **data sync**, whenever the `projections` stage ran. Its *values* come from the trajectory/freshman models, so a Layer 2-only retrain leaves them byte-identical — but the *season set* is not fixed, and a run that materializes a new forward season writes rows prod has never held. Gating on Layer 1 would print a push that omits exactly those rows |
 | `coach_season_cae`, `coach_ratings` | 3 | **data sync** |
 | `player_archetypes` | 0 | data sync in the offseason; **prod-owned in-season** (the Rust assign half runs nightly) |
 | `artifact_provenance` | 3 | **data sync** — not in `sync_to_prod.sh`'s EXCLUDED list, so it travels with the tables it describes. It has to: `team_preseason_projection` reaches prod by sync, and provenance recorded only on one laptop would leave prod holding rows of unknown origin |
 
 ```bash
 ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance
-# ...plus player_season_projection when the retrain included Layer 1
+# ...plus player_season_projection when the run included the projections stage
 ```
 
 `retrain_downstream.sh` prints the right list for the run it just did, rather
-than leaving the Layer 1 conditional to be remembered.
+than leaving that to be remembered.
 
 The subtlety: **the served AdjO/AdjD split is never materialized.**
 `routes/projections.rs:641` runs `roster_adjo_model.onnx` live at request time

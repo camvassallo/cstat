@@ -132,6 +132,13 @@ is_in() { local n="$1"; shift; for x in "$@"; do [[ "$x" == "$n" ]] && return 0;
 # through `CSTAT_SIMULATED_DATE` for the same reason `today_utc()` does, so the
 # replay harness and this script never disagree about what year it is.
 #
+# Note this is NOT the rule the Future page uses. `upcomingProjectionSeason()`
+# (web/src/components/season.ts) is `AVAILABLE_SEASONS_FALLBACK[0] + 1`, a
+# hand-maintained frontend constant, so the two agree today but drift between
+# the November flip and whoever next bumps that list. Materializing BOTH forward
+# seasons is what makes the drift harmless — do not narrow this to one season on
+# the assumption that the frontend derives its year the same way.
+#
 # Resolved here, before any stage runs: `$(date)` mid-pipeline clobbers `$?`,
 # which has bitten this repo before.
 TODAY="${CSTAT_SIMULATED_DATE:-$(date -u +%Y-%m-%d)}"
@@ -192,14 +199,20 @@ fi
 
 echo "→ Repo:     $REPO_ROOT"
 echo "→ Seasons:  $YEARS"
-if (( ${#FORWARD[@]} )); then
+echo "→ Plan:     ${PLAN[*]}"
+# Reported against the resolved plan, not in the abstract: on a run without the
+# `projections` stage nothing is appended anywhere, and saying otherwise is the
+# same read-the-summary-and-be-misled failure this block exists to prevent.
+if ! is_in projections "${PLAN[@]}"; then
+  echo "→ Forward:  not this run — the projections stage is not in the plan, so"
+  echo "            $CURRENT_SEASON/$FORECAST_YEAR are NOT refreshed by it"
+elif (( ${#FORWARD[@]} )); then
   echo "→ Forward:  ${FORWARD[*]} (appended to the projections stage — no actuals to backtest,"
-  echo "            but $FORECAST_YEAR is what the Future page serves and $CURRENT_SEASON is the"
-  echo "            preseason anchor /predict blends over opening week)"
+  echo "            but these are the served rows: the Future page and the preseason"
+  echo "            anchor /predict blends over opening week)"
 else
   echo "→ Forward:  none to append — $CURRENT_SEASON and $FORECAST_YEAR are already in the season list"
 fi
-echo "→ Plan:     ${PLAN[*]}"
 for s in "${PLAN[@]}"; do
   if is_in "$s" "${LAYER1[@]}"; then
     echo "→ WARNING:  '$s' TRUNCATEs and reloads an OOF table. Every Layer 2 model"
@@ -333,11 +346,19 @@ stage_banner "verify — cross-layer input provenance"
 ( cd "$TRAINING_DIR" && "$VENV_PY" check_provenance.py ) || true
 
 # ── What happened ───────────────────────────────────────
-# What to push. `player_season_projection` rides along only when Layer 1 ran:
-# its values come from the trajectory/freshman models, so a Layer 2-only
-# retrain leaves them byte-identical.
+# What to push. `player_season_projection` rides along whenever the projections
+# stage ran, NOT only when Layer 1 did. The tempting narrower rule — its values
+# come from the trajectory/freshman models, so a Layer 2-only retrain leaves
+# them byte-identical — holds only while the SEASON SET is unchanged, and this
+# script now widens that set: the first run after the November flip materializes
+# a forward season prod has never held. Under the narrow rule that run prints a
+# push that omits the one table carrying the new rows, and the operator running
+# exactly what was printed leaves /api/projected-players empty for it. Pushing a
+# table whose bytes did not move costs nothing extra here either — the sibling
+# `team_preseason_projection` is in the same command, so it is the same restore
+# window.
 SYNC_TABLES="team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance"
-if is_in trajectory "${PLAN[@]}" || is_in freshman "${PLAN[@]}"; then
+if is_in projections "${PLAN[@]}"; then
   SYNC_TABLES="$SYNC_TABLES,player_season_projection"
 fi
 
@@ -357,12 +378,12 @@ If roster_impact moved, the downstream products built from it did too — commit
 the model artifacts and push the regenerated database tables to prod:
 NOTE
 echo "  ./scripts/sync_to_prod.sh --tables $SYNC_TABLES"
-if is_in player_season_projection ${SYNC_TABLES//,/ }; then
+if is_in player_season_projection ${SYNC_TABLES//,/ } && (( ${#FORWARD[@]} )); then
   echo
-  echo "  player_season_projection is in that list because this run rebuilt Layer 1,"
-  echo "  which is what moves those values. Its $FORECAST_YEAR rows are the served"
-  echo "  Future-page player board; a Layer 2-only retrain leaves them unchanged and"
-  echo "  they are left out rather than truncated and restored for nothing."
+  echo "  player_season_projection is in that list because the projections stage ran."
+  echo "  Its forward-season rows (${FORWARD[*]}) are the served Future-page player"
+  echo "  board, and a run that widens the season set writes rows prod does not have"
+  echo "  yet — so this is not conditional on Layer 1 having moved the values."
 fi
 cat <<'NOTE'
 
