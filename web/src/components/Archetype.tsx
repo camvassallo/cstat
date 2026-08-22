@@ -256,6 +256,13 @@ export function SimilarPlayers({
   /// in flight. Only meaningful alongside the toggle: the cross-year search is
   /// an order of magnitude slower than the single-season one (~280 ms vs
   /// ~22 ms), so a flip with no feedback looks like a dead control.
+  ///
+  /// The caller is expected to pass an EMPTY `players` while this is true,
+  /// which is why the wait shows as "Searching…" rather than as the previous
+  /// mode's rows greyed out. Holding those rows would be worse than a blank:
+  /// the year suffix and the "same player" badge are rendered off `mode`, so
+  /// stale rows would be relabelled with the year policy of a mode they did
+  /// not come from.
   loading?: boolean;
 }) {
   const navigate = useNavigate();
@@ -308,7 +315,7 @@ export function SimilarPlayers({
   };
 
   return (
-    <div className="bg-gray-800 rounded-lg p-5">
+    <div className="bg-gray-800 rounded-lg p-5" aria-busy={loading || undefined}>
       <div className="flex flex-wrap items-start justify-between gap-3 mb-1">
         <h2 className="text-lg font-bold">{title}</h2>
         {showToggle && (
@@ -339,12 +346,7 @@ export function SimilarPlayers({
           {loading ? 'Searching…' : 'No comparable players found.'}
         </p>
       )}
-      <div
-        className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 ${
-          loading ? 'opacity-50 transition-opacity' : ''
-        }`}
-        aria-busy={loading || undefined}
-      >
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         {players.map((p) => {
           const c = classColor(p.primary_class);
           const simPct = Math.round(p.similarity * 100);
@@ -393,8 +395,18 @@ export function SimilarPlayers({
                     </span>
                   </ClassTooltip>
                 )}
+                {/* Titled because cross-year puts a SECOND year on this tile
+                    (the row's own season, next to the team). These two mean
+                    different things — this one is where a carried-over
+                    archetype label came from — and side by side with no
+                    explanation they read as a contradiction. */}
                 {prov.shortYear && (
-                  <span className="text-[10px] text-gray-500 lowercase">{prov.shortYear}</span>
+                  <span
+                    className="text-[10px] text-gray-500 lowercase"
+                    title={prov.note ?? undefined}
+                  >
+                    {prov.shortYear}
+                  </span>
                 )}
               </div>
               <div className="mt-2 flex items-center gap-2">

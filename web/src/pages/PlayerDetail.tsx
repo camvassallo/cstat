@@ -188,7 +188,18 @@ export default function PlayerDetail() {
   // Keyed on the RESOLVED player id rather than the URL's `id`. They differ for
   // one paint on the canonical-UUID redirect, and a neighbour search against
   // another season's UUID finds no target vector and comes back empty.
-  const similarTargetId = player != null && archetype != null ? player.id : null;
+  //
+  // `player.season === season` is the other half of that, and it is not
+  // belt-and-braces. Switching the navbar season re-renders with the NEW season
+  // a paint before the refetch swaps `player`, so without the check this fires
+  // (last season's UUID, this season's number) — a pair that matches no
+  // `player_archetypes` row, comes back empty, and lands stamped with the key
+  // the panel is currently reading. The panel then says "No comparable players
+  // found" about a row that does not exist, until the redirect lands. In
+  // cross-year mode that throwaway is the ~280 ms query.
+  const similarReady =
+    player != null && archetype != null && player.season === season;
+  const similarTargetId = similarReady ? player.id : null;
   const similarKey = similarRequestKey(similarTargetId, season, similarMode);
   useEffect(() => {
     if (!similarTargetId) return;
@@ -204,7 +215,11 @@ export default function PlayerDetail() {
     };
   }, [similarTargetId, season, similarMode]);
   const similarPlayers = similar?.key === similarKey ? similar.players : [];
-  const similarLoading = similarTargetId != null && similar?.key !== similarKey;
+  // No stored result for the current key means one is on the way — including
+  // the mid-navigation window above, where `similarTargetId` is null and the
+  // key can never be matched. That window is genuinely "loading", so it should
+  // read as such rather than as an empty result.
+  const similarLoading = similar?.key !== similarKey;
 
   // PBP season profile — own request, fetched in parallel with the main
   // payload. Keyed on (id, season); the endpoint resolves the cross-season
