@@ -2,6 +2,7 @@ import { Suspense, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAvailableSeasons, usePageSeasons, useSeason, type Season } from './season';
 import RouteErrorBoundary, { ChunkReloadReset } from './RouteErrorBoundary';
+import { routePattern } from '../lib/errorReporter';
 
 const navLinkClass = (active: boolean) =>
   `px-3 py-2 rounded text-sm font-medium transition-colors ${
@@ -385,7 +386,7 @@ export default function Layout() {
             season picker stay mounted and interactive while the next route's
             chunk downloads.
 
-            `key={pathname}` is what makes the fallback actually appear.
+            The key is what makes the fallback actually appear.
             BrowserRouter wraps its location update in `React.startTransition`,
             and React deliberately keeps an ALREADY-REVEALED boundary's content
             on screen through a transition instead of showing its fallback — so
@@ -394,15 +395,23 @@ export default function Layout() {
             arrived. A key change mounts a NEW boundary, which has nothing to
             preserve and renders its fallback immediately.
 
-            Keyed on `pathname` and NOT `search` on purpose: the URL-backed
-            filters on /players (archetype chips, match mode, mode tabs) only
-            move the query string, so they keep the same boundary and stay
-            inside the transition, where React can interrupt them. Opting out
-            of transitions globally would have fixed the spinner and made those
-            filters ~5x more expensive — measured at 413ms of blocked main
-            thread per chip vs 83ms. */}
+            Keyed on the route PATTERN, not the raw pathname, and never on
+            `search`. Two reasons, both about not remounting more than the
+            fallback needs. The URL-backed filters on /players (archetype chips,
+            match mode, mode tabs) only move the query string, so they keep the
+            same boundary and stay inside the transition where React can
+            interrupt them — opting out of transitions globally would have fixed
+            the spinner and made those filters ~5x more expensive, measured at
+            413ms of blocked main thread per chip against 83ms. And collapsing
+            the entity id means /teams/A -> /teams/B keeps its boundary too:
+            same component, chunk already loaded, nothing to wait for, so a
+            remount there would only throw away child state (roster sort, lineup
+            size) that survived before this PR. */}
         <RouteErrorBoundary resetKey={pathname + search}>
-          <Suspense key={pathname} fallback={<div className="text-gray-400">Loading…</div>}>
+          <Suspense
+            key={routePattern(pathname)}
+            fallback={<div className="text-gray-400">Loading…</div>}
+          >
             <ChunkReloadReset />
             <Outlet />
           </Suspense>

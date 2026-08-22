@@ -68,13 +68,18 @@ function isChunkLoadError(error: unknown): boolean {
  */
 export default class RouteErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
-  { failed: boolean; offline: boolean; checking: boolean }
+  { failed: boolean; offline: boolean; checking: boolean; wasChunkError: boolean }
 > {
-  state = { failed: false, offline: false, checking: false };
+  state = { failed: false, offline: false, checking: false, wasChunkError: false };
 
   // Bumped whenever the boundary resets or unmounts, so an in-flight
   // reachability probe can tell that its attempt has been superseded.
   private probeGeneration = 0;
+
+  // True while a probe is outstanding. An instance field rather than state
+  // because it is read synchronously inside `componentDidCatch`, before any
+  // queued setState has been applied.
+  private probeInFlight = false;
 
   static getDerivedStateFromError() {
     return { failed: true };
@@ -82,6 +87,12 @@ export default class RouteErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     if (isChunkLoadError(error)) {
+      // A reset and a throw can land in the SAME commit — `componentDidUpdate`
+      // runs first, clears `failed`, and the re-render throws again — so this
+      // can be entered twice for one navigation. That is the true->true case
+      // the `prevState` gate below does not cover. Without this, one navigation
+      // starts two probes and two reloads.
+      if (this.probeInFlight) return;
       // A dead network is the OTHER reason a dynamic import fails, and
       // reloading is the worst available response to it. Before code
       // splitting, in-app navigation needed no network for JS, so a user on
@@ -104,7 +115,7 @@ export default class RouteErrorBoundary extends Component<
       // the `online` event is guaranteed to fire and clear it. A true tells us
       // nothing, so nothing downstream may claim to know the user is offline.
       if (navigator.onLine === false) {
-        this.setState({ offline: true });
+        this.setState({ offline: true, wasChunkError: true });
         return;
       }
       const key = reloadKey(window.location.pathname);
@@ -119,11 +130,13 @@ export default class RouteErrorBoundary extends Component<
         storageUsable = false;
       }
       if (storageUsable && !alreadyReloaded) {
-        this.setState({ checking: true });
+        this.setState({ checking: true, wasChunkError: true });
+        this.probeInFlight = true;
         this.reloadIfOriginReachable(key);
         return;
       }
       if (!storageUsable) {
+        this.setState({ wasChunkError: true });
         // Show the error UI, but say nothing to #errors-web. Unreadable storage
         // is not evidence about the chunk: this is most likely an ordinary
         // stale tab, which is the case that is supposed to report nothing, and
@@ -134,6 +147,7 @@ export default class RouteErrorBoundary extends Component<
       // A second failure on the same chunk is a missing asset, not a stale tab.
       // Worth reporting: it means a deploy shipped an index.html referencing a
       // chunk that isn't being served.
+      this.setState({ wasChunkError: true });
     }
     reportCaughtError(error, info.componentStack ?? undefined);
     console.error('Route render failed', error, info.componentStack);
@@ -157,7 +171,8 @@ export default class RouteErrorBoundary extends Component<
     // which is precisely when a navigation should clear it.
     if (prevState.failed && prev.resetKey !== this.props.resetKey) {
       this.probeGeneration += 1;
-      this.setState({ failed: false, offline: false, checking: false });
+      this.probeInFlight = false;
+      this.setState({ failed: false, offline: false, checking: false, wasChunkError: false });
     }
   }
 
@@ -204,6 +219,7 @@ export default class RouteErrorBoundary extends Component<
         .then((res) => {
           window.clearTimeout(timer);
           if (superseded()) return;
+          this.probeInFlight = false;
           // An origin that ANSWERS is reachable, whatever it answered. A 502 or
           // 503 from the proxy mid-rollout, or a redirect from an edge rule on
           // the second host, means the network is fine — and the user must not
@@ -245,12 +261,14 @@ export default class RouteErrorBoundary extends Component<
           // that is now the right move — is the better answer.
           window.clearTimeout(timer);
           if (superseded()) return;
+          this.probeInFlight = false;
           this.setState({ checking: false });
         });
     } catch {
       // Same reasoning as the catch above: reachable only while `onLine` is
       // true, so it must not claim the user is offline.
       window.clearTimeout(timer);
+      this.probeInFlight = false;
       this.setState({ checking: false });
     }
   }
@@ -261,6 +279,7 @@ export default class RouteErrorBoundary extends Component<
 
   componentWillUnmount() {
     this.probeGeneration += 1;
+    this.probeInFlight = false;
     window.removeEventListener('online', this.handleOnline);
   }
 
@@ -279,7 +298,7 @@ export default class RouteErrorBoundary extends Component<
   // drop again.
   private handleOnline = () => {
     if (this.state.offline) {
-      this.setState({ failed: false, offline: false, checking: false });
+      this.setState({ failed: false, offline: false, checking: false, wasChunkError: false });
     }
   };
 
@@ -309,14 +328,19 @@ export default class RouteErrorBoundary extends Component<
           <button
             type="button"
             className="text-blue-400 underline"
-            // Re-checked at CLICK time, not at catch time. The connection can
+            // Re-checked at CLICK time, not at catch time: the connection can
             // drop during the up-to-5s probe window, and this button is exactly
             // what `componentDidCatch` refuses to do on the user's behalf while
-            // offline: the reload is a network navigation, it fails, and the
-            // browser replaces a still-working app with its error page. If the
-            // device has gone offline since, show that instead of doing it.
+            // offline — the reload is a network navigation, it fails, and the
+            // browser replaces a still-working app with its error page.
+            //
+            // Gated on `wasChunkError`, mirroring the gate `componentDidCatch`
+            // applies. Being offline explains a chunk that would not load; it
+            // explains nothing about a render crash, and swapping in the
+            // offline message there would be both a wrong diagnosis and a trap,
+            // since that message renders no button.
             onClick={() => {
-              if (navigator.onLine === false) {
+              if (navigator.onLine === false && this.state.wasChunkError) {
                 this.setState({ offline: true });
                 return;
               }
