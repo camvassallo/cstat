@@ -192,8 +192,16 @@ pub async fn fetch_roster(
         FROM player_season_stats pss
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = pss.player_id AND tps.season = pss.season
+        -- One Torvik profile per (player, season) -- the table is UNIQUE on
+        -- (torvik_pid, season), not (player_id, season), so a bare join gives
+        -- a duplicated player two roster slots (#311). Mirrors the collapse in
+        -- `training/train_roster_impact_model.py`; the two frames feed one model and must agree.
+        LEFT JOIN LATERAL (
+            SELECT * FROM torvik_player_stats t
+            WHERE t.player_id = pss.player_id AND t.season = pss.season
+            ORDER BY t.torvik_pid
+            LIMIT 1
+        ) tps ON TRUE
         WHERE pss.team_id = $1
           AND pss.season = $2
           AND COALESCE(pss.games_played, 0) >= $3

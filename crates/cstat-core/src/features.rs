@@ -229,8 +229,25 @@ async fn get_roster_agg(
                    tps.ogbpm  AS torvik_ogbpm,
                    tps.dgbpm  AS torvik_dgbpm
             FROM player_season_stats pss
-            LEFT JOIN torvik_player_stats tps
-              ON tps.player_id = pss.player_id AND tps.season = pss.season
+            -- One Torvik profile per (player, season). The table is UNIQUE on
+            -- (torvik_pid, season), NOT on (player_id, season), so a bare join
+            -- gives a duplicated player TWO rows in `qualified` -- counted
+            -- twice by `roster_size` and weighted twice in every
+            -- SUM(x * total_minutes) / SUM(total_minutes) below (#311). On
+            -- Mercyhurst 2026 that read `roster_size` 10 for 9 players, `w_ppg`
+            -- 12% high and `w_gbpm` 31% off, across 5.0% of team-seasons.
+            --
+            -- `training/features.py::load_torvik_stats` collapses identically,
+            -- and that is load-bearing rather than tidy: the two frames feed
+            -- one model, so they have to fan out the same way or not at all.
+            -- Changing one without the other is a train/serve skew, which is
+            -- why this landed with a retrain rather than on its own.
+            LEFT JOIN LATERAL (
+                SELECT * FROM torvik_player_stats t
+                WHERE t.player_id = pss.player_id AND t.season = pss.season
+                ORDER BY t.torvik_pid
+                LIMIT 1
+            ) tps ON TRUE
             WHERE pss.team_id = $1
               AND pss.season = $2
               AND pss.games_played >= 5

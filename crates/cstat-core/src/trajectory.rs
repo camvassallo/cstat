@@ -305,8 +305,21 @@ pub async fn fetch_player_trajectory_row(
             rec.year             AS recruit_year
         FROM player_season_stats pss
         JOIN players ply ON ply.id = pss.player_id
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = pss.player_id AND tps.season = pss.season
+        -- One Torvik profile per (player, season). Unlike the roster-frame
+        -- builders, this one was a genuine train/serve MISMATCH rather than a
+        -- shared distortion (#311): `train_trajectory_model.py` keys its base
+        -- frame on `torvik_pid` (`FROM torvik_player_stats a JOIN
+        -- torvik_player_stats b ON a.torvik_pid = b.torvik_pid`), one row per
+        -- pid and no fan-out, while serving keyed on `player_id` and handed a
+        -- duplicated player two feature rows. Collapsing to the lowest pid
+        -- gives one row whose N-1 chain below follows that same pid, which is
+        -- the shape the model was trained on.
+        LEFT JOIN LATERAL (
+            SELECT * FROM torvik_player_stats t
+            WHERE t.player_id = pss.player_id AND t.season = pss.season
+            ORDER BY t.torvik_pid
+            LIMIT 1
+        ) tps ON TRUE
         LEFT JOIN player_on_off oo
             ON oo.player_id = pss.player_id AND oo.season = pss.season
         LEFT JOIN player_archetypes pa
@@ -420,8 +433,21 @@ pub async fn fetch_player_trajectory_rows(
             rec.year             AS recruit_year
         FROM player_season_stats pss
         JOIN players ply ON ply.id = pss.player_id
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = pss.player_id AND tps.season = pss.season
+        -- One Torvik profile per (player, season). Unlike the roster-frame
+        -- builders, this one was a genuine train/serve MISMATCH rather than a
+        -- shared distortion (#311): `train_trajectory_model.py` keys its base
+        -- frame on `torvik_pid` (`FROM torvik_player_stats a JOIN
+        -- torvik_player_stats b ON a.torvik_pid = b.torvik_pid`), one row per
+        -- pid and no fan-out, while serving keyed on `player_id` and handed a
+        -- duplicated player two feature rows. Collapsing to the lowest pid
+        -- gives one row whose N-1 chain below follows that same pid, which is
+        -- the shape the model was trained on.
+        LEFT JOIN LATERAL (
+            SELECT * FROM torvik_player_stats t
+            WHERE t.player_id = pss.player_id AND t.season = pss.season
+            ORDER BY t.torvik_pid
+            LIMIT 1
+        ) tps ON TRUE
         LEFT JOIN player_on_off oo
             ON oo.player_id = pss.player_id AND oo.season = pss.season
         LEFT JOIN player_archetypes pa

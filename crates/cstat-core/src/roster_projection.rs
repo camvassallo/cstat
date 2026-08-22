@@ -950,8 +950,16 @@ pub async fn compose_all_projections(
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = pss.player_id AND tps.season = pss.season
+        -- One Torvik profile per (player, season) (#311). DISTINCT ON rather
+        -- than a LATERAL because this sweep is season-wide: `pss.season = $1`
+        -- propagates into the subquery through the join equivalence, so the
+        -- de-duplication stays confined to the season being projected.
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id, season) *
+            FROM torvik_player_stats
+            WHERE player_id IS NOT NULL
+            ORDER BY player_id, season, torvik_pid
+        ) tps ON tps.player_id = pss.player_id AND tps.season = pss.season
         WHERE pss.season = $1
           AND COALESCE(pss.games_played, 0) >= $2
           AND COALESCE(pss.minutes_per_game, 0) >= $3
@@ -1141,8 +1149,13 @@ pub async fn compose_all_projections(
                 JOIN players p ON p.id = pss.player_id AND p.season = pss.season
                 LEFT JOIN player_archetypes pa
                     ON pa.player_id = pss.player_id AND pa.season = pss.season
-                LEFT JOIN torvik_player_stats tps
-                    ON tps.player_id = pss.player_id AND tps.season = pss.season
+                -- One Torvik profile per (player, season) (#311).
+                LEFT JOIN LATERAL (
+                    SELECT * FROM torvik_player_stats t
+                    WHERE t.player_id = pss.player_id AND t.season = pss.season
+                    ORDER BY t.torvik_pid
+                    LIMIT 1
+                ) tps ON TRUE
                 WHERE p.id = ANY($1)
                   AND pss.season BETWEEN $2 AND $3
                   AND COALESCE(pss.games_played, 0) >= $4
