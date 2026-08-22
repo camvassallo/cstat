@@ -1383,7 +1383,10 @@ export interface PredictionResult {
   /// point-in-time (mid-January onward, or when a team has no preseason
   /// projection row). Read this rather than inferring from local state so
   /// UI honesty claims always match what the server actually served.
-  prediction_basis: 'preseason' | 'blended' | 'pit' | 'leaky';
+  /// "cross_era" = the two slots named different seasons — a what-if matchup,
+  /// always served from whole-season state (no point-in-time, no preseason
+  /// blend), with no prior meetings and the conference flag forced off.
+  prediction_basis: 'preseason' | 'blended' | 'pit' | 'leaky' | 'cross_era';
   predicted_margin: number;
   home_win_probability: number;
   /// Total points (home + away). Materially less precise than margin
