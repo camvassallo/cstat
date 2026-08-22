@@ -707,8 +707,10 @@ fn jptr_str(v: &Value, ptr: &str) -> Option<String> {
 ///
 /// The 4/3 floor is the loose one, because 247's 3-vs-4 star cut is really a
 /// rank cut (roughly the top 150) that the rating only approximates. 0.9350 is
-/// not a compromise, though — the 3-star ceiling lands within a thousandth of
-/// 0.9349 in nearly every class from 2018 on, so it is a real structural edge.
+/// not a compromise, though — it is a real ceiling on the 3-star side. Only 4
+/// of the 2,638 three-star rows scraped since 2018 rate above it, and five of
+/// those eight classes top out between 0.9344 and 0.9349. The residual error is
+/// almost entirely 4-stars reaching *below* the floor, not 3-stars crossing it.
 /// Its residual error is one-sided in the safe direction: on the 2018+ era the
 /// bands actually write, 0.9350 leaves 28 inflated rows against 145 deflated.
 /// That asymmetry is deliberate. `star_rating` is served to the freshman and

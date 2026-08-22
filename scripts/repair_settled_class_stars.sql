@@ -103,7 +103,18 @@ WHERE r.year < :current_season
 
 -- Dry run by default. To commit, run with:
 --   psql "$DATABASE_URL" -v commit=on -f scripts/repair_settled_class_stars.sql
+--
+-- Branch on the variable's VALUE, not on whether it is defined. `\if :{?commit}`
+-- on its own is a trap: `:{?name}` asks only whether the variable is SET, so
+-- `-v commit=off` — the spelling anyone reaching for a forced dry run would
+-- type — takes the commit branch and writes. Defaulting it and testing the
+-- value makes `off`, `false` and `0` all mean what they say.
 \if :{?commit}
+\else
+    \set commit off
+\endif
+
+\if :commit
     \echo '>> committing'
     COMMIT;
 \else

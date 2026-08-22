@@ -92,8 +92,10 @@ fn star_ratings_in_expected_range() {
     let rows = parse_recruits_html(FIXTURE);
     for r in &rows {
         let stars = r.star_rating.unwrap_or(0);
-        // 247's composite is normalized to 1-5 stars; page-2 (ranks 51-100)
-        // should be predominantly 4-star with some 5-star outliers.
+        // 247's composite is normalized to 1-5 stars. Page 2 (ranks 51-100) is
+        // 4-star all the way down — `star_bands_match_the_captured_rankings_page`
+        // asserts that exactly, and it is what makes the JSON feed's 5-star
+        // claim at rank 76 impossible. This one only guards the range.
         assert!(
             (0..=5).contains(&stars),
             "star_rating out of range: {stars} for key={}",
