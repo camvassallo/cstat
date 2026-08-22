@@ -6,6 +6,36 @@ use uuid::Uuid;
 use crate::inference::{NUM_FEATURES, TOTAL_NUM_FEATURES};
 use crate::pit_campom::{PitCamPom, compute_pit_campom};
 
+/// One side of a matchup: which team, drawn from which season.
+///
+/// Team UUIDs are season-scoped (Duke 2025 and Duke 2026 are different rows),
+/// so an id already implies a season for row lookup — but the feature builder
+/// takes the season explicitly because a *matchup* need not draw both sides
+/// from the same year (ROADMAP §7c, "2015 Kentucky vs 2026 Duke").
+///
+/// The pairing is the point. Venue handling in `projection::predict_with_venue`
+/// swaps the two sides for the Away and Neutral paths, and with four loose
+/// scalars a swap that moved the ids but not the seasons would pair each team
+/// with the other's year — a silent wrong answer, not a compile error. Bound
+/// together, a swap is `(away, home)` and cannot come apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeamSeason {
+    pub id: Uuid,
+    pub season: i32,
+}
+
+impl TeamSeason {
+    pub fn new(id: Uuid, season: i32) -> Self {
+        Self { id, season }
+    }
+
+    /// Both sides of a single-season matchup — every real scheduled game, and
+    /// the only shape the point-in-time path can serve.
+    pub fn same_season(home_id: Uuid, away_id: Uuid, season: i32) -> (Self, Self) {
+        (Self::new(home_id, season), Self::new(away_id, season))
+    }
+}
+
 /// Feature vectors for both the margin/win path (49 diffs) and the totals
 /// path (49 diffs + 9 level-sensitive sums). Built in a single DB-fetch
 /// pass so the API can call all three models off one round-trip without
@@ -447,21 +477,12 @@ pub async fn get_rolling_form(
 /// only need the margin path.
 pub async fn build_game_features(
     pool: &PgPool,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
+    home: TeamSeason,
+    away: TeamSeason,
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<[f32; NUM_FEATURES], sqlx::Error> {
-    let f = build_all_features(
-        pool,
-        home_team_id,
-        away_team_id,
-        season,
-        is_neutral,
-        is_conference,
-    )
-    .await?;
+    let f = build_all_features(pool, home, away, is_neutral, is_conference).await?;
     Ok(f.diff)
 }
 
@@ -471,24 +492,22 @@ pub async fn build_game_features(
 /// Features are home − away differences for the diff path, plus
 /// home + away sums on the unflipped raw columns for the totals path.
 /// Order matches `model_meta.json::features` and `::total_features`.
+///
+/// Each side carries its own season, so a cross-era what-if is expressible
+/// here. Every caller today passes one season for both sides; nothing about
+/// the arithmetic changes when they differ, because `season` only ever scoped
+/// a per-team row lookup. What the *number* means when the eras differ is a
+/// separate question (the league-wide baselines moved, so several of the 49
+/// diffs carry era drift on top of team quality) — that belongs to #289, not
+/// to this layer.
 pub async fn build_all_features(
     pool: &PgPool,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
+    home: TeamSeason,
+    away: TeamSeason,
     is_neutral: bool,
     is_conference: bool,
 ) -> Result<GameFeatures, sqlx::Error> {
-    build_all_features_inner(
-        pool,
-        home_team_id,
-        away_team_id,
-        season,
-        is_neutral,
-        is_conference,
-        None,
-    )
-    .await
+    build_all_features_inner(pool, home, away, is_neutral, is_conference, None).await
 }
 
 /// Point-in-time companion to `build_all_features`. Roster impact (gbpm /
@@ -512,6 +531,14 @@ pub async fn build_all_features(
 ///
 /// Pair with `Predictor::predict_pit` to keep the model that receives
 /// these features the one that was trained on them.
+///
+/// **Single-season by construction.** Unlike [`build_all_features`], this takes
+/// one `season` and two bare ids rather than two [`TeamSeason`]s, because the
+/// pit cohort map ([`build_pit_by_player`]) is computed for one season's player
+/// pool — there is no coherent "point-in-time" cutoff spanning two eras, since
+/// a date inside one season is nowhere near the other. Keeping the parameter
+/// singular makes the incoherent case unrepresentable here instead of leaving
+/// it to a caller to remember.
 pub async fn build_all_features_pit(
     pool: &PgPool,
     home_team_id: Uuid,
@@ -521,11 +548,11 @@ pub async fn build_all_features_pit(
     is_conference: bool,
     as_of_date: NaiveDate,
 ) -> Result<GameFeatures, sqlx::Error> {
+    let (home, away) = TeamSeason::same_season(home_team_id, away_team_id, season);
     build_all_features_inner(
         pool,
-        home_team_id,
-        away_team_id,
-        season,
+        home,
+        away,
         is_neutral,
         is_conference,
         Some(as_of_date),
@@ -535,36 +562,45 @@ pub async fn build_all_features_pit(
 
 async fn build_all_features_inner(
     pool: &PgPool,
-    home_team_id: Uuid,
-    away_team_id: Uuid,
-    season: i32,
+    home: TeamSeason,
+    away: TeamSeason,
     is_neutral: bool,
     is_conference: bool,
     as_of_date: Option<NaiveDate>,
 ) -> Result<GameFeatures, sqlx::Error> {
     // Build the pit map once when as_of_date is set — the season-cohort
-    // aggregate is shared across home/away roster queries.
+    // aggregate is shared across home/away roster queries, which is exactly
+    // why the pit path is single-season. `build_all_features_pit` is the only
+    // way to reach this arm and constructs both sides from one season, so the
+    // assert documents an invariant the type system already holds rather than
+    // guarding a reachable state.
+    debug_assert!(
+        as_of_date.is_none() || home.season == away.season,
+        "point-in-time features need one season cohort; got {} vs {}",
+        home.season,
+        away.season
+    );
     let pit_map = match as_of_date {
-        Some(d) => Some(build_pit_by_player(pool, season, d).await?),
+        Some(d) => Some(build_pit_by_player(pool, home.season, d).await?),
         None => None,
     };
 
     let (home_ts, away_ts, home_roster, away_roster, home_form, away_form) = match &pit_map {
         Some(map) => tokio::try_join!(
-            get_team_stats(pool, home_team_id, season),
-            get_team_stats(pool, away_team_id, season),
-            get_roster_agg_pit(pool, home_team_id, season, map),
-            get_roster_agg_pit(pool, away_team_id, season, map),
-            get_rolling_form(pool, home_team_id, season),
-            get_rolling_form(pool, away_team_id, season),
+            get_team_stats(pool, home.id, home.season),
+            get_team_stats(pool, away.id, away.season),
+            get_roster_agg_pit(pool, home.id, home.season, map),
+            get_roster_agg_pit(pool, away.id, away.season, map),
+            get_rolling_form(pool, home.id, home.season),
+            get_rolling_form(pool, away.id, away.season),
         )?,
         None => tokio::try_join!(
-            get_team_stats(pool, home_team_id, season),
-            get_team_stats(pool, away_team_id, season),
-            get_roster_agg(pool, home_team_id, season),
-            get_roster_agg(pool, away_team_id, season),
-            get_rolling_form(pool, home_team_id, season),
-            get_rolling_form(pool, away_team_id, season),
+            get_team_stats(pool, home.id, home.season),
+            get_team_stats(pool, away.id, away.season),
+            get_roster_agg(pool, home.id, home.season),
+            get_roster_agg(pool, away.id, away.season),
+            get_rolling_form(pool, home.id, home.season),
+            get_rolling_form(pool, away.id, away.season),
         )?,
     };
 
