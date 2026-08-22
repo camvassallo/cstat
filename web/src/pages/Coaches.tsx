@@ -15,7 +15,8 @@ import ModeToggle, { type ModeToggleOption } from '../components/ModeToggle';
 
 type Mode = 'career' | 'season';
 
-// Hoisted so the array identity is stable across renders.
+// Hoisted only to avoid re-allocating on every render — `ModeToggle` is not
+// memoized, so nothing depends on the array identity being stable.
 const MODE_OPTIONS: readonly ModeToggleOption<Mode>[] = [
   { value: 'career', label: 'Career' },
   { value: 'season', label: 'Season' },

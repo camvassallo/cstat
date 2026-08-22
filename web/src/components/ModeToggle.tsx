@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 // A segmented two-or-more-option control — the small pill of adjoining buttons
 // with the active option filled blue. Lifted verbatim out of `Coaches.tsx`
@@ -10,6 +10,12 @@ import type { ReactNode } from 'react';
 // and inactive tone, so consolidating them is a deliberate follow-up (#301)
 // rather than a drive-by here. New segmented controls should use this
 // component.
+//
+// Note for those conversions: `text-xs` is baked into the base class because
+// it is what every current caller wants, and `className` is placement-only —
+// a caller passing `text-sm` would emit two competing size classes and let
+// stylesheet order decide. Predict's venue picker is `text-sm`, so #301 has to
+// add a real size variant rather than route it through `className`.
 //
 // ---------------------------------------------------------------------------
 // The cross-year contract (why this component exists now)
@@ -61,12 +67,20 @@ type Props<T extends string> = {
 };
 
 /**
- * Radiogroup semantics follow the pattern already used by the Predict page's
- * venue picker: `role="radiogroup"` on the container, `role="radio"` +
- * `aria-checked` on each button. The seven other copies of this markup are
- * plain unlabelled buttons, so screen readers get a strictly better
- * announcement here — invisible on screen, which keeps the Coaches conversion
- * a pixel-for-pixel no-op.
+ * Radiogroup semantics follow the pattern the Predict page's venue picker
+ * already uses: `role="radiogroup"` on the container, `role="radio"` +
+ * `aria-checked` on each button. Predict aside, the other seven copies of this
+ * markup are plain unlabelled buttons, so screen readers get a strictly better
+ * announcement here — and none of it is visible on screen, which keeps the
+ * Coaches conversion a pixel-for-pixel no-op.
+ *
+ * Declaring those roles takes on the radio pattern's KEYBOARD contract too,
+ * which Predict's picker does not honor: a radiogroup is a single tab stop and
+ * moves between options with the arrow keys. Announcing "radio group, 1 of 2"
+ * and then ignoring Arrow Right is worse than plain buttons, so the contract is
+ * implemented here rather than inherited half-done — this component is slated
+ * to replace eight more controls (#301), so the pattern it establishes
+ * propagates.
  */
 export default function ModeToggle<T extends string>({
   options,
@@ -75,18 +89,62 @@ export default function ModeToggle<T extends string>({
   ariaLabel,
   className = '',
 }: Props<T>) {
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // The checked option owns the group's tab stop; every other option is
+  // reachable only by arrow key (roving tabindex). `findIndex` returning -1 —
+  // a `value` outside `options` — would otherwise leave EVERY button at
+  // tabIndex -1 and make the control unreachable from the keyboard, so fall
+  // back to the first option. Nothing is visually selected in that state
+  // either, which is the real bug; this just keeps it operable.
+  const activeIndex = options.findIndex((o) => o.value === value);
+  const tabStopIndex = activeIndex >= 0 ? activeIndex : 0;
+
+  // Arrow/Home/End move the selection AND the focus together — for radios,
+  // focus follows selection, so arrowing onto an option chooses it.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const last = options.length - 1;
+    let next: number;
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        next = tabStopIndex === last ? 0 : tabStopIndex + 1;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        next = tabStopIndex === 0 ? last : tabStopIndex - 1;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = last;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    onChange(options[next].value);
+    buttons.current[next]?.focus();
+  };
+
   return (
     <div
       className={`inline-flex items-center rounded-md border border-gray-700 overflow-hidden text-xs ${className}`}
       role="radiogroup"
       aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
     >
-      {options.map((o) => (
+      {options.map((o, i) => (
         <button
           key={o.value}
+          ref={(el) => {
+            buttons.current[i] = el;
+          }}
           type="button"
           role="radio"
           aria-checked={value === o.value}
+          tabIndex={i === tabStopIndex ? 0 : -1}
           title={o.title}
           onClick={() => onChange(o.value)}
           className={`px-3 py-1.5 ${
