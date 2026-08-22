@@ -266,10 +266,36 @@ This matters because `CLAUDE.md` currently advertises
 tipoff that line is half wrong: `player_rapm` still needs it (B6), `lineup_aggregates`
 must not.
 
-**Fix:** at tipoff, split that guidance, move both rollups to owner=prod in the ownership
-table (§3), and rewrite the R4 test's rationale from *"prod has no PBP"* to *"prod
-produces these itself; pushing them is the collision."* This is the concrete first
-customer for the open ROADMAP P1 *"enforce table ownership on `--tables`"*.
+**Fix — done (#249), ahead of tipoff rather than at it.** The guidance is split: `CLAUDE.md`
+now shows `--tables player_rapm` as the in-season path and states why the two rollups are
+absent from it. The R4 test's rationale is rewritten from *"prod has no PBP"* to *"prod
+produces these itself; pushing them is the collision"* — its assertions are unchanged, and
+what the exclusion protects is restated as scope coherence plus prod's disk budget. The
+same stale claim was corrected in the two other places it lived: the `EXCLUDED` comment in
+`sync_to_prod.sh` and §R4 of `docs/intraseason_data_safety_plan.md` (date-stamped there
+rather than rewritten, since that document is a point-in-time analysis).
+
+Doing it before tipoff rather than on it is deliberate. The window where the docs are wrong
+is the window where someone follows them, and the push leaves no trace: prod's rows are
+replaced by the laptop's and the next nightly quietly rebuilds them, so the only symptom is
+one day of wrong on-off numbers that nobody was watching.
+
+**And the guidance is now enforced, not just corrected.** `--tables` runs a staleness
+preflight and refuses (exit 4) when local cannot reproduce a season prod holds, naming the
+table, the season and the row count. It is deliberately a precondition on LOCAL rather than
+an implementation of the ownership table above: ownership here is seasonal — `lineup_aggregates`
+is legitimately laptop-owned right up until prod ingests a season's play-by-play and
+legitimately prod-owned from the first game after — so a static owner list would be wrong
+for part of every year and would train the operator to reach for the override. Asking the
+two databases what they actually hold is right on both sides of the flip with no calendar
+rule, and it needs no maintenance when a new table joins the hazard: carrying a season
+column is enough. `--force-tables` overrides.
+
+This also closes the *other* row of §3 that was waiting to bite. Once prod computes 2027
+(B2), a `--tables team_preseason_projection` push from the laptop would have deleted prod's
+opening-week anchors — the same failure, a different table, and one the retrain script now
+prints a push command for (#263). The preflight catches it without either of us having to
+remember it.
 
 ### B5 — Archetypes: the cold start is handled, the retrain is not
 
@@ -369,7 +395,8 @@ two columns disagree with today's habit, that disagreement is the work.
 | `players.display_name` | **prod** for the current season; laptop `--columns` for historical | `compute_all` step 21 | — |
 | `archetype_models` | **laptop**, annual | `--tables` | — |
 | `player_rapm` | **laptop**, periodic (until §5 is decided) | `--tables` | — |
-| `transfers`, `recruits`, `coaches`, `draft_entrants` | **laptop**, offseason/on-demand | `--tables` | no in-season churn, so no staleness (ROADMAP S5) |
+| `transfers`, `recruits` | **prod** in-season; laptop for a bootstrap or a historical class | nightly `transfers_{year}` / `recruits_{class_year}` / `recruit_commits_{class_year}` steps | a laptop `--tables` push replaces prod's fresher portal/recruit rows with the laptop's. Self-healing — `last_update_cursor` reads the cursor from the table, so a clobber moves it backward and the next incremental sweep re-fetches — but it is a day of stale portal data on the site |
+| `coaches`, `draft_entrants` | **laptop**, offseason/on-demand | `--tables` | no in-season churn, so no staleness |
 | `team_preseason_projection`, `player_season_projection` | **prod** for 2027 (B2) | `compute-projections` run on prod | **local currently has no 2027 rows — a `--tables` push from the laptop after B2 would delete prod's 2027 anchors.** Do not push this table once prod owns 2027 |
 | `ingest_runs`, `ingest_run_table_counts`, `api_cache`, `portle_daily_puzzle` | **prod** | runtime | already EXCLUDED |
 
@@ -398,9 +425,12 @@ That `team_preseason_projection` row is not hypothetical: local and prod are byt
 7. **Immediately after 6 succeeds:** `cstat-ingest compute-projections --years 2027` on
    Railway → verify `team_preseason_projection` has 2027 rows (B2 — it silently writes
    nothing if run before 6).
-8. Final offseason `--tables` pushes while the laptop is still the owner: `transfers`,
-   `recruits`, `coaches`, `draft_entrants`, `archetype_models`, `player_rapm`,
-   `coach_ratings`, `coach_season_cae`.
+8. Final offseason `--tables` pushes while the laptop is still the owner: `coaches`,
+   `draft_entrants`, `archetype_models`, `player_rapm`, `coach_ratings`,
+   `coach_season_cae`. **Not `transfers` / `recruits`** — the nightly refreshes those
+   on prod year-round, not only in-season (the 2026 class gained 51 players in the
+   first 19 days of August 2026), so prod is the fresher copy even now and pushing
+   them is a rollback, not a handover.
 9. Confirm no `CSTAT_SIMULATED_DATE` on either Railway service.
 
 **Nov 1 (rollover day).** Season flips to 2027. Expect `torvik`/`torvik_games` to record

@@ -32,9 +32,10 @@
 #   ./scripts/sync_to_prod.sh --dry-run                # preview without applying
 #   ./scripts/sync_to_prod.sh --prod-status            # READ-ONLY prod inspection
 #   ./scripts/sync_to_prod.sh --tables a,b,c           # push only these tables
-#   ./scripts/sync_to_prod.sh --tables lineup_aggregates,player_rapm
+#   ./scripts/sync_to_prod.sh --tables player_rapm
 #   ./scripts/sync_to_prod.sh --columns players.display_name  # merge one column
 #   ./scripts/sync_to_prod.sh --force-full             # override the in-season guard
+#   ./scripts/sync_to_prod.sh --force-tables           # override the staleness preflight
 #
 # IN-SEASON RULE (enforced, not just documented — see the P0 guard below and
 # docs/intraseason_data_safety_plan.md): while prod is cron-fed, a FULL sync is
@@ -50,9 +51,21 @@
 # (intersected with the live, non-excluded local tables). This is the targeted
 # mode for the Railway-direct nightly architecture: the serving-critical tables
 # are written on prod by the nightly cron job, so the local machine pushes ONLY
-# its heavy derived tables (PBP/RAPM/archetype/lineup outputs) without a full
-# truncate clobbering what the cron just wrote. Names in EXCLUDED can never be
-# selected; an unknown name aborts before any write.
+# its heavy derived tables (PBP/RAPM/archetype outputs) without a full truncate
+# clobbering what the cron just wrote. Names in EXCLUDED can never be selected;
+# an unknown name aborts before any write.
+#
+# --tables is TRUNCATE + restore-from-local, so it is only safe while LOCAL IS AT
+# LEAST AS COMPLETE AS PROD. A staleness preflight enforces that (#249, exit 4):
+# for every requested table carrying a season-like column it asks prod for the
+# seasons local cannot reproduce, and refuses the push naming them. This is a
+# precondition on local, not a claim about ownership — which is deliberate,
+# because ownership here is seasonal. `lineup_aggregates` is legitimately
+# laptop-owned until prod ingests a season's play-by-play and legitimately
+# prod-owned from the first game after, so a static owner list would be wrong
+# for part of every year and would train you to reach for the override. Season
+# coverage is what actually changes, and it is right on both sides of the flip
+# with no calendar rule. --force-tables overrides; it accepts the deletion.
 #
 # --columns table.col[,col…] is the third mode, for the case --tables cannot
 # serve: a derived column on a table that is REFERENCED by foreign keys.
@@ -108,6 +121,7 @@ DRY_RUN=0
 REQUESTED_TABLES=""   # empty = all (full sync); set by --tables for targeted mode
 REQUESTED_COLUMNS=""  # set by --columns for column-merge mode (see below)
 FORCE_FULL=0          # --force-full: override the in-season full-sync guard
+FORCE_TABLES=0        # --force-tables: override the --tables staleness preflight
 PROD_STATUS=0         # --prod-status: read-only prod inspection, then exit
 
 while [[ $# -gt 0 ]]; do
@@ -118,6 +132,7 @@ while [[ $# -gt 0 ]]; do
     --columns) REQUESTED_COLUMNS="${2:?--columns needs table.col[,col…]}"; shift 2 ;;
     --columns=*) REQUESTED_COLUMNS="${1#--columns=}"; shift ;;
     --force-full) FORCE_FULL=1; shift ;;
+    --force-tables) FORCE_TABLES=1; shift ;;
     --prod-status) PROD_STATUS=1; shift ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "Unknown arg: $1"; exit 2 ;;
@@ -186,12 +201,17 @@ prod_nightly_age_hours() {
 # natstat_lineups / natstat_lineup_games: local-only lineups-object capture,
 # prod serves only the derived lineup_aggregates / player_on_off.
 #   R4 INVARIANT (docs/intraseason_data_safety_plan.md §R4): keeping these four
-#   source tables local-only is LOAD-BEARING, not just a size optimization. It is
-#   the sole reason the in-season targeted push (--tables lineup_aggregates,
-#   player_on_off) can safely own those rollups on prod: with no PBP/lineup rows
-#   on prod, the nightly's compute_pbp_lineups no-ops (early-returns) instead of
-#   rebuilding them. Ship any of the four to prod and the nightly starts wiping
-#   and rebuilding the rollups every night, clobbering the operator's push.
+#   source tables local-only is LOAD-BEARING, not just a size optimization —
+#   though what it bears CHANGED at tipoff (#249), and the old reason is now
+#   backwards. It used to be what let the laptop safely own lineup_aggregates /
+#   player_on_off on prod: with no PBP there, compute_pbp_lineups early-returned
+#   instead of rebuilding them. Prod now ingests its own PBP, so it rebuilds both
+#   rollups nightly for the season it is ingesting, and pushing them from here is
+#   the collision — NOT the intended path. What the exclusion protects now is (a)
+#   scope: prod's PBP is exactly what prod ingested, so its rebuild is confined to
+#   the current season and the laptop keeps the historical rollups; ship history
+#   up and both sides write the same rows; and (b) prod's disk, at ~1 GB of PBP
+#   per lived-through season against a 10 GB volume.
 #   Enforced by crates/cstat-core/tests/sync_prod_r4_invariant.rs — do not remove
 #   any of the four without reading that coupling first.
 # ingest_runs / ingest_run_table_counts: runtime ledger + row-count snapshots
@@ -456,6 +476,117 @@ if [[ -n "$REQUESTED_TABLES" ]]; then
     SELECTED="${SELECTED:+$SELECTED,}$want"
   done
   TABLE_LIST="$SELECTED"
+fi
+
+# ── --tables staleness preflight (#249) ─────────────────
+# `--tables` is TRUNCATE + restore-from-local. So the question that decides
+# whether a push is safe is not "who owns this table" but "is local at least as
+# complete as prod?" — anything prod holds that local cannot reproduce is
+# DELETED, and the deletion is silent: the restore succeeds, the row counts look
+# plausible, and the missing rows are simply gone until something rebuilds them.
+#
+# Asking the databases beats declaring ownership in a list. Ownership here is
+# SEASONAL — `lineup_aggregates` is legitimately laptop-owned right up until
+# prod ingests a season's play-by-play, and legitimately prod-owned from the
+# first game after — so a static list would be wrong for part of every year and
+# would train the operator to reach for the override. Season coverage is the
+# thing that actually changes, it is cheap to read, and it is right on both
+# sides of the flip with no calendar rule.
+#
+# Scope: tables carrying a season-like column, which is every table where this
+# has bitten. `class_year` is deliberately NOT a candidate — it is a class label
+# ('Fr'/'So'), not a season, and `player_season_projection` carries both.
+#
+# WHAT IT DOES NOT COVER, because a silent pass here should not be read as "this
+# push is safe": the comparison is season COVERAGE, so it sees a whole season
+# prod has and local lacks, and nothing finer. Two copies of the SAME season that
+# disagree row-for-row look identical to it. `player_archetypes` is the live
+# example — prod's current-season rows come from the nightly's Rust assign, local's
+# from a Python refit, and a push silently replaces prod's with the laptop's. That
+# one is self-correcting (the next nightly rewrites it, and §3 of
+# docs/tipoff_self_sufficiency_plan.md calls that correct), but the guard is not
+# what makes it safe, and a future table with within-season divergence and no
+# nightly rebuild would be clobbered with this check reporting nothing. Row-level
+# comparison is the ingest-frontier precondition in ROADMAP P1, still open.
+#
+# Fails OPEN (warn, continue to the confirm prompt) when prod cannot be read for
+# a table, because a table prod does not have yet is a legitimate first push and
+# refusing it would break bootstrap. The interactive confirm below still prints
+# the exact TRUNCATE.
+if [[ -n "$REQUESTED_TABLES" ]]; then
+  LOSSES=""
+  UNVERIFIED=""
+  for t in ${TABLE_LIST//,/ }; do
+    SEASON_COL=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = '$t'
+        AND column_name IN ('season', 'target_season', 'year')
+      ORDER BY CASE column_name
+                 WHEN 'season' THEN 1 WHEN 'target_season' THEN 2 ELSE 3 END
+      LIMIT 1" 2>/dev/null | tr -d '[:space:]' || true)
+    [[ -n "$SEASON_COL" ]] || continue
+
+    # Local's coverage, as a quoted SQL list. Empty when local holds no rows.
+    LOCAL_SEASONS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+      SELECT string_agg(DISTINCT quote_literal($SEASON_COL::text), ',')
+      FROM \"$t\"" 2>/dev/null | tr -d '[:space:]' || true)
+
+    # Seasons prod holds that local does not. `NOT IN ()` is a syntax error, so
+    # an empty local list becomes TRUE — every prod season is unreplaceable,
+    # which is the right answer: restoring an empty local table over prod
+    # deletes everything it had.
+    #
+    # Explicit `if` rather than `[[ … ]] && …`, matching the convention at the
+    # sequence-leak guard below: under `set -e` an AND-list whose test fails
+    # yields a non-zero status for the whole list, and that is not an idiom to
+    # reintroduce in a guard that decides whether prod rows get deleted.
+    PRED="TRUE"
+    if [[ -n "$LOCAL_SEASONS" ]]; then
+      PRED="$SEASON_COL::text NOT IN ($LOCAL_SEASONS)"
+    fi
+    if ! MISSING=$("${PSQL[@]}" "$PROD_URL" -t -A -F' ' -c "
+      SELECT $SEASON_COL::text, count(*)
+      FROM \"$t\" WHERE $PRED
+      GROUP BY 1 ORDER BY 1" 2>/dev/null); then
+      UNVERIFIED="${UNVERIFIED:+$UNVERIFIED }$t"
+      continue
+    fi
+    while read -r season rows; do
+      [[ -n "$season" ]] || continue
+      LOSSES="${LOSSES}    $(printf '%-28s' "$t") prod has $SEASON_COL $season ($rows rows), local has none"$'\n'
+    done <<< "$MISSING"
+  done
+
+  if [[ -n "$UNVERIFIED" ]]; then
+    echo "  ! Could not read prod coverage for: $UNVERIFIED"
+    echo "    (absent on prod is normal for a first push) — staleness UNVERIFIED for those."
+    echo
+  fi
+
+  if [[ -n "$LOSSES" ]]; then
+    echo "✗ Local is BEHIND prod — this --tables push would DELETE rows prod holds"
+    echo "  and local cannot replace:"
+    echo
+    printf '%s' "$LOSSES"
+    echo
+    echo "  --tables is TRUNCATE + restore-from-local, so those rows go away and"
+    echo "  nothing reports it. Two ways forward, and the second is usually right:"
+    echo
+    echo "    1. Bring local up to date for those seasons, then push."
+    echo "    2. Drop that table from --tables. Prod produces some of these itself"
+    echo "       (the nightly computes lineup_aggregates / player_on_off from the"
+    echo "       PBP it ingests, and team_preseason_projection for the forecast"
+    echo "       season), which means local is not merely behind — it is the wrong"
+    echo "       writer. Ownership table: docs/tipoff_self_sufficiency_plan.md §3."
+    echo
+    if [[ "$FORCE_TABLES" -eq 1 ]]; then
+      echo "  ! --force-tables given — proceeding anyway, and accepting the deletion."
+      echo
+    else
+      echo "  Override with --force-tables only if you know why prod's rows are wrong."
+      exit 4
+    fi
+  fi
 fi
 
 # pg_dump must restrict to the selected tables too, else the dump still carries
