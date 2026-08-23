@@ -897,6 +897,48 @@ fn split_combined_school(v: &str) -> (Option<String>, Option<String>) {
     (clean(v), None)
 }
 
+/// The season a page's own season PICKER says is selected.
+///
+/// Fallback for the schools whose `<title>` names no season — Arkansas serves
+/// "Roster | Arkansas Razorbacks" — but which do carry a season dropdown with
+/// the current one selected:
+///
+/// ```html
+/// <option value="…?season=2026-27" selected>2026-27</option>
+/// <span class="selected-option__text">2026-27</span>
+/// ```
+///
+/// Deliberately reads only the SELECTED control, never the most frequent year
+/// on the page. A frequency heuristic would happily confirm a stale roster off
+/// a "2026-27 schedule" link in the sidebar, which is the failure the season
+/// gate exists to catch. And it is not a way of asserting the season is right:
+/// it reports what the picker says, and [`season_gate`] still decides. A stale
+/// page whose picker reads "2025-26" is therefore rejected as stale rather than
+/// downgraded to unconfirmable — a strictly better outcome.
+///
+/// Only span forms count. A bare year in a picker is no more decidable than a
+/// bare year in a title, and the title path already handles that case.
+fn selected_season(html: &str) -> Option<TitleSeason> {
+    let doc = Html::parse_document(html);
+    for selector in ["option[selected]", "[class*='selected-option']"] {
+        let Ok(sel) = Selector::parse(selector) else {
+            continue;
+        };
+        for el in doc.select(&sel) {
+            let text = el.text().collect::<String>();
+            // The value attribute often carries `?season=2026-27` even when the
+            // visible text is abbreviated, so try both.
+            let attr = el.value().attr("value").unwrap_or_default();
+            for candidate in [text.as_str(), attr] {
+                if let TitleSeason::Span(y) = parse_title_season(candidate) {
+                    return Some(TitleSeason::Span(y));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Which vendor layout is this page, if any? Cheap substring probes on the
 /// raw body: every one of these markers is a vendor CSS class that no other
 /// platform emits.
@@ -1047,7 +1089,15 @@ impl RosterClient {
             if players.is_empty() {
                 continue;
             }
-            let claimed = parse_title_season(title.as_deref().unwrap_or_default());
+            // Title first; fall back to the page's own season picker only when
+            // the title says nothing, so a page that names a season is never
+            // second-guessed by a control elsewhere on it.
+            let mut claimed = parse_title_season(title.as_deref().unwrap_or_default());
+            if matches!(claimed, TitleSeason::Unknown)
+                && let Some(picked) = selected_season(&body)
+            {
+                claimed = picked;
+            }
             return Ok(Some(finish(claimed, target, title, players, platform, url)));
         }
         Ok(None)
@@ -1170,6 +1220,23 @@ fn finish(
         }
         Ok(SeasonEvidence::Confirmed) => {}
     }
+
+    // De-duplicate on the stored key BEFORE the headcount gate, so
+    // `player_count`, the `MIN_TRUSTED_ROSTER` decision and the rows actually
+    // written all agree. `persist` keys players on the normalized name, and
+    // two roster entries can share one — Missouri briefly listed "Jason Crowe
+    // Jr." and "Jason Crowe Sr.", which normalize identically. Counting the
+    // raw parse would report a 9-man roster as `ok` while storing 8.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut players = players;
+    players.retain(|p| {
+        let key = normalize_player_name(&strip_nickname(&p.name));
+        if key.is_empty() || !seen.insert(key) {
+            warn!(player = %p.name, "dropping duplicate roster entry");
+            return false;
+        }
+        true
+    });
 
     let marker = title_subset_marker(&title.unwrap_or_default());
     let status = if let Some(m) = marker {
@@ -1701,10 +1768,23 @@ mod tests {
 
     // --- verdicts -----------------------------------------------------
 
+    /// `n` distinct players.
+    ///
+    /// Names must be alphabetically distinct, not "Player 0"/"Player 1":
+    /// `normalize_player_name` strips digits, so numbered names all collapse to
+    /// the single key `player` and the de-duplication in `finish` would reduce
+    /// any such roster to one man.
     fn dummy(n: usize) -> Vec<RosterPlayer> {
         (0..n)
             .map(|i| RosterPlayer {
-                name: format!("Player {i}"),
+                name: format!(
+                    "Player {}",
+                    [
+                        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+                        "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
+                        "Quebec", "Romeo", "Sierra", "Tango"
+                    ][i % 20]
+                ),
                 ..Default::default()
             })
             .collect()
@@ -1780,6 +1860,71 @@ mod tests {
         );
         assert_eq!(f.status, FetchStatus::Partial);
         assert_eq!(f.players.len(), 5);
+    }
+
+    #[test]
+    fn duplicate_names_are_dropped_before_the_headcount_gate() {
+        // `persist` keys on the normalized name, so two entries sharing one
+        // store as a single row. Counting the raw parse would grade a roster
+        // `ok` on a headcount it does not actually have.
+        let mut players = dummy(8);
+        players.push(RosterPlayer {
+            name: "Player Alpha".into(),
+            ..Default::default()
+        });
+        assert_eq!(players.len(), 9, "9 raw entries, one a duplicate");
+        let f = finish(
+            TitleSeason::Span(2027),
+            2027,
+            Some("2026-27 Men's Basketball Roster".into()),
+            players,
+            PLATFORM_SIDEARM_LEGACY,
+            "u".into(),
+        );
+        assert_eq!(f.players.len(), 8, "the duplicate must not be counted");
+        assert_eq!(
+            f.status,
+            FetchStatus::Partial,
+            "8 real players is below the trust threshold, even though 9 parsed"
+        );
+    }
+
+    #[test]
+    fn a_season_picker_supplies_what_the_title_omits() {
+        // Arkansas titles its page "Roster | Arkansas Razorbacks" but ships a
+        // season dropdown with the current season selected.
+        let html = r#"<html><body>
+          <select>
+            <option value="/roster/?season=2025-26">2025-26</option>
+            <option value="/roster/?season=2026-27" selected>2026-27</option>
+          </select></body></html>"#;
+        assert_eq!(selected_season(html), Some(TitleSeason::Span(2027)));
+
+        // Troy's widget shape.
+        let widget = r#"<div class="selected-option__text">2026-27</div>"#;
+        assert_eq!(selected_season(widget), Some(TitleSeason::Span(2027)));
+    }
+
+    #[test]
+    fn a_season_picker_reports_a_stale_selection_honestly() {
+        // The picker is read, not trusted: a stale page must come back as the
+        // season it actually serves so the gate can reject it, rather than
+        // being confirmed by whatever year appears most often on the page.
+        let html = r#"<select>
+            <option value="/roster/?season=2025-26" selected>2025-26</option>
+            <option value="/roster/?season=2026-27">2026-27</option>
+          </select>
+          <a href="/schedule/2026-27">2026-27 Schedule</a>"#;
+        assert_eq!(selected_season(html), Some(TitleSeason::Span(2026)));
+        assert!(season_gate(selected_season(html).unwrap(), 2027).is_err());
+    }
+
+    #[test]
+    fn an_unselected_picker_confirms_nothing() {
+        assert_eq!(selected_season("<option>2026-27</option>"), None);
+        assert_eq!(selected_season("<option selected>All Types</option>"), None);
+        // A bare year in a picker is no more decidable than one in a title.
+        assert_eq!(selected_season("<option selected>2026</option>"), None);
     }
 
     #[test]

@@ -74,6 +74,23 @@ nothing would surface it if one of them quietly started serving last season.
 Only absence is withheld: their players are still stored and still true, so the
 audit's eligibility section, which reads presence, is unaffected.
 
+Three of those four are recovered by a second look. When the title says
+nothing, the gate falls back to the page's own season **picker**:
+
+```html
+<option value="…?season=2026-27" selected>2026-27</option>
+<span class="selected-option__text">2026-27</span>
+```
+
+Only the *selected* control counts, and only span forms. Reading the most
+frequent year on the page instead would cheerfully confirm a stale roster off a
+"2026-27 schedule" link in the sidebar — the exact failure the gate exists for.
+And the picker is read, not trusted: it reports what the page says and
+`season_gate` still decides, so a stale page whose picker reads "2025-26" comes
+back as `stale_season` rather than merely unconfirmable, which is strictly
+better. Arkansas, Georgia Tech and Troy recover this way; Miami carries no such
+control and stays `partial`.
+
 ## Platforms
 
 Three vendors, verified against all 364 cstat teams (2026-08-23):
@@ -234,7 +251,7 @@ Both tables are laptop-written and prod has no writer for them, so a full
 
 ## Coverage, 2026-08-23
 
-364 teams: **298 `ok`**, 9 `partial`, 36 `stale_season`, 6 `unsupported`, 15
+364 teams: **300 `ok`**, 7 `partial`, 36 `stale_season`, 6 `unsupported`, 15
 `unreachable`. 4,473 players, **2,257 with a previous school** — the D2 / JuCo /
 international signal, present on just over half of all rows.
 
