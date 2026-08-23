@@ -827,19 +827,33 @@ fn predict_team(
     let (floor_raw, floor_o_raw) = score(DraftScenario::Floor, "floor")?;
     let (ceiling_raw, ceiling_o_raw) = score(DraftScenario::Ceiling, "ceiling")?;
 
+    // Program-anchored baselines (#325): last season shrunk toward the
+    // program's own multi-season level by whatever this year's roster does not
+    // corroborate. Derived from the p̄-blended raw, once per half, so both
+    // bounds shrink toward the same anchor and the band width stays a pure
+    // function of the draft-scenario spread. Identical to what the shared
+    // `score_projection_adj_em` computes — this route and the offline
+    // materializer must not drift.
+    let blended_raw = p_return * ceiling_raw + (1.0 - p_return) * floor_raw;
+    let blended_o_raw = p_return * ceiling_o_raw + (1.0 - p_return) * floor_o_raw;
+    let anchor =
+        cstat_core::roster_projection::program_anchor(baseline, p.program_level, blended_raw);
+    let anchor_o =
+        cstat_core::roster_projection::program_anchor(baseline_o, p.program_level_o, blended_o_raw);
+
     // Baseline-shrink both bounds at the turnover-aware weight. The band
     // shrinks in width by `(1 - baseline_weight)` but stays internally
     // consistent (ceiling ≥ floor preserved for non-anomaly teams;
     // negative-spread anomalies stay negative-spread). The AdjO bounds
-    // shrink toward the prior-season *offense* (`baseline_o`) at the SAME
-    // weight, so the derived AdjD shrinks toward prior defense and the
-    // split stays coherent with the net headline.
+    // shrink toward the prior-season *offense* anchor at the SAME weight, so
+    // the derived AdjD shrinks toward prior defense and the split stays
+    // coherent with the net headline.
     Some(base(
-        Some(shrink(floor_raw, baseline, baseline_weight)),
-        Some(shrink(ceiling_raw, baseline, baseline_weight)),
+        Some(shrink(floor_raw, anchor, baseline_weight)),
+        Some(shrink(ceiling_raw, anchor, baseline_weight)),
         false,
-        Some(shrink(floor_o_raw, baseline_o, baseline_weight)),
-        Some(shrink(ceiling_o_raw, baseline_o, baseline_weight)),
+        Some(shrink(floor_o_raw, anchor_o, baseline_weight)),
+        Some(shrink(ceiling_o_raw, anchor_o, baseline_weight)),
     ))
 }
 
@@ -1966,18 +1980,23 @@ mod tests {
     #[test]
     fn overhaul_weight_leans_off_a_stale_baseline() {
         // At a lower (overhaul) weight the blend sits closer to the roster
-        // projection than to a stale baseline. raw=10, baseline=25:
-        // w=0.45 → 16.75; w=0.20 → 13.0 (nearer raw).
+        // projection than to a stale anchor. Expectations are DERIVED from the
+        // served constants, not hardcoded: these have been retuned three times
+        // (0.50/0.25 → 0.45/0.20 → 0.30/0.20 → 0.70/0.55) and a literal here
+        // just breaks the build on the next honest retune without catching a
+        // real defect.
         let raw = 10.0_f32;
-        let baseline = 25.0_f32;
-        let stable = shrink(raw, Some(baseline), SHRINK_WEIGHT);
-        let overhaul = shrink(
-            raw,
-            Some(baseline),
-            cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT_OVERHAUL,
-        );
+        let anchor = 25.0_f32;
+        let w_overhaul = cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT_OVERHAUL;
+        let stable = shrink(raw, Some(anchor), SHRINK_WEIGHT);
+        let overhaul = shrink(raw, Some(anchor), w_overhaul);
         assert!(overhaul < stable, "lower weight should pull toward raw");
-        assert!((overhaul - 13.0).abs() < 1e-5);
+        let expected = w_overhaul * anchor + (1.0 - w_overhaul) * raw;
+        assert!((overhaul - expected).abs() < 1e-5);
+        assert!(
+            w_overhaul < SHRINK_WEIGHT,
+            "the overhaul weight must stay below the stable one or the ramp inverts"
+        );
     }
 
     #[test]

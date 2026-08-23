@@ -136,6 +136,18 @@ struct TeamResult {
     /// it plus two constants), dumped anyway so a residual analysis can score
     /// what was actually served without re-implementing the ramp in Python.
     baseline_weight: f64,
+    /// The program's own multi-season level (#325) — mean AdjEM over the 3
+    /// seasons before the base season, `None` for a program with fewer than 2
+    /// of them. With this and `baseline` the tuner can reconstruct the served
+    /// anchor exactly, which it must: since #325 the blend does not shrink
+    /// toward `baseline` at all, it shrinks toward a corroboration-gated
+    /// function of `baseline`, `program_level` and `roster_proj`.
+    program_level: Option<f64>,
+    /// Σ base-season cam_v3 of the uncertain (declared-draft / contested
+    /// 5-in-5) cohort. Nothing here reads it — it is dumped for #324, which
+    /// asks whether that cohort belongs in `retained_talent_fraction`'s
+    /// denominator and cannot be answered without it.
+    uncertain_cam_v3_sum: f64,
 }
 
 /// Fetch `team_season_stats.adj_efficiency_margin` for a season, keyed by
@@ -269,6 +281,12 @@ async fn backtest_year(
             actual,
             retained: retained_talent_fraction(p).map(f64::from),
             baseline_weight: f64::from(transition_shrink_weight(p)),
+            program_level: p.program_level.map(f64::from),
+            uncertain_cam_v3_sum: p
+                .uncertain
+                .iter()
+                .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
+                .sum(),
         });
     }
 
@@ -475,7 +493,9 @@ pub async fn run(
 /// is the flat array of `{team_id, team_name, season, roster_proj, baseline,
 /// actual}` records this file has always carried — one per scored team, plus
 /// (since #322) the ex-ante `retained` turnover fraction and the
-/// `baseline_weight` the serving ramp derives from it. Floats
+/// `baseline_weight` the serving ramp derives from it, and (since #325) the
+/// `program_level` the served anchor shrinks toward plus the
+/// `uncertain_cam_v3_sum` #324 needs. Floats
 /// kept at their native f64 precision; downstream audit code handles rounding.
 ///
 /// The envelope is what lets a consumer say *which projection generation these
@@ -498,6 +518,8 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult], provenance: &Value) -
                 "actual": r.actual,
                 "retained": r.retained,
                 "baseline_weight": r.baseline_weight,
+                "program_level": r.program_level,
+                "uncertain_cam_v3_sum": r.uncertain_cam_v3_sum,
             })
         })
         .collect();
@@ -527,6 +549,8 @@ mod dump_format_tests {
             actual: 22.0,
             retained: Some(0.55),
             baseline_weight: 0.45,
+            program_level: Some(12.0),
+            uncertain_cam_v3_sum: 3.5,
         }
     }
 
@@ -556,6 +580,8 @@ mod dump_format_tests {
             "actual",
             "retained",
             "baseline_weight",
+            "program_level",
+            "uncertain_cam_v3_sum",
         ] {
             assert!(teams[0].get(key).is_some(), "dump row lost the `{key}` key");
         }

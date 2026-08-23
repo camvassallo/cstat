@@ -62,8 +62,24 @@ MIN_QUAL = 5                # player qualifying gate (mirror the roster model)
 # `baseline_weight` the Rust actually used, and `served_weight` is checked
 # against it when present, so a drift between these four numbers and the
 # served ones shows up as a loud warning instead of a quietly wrong tuning.
-W_STABLE, W_OVERHAUL = 0.30, 0.20
+W_STABLE, W_OVERHAUL = 0.70, 0.55
 RETAINED_FULL_OVERHAUL, RETAINED_FULL_STABLE = 0.20, 0.40
+# `PROGRAM_ANCHOR_SHRINK` (#325). The blend no longer shrinks toward `baseline`
+# — it shrinks toward `program_anchor(baseline, program_level, roster_proj)`,
+# so every MAE printed here would be fiction without mirroring it too.
+PROGRAM_ANCHOR_SHRINK = 1.0
+
+
+def program_anchor(baseline, program_level, roster_proj):
+    """Mirror of `roster_projection::program_anchor` — last season shrunk
+    toward the program's level by the part the roster does not corroborate."""
+    if program_level is None:
+        return baseline
+    dev = baseline - program_level
+    if abs(dev) < 1e-3:
+        return baseline
+    corroboration = (roster_proj - program_level) / dev
+    return baseline - PROGRAM_ANCHOR_SHRINK * min(max(1.0 - corroboration, 0.0), 1.0) * dev
 
 
 def served_weight(retained):
@@ -150,6 +166,7 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
             "roster_proj": float(r["roster_proj"]),
             "is_new_hc": new_hc.get((ns, r["season"])),
             "returning": retained,
+            "program_level": r.get("program_level"),
         })
     if weight_mismatch:
         print(f"  ** WARNING: {weight_mismatch} rows where this script's mirrored ramp "
@@ -159,16 +176,20 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
     return rows, source
 
 
+def blend(r, w):
+    """The served prediction at baseline weight `w`, anchored per #325."""
+    a = program_anchor(r["baseline"], r.get("program_level"), r["roster_proj"])
+    return w * a + (1 - w) * r["roster_proj"]
+
+
 def mae(rows, w):
-    """MAE of the blend w·baseline + (1-w)·roster_proj."""
-    return sum(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["roster_proj"]))
-               for r in rows) / len(rows)
+    """MAE of the blend w·anchor + (1-w)·roster_proj."""
+    return sum(abs(r["actual"] - blend(r, w)) for r in rows) / len(rows)
 
 
 def ramp_pred(r):
     """Prediction under the SERVED transition ramp (not a flat weight)."""
-    w = served_weight(r["returning"])
-    return w * r["baseline"] + (1 - w) * r["roster_proj"]
+    return blend(r, served_weight(r["returning"]))
 
 
 def ramp_mae(rows):
@@ -188,8 +209,7 @@ def best_weight(rows):
 
 def bias(rows, w):
     """Mean SIGNED error of the blend (pred − actual): + = over-projected."""
-    return sum((w * r["baseline"] + (1 - w) * r["roster_proj"]) - r["actual"]
-               for r in rows) / len(rows)
+    return sum(blend(r, w) - r["actual"] for r in rows) / len(rows)
 
 
 def report_cohort(name, rows):
@@ -228,8 +248,8 @@ def loso_conditional(rows, cohort_fn, cohorts):
             w_by[c] = best_weight(grp)[0] if len(grp) >= 30 else 0.5
         for r in test:
             w = w_by.get(cohort_fn(r), 0.5)
-            cond_ae.append(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["roster_proj"])))
-            flat_ae.append(abs(r["actual"] - (0.5 * r["baseline"] + 0.5 * r["roster_proj"])))
+            cond_ae.append(abs(r["actual"] - blend(r, w)))
+            flat_ae.append(abs(r["actual"] - blend(r, 0.5)))
     return sum(flat_ae) / len(flat_ae), sum(cond_ae) / len(cond_ae), w_by
 
 

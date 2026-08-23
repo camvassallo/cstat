@@ -743,10 +743,13 @@ export interface ProjectedTeam {
 
   /// Baseline weight used in the served blend:
   /// `midpoint ≈ baseline_weight·(last-yr AdjEM) + (1−baseline_weight)·roster`.
-  /// The stable weight for continuity rosters (0.30 since #322), ramping down
-  /// toward 0.20 for roster-overhaul teams (low talent retained) — last year's
-  /// result is a stale anchor when the roster turns over, so the projection
-  /// leans on the roster model. Below the stable weight = "leaning on the new
+  /// The stable weight for continuity rosters (0.70 since #325), ramping down
+  /// toward 0.55 for roster-overhaul teams (low talent retained). What it
+  /// weights changed in #325: no longer last season's AdjEM but a *program
+  /// anchor* — last season shrunk toward the program's three-year level by
+  /// whatever this year's roster does not corroborate — which is why the
+  /// weight roughly doubled while the projection leans LESS on any single
+  /// season than before. Below the stable weight = "leaning on the new
   /// roster"; compare against a hair under it, since the f32 → f64 promotion
   /// means the cap never arrives as the exact decimal (see `Projected.tsx`).
   baseline_weight: number;

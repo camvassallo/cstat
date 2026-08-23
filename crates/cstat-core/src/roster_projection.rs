@@ -362,6 +362,20 @@ pub struct ProjectedRoster {
     /// also how `training/transition_blend_diagnostic.py` defines its cohorts,
     /// so the tuned constants and the served key now measure the same thing.
     pub departures_abs_cam_v3_sum: f32,
+    /// The program's own recent level: mean `adj_efficiency_margin` over the
+    /// **3 seasons before the base season**, `None` when fewer than 2 of them
+    /// exist (a young or reclassifying program). This is the anchor
+    /// [`program_anchor`] shrinks `baseline` toward — see that function for
+    /// why last season alone is the wrong anchor and what stops the shrink
+    /// from flattening a genuine level change.
+    pub program_level: Option<f32>,
+    /// Same window, for `adj_offensive_efficiency` — the AdjO half's anchor.
+    /// The offense/defense split is display-only, but it has to move WITH the
+    /// net headline: the served AdjD is derived from the two, so correcting
+    /// the net anchor while leaving the offense anchor alone would dump the
+    /// whole correction into a defense number nobody adjusted. Only the net
+    /// half is backtest-validated; this one rides along for coherence.
+    pub program_level_o: Option<f32>,
 }
 
 impl ProjectedRoster {
@@ -963,6 +977,47 @@ pub async fn compose_all_projections(
             .bind(base_season)
             .fetch_all(pool)
             .await?;
+
+    // The program's own level over the 3 seasons BEFORE the base season,
+    // keyed by base-season team UUID. Season-scoped UUIDs mean this has to
+    // hop through `natstat_id` to reach the same program's older rows. The
+    // `HAVING count(*) >= 2` gate mirrors the backtest: one prior season is
+    // not a level estimate, it is another single sample, and a team with
+    // fewer than two takes `program_level = None` and is left on the raw
+    // baseline (measured as a no-op — 19 of 2,626 team-seasons).
+    #[derive(sqlx::FromRow)]
+    struct ProgramLevelRow {
+        team_id: Uuid,
+        level: Option<f64>,
+        level_o: Option<f64>,
+    }
+    let program_levels: Vec<ProgramLevelRow> = sqlx::query_as::<_, ProgramLevelRow>(
+        r#"
+        SELECT t_base.id AS team_id,
+               AVG(tss.adj_efficiency_margin)    AS level,
+               AVG(tss.adj_offense)              AS level_o
+        FROM teams t_base
+        JOIN teams t_hist ON t_hist.natstat_id = t_base.natstat_id
+        JOIN team_season_stats tss ON tss.team_id = t_hist.id
+        WHERE t_base.season = $1
+          AND t_hist.season BETWEEN $1 - 3 AND $1 - 1
+          AND tss.adj_efficiency_margin IS NOT NULL
+        GROUP BY t_base.id
+        HAVING count(*) >= 2
+        "#,
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?;
+    let program_level: HashMap<Uuid, (Option<f32>, Option<f32>)> = program_levels
+        .into_iter()
+        .map(|r| {
+            (
+                r.team_id,
+                (r.level.map(|v| v as f32), r.level_o.map(|v| v as f32)),
+            )
+        })
+        .collect();
 
     let roster_rows: Vec<RosterRow> = sqlx::query_as::<_, RosterRow>(
         r#"
@@ -1720,6 +1775,8 @@ pub async fn compose_all_projections(
             inbound_cam_v3_sum,
             departures_cam_v3_sum: departure_cam.signed,
             departures_abs_cam_v3_sum: departure_cam.magnitude,
+            program_level: program_level.get(&team.id).and_then(|(net, _)| *net),
+            program_level_o: program_level.get(&team.id).and_then(|(_, o)| *o),
         });
     }
 
@@ -1880,7 +1937,18 @@ pub async fn project_returner_cam_v3_banded(
 /// The whole-corpus flat optimum has read 0.25–0.30 for several generations,
 /// so this also removes a standing disagreement between the flat sweep the
 /// backtest prints and the constant actually served.
-pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.30;
+///
+/// **Retuned again 2026-08-23, 0.30 → 0.70 (#325), and the jump is the point.**
+/// The anchor is no longer raw `baseline`; [`program_anchor`] first shrinks
+/// last season toward the program's own multi-season level. 0.30 was the right
+/// weight for a ONE-SEASON sample of a program's strength — a noisy quantity
+/// that deserves little trust. Once that sample is de-noised the blend wants to
+/// lean on it hard: the leave-one-season-out refit picks 0.70 in **all eight
+/// folds**, and the surface is flat around it (0.60 → 5.5487, 0.70 → 5.5448,
+/// 0.80 → 5.5506 whole-corpus MAE). A retune of the weight without the anchor
+/// change, or vice versa, is not a partial improvement — the two constants are
+/// fit together and only make sense together.
+pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.70;
 
 /// Additive bias correction applied after the baseline shrink. The roster-impact model's
 /// raw residual at `PROJECTION_SHRINK_WEIGHT` is ≈−0.10 — within noise, so
@@ -1921,7 +1989,7 @@ pub const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 /// causal story (a stale anchor IS worth less on a rebuilt roster), and it
 /// holds the overhaul cohort's bias near zero (−0.15 at a flat 0.30, −0.05
 /// with the ramp). Do not cite it as a large accuracy win.
-pub const PROJECTION_SHRINK_WEIGHT_OVERHAUL: f32 = 0.20;
+pub const PROJECTION_SHRINK_WEIGHT_OVERHAUL: f32 = 0.55;
 
 /// Retained-talent fraction at/below which the overhaul weight applies in full.
 const OVERHAUL_RETAINED_FULL: f32 = 0.20;
@@ -1990,6 +2058,80 @@ pub fn retained_talent_fraction(p: &ProjectedRoster) -> Option<f32> {
         return None;
     }
     Some((returning / total).clamp(0.0, 1.0))
+}
+
+/// How much of an *uncorroborated* deviation from the program's level is
+/// reverted. 1.0 = revert all of it; 0.0 = the old behaviour, anchor on last
+/// season verbatim. Fit at 1.0 (folds 1.0–1.1; 0.8 → 5.5637, 1.0 → 5.5448,
+/// 1.2 → 5.5544 whole-corpus MAE).
+pub const PROGRAM_ANCHOR_SHRINK: f32 = 1.0;
+
+/// The blend's anchor: last season's AdjEM, shrunk toward the program's own
+/// multi-season level by the part of the move **this year's roster does not
+/// corroborate**.
+///
+/// `baseline` is one season — a sample of a program's strength, not the
+/// strength itself — and treating it as the strength was the largest remaining
+/// source of projection error (#325): teams on a 3-year climb were
+/// over-projected by **+1.82** and teams sliding under-projected by **−1.78**,
+/// symmetric signatures of un-modelled mean reversion. Shrinking the anchor
+/// toward `mean(prior 3 seasons)` fixes both (+0.24 pooled MAE, t=+6.8).
+///
+/// **But a flat shrink is wrong for the teams that matter most.** A program
+/// that genuinely changed level — McNeese 2025 (+10.3 last year against a
+/// −21.5 three-year mean, then went +13.8) — has last season as its most
+/// informative datapoint, and reverting it toward a history that no longer
+/// describes the program turned a 3.3-point error into 11.8. Kennesaw St.
+/// 2023, Liberty 2020 and Buffalo 2025 (a collapse, same shape inverted) fail
+/// the same way. Cohort averages hide this: those teams are a minority inside
+/// "risers", which gain on average.
+///
+/// So the shrink is **gated on corroboration** — the roster-impact model is an
+/// independent read on *this* year's team, and if it also projects the team at
+/// the new level, the move was real:
+///
+/// ```text
+/// dev           = baseline − program_level
+/// corroboration = (roster_raw − program_level) / dev     // ~1 → the roster agrees
+/// anchor        = baseline − PROGRAM_ANCHOR_SHRINK · clamp(1 − corroboration, 0, 1) · dev
+/// ```
+///
+/// On the cases above corroboration lands at 0.77–1.23 and the gate returns
+/// almost all the damage: McNeese 11.76 → 3.37, Liberty 5.89 → 1.00, Buffalo
+/// 9.94 → 5.23. It costs about half the flat variant's pooled gain (+0.126 vs
+/// +0.240 MAE) — a deliberate trade of average accuracy for not being wildly
+/// wrong about the most newsworthy teams on the board.
+///
+/// **Rejected alternatives, all measured** (#325): crediting corroboration
+/// *partially* (`0.5·corroboration`) posts the best pooled MAE of any variant
+/// but does NOT protect those teams — half-crediting a fully corroborated jump
+/// still reverts half of it, and McNeese lands at 10.44. Saturating curves
+/// protect more but give back nearly all the gain. Adding roster-retention or
+/// a new-head-coach flag to the gate adds **nothing** (t=+0.48 / +0.33): both
+/// act through the roster projection, which corroboration already reads —
+/// the same reason the coaching term died in #323. Persistence of the
+/// deviation actively hurts (t=−2.73); it is already partly inside the
+/// 3-season mean, so crediting it again double-counts.
+///
+/// `None` program level (a young program, fewer than 2 prior seasons) returns
+/// `baseline` untouched.
+pub fn program_anchor(
+    baseline: Option<f32>,
+    program_level: Option<f32>,
+    roster_raw: f32,
+) -> Option<f32> {
+    let baseline = baseline?;
+    let Some(level) = program_level else {
+        return Some(baseline);
+    };
+    let dev = baseline - level;
+    // Nothing to revert, and the corroboration ratio is undefined at dev ≈ 0.
+    if dev.abs() < 1e-3 {
+        return Some(baseline);
+    }
+    let corroboration = (roster_raw - level) / dev;
+    let uncorroborated = (1.0 - corroboration).clamp(0.0, 1.0);
+    Some(baseline - PROGRAM_ANCHOR_SHRINK * uncorroborated * dev)
 }
 
 /// Baseline blend weight for this roster: the stable [`PROJECTION_SHRINK_WEIGHT`]
@@ -2068,8 +2210,15 @@ pub fn score_projection_adj_em(
     // Computed from `p` so the route's `predict_team` and this shared scorer
     // stay in lockstep without either passing extra state.
     let weight = transition_shrink_weight(p);
-    let floor = shrink_adj_em_weighted(floor_raw, baseline, weight);
-    let ceiling = shrink_adj_em_weighted(ceiling_raw, baseline, weight);
+    // Program-anchored baseline (#325). Derived from the p̄-blended raw rather
+    // than per scenario, so both bounds shrink toward the SAME anchor and the
+    // band's width stays a pure function of the draft-scenario spread — a
+    // per-scenario anchor would let the floor and ceiling be corroborated to
+    // different degrees and silently distort the band.
+    let blended_raw = p_return * ceiling_raw + (1.0 - p_return) * floor_raw;
+    let anchor = program_anchor(baseline, p.program_level, blended_raw);
+    let floor = shrink_adj_em_weighted(floor_raw, anchor, weight);
+    let ceiling = shrink_adj_em_weighted(ceiling_raw, anchor, weight);
     let midpoint = p_return * ceiling + (1.0 - p_return) * floor;
     Some((floor, ceiling, midpoint))
 }
@@ -2132,6 +2281,8 @@ mod tests {
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
             departures_abs_cam_v3_sum: 0.0,
+            program_level: None,
+            program_level_o: None,
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
@@ -2155,6 +2306,8 @@ mod tests {
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum,
             departures_abs_cam_v3_sum: departures_cam_v3_sum.abs(),
+            program_level: None,
+            program_level_o: None,
         }
     }
 
@@ -2234,6 +2387,58 @@ mod tests {
         );
     }
 
+    /// The #325 anchor: revert an uncorroborated move toward the program's
+    /// level, leave a corroborated one alone.
+    #[test]
+    fn program_anchor_reverts_only_what_the_roster_does_not_corroborate() {
+        // A team 20 above its own level, whose roster this year projects right
+        // back at that level: corroboration 0 → revert the whole move.
+        let a = program_anchor(Some(20.0), Some(0.0), 0.0).unwrap();
+        assert!(
+            (a - 0.0).abs() < 1e-4,
+            "uncorroborated spike should revert, got {a}"
+        );
+
+        // McNeese's shape: 20 above its level and the roster agrees it belongs
+        // there → corroboration 1 → the anchor stays on last season.
+        let a = program_anchor(Some(20.0), Some(0.0), 20.0).unwrap();
+        assert!(
+            (a - 20.0).abs() < 1e-4,
+            "corroborated level change must survive, got {a}"
+        );
+
+        // Half corroborated → half reverted.
+        let a = program_anchor(Some(20.0), Some(0.0), 10.0).unwrap();
+        assert!((a - 10.0).abs() < 1e-4, "expected half revert, got {a}");
+
+        // Over-corroborated (roster projects even higher) clamps at "no
+        // revert" rather than pushing the anchor ABOVE last season.
+        let a = program_anchor(Some(20.0), Some(0.0), 35.0).unwrap();
+        assert!(
+            (a - 20.0).abs() < 1e-4,
+            "over-corroboration must clamp, got {a}"
+        );
+
+        // Symmetric on the way down (Buffalo's shape): a collapse the roster
+        // does not corroborate reverts upward toward the program level.
+        let a = program_anchor(Some(-20.0), Some(0.0), 0.0).unwrap();
+        assert!(
+            (a - 0.0).abs() < 1e-4,
+            "uncorroborated collapse should revert, got {a}"
+        );
+    }
+
+    #[test]
+    fn program_anchor_is_a_no_op_without_a_level_or_a_deviation() {
+        // Young program: no multi-season level → last season, untouched.
+        assert!((program_anchor(Some(7.5), None, -3.0).unwrap() - 7.5).abs() < 1e-6);
+        // Already at its own level: nothing to revert, and the corroboration
+        // ratio would divide by ~0.
+        assert!((program_anchor(Some(5.0), Some(5.0), -40.0).unwrap() - 5.0).abs() < 1e-6);
+        // No baseline at all stays None (the shrink is skipped downstream).
+        assert!(program_anchor(None, Some(5.0), 5.0).is_none());
+    }
+
     #[test]
     fn shrink_weighted_matches_default_at_stable_weight() {
         assert!(
@@ -2302,6 +2507,8 @@ mod tests {
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
             departures_abs_cam_v3_sum: 0.0,
+            program_level: None,
+            program_level_o: None,
         };
         // Floor: 1 returning + 1 arrival + 2 recruits = 4
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);
@@ -2348,6 +2555,8 @@ mod tests {
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
             departures_abs_cam_v3_sum: 0.0,
+            program_level: None,
+            program_level_o: None,
         };
         // Both recruits are present for display.
         assert_eq!(r.recruits.len(), 2);
@@ -2396,6 +2605,8 @@ mod tests {
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
             departures_abs_cam_v3_sum: 0.0,
+            program_level: None,
+            program_level_o: None,
         };
         // Both recruits are present for display.
         assert_eq!(r.recruits.len(), 2);
