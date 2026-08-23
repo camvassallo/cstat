@@ -11,11 +11,22 @@ value — the one place there may be room to beat `served`.
 
 Two transition signals, joined to the 11-season backtest dump:
   - is_new_hc  : coach_seasons flag (new head coach this offseason).
-  - returning  : fraction of last season's roster TALENT (Σ cam_v3) retained,
-                 matched across seasons by torvik_pid (the stable key). Low =
-                 portal overhaul. roster_proj sees the new roster; baseline doesn't.
+  - returning  : fraction of last season's roster TALENT retained. Since #322
+                 this is read straight off the dump (`retained`), which is the
+                 EX-ANTE fraction `roster_projection::retained_talent_fraction`
+                 computes from the four departure channels — i.e. the exact key
+                 the serving ramp uses. Older dumps have no such field, so we
+                 fall back to the hindsight proxy this tool used to compute
+                 (which of last season's qualifying players appear in the
+                 target season, matched by torvik_pid) and say so in the
+                 header. The proxy is not the same measurement: it can only be
+                 taken after the season it is predicting, and a midseason
+                 injury moves it for reasons that have nothing to do with how
+                 the roster was built. Tuning a served constant against a
+                 cohort the serving code cannot reproduce is the failure this
+                 field closes.
 
-For each cohort we report standalone baseline/talent MAE, the served(0.5) MAE +
+For each cohort we report standalone baseline/talent MAE, the served MAE +
 signed bias, and the IN-SAMPLE optimal weight on baseline. Then an honest
 leave-one-season-out test: does a cohort-conditional weight (fit on the other
 years) beat the flat 0.5 out-of-sample?
@@ -43,9 +54,35 @@ START_YEAR = 2019
 OVERHAUL_RETURNING = 0.40   # < this fraction of talent retained = "overhaul"
 MIN_QUAL = 5                # player qualifying gate (mirror the roster model)
 
+# The SERVED blend ramp, mirrored from `roster_projection.rs`
+# (PROJECTION_SHRINK_WEIGHT / _OVERHAUL / OVERHAUL_RETAINED_FULL /
+# STABLE_RETAINED_FULL). Mirrored rather than imported because this is Python
+# reading a Rust constant; the dump also carries the per-team
+# `baseline_weight` the Rust actually used, and `served_weight` is checked
+# against it when present, so a drift between these four numbers and the
+# served ones shows up as a loud warning instead of a quietly wrong tuning.
+W_STABLE, W_OVERHAUL = 0.30, 0.20
+RETAINED_FULL_OVERHAUL, RETAINED_FULL_STABLE = 0.20, 0.40
 
-def load_rows(conn, dump: Path | None = None) -> list[dict]:
-    """Backtest dump rows + team_natstat_id + is_new_hc + returning-talent frac."""
+
+def served_weight(retained):
+    """Baseline weight the serving path gives a roster with this retention."""
+    if retained is None or retained >= RETAINED_FULL_STABLE:
+        return W_STABLE
+    if retained <= RETAINED_FULL_OVERHAUL:
+        return W_OVERHAUL
+    t = ((retained - RETAINED_FULL_OVERHAUL)
+         / (RETAINED_FULL_STABLE - RETAINED_FULL_OVERHAUL))
+    return W_OVERHAUL + t * (W_STABLE - W_OVERHAUL)
+
+
+def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
+    """Backtest dump rows + team_natstat_id + is_new_hc + returning-talent frac.
+
+    Returns `(rows, retention_source)`, where the source is "ex-ante (dump)"
+    when the dump carries the served `retained` key and "hindsight (proxy)"
+    for pre-#322 dumps.
+    """
     bt = load_backtest(dump)
     tid2ns = {r.id: r.natstat_id
               for r in conn.execute(text("SELECT id::text AS id, natstat_id FROM teams"))}
@@ -79,27 +116,63 @@ def load_rows(conn, dump: Path | None = None) -> list[dict]:
         kept = sum(abs(v) for pid, v in base.items() if pid in tgt)
         return kept / tot
 
-    rows = []
+    # Prefer the served ex-ante fraction the dump carries; fall back to the
+    # hindsight proxy for older dumps. Decided per-dump, not per-row, so a
+    # single run never mixes two different definitions of "overhaul".
+    ex_ante = any("retained" in r for r in bt)
+    source = "ex-ante (dump `retained`)" if ex_ante else "hindsight (torvik_pid proxy)"
+
+    rows, weight_mismatch = [], 0
     for r in bt:
         if r["season"] < START_YEAR:
             continue
         ns = tid2ns.get(r["team_id"])
         if ns is None:
             continue
+        if ex_ante:
+            retained = r.get("retained")
+            retained = None if retained is None else float(retained)
+        else:
+            retained = returning_frac(ns, r["season"])
+        # The dump also records the weight the Rust actually derived. If the
+        # mirrored ramp above has drifted from the served one, this is where
+        # it surfaces — before the drift is baked into a retuned constant.
+        served = r.get("baseline_weight")
+        if served is not None and abs(float(served) - served_weight(retained)) > 1e-4:
+            weight_mismatch += 1
         rows.append({
             "ns": ns, "team": r["team_name"], "season": r["season"],
             "actual": float(r["actual"]), "baseline": float(r["baseline"]),
             "roster_proj": float(r["roster_proj"]),
             "is_new_hc": new_hc.get((ns, r["season"])),
-            "returning": returning_frac(ns, r["season"]),
+            "returning": retained,
         })
-    return rows
+    if weight_mismatch:
+        print(f"  ** WARNING: {weight_mismatch} rows where this script's mirrored ramp "
+              f"disagrees with the dump's served `baseline_weight`. The constants at the "
+              f"top of this file are stale against roster_projection.rs — fix them before "
+              f"reading anything below.")
+    return rows, source
 
 
 def mae(rows, w):
     """MAE of the blend w·baseline + (1-w)·roster_proj."""
     return sum(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["roster_proj"]))
                for r in rows) / len(rows)
+
+
+def ramp_pred(r):
+    """Prediction under the SERVED transition ramp (not a flat weight)."""
+    w = served_weight(r["returning"])
+    return w * r["baseline"] + (1 - w) * r["roster_proj"]
+
+
+def ramp_mae(rows):
+    return sum(abs(r["actual"] - ramp_pred(r)) for r in rows) / len(rows)
+
+
+def ramp_bias(rows):
+    return sum(ramp_pred(r) - r["actual"] for r in rows) / len(rows)
 
 
 def best_weight(rows):
@@ -163,9 +236,16 @@ def main():
     args = ap.parse_args()
 
     with get_engine().connect() as conn:
-        rows = load_rows(conn, args.dump)
-    print(f"\nn = {len(rows)} team-seasons ({START_YEAR}-2026); "
-          f"flat served MAE {mae(rows,0.5):.3f}, global best w={best_weight(rows)[0]:.2f}")
+        rows, source = load_rows(conn, args.dump)
+    print(f"\nn = {len(rows)} team-seasons ({START_YEAR}-2026); retention key: {source}")
+    print(f"  flat w=0.5 MAE {mae(rows,0.5):.3f}, global best flat w={best_weight(rows)[0]:.2f} "
+          f"(MAE {best_weight(rows)[1]:.3f})")
+    print(f"  SERVED ramp ({W_STABLE}→{W_OVERHAUL} over retained "
+          f"{RETAINED_FULL_STABLE}→{RETAINED_FULL_OVERHAUL})  MAE {ramp_mae(rows):.3f} "
+          f"(bias {ramp_bias(rows):+.2f})")
+    undefined = sum(1 for r in rows if r["returning"] is None)
+    print(f"  retention undefined on {undefined} of {len(rows)} rows "
+          f"({undefined/len(rows):.1%}) → served the stable weight by default")
 
     print("\n— by coaching change (is_new_hc) —")
     report_cohort("returning HC", [r for r in rows if r["is_new_hc"] is False])
@@ -187,9 +267,14 @@ def main():
     print("\n— HONEST out-of-sample test (leave-one-season-out) —")
     flat, cond, w_last = loso_conditional(
         rows, lambda r: "T" if is_transition(r) else "S", ["S", "T"])
-    print(f"  flat 0.5 served      pooled MAE {flat:.4f}")
-    print(f"  transition-cond wt   pooled MAE {cond:.4f}  (lift {flat-cond:+.4f})")
+    print(f"  flat 0.5             pooled MAE {flat:.4f}")
+    print(f"  transition-cond wt   pooled MAE {cond:.4f}  (lift vs flat {flat-cond:+.4f})")
+    print(f"  SERVED ramp          pooled MAE {ramp_mae(rows):.4f}  "
+          f"(lift vs flat {flat-ramp_mae(rows):+.4f})")
     print(f"  last-fold weights: stable w={w_last.get('S')}, transition w={w_last.get('T')}")
+    print("  (the served ramp's two constants were themselves fit on earlier runs of this "
+          "corpus, so its line is not fully out-of-sample — read it as the number to beat, "
+          "not as a held-out score.)")
 
     # utcnow() is deprecated; now(UTC) is aware, so drop the tzinfo before
     # formatting to keep the naive `…Z` shape the existing artifacts use.
@@ -198,6 +283,9 @@ def main():
     out.write_text(json.dumps({
         "generated_at": now.isoformat() + "Z",
         "n": len(rows), "flat_served_mae": mae(rows, 0.5),
+        "retention_source": source,
+        "served_ramp_mae": ramp_mae(rows), "served_ramp_bias": ramp_bias(rows),
+        "retention_undefined_frac": undefined / len(rows),
         "global_best_w": best_weight(rows)[0],
         "loso_flat_mae": flat, "loso_conditional_mae": cond, "loso_lift": flat - cond,
         "overhaul_threshold": OVERHAUL_RETURNING,

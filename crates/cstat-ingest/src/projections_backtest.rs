@@ -50,7 +50,7 @@ use cstat_core::inference::{Predictor, RosterImpactModel};
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
     DraftScenario, compose_all_projections, fetch_draft_entrants, fetch_player_departures,
-    project_returner_cam_v3,
+    project_returner_cam_v3, retained_talent_fraction, transition_shrink_weight,
 };
 
 /// Minimum (returning + arrivals + recruits) to score a team — mirrors
@@ -109,7 +109,8 @@ fn compute_stats(preds: &[f64], actuals: &[f64]) -> Stats {
     }
 }
 
-/// One team's two predictions plus its actual AdjEM.
+/// One team's two predictions plus its actual AdjEM, and the turnover key the
+/// serving blend would have used on it.
 struct TeamResult {
     team_id: Uuid,
     team_name: String,
@@ -117,6 +118,24 @@ struct TeamResult {
     roster_proj: f64,
     baseline: f64,
     actual: f64,
+    /// [`retained_talent_fraction`] for this composed roster — the EX-ANTE
+    /// turnover signal, known in the offseason from the four departure
+    /// channels. `None` for a roster with no cam coverage at all.
+    ///
+    /// Dumped because `transition_blend_diagnostic.py` used to reconstruct a
+    /// *hindsight* proxy for it (which of last season's players actually
+    /// appear in the target season's box scores), and then tuned the served
+    /// weights against cohorts the serving code could not reproduce — it
+    /// cannot see next season's box scores in August, and injuries and
+    /// midseason attrition move the hindsight number for reasons that have
+    /// nothing to do with roster construction. Carrying the real key here
+    /// closes that gap.
+    retained: Option<f64>,
+    /// The blend weight [`transition_shrink_weight`] hands the serving path
+    /// for this roster. Redundant with `retained` (it is a pure function of
+    /// it plus two constants), dumped anyway so a residual analysis can score
+    /// what was actually served without re-implementing the ramp in Python.
+    baseline_weight: f64,
 }
 
 /// Fetch `team_season_stats.adj_efficiency_margin` for a season, keyed by
@@ -248,6 +267,8 @@ async fn backtest_year(
             roster_proj: roster_proj as f64,
             baseline,
             actual,
+            retained: retained_talent_fraction(p).map(f64::from),
+            baseline_weight: f64::from(transition_shrink_weight(p)),
         });
     }
 
@@ -452,7 +473,9 @@ pub async fn run(
 ///
 /// Schema (since #238): `{"provenance": {...}, "teams": [...]}`, where `teams`
 /// is the flat array of `{team_id, team_name, season, roster_proj, baseline,
-/// actual}` records this file has always carried — one per scored team. Floats
+/// actual}` records this file has always carried — one per scored team, plus
+/// (since #322) the ex-ante `retained` turnover fraction and the
+/// `baseline_weight` the serving ramp derives from it. Floats
 /// kept at their native f64 precision; downstream audit code handles rounding.
 ///
 /// The envelope is what lets a consumer say *which projection generation these
@@ -473,6 +496,8 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult], provenance: &Value) -
                 "roster_proj": r.roster_proj,
                 "baseline": r.baseline,
                 "actual": r.actual,
+                "retained": r.retained,
+                "baseline_weight": r.baseline_weight,
             })
         })
         .collect();
@@ -500,6 +525,8 @@ mod dump_format_tests {
             roster_proj: 20.0,
             baseline: 18.0,
             actual: 22.0,
+            retained: Some(0.55),
+            baseline_weight: 0.45,
         }
     }
 
@@ -527,6 +554,8 @@ mod dump_format_tests {
             "roster_proj",
             "baseline",
             "actual",
+            "retained",
+            "baseline_weight",
         ] {
             assert!(teams[0].get(key).is_some(), "dump row lost the `{key}` key");
         }

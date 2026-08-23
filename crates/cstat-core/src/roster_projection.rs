@@ -350,6 +350,18 @@ pub struct ProjectedRoster {
     /// NBA-bound declaree shows the loss the portal-only sum would miss.
     /// Missing torvik coverage contributes 0 (COALESCE convention).
     pub departures_cam_v3_sum: f32,
+    /// Σ |base-season cam_v3| across the *same* departure population as
+    /// [`Self::departures_cam_v3_sum`], summed on MAGNITUDE. The denominator
+    /// half of [`retained_talent_fraction`], and the reason it exists is that
+    /// the signed sum cannot key roster turnover: cam_v3 is centred near 0
+    /// across D-I, so a returner set of two bench players sums *negative* and
+    /// left the signed ratio undefined on exactly the teams the overhaul
+    /// weight was written for — 239 of 364 teams on the live 2027 board,
+    /// Cincinnati among them (2 of 12 back, returners worth −0.3 against
+    /// +46.0 walking out, served at the full continuity weight). Magnitude is
+    /// also how `training/transition_blend_diagnostic.py` defines its cohorts,
+    /// so the tuned constants and the served key now measure the same thing.
+    pub departures_abs_cam_v3_sum: f32,
 }
 
 impl ProjectedRoster {
@@ -890,6 +902,30 @@ pub fn normalize_player_name(name: &str) -> String {
 /// One DB round-trip per source table (teams, players-with-stats,
 /// transfers); the partitioning happens in Rust.
 ///
+/// Running cam_v3 totals over one team's departures, signed and on magnitude.
+///
+/// Two sums over the same population, updated together by [`Self::add`]:
+/// `signed` is the "talent out" figure the Future grid shows, `magnitude` is
+/// the turnover denominator [`retained_talent_fraction`] keys on. Keeping them
+/// in one accumulator is the point — before this they were one running total,
+/// and the magnitude half is easy to forget when a fifth departure channel
+/// lands next to the four that exist today.
+#[derive(Default)]
+struct DepartureCam {
+    signed: f32,
+    magnitude: f32,
+}
+
+impl DepartureCam {
+    /// Fold in one departing player's base-season cam_v3. Missing torvik
+    /// coverage contributes 0 to both sums (COALESCE convention).
+    fn add(&mut self, cam_v3: Option<f64>) {
+        let cam = cam_v3.unwrap_or(0.0) as f32;
+        self.signed += cam;
+        self.magnitude += cam.abs();
+    }
+}
+
 /// `base_season` = N (the most recently completed season; for cstat's
 /// 2026 = 2025-26 college season, the 2026 portal class moves players
 /// from N=2026 into N+1=2027). `draft_entrants` is the optional
@@ -1449,9 +1485,13 @@ pub async fn compose_all_projections(
         let mut uncertain: Vec<(PlayerRow, UncertainPlayer)> = Vec::new();
         let mut departures: Vec<DepartureReason> = Vec::new();
         // Σ base-season cam_v3 across all departures (seniors + portal-out
-        // + draft-gone). Accumulated here where each departing player's
-        // RosterRow (and its cam_v3) is in scope; missing torvik → 0.
-        let mut departures_cam_v3_sum: f32 = 0.0;
+        // + draft-gone), signed and on magnitude. Accumulated here where each
+        // departing player's RosterRow (and its cam_v3) is in scope; missing
+        // torvik → 0. Bundled into one accumulator so a new departure channel
+        // cannot update one sum and silently skip the other — the signed sum
+        // feeds the UI's Departures column, the magnitude sum keys the
+        // turnover weight, and they must cover an identical population.
+        let mut departure_cam = DepartureCam::default();
 
         for (row, name) in rows {
             let pid = row.player_id;
@@ -1475,7 +1515,7 @@ pub async fn compose_all_projections(
                     reason: reason.clone(),
                     destination: destination.clone(),
                 });
-                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
+                departure_cam.add(row.cam_v3);
                 continue;
             }
             // Outbound portal commit? Checked BEFORE the senior branch: a
@@ -1508,7 +1548,7 @@ pub async fn compose_all_projections(
                     destination: dest,
                     destination_team_id: dest_team_id,
                 });
-                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
+                departure_cam.add(row.cam_v3);
                 continue;
             }
             // --- Eligibility overrides on the senior inference (issue #220).
@@ -1566,7 +1606,7 @@ pub async fn compose_all_projections(
                     player_id: pid,
                     name: name.clone(),
                 });
-                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
+                departure_cam.add(row.cam_v3);
                 continue;
             }
             // Derived signal, no curation required: a senior who entered the
@@ -1598,7 +1638,7 @@ pub async fn compose_all_projections(
                     player_id: pid,
                     name: name.clone(),
                 });
-                departures_cam_v3_sum += row.cam_v3.unwrap_or(0.0) as f32;
+                departure_cam.add(row.cam_v3);
                 continue;
             }
             // Declared (uncertain) → bucket separately so the route can
@@ -1678,7 +1718,8 @@ pub async fn compose_all_projections(
             departures,
             outbound_cam_v3_sum,
             inbound_cam_v3_sum,
-            departures_cam_v3_sum,
+            departures_cam_v3_sum: departure_cam.signed,
+            departures_abs_cam_v3_sum: departure_cam.magnitude,
         });
     }
 
@@ -1818,12 +1859,29 @@ pub async fn project_returner_cam_v3_banded(
 /// `shrink = w·baseline + (1−w)·raw + offset`. Canonical home for the
 /// calibration constants the `/api/projections` route and the
 /// `cstat-ingest compute-projections` step share — a recalibration touches
-/// one place and both surfaces stay in lockstep. Retuned 2026-06-27 on the
-/// LOSO backtest after the multi-season-trajectory calibrator refit
-/// (`training/transition_blend_diagnostic.py`, targets 2019–2026, n=1487):
-/// the continuity cohort's (≥40% talent retained) own backtest optimum moved
-/// 0.50 → 0.45 against the better raw projector. offset stays 0.0.
-pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.45;
+/// one place and both surfaces stay in lockstep. offset stays 0.0.
+///
+/// Retuned 2026-08-23, 0.45 → 0.30 (#322). The 0.45 came from the continuity
+/// cohort's own optimum measured through a HINDSIGHT retention key — which of
+/// last season's players actually turn up in the target season's box scores.
+/// The serving path cannot know that in August; it keys on
+/// [`retained_talent_fraction`], computed from the four departure channels.
+/// Now that the backtest dump carries the served fraction per team,
+/// `transition_blend_diagnostic.py` cohorts on the same signal the ramp does,
+/// and the continuity optimum on the honest key is 0.30, not 0.45 — the
+/// hindsight cohort was partly conditioned on the outcome it was predicting
+/// (a midseason injury or a January transfer lowers it), which flattered
+/// baseline persistence inside it.
+///
+/// Evidence (`eval_history/projections_backtest_per_team_full_11season_retained322.json`,
+/// targets 2019–2026, n=2626): pooled MAE 5.6921 at 0.45/0.20 → 5.6752 at
+/// 0.30/0.20, and a leave-one-season-out refit of both ramp constants picks
+/// stable 0.30 in seven of eight folds (0.35 in the eighth), pooled 5.6801.
+/// The whole-corpus flat optimum has read 0.25–0.30 for several generations,
+/// so this also removes a standing disagreement between the flat sweep the
+/// backtest prints and the constant actually served.
+pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.30;
+
 /// Additive bias correction applied after the baseline shrink. The roster-impact model's
 /// raw residual at `PROJECTION_SHRINK_WEIGHT` is ≈−0.10 — within noise, so
 /// the offset stays 0.0 (the box-score model's old +2.0 hack is retired).
@@ -1850,9 +1908,19 @@ pub const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 /// lockstep with NO extra DB fetch.
 ///
 /// Retuned 2026-06-27 (multi-season-trajectory calibrator refit): the overhaul
-/// cohort's (<40% retained) own backtest optimum moved 0.25 → 0.20. The
-/// honest leave-one-season-out test gives transition-conditional weights
-/// (stable 0.45 / overhaul 0.20) pooled MAE 5.788 vs 5.842 flat (+0.054 lift).
+/// cohort's (<40% retained) own backtest optimum moved 0.25 → 0.20.
+///
+/// **Held at 0.20 on the 2026-08-23 re-derivation (#322), but the ramp's
+/// measured value shrank sharply and the claim above needs reading with
+/// that.** Re-scored against the ex-ante retention key (see
+/// [`PROJECTION_SHRINK_WEIGHT`]), a LOSO refit picks 0.20–0.25 here, and the
+/// ramp is worth **+0.003 MAE** over a *retuned* flat weight — not the
+/// +0.05 the hindsight-keyed run credited it with. Almost all of that
+/// original lift was the flat weight being too high (0.45), not turnover
+/// conditioning. It is kept because it costs nothing, it is the honest
+/// causal story (a stale anchor IS worth less on a rebuilt roster), and it
+/// holds the overhaul cohort's bias near zero (−0.15 at a flat 0.30, −0.05
+/// with the ramp). Do not cite it as a large accuracy win.
 pub const PROJECTION_SHRINK_WEIGHT_OVERHAUL: f32 = 0.20;
 
 /// Retained-talent fraction at/below which the overhaul weight applies in full.
@@ -1860,31 +1928,51 @@ const OVERHAUL_RETAINED_FULL: f32 = 0.20;
 /// Retained-talent fraction at/above which the stable weight applies in full;
 /// the blend weight ramps linearly between the two bounds. `[0.20, 0.40]` keeps
 /// every team that returns ≥40% of last season's cam-weighted talent at the
-/// stable 0.45 (the continuity cohort's own backtest optimum), so only genuine
-/// overhauls deviate.
+/// stable [`PROJECTION_SHRINK_WEIGHT`] (the continuity cohort's own backtest
+/// optimum), so only genuine overhauls deviate.
 const STABLE_RETAINED_FULL: f32 = 0.40;
 
 /// Fraction of last season's roster TALENT retained into the projected season:
-/// `Σ base-season cam_v3 of returners / (returners + all departures)`. Both
-/// sums are base-season cam_v3, so this reads as "how much of last year's
-/// production is coming back". `None` when the team has no measurable prior
-/// talent on the books (e.g. a brand-new D-I program) — caller treats that as
-/// stable (the stale-baseline problem doesn't apply without a baseline roster).
+/// `Σ |base-season cam_v3| of returners / Σ |base-season cam_v3| of
+/// (returners + all departures)`. Both sums are base-season cam_v3 on
+/// MAGNITUDE, so this reads as "how much of last year's on-court impact is
+/// coming back" — which is what the blend weight actually wants to know,
+/// since a heavily-used *negative* player leaving makes last season's AdjEM
+/// exactly as stale as a star leaving does.
+///
+/// **Magnitude, not signed sums (#322).** cam_v3 is centred near 0 across
+/// D-I, so a team whose returners are three bench players sums negative —
+/// and the previous signed formula answered `None` for that case, falling
+/// through to the *stable* weight. That fired on 239 of 364 teams on the live
+/// 2027 board, and the cohort it silently exempted was led by the most
+/// complete overhauls in the country: Cincinnati (2 of 12 back, returners
+/// −0.3 cam against +46.0 departing, baseline +18.9), California (1 of 11),
+/// Pittsburgh (2 of 10) — all anchored to last season at w = 0.45, which is
+/// the opposite of what the ramp exists to do. Signed sums also disagreed
+/// with `training/transition_blend_diagnostic.py`, which has always defined
+/// its cohorts on `abs(cam)`: the served constants were fit against one
+/// definition of "overhaul" and applied through another.
+///
+/// The old guard was not paranoia — a team returning nine of ten *bad*
+/// players also sums negative (Central Arkansas 2027: 9 of 10 back, returners
+/// −15.4 cam), and clamping that to 0.0 would have labelled a continuity
+/// roster a full overhaul. Magnitude separates the two cases without a guard:
+/// Central Arkansas reads 0.72 retained, Cincinnati 0.02.
+///
+/// `None` only when the team has no measurable prior talent on the books at
+/// all (e.g. a brand-new D-I program) — caller treats that as stable, since
+/// the stale-baseline problem doesn't apply without a baseline roster.
 pub fn retained_talent_fraction(p: &ProjectedRoster) -> Option<f32> {
     let returning: f32 = p
         .returning
         .iter()
-        .map(|r| r.cam_v3.unwrap_or(0.0) as f32)
+        .map(|r| r.cam_v3.unwrap_or(0.0).abs() as f32)
         .sum();
-    let total = returning + p.departures_cam_v3_sum;
-    // `returning < 0` (all-negative returners) or a non-positive `total` →
-    // unknown. A non-positive total means departures out-weigh the returners
-    // in net *negative* cam (the team shed a pile of bench/negative-value
-    // players) — that's a continuity team, not an overhaul, so fall through to
-    // the stable weight rather than letting a negative ratio clamp to 0.0 and
-    // mislabel it. A zero-returner team with positive departures keeps a valid
-    // `total > 0` and correctly reads as a full overhaul (retained 0.0).
-    if returning < 0.0 || total <= 1e-3 {
+    let total = returning + p.departures_abs_cam_v3_sum;
+    // Magnitude sums are non-negative by construction, so the only way to get
+    // here is a roster with no cam coverage at all — an unknown, not a
+    // turnover reading.
+    if total <= 1e-3 {
         return None;
     }
     Some((returning / total).clamp(0.0, 1.0))
@@ -2029,11 +2117,16 @@ mod tests {
             outbound_cam_v3_sum: 0.0,
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
+            departures_abs_cam_v3_sum: 0.0,
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
     }
 
+    /// `departures_cam_v3_sum` is the SIGNED departure total; the magnitude
+    /// half is derived from it, which matches the real accumulator for every
+    /// same-signed departure set (the interesting asymmetry in these tests is
+    /// on the returner side, where a negative sum used to void the ratio).
     fn roster_with(returning_cam: &[f64], departures_cam_v3_sum: f32) -> ProjectedRoster {
         ProjectedRoster {
             team_id: Uuid::new_v4(),
@@ -2047,12 +2140,13 @@ mod tests {
             outbound_cam_v3_sum: 0.0,
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum,
+            departures_abs_cam_v3_sum: departures_cam_v3_sum.abs(),
         }
     }
 
     #[test]
     fn retained_fraction_and_weight_ramp() {
-        // Continuity: returns 24 of 30 cam (0.80 ≥ 0.40) → stable weight (0.45).
+        // Continuity: returns 24 of 30 cam (0.80 ≥ 0.40) → stable weight.
         let stable = roster_with(&[12.0, 12.0], 6.0);
         assert!((retained_talent_fraction(&stable).unwrap() - 0.80).abs() < 1e-5);
         assert!((transition_shrink_weight(&stable) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
@@ -2065,29 +2159,64 @@ mod tests {
         );
 
         // Mid-ramp at retained 0.30 (midpoint of [0.20,0.40]) → weight is the
-        // midpoint of [0.20,0.45] = 0.325. ret 9, dep 21, total 30 → 0.30.
+        // midpoint of the two constants. ret 9, dep 21, total 30 → 0.30.
         let mid = roster_with(&[9.0], 21.0);
         assert!((retained_talent_fraction(&mid).unwrap() - 0.30).abs() < 1e-5);
-        assert!((transition_shrink_weight(&mid) - 0.325).abs() < 1e-5);
+        let midpoint_w = 0.5 * (PROJECTION_SHRINK_WEIGHT + PROJECTION_SHRINK_WEIGHT_OVERHAUL);
+        assert!((transition_shrink_weight(&mid) - midpoint_w).abs() < 1e-5);
 
         // No measurable prior talent (new D-I program) → stable default, no panic.
         let empty = roster_with(&[], 0.0);
         assert!(retained_talent_fraction(&empty).is_none());
         assert!((transition_shrink_weight(&empty) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
 
-        // Departures net-negative enough to drive total < 0 (kept +5, shed −10
-        // of bench scrubs): a CONTINUITY team, must NOT clamp to 0.0 and get
-        // mislabeled a full overhaul. → None → stable.
-        let neg_total = roster_with(&[5.0], -10.0);
-        assert!(retained_talent_fraction(&neg_total).is_none());
-        assert!((transition_shrink_weight(&neg_total) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6);
+        // Shed a pile of NEGATIVE-value players (kept +5 of cam, the two who
+        // left were −10 between them). On magnitude that is 5 of 15 = 0.33
+        // retained, so the weight lands mid-ramp. Deliberate, and the change
+        // from the old signed formula (which answered `None` → stable here):
+        // two thirds of last season's on-court impact is gone, and last
+        // season's AdjEM is stale in the team's FAVOUR — losing bad players
+        // moves a team as surely as losing good ones.
+        let shed_negatives = roster_with(&[5.0], -10.0);
+        assert!((retained_talent_fraction(&shed_negatives).unwrap() - 1.0 / 3.0).abs() < 1e-5);
+        let w = transition_shrink_weight(&shed_negatives);
+        assert!(w > PROJECTION_SHRINK_WEIGHT_OVERHAUL && w < PROJECTION_SHRINK_WEIGHT);
 
         // Zero returners but real (positive) departures = a GENUINE full
-        // overhaul (everyone left, all-new roster) → retained 0.0 → 0.25.
+        // overhaul (everyone left, all-new roster) → retained 0.0 → 0.20.
         let all_new = roster_with(&[], 15.0);
         assert!(retained_talent_fraction(&all_new).unwrap() < 1e-6);
         assert!(
             (transition_shrink_weight(&all_new) - PROJECTION_SHRINK_WEIGHT_OVERHAUL).abs() < 1e-6
+        );
+    }
+
+    /// The #322 regression, in the two shapes that used to collide.
+    ///
+    /// Both rosters have a NEGATIVE signed returner sum, which is what voided
+    /// the old ratio and handed each of them the full continuity weight. They
+    /// are not the same team, and magnitude tells them apart.
+    #[test]
+    fn negative_returner_sums_split_into_overhaul_and_continuity() {
+        // Cincinnati's 2027 shape: 2 of 12 back, returners worth −0.3 cam
+        // against +46.0 walking out the door, baseline +18.9. The most
+        // complete overhaul on the board — it must get the overhaul weight,
+        // not the stable one it was served at.
+        let gutted = roster_with(&[-0.2, -0.1], 46.0);
+        assert!(retained_talent_fraction(&gutted).unwrap() < 0.02);
+        assert!(
+            (transition_shrink_weight(&gutted) - PROJECTION_SHRINK_WEIGHT_OVERHAUL).abs() < 1e-6
+        );
+
+        // Central Arkansas's 2027 shape: 9 of 10 back, returners worth −15.4
+        // cam because they are simply bad. A continuity roster wearing the
+        // same negative sign — clamping it to 0.0 (the naive fix) would call
+        // it a full overhaul, so the guard it used to hit was protecting
+        // something real. Magnitude keeps it at the stable weight.
+        let bad_but_intact = roster_with(&[-2.0; 9], 7.0);
+        assert!(retained_talent_fraction(&bad_but_intact).unwrap() > 0.40);
+        assert!(
+            (transition_shrink_weight(&bad_but_intact) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6
         );
     }
 
@@ -2158,6 +2287,7 @@ mod tests {
             outbound_cam_v3_sum: 0.0,
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
+            departures_abs_cam_v3_sum: 0.0,
         };
         // Floor: 1 returning + 1 arrival + 2 recruits = 4
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);
@@ -2203,6 +2333,7 @@ mod tests {
             outbound_cam_v3_sum: 0.0,
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
+            departures_abs_cam_v3_sum: 0.0,
         };
         // Both recruits are present for display.
         assert_eq!(r.recruits.len(), 2);
@@ -2250,6 +2381,7 @@ mod tests {
             outbound_cam_v3_sum: 0.0,
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum: 0.0,
+            departures_abs_cam_v3_sum: 0.0,
         };
         // Both recruits are present for display.
         assert_eq!(r.recruits.len(), 2);

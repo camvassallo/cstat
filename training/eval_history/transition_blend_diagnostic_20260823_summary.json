@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-08-23T03:24:31.360475Z",
+  "n": 2626,
+  "flat_served_mae": 5.737402005689623,
+  "retention_source": "ex-ante (dump `retained`)",
+  "served_ramp_mae": 5.675181969305081,
+  "served_ramp_bias": 0.03999278135249501,
+  "retention_undefined_frac": 0.0,
+  "global_best_w": 0.3,
+  "loso_flat_mae": 5.737402005689623,
+  "loso_conditional_mae": 5.679413820670304,
+  "loso_lift": 0.057988185019318905,
+  "overhaul_threshold": 0.4
+}
