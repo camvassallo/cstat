@@ -1,1 +1,386 @@
-[]
+[
+  {
+    "name": "AJ Casey",
+    "current_team": "Evansville",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Aaron Price",
+    "current_team": "Cal Poly",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Anthony McComb",
+    "current_team": "Norfolk St.",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Antwone Woolfolk",
+    "current_team": "Miami OH",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Brendan Coyle",
+    "current_team": "Siena",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://sienasaints.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Cade Pendleton",
+    "current_team": "UC San Diego",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://ucsdtritons.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Caden Powell",
+    "current_team": "Baylor",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Caleb Shaw",
+    "current_team": "Grand Canyon",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://gculopes.com/api/v2/Rosters?sportId=4",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Cam'Ron Fletcher",
+    "current_team": "High Point",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://highpointpanthers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Chris Howell",
+    "current_team": "New Mexico",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Christian Winborne",
+    "current_team": "Nicholls St.",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Danilo Jovanovich",
+    "current_team": "Milwaukee",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"R-Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "David Mager",
+    "current_team": "Pepperdine",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://pepperdinewaves.com/api/v2/Rosters?sportId=4",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Demetrius Lilley",
+    "current_team": "Binghamton",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Donovan Atwell",
+    "current_team": "Texas Tech",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question. Atwell is additionally a named plaintiff in a North Carolina state suit for the same class; players holding their own state-court injunctions were carved out of the Tenth Circuit stay, so his individual outcome may diverge from the cohort's."
+  },
+  {
+    "name": "Elijah Jamison",
+    "current_team": "Norfolk St.",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Elijah Perkins",
+    "current_team": "Saint Peter's",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Ethan Potter",
+    "current_team": "Utah Tech",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Ethan Simmon",
+    "current_team": "Stony Brook",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://stonybrookathletics.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 1 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Evan Mahaffey",
+    "current_team": "Akron",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Fallou Diagne",
+    "current_team": "Southern Miss",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://southernmiss.com/api/v2/Rosters?sportId=5",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Favour Aire",
+    "current_team": "Coppin St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://coppinstatesports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Jaiden Feroah",
+    "current_team": "Southern Utah",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://suutbirds.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 2 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Jalen Jackson",
+    "current_team": "Butler",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Jasteven Walker",
+    "current_team": "Alabama St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://bamastatesports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Jerome Brewer",
+    "current_team": "La Salle",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://goexplorers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Jerrell Colbert",
+    "current_team": "McNeese St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://mcneesesports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Jordan Gorecki",
+    "current_team": "Texas Southern",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://tsusports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 1 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Josh Reed",
+    "current_team": "Drexel",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://drexeldragons.com/api/v2/Rosters?sportId=2",
+    "note": "Listed on the school's published 2026-27 roster as \"Jr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 2 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Keegan Harvey",
+    "current_team": "Bryant",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://bryantbulldogs.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Kheni Briggs",
+    "current_team": "New Haven",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://newhavenchargers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Koat Keat Tong",
+    "current_team": "UC Santa Barbara",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://ucsbgauchos.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 3 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Kyle Jones",
+    "current_team": "Buffalo",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://ubbulls.com/api/v2/Rosters?sportId=4",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 1 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Lee Dort",
+    "current_team": "California",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Luke Jungers",
+    "current_team": "Iona",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Marvin McGhee",
+    "current_team": "UC Santa Barbara",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://ucsbgauchos.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 2 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Michael Gray",
+    "current_team": "Wichita St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://goshockers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Michael Zanoni",
+    "current_team": "Penn",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Mouhamed Sow",
+    "current_team": "Rhode Island",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Ose Okojie",
+    "current_team": "Howard",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Parsa Fallah",
+    "current_team": "Oklahoma St.",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Peyton Law",
+    "current_team": "South Alabama",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://usajaguars.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 1 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Pharrel Payne",
+    "current_team": "Maryland",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"R-Sr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Rahmir Moore",
+    "current_team": "Delaware St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://dsuhornets.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Samuel Ariyibi",
+    "current_team": "Utah Tech",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://utahtechtrailblazers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"6th\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Ven-Allen Lubin",
+    "current_team": "N.C. State",
+    "status": "contested",
+    "reason": "injunction",
+    "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question."
+  },
+  {
+    "name": "Will Felton",
+    "current_team": "North Carolina A&T",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://ncataggies.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has only 2 D-I season(s) on record, so he has ordinary eligibility left. Roster evidence rather than a news report; upgrade the source if one appears."
+  },
+  {
+    "name": "Zach Clemence",
+    "current_team": "Texas A&M",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://12thman.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
+  }
+]

@@ -1,0 +1,1670 @@
+{
+ "Abilene Christian": {
+  "host": "acusports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Air Force": {
+  "host": "goairforcefalcons.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Akron": {
+  "host": "gozips.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Alabama": {
+  "host": "rolltide.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Alabama A&M": {
+  "host": "aamusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Alabama St.": {
+  "host": "bamastatesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Albany": {
+  "host": "ualbanysports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Alcorn St.": {
+  "host": "alcornsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "American": {
+  "host": "aueagles.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Appalachian St.": {
+  "host": "appstatesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Arizona": {
+  "host": "arizonawildcats.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Arizona St.": {
+  "host": "thesundevils.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Arkansas": {
+  "host": "arkansasrazorbacks.com",
+  "path": "/sport/m-baskbl/roster/",
+  "platform": "roster_table"
+ },
+ "Arkansas Pine Bluff": {
+  "host": "uapblionsroar.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Arkansas St.": {
+  "host": "astateredwolves.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Army": {
+  "host": "goarmywestpoint.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Auburn": {
+  "host": "auburntigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Austin Peay": {
+  "host": "letsgopeay.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "BYU": {
+  "host": "byucougars.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Ball St.": {
+  "host": "ballstatesports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Baylor": {
+  "host": "baylorbears.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Bellarmine": {
+  "host": "athletics.bellarmine.edu",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Belmont": {
+  "host": "belmontbruins.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Bethune Cookman": {
+  "host": "bcuathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Binghamton": {
+  "host": "bubearcats.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Boise St.": {
+  "host": "broncosports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Boston College": {
+  "host": "bceagles.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Boston University": {
+  "host": "goterriers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Bowling Green": {
+  "host": "bgsufalcons.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Bradley": {
+  "host": "bradleybraves.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Brown": {
+  "host": "brownbears.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Bryant": {
+  "host": "bryantbulldogs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Bucknell": {
+  "host": "bucknellbison.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Buffalo": {
+  "host": "ubbulls.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Butler": {
+  "host": "butlersports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Cal Baptist": {
+  "host": "cbulancers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Cal Poly": {
+  "host": "gopoly.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Cal St. Bakersfield": {
+  "host": "gorunners.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Cal St. Fullerton": {
+  "host": "fullertontitans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Cal St. Northridge": {
+  "host": "gomatadors.com",
+  "platform": "sidearm_nextgen"
+ },
+ "California": {
+  "host": "calbears.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Campbell": {
+  "host": "gocamels.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Canisius": {
+  "host": "gogriffs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Central Arkansas": {
+  "host": "ucasports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Central Connecticut": {
+  "host": "ccsubluedevils.com"
+ },
+ "Central Michigan": {
+  "host": "cmuchippewas.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Charleston": {
+  "host": "cofcsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Charleston Southern": {
+  "host": "csusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Charlotte": {
+  "host": "charlotte49ers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Chattanooga": {
+  "host": "gomocs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Chicago St.": {
+  "host": "gocsucougars.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Cincinnati": {
+  "host": "gobearcats.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Clemson": {
+  "host": "clemsontigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Cleveland St.": {
+  "host": "csuvikings.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Coastal Carolina": {
+  "host": "goccusports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Colgate": {
+  "host": "colgateathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Colorado": {
+  "host": "cubuffs.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Colorado St.": {
+  "host": "csurams.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Columbia": {
+  "host": "gocolumbialions.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Connecticut": {
+  "host": "uconnhuskies.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Coppin St.": {
+  "host": "coppinstatesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Cornell": {
+  "host": "cornellbigred.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Creighton": {
+  "host": "gocreighton.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Dartmouth": {
+  "host": "dartmouthsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Davidson": {
+  "host": "davidsonwildcats.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Dayton": {
+  "host": "daytonflyers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "DePaul": {
+  "host": "depaulbluedemons.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Delaware": {
+  "host": "bluehens.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Delaware St.": {
+  "host": "dsuhornets.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Denver": {
+  "host": "denverpioneers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Detroit Mercy": {
+  "host": "detroittitans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Drake": {
+  "host": "godrakebulldogs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Drexel": {
+  "host": "drexeldragons.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Duke": {
+  "host": "goduke.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Duquesne": {
+  "host": "goduquesne.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "East Carolina": {
+  "host": "ecupirates.com",
+  "platform": "sidearm_nextgen"
+ },
+ "East Tennessee St.": {
+  "host": "etsubucs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "East Texas A&M": {
+  "host": "lionathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Eastern Illinois": {
+  "host": "eiupanthers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Eastern Kentucky": {
+  "host": "ekusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Eastern Michigan": {
+  "host": "emueagles.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Eastern Washington": {
+  "host": "goeags.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Elon": {
+  "host": "elonphoenix.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Evansville": {
+  "host": "gopurpleaces.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "FIU": {
+  "host": "fiusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Fairfield": {
+  "host": "fairfieldstags.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Fairleigh Dickinson": {
+  "host": "fduknights.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Florida": {
+  "host": "floridagators.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Florida A&M": {
+  "host": "famuathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Florida Atlantic": {
+  "host": "fausports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Florida Gulf Coast": {
+  "host": "fgcuathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Florida St.": {
+  "host": "seminoles.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Fordham": {
+  "host": "fordhamsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Fresno St.": {
+  "host": "gobulldogs.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Furman": {
+  "host": "furmanpaladins.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Gardner Webb": {
+  "host": "gwusports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "George Mason": {
+  "host": "gomason.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "George Washington": {
+  "host": "gwsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Georgetown": {
+  "host": "guhoyas.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Georgia": {
+  "host": "georgiadogs.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Georgia Southern": {
+  "host": "gseagles.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Georgia St.": {
+  "host": "georgiastatesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Georgia Tech": {
+  "host": "ramblinwreck.com",
+  "path": "/sports/m-baskbl/roster",
+  "platform": "roster_table"
+ },
+ "Gonzaga": {
+  "host": "gozags.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Grambling St.": {
+  "host": "gsutigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Grand Canyon": {
+  "host": "gculopes.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Green Bay": {
+  "host": "greenbayphoenix.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Hampton": {
+  "host": "hamptonpirates.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Harvard": {
+  "host": "gocrimson.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Hawaii": {
+  "host": "hawaiiathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "High Point": {
+  "host": "highpointpanthers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Hofstra": {
+  "host": "gohofstra.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Holy Cross": {
+  "host": "goholycross.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Houston": {
+  "host": "uhcougars.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Houston Christian": {
+  "host": "hcuhuskies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Howard": {
+  "host": "hubison.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "IU Indy": {
+  "host": "iuindyjags.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Idaho": {
+  "host": "govandals.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Idaho St.": {
+  "host": "isubengals.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Illinois": {
+  "host": "fightingillini.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Illinois Chicago": {
+  "host": "uicflames.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Illinois St.": {
+  "host": "goredbirds.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Incarnate Word": {
+  "host": "uiwcardinals.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Indiana": {
+  "host": "iuhoosiers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Indiana St.": {
+  "host": "gosycamores.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Iona": {
+  "host": "ionagaels.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Iowa": {
+  "host": "hawkeyesports.com",
+  "path": "/sports/mbball/roster",
+  "platform": "wmt"
+ },
+ "Iowa St.": {
+  "host": "cyclones.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Jackson St.": {
+  "host": "gojsutigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Jacksonville": {
+  "host": "judolphins.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Jacksonville St.": {
+  "host": "jaxstatesports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "James Madison": {
+  "host": "jmusports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Kansas": {
+  "host": "kuathletics.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Kansas St.": {
+  "host": "kstatesports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Kennesaw St.": {
+  "host": "ksuowls.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Kent St.": {
+  "host": "kentstatesports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Kentucky": {
+  "host": "ukathletics.com",
+  "path": "/sports/mbball/roster",
+  "platform": "roster_table"
+ },
+ "LIU": {
+  "host": "liuathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "LSU": {
+  "host": "lsusports.net",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "La Salle": {
+  "host": "goexplorers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Lafayette": {
+  "host": "goleopards.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Lamar": {
+  "host": "lamarcardinals.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Lehigh": {
+  "host": "lehighsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Liberty": {
+  "host": "libertyflames.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Lindenwood": {
+  "host": "lindenwoodlions.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Lipscomb": {
+  "host": "lipscombsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Little Rock": {
+  "host": "lrtrojans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Long Beach St.": {
+  "host": "longbeachstate.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Longwood": {
+  "host": "longwoodlancers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Louisiana": {
+  "host": "ragincajuns.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Louisiana Monroe": {
+  "host": "ulmwarhawks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Louisiana Tech": {
+  "host": "latechsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Louisville": {
+  "host": "gocards.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Loyola Chicago": {
+  "host": "loyolaramblers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Loyola MD": {
+  "host": "loyolagreyhounds.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Loyola Marymount": {
+  "host": "lmulions.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Maine": {
+  "host": "goblackbears.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Manhattan": {
+  "host": "gojaspers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Marist": {
+  "host": "goredfoxes.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Marquette": {
+  "host": "gomarquette.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Marshall": {
+  "host": "herdzone.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Maryland": {
+  "host": "umterps.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Maryland Eastern Shore": {
+  "host": "umeshawksports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Massachusetts": {
+  "host": "umassathletics.com",
+  "platform": "sidearm_nextgen"
+ },
+ "McNeese St.": {
+  "host": "mcneesesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Memphis": {
+  "host": "gotigersgo.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Mercer": {
+  "host": "mercerbears.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Mercyhurst": {
+  "host": "hurstathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Merrimack": {
+  "host": "merrimackathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Miami FL": {
+  "host": "miamihurricanes.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "roster_table"
+ },
+ "Miami OH": {
+  "host": "miamiredhawks.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Michigan": {
+  "host": "mgoblue.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Michigan St.": {
+  "host": "msuspartans.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Middle Tennessee": {
+  "host": "goblueraiders.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Milwaukee": {
+  "host": "mkepanthers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Minnesota": {
+  "host": "gophersports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Mississippi": {
+  "host": "olemisssports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Mississippi St.": {
+  "host": "hailstate.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Mississippi Valley St.": {
+  "host": "mvsusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Missouri": {
+  "host": "mutigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Missouri St.": {
+  "host": "missouristatebears.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Monmouth": {
+  "host": "monmouthhawks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Montana": {
+  "host": "gogriz.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Montana St.": {
+  "host": "msubobcats.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Morehead St.": {
+  "host": "msueagles.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Morgan St.": {
+  "host": "morganstatebears.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Mount St. Mary's": {
+  "host": "mountathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Murray St.": {
+  "host": "goracers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "N.C. State": {
+  "host": "gopack.com",
+  "platform": "sidearm_nextgen"
+ },
+ "NJIT": {
+  "host": "njithighlanders.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Navy": {
+  "host": "navysports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Nebraska": {
+  "host": "huskers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
+ },
+ "Nebraska Omaha": {
+  "host": "omavs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Nevada": {
+  "host": "nevadawolfpack.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "New Hampshire": {
+  "host": "unhwildcats.com",
+  "platform": "sidearm_nextgen"
+ },
+ "New Haven": {
+  "host": "newhavenchargers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "New Mexico": {
+  "host": "golobos.com",
+  "path": "/sports/mbball/roster",
+  "platform": "wmt"
+ },
+ "New Mexico St.": {
+  "host": "nmstatesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "New Orleans": {
+  "host": "unoprivateers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Niagara": {
+  "host": "purpleeagles.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Nicholls St.": {
+  "host": "geauxcolonels.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Norfolk St.": {
+  "host": "nsuspartans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "North Alabama": {
+  "host": "roarlions.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "North Carolina": {
+  "host": "goheels.com",
+  "platform": "sidearm_nextgen"
+ },
+ "North Carolina A&T": {
+  "host": "ncataggies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "North Carolina Central": {
+  "host": "nccueaglepride.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "North Dakota": {
+  "host": "fightinghawks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "North Dakota St.": {
+  "host": "gobison.com",
+  "platform": "sidearm_nextgen"
+ },
+ "North Florida": {
+  "host": "unfospreys.com",
+  "platform": "sidearm_nextgen"
+ },
+ "North Texas": {
+  "host": "meangreensports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Northeastern": {
+  "host": "nuhuskies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Northern Arizona": {
+  "host": "nauathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Northern Colorado": {
+  "host": "uncbears.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Northern Illinois": {
+  "host": "niuhuskies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Northern Iowa": {
+  "host": "unipanthers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Northern Kentucky": {
+  "host": "nkunorse.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Northwestern": {
+  "host": "nusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
+ },
+ "Northwestern St.": {
+  "host": "nsudemons.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Notre Dame": {
+  "host": "fightingirish.com",
+  "path": "/sports/mbball/roster",
+  "platform": "wmt_table"
+ },
+ "Oakland": {
+  "host": "goldengrizzlies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Ohio": {
+  "host": "ohiobobcats.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Ohio St.": {
+  "host": "ohiostatebuckeyes.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Oklahoma": {
+  "host": "soonersports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Oklahoma St.": {
+  "host": "okstate.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "roster_table"
+ },
+ "Old Dominion": {
+  "host": "odusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Oral Roberts": {
+  "host": "oruathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Oregon": {
+  "host": "goducks.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Oregon St.": {
+  "host": "osubeavers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Pacific": {
+  "host": "pacifictigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Penn": {
+  "host": "pennathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Penn St.": {
+  "host": "gopsusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
+ },
+ "Pepperdine": {
+  "host": "pepperdinewaves.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Pittsburgh": {
+  "host": "pittsburghpanthers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Portland": {
+  "host": "portlandpilots.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Portland St.": {
+  "host": "goviks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Prairie View A&M": {
+  "host": "pvpanthers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Presbyterian": {
+  "host": "gobluehose.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Princeton": {
+  "host": "goprincetontigers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Providence": {
+  "host": "friars.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Purdue": {
+  "host": "purduesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
+ },
+ "Purdue Fort Wayne": {
+  "host": "gomastodons.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Queens": {
+  "host": "queensathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Quinnipiac": {
+  "host": "gobobcats.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Radford": {
+  "host": "radfordathletics.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Rhode Island": {
+  "host": "gorhody.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Rice": {
+  "host": "riceowls.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Richmond": {
+  "host": "richmondspiders.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Rider": {
+  "host": "gobroncs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Robert Morris": {
+  "host": "rmucolonials.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Rutgers": {
+  "host": "scarletknights.com",
+  "platform": "sidearm_nextgen"
+ },
+ "SIU Edwardsville": {
+  "host": "siuecougars.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "SMU": {
+  "host": "smumustangs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Sacramento St.": {
+  "host": "hornetsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Sacred Heart": {
+  "host": "sacredheartpioneers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Saint Francis": {
+  "host": "sfuathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Saint Joseph's": {
+  "host": "sjuhawks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Saint Louis": {
+  "host": "slubillikens.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Saint Mary's": {
+  "host": "smcgaels.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Saint Peter's": {
+  "host": "saintpeterspeacocks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Sam Houston St.": {
+  "host": "gobearkats.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Samford": {
+  "host": "samfordsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "San Diego": {
+  "host": "usdtoreros.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "San Diego St.": {
+  "host": "goaztecs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "San Francisco": {
+  "host": "usfdons.com",
+  "platform": "sidearm_nextgen"
+ },
+ "San Jose St.": {
+  "host": "sjsuspartans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Santa Clara": {
+  "host": "santaclarabroncos.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Seattle": {
+  "host": "goseattleu.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Seton Hall": {
+  "host": "shupirates.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Siena": {
+  "host": "sienasaints.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "South Alabama": {
+  "host": "usajaguars.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "South Carolina": {
+  "host": "gamecocksonline.com",
+  "path": "/sports/mbball/roster",
+  "platform": "roster_table"
+ },
+ "South Carolina St.": {
+  "host": "scsuathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "South Dakota": {
+  "host": "goyotes.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "South Dakota St.": {
+  "host": "gojacks.com",
+  "platform": "sidearm_nextgen"
+ },
+ "South Florida": {
+  "host": "gousfbulls.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Southeast Missouri St.": {
+  "host": "semoredhawks.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Southeastern Louisiana": {
+  "host": "lionsports.net",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Southern": {
+  "host": "gojagsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Southern Illinois": {
+  "host": "siusalukis.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Southern Indiana": {
+  "host": "usiscreamingeagles.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Southern Miss": {
+  "host": "southernmiss.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Southern Utah": {
+  "host": "suutbirds.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "St. Bonaventure": {
+  "host": "gobonnies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "St. John's": {
+  "host": "redstormsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "St. Thomas": {
+  "host": "tommiesports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Stanford": {
+  "host": "gostanford.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Stephen F. Austin": {
+  "host": "sfajacks.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Stetson": {
+  "host": "gohatters.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Stonehill": {
+  "host": "stonehillskyhawks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Stony Brook": {
+  "host": "stonybrookathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Syracuse": {
+  "host": "cuse.com",
+  "platform": "sidearm_nextgen"
+ },
+ "TCU": {
+  "host": "gofrogs.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Tarleton St.": {
+  "host": "tarletonsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Temple": {
+  "host": "owlsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Tennessee": {
+  "host": "utsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Tennessee Martin": {
+  "host": "utmsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Tennessee St.": {
+  "host": "tsutigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Tennessee Tech": {
+  "host": "ttusports.com"
+ },
+ "Texas": {
+  "host": "texaslonghorns.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Texas A&M": {
+  "host": "12thman.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Texas A&M Corpus Christi": {
+  "host": "goislanders.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Texas Southern": {
+  "host": "tsusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Texas St.": {
+  "host": "txstatebobcats.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Texas Tech": {
+  "host": "texastech.com",
+  "platform": "sidearm_nextgen"
+ },
+ "The Citadel": {
+  "host": "citadelsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Toledo": {
+  "host": "utrockets.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Towson": {
+  "host": "towsontigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Troy": {
+  "host": "troytrojans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "roster_table"
+ },
+ "Tulane": {
+  "host": "tulanegreenwave.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Tulsa": {
+  "host": "tulsahurricane.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UAB": {
+  "host": "uabsports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UC Davis": {
+  "host": "ucdavisaggies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UC Irvine": {
+  "host": "ucirvinesports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UC Riverside": {
+  "host": "gohighlanders.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UC San Diego": {
+  "host": "ucsdtritons.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UC Santa Barbara": {
+  "host": "ucsbgauchos.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UCF": {
+  "host": "ucfknights.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
+ },
+ "UCLA": {
+  "host": "uclabruins.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "UMBC": {
+  "host": "umbcretrievers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UMKC": {
+  "host": "kcroos.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UMass Lowell": {
+  "host": "goriverhawks.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UNC Asheville": {
+  "host": "uncabulldogs.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UNC Greensboro": {
+  "host": "uncgspartans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UNC Wilmington": {
+  "host": "uncwsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UNLV": {
+  "host": "unlvrebels.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "USC": {
+  "host": "usctrojans.com",
+  "platform": "sidearm_nextgen"
+ },
+ "USC Upstate": {
+  "host": "upstatespartans.com",
+  "platform": "sidearm_nextgen"
+ },
+ "UT Arlington": {
+  "host": "utamavs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UT Rio Grande Valley": {
+  "host": "goutrgv.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UTEP": {
+  "host": "utepminers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "UTSA": {
+  "host": "goutsa.com"
+ },
+ "Utah": {
+  "host": "utahutes.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Utah St.": {
+  "host": "utahstateaggies.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Utah Tech": {
+  "host": "utahtechtrailblazers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Utah Valley": {
+  "host": "gouvu.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "VCU": {
+  "host": "vcuathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "VMI": {
+  "host": "vmikeydets.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Valparaiso": {
+  "host": "valpoathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Vanderbilt": {
+  "host": "vucommodores.com",
+  "path": "/sports/mbball/roster",
+  "platform": "wmt"
+ },
+ "Vermont": {
+  "host": "uvmathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Villanova": {
+  "host": "villanova.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Virginia": {
+  "host": "virginiasports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Virginia Tech": {
+  "host": "hokiesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
+ },
+ "Wagner": {
+  "host": "wagnerathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Wake Forest": {
+  "host": "godeacs.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Washington": {
+  "host": "gohuskies.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Washington St.": {
+  "host": "wsucougars.com"
+ },
+ "Weber St.": {
+  "host": "weberstatesports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "West Georgia": {
+  "host": "uwgathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "West Virginia": {
+  "host": "wvusports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Western Carolina": {
+  "host": "catamountsports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Western Illinois": {
+  "host": "goleathernecks.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Western Kentucky": {
+  "host": "wkusports.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Western Michigan": {
+  "host": "wmubroncos.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Wichita St.": {
+  "host": "goshockers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "William & Mary": {
+  "host": "tribeathletics.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Winthrop": {
+  "host": "winthropeagles.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Wisconsin": {
+  "host": "uwbadgers.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Wofford": {
+  "host": "woffordterriers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Wright St.": {
+  "host": "wsuraiders.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Wyoming": {
+  "host": "gowyo.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Xavier": {
+  "host": "goxavier.com",
+  "platform": "sidearm_nextgen"
+ },
+ "Yale": {
+  "host": "yalebulldogs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "sidearm_legacy"
+ },
+ "Youngstown St.": {
+  "host": "ysusports.com",
+  "platform": "sidearm_nextgen"
+ }
+}

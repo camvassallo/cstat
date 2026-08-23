@@ -48,6 +48,7 @@ use cstat_core::roster_projection::{
     DepartureReason, PlayerDeparture, PlayerReturn, ReturnStatus, compose_all_projections,
     fetch_draft_entrants, fetch_player_departures, fetch_player_returns, normalize_player_name,
 };
+use cstat_core::team_name_match::team_match_score;
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -74,6 +75,9 @@ struct PlayerMeta {
     id: Uuid,
     name: String,
     team_name: String,
+    /// Base-season CamPom, so a departure candidate can be ranked by what
+    /// missing him would cost. Same column the projection reads.
+    cam_v3: Option<f64>,
     class_year: Option<String>,
     nationality: Option<String>,
     /// Clears the projection's roster gate (`QUAL_MIN_GAMES_PLAYED` /
@@ -118,12 +122,21 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
     let meta: Vec<PlayerMeta> = sqlx::query_as::<_, PlayerMeta>(
         r#"
         SELECT p.id, p.name, t.name AS team_name, p.class_year, p.nationality,
+               max(tps.cam_gbpm_v3_psos) AS cam_v3,
                COALESCE(bool_or(pss.games_played >= $2 AND pss.minutes_per_game >= $3), false)
                    AS qualified
         FROM players p
         JOIN teams t ON t.id = p.team_id
         LEFT JOIN player_season_stats pss
                ON pss.player_id = p.id AND pss.season = p.season
+        -- One Torvik profile per (player, season), same de-duplication the
+        -- projection applies (#311) — without it a player carrying two profile
+        -- rows fans the join out and double-counts in the GROUP BY.
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id, season) player_id, season, cam_gbpm_v3_psos
+            FROM torvik_player_stats
+            ORDER BY player_id, season, cam_gbpm_v3_psos DESC NULLS LAST
+        ) tps ON tps.player_id = p.id AND tps.season = p.season
         WHERE p.season = $1
         GROUP BY p.id, p.name, t.name, p.class_year, p.nationality
         "#,
@@ -223,22 +236,37 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
     // case, so we can check the bucket too and not just the absence of a
     // departure: `granted` must land in `returning`, `contested` in
     // `uncertain`.
-    let mut departed_names: HashSet<String> = HashSet::new();
-    for d in projections.iter().flat_map(|p| p.departures.iter()) {
-        departed_names.insert(normalize_player_name(departure_name(d)));
-    }
-    let mut uncertain_names: HashSet<String> = HashSet::new();
-    let mut returning_names: HashSet<String> = HashSet::new();
+    // Keyed by (team, normalized name), NOT by name alone.
+    //
+    // cstat carries genuine same-name players across different teams in one
+    // season — two Josh Reeds (Drexel and Penn St.) and two Marvin McGhees
+    // (UC Santa Barbara and UT Rio Grande Valley) in 2026 alone. With
+    // name-only sets, the sibling departing *anywhere in D-I* put the name in
+    // `departed`, and a perfectly good row for the other one was reported as
+    // "still a departure — the row matched nobody (check the team string)".
+    // The message named the team; the check did not contain one.
+    let mut departed: HashSet<(&str, String)> = HashSet::new();
+    let mut uncertain: HashSet<(&str, String)> = HashSet::new();
+    let mut returning: HashSet<(&str, String)> = HashSet::new();
     for p in &projections {
+        let team = p.team_name.as_str();
+        for d in &p.departures {
+            departed.insert((team, normalize_player_name(departure_name(d))));
+        }
         for (_, u) in &p.uncertain {
-            uncertain_names.insert(normalize_player_name(&u.name));
+            uncertain.insert((team, normalize_player_name(&u.name)));
         }
         for r in &p.returning {
             if let Some(m) = meta_by_id.get(&r.player_id) {
-                returning_names.insert(normalize_player_name(&m.name));
+                returning.insert((team, normalize_player_name(&m.name)));
             }
         }
     }
+
+    let team_keys: Vec<(&str, &str)> = projections
+        .iter()
+        .map(|p| (p.team_name.as_str(), p.team_full_name.as_str()))
+        .collect();
 
     let mut unplaced_real: Vec<(&PlayerReturn, &str)> = Vec::new();
     let mut unplaced_benign: Vec<&PlayerReturn> = Vec::new();
@@ -248,11 +276,24 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
             unplaced_real.push((r, "no player by that name in the season — check spelling"));
             continue;
         }
-        if departed_names.contains(&key) {
-            unplaced_real.push((
-                r,
-                "still a departure — the row matched nobody (check the team string)",
-            ));
+        // Resolve the row's team the same way the projection does, so a team
+        // string the projection accepts is never rejected here.
+        //
+        // BEST match, not first. Several program names prefix another's —
+        // "Penn" also matches Penn St., "Texas A&M" matches Texas A&M-Corpus
+        // Christi, "California" matches California Baptist — so taking the
+        // first team that matches at all lands on the wrong program and
+        // reports a correctly-placed row as unplaced. `roster_projection`'s
+        // own resolver minimises the score; this has to do the same or the two
+        // disagree about which team a curated row names.
+        let Some(proj) = best_team_index(&team_keys, &r.current_team).map(|i| &projections[i])
+        else {
+            unplaced_real.push((r, "no team by that name — check the team string"));
+            continue;
+        };
+        let team = proj.team_name.as_str();
+        if departed.contains(&(team, key.clone())) {
+            unplaced_real.push((r, "still a departure on that team — the row matched nobody"));
             continue;
         }
         // Known name, not departing, but never entered the projection: a
@@ -264,12 +305,12 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
             continue;
         }
         match r.parsed_status() {
-            ReturnStatus::Granted if !returning_names.contains(&key) => {
+            ReturnStatus::Granted if !returning.contains(&(team, key.clone())) => {
                 unplaced_real.push((r, "curated `granted` but not in the team's returning core"))
             }
-            ReturnStatus::Contested if !uncertain_names.contains(&key) => unplaced_real.push((
+            ReturnStatus::Contested if !uncertain.contains(&(team, key)) => unplaced_real.push((
                 r,
-                "curated `contested` but not in any team's uncertain bucket",
+                "curated `contested` but not in that team's uncertain bucket",
             )),
             _ => {}
         }
@@ -311,7 +352,139 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
         }
     }
 
-    // --- 3. At-risk returners, ranked by what their exit would cost. -----
+    // --- 3. Returners the official roster no longer lists. ---------------
+    // The sharpest signal in this report, and the only section that is closer
+    // to a detector than a worklist: it compares the projection's returning
+    // cohort against what the school itself publishes. Gated hard on
+    // `status = 'ok'` — schools publish "(Returners)" subsets and last
+    // season's rosters all summer, and reading absence off either invents
+    // departures wholesale (Gonzaga's four-man page would report nine).
+    let rosters = fetch_official_rosters(pool, base + 1).await?;
+
+    println!();
+    if rosters.verdicts.is_empty() {
+        println!(
+            "OFFICIAL ROSTERS: none fetched for {}. Run `cstat-ingest rosters --year {}` \
+             to enable the two roster-backed sections.",
+            base + 1,
+            base + 1
+        );
+    } else {
+        let mut missing: Vec<(f64, &PlayerMeta, f64)> = Vec::new();
+        for proj in &projections {
+            let Some(listed) = rosters.trusted.get(&proj.team_name) else {
+                continue;
+            };
+            let loose = rosters.trusted_loose.get(&proj.team_name);
+            for r in &proj.returning {
+                let Some(m) = meta_by_id.get(&r.player_id) else {
+                    continue;
+                };
+                let key = normalize_player_name(&m.name);
+                if !listed_contains(listed, loose, &key) {
+                    missing.push((r.cam_v3.unwrap_or(0.0), m, r.mpg));
+                }
+            }
+        }
+        missing.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        println!(
+            "RETURNERS ABSENT FROM THE OFFICIAL ROSTER — {} trusted roster(s) of {} fetched, \
+             {} name(s) absent, showing {}:",
+            rosters.trusted.len(),
+            rosters.verdicts.len(),
+            missing.len(),
+            missing.len().min(opts.limit),
+        );
+        println!(
+            "  {:<26} {:<30} {:<4} {:>5} {:>7}",
+            "PLAYER", "TEAM", "CLS", "MPG", "CAM"
+        );
+        for (cam, m, mpg) in missing.iter().take(opts.limit) {
+            println!(
+                "  {:<26} {:<30} {:<4} {:>5.1} {:>7.2}",
+                truncate(&m.name, 26),
+                truncate(&m.team_name, 30),
+                m.class_year.as_deref().unwrap_or("?"),
+                mpg,
+                cam,
+            );
+        }
+        println!(
+            "  Absence is evidence, not proof — a walk-on omitted from the published roster \
+             looks identical to an exit."
+        );
+        println!(
+            "  Confirm against the news, then write the real ones into \
+             data/departures/{base}_departures.json."
+        );
+
+        // --- 4. Seniors the school still lists — the 5-in-5 capture. -----
+        // The mirror of section 3, and it reads PRESENCE rather than absence,
+        // so it deliberately uses every fetch regardless of status: a name on
+        // a partial page is still a name on the page. This is the only
+        // automatic signal cstat has for the population `docs/eligibility_5in5.md`
+        // describes as invisible — a senior taking the extra year AT THE SAME
+        // SCHOOL, who enters no portal and appears in no feed.
+        let mut staying: Vec<(f64, &PlayerMeta, String)> = Vec::new();
+        for proj in &projections {
+            let Some(listed) = rosters.any.get(&proj.team_name) else {
+                continue;
+            };
+            let loose = rosters.any_loose.get(&proj.team_name);
+            for d in &proj.departures {
+                let DepartureReason::GraduatedSenior { player_id, name } = d else {
+                    continue;
+                };
+                let key = normalize_player_name(name);
+                if !listed_contains(listed, loose, &key) {
+                    continue;
+                }
+                let Some(m) = meta_by_id.get(player_id) else {
+                    continue;
+                };
+                // Look the label up under the same aliases that matched the
+                // name. Keying it on the exact spelling alone printed "?" for
+                // exactly the players the alias matching exists to find — and
+                // the school's own label ("5th", "R-Sr.") is the informative
+                // half of this section.
+                let label = std::iter::once(key.clone())
+                    .chain(name_aliases(&key))
+                    .find_map(|k| rosters.class_labels.get(&(proj.team_name.clone(), k)))
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                staying.push((m.cam_v3.unwrap_or(0.0), m, label));
+            }
+        }
+        staying.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        println!();
+        println!(
+            "SENIORS STILL ON THE OFFICIAL ROSTER ({}) — the projection deletes these as \
+             graduated, showing {}:",
+            staying.len(),
+            staying.len().min(opts.limit),
+        );
+        println!(
+            "  {:<26} {:<30} {:<16} {:>7}",
+            "PLAYER", "TEAM", "SCHOOL SAYS", "CAM"
+        );
+        for (cam, m, label) in staying.iter().take(opts.limit) {
+            println!(
+                "  {:<26} {:<30} {:<16} {:>7.2}",
+                truncate(&m.name, 26),
+                truncate(&m.team_name, 30),
+                truncate(label, 16),
+                cam,
+            );
+        }
+        println!(
+            "  Each is a candidate for data/returns/{base}_returns.json — `granted` if his \
+             eligibility is settled, `contested` if it is being litigated."
+        );
+    }
+
+    // --- 5. At-risk returners, ranked by what their exit would cost. -----
 
     let mut at_risk: Vec<(f64, &PlayerMeta, f64)> = Vec::new();
     for p in &projections {
@@ -393,4 +566,249 @@ fn truncate(s: &str, max: usize) -> String {
         return s.to_string();
     }
     s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+}
+
+/// Official-roster rows for a target season, indexed for the two audit
+/// sections that read them.
+///
+/// The `trusted` / `any` split is the whole point and is not a convenience.
+/// A player's PRESENCE on a published roster is a fact from one row and holds
+/// no matter how partial the page was, so section 4 reads `any`. A player's
+/// ABSENCE is a claim about the completeness of the whole page, so section 3
+/// reads `trusted`, which contains only fetches the ingest marked `ok`.
+struct OfficialRosters {
+    /// `teams.short_name` → normalized names, restricted to `status = 'ok'`.
+    /// Membership is checked against BOTH this and [`Self::trusted_loose`].
+    trusted: HashMap<String, HashSet<String>>,
+    /// The same cohort under [`name_aliases`], for spelling differences
+    /// between cstat and the school.
+    trusted_loose: HashMap<String, HashSet<String>>,
+    /// `teams.short_name` → normalized names, every status.
+    any: HashMap<String, HashSet<String>>,
+    /// [`Self::any`] under [`name_aliases`]. Both sections match names the
+    /// same way: a name is either on the page or it is not, and which
+    /// direction the caller reads that in must not change the answer.
+    any_loose: HashMap<String, HashSet<String>>,
+    /// `(team, normalized name)` → the school's verbatim eligibility label
+    /// ("R-Sr.", "5th", "Gr."), which is the informative part of section 4.
+    class_labels: HashMap<(String, String), String>,
+    /// `teams.short_name` → fetch status, for the section headers.
+    verdicts: HashMap<String, String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct RosterRow {
+    team_short_name: String,
+    status: String,
+    normalized_name: Option<String>,
+    class_year_raw: Option<String>,
+}
+
+async fn fetch_official_rosters(pool: &PgPool, season: i32) -> Result<OfficialRosters> {
+    // LEFT JOIN rather than INNER: a fetch with zero players still has to reach
+    // `verdicts`, or a school that published nothing is indistinguishable from
+    // one we never asked.
+    let rows: Vec<RosterRow> = sqlx::query_as::<_, RosterRow>(
+        r#"
+        SELECT f.team_short_name, f.status,
+               p.normalized_name, p.class_year_raw
+        FROM team_roster_fetches f
+        LEFT JOIN team_roster_players p
+               ON p.season = f.season AND p.team_short_name = f.team_short_name
+        WHERE f.season = $1
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out = OfficialRosters {
+        trusted: HashMap::new(),
+        trusted_loose: HashMap::new(),
+        any_loose: HashMap::new(),
+        any: HashMap::new(),
+        class_labels: HashMap::new(),
+        verdicts: HashMap::new(),
+    };
+    for r in rows {
+        out.verdicts
+            .insert(r.team_short_name.clone(), r.status.clone());
+        let Some(name) = r.normalized_name else {
+            continue;
+        };
+        if r.status == "ok" {
+            out.trusted
+                .entry(r.team_short_name.clone())
+                .or_default()
+                .insert(name.clone());
+            out.trusted_loose
+                .entry(r.team_short_name.clone())
+                .or_default()
+                .extend(name_aliases(&name));
+        }
+        out.any
+            .entry(r.team_short_name.clone())
+            .or_default()
+            .insert(name.clone());
+        out.any_loose
+            .entry(r.team_short_name.clone())
+            .or_default()
+            .extend(name_aliases(&name));
+        if let Some(cls) = r.class_year_raw {
+            for alias in name_aliases(&name) {
+                out.class_labels
+                    .insert((r.team_short_name.clone(), alias), cls.clone());
+            }
+            out.class_labels.insert((r.team_short_name, name), cls);
+        }
+    }
+    Ok(out)
+}
+
+/// Is `key` on this team's published roster, allowing the loose key?
+///
+/// Shared by both roster-backed sections so they cannot drift apart. They read
+/// the answer in opposite directions — section 3 treats absence as a possible
+/// departure, section 4 treats presence as a possible return — but a name is
+/// either on the page or it is not, and a spelling difference must not decide
+/// it for either one.
+fn listed_contains(exact: &HashSet<String>, loose: Option<&HashSet<String>>, key: &str) -> bool {
+    exact.contains(key)
+        || loose.is_some_and(|set| name_aliases(key).iter().any(|a| set.contains(a)))
+}
+
+/// Index of the team a curated row's `current_team` names, mirroring
+/// `roster_projection::resolve_team_id`.
+///
+/// The mirroring is the point. Several program names prefix another's — "Penn"
+/// also matches Penn St., "Texas A&M" matches Texas A&M-Corpus Christi,
+/// "California" matches California Baptist — so *any* match is not good enough;
+/// it has to be the same match the projection made, or the audit reports a
+/// correctly-placed row as doing nothing and sends someone to fix a file that
+/// is already right.
+fn best_team_index(teams: &[(&str, &str)], want: &str) -> Option<usize> {
+    teams
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (short, full))| {
+            team_match_score(Some(short), full, want).map(|score| (score, i))
+        })
+        .min_by_key(|(score, _)| *score)
+        .map(|(_, i)| i)
+}
+
+/// Spellings that still denote the same person as `normalized`.
+///
+/// Two sources spell one human differently often enough to matter: Seattle
+/// prints "Junseok Yeo" where cstat has "Jun Seok Yeo", schools print middle
+/// names cstat omits ("David Ugonna Ike" vs "David Ike"), and Virginia prints
+/// "Johann Grünloh" where cstat carries the transliterated "Gruenloh". Exact
+/// matching misses all three.
+///
+/// **Deliberately not first-initial + surname.** That was tried and is far too
+/// loose — it collapses "Meechie Johnson" onto South Carolina's freshman
+/// "Marcus Johnson" and "Landon Wolf" onto Illinois State's "Leyton Wolf",
+/// which breaks BOTH readings: the eligibility section would claim a departed
+/// senior is returning (inflating a team by his whole CamPom), and the absence
+/// section would treat his replacement as him and never report the departure.
+/// Keeping the full first name is what makes the aliases safe.
+fn name_aliases(normalized: &str) -> Vec<String> {
+    let folded = fold_umlaut_spellings(normalized);
+    let mut out = vec![folded.replace(' ', "")];
+    let mut parts = folded.split_whitespace();
+    if let (Some(first), Some(last)) = (parts.next(), folded.split_whitespace().next_back())
+        && first != last
+    {
+        out.push(format!("{first} {last}"));
+    }
+    out
+}
+
+/// Collapse the two ways a German name reaches the two sources.
+///
+/// `normalize_player_name` folds `ü` to `u`, so Virginia's "Johann Grünloh"
+/// becomes `grunloh` while cstat's transliterated "Johann Gruenloh" becomes
+/// `gruenloh`. Collapsing the digraphs makes both `grunloh`.
+///
+/// Lossy for names that legitimately contain the digraph — "samuel" folds to
+/// "samul" — but it is applied to both sides of every comparison, so those
+/// still match each other.
+fn fold_umlaut_spellings(s: &str) -> String {
+    s.replace('\u{00df}', "s")
+        .replace("ue", "u")
+        .replace("oe", "o")
+        .replace("ae", "a")
+        .replace("ss", "s")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn best_team_index_prefers_the_exact_program_over_one_it_prefixes() {
+        // Ordered so the WRONG team comes first: taking the first match rather
+        // than the best is exactly the bug this guards.
+        let teams = [
+            ("Penn St.", "Penn State Nittany Lions"),
+            ("Penn", "Penn Quakers"),
+            ("California Baptist", "California Baptist Lancers"),
+            ("California", "California Golden Bears"),
+            (
+                "Texas A&M Corpus Christi",
+                "Texas A&M Corpus Christi Islanders",
+            ),
+            ("Texas A&M", "Texas A&M Aggies"),
+        ];
+        for (want, expect) in [
+            ("Penn", "Penn"),
+            ("Penn St.", "Penn St."),
+            ("California", "California"),
+            ("Texas A&M", "Texas A&M"),
+        ] {
+            let got = best_team_index(&teams, want).map(|i| teams[i].0);
+            assert_eq!(got, Some(expect), "{want} resolved to {got:?}");
+        }
+    }
+
+    #[test]
+    fn best_team_index_declines_a_name_that_matches_nothing() {
+        let teams = [("Duke", "Duke Blue Devils")];
+        assert_eq!(best_team_index(&teams, "Nowhere State"), None);
+    }
+
+    /// Does a roster spelling of `a` match a cstat spelling of `b`?
+    fn matches(a: &str, b: &str) -> bool {
+        let set: std::collections::HashSet<String> = name_aliases(a).into_iter().collect();
+        super::listed_contains(&std::collections::HashSet::new(), Some(&set), b)
+    }
+
+    #[test]
+    fn aliases_bridge_spacing_middle_names_and_transliteration() {
+        // Seattle prints "Junseok Yeo"; cstat carries "Jun Seok Yeo".
+        assert!(matches("junseok yeo", "jun seok yeo"));
+        // The school prints a middle name cstat omits.
+        assert!(matches("david ugonna ike", "david ike"));
+        // Virginia prints "Grünloh" (normalizes to grunloh); cstat has the
+        // transliterated "Gruenloh".
+        assert!(matches("johann grunloh", "johann gruenloh"));
+    }
+
+    #[test]
+    fn aliases_keep_distinct_people_distinct() {
+        // The regression that motivated dropping first-initial + surname.
+        // South Carolina's freshman Marcus Johnson is not the departed senior
+        // Meechie Johnson; matching them would both claim Meechie is returning
+        // and hide the fact that he left.
+        assert!(!matches("marcus johnson", "meechie johnson"));
+        assert!(!matches("leyton wolf", "landon wolf"));
+        // Same-surname teammates, which cstat genuinely carries.
+        assert!(!matches("marcus millender", "kemauri millender"));
+    }
+
+    #[test]
+    fn aliases_do_not_match_an_unrelated_name() {
+        assert!(!matches("chris howell", "chris paul"));
+        assert!(!matches("", "chris howell"));
+    }
 }

@@ -10,6 +10,7 @@ pub mod notify;
 pub mod preflight;
 pub mod projections_backtest;
 pub mod rate_limiter;
+pub mod rosters;
 pub mod run_ledger;
 pub mod simulate;
 pub mod tfs;
@@ -171,6 +172,28 @@ fn season_for_date(today: NaiveDate) -> i32 {
     }
 }
 
+/// The season whose rosters schools are publishing on `today` — the target
+/// for `cstat-ingest rosters`.
+///
+/// Lives here beside [`season_for_date`] rather than in the CLI because it is
+/// the same kind of calendar rule and has the same trap. It is NOT
+/// `season_for_date(today) + 1`: that is right only in the offseason, because
+/// `season_for_date` rolls forward on 1 November. A bare `+ 1` run on
+/// 2026-12-01 would ask every site for 2027-28 while all of them serve
+/// 2026-27, and the roster ingest's season gate would correctly reject all 364
+/// as stale — a sweep that refreshes nothing and reads like a mass outage.
+///
+/// Schools post next season's roster over the summer and keep it up through
+/// the season, so the answer is the season now being played while one is in
+/// progress, and the one about to start otherwise.
+pub fn roster_season_for_date(today: NaiveDate) -> i32 {
+    if in_season_on(today) {
+        season_for_date(today)
+    } else {
+        season_for_date(today) + 1
+    }
+}
+
 /// True when the college-basketball calendar says games are actively being
 /// played — November through March, plus April 1–15 (through the Final Four).
 /// Mirrors `scripts/sync_to_prod.sh::in_season_now`. Respects the simulated
@@ -281,6 +304,22 @@ pub fn extract_results(page: &Value) -> Vec<&Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn roster_season_targets_the_roster_schools_actually_publish() {
+        use super::roster_season_for_date;
+        use chrono::NaiveDate;
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        // Offseason before the November roll: 2026-27 rosters are already up.
+        assert_eq!(roster_season_for_date(d(2026, 8, 23)), 2027);
+        // In season, AFTER the roll. `season_for_date` now returns 2027, so a
+        // naive `+ 1` would ask for 2027-28 while every school still serves
+        // 2026-27 — the regression this function exists to prevent.
+        assert_eq!(roster_season_for_date(d(2026, 12, 1)), 2027);
+        assert_eq!(roster_season_for_date(d(2027, 3, 15)), 2027);
+        // Next offseason: schools have flipped to 2027-28.
+        assert_eq!(roster_season_for_date(d(2027, 7, 1)), 2028);
+    }
+
     use super::*;
     use serde_json::json;
 

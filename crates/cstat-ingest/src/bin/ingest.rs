@@ -13,6 +13,13 @@ fn default_season() -> i32 {
     current_natstat_season()
 }
 
+/// CLI default for `rosters --year`. The rule and the trap it avoids live in
+/// [`cstat_ingest::roster_season_for_date`], beside the other calendar rules —
+/// it is deliberately NOT `default_season() + 1`.
+fn default_roster_season() -> i32 {
+    cstat_ingest::roster_season_for_date(cstat_ingest::today_utc())
+}
+
 /// Default `nightly` window: yesterday..today (UTC). Run at ~04:30 ET this
 /// covers the prior night's games plus any corrections from NatStat's overnight
 /// re-tabulation. Returns `(from, to)` as `YYYY-MM-DD`.
@@ -441,6 +448,65 @@ enum Commands {
         /// Directory of `{year}_returns.json` files.
         #[arg(long, default_value = "data/returns")]
         dir: std::path::PathBuf,
+
+        /// Apply a court outcome to every curated return carrying this
+        /// `reason` (e.g. `injunction`), instead of loading. Eligibility
+        /// litigation resolves per COHORT — one Tenth Circuit ruling decides
+        /// all 23 class-of-2022 rows at once — and `reason` already tags the
+        /// cohort, so no new grouping concept is needed. Requires `--as`.
+        #[arg(long, value_name = "REASON")]
+        resolve_reason: Option<String>,
+
+        /// What the ruling decided. `granted` flips those rows to granted so
+        /// they project as ordinary returners; `departed` deletes them, which
+        /// IS the correct encoding — an unlisted senior already defaults to
+        /// departing, so a third status would teach the projection a state it
+        /// has no use for. Rewrites the JSON and stops WITHOUT loading, so the
+        /// change lands as a reviewable diff; run `returns` again to apply it.
+        #[arg(long = "as", value_name = "OUTCOME", requires = "resolve_reason")]
+        outcome: Option<String>,
+    },
+
+    /// Fetch official school-published rosters for a target season into
+    /// `team_roster_fetches` / `team_roster_players`. `year` is the SEASON THE
+    /// ROSTER IS FOR (2027 = the 2026-27 rosters), not the base season being
+    /// projected from — the opposite convention to `departures`/`returns`,
+    /// because this describes the upcoming roster itself.
+    ///
+    /// This is the only forward-looking roster signal cstat has: redshirts
+    /// staying put, D2/JuCo up-transfers and direct international signings
+    /// appear here and in no feed cstat ingests. It feeds `departures-audit`,
+    /// NOT the projection's scored roster — see `docs/official_rosters.md`.
+    ///
+    /// Absence is only meaningful where the fetch status is `ok`; schools
+    /// publish partial ("(Returners)") and stale rosters all summer, and both
+    /// are recorded as such rather than trusted.
+    Rosters {
+        /// Target season the rosters are FOR. Defaults to the season whose
+        /// rosters schools are publishing right now.
+        #[arg(short, long, default_value_t = default_roster_season())]
+        year: i32,
+
+        /// Team -> athletics-site map, keyed by `teams.short_name`.
+        #[arg(long, default_value = "data/team_sites.json")]
+        sites: std::path::PathBuf,
+
+        /// Restrict to these teams (comma-separated `short_name` values).
+        #[arg(long, value_delimiter = ',')]
+        teams: Vec<String>,
+
+        /// Hosts fetched concurrently. These are separate servers, so this
+        /// bounds our own egress rather than any one site's load.
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+
+        /// Fetch and report without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Print every team's verdict, not just the non-`ok` ones.
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Print the offseason attrition worklist: curated rows that resolve to
@@ -1147,7 +1213,59 @@ async fn main() -> Result<()> {
             );
         }
 
-        Commands::Returns { dir } => {
+        Commands::Returns {
+            dir,
+            resolve_reason,
+            outcome,
+        } => {
+            if let Some(reason) = resolve_reason {
+                use cstat_ingest::ingest::returns::Resolution;
+                let outcome = outcome.as_deref().unwrap_or_default();
+                let res = match outcome {
+                    "granted" => Resolution::Granted,
+                    "departed" => Resolution::Departed,
+                    other => anyhow::bail!("--as must be `granted` or `departed`, got {other:?}"),
+                };
+                // Only the granted path stamps a note; building the
+                // "succeeded" wording for a `departed` run would be a lie even
+                // if nothing read it.
+                let suffix = match res {
+                    Resolution::Granted => format!(
+                        "RESOLVED {}: the {reason} claim succeeded and eligibility is settled.",
+                        cstat_ingest::today_utc()
+                    ),
+                    Resolution::Departed => String::new(),
+                };
+                let reports =
+                    cstat_ingest::ingest::returns::resolve_reason(&dir, &reason, res, &suffix)?;
+                let total: usize = reports.iter().map(|r| r.matched).sum();
+                if total == 0 {
+                    println!(
+                        "returns: nothing to resolve — no row with reason {reason:?} in {} \
+                         would change. (Rows already at that outcome are left alone, so \
+                         re-running is safe.)",
+                        dir.display()
+                    );
+                    return Ok(());
+                }
+                for r in &reports {
+                    println!(
+                        "returns {}: {} row(s) with reason {reason:?} -> {}",
+                        r.year,
+                        r.matched,
+                        match r.outcome {
+                            Resolution::Granted => "granted",
+                            Resolution::Departed => "removed",
+                        }
+                    );
+                }
+                println!(
+                    "{total} row(s) rewritten in place. Review the diff, then run \
+                     `cstat-ingest returns` to load it, and `departures-audit --year N` \
+                     to confirm every remaining row still places its player."
+                );
+                return Ok(());
+            }
             let reports = cstat_ingest::ingest::returns::bootstrap_from_dir(&db.pool, &dir).await?;
             let total: usize = reports.iter().map(|r| r.rows).sum();
             let contested: usize = reports.iter().map(|r| r.contested).sum();
@@ -1165,6 +1283,73 @@ async fn main() -> Result<()> {
                 total,
                 reports.len()
             );
+        }
+
+        Commands::Rosters {
+            year,
+            sites,
+            teams,
+            concurrency,
+            dry_run,
+            verbose,
+        } => {
+            let site_map = cstat_ingest::rosters::load_sites(&sites)?;
+            // Before the header, so it can't announce a count it is about to reject.
+            cstat_ingest::rosters::validate_teams(&site_map, &teams)?;
+            let opts = cstat_ingest::rosters::SweepOptions {
+                season: year,
+                only: teams,
+                concurrency,
+                dry_run,
+            };
+            println!(
+                "rosters: fetching {} team(s) for the {}-{:02} season{}",
+                if opts.only.is_empty() {
+                    site_map.len()
+                } else {
+                    opts.only.len()
+                },
+                year - 1,
+                year % 100,
+                if dry_run { " (dry run)" } else { "" }
+            );
+            let report = cstat_ingest::rosters::sweep(&db.pool, &site_map, &opts).await?;
+            println!(
+                "  ok {}  partial {}  stale-season {}  unsupported {}  unreachable {}",
+                report.ok,
+                report.partial,
+                report.stale_season,
+                report.unsupported,
+                report.unreachable,
+            );
+            println!(
+                "  {} player(s), {} with a prior school recorded (where a D2/JuCo/overseas \
+                 arrival becomes identifiable; some schools file a high school here too)",
+                report.players, report.with_previous_school,
+            );
+            if !report.problems.is_empty() {
+                println!();
+                println!(
+                    "NOT USABLE FOR ABSENCE ({}) — a player missing from these tells you nothing:",
+                    report.problems.len()
+                );
+                for (team, status, note) in &report.problems {
+                    println!("  {:<26} {:<13} {note}", team, status.as_str());
+                }
+            }
+            if verbose {
+                println!();
+                println!("ALL VERDICTS ({}):", report.verdicts.len());
+                for (team, status, n) in &report.verdicts {
+                    println!("  {:<26} {:<13} {n:>3} player(s)", team, status.as_str());
+                }
+            }
+            println!();
+            println!(
+                "Run `cstat-ingest departures-audit --year {}` to see which returners the",
+                year - 1
+            );
+            println!("official rosters no longer list.");
         }
 
         Commands::DeparturesAudit {
