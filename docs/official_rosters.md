@@ -291,6 +291,26 @@ Eligibility labels that cstat's four-value `class_year` cannot express:
 143 `R-Jr.`, 127 `R-Fr.`, 120 `R-So.`, 93 `R-Sr.`, 129 `Gr.`, 65 `5th`, plus
 long-form spellings — roughly 700 players.
 
+### Known gap: Oklahoma St.
+
+Oklahoma St. publishes two views of the same roster and we read the thinner
+one. Its `<table>` carries only `#`, Name, Class, Pos and Hometown, while the
+page's card view adds Height and — the one that matters — Last School, which
+holds Oregon State, Arizona St. and North Carolina for its transfers. That card
+markup is Sidearm's `s-person-card` label/value DOM, which none of the four
+parsers recognise, so detection falls through to the generic table.
+
+Left unbuilt deliberately: it is one team, and the fields we do get from it
+(class year, hometown) are the ones the audit actually reads. Worth revisiting
+only if a re-run finds more schools on that layout — check for `s-person-card`
+alongside a thin table.
+
+Verified correct rather than missing, against rosters supplied by hand:
+Cincinnati, New Mexico and Seattle publish no hometown; Vanderbilt no position;
+Georgia Southern and North Dakota St. no academic year; LSU neither hometown
+nor previous school; Troy leaves its Year column blank for all but one player.
+Those NULLs are the schools' data, and chasing them is wasted effort.
+
 ### Rejected alternative: ESPN
 
 ESPN's core API (`sports.core.api.espn.com`; the `site.api` host is edge-blocked
