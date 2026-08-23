@@ -897,7 +897,8 @@ fn split_combined_school(v: &str) -> (Option<String>, Option<String>) {
     (clean(v), None)
 }
 
-/// The season a page's own season PICKER says is selected.
+/// The season a page's own season PICKER says is selected, when it names the
+/// target season.
 ///
 /// Fallback for the schools whose `<title>` names no season — Arkansas serves
 /// "Roster | Arkansas Razorbacks" — but which do carry a season dropdown with
@@ -908,30 +909,40 @@ fn split_combined_school(v: &str) -> (Option<String>, Option<String>) {
 /// <span class="selected-option__text">2026-27</span>
 /// ```
 ///
-/// Deliberately reads only the SELECTED control, never the most frequent year
-/// on the page. A frequency heuristic would happily confirm a stale roster off
-/// a "2026-27 schedule" link in the sidebar, which is the failure the season
-/// gate exists to catch. And it is not a way of asserting the season is right:
-/// it reports what the picker says, and [`season_gate`] still decides. A stale
-/// page whose picker reads "2025-26" is therefore rejected as stale rather than
-/// downgraded to unconfirmable — a strictly better outcome.
+/// Three deliberate restrictions, each from a way this misfired in testing:
 ///
-/// Only span forms count. A bare year in a picker is no more decidable than a
-/// bare year in a title, and the title path already handles that case.
-fn selected_season(html: &str) -> Option<TitleSeason> {
+/// 1. **Only the element's own text**, never `.text()` over its subtree.
+///    Athletics pages routinely ship unclosed `<option selected>A<option>B`
+///    markup — ramblinwreck.com serves exactly that on one of its pages — and
+///    html5ever repairs it by NESTING the unclosed options. A subtree read then
+///    picks up a later option's year, so a page stating no season at all can
+///    confirm itself from an unrelated dropdown. Own-text is also simply the
+///    correct reading of an `<option>`.
+/// 2. **Only the selected control**, never the most frequent year on the page —
+///    that would confirm a stale roster off a "2026-27 schedule" sidebar link,
+///    the exact failure the gate exists for.
+/// 3. **Only a match for `target`.** The picker can raise confidence, never
+///    destroy a roster. Troy's page carries four `selected-option` widgets, one
+///    of which is a "Jersey" sort control, so attribution is not certain enough
+///    to justify discarding players — which is what a `stale_season` verdict
+///    does. A picker that names some other season simply leaves the page
+///    unconfirmed, and the title stays the only thing that can condemn it.
+fn selected_season(html: &str, target: i32) -> Option<TitleSeason> {
     let doc = Html::parse_document(html);
     for selector in ["option[selected]", "[class*='selected-option']"] {
         let Ok(sel) = Selector::parse(selector) else {
             continue;
         };
         for el in doc.select(&sel) {
-            let text = el.text().collect::<String>();
-            // The value attribute often carries `?season=2026-27` even when the
-            // visible text is abbreviated, so try both.
+            // Direct text children only — see restriction 1.
+            let own: String = el
+                .children()
+                .filter_map(|n| n.value().as_text().map(|t| t.to_string()))
+                .collect();
             let attr = el.value().attr("value").unwrap_or_default();
-            for candidate in [text.as_str(), attr] {
-                if let TitleSeason::Span(y) = parse_title_season(candidate) {
-                    return Some(TitleSeason::Span(y));
+            for candidate in [own.as_str(), attr] {
+                if parse_title_season(candidate) == TitleSeason::Span(target) {
+                    return Some(TitleSeason::Span(target));
                 }
             }
         }
@@ -1094,7 +1105,7 @@ impl RosterClient {
             // second-guessed by a control elsewhere on it.
             let mut claimed = parse_title_season(title.as_deref().unwrap_or_default());
             if matches!(claimed, TitleSeason::Unknown)
-                && let Some(picked) = selected_season(&body)
+                && let Some(picked) = selected_season(&body, target)
             {
                 claimed = picked;
             }
@@ -1898,33 +1909,51 @@ mod tests {
             <option value="/roster/?season=2025-26">2025-26</option>
             <option value="/roster/?season=2026-27" selected>2026-27</option>
           </select></body></html>"#;
-        assert_eq!(selected_season(html), Some(TitleSeason::Span(2027)));
+        assert_eq!(selected_season(html, 2027), Some(TitleSeason::Span(2027)));
 
         // Troy's widget shape.
         let widget = r#"<div class="selected-option__text">2026-27</div>"#;
-        assert_eq!(selected_season(widget), Some(TitleSeason::Span(2027)));
+        assert_eq!(selected_season(widget, 2027), Some(TitleSeason::Span(2027)));
     }
 
     #[test]
-    fn a_season_picker_reports_a_stale_selection_honestly() {
-        // The picker is read, not trusted: a stale page must come back as the
-        // season it actually serves so the gate can reject it, rather than
-        // being confirmed by whatever year appears most often on the page.
+    fn a_picker_naming_another_season_confirms_nothing_and_destroys_nothing() {
+        // The picker may only raise confidence. Letting it condemn would mean
+        // discarding a roster on the say-so of a control we cannot always
+        // attribute — Troy's page carries four such widgets, one of them a
+        // jersey-sort. Unconfirmed (players kept, absence withheld) is the
+        // right answer, and the title remains the only thing that can declare a
+        // page stale.
         let html = r#"<select>
             <option value="/roster/?season=2025-26" selected>2025-26</option>
             <option value="/roster/?season=2026-27">2026-27</option>
           </select>
           <a href="/schedule/2026-27">2026-27 Schedule</a>"#;
-        assert_eq!(selected_season(html), Some(TitleSeason::Span(2026)));
-        assert!(season_gate(selected_season(html).unwrap(), 2027).is_err());
+        assert_eq!(selected_season(html, 2027), None);
+    }
+
+    #[test]
+    fn unclosed_option_markup_cannot_confirm_by_accident() {
+        // Unclosed options are common in this markup, and html5ever repairs
+        // them by nesting, so reading the selected element's SUBTREE picks up a
+        // later option's year and lets a page stating no season confirm itself
+        // off an unrelated dropdown.
+        let gt = r#"<select><option selected>All Types<option value="x">2026-27</select>"#;
+        assert_eq!(selected_season(gt, 2027), None);
     }
 
     #[test]
     fn an_unselected_picker_confirms_nothing() {
-        assert_eq!(selected_season("<option>2026-27</option>"), None);
-        assert_eq!(selected_season("<option selected>All Types</option>"), None);
+        assert_eq!(selected_season("<option>2026-27</option>", 2027), None);
+        assert_eq!(
+            selected_season("<option selected>All Types</option>", 2027),
+            None
+        );
         // A bare year in a picker is no more decidable than one in a title.
-        assert_eq!(selected_season("<option selected>2026</option>"), None);
+        assert_eq!(
+            selected_season("<option selected>2026</option>", 2027),
+            None
+        );
     }
 
     #[test]
