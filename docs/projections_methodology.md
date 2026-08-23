@@ -130,14 +130,18 @@ w         = 0.45 for continuity rosters, ramping to 0.20 for roster overhauls
 
 The Future grid's **Conf** column, and its search, name the league each team plays in *during the season being projected* — not the one it played in last year. Nothing here touches the model: the projection is roster-based and never reads a conference.
 
-`teams.conference` is season-scoped and realignment-accurate, but only for seasons that exist. The live forecast projects a season with no `teams` rows at all, so the DB's only answer is the base season's league — and for 2026-27 that is wrong for 31 programs. Gonzaga in the West Coast Conference is not a rounding error on a page about next season.
+`teams.conference` is season-scoped and realignment-accurate, but only for seasons that exist. The live forecast projects a season with no `teams` rows at all, so the DB's only answer is the base season's league — and for 2026-27 that is wrong for 31 programs — 30 conference changes plus one Division I departure. Gonzaga in the West Coast Conference is not a rounding error on a page about next season.
 
 So `fetch_conferences` (`crates/cstat-api/src/routes/projections.rs`) resolves it from two sources, in order:
 
 1. **The target season's own `teams` row**, where the season has been ingested and carries a conference. Authoritative — it is Torvik-corrected (`compute::TORVIK_CONF_TO_CSTAT`), and it is what a graded past season on this page shows.
 2. **The base season's conference plus a curated diff**, `data/conference_realignment.json`, for the upcoming forecast.
 
-The capture retires itself: the day the target season is ingested, branch 1 takes over and the file stops being consulted for it.
+The capture retires itself: the day the target season is ingested *and labelled*, branch 1 takes over and the file stops being consulted for it.
+
+**"Ingested" is not the same as "labelled", and conflating them undoes the whole feature.** `ingest/teams.rs` binds NatStat's `conference` field straight into `teams.conference`, and NatStat mislabels realignment — that is precisely why the Torvik correction overwrites it. Torvik publishes for a new season weeks after `current_natstat_season()` rolls forward (the gap `SOURCE_NOT_PUBLISHED_GRACE_HOURS` is built around), so for that window the target-season row reports the league the team just **left**. `upcomingProjectionSeason()` is pinned to `AVAILABLE_SEASONS_FALLBACK[0] + 1`, so the Future tab is still landing on that season while it happens: a naive "ingested wins" rule puts Gonzaga back in the West Coast Conference on the default view, with no badge, for the fortnight the move is most newsworthy.
+
+`resolve_conference` therefore adds one rule: **when the ingested target conference is still the league the capture says the team left, the ingest has not caught up and the capture wins.** Any other ingested value — Torvik's correction, or a genuinely different outcome such as a move that was called off — beats the capture, so the rule cannot pin a stale answer in place. Both directions are unit-tested in `routes/projections.rs`.
 
 **Every entry records the conference it leaves, not just the one it joins.** The obvious `{team: new_conference}` shape is also the shape that fails silently — entries outlive their season, the base season underneath gets re-ingested and re-corrected, and an override whose premise has quietly changed looks exactly like one that is still right. Recording `from` makes the premise checkable: an entry applies only while the base season still says what it claims, so a stale one degrades to the DB value instead of asserting a fiction. `crates/cstat-core/tests/conference_realignment.rs` asserts the rest — no team captured twice, `from != to`, every code one the ingest can also produce (which is what would otherwise have hidden the WAC→UAC rebrand), and, DB-gated, that every entry's team and `from` still match the base season.
 

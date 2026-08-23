@@ -11,6 +11,7 @@ use axum::{
     routing::get,
 };
 use cstat_core::inference::Predictor;
+use cstat_core::realignment::TargetConference;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
     DraftScenario, ProjectedRoster, UncertainCause, compose_all_projections, fetch_draft_entrants,
@@ -179,7 +180,8 @@ struct ProjectedTeam {
     // --- Conference for the season being projected. Display + search only. ---
     // `teams.conference` is season-scoped, but the live forecast projects a
     // season that has no `teams` rows yet, so the DB's only answer is last
-    // year's league — wrong for the 30 programs that realigned. These three
+    // year's league — wrong for the 31 programs that realigned into 2026-27
+    // (30 changed conference, one left Division I). These three
     // fields carry the *target*-season answer: the ingested season's conference
     // when there is one, else the base season's with the curated realignment
     // diff laid over it (`cstat_core::realignment`). Never read by the model.
@@ -1681,43 +1683,81 @@ async fn fetch_conferences(
     Ok(rows
         .into_iter()
         .map(|r| {
-            // An ingested target season wins — but only where it actually
-            // carries a conference. A row that exists with a NULL conference
-            // (ingested, not yet Torvik-corrected) is less informative than the
-            // base season, so it falls through rather than blanking the column.
-            let entry = if let Some(target) = r.target_conference {
-                let prev = r.base_conference.filter(|b| *b != target);
-                TeamConference {
-                    conference: Some(target),
-                    prev_conference: prev,
-                    left_division_i: false,
-                }
-            } else {
-                use cstat_core::realignment::TargetConference;
-                match curated
-                    .map(|c| c.target_conference(&r.short_name, r.base_conference.as_deref()))
-                    .unwrap_or(TargetConference::Unchanged)
-                {
-                    TargetConference::Moved { from, to } => TeamConference {
-                        conference: Some(to.to_string()),
-                        prev_conference: Some(from.to_string()),
-                        left_division_i: false,
-                    },
-                    TargetConference::LeftDivisionI { from } => TeamConference {
-                        conference: None,
-                        prev_conference: Some(from.to_string()),
-                        left_division_i: true,
-                    },
-                    TargetConference::Unchanged => TeamConference {
-                        conference: r.base_conference,
-                        prev_conference: None,
-                        left_division_i: false,
-                    },
-                }
-            };
+            let verdict = curated
+                .map(|c| c.target_conference(&r.short_name, r.base_conference.as_deref()))
+                .unwrap_or(TargetConference::Unchanged);
+            let entry = resolve_conference(verdict, r.base_conference, r.target_conference);
             (r.base_team_id, entry)
         })
         .collect())
+}
+
+/// Decide one team's target-season conference from the ingested values and the
+/// curated verdict. Split out from [`fetch_conferences`] so the precedence rule
+/// below is unit-testable without a database.
+///
+/// The ingested target season is authoritative — with one exception, and the
+/// exception is the whole reason this is a named function.
+///
+/// `ingest/teams.rs` writes NatStat's `conference` field into `teams.conference`
+/// verbatim, and NatStat *mislabels realignment* — that is precisely why the
+/// Torvik correction (`compute::TORVIK_CONF_TO_CSTAT`) exists and overwrites it.
+/// Torvik publishes for a new season weeks after `current_natstat_season()`
+/// rolls forward (the gap `SOURCE_NOT_PUBLISHED_GRACE_HOURS` is built around),
+/// so for that window the target-season row reports the league the team just
+/// **left**. Taking it at face value would revert the Conf column to the
+/// pre-move league on the Future tab's default landing season, silently, for the
+/// two weeks the realignment is most newsworthy — the exact failure this feature
+/// exists to prevent.
+///
+/// So: when the ingested target conference is *still the one the capture says
+/// the team left*, the ingest has not caught up and the capture is the better
+/// answer. Any other ingested value — Torvik's correction, or a genuinely
+/// different outcome such as a cancelled move — beats the capture, so this
+/// cannot pin a stale answer in place.
+fn resolve_conference(
+    verdict: TargetConference<'_>,
+    base_conference: Option<String>,
+    target_conference: Option<String>,
+) -> TeamConference {
+    // Does the ingested target season still report the league the capture says
+    // this team departed?
+    let ingest_lags = match (&verdict, target_conference.as_deref()) {
+        (TargetConference::Moved { from, .. }, Some(t))
+        | (TargetConference::LeftDivisionI { from }, Some(t)) => *from == t,
+        _ => false,
+    };
+
+    // An ingested target season wins where it carries a conference at all and
+    // isn't lagging the capture. A row that exists with a NULL conference
+    // (ingested, not yet labelled) is less informative than the base season, so
+    // it falls through rather than blanking the column.
+    if !ingest_lags && let Some(target) = target_conference {
+        let prev = base_conference.filter(|b| *b != target);
+        return TeamConference {
+            conference: Some(target),
+            prev_conference: prev,
+            left_division_i: false,
+        };
+    }
+
+    match verdict {
+        TargetConference::Moved { from, to } => TeamConference {
+            conference: Some(to.to_string()),
+            prev_conference: Some(from.to_string()),
+            left_division_i: false,
+        },
+        TargetConference::LeftDivisionI { from } => TeamConference {
+            conference: None,
+            prev_conference: Some(from.to_string()),
+            left_division_i: true,
+        },
+        TargetConference::Unchanged => TeamConference {
+            conference: base_conference,
+            prev_conference: None,
+            left_division_i: false,
+        },
+    }
 }
 
 /// Display-only coach CAE per projected team, keyed by **base-season**
@@ -1813,6 +1853,92 @@ async fn fetch_coach_cae(
 mod tests {
     use super::*;
     use cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT as SHRINK_WEIGHT;
+
+    /// The ingested target season is authoritative once it has been corrected.
+    #[test]
+    fn ingested_target_conference_wins_and_flags_the_move() {
+        let tc = resolve_conference(
+            TargetConference::Moved {
+                from: "WCC",
+                to: "PAC-12",
+            },
+            Some("WCC".into()),
+            Some("PAC-12".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("PAC-12"));
+        assert_eq!(tc.prev_conference.as_deref(), Some("WCC"));
+        assert!(!tc.left_division_i);
+    }
+
+    /// The regression this rule exists for: the target season is ingested but
+    /// still carries NatStat's pre-move label, because Torvik hasn't published
+    /// for it yet. Taking the DB at face value would put Gonzaga back in the
+    /// West Coast Conference on the Future tab for the two weeks the move is
+    /// most newsworthy.
+    #[test]
+    fn capture_wins_while_the_ingest_still_reports_the_league_left() {
+        let tc = resolve_conference(
+            TargetConference::Moved {
+                from: "WCC",
+                to: "PAC-12",
+            },
+            Some("WCC".into()),
+            Some("WCC".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("PAC-12"));
+        assert_eq!(tc.prev_conference.as_deref(), Some("WCC"));
+    }
+
+    /// ...but the capture must not be able to pin a stale answer in place. Any
+    /// ingested value other than the one the capture says was departed wins —
+    /// including a move that was called off and landed somewhere else.
+    #[test]
+    fn any_other_ingested_value_beats_the_capture() {
+        let tc = resolve_conference(
+            TargetConference::Moved {
+                from: "WCC",
+                to: "PAC-12",
+            },
+            Some("WCC".into()),
+            Some("BIGEAST".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("BIGEAST"));
+    }
+
+    /// Same lag rule for a program leaving Division I: NatStat listing it in
+    /// its old league for the target season is not evidence it stayed.
+    #[test]
+    fn leaving_division_i_survives_a_lagging_ingest() {
+        let tc = resolve_conference(
+            TargetConference::LeftDivisionI { from: "NEC" },
+            Some("NEC".into()),
+            Some("NEC".into()),
+        );
+        assert!(tc.left_division_i);
+        assert_eq!(tc.conference, None);
+        assert_eq!(tc.prev_conference.as_deref(), Some("NEC"));
+    }
+
+    /// An ingested row with no conference yet is less informative than the base
+    /// season, so it must not blank the column.
+    #[test]
+    fn null_target_conference_falls_back_instead_of_blanking() {
+        let tc = resolve_conference(TargetConference::Unchanged, Some("ACC".into()), None);
+        assert_eq!(tc.conference.as_deref(), Some("ACC"));
+        assert_eq!(tc.prev_conference, None);
+    }
+
+    /// A team that didn't move gets no badge, even across an ingested season.
+    #[test]
+    fn unchanged_team_carries_no_prev_conference() {
+        let tc = resolve_conference(
+            TargetConference::Unchanged,
+            Some("ACC".into()),
+            Some("ACC".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("ACC"));
+        assert_eq!(tc.prev_conference, None);
+    }
 
     #[test]
     fn shrink_blends_raw_with_baseline_and_offset() {

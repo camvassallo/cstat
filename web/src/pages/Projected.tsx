@@ -66,6 +66,20 @@ function nullsLast(
 }
 
 const dashCell = <span className="text-slate-600 text-xs">—</span>;
+
+// What the Conf column *shows* for a team. The cell and the search box both
+// read this, so anything on screen can be found by typing it — a team that has
+// left Division I renders "Not Division I", and searching that phrase has to
+// reach it. Routing it through `conferenceLabel` would instead call it
+// "Independent" (the null-conference default), which is both unfindable by its
+// own label and a false hit for anyone searching for actual independents.
+const NOT_DIVISION_I = 'Not Division I';
+const projectedConferenceLabel = (t: ProjectedTeam): string =>
+  t.left_division_i ? NOT_DIVISION_I : conferenceLabel(t.conference);
+
+/** Search text for the Conf column: the code plus the label actually rendered. */
+const conferenceHaystack = (t: ProjectedTeam): string =>
+  t.left_division_i ? NOT_DIVISION_I.toLowerCase() : conferenceSearchText(t.conference);
 const fmtSigned = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
 
 // Tooltip line for a cohort's prior-season CAM O/D split. Empty when
@@ -292,10 +306,10 @@ function buildColumns(
     {
       // The conference for the season being *projected*, which for the upcoming
       // forecast is not the one in the base-season `teams` row: 30 programs
-      // realigned for 2026-27. The server resolves that (ingested season first,
-      // else last season plus the curated realignment diff) and sets
-      // `prev_conference` only on the teams that actually moved, so this cell
-      // just renders what it's given.
+      // changed conference for 2026-27 and one left Division I. The server
+      // resolves that (ingested season first, else last season plus the curated
+      // realignment diff) and sets `prev_conference` only on the teams that
+      // actually moved, so this cell just renders what it's given.
       headerName: 'Conf',
       colId: 'conference',
       // 126 rather than the ~100 the label alone needs: the second line has to
@@ -305,7 +319,7 @@ function buildColumns(
       valueGetter: (p) => {
         const t = p.data as ProjectedTeam | undefined;
         if (!t) return null;
-        return t.left_division_i ? 'Not Division I' : conferenceLabel(t.conference);
+        return projectedConferenceLabel(t);
       },
       cellRenderer: (p: { value: string | null; data?: ProjectedTeam }) => {
         const t = p.data;
@@ -672,7 +686,7 @@ function ProjectionView({ year }: { year: number }) {
       (t) =>
         t.team_name.toLowerCase().includes(q) ||
         t.team_full_name.toLowerCase().includes(q) ||
-        conferenceSearchText(t.conference).includes(q),
+        conferenceHaystack(t).includes(q),
     );
   }, [teams, search]);
 
@@ -684,10 +698,14 @@ function ProjectionView({ year }: { year: number }) {
 
   const scoredCount = teams?.filter((t) => !t.too_thin).length ?? 0;
   const thinCount = teams?.filter((t) => t.too_thin).length ?? 0;
-  // `prev_conference` is set by the server only where the league actually
-  // changed, so this is the realignment count for the season — surfaced in the
-  // status line because the Conf column is otherwise easy to scroll past.
-  const realignedCount = teams?.filter((t) => t.prev_conference != null).length ?? 0;
+  // `prev_conference` is set by the server wherever the league changed — which
+  // includes a program that left Division I entirely, and that is not a
+  // conference change. Counting the two separately keeps the number checkable
+  // against the 30 moves the press reported. Surfaced in the status line
+  // because the Conf column is otherwise easy to scroll past.
+  const realignedCount =
+    teams?.filter((t) => t.prev_conference != null && !t.left_division_i).length ?? 0;
+  const leftDivisionICount = teams?.filter((t) => t.left_division_i).length ?? 0;
 
   return (
     <div className="p-4">
@@ -707,6 +725,8 @@ function ProjectionView({ year }: { year: number }) {
         <span className="text-xs text-gray-500">
           {scoredCount} teams scored · {thinCount} flagged thin roster
           {realignedCount > 0 && ` · ${realignedCount} changing conference`}
+          {leftDivisionICount > 0 &&
+            ` · ${leftDivisionICount} leaving Division I`}
           {baseSeason != null &&
             ` · based on ${seasonLabel(baseSeason)} → projecting ${seasonLabel(year)}`}
         </span>
