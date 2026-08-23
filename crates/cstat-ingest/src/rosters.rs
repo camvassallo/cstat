@@ -615,6 +615,38 @@ fn has_player_fields(p: &RosterPlayer) -> bool {
         || p.height_inches.is_some()
 }
 
+/// First matching descendant's text, skipping any subtree whose class contains
+/// one of `exclude`.
+///
+/// Sidearm legacy's `-position` container is a grab-bag: it holds the position
+/// (sometimes as loose text, sometimes nested inside a `text-bold` span) AND
+/// the height, weight and jersey spans as siblings. A plain subtree read
+/// returns "G 6'1\" 160 lbs"; an own-direct-text read returns nothing at all on
+/// the sites that nest the position. Pruning the fields that have their own
+/// selectors is the only reading that works for both shapes.
+fn pick_excluding(el: &scraper::ElementRef, sel: &Selector, exclude: &[&str]) -> Option<String> {
+    let root = el.select(sel).next()?;
+    let mut out = String::new();
+    for node in root.descendants() {
+        let Some(text) = node.value().as_text() else {
+            continue;
+        };
+        let inside_excluded = node
+            .ancestors()
+            .take_while(|a| a.id() != root.id())
+            .any(|a| {
+                a.value().as_element().is_some_and(|e| {
+                    e.attr("class")
+                        .is_some_and(|c| exclude.iter().any(|x| c.contains(x)))
+                })
+            });
+        if !inside_excluded {
+            out.push_str(text);
+        }
+    }
+    clean(&out)
+}
+
 /// First matching descendant's cleaned text.
 fn pick(el: &scraper::ElementRef, sel: &Selector) -> Option<String> {
     el.select(sel)
@@ -650,6 +682,10 @@ fn parse_sidearm_legacy(html: &str) -> Vec<RosterPlayer> {
     let jersey = sel(".sidearm-roster-player-jersey-number");
     let year = sel(".sidearm-roster-player-academic-year");
     let position = sel(".sidearm-roster-player-position-long-short");
+    // Sites that never render the `-long-short` child put the position inside
+    // `-position`, which ALSO wraps the height, weight and jersey spans — so a
+    // plain subtree read yields "G 6'1\" 160 lbs". Those siblings are pruned.
+    let position_plain = sel(".sidearm-roster-player-position");
     let height = sel(".sidearm-roster-player-height");
     let weight = sel(".sidearm-roster-player-weight");
     let hometown = sel(".sidearm-roster-player-hometown");
@@ -671,7 +707,17 @@ fn parse_sidearm_legacy(html: &str) -> Vec<RosterPlayer> {
             name,
             jersey: pick(&el, &jersey),
             class_year_raw: pick(&el, &year),
-            position: pick(&el, &position),
+            position: pick(&el, &position).or_else(|| {
+                pick_excluding(
+                    &el,
+                    &position_plain,
+                    &[
+                        "sidearm-roster-player-height",
+                        "sidearm-roster-player-weight",
+                        "sidearm-roster-player-jersey",
+                    ],
+                )
+            }),
             height_inches: pick(&el, &height).as_deref().and_then(parse_height_inches),
             weight_lbs: pick(&el, &weight).as_deref().and_then(parse_weight_lbs),
             hometown: pick(&el, &hometown),
@@ -841,29 +887,55 @@ fn parse_roster_table(html: &str) -> Vec<RosterPlayer> {
                     continue;
                 }
                 let v = v.clone();
-                // Order matters: the combined "High School/Previous School"
-                // column must be tested before either single-field spelling,
-                // or it would be filed as a high school and the transfer
-                // origin — the whole point of reading these pages — lost.
-                if h.contains("high school") && h.contains("previous") {
-                    let (hs, prev) = split_combined_school(&v);
-                    p.high_school = hs;
-                    p.previous_school = prev;
-                } else if h.contains("previous") {
-                    p.previous_school = Some(v);
-                } else if h.contains("high school") || h.contains("last school") {
-                    p.high_school = Some(v);
-                } else if h.contains("hometown") {
-                    p.hometown = Some(v);
+                // Origin columns first, and as a GROUP. Schools combine them
+                // in whatever pairing they like — Arkansas ships
+                // "High School/Previous School", Troy ships
+                // "Hometown / High School" — so the header is read for every
+                // origin field it names and the cell is split across them in
+                // order. Testing the single-field spellings first would file
+                // Troy's whole "Waldorf, Md. / Bullis School" as a high school
+                // and lose the hometown entirely.
+                let origins = origin_fields(h);
+                if !origins.is_empty() {
+                    for (field, part) in origins.iter().zip(split_origin(&v, origins.len())) {
+                        match field {
+                            OriginField::Hometown => p.hometown = part,
+                            OriginField::HighSchool => p.high_school = part,
+                            OriginField::PreviousSchool => p.previous_school = part,
+                        }
+                    }
                 } else if h.contains("name") {
                     p.name = v;
                 } else if h.contains("pos") {
                     p.position = Some(v);
-                } else if h.contains("ht") || h.contains("height") {
-                    p.height_inches = parse_height_inches(&v);
+                // WEIGHT BEFORE HEIGHT. "weight" contains the substring "ht",
+                // so a `contains("ht")` test claims the weight column first,
+                // fails to read "165 lbs." as a height, and — because the
+                // assignment is unconditional — overwrites the height already
+                // read from the real column with None. Kentucky, Miami,
+                // Oklahoma St. and South Carolina lost BOTH measurements to
+                // that; Arkansas escaped only because it abbreviates to
+                // "Ht"/"Wt", and "height" does not contain "wt".
+                //
+                // The assignments are also now conditional, so no later column
+                // can blank a field an earlier one filled.
                 } else if h.contains("wt") || h.contains("weight") {
-                    p.weight_lbs = parse_weight_lbs(&v);
-                } else if h.contains("yr") || h.contains("class") || h.contains("cl.") {
+                    if let Some(w) = parse_weight_lbs(&v) {
+                        p.weight_lbs = Some(w);
+                    }
+                } else if h.contains("ht") || h.contains("height") {
+                    if let Some(inches) = parse_height_inches(&v) {
+                        p.height_inches = Some(inches);
+                    }
+                // "year" does NOT contain "yr" — Georgia Tech's header is
+                // "YEAR" and Troy's is "Year", and matching only "yr" silently
+                // dropped the class for both. That is the field the eligibility
+                // audit reads: Georgia Tech alone lists two players as "5th".
+                } else if h.contains("yr")
+                    || h.contains("year")
+                    || h.contains("class")
+                    || h.contains("cl.")
+                {
                     p.class_year_raw = Some(v);
                 } else if h.contains("num") || h.contains('#') || h.contains("no.") {
                     p.jersey = Some(v);
@@ -880,24 +952,65 @@ fn parse_roster_table(html: &str) -> Vec<RosterPlayer> {
     Vec::new()
 }
 
-/// Split a combined "High School / Previous School" cell.
-///
-/// Schools pack both into one column with no fixed separator: Arkansas prints
-/// `Sunrise Christian Academy (Kan.) / Furman` but also `The Skill Factory ||
-/// Georgia` and, for a player with no college stop, a bare
-/// `Little Rock Christian Academy`. With no separator the value is a high
-/// school and nothing else — inventing a previous school from it would
-/// manufacture exactly the transfer signal this ingest exists to measure.
-fn split_combined_school(v: &str) -> (Option<String>, Option<String>) {
-    for sep in ["||", "/"] {
-        if let Some((hs, prev)) = v.split_once(sep) {
-            return (clean(hs), clean(prev));
-        }
-    }
-    (clean(v), None)
+/// An origin column a roster table can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OriginField {
+    Hometown,
+    HighSchool,
+    PreviousSchool,
 }
 
-/// The season a page's own season PICKER says is selected, when it names the
+/// Which origin columns a header names, in the order it names them.
+///
+/// Returns more than one for the combined headers these tables are full of:
+/// "High School/Previous School" (Arkansas), "Hometown / High School" (Troy).
+///
+/// "Last School" counts as the previous school, not the high school. Georgia
+/// Tech's column under that header holds San Jose State and Washington
+/// alongside Lee-Scott Academy — it means "wherever you were before here", and
+/// filing it as a high school is what made Georgia Tech contribute nothing to
+/// the transfer-origin signal this ingest exists to capture.
+fn origin_fields(header: &str) -> Vec<OriginField> {
+    let mut out: Vec<(usize, OriginField)> = Vec::new();
+    let mut push = |needle: &str, field: OriginField| {
+        if let Some(at) = header.find(needle) {
+            out.push((at, field));
+        }
+    };
+    push("hometown", OriginField::Hometown);
+    push("high school", OriginField::HighSchool);
+    if header.contains("previous") {
+        push("previous", OriginField::PreviousSchool);
+    } else if header.contains("last school") {
+        push("last school", OriginField::PreviousSchool);
+    }
+    out.sort_by_key(|(at, _)| *at);
+    out.into_iter().map(|(_, f)| f).collect()
+}
+
+/// Split a combined origin cell into `n` parts.
+///
+/// Schools pack several origins into one column with no fixed separator:
+/// Arkansas prints `Sunrise Christian Academy (Kan.) / Furman` but also
+/// `The Skill Factory || Georgia` and, for a player with no college stop, a
+/// bare `Little Rock Christian Academy`.
+///
+/// A cell with fewer parts than the header promises fills from the LEFT and
+/// leaves the rest `None`. That is the whole point: with no separator the value
+/// is only the first field, and inventing a previous school from it would
+/// manufacture exactly the transfer signal this ingest measures.
+fn split_origin(v: &str, n: usize) -> Vec<Option<String>> {
+    let parts: Vec<&str> = if v.contains("||") {
+        v.split("||").collect()
+    } else {
+        v.split('/').collect()
+    };
+    (0..n)
+        .map(|i| parts.get(i).and_then(|p| clean(p)))
+        .collect()
+}
+
+/// The season a page's own season PICKER says is selected/// The season a page's own season PICKER says is selected, when it names the
 /// target season.
 ///
 /// Fallback for the schools whose `<title>` names no season — Arkansas serves
@@ -1391,7 +1504,13 @@ pub struct SweepReport {
     pub unsupported: usize,
     pub unreachable: usize,
     pub players: usize,
-    /// Rows carrying a `previous_school` — the D2/JuCo/international signal.
+    /// Rows carrying a `previous_school`.
+    ///
+    /// Where a D2/JuCo/overseas arrival becomes identifiable — but not a
+    /// transfer count. Schools whose column is headed "Last School" file a
+    /// high school there for a true freshman, and that is the honest reading
+    /// of their data rather than something to filter: Georgia Tech's column
+    /// holds San Jose State and Lee-Scott Academy side by side.
     pub with_previous_school: usize,
     /// Teams whose verdict is not `ok`, with the reason, for the CLI summary.
     pub problems: Vec<(String, FetchStatus, String)>,
@@ -1653,6 +1772,27 @@ mod tests {
         assert_eq!(p.weight_lbs, Some(180));
     }
 
+    #[test]
+    fn legacy_reads_a_position_that_shares_its_container_with_height() {
+        // Siena and 16 other legacy sites never render the `-long-short` child,
+        // and their `-position` container also wraps the height and weight
+        // spans — so a subtree read yields "G 6'1\" 160 lbs" and a selector
+        // requiring `-long-short` yields nothing at all.
+        let html = r#"
+          <li class="sidearm-roster-player">
+            <div class="sidearm-roster-player-position"><span class="text-bold">G</span>
+              <span class="sidearm-roster-player-height">6'1"</span>
+              <span class="sidearm-roster-player-weight">160 lbs</span>
+            </div>
+            <div class="sidearm-roster-player-name"><h3><a href="/x">Owen Schlager</a></h3></div>
+          </li>"#;
+        let rows = parse_sidearm_legacy(html);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].position.as_deref(), Some("G"));
+        assert_eq!(rows[0].height_inches, Some(73));
+        assert_eq!(rows[0].weight_lbs, Some(160));
+    }
+
     const WMT_CARD: &str = r#"
       <div class="roster-card-item">
         <strong class="roster-card-item__jersey-number">#00</strong>
@@ -1750,6 +1890,58 @@ mod tests {
     }
 
     #[test]
+    fn table_parser_reads_year_and_last_school_headers() {
+        // Georgia Tech's header row. "YEAR" does not contain "yr", and "LAST
+        // SCHOOL" is a transfer origin, not a high school — matching only
+        // "yr"/"high school" dropped the class for every player and filed San
+        // Jose State as a high school, so the school contributed nothing to the
+        // transfer signal.
+        let html = r#"
+          <table><thead><tr>
+            <th>Number</th><th>Name</th><th>Position</th><th>HT.</th><th>WT.</th>
+            <th>YEAR</th><th>HOMETOWN</th><th>LAST SCHOOL</th>
+          </tr></thead><tbody>
+            <tr><td>7</td><td>Jackson Fields</td><td>Forward</td><td>6-9</td><td>220</td>
+                <td>5th</td><td>Missouri City, Texas</td><td>Troy</td></tr>
+            <tr><td>0</td><td>Colby Garland</td><td>Guard</td><td>6-1</td><td>195</td>
+                <td>Senior</td><td>Magnolia, Ark.</td><td>San Jose State</td></tr>
+          </tbody></table>"#;
+        let rows = parse_roster_table(html);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].class_year_raw.as_deref(), Some("5th"));
+        assert_eq!(rows[1].class_year_raw.as_deref(), Some("Senior"));
+        assert_eq!(rows[1].previous_school.as_deref(), Some("San Jose State"));
+        assert_eq!(rows[1].high_school, None);
+        assert_eq!(rows[1].hometown.as_deref(), Some("Magnolia, Ark."));
+    }
+
+    #[test]
+    fn table_parser_splits_a_combined_hometown_and_high_school() {
+        // Troy pairs the columns the other way round. Testing the single-field
+        // spellings first filed the whole cell as a high school and lost the
+        // hometown.
+        let html = r#"
+          <table><thead><tr>
+            <th>#</th><th>Full Name</th><th>Pos.</th><th>Year</th>
+            <th>Hometown / High School</th><th>Previous School</th>
+          </tr></thead><tbody>
+            <tr><td>1</td><td>Caden Diggs</td><td>G</td><td>Junior</td>
+                <td>Waldorf, Md. / Bullis School</td><td>UMBC</td></tr>
+            <tr><td>2</td><td>Afonso Pacheco</td><td>F</td><td>Sophomore</td>
+                <td>Rio de Janeiro, Brazil</td><td>E.C. Pinheiros</td></tr>
+          </tbody></table>"#;
+        let rows = parse_roster_table(html);
+        assert_eq!(rows[0].hometown.as_deref(), Some("Waldorf, Md."));
+        assert_eq!(rows[0].high_school.as_deref(), Some("Bullis School"));
+        assert_eq!(rows[0].previous_school.as_deref(), Some("UMBC"));
+        assert_eq!(rows[0].class_year_raw.as_deref(), Some("Junior"));
+        // No separator: the cell is only the hometown, and no high school is
+        // invented from it.
+        assert_eq!(rows[1].hometown.as_deref(), Some("Rio de Janeiro, Brazil"));
+        assert_eq!(rows[1].high_school, None);
+    }
+
+    #[test]
     fn table_parser_reads_a_discrete_previous_school_column() {
         // Kentucky's shape: separate columns, and eligibility spelled out.
         let html = r#"
@@ -1766,6 +1958,24 @@ mod tests {
         assert_eq!(rows[0].class_year_raw.as_deref(), Some("Graduate Student"));
         assert_eq!(rows[0].previous_school.as_deref(), Some("Washington"));
         assert_eq!(rows[0].high_school.as_deref(), Some("Ledyard"));
+    }
+
+    #[test]
+    fn a_weight_column_does_not_eat_the_height_column() {
+        // "weight" contains the substring "ht". Kentucky's headers spell both
+        // out, so the weight column matched the height branch, failed to read
+        // "165 lbs." as a height, and blanked the height already read from the
+        // real column. Both measurements were lost for four schools.
+        let html = r#"
+          <table><thead><tr>
+            <th>Number</th><th>Name</th><th>Position</th><th>Height</th><th>Weight</th><th>Hometown</th>
+          </tr></thead><tbody>
+            <tr><td>0</td><td>Zyon Hawthorne</td><td>Guard</td><td>6-2</td><td>165 lbs.</td>
+                <td>Louisville, Ky.</td></tr>
+          </tbody></table>"#;
+        let rows = parse_roster_table(html);
+        assert_eq!(rows[0].height_inches, Some(74));
+        assert_eq!(rows[0].weight_lbs, Some(165));
     }
 
     #[test]

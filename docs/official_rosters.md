@@ -110,12 +110,26 @@ columns are mapped by **header text** rather than by position or class. One
 parser covers all of them and survives a school reordering its columns, which a
 positional read would silently scramble.
 
-Two column shapes exist and the order of the checks matters: a combined
-`High School/Previous School` cell must be tested before either single-field
-spelling, or the transfer origin gets filed as a high school and lost. A
-combined cell with no separator (`Little Rock Christian Academy`) is a high
-school and nothing else — inventing a previous school from it would manufacture
-exactly the signal this ingest exists to measure.
+Header vocabulary is where this parser actually breaks, and every rule below
+came from a school it got wrong:
+
+- **Class year** must match `year` as well as `yr` — "year" contains no `yr`
+  substring, and Georgia Tech ("YEAR") and Troy ("Year") both lost their class
+  column to that until it was caught against a published roster.
+- **"Last School" is a previous school, not a high school.** Georgia Tech's
+  column under that header holds San Jose State and Washington beside Lee-Scott
+  Academy; filing it as a high school left the school contributing nothing to
+  the transfer signal.
+- **Origin columns are read as a group**, in the order the header names them,
+  and the cell is split across them. Schools combine them in whichever pairing
+  they like — Arkansas ships `High School/Previous School`, Troy ships
+  `Hometown / High School` — so testing single-field spellings first files
+  Troy's whole `Waldorf, Md. / Bullis School` as a high school and drops the
+  hometown.
+- A combined cell with **fewer parts than the header promises fills from the
+  left**: `Little Rock Christian Academy` under a two-field header is a high
+  school and nothing else, because inventing a previous school from it would
+  manufacture exactly the signal this ingest measures.
 
 `sportId` is **per-site** (Duke 7, BU 3, LA Tech 5), so it is resolved fresh
 every run and deliberately not cached in `data/team_sites.json`.
@@ -252,7 +266,7 @@ Both tables are laptop-written and prod has no writer for them, so a full
 ## Coverage, 2026-08-23
 
 364 teams: **300 `ok`**, 7 `partial`, 36 `stale_season`, 6 `unsupported`, 15
-`unreachable`. 4,473 players, **2,257 with a previous school** — the D2 / JuCo /
+`unreachable`. 4,473 players, **2,272 with a previous school** — the D2 / JuCo /
 international signal, present on just over half of all rows.
 
 **The remaining 21 are a rendering problem, not a URL problem.** Of the 15

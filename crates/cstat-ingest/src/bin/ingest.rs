@@ -1323,7 +1323,8 @@ async fn main() -> Result<()> {
                 report.unreachable,
             );
             println!(
-                "  {} player(s), {} with a previous school (the D2/JuCo/international signal)",
+                "  {} player(s), {} with a prior school recorded (where a D2/JuCo/overseas \
+                 arrival becomes identifiable; some schools file a high school here too)",
                 report.players, report.with_previous_school,
             );
             if !report.problems.is_empty() {
