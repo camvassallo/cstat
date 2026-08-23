@@ -295,7 +295,25 @@ pub fn resolve_reason(
         let mut rows: Vec<serde_json::Value> = serde_json::from_str(&raw)
             .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
 
-        let hits = |v: &serde_json::Value| v.get("reason").and_then(|r| r.as_str()) == Some(reason);
+        let field = |v: &serde_json::Value, k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        // Rows this outcome would actually CHANGE, not merely rows carrying
+        // the reason. Without the status test, re-running `--as granted`
+        // stamps the resolution note onto an already-granted row a second
+        // time, so the capture accumulates "RESOLVED … RESOLVED …" and the
+        // command stops being safe to repeat — which it has to be, since the
+        // obvious reaction to an ambiguous first run is to run it again.
+        let hits = |v: &serde_json::Value| {
+            field(v, "reason") == reason
+                && match outcome {
+                    Resolution::Granted => field(v, "status") != "granted",
+                    Resolution::Departed => true,
+                }
+        };
         let matched = rows.iter().filter(|v| hits(v)).count();
         if matched == 0 {
             continue;
@@ -421,6 +439,43 @@ mod tests {
         assert!(
             first_key.starts_with("\"name\""),
             "identity key must lead each row, got {first_key:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolving_twice_is_a_no_op() {
+        // Re-running is the obvious reaction to an ambiguous first run, so it
+        // must not stamp the resolution note a second time.
+        let dir = scratch("twice");
+        let first = resolve_reason(&dir, "injunction", Resolution::Granted, "R.").unwrap();
+        assert_eq!(first[0].matched, 2);
+        let after_one = std::fs::read_to_string(dir.join("2026_returns.json")).unwrap();
+
+        let second = resolve_reason(&dir, "injunction", Resolution::Granted, "R.").unwrap();
+        assert!(second.is_empty(), "second run must report nothing to do");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("2026_returns.json")).unwrap(),
+            after_one,
+            "second run must not touch the file"
+        );
+        assert_eq!(
+            rows(&dir)[0]["note"]
+                .as_str()
+                .unwrap()
+                .matches("R.")
+                .count(),
+            1,
+            "the resolution note must be stamped exactly once"
+        );
+
+        // Departed is idempotent for the other reason: the rows are gone.
+        let third = resolve_reason(&dir, "injunction", Resolution::Departed, "").unwrap();
+        assert_eq!(third[0].matched, 2);
+        assert!(
+            resolve_reason(&dir, "injunction", Resolution::Departed, "")
+                .unwrap()
+                .is_empty()
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

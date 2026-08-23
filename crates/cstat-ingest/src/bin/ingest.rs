@@ -1241,7 +1241,9 @@ async fn main() -> Result<()> {
                 let total: usize = reports.iter().map(|r| r.matched).sum();
                 if total == 0 {
                     println!(
-                        "returns: no rows carry reason {reason:?} in {} — nothing to resolve.",
+                        "returns: nothing to resolve — no row with reason {reason:?} in {} \
+                         would change. (Rows already at that outcome are left alone, so \
+                         re-running is safe.)",
                         dir.display()
                     );
                     return Ok(());
