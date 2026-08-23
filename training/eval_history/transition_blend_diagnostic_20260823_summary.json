@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-08-23T04:26:33.432182Z",
+  "generated_at": "2026-08-23T19:34:45.374288Z",
   "n": 2626,
-  "flat_served_mae": 5.737402005689623,
+  "flat_served_mae": 5.564071248957613,
   "retention_source": "ex-ante (dump `retained`)",
-  "served_ramp_mae": 5.675181969305081,
-  "served_ramp_bias": 0.03999278135249501,
+  "served_ramp_mae": 5.538632013529541,
+  "served_ramp_bias": 0.026216161544819174,
   "retention_undefined_frac": 0.0,
-  "global_best_w": 0.3,
-  "loso_flat_mae": 5.737402005689623,
-  "loso_conditional_mae": 5.679413820670304,
-  "loso_lift": 0.057988185019318905,
+  "global_best_w": 0.65,
+  "loso_flat_mae": 5.564071248957613,
+  "loso_conditional_mae": 5.546610473476674,
+  "loso_lift": 0.017460775480938828,
   "overhaul_threshold": 0.4
 }

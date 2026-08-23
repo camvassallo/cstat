@@ -354,7 +354,7 @@ function buildColumns(
       ...flexCol(1, 100),
       sort: 'desc',
       headerTooltip:
-        "The projected AdjEM for this roster: the roster model's projected-roster output blended with last season's actual AdjEM. The blend is about 30% last season for continuity rosters, and leans further toward the roster for heavy-turnover teams (last year's result is a stale anchor when the roster overhauls).",
+        "The projected AdjEM for this roster: the roster model's projected-roster output blended with the program's recent form. That anchor is last season's actual AdjEM pulled toward the program's three-year level, except where this year's roster backs up the move — so a one-year spike fades but a real step up holds. It carries about 70% for continuity rosters and less for heavy-turnover ones.",
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         const chip = adjEmChip(p.value);
@@ -362,9 +362,11 @@ function buildColumns(
         if (p.value == null || baseline == null) return chip;
         const w = p.data?.baseline_weight ?? 0.5;
         const bw = Math.round(w * 100);
-        // The stable cap is PROJECTION_SHRINK_WEIGHT on the backend — 0.30
-        // since #322 (it was 0.45, and 0.50 before that; this threshold has to
-        // move with it or the badge stops meaning anything).
+        // The stable cap is PROJECTION_SHRINK_WEIGHT on the backend — 0.70
+        // since #325 (0.30 before that, 0.45 before that, 0.50 before that;
+        // this threshold has to move with it or the badge stops meaning
+        // anything — left at 0.299 against a 0.70 cap it would never fire,
+        // silently deleting the marker from every row).
         //
         // Compare against a value just BELOW the cap, never against the cap
         // itself. The route returns `Json(json!({... "teams": rows}))`, and
@@ -376,9 +378,10 @@ function buildColumns(
         // badge fired on all 364) and would be FALSE for every team under this
         // one. Both failures are silent; a threshold a hair under the cap is
         // correct for both, so only genuine roster-overhaul teams light up.
-        const leansRoster = w < 0.299;
+        const leansRoster = w < 0.699;
         const title =
-          `${bw}% last year's actual AdjEM (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}) ` +
+          `${bw}% recent-form anchor (last season ${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}, ` +
+          `pulled toward the program's three-year level) ` +
           `+ ${100 - bw}% the roster model's projection` +
           (leansRoster ? ' — leaning on the new roster (heavy turnover)' : '');
         return (

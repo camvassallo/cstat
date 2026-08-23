@@ -50,31 +50,24 @@ from sqlalchemy import text
 
 from compute_cae import EVAL_DIR, load_backtest
 from db import get_engine
+from served_blend import (
+    RETAINED_FULL_OVERHAUL,
+    RETAINED_FULL_STABLE,
+    W_OVERHAUL,
+    W_STABLE,
+    blend,
+    unverified_rows,
+    served_weight,
+)
 
 START_YEAR = 2019
 OVERHAUL_RETURNING = 0.40   # < this fraction of talent retained = "overhaul"
 MIN_QUAL = 5                # player qualifying gate (mirror the roster model)
 
-# The SERVED blend ramp, mirrored from `roster_projection.rs`
-# (PROJECTION_SHRINK_WEIGHT / _OVERHAUL / OVERHAUL_RETAINED_FULL /
-# STABLE_RETAINED_FULL). Mirrored rather than imported because this is Python
-# reading a Rust constant; the dump also carries the per-team
-# `baseline_weight` the Rust actually used, and `served_weight` is checked
-# against it when present, so a drift between these four numbers and the
-# served ones shows up as a loud warning instead of a quietly wrong tuning.
-W_STABLE, W_OVERHAUL = 0.30, 0.20
-RETAINED_FULL_OVERHAUL, RETAINED_FULL_STABLE = 0.20, 0.40
-
-
-def served_weight(retained):
-    """Baseline weight the serving path gives a roster with this retention."""
-    if retained is None or retained >= RETAINED_FULL_STABLE:
-        return W_STABLE
-    if retained <= RETAINED_FULL_OVERHAUL:
-        return W_OVERHAUL
-    t = ((retained - RETAINED_FULL_OVERHAUL)
-         / (RETAINED_FULL_STABLE - RETAINED_FULL_OVERHAUL))
-    return W_OVERHAUL + t * (W_STABLE - W_OVERHAUL)
+# The served blend lives in `served_blend` — one mirror of
+# `roster_projection.rs` for every Python consumer, so a retune touches one
+# file instead of however many diagnostics happen to reconstruct the formula.
+# `unverified_rows` is what catches that mirror drifting from the Rust.
 
 
 def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
@@ -126,7 +119,7 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
         kept = sum(abs(v) for pid, v in base.items() if pid in tgt)
         return kept / tot
 
-    rows, weight_mismatch = [], 0
+    rows = []
     for r in bt:
         if r["season"] < START_YEAR:
             continue
@@ -138,37 +131,34 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
             retained = None if retained is None else float(retained)
         else:
             retained = returning_frac(ns, r["season"])
-        # The dump also records the weight the Rust actually derived. If the
-        # mirrored ramp above has drifted from the served one, this is where
-        # it surfaces — before the drift is baked into a retuned constant.
-        served = r.get("baseline_weight")
-        if served is not None and abs(float(served) - served_weight(retained)) > 1e-4:
-            weight_mismatch += 1
         rows.append({
             "ns": ns, "team": r["team_name"], "season": r["season"],
             "actual": float(r["actual"]), "baseline": float(r["baseline"]),
             "roster_proj": float(r["roster_proj"]),
             "is_new_hc": new_hc.get((ns, r["season"])),
             "returning": retained,
+            "program_level": r.get("program_level"),
         })
-    if weight_mismatch:
-        print(f"  ** WARNING: {weight_mismatch} rows where this script's mirrored ramp "
-              f"disagrees with the dump's served `baseline_weight`. The constants at the "
-              f"top of this file are stale against roster_projection.rs — fix them before "
-              f"reading anything below.")
+    # The dump records the weight the Rust actually derived, so a drift between
+    # `served_blend`'s mirror and the served constants surfaces here — before it
+    # is baked into a retuned constant.
+    stale = unverified_rows(bt)
+    if stale:
+        print(f"  ** WARNING: {stale} rows this mirror could not be confirmed "
+              f"against (drifted or missing `baseline_weight`). Either the mirror is "
+              f"stale against roster_projection.rs or this dump predates the current "
+              f"blend — fix that before reading anything below.")
     return rows, source
 
 
 def mae(rows, w):
-    """MAE of the blend w·baseline + (1-w)·roster_proj."""
-    return sum(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["roster_proj"]))
-               for r in rows) / len(rows)
+    """MAE of the blend w·anchor + (1-w)·roster_proj."""
+    return sum(abs(r["actual"] - blend(r, w)) for r in rows) / len(rows)
 
 
 def ramp_pred(r):
     """Prediction under the SERVED transition ramp (not a flat weight)."""
-    w = served_weight(r["returning"])
-    return w * r["baseline"] + (1 - w) * r["roster_proj"]
+    return blend(r, served_weight(r["returning"], r.get("program_level") is not None))
 
 
 def ramp_mae(rows):
@@ -188,8 +178,7 @@ def best_weight(rows):
 
 def bias(rows, w):
     """Mean SIGNED error of the blend (pred − actual): + = over-projected."""
-    return sum((w * r["baseline"] + (1 - w) * r["roster_proj"]) - r["actual"]
-               for r in rows) / len(rows)
+    return sum(blend(r, w) - r["actual"] for r in rows) / len(rows)
 
 
 def report_cohort(name, rows):
@@ -228,8 +217,8 @@ def loso_conditional(rows, cohort_fn, cohorts):
             w_by[c] = best_weight(grp)[0] if len(grp) >= 30 else 0.5
         for r in test:
             w = w_by.get(cohort_fn(r), 0.5)
-            cond_ae.append(abs(r["actual"] - (w * r["baseline"] + (1 - w) * r["roster_proj"])))
-            flat_ae.append(abs(r["actual"] - (0.5 * r["baseline"] + 0.5 * r["roster_proj"])))
+            cond_ae.append(abs(r["actual"] - blend(r, w)))
+            flat_ae.append(abs(r["actual"] - blend(r, 0.5)))
     return sum(flat_ae) / len(flat_ae), sum(cond_ae) / len(cond_ae), w_by
 
 
