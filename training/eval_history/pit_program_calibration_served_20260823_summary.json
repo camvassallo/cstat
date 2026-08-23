@@ -1,0 +1,108 @@
+{
+  "generated_at": "2026-08-23T19:15:31.822024Z",
+  "base": "served",
+  "shrink_weight": 0.7,
+  "offset": 0.0,
+  "start_year": 2019,
+  "targets": [
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025,
+    2026
+  ],
+  "overall_served_or_chosen": {
+    "n": 2626,
+    "mae_base": 5.544764168400107,
+    "mae_cal": 5.544764168400107,
+    "mae_lift": 0.0,
+    "rmse_base": 6.93747556392505,
+    "rmse_cal": 6.93747556392505,
+    "paired_mean_delta": 0.0,
+    "paired_se": 0.0,
+    "paired_z": 0.0,
+    "n_improved": 0,
+    "n_worsened": 0,
+    "low_q1": {
+      "n": 656,
+      "mae_base": 5.795326114993263,
+      "mae_cal": 5.795326114993263,
+      "mean_prior": 0.0
+    }
+  },
+  "reference_roster_proj": {
+    "n": 2626,
+    "mae_base": 5.822419379372788,
+    "mae_cal": 5.786273978901821,
+    "mae_lift": 0.036145400470966926,
+    "rmse_base": 7.2994434423457415,
+    "rmse_cal": 7.2427632021146255,
+    "paired_mean_delta": 0.03614540047096668,
+    "paired_se": 0.008508975239760751,
+    "paired_z": 4.247914637483772,
+    "n_improved": 835,
+    "n_worsened": 779,
+    "low_q1": {
+      "n": 656,
+      "mae_base": 5.913033066144804,
+      "mae_cal": 5.871424717673471,
+      "mean_prior": -0.2931158056744925
+    }
+  },
+  "per_year": {
+    "2019": {
+      "n": 327,
+      "k": Infinity,
+      "mae_base": 5.5206157593410286,
+      "mae_cal": 5.5206157593410286
+    },
+    "2020": {
+      "n": 338,
+      "k": Infinity,
+      "mae_base": 5.286887272161145,
+      "mae_cal": 5.286887272161145
+    },
+    "2021": {
+      "n": 334,
+      "k": Infinity,
+      "mae_base": 5.567235773701412,
+      "mae_cal": 5.567235773701412
+    },
+    "2022": {
+      "n": 326,
+      "k": Infinity,
+      "mae_base": 5.464465877418311,
+      "mae_cal": 5.464465877418311
+    },
+    "2023": {
+      "n": 328,
+      "k": Infinity,
+      "mae_base": 5.527644927280606,
+      "mae_cal": 5.527644927280606
+    },
+    "2024": {
+      "n": 337,
+      "k": Infinity,
+      "mae_base": 5.599749956355358,
+      "mae_cal": 5.599749956355358
+    },
+    "2025": {
+      "n": 324,
+      "k": Infinity,
+      "mae_base": 5.453665558808916,
+      "mae_cal": 5.453665558808916
+    },
+    "2026": {
+      "n": 312,
+      "k": Infinity,
+      "mae_base": 5.9624933268435045,
+      "mae_cal": 5.9624933268435045
+    }
+  },
+  "floor": 0.01,
+  "helps": false,
+  "verdict": "baseline blend already absorbs program persistence \u2192 do NOT change the served forecast (ship a display-only decomposition at most)"
+}

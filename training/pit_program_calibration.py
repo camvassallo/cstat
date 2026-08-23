@@ -7,7 +7,7 @@ found a team-keyed prior beats the raw roster projection `roster_proj` by +0.18 
 *bigger* than the coach-keyed term, so the lift is program-level, not coaching.
 
 But the SERVED forecast is NOT raw roster_proj. `/api/projections` ships
-    served = PROJECTION_SHRINK_WEIGHT·baseline + (1−w)·roster_proj + OFFSET   (w=0.50)
+    served = the turnover-ramped, program-anchored blend (see `served_blend`)
 i.e. it already leans 50% on last season's actual AdjEM — and *baseline is itself
 a per-program persistence term*. The feasibility study warned this exact blend
 "absorbs the persistent coach signal, driving σ²_between to 0" for the CAE null.
@@ -44,10 +44,13 @@ from sqlalchemy import text
 from cae_feasibility import mean, variance_components
 from compute_cae import EVAL_DIR, load_backtest
 from db import get_engine
+from served_blend import OFFSET, W_STABLE, mirror_mismatches, served_prediction
 
-# Must match cstat_core::roster_projection — the served projection blend.
-SHRINK_WEIGHT = 0.50
-OFFSET = 0.0
+# Kept for the summary artifact's provenance field. The blend itself comes from
+# `served_blend`, which mirrors roster_projection.rs — this script hardcoded
+# 0.50 through two regime changes (#322's turnover ramp, #325's program
+# anchor), so its "served" column was measuring a blend nobody was served.
+SHRINK_WEIGHT = W_STABLE
 
 
 def attach_program_key(bt: list[dict], conn) -> list[dict]:
@@ -58,6 +61,13 @@ def attach_program_key(bt: list[dict], conn) -> list[dict]:
         r.id: r.natstat_id
         for r in conn.execute(text("SELECT id::text AS id, natstat_id FROM teams"))
     }
+    stale = mirror_mismatches(bt)
+    if stale:
+        print(f"  ** WARNING: {stale} rows where `served_blend`'s mirrored constants "
+              f"disagree with the dump's own `baseline_weight`. Either this dump "
+              f"predates the current served blend or the mirror is stale against "
+              f"roster_projection.rs — the `served` column below is not what anyone "
+              f"is served, which is the exact defect this comparison exists to avoid.")
     rows, dropped = [], 0
     for r in bt:
         ns = tid2ns.get(r["team_id"])
@@ -66,7 +76,7 @@ def attach_program_key(bt: list[dict], conn) -> list[dict]:
             continue
         baseline = float(r["baseline"])
         roster_proj = float(r["roster_proj"])
-        served = SHRINK_WEIGHT * baseline + (1.0 - SHRINK_WEIGHT) * roster_proj + OFFSET
+        served = served_prediction(r)
         rows.append({
             "team_natstat_id": ns,
             "team": r["team_name"],
