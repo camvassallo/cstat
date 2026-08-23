@@ -381,9 +381,7 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
                     continue;
                 };
                 let key = normalize_player_name(&m.name);
-                let present = listed.contains(&key)
-                    || loose_key(&key).is_some_and(|k| loose.is_some_and(|s| s.contains(&k)));
-                if !present {
+                if !listed_contains(listed, loose, &key) {
                     missing.push((r.cam_v3.unwrap_or(0.0), m, r.mpg));
                 }
             }
@@ -433,20 +431,26 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
             let Some(listed) = rosters.any.get(&proj.team_name) else {
                 continue;
             };
+            let loose = rosters.any_loose.get(&proj.team_name);
             for d in &proj.departures {
                 let DepartureReason::GraduatedSenior { player_id, name } = d else {
                     continue;
                 };
                 let key = normalize_player_name(name);
-                if !listed.contains(&key) {
+                if !listed_contains(listed, loose, &key) {
                     continue;
                 }
                 let Some(m) = meta_by_id.get(player_id) else {
                     continue;
                 };
-                let label = rosters
-                    .class_labels
-                    .get(&(proj.team_name.clone(), key))
+                // Look the label up under the same aliases that matched the
+                // name. Keying it on the exact spelling alone printed "?" for
+                // exactly the players the alias matching exists to find — and
+                // the school's own label ("5th", "R-Sr.") is the informative
+                // half of this section.
+                let label = std::iter::once(key.clone())
+                    .chain(name_aliases(&key))
+                    .find_map(|k| rosters.class_labels.get(&(proj.team_name.clone(), k)))
                     .cloned()
                     .unwrap_or_else(|| "?".to_string());
                 staying.push((m.cam_v3.unwrap_or(0.0), m, label));
@@ -576,20 +580,15 @@ struct OfficialRosters {
     /// `teams.short_name` → normalized names, restricted to `status = 'ok'`.
     /// Membership is checked against BOTH this and [`Self::trusted_loose`].
     trusted: HashMap<String, HashSet<String>>,
-    /// The same cohort keyed by first initial + surname.
-    ///
-    /// Exists because the two sides spell the same human differently often
-    /// enough to matter: the school prints a middle name cstat omits ("David
-    /// Ugonna Ike" vs "David Ike") or an initial where cstat has the full name.
-    /// A miss here is a *false departure* on the report, which is the expensive
-    /// direction — it sends someone to check a player who never left. The
-    /// looser key can in principle collide (two same-surname players sharing an
-    /// initial), and that collision hides a real departure instead. That is the
-    /// cheaper error: it leaves the status quo, where nothing detected the
-    /// departure at all.
+    /// The same cohort under [`name_aliases`], for spelling differences
+    /// between cstat and the school.
     trusted_loose: HashMap<String, HashSet<String>>,
     /// `teams.short_name` → normalized names, every status.
     any: HashMap<String, HashSet<String>>,
+    /// [`Self::any`] under [`name_aliases`]. Both sections match names the
+    /// same way: a name is either on the page or it is not, and which
+    /// direction the caller reads that in must not change the answer.
+    any_loose: HashMap<String, HashSet<String>>,
     /// `(team, normalized name)` → the school's verbatim eligibility label
     /// ("R-Sr.", "5th", "Gr."), which is the informative part of section 4.
     class_labels: HashMap<(String, String), String>,
@@ -626,6 +625,7 @@ async fn fetch_official_rosters(pool: &PgPool, season: i32) -> Result<OfficialRo
     let mut out = OfficialRosters {
         trusted: HashMap::new(),
         trusted_loose: HashMap::new(),
+        any_loose: HashMap::new(),
         any: HashMap::new(),
         class_labels: HashMap::new(),
         verdicts: HashMap::new(),
@@ -641,22 +641,40 @@ async fn fetch_official_rosters(pool: &PgPool, season: i32) -> Result<OfficialRo
                 .entry(r.team_short_name.clone())
                 .or_default()
                 .insert(name.clone());
-            if let Some(loose) = loose_key(&name) {
-                out.trusted_loose
-                    .entry(r.team_short_name.clone())
-                    .or_default()
-                    .insert(loose);
-            }
+            out.trusted_loose
+                .entry(r.team_short_name.clone())
+                .or_default()
+                .extend(name_aliases(&name));
         }
         out.any
             .entry(r.team_short_name.clone())
             .or_default()
             .insert(name.clone());
+        out.any_loose
+            .entry(r.team_short_name.clone())
+            .or_default()
+            .extend(name_aliases(&name));
         if let Some(cls) = r.class_year_raw {
+            for alias in name_aliases(&name) {
+                out.class_labels
+                    .insert((r.team_short_name.clone(), alias), cls.clone());
+            }
             out.class_labels.insert((r.team_short_name, name), cls);
         }
     }
     Ok(out)
+}
+
+/// Is `key` on this team's published roster, allowing the loose key?
+///
+/// Shared by both roster-backed sections so they cannot drift apart. They read
+/// the answer in opposite directions — section 3 treats absence as a possible
+/// departure, section 4 treats presence as a possible return — but a name is
+/// either on the page or it is not, and a spelling difference must not decide
+/// it for either one.
+fn listed_contains(exact: &HashSet<String>, loose: Option<&HashSet<String>>, key: &str) -> bool {
+    exact.contains(key)
+        || loose.is_some_and(|set| name_aliases(key).iter().any(|a| set.contains(a)))
 }
 
 /// Index of the team a curated row's `current_team` names, mirroring
@@ -679,32 +697,42 @@ fn best_team_index(teams: &[(&str, &str)], want: &str) -> Option<usize> {
         .map(|(_, i)| i)
 }
 
-/// First initial + transliteration-folded surname, from an already-normalized
-/// name. `None` for a single-token name, where the key would be no looser than
-/// the name itself.
-fn loose_key(normalized: &str) -> Option<String> {
-    let mut parts = normalized.split_whitespace();
-    let first = parts.next()?;
-    let last = parts.next_back()?;
-    Some(format!(
-        "{} {}",
-        first.chars().next()?,
-        fold_umlaut_spellings(last)
-    ))
+/// Spellings that still denote the same person as `normalized`.
+///
+/// Two sources spell one human differently often enough to matter: Seattle
+/// prints "Junseok Yeo" where cstat has "Jun Seok Yeo", schools print middle
+/// names cstat omits ("David Ugonna Ike" vs "David Ike"), and Virginia prints
+/// "Johann Grünloh" where cstat carries the transliterated "Gruenloh". Exact
+/// matching misses all three.
+///
+/// **Deliberately not first-initial + surname.** That was tried and is far too
+/// loose — it collapses "Meechie Johnson" onto South Carolina's freshman
+/// "Marcus Johnson" and "Landon Wolf" onto Illinois State's "Leyton Wolf",
+/// which breaks BOTH readings: the eligibility section would claim a departed
+/// senior is returning (inflating a team by his whole CamPom), and the absence
+/// section would treat his replacement as him and never report the departure.
+/// Keeping the full first name is what makes the aliases safe.
+fn name_aliases(normalized: &str) -> Vec<String> {
+    let folded = fold_umlaut_spellings(normalized);
+    let mut out = vec![folded.replace(' ', "")];
+    let mut parts = folded.split_whitespace();
+    if let (Some(first), Some(last)) = (parts.next(), folded.split_whitespace().next_back())
+        && first != last
+    {
+        out.push(format!("{first} {last}"));
+    }
+    out
 }
 
 /// Collapse the two ways a German name reaches the two sources.
 ///
 /// `normalize_player_name` folds `ü` to `u`, so Virginia's "Johann Grünloh"
 /// becomes `grunloh` while cstat's transliterated "Johann Gruenloh" becomes
-/// `gruenloh`, and a rostered player reads as departed. Collapsing the
-/// digraphs makes both `grunloh`.
+/// `gruenloh`. Collapsing the digraphs makes both `grunloh`.
 ///
-/// This *is* lossy for names that legitimately contain the digraph — "samuel"
-/// folds to "samul" — but it is applied to both sides of the comparison, so
-/// those still match each other. The only failure it can introduce is two
-/// distinct surnames colliding, which hides a departure rather than inventing
-/// one: the safe direction for a worklist.
+/// Lossy for names that legitimately contain the digraph — "samuel" folds to
+/// "samul" — but it is applied to both sides of every comparison, so those
+/// still match each other.
 fn fold_umlaut_spellings(s: &str) -> String {
     s.replace('\u{00df}', "s")
         .replace("ue", "u")
@@ -749,34 +777,38 @@ mod tests {
         assert_eq!(best_team_index(&teams, "Nowhere State"), None);
     }
 
-    #[test]
-    fn loose_key_pairs_a_middle_name_with_its_plain_form() {
-        // The school prints the middle name, cstat does not. Both must reduce
-        // to the same key or the projection's returner reads as departed.
-        assert_eq!(loose_key("david ugonna ike"), loose_key("david ike"));
-        assert_eq!(loose_key("david ike").as_deref(), Some("d ike"));
+    /// Does a roster spelling of `a` match a cstat spelling of `b`?
+    fn matches(a: &str, b: &str) -> bool {
+        let set: std::collections::HashSet<String> = name_aliases(a).into_iter().collect();
+        super::listed_contains(&std::collections::HashSet::new(), Some(&set), b)
     }
 
     #[test]
-    fn loose_key_separates_same_surname_teammates() {
-        // Georgia rosters two Millenders. Different initials must stay
-        // distinct, or one covers for the other's departure.
-        assert_ne!(
-            loose_key("marcus millender"),
-            loose_key("kemauri millender")
-        );
+    fn aliases_bridge_spacing_middle_names_and_transliteration() {
+        // Seattle prints "Junseok Yeo"; cstat carries "Jun Seok Yeo".
+        assert!(matches("junseok yeo", "jun seok yeo"));
+        // The school prints a middle name cstat omits.
+        assert!(matches("david ugonna ike", "david ike"));
+        // Virginia prints "Grünloh" (normalizes to grunloh); cstat has the
+        // transliterated "Gruenloh".
+        assert!(matches("johann grunloh", "johann gruenloh"));
     }
 
     #[test]
-    fn loose_key_bridges_umlaut_and_transliterated_spellings() {
-        // Virginia publishes "Grünloh" (normalizes to grunloh); cstat carries
-        // the transliterated "Gruenloh". Both must reach one key.
-        assert_eq!(loose_key("johann grunloh"), loose_key("johann gruenloh"));
+    fn aliases_keep_distinct_people_distinct() {
+        // The regression that motivated dropping first-initial + surname.
+        // South Carolina's freshman Marcus Johnson is not the departed senior
+        // Meechie Johnson; matching them would both claim Meechie is returning
+        // and hide the fact that he left.
+        assert!(!matches("marcus johnson", "meechie johnson"));
+        assert!(!matches("leyton wolf", "landon wolf"));
+        // Same-surname teammates, which cstat genuinely carries.
+        assert!(!matches("marcus millender", "kemauri millender"));
     }
 
     #[test]
-    fn loose_key_declines_single_token_names() {
-        assert_eq!(loose_key("pele"), None);
-        assert_eq!(loose_key(""), None);
+    fn aliases_do_not_match_an_unrelated_name() {
+        assert!(!matches("chris howell", "chris paul"));
+        assert!(!matches("", "chris howell"));
     }
 }

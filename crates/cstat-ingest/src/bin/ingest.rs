@@ -448,6 +448,23 @@ enum Commands {
         /// Directory of `{year}_returns.json` files.
         #[arg(long, default_value = "data/returns")]
         dir: std::path::PathBuf,
+
+        /// Apply a court outcome to every curated return carrying this
+        /// `reason` (e.g. `injunction`), instead of loading. Eligibility
+        /// litigation resolves per COHORT — one Tenth Circuit ruling decides
+        /// all 23 class-of-2022 rows at once — and `reason` already tags the
+        /// cohort, so no new grouping concept is needed. Requires `--as`.
+        #[arg(long, value_name = "REASON")]
+        resolve_reason: Option<String>,
+
+        /// What the ruling decided. `granted` flips those rows to granted so
+        /// they project as ordinary returners; `departed` deletes them, which
+        /// IS the correct encoding — an unlisted senior already defaults to
+        /// departing, so a third status would teach the projection a state it
+        /// has no use for. Rewrites the JSON and stops WITHOUT loading, so the
+        /// change lands as a reviewable diff; run `returns` again to apply it.
+        #[arg(long = "as", value_name = "OUTCOME", requires = "resolve_reason")]
+        outcome: Option<String>,
     },
 
     /// Fetch official school-published rosters for a target season into
@@ -1196,7 +1213,57 @@ async fn main() -> Result<()> {
             );
         }
 
-        Commands::Returns { dir } => {
+        Commands::Returns {
+            dir,
+            resolve_reason,
+            outcome,
+        } => {
+            if let Some(reason) = resolve_reason {
+                use cstat_ingest::ingest::returns::Resolution;
+                let outcome = outcome.as_deref().unwrap_or_default();
+                let res = match outcome {
+                    "granted" => Resolution::Granted,
+                    "departed" => Resolution::Departed,
+                    other => anyhow::bail!("--as must be `granted` or `departed`, got {other:?}"),
+                };
+                // Only the granted path stamps a note; building the
+                // "succeeded" wording for a `departed` run would be a lie even
+                // if nothing read it.
+                let suffix = match res {
+                    Resolution::Granted => format!(
+                        "RESOLVED {}: the {reason} claim succeeded and eligibility is settled.",
+                        cstat_ingest::today_utc()
+                    ),
+                    Resolution::Departed => String::new(),
+                };
+                let reports =
+                    cstat_ingest::ingest::returns::resolve_reason(&dir, &reason, res, &suffix)?;
+                let total: usize = reports.iter().map(|r| r.matched).sum();
+                if total == 0 {
+                    println!(
+                        "returns: no rows carry reason {reason:?} in {} — nothing to resolve.",
+                        dir.display()
+                    );
+                    return Ok(());
+                }
+                for r in &reports {
+                    println!(
+                        "returns {}: {} row(s) with reason {reason:?} -> {}",
+                        r.year,
+                        r.matched,
+                        match r.outcome {
+                            Resolution::Granted => "granted",
+                            Resolution::Departed => "removed",
+                        }
+                    );
+                }
+                println!(
+                    "{total} row(s) rewritten in place. Review the diff, then run \
+                     `cstat-ingest returns` to load it, and `departures-audit --year N` \
+                     to confirm every remaining row still places its player."
+                );
+                return Ok(());
+            }
             let reports = cstat_ingest::ingest::returns::bootstrap_from_dir(&db.pool, &dir).await?;
             let total: usize = reports.iter().map(|r| r.rows).sum();
             let contested: usize = reports.iter().map(|r| r.contested).sum();

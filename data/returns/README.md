@@ -110,5 +110,30 @@ used two non-D-I years first can look identical, and players holding their own
 Atwell is a named plaintiff in the North Carolina suit, so his individual
 outcome may diverge from the cohort's.
 
-**Revisit when the Tenth Circuit rules.** A win flips the cohort to `granted`;
-a loss makes them departures and the rows should be deleted, not flipped.
+**Revisit when the Tenth Circuit rules.** Both outcomes are one command, keyed
+on `reason` because that column already tags the cohort exactly:
+
+```bash
+# Athletes win — the cohort is eligible.
+cargo run --bin cstat-ingest -- returns --resolve-reason injunction --as granted
+
+# NCAA wins — the cohort is not coming back.
+cargo run --bin cstat-ingest -- returns --resolve-reason injunction --as departed
+```
+
+`--as departed` DELETES the rows rather than writing some "denied" status. That
+is the correct encoding, not a shortcut: the projection's default for an
+unlisted senior is already "departing", so a third status would teach it a
+state it has no use for.
+
+Both rewrite the JSON in place and stop **without** loading, so the change
+lands as a reviewable git diff first. Run `cstat-ingest returns` to apply it,
+then `departures-audit --year 2026` to confirm every remaining row still places
+its player.
+
+Deletion genuinely takes effect: the loader replaces the whole year rather than
+upserting into it, so a row removed from the file is removed from
+`player_returns`. That was not always true — an upsert-only load honoured
+additions and silently ignored removals, which would have left 23 players
+restored to their teams forever while both the file and the loader's own output
+said they were gone.

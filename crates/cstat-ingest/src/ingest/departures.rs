@@ -67,12 +67,25 @@ pub async fn bootstrap_from_dir(
     Ok(reports)
 }
 
-/// Upsert one year's departures. Returns the row count written.
+/// Replace one year's departures. Returns the row count written.
+///
+/// Deletes the year before inserting, for the same reason as the returns
+/// loader: the JSON file is the source of record, and an upsert-only load
+/// honours additions but silently ignores removals. Retracting a departure —
+/// a report that turned out to be wrong, a player who withdrew — would leave
+/// him deleted from his team's projection with nothing in the file to explain
+/// it. Scoped to `year` and transactional, so a mid-load failure cannot leave
+/// the season empty; a year with no file in `dir` is never touched.
 async fn bootstrap_year(
     pool: &PgPool,
     year: i32,
     departures: &[cstat_core::roster_projection::PlayerDeparture],
 ) -> Result<usize, DepartureIngestError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM player_departures WHERE year = $1")
+        .bind(year)
+        .execute(&mut *tx)
+        .await?;
     for d in departures {
         sqlx::query(
             r#"
@@ -93,8 +106,9 @@ async fn bootstrap_year(
         .bind(&d.destination)
         .bind(&d.source)
         .bind(&d.note)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
     Ok(departures.len())
 }
