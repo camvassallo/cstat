@@ -103,18 +103,19 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
     # Only for the fallback path — this scans every qualifying player-season in
     # the DB, and an ex-ante dump answers the same question without it.
     roster: dict[tuple, dict] = defaultdict(dict)
-    for r in ([] if ex_ante else conn.execute(text(
-        f"""SELECT t.natstat_id AS ns, pss.season AS season,
-                   tps.torvik_pid AS tpid,
-                   COALESCE(tps.cam_gbpm_v3_psos, 0) AS cam
-            FROM player_season_stats pss
-            JOIN teams t ON t.id = pss.team_id
-            LEFT JOIN torvik_player_stats tps
-              ON tps.player_id = pss.player_id AND tps.season = pss.season
-            WHERE COALESCE(pss.minutes_per_game,0) >= {MIN_QUAL}
-              AND COALESCE(pss.games_played,0) >= {MIN_QUAL}"""))):
-        if r.tpid is not None:
-            roster[(r.ns, r.season)][r.tpid] = float(r.cam)
+    if not ex_ante:
+        for r in conn.execute(text(
+            f"""SELECT t.natstat_id AS ns, pss.season AS season,
+                       tps.torvik_pid AS tpid,
+                       COALESCE(tps.cam_gbpm_v3_psos, 0) AS cam
+                FROM player_season_stats pss
+                JOIN teams t ON t.id = pss.team_id
+                LEFT JOIN torvik_player_stats tps
+                  ON tps.player_id = pss.player_id AND tps.season = pss.season
+                WHERE COALESCE(pss.minutes_per_game,0) >= {MIN_QUAL}
+                  AND COALESCE(pss.games_played,0) >= {MIN_QUAL}""")):
+            if r.tpid is not None:
+                roster[(r.ns, r.season)][r.tpid] = float(r.cam)
 
     def returning_frac(ns, target_year):
         base = roster.get((ns, target_year - 1), {})
