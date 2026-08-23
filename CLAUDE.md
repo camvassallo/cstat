@@ -273,6 +273,8 @@ Then `touch crates/cstat-core/src/db.rs && cargo build` — the migration files 
 
 For data-driven migrations (e.g. `017_team_short_names.sql` is sourced from `data/team_short_names.json`), edit the JSON and re-run the relevant `cstat-ingest` command — no SQL needed.
 
+**Conference for a season that isn't ingested yet** lives in `data/conference_realignment.json` — a hand-curated diff of the moves for one target season, keyed by `teams.short_name`. The Future page projects a season before any `teams` row for it exists, so the DB's only answer is last year's league, which is wrong for the 31 programs that realigned into 2026-27. `fetch_conferences` (projections route) prefers the target season's own ingested + Torvik-corrected conference and falls back to base-season + this diff, so the capture retires itself the day the season lands. **Every entry records the conference it leaves (`from`), and applies only while the base season still agrees** — a stale entry no-ops instead of asserting a fiction. `include_str!`-compiled via `cstat_core::realignment`, so editing it needs a **redeploy, not a sync** (same trap as `data/player_display_names.json`). Invariants — including that every destination is a code `TORVIK_CONF_TO_CSTAT` can also produce, which is what catches a league *rebrand* like WAC → UAC — are in `crates/cstat-core/tests/conference_realignment.rs`. Display and search only; no model reads a conference.
+
 ## ML Inference
 
 ONNX models are loaded at API startup via the `ort` crate (ONNX Runtime):

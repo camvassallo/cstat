@@ -126,6 +126,28 @@ w         = 0.45 for continuity rosters, ramping to 0.20 for roster overhauls
 
 **Re-tuning playbook**: run `cargo run --bin cstat-ingest -- projections-backtest --output training/eval_history/projections_backtest_per_team_<label>.json` — it composes the full pipeline with held-out OOF cam_v3, prints the roster-impact model raw vs baseline-persistence, sweeps a single *flat* blend weight, and (with `--output`) writes the per-team dump the cohort tuner reads. **Do not set the served weights from the flat sweep** — that optimum is the population-wide single weight (it averages continuity and overhaul teams together), which sits *below* what continuity teams want. Instead run `python training/transition_blend_diagnostic.py` (reads the latest per-team dump) and set `PROJECTION_SHRINK_WEIGHT` from the **continuity cohort's** own LOSO optimum and `PROJECTION_SHRINK_WEIGHT_OVERHAUL` from the **overhaul cohort's** — both surfaced in its output and validated leave-one-season-out. `PROJECTION_OFFSET` stays 0.0 unless the raw bias drifts well off zero. The route's `predict_team` and the shared `score_projection_adj_em` both read those constants. The backtest needs the per-season LOSO models in `models/roster_impact_loso/`; rerun `train_roster_impact_model.py` first if they are absent (it fails with a clear message if so).
 
+## Conference for the projected season (display only)
+
+The Future grid's **Conf** column, and its search, name the league each team plays in *during the season being projected* — not the one it played in last year. Nothing here touches the model: the projection is roster-based and never reads a conference.
+
+`teams.conference` is season-scoped and realignment-accurate, but only for seasons that exist. The live forecast projects a season with no `teams` rows at all, so the DB's only answer is the base season's league — and for 2026-27 that is wrong for 31 programs. Gonzaga in the West Coast Conference is not a rounding error on a page about next season.
+
+So `fetch_conferences` (`crates/cstat-api/src/routes/projections.rs`) resolves it from two sources, in order:
+
+1. **The target season's own `teams` row**, where the season has been ingested and carries a conference. Authoritative — it is Torvik-corrected (`compute::TORVIK_CONF_TO_CSTAT`), and it is what a graded past season on this page shows.
+2. **The base season's conference plus a curated diff**, `data/conference_realignment.json`, for the upcoming forecast.
+
+The capture retires itself: the day the target season is ingested, branch 1 takes over and the file stops being consulted for it.
+
+**Every entry records the conference it leaves, not just the one it joins.** The obvious `{team: new_conference}` shape is also the shape that fails silently — entries outlive their season, the base season underneath gets re-ingested and re-corrected, and an override whose premise has quietly changed looks exactly like one that is still right. Recording `from` makes the premise checkable: an entry applies only while the base season still says what it claims, so a stale one degrades to the DB value instead of asserting a fiction. `crates/cstat-core/tests/conference_realignment.rs` asserts the rest — no team captured twice, `from != to`, every code one the ingest can also produce (which is what would otherwise have hidden the WAC→UAC rebrand), and, DB-gated, that every entry's team and `from` still match the base season.
+
+Two shapes beyond a plain move:
+
+- **`left_division_i`** — a program that stops playing D-I (Saint Francis reclassifying to Division III for 2026-27). It still has a base-season roster so it still reaches the projection, but there is no destination league, and labelling it with last year's would put a team on the board that isn't in the division. Rendered "Not Division I", not as a blank conference.
+- **`new_division_i`** — informational, never applied. A program moving up from D-II (West Florida → ASUN) has no prior D-I season, so no roster to project and no row on this page. Recorded so the capture reads as complete rather than as an oversight.
+
+The file is `include_str!`-compiled (`cstat_core::realignment`), like `data/player_display_names.json` — **editing it needs a redeploy, not a data sync.**
+
 ## Limitations and upgrade paths
 
 - **Recruit cam_v3 is per-player, but pre-college signal is weak.** `freshman_row` scores each recruit through the freshman-impact model — a 5★ projected to bust and one projected to star get different rows. But composite rank stops separating past ~100, so spread among lower-ranked recruits is modest and elite-recruit bands (q10–q90) are wide; the per-recruit point estimate is honest only as a directional read.

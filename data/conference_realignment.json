@@ -1,0 +1,56 @@
+{
+  "2027": {
+    "note": "2026-27 realignment, effective July 1 2026. `from` is the season-2026 conference and is verified against the DB at load time, so a re-ingest that moves a team out from under an entry is caught instead of silently overriding. Sources: CBS Sports 'College basketball conference changes: Takeaways after 27 teams move to new leagues for 2026-27'; Wikipedia '2026-27 NCAA Division I men's basketball season' membership-changes table; pac-12.com 'The new Pac-12 Conference officially launches with the addition of seven full-time members' (2026-06-30); acusports.com 'WAC to Rebrand to UAC, Add Five New Members in 2026-27'.",
+    "moves": [
+      { "team": "Boise St.", "from": "MWC", "to": "PAC-12" },
+      { "team": "Colorado St.", "from": "MWC", "to": "PAC-12" },
+      { "team": "Fresno St.", "from": "MWC", "to": "PAC-12" },
+      { "team": "Gonzaga", "from": "WCC", "to": "PAC-12" },
+      { "team": "Oregon St.", "from": "WCC", "to": "PAC-12" },
+      { "team": "San Diego St.", "from": "MWC", "to": "PAC-12" },
+      { "team": "Texas St.", "from": "SUNBELT", "to": "PAC-12" },
+      { "team": "Utah St.", "from": "MWC", "to": "PAC-12" },
+      { "team": "Washington St.", "from": "WCC", "to": "PAC-12" },
+
+      { "team": "Hawaii", "from": "BIGWEST", "to": "MWC" },
+      { "team": "UC Davis", "from": "BIGWEST", "to": "MWC" },
+      { "team": "UTEP", "from": "C-USA", "to": "MWC" },
+
+      { "team": "Cal Baptist", "from": "WAC", "to": "BIGWEST" },
+      { "team": "Sacramento St.", "from": "BIGSKY", "to": "BIGWEST" },
+      { "team": "Utah Valley", "from": "WAC", "to": "BIGWEST" },
+
+      { "team": "Southern Utah", "from": "WAC", "to": "BIGSKY" },
+      { "team": "Utah Tech", "from": "WAC", "to": "BIGSKY" },
+
+      { "team": "Denver", "from": "SUMMIT", "to": "WCC" },
+      { "team": "Northern Illinois", "from": "MAC", "to": "HL" },
+      { "team": "Louisiana Tech", "from": "C-USA", "to": "SUNBELT" },
+      { "team": "Tennessee Tech", "from": "OVC", "to": "SOCON" },
+
+      { "team": "Abilene Christian", "from": "WAC", "to": "UAC", "note": "Not a move — the WAC rebranded as the United Athletic Conference on 2026-07-01. Recorded so the label follows the league." },
+      { "team": "Tarleton St.", "from": "WAC", "to": "UAC", "note": "WAC -> UAC rebrand." },
+      { "team": "UT Arlington", "from": "WAC", "to": "UAC", "note": "WAC -> UAC rebrand." },
+      { "team": "Austin Peay", "from": "A-SUN", "to": "UAC" },
+      { "team": "Central Arkansas", "from": "A-SUN", "to": "UAC" },
+      { "team": "Eastern Kentucky", "from": "A-SUN", "to": "UAC" },
+      { "team": "North Alabama", "from": "A-SUN", "to": "UAC" },
+      { "team": "West Georgia", "from": "A-SUN", "to": "UAC" },
+      { "team": "Little Rock", "from": "OVC", "to": "UAC" }
+    ],
+    "left_division_i": [
+      {
+        "team": "Saint Francis",
+        "from": "NEC",
+        "note": "Saint Francis (PA) is reclassifying to Division III and joining the Presidents' Athletic Conference; 2025-26 was its last Division I season. Projecting it would put a team on the board that no longer plays in the division."
+      }
+    ],
+    "new_division_i": [
+      {
+        "team": "West Florida",
+        "to": "A-SUN",
+        "note": "Informational only, not applied. West Florida moves up from Division II (Gulf South) into the ASUN and has no prior Division I season, so it has no roster to project and cannot appear on this page. Recorded here so the realignment record is complete."
+      }
+    ]
+  }
+}

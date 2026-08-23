@@ -16,6 +16,7 @@ import { caeColor, fmtCae } from '../components/cae';
 import { pctileTextColor } from '../components/pctile';
 import { BAND_CHIP_CLASS, BAND_CHIP_TOP_STRONG } from '../components/scale';
 import { recruitTooltipLine } from '../lib/recruitDisplay';
+import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 
 // Projectable-year definitions are shared with the team projection ledger via
 // `season.ts` so both surfaces publish the same list (incl. the upcoming
@@ -287,6 +288,51 @@ function buildColumns(
           {p.value}
         </SeasonLink>
       ),
+    },
+    {
+      // The conference for the season being *projected*, which for the upcoming
+      // forecast is not the one in the base-season `teams` row: 30 programs
+      // realigned for 2026-27. The server resolves that (ingested season first,
+      // else last season plus the curated realignment diff) and sets
+      // `prev_conference` only on the teams that actually moved, so this cell
+      // just renders what it's given.
+      headerName: 'Conf',
+      colId: 'conference',
+      // 126 rather than the ~100 the label alone needs: the second line has to
+      // fit "\u2190 Mountain West", the longest thing this cell ever renders.
+      ...flexCol(1.2, 126),
+      headerTooltip: `The conference each team plays in for ${seasonLabel(year)} — realignment applied, so a team that changed leagues shows its new one with the league it left beneath. Searchable: type a conference name or code to filter the board to it.`,
+      valueGetter: (p) => {
+        const t = p.data as ProjectedTeam | undefined;
+        if (!t) return null;
+        return t.left_division_i ? 'Not Division I' : conferenceLabel(t.conference);
+      },
+      cellRenderer: (p: { value: string | null; data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t) return dashCell;
+        const from = t.prev_conference;
+        const tip = t.left_division_i
+          ? `No longer plays Division I basketball in ${seasonLabel(year)}${from ? ` — left the ${conferenceLabel(from)}` : ''}. Still projected because it has a ${seasonLabel(year - 1)} roster.`
+          : from
+            ? `Moved from the ${conferenceLabel(from)} to the ${conferenceLabel(t.conference)} for ${seasonLabel(year)}`
+            : `${conferenceLabel(t.conference)} in ${seasonLabel(year)}`;
+        return (
+          <div className="leading-tight flex flex-col justify-center h-full" title={tip}>
+            <div
+              className={`text-[11px] truncate ${t.left_division_i ? 'text-slate-500 italic' : 'text-slate-200'}`}
+            >
+              {p.value}
+            </div>
+            {/* Present only on teams that changed leagues — the server sets
+                `prev_conference` for exactly that set. */}
+            {from && (
+              <div className="text-[10px] text-amber-400/90 truncate">
+                ← {conferenceLabel(from)}
+              </div>
+            )}
+          </div>
+        );
+      },
     },
     {
       headerName: 'Proj AdjEM',
@@ -618,10 +664,15 @@ function ProjectionView({ year }: { year: number }) {
     if (!teams) return null;
     const q = search.trim().toLowerCase();
     if (!q) return teams;
+    // Conference matches on the *projected* season's league only, code or
+    // display name ("big 12" and "big12" both work). Deliberately not the
+    // previous one: searching "Mountain West" should list who is in it next
+    // season, not also the five teams that left it for the Pac-12.
     return teams.filter(
       (t) =>
         t.team_name.toLowerCase().includes(q) ||
-        t.team_full_name.toLowerCase().includes(q),
+        t.team_full_name.toLowerCase().includes(q) ||
+        conferenceSearchText(t.conference).includes(q),
     );
   }, [teams, search]);
 
@@ -633,6 +684,10 @@ function ProjectionView({ year }: { year: number }) {
 
   const scoredCount = teams?.filter((t) => !t.too_thin).length ?? 0;
   const thinCount = teams?.filter((t) => t.too_thin).length ?? 0;
+  // `prev_conference` is set by the server only where the league actually
+  // changed, so this is the realignment count for the season — surfaced in the
+  // status line because the Conf column is otherwise easy to scroll past.
+  const realignedCount = teams?.filter((t) => t.prev_conference != null).length ?? 0;
 
   return (
     <div className="p-4">
@@ -651,6 +706,7 @@ function ProjectionView({ year }: { year: number }) {
         />
         <span className="text-xs text-gray-500">
           {scoredCount} teams scored · {thinCount} flagged thin roster
+          {realignedCount > 0 && ` · ${realignedCount} changing conference`}
           {baseSeason != null &&
             ` · based on ${seasonLabel(baseSeason)} → projecting ${seasonLabel(year)}`}
         </span>
