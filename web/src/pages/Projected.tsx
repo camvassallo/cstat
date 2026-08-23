@@ -354,7 +354,7 @@ function buildColumns(
       ...flexCol(1, 100),
       sort: 'desc',
       headerTooltip:
-        "The projected AdjEM for this roster: the roster-impact model's projected-roster output blended with last season's actual AdjEM. The blend is ~50/50 for continuity rosters, but leans toward the roster model for heavy-turnover teams (last year's result is a stale anchor when the roster overhauls).",
+        "The projected AdjEM for this roster: the roster model's projected-roster output blended with last season's actual AdjEM. The blend is about 30% last season for continuity rosters, and leans further toward the roster for heavy-turnover teams (last year's result is a stale anchor when the roster overhauls).",
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         const chip = adjEmChip(p.value);
@@ -362,16 +362,21 @@ function buildColumns(
         if (p.value == null || baseline == null) return chip;
         const w = p.data?.baseline_weight ?? 0.5;
         const bw = Math.round(w * 100);
-        // The stable cap is PROJECTION_SHRINK_WEIGHT = 0.45f32 on the backend.
-        // The route returns `Json(json!({... "teams": rows}))`, and building a
-        // serde_json `Value` promotes the f32 to f64 (a `Number` only holds
-        // f64) — so 0.45f32 reaches the client as 0.44999998807907104, NOT
-        // "0.45" (a direct `to_string(&f32)` would ryu-print "0.45", but that's
-        // not this path). A naive `w < 0.45` was therefore TRUE for every team,
-        // including the ~75% pinned at the stable cap, so the badge fired on all
-        // 364. Threshold just under the served cap so only genuine
-        // roster-overhaul teams (retained < ~40%) light up.
-        const leansRoster = w < 0.449;
+        // The stable cap is PROJECTION_SHRINK_WEIGHT on the backend — 0.30
+        // since #322 (it was 0.45, and 0.50 before that; this threshold has to
+        // move with it or the badge stops meaning anything).
+        //
+        // Compare against a value just BELOW the cap, never against the cap
+        // itself. The route returns `Json(json!({... "teams": rows}))`, and
+        // building a serde_json `Value` promotes the f32 to f64 (a `Number`
+        // only holds f64), so the cap arrives as a near-miss of the decimal
+        // literal in either direction — 0.45f32 came through as
+        // 0.44999998807907104, and 0.30f32 arrives as 0.30000001192092896. A
+        // naive `w < cap` was TRUE for every team under the old value (the
+        // badge fired on all 364) and would be FALSE for every team under this
+        // one. Both failures are silent; a threshold a hair under the cap is
+        // correct for both, so only genuine roster-overhaul teams light up.
+        const leansRoster = w < 0.299;
         const title =
           `${bw}% last year's actual AdjEM (${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}) ` +
           `+ ${100 - bw}% the roster model's projection` +

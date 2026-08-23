@@ -170,10 +170,10 @@ struct ProjectedTeam {
 
     /// The baseline weight used in the served blend for this team:
     /// `midpoint ≈ baseline_weight·(last-yr AdjEM) + (1−baseline_weight)·roster`.
-    /// The stable 0.45 for continuity rosters, ramping down toward 0.20 for
-    /// roster-overhaul teams (low talent retained) — last season's result is a
-    /// stale anchor when the roster turns over, so the blend leans on the roster
-    /// projection. See `roster_projection::transition_shrink_weight`. Lets the UI
+    /// The stable weight for continuity rosters, ramping down toward the
+    /// overhaul weight as talent retained falls — last season's result is a
+    /// stale anchor when the roster turns over, so the blend leans on the
+    /// roster projection. See `roster_projection::transition_shrink_weight`. Lets the UI
     /// flag "leaning on the new roster" and keeps the blend auditable.
     baseline_weight: f32,
 
@@ -704,7 +704,8 @@ fn predict_team(
         })
         .collect();
 
-    // Turnover-aware baseline weight: stable 0.45, lower for overhaul rosters.
+    // Turnover-aware baseline weight: the stable constant, lower for overhaul
+    // rosters.
     // Derived from `p` by the shared helper, identical to what the offline
     // `score_projection_adj_em` computes, so the two serving paths never diverge.
     let baseline_weight = cstat_core::roster_projection::transition_shrink_weight(p);
