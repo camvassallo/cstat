@@ -443,6 +443,48 @@ enum Commands {
         dir: std::path::PathBuf,
     },
 
+    /// Fetch official school-published rosters for a target season into
+    /// `team_roster_fetches` / `team_roster_players`. `year` is the SEASON THE
+    /// ROSTER IS FOR (2027 = the 2026-27 rosters), not the base season being
+    /// projected from — the opposite convention to `departures`/`returns`,
+    /// because this describes the upcoming roster itself.
+    ///
+    /// This is the only forward-looking roster signal cstat has: redshirts
+    /// staying put, D2/JuCo up-transfers and direct international signings
+    /// appear here and in no feed cstat ingests. It feeds `departures-audit`,
+    /// NOT the projection's scored roster — see `docs/official_rosters.md`.
+    ///
+    /// Absence is only meaningful where the fetch status is `ok`; schools
+    /// publish partial ("(Returners)") and stale rosters all summer, and both
+    /// are recorded as such rather than trusted.
+    Rosters {
+        /// Target season the rosters are FOR. Defaults to the season after the
+        /// current one — in the offseason that is the year being projected.
+        #[arg(short, long, default_value_t = default_season() + 1)]
+        year: i32,
+
+        /// Team -> athletics-site map, keyed by `teams.short_name`.
+        #[arg(long, default_value = "data/team_sites.json")]
+        sites: std::path::PathBuf,
+
+        /// Restrict to these teams (comma-separated `short_name` values).
+        #[arg(long, value_delimiter = ',')]
+        teams: Vec<String>,
+
+        /// Hosts fetched concurrently. These are separate servers, so this
+        /// bounds our own egress rather than any one site's load.
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+
+        /// Fetch and report without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Print every team's verdict, not just the non-`ok` ones.
+        #[arg(long)]
+        verbose: bool,
+    },
+
     /// Print the offseason attrition worklist: curated rows that resolve to
     /// nobody (silent no-ops from a typo'd name) in `player_departures` and in
     /// `player_returns`, then the returners the projection currently assumes
@@ -1165,6 +1207,65 @@ async fn main() -> Result<()> {
                 total,
                 reports.len()
             );
+        }
+
+        Commands::Rosters {
+            year,
+            sites,
+            teams,
+            concurrency,
+            dry_run,
+            verbose,
+        } => {
+            let site_map = cstat_ingest::rosters::load_sites(&sites)?;
+            let opts = cstat_ingest::rosters::SweepOptions {
+                season: year,
+                only: teams,
+                concurrency,
+                dry_run,
+            };
+            println!(
+                "rosters: fetching {} team(s) for the {}-{:02} season{}",
+                if opts.only.is_empty() {
+                    site_map.len()
+                } else {
+                    opts.only.len()
+                },
+                year - 1,
+                year % 100,
+                if dry_run { " (dry run)" } else { "" }
+            );
+            let report = cstat_ingest::rosters::sweep(&db.pool, &site_map, &opts).await?;
+            println!(
+                "  ok {}  partial {}  stale-season {}  unsupported {}  unreachable {}",
+                report.ok,
+                report.partial,
+                report.stale_season,
+                report.unsupported,
+                report.unreachable,
+            );
+            println!(
+                "  {} player(s), {} with a previous school (the D2/JuCo/international signal)",
+                report.players, report.with_previous_school,
+            );
+            if !report.problems.is_empty() {
+                println!();
+                println!(
+                    "NOT USABLE FOR ABSENCE ({}) — a player missing from these tells you nothing:",
+                    report.problems.len()
+                );
+                for (team, status, note) in &report.problems {
+                    println!("  {:<26} {:<13} {note}", team, status.as_str());
+                }
+            }
+            if verbose {
+                println!();
+                println!(
+                    "Run `cstat-ingest departures-audit --year {}` to see which returners the",
+                    year - 1
+                );
+                println!("official rosters no longer list.");
+            }
         }
 
         Commands::DeparturesAudit {

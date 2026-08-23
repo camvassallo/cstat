@@ -10,6 +10,7 @@ pub mod notify;
 pub mod preflight;
 pub mod projections_backtest;
 pub mod rate_limiter;
+pub mod rosters;
 pub mod run_ledger;
 pub mod simulate;
 pub mod tfs;

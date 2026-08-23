@@ -1,1 +1,386 @@
-[]
+[
+  {
+    "name": "AJ Casey",
+    "current_team": "Evansville",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://gopurpleaces.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - University of Evansville Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Aaron Price",
+    "current_team": "Cal Poly",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://gopoly.com/api/v2/Rosters?sportId=5",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Cal Poly Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Anthony McComb",
+    "current_team": "Norfolk St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://nsuspartans.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Norfolk State University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Antwone Woolfolk",
+    "current_team": "Miami OH",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://miamiredhawks.com/api/v2/Rosters?sportId=6",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Brendan Coyle",
+    "current_team": "Siena",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://sienasaints.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Siena University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Cade Pendleton",
+    "current_team": "UC San Diego",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://ucsdtritons.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - UC San Diego. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Caden Powell",
+    "current_team": "Baylor",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://baylorbears.com/api/v2/Rosters?sportId=6",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Caleb Shaw",
+    "current_team": "Grand Canyon",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://gculopes.com/api/v2/Rosters?sportId=4",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Cam'Ron Fletcher",
+    "current_team": "High Point",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://highpointpanthers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - High Point University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Chris Howell",
+    "current_team": "New Mexico",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://golobos.com/sports/mbball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 New Mexico Men's Basketball Roster - New Mexico Lobos - Official Athletics Website. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Christian Winborne",
+    "current_team": "Nicholls St.",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://geauxcolonels.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Nicholls State University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Danilo Jovanovich",
+    "current_team": "Milwaukee",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://mkepanthers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Milwaukee Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "David Mager",
+    "current_team": "Pepperdine",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://pepperdinewaves.com/api/v2/Rosters?sportId=4",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Demetrius Lilley",
+    "current_team": "Binghamton",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://bubearcats.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Binghamton University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Donovan Atwell",
+    "current_team": "Texas Tech",
+    "status": "contested",
+    "reason": "other",
+    "source": "https://texastech.com/api/v2/Rosters?sportId=5",
+    "note": "Listed on Texas Tech's published 2026-27 roster as \"5th\" (captured 2026-08-23 by `cstat-ingest rosters`). Repo owner reports he is RUMOURED eligible via one of the pending eligibility lawsuits; that claim is unconfirmed here and no court document or report has been cited, so this row is contested rather than granted. Replace `source` with the ruling or report and flip to `granted` once it settles."
+  },
+  {
+    "name": "Elijah Jamison",
+    "current_team": "Norfolk St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://nsuspartans.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Norfolk State University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Elijah Perkins",
+    "current_team": "Saint Peter's",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://saintpeterspeacocks.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Saint Peter's University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Ethan Potter",
+    "current_team": "Utah Tech",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://utahtechtrailblazers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Utah Tech University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Ethan Simmon",
+    "current_team": "Stony Brook",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://stonybrookathletics.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Stony Brook University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Evan Mahaffey",
+    "current_team": "Akron",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://gozips.com/api/v2/Rosters?sportId=4",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026 Men's Basketball Summer Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Fallou Diagne",
+    "current_team": "Southern Miss",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://southernmiss.com/api/v2/Rosters?sportId=5",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Favour Aire",
+    "current_team": "Coppin St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://coppinstatesports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Coppin State University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Jaiden Feroah",
+    "current_team": "Southern Utah",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://suutbirds.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Southern Utah University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Jalen Jackson",
+    "current_team": "Butler",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://butlersports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Butler University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Jasteven Walker",
+    "current_team": "Alabama St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://bamastatesports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Alabama State University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Jerome Brewer",
+    "current_team": "La Salle",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://goexplorers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - La Salle University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Jerrell Colbert",
+    "current_team": "McNeese St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://mcneesesports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-2027 Men's Basketball Roster - McNeese State University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Jordan Gorecki",
+    "current_team": "Texas Southern",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://tsusports.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Texas Southern University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Josh Reed",
+    "current_team": "Drexel",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://drexeldragons.com/api/v2/Rosters?sportId=2",
+    "note": "Listed on the school's published 2026-27 roster as \"Jr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Keegan Harvey",
+    "current_team": "Bryant",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://bryantbulldogs.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Bryant University. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Kheni Briggs",
+    "current_team": "New Haven",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://newhavenchargers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - University of New Haven Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Koat Keat Tong",
+    "current_team": "UC Santa Barbara",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://ucsbgauchos.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - University of California, Santa Barbara. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Kyle Jones",
+    "current_team": "Buffalo",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://ubbulls.com/api/v2/Rosters?sportId=4",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Lee Dort",
+    "current_team": "California",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://calbears.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - California Golden Bears Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Luke Jungers",
+    "current_team": "Iona",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://ionagaels.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Iona University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Marvin McGhee",
+    "current_team": "UC Santa Barbara",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://ucsbgauchos.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - University of California, Santa Barbara. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Michael Gray",
+    "current_team": "Wichita St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://goshockers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Wichita State Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Michael Zanoni",
+    "current_team": "Penn",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://pennathletics.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - University of Pennsylvania Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Mouhamed Sow",
+    "current_team": "Rhode Island",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://gorhody.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - University of Rhode Island. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Ose Okojie",
+    "current_team": "Howard",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://hubison.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Howard University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Parsa Fallah",
+    "current_team": "Oklahoma St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://okstate.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"5th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Cowboy Basketball Roster - Oklahoma State University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Peyton Law",
+    "current_team": "South Alabama",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://usajaguars.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - University of South Alabama Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Pharrel Payne",
+    "current_team": "Maryland",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://umterps.com/api/v2/Rosters?sportId=5",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Rahmir Moore",
+    "current_team": "Delaware St.",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://dsuhornets.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Delaware State University. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Samuel Ariyibi",
+    "current_team": "Utah Tech",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://utahtechtrailblazers.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"6th\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Utah Tech University Athletics. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Ven-Allen Lubin",
+    "current_team": "N.C. State",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://gopack.com/api/v2/Rosters?sportId=5",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Will Felton",
+    "current_team": "North Carolina A&T",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://ncataggies.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"R-Sr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - North Carolina A&T. Roster evidence, not a news report — upgrade the source if a report is found."
+  },
+  {
+    "name": "Zach Clemence",
+    "current_team": "Texas A&M",
+    "status": "granted",
+    "reason": "5in5",
+    "source": "https://12thman.com/sports/mens-basketball/roster",
+    "note": "Listed on the school's published 2026-27 roster as \"Gr.\". Captured 2026-08-23 by `cstat-ingest rosters` from 2026-27 Men's Basketball Roster - Texas A&M Aggies - Official Athletics Website. Roster evidence, not a news report — upgrade the source if a report is found."
+  }
+]
