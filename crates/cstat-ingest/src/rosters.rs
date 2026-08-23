@@ -40,16 +40,23 @@
 //!
 //! # Platforms
 //!
-//! Three vendors cover Division I, verified against all 364 cstat teams:
+//! Three vendors and one fallback cover Division I, verified against all 364
+//! cstat teams (301 usable, 2026-08-23):
 //!
 //! - **Sidearm nextgen** (143 teams) — an unauthenticated JSON API. Two calls:
 //!   `/api/v2/Sports` to find the men's-basketball `sportId` (it is per-site —
 //!   Duke 7, BU 3, LA Tech 5 — so it cannot be cached across schools), then
 //!   `/api/v2/Rosters?sportId={id}`.
-//! - **Sidearm legacy** (181 teams) — server-rendered HTML with stable vendor
+//! - **Sidearm legacy** (183 teams) — server-rendered HTML with stable vendor
 //!   CSS classes (`sidearm-roster-player-*`).
 //! - **WMT Digital** (~36 teams, skewed to majors — Purdue, Virginia, Oklahoma
-//!   St., New Mexico) — server-rendered HTML, label/value card DOM.
+//!   St., New Mexico) — server-rendered HTML, card and list DOMs.
+//! - **Plain roster table** (~7) — not a vendor. The WordPress-based sites
+//!   (Arkansas, Kentucky) share no markup with each other but all emit a real
+//!   `<table>` with a labelled header row, so columns are mapped by header
+//!   text. [`detect_html_platform`] falls through to this LAST, so a vendor
+//!   page is never read through it by accident — wire any new vendor ahead of
+//!   it, not after.
 
 use anyhow::{Context, Result, anyhow};
 use cstat_core::roster_projection::normalize_player_name;
@@ -78,12 +85,42 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 /// outcome, because a five-man page genuinely cannot tell you who left.
 pub const MIN_TRUSTED_ROSTER: usize = 9;
 
-/// Title fragments that mean the page is showing a *subset* by construction.
-/// Checked case-insensitively against the school's own roster title, which is
-/// the only place this intent is ever stated.
+/// Words that mean the page is showing a *subset* by construction.
+///
+/// Matched as whole words, case-insensitively, by [`title_subset_marker`] —
+/// NOT as substrings. The HTML platforms hand us the full document `<title>`,
+/// which carries the school's site branding and averages 63-78 characters
+/// ("… - Official Athletics Website"), so a bare `contains("commit")` also
+/// fires on "Commitment" and `contains("recruit")` on "Recruiting". That would
+/// demote a complete roster to [`FetchStatus::Partial`], silently drop the team
+/// out of the audit's trusted set, and give no hint why.
 const PARTIAL_TITLE_MARKERS: &[&str] = &[
-    "returner", "incoming", "newcomer", "signee", "commit", "recruit",
+    "returner",
+    "returners",
+    "incoming",
+    "newcomer",
+    "newcomers",
+    "signee",
+    "signees",
+    "commit",
+    "commits",
+    "recruit",
+    "recruits",
 ];
+
+/// The subset marker a roster title states, if any. Whole-word match so a
+/// school's marketing tagline cannot disable its own absence detection.
+fn title_subset_marker(title: &str) -> Option<&'static str> {
+    let words: Vec<String> = title
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect();
+    PARTIAL_TITLE_MARKERS
+        .iter()
+        .copied()
+        .find(|m| words.iter().any(|w| w == m))
+}
 
 /// Roster paths to try, in order, when probing an HTML platform. Sidearm and
 /// WMT both key the sport off the URL and there is no discovery endpoint, so
@@ -1004,9 +1041,17 @@ impl RosterClient {
     /// site must not abort a 364-team sweep.
     pub async fn fetch_team(&self, team: &str, site: &TeamSite, target: i32) -> TeamRosterFetch {
         let host = site.host.trim();
+        // Every platform that is NOT the JSON API. Listing them positively
+        // rather than negating the one nextgen value is deliberate: when a new
+        // HTML platform is added, forgetting it here silently reverts its teams
+        // to probing `/api/v2/Sports` first, which 404s, wastes a request, and
+        // prepends that 404 to the note on a fetch that then succeeds.
         let prefer_html = matches!(
             site.platform.as_deref(),
-            Some(PLATFORM_SIDEARM_LEGACY) | Some(PLATFORM_WMT)
+            Some(PLATFORM_SIDEARM_LEGACY)
+                | Some(PLATFORM_WMT)
+                | Some(PLATFORM_WMT_TABLE)
+                | Some(PLATFORM_ROSTER_TABLE)
         );
         let mut notes: Vec<String> = Vec::new();
 
@@ -1100,8 +1145,7 @@ fn finish(
         Ok(None) => {}
     }
 
-    let lower = title.unwrap_or_default().to_lowercase();
-    let marker = PARTIAL_TITLE_MARKERS.iter().find(|m| lower.contains(**m));
+    let marker = title_subset_marker(&title.unwrap_or_default());
     let status = if let Some(m) = marker {
         notes.push(format!(
             "roster title says {m:?} — this page is a subset by design"
@@ -1241,6 +1285,9 @@ pub struct SweepReport {
     pub with_previous_school: usize,
     /// Teams whose verdict is not `ok`, with the reason, for the CLI summary.
     pub problems: Vec<(String, FetchStatus, String)>,
+    /// Every team's verdict, for `--verbose`. Kept separate from `problems`
+    /// so the default summary stays short.
+    pub verdicts: Vec<(String, FetchStatus, usize)>,
 }
 
 impl SweepReport {
@@ -1258,6 +1305,8 @@ impl SweepReport {
             .iter()
             .filter(|p| p.previous_school.is_some())
             .count();
+        self.verdicts
+            .push((f.team_short_name.clone(), f.status, f.players.len()));
         if f.status != FetchStatus::Ok {
             self.problems.push((
                 f.team_short_name.clone(),
@@ -1268,9 +1317,35 @@ impl SweepReport {
     }
 }
 
+/// Reject a `--teams` name that matches no site-map key.
+///
+/// An unmatched name is an error, not a skip. Filtering alone would fetch the
+/// names that did match, exit 0, and leave the operator believing the typo'd
+/// one refreshed too — the same silent no-op `departures-audit` exists to catch
+/// in the curated captures. Called by the CLI *before* it prints the run header
+/// so the header can't claim a count it is about to fail, and again by
+/// [`sweep`] so a non-CLI caller gets the same guarantee.
+pub fn validate_teams(sites: &TeamSites, only: &[String]) -> Result<()> {
+    let unknown: Vec<&str> = only
+        .iter()
+        .filter(|t| !sites.contains_key(*t))
+        .map(String::as_str)
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "--teams named {} team(s) that are not in the site map: {}. \
+         Keys are `teams.short_name` exactly (e.g. \"Miami FL\", \"N.C. State\").",
+        unknown.len(),
+        unknown.join(", ")
+    ))
+}
+
 /// Fetch every mapped team's roster for `opts.season` and persist the results.
 pub async fn sweep(pool: &PgPool, sites: &TeamSites, opts: &SweepOptions) -> Result<SweepReport> {
     let client = std::sync::Arc::new(RosterClient::new()?);
+    validate_teams(sites, &opts.only)?;
     let targets: Vec<(String, TeamSite)> = sites
         .iter()
         .filter(|(team, _)| opts.only.is_empty() || opts.only.iter().any(|t| t == *team))
@@ -1299,6 +1374,7 @@ pub async fn sweep(pool: &PgPool, sites: &TeamSites, opts: &SweepOptions) -> Res
         }
     }
     report.problems.sort();
+    report.verdicts.sort();
     Ok(report)
 }
 
@@ -1594,6 +1670,32 @@ mod tests {
                 ..Default::default()
             })
             .collect()
+    }
+
+    #[test]
+    fn subset_markers_match_whole_words_not_substrings() {
+        // The HTML platforms hand over the full document title, branding and
+        // all. "Recruiting" must not read as "recruit", or a complete roster is
+        // demoted to Partial and the team silently leaves the audit's trusted
+        // set.
+        assert_eq!(
+            title_subset_marker("2026-27 Men's Basketball Roster - Recruiting Questionnaire"),
+            None
+        );
+        assert_eq!(
+            title_subset_marker("Men's Basketball Roster - Commitment to Excellence"),
+            None
+        );
+        // The real thing still trips it, with or without the parentheses.
+        assert_eq!(
+            title_subset_marker("2026-27 Men's Basketball Roster (Returners)"),
+            Some("returners")
+        );
+        assert_eq!(
+            title_subset_marker("2026-27 Incoming Class"),
+            Some("incoming")
+        );
+        assert_eq!(title_subset_marker("2026-27 Men's Basketball Roster"), None);
     }
 
     #[test]

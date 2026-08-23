@@ -13,6 +13,13 @@ fn default_season() -> i32 {
     current_natstat_season()
 }
 
+/// CLI default for `rosters --year`. The rule and the trap it avoids live in
+/// [`cstat_ingest::roster_season_for_date`], beside the other calendar rules —
+/// it is deliberately NOT `default_season() + 1`.
+fn default_roster_season() -> i32 {
+    cstat_ingest::roster_season_for_date(cstat_ingest::today_utc())
+}
+
 /// Default `nightly` window: yesterday..today (UTC). Run at ~04:30 ET this
 /// covers the prior night's games plus any corrections from NatStat's overnight
 /// re-tabulation. Returns `(from, to)` as `YYYY-MM-DD`.
@@ -458,9 +465,9 @@ enum Commands {
     /// publish partial ("(Returners)") and stale rosters all summer, and both
     /// are recorded as such rather than trusted.
     Rosters {
-        /// Target season the rosters are FOR. Defaults to the season after the
-        /// current one — in the offseason that is the year being projected.
-        #[arg(short, long, default_value_t = default_season() + 1)]
+        /// Target season the rosters are FOR. Defaults to the season whose
+        /// rosters schools are publishing right now.
+        #[arg(short, long, default_value_t = default_roster_season())]
         year: i32,
 
         /// Team -> athletics-site map, keyed by `teams.short_name`.
@@ -1218,6 +1225,8 @@ async fn main() -> Result<()> {
             verbose,
         } => {
             let site_map = cstat_ingest::rosters::load_sites(&sites)?;
+            // Before the header, so it can't announce a count it is about to reject.
+            cstat_ingest::rosters::validate_teams(&site_map, &teams)?;
             let opts = cstat_ingest::rosters::SweepOptions {
                 season: year,
                 only: teams,
@@ -1260,12 +1269,17 @@ async fn main() -> Result<()> {
             }
             if verbose {
                 println!();
-                println!(
-                    "Run `cstat-ingest departures-audit --year {}` to see which returners the",
-                    year - 1
-                );
-                println!("official rosters no longer list.");
+                println!("ALL VERDICTS ({}):", report.verdicts.len());
+                for (team, status, n) in &report.verdicts {
+                    println!("  {:<26} {:<13} {n:>3} player(s)", team, status.as_str());
+                }
             }
+            println!();
+            println!(
+                "Run `cstat-ingest departures-audit --year {}` to see which returners the",
+                year - 1
+            );
+            println!("official rosters no longer list.");
         }
 
         Commands::DeparturesAudit {

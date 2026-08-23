@@ -190,6 +190,15 @@ cargo run --bin cstat-ingest -- rosters --year 2027 --teams Gonzaga --dry-run
 `--year` is the season the roster is **for** (2027 = the 2026-27 rosters) — the
 opposite convention to `departures` / `returns`, which take the base season.
 
+Its default is `cstat_ingest::roster_season_for_date`, deliberately **not**
+`current_natstat_season() + 1`. That `+ 1` is right only in the offseason:
+`current_natstat_season` rolls forward on 1 November, so from December a bare
+`+ 1` asks every site for 2027-28 while all of them still serve 2026-27, and the
+season gate correctly rejects all 364 as stale — a sweep that refreshes nothing
+and reads like a mass outage. Re-running in December to pick up the schools that
+had not posted in August is the main reason to run it at all, so that default
+had to be right.
+
 The team → athletics-host map is `data/team_sites.json`, keyed by
 `teams.short_name`. It was generated from the NCAA's public member directory
 (`web3.ncaa.org/directory/api/directory/memberList?type=12&division=I`, whose

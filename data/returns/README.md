@@ -85,3 +85,30 @@ An empty array means "no curated returns for this season", which is the correct
 starting point. It is not the same as the file being missing — the loader errors
 on a missing directory on purpose, because silently writing nothing is the
 failure this capture exists to prevent.
+
+## The class-of-2022 litigation (2026-27)
+
+Most of the `2026_returns.json` rows are `contested` rather than `granted`, and
+the reason is a single live case rather than 23 separate judgement calls.
+
+On **2026-07-31** Judge Charlotte Sweeney (D. Colo.) granted a class-wide
+injunction letting every Division I athlete from the 2022 freshman class who had
+exhausted four years seek a fifth in 2026-27. On **2026-08-21** the Tenth
+Circuit **stayed** that injunction pending appeal, which returns the NCAA to the
+status quo and makes that whole cohort temporarily ineligible for weeks to
+months.
+
+So a player who entered in 2022-23, has four D-I seasons on record, and appears
+on his school's published 2026-27 roster is genuinely unresolved — which is what
+`contested` is for. It puts him in the ceiling and out of the floor, so the
+team's band spans both outcomes instead of asserting one.
+
+Membership is read off cstat's own season history (first D-I season 2023 plus
+four seasons played), not asserted per player. Two caveats: a JuCo transfer who
+used two non-D-I years first can look identical, and players holding their own
+**state-court** injunctions were carved out of the Tenth Circuit stay — Donovan
+Atwell is a named plaintiff in the North Carolina suit, so his individual
+outcome may diverge from the cohort's.
+
+**Revisit when the Tenth Circuit rules.** A win flips the cohort to `granted`;
+a loss makes them departures and the rows should be deleted, not flipped.
