@@ -1119,6 +1119,15 @@ fn assign_by_label(p: &mut RosterPlayer, label: &str, v: String) {
 /// is only the first field, and inventing a previous school from it would
 /// manufacture exactly the transfer signal this ingest measures.
 fn split_origin(v: &str, n: usize) -> Vec<Option<String>> {
+    // A header naming ONE field takes the whole cell. Splitting anyway
+    // truncates a transfer chain at its first slash — "Emory & Henry/Seton
+    // Hall" becomes "Emory & Henry", "Meridian CC/Miss. Valley St." loses the
+    // destination. 244 players across the other platforms carry such chains in
+    // exactly this field, and the table path was silently the only one that
+    // could not.
+    if n <= 1 {
+        return vec![clean(v)];
+    }
     let parts: Vec<&str> = if v.contains("||") {
         v.split("||").collect()
     } else {
@@ -2123,6 +2132,26 @@ mod tests {
         let rows = parse_roster_table(html);
         assert_eq!(rows[0].height_inches, Some(74));
         assert_eq!(rows[0].weight_lbs, Some(165));
+    }
+
+    #[test]
+    fn a_discrete_previous_school_column_keeps_the_whole_transfer_chain() {
+        // Splitting a single-field cell truncates the chain at its first slash
+        // and drops every school after the first — which is most of the
+        // information in a multi-stop transfer.
+        let html = r#"
+          <table><thead><tr>
+            <th>Name</th><th>Hometown</th><th>Previous School</th>
+          </tr></thead><tbody>
+            <tr><td>Mike James</td><td>Meridian, Miss.</td>
+                <td>Meridian CC/Miss. Valley St.</td></tr>
+          </tbody></table>"#;
+        let rows = parse_roster_table(html);
+        assert_eq!(
+            rows[0].previous_school.as_deref(),
+            Some("Meridian CC/Miss. Valley St.")
+        );
+        assert_eq!(rows[0].hometown.as_deref(), Some("Meridian, Miss."));
     }
 
     #[test]
