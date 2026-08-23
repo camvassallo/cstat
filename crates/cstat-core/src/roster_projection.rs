@@ -1959,6 +1959,20 @@ const STABLE_RETAINED_FULL: f32 = 0.40;
 /// roster a full overhaul. Magnitude separates the two cases without a guard:
 /// Central Arkansas reads 0.72 retained, Cincinnati 0.02.
 ///
+/// **The uncertain cohort is in neither half.** Declared-but-undecided draft
+/// entrants (and contested 5-in-5 seniors) are not in `returning` and not in
+/// the departure sums, so this reads "of the players whose status is
+/// resolved, how much is coming back". Defensible — they genuinely are
+/// unknown, and the floor/ceiling band is where their uncertainty is already
+/// represented — but it is a real asymmetry against the scoring path, which
+/// blends a ceiling roster that has them all back. It also falls hardest on
+/// elite teams, who are the ones with declarees: across the 2019–2026
+/// backtest, retention correlates −0.42 with baseline AdjEM, and the top
+/// baseline decile reads below the 0.40 overhaul line 49% of the time. The
+/// effect on the served weight is small (that decile averages w = 0.27
+/// against a 0.30 cap) and untested; see the follow-up issue before treating
+/// it as settled either way (#324).
+///
 /// `None` only when the team has no measurable prior talent on the books at
 /// all (e.g. a brand-new D-I program) — caller treats that as stable, since
 /// the stale-baseline problem doesn't apply without a baseline roster.

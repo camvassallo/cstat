@@ -26,10 +26,11 @@ Two transition signals, joined to the 11-season backtest dump:
                  cohort the serving code cannot reproduce is the failure this
                  field closes.
 
-For each cohort we report standalone baseline/talent MAE, the served MAE +
-signed bias, and the IN-SAMPLE optimal weight on baseline. Then an honest
-leave-one-season-out test: does a cohort-conditional weight (fit on the other
-years) beat the flat 0.5 out-of-sample?
+For each cohort we report the standalone baseline/talent MAE, a flat-0.5
+reference, the MAE and signed bias of the ramp that is ACTUALLY SERVED, and the
+cohort's own IN-SAMPLE optimal flat weight. Then an honest leave-one-season-out
+test: does a cohort-conditional weight (fit on the other years) beat the flat
+0.5 out-of-sample?
 
 Run:  ./.venv/bin/python transition_blend_diagnostic.py --dump eval_history/<dump>.json
 
@@ -84,6 +85,12 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
     for pre-#322 dumps.
     """
     bt = load_backtest(dump)
+    # Prefer the served ex-ante fraction the dump carries; fall back to the
+    # hindsight proxy for older dumps. Decided per-dump, not per-row, so a
+    # single run never mixes two different definitions of "overhaul".
+    ex_ante = any("retained" in r for r in bt)
+    source = "ex-ante (dump `retained`)" if ex_ante else "hindsight (torvik_pid proxy)"
+
     tid2ns = {r.id: r.natstat_id
               for r in conn.execute(text("SELECT id::text AS id, natstat_id FROM teams"))}
 
@@ -93,8 +100,10 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
 
     # Per (program, season): {torvik_pid: cam_v3} for qualifying players, to
     # measure season-over-season talent retention by the stable torvik_pid key.
+    # Only for the fallback path — this scans every qualifying player-season in
+    # the DB, and an ex-ante dump answers the same question without it.
     roster: dict[tuple, dict] = defaultdict(dict)
-    for r in conn.execute(text(
+    for r in ([] if ex_ante else conn.execute(text(
         f"""SELECT t.natstat_id AS ns, pss.season AS season,
                    tps.torvik_pid AS tpid,
                    COALESCE(tps.cam_gbpm_v3_psos, 0) AS cam
@@ -103,7 +112,7 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
             LEFT JOIN torvik_player_stats tps
               ON tps.player_id = pss.player_id AND tps.season = pss.season
             WHERE COALESCE(pss.minutes_per_game,0) >= {MIN_QUAL}
-              AND COALESCE(pss.games_played,0) >= {MIN_QUAL}""")):
+              AND COALESCE(pss.games_played,0) >= {MIN_QUAL}"""))):
         if r.tpid is not None:
             roster[(r.ns, r.season)][r.tpid] = float(r.cam)
 
@@ -115,12 +124,6 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
             return None
         kept = sum(abs(v) for pid, v in base.items() if pid in tgt)
         return kept / tot
-
-    # Prefer the served ex-ante fraction the dump carries; fall back to the
-    # hindsight proxy for older dumps. Decided per-dump, not per-row, so a
-    # single run never mixes two different definitions of "overhaul".
-    ex_ante = any("retained" in r for r in bt)
-    source = "ex-ante (dump `retained`)" if ex_ante else "hindsight (torvik_pid proxy)"
 
     rows, weight_mismatch = [], 0
     for r in bt:
@@ -189,13 +192,23 @@ def bias(rows, w):
 
 
 def report_cohort(name, rows):
+    """One cohort's line: the two endpoints (all-baseline / all-roster), the
+    flat 0.5 reference, **what this cohort actually gets served**, and its own
+    in-sample optimal flat weight.
+
+    The served-ramp column is the one to read when deciding whether a constant
+    needs moving — a cohort whose served MAE sits well above its own optimum is
+    a cohort the ramp is mis-weighting, and its signed bias says which way.
+    Before #322 this line only carried the flat 0.5, which has not been what we
+    serve since the ramp shipped."""
     if not rows:
         print(f"  {name:22s} n=0")
         return
     w, m = best_weight(rows)
     print(f"  {name:22s} n={len(rows):4d}  "
           f"base-only {mae(rows,1.0):5.3f}  talent-only {mae(rows,0.0):5.3f}  "
-          f"served(.5) {mae(rows,0.5):5.3f} (bias {bias(rows,0.5):+5.2f})  "
+          f"flat(.5) {mae(rows,0.5):5.3f}  "
+          f"SERVED {ramp_mae(rows):5.3f} (bias {ramp_bias(rows):+5.2f})  "
           f"→ best w={w:.2f} MAE {m:5.3f}")
 
 
