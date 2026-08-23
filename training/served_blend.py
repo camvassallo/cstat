@@ -22,21 +22,30 @@ from __future__ import annotations
 # --- mirrored from crates/cstat-core/src/roster_projection.rs ---------------
 W_STABLE = 0.70                  # PROJECTION_SHRINK_WEIGHT
 W_OVERHAUL = 0.55                # PROJECTION_SHRINK_WEIGHT_OVERHAUL
+# A roster with no program level is anchored on a raw one-season baseline, so
+# it keeps the pre-#325 pair — the anchored 0.70 was earned BY the anchor.
+W_STABLE_UNANCHORED = 0.30       # PROJECTION_SHRINK_WEIGHT_UNANCHORED
+W_OVERHAUL_UNANCHORED = 0.20     # PROJECTION_SHRINK_WEIGHT_UNANCHORED_OVERHAUL
 RETAINED_FULL_OVERHAUL = 0.20    # OVERHAUL_RETAINED_FULL
 RETAINED_FULL_STABLE = 0.40      # STABLE_RETAINED_FULL
 PROGRAM_ANCHOR_SHRINK = 1.0      # PROGRAM_ANCHOR_SHRINK
 OFFSET = 0.0                     # PROJECTION_OFFSET
 
 
-def served_weight(retained: float | None) -> float:
-    """Baseline weight the ramp gives a roster with this retained-talent fraction."""
+def served_weight(retained: float | None, anchored: bool = True) -> float:
+    """Baseline weight the ramp gives a roster with this retained-talent
+    fraction. `anchored` is whether the roster has a program level — without
+    one the blend is anchored on a raw one-season baseline and keeps the
+    pre-#325 pair."""
+    stable = W_STABLE if anchored else W_STABLE_UNANCHORED
+    overhaul = W_OVERHAUL if anchored else W_OVERHAUL_UNANCHORED
     if retained is None or retained >= RETAINED_FULL_STABLE:
-        return W_STABLE
+        return stable
     if retained <= RETAINED_FULL_OVERHAUL:
-        return W_OVERHAUL
+        return overhaul
     t = ((retained - RETAINED_FULL_OVERHAUL)
          / (RETAINED_FULL_STABLE - RETAINED_FULL_OVERHAUL))
-    return W_OVERHAUL + t * (W_STABLE - W_OVERHAUL)
+    return overhaul + t * (stable - overhaul)
 
 
 def program_anchor(baseline: float, program_level: float | None,
@@ -63,7 +72,8 @@ def blend(row: dict, w: float) -> float:
 
 def served_prediction(row: dict) -> float:
     """What the serving path would produce for this backtest-dump row."""
-    return blend(row, served_weight(row.get("retained")))
+    return blend(row, served_weight(row.get("retained"),
+                                    row.get("program_level") is not None))
 
 
 def unverified_rows(rows: list[dict], tol: float = 1e-4) -> int:
@@ -89,6 +99,7 @@ def unverified_rows(rows: list[dict], tol: float = 1e-4) -> int:
         if served is None:
             n += 1
             continue
-        if abs(float(served) - served_weight(r.get("retained"))) > tol:
+        if abs(float(served) - served_weight(
+                r.get("retained"), r.get("program_level") is not None)) > tol:
             n += 1
     return n

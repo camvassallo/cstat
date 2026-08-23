@@ -1991,6 +1991,25 @@ pub const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 /// with the ramp). Do not cite it as a large accuracy win.
 pub const PROJECTION_SHRINK_WEIGHT_OVERHAUL: f32 = 0.55;
 
+/// Weights for a roster with **no program level** — [`program_anchor`] cannot
+/// run, so the blend is anchored on a raw one-season baseline exactly as it
+/// was before #325, and it gets the pair that was fitted for that.
+///
+/// Serving these teams at the anchored 0.70/0.55 would be a straightforward
+/// regression: 0.70 was *earned by* the anchor, and on the 682 corpus rows
+/// with no program level their own optimal flat weight is **0.30** — the
+/// pre-#325 constant, to the grid step — costing **+0.204 MAE** if they are
+/// served at 0.70 instead.
+///
+/// This is not a rare edge case worth waving through. It covers every team in
+/// targets 2016–2017 (their 3-season window predates ingested data entirely),
+/// plus new and reclassifying D-I programs in every later season — including
+/// the live board, where a raw one-season baseline is at its least reliable
+/// and a 0.70 weight on it would be the worst possible combination.
+pub const PROJECTION_SHRINK_WEIGHT_UNANCHORED: f32 = 0.30;
+/// Overhaul-end weight for the same un-anchored regime (the pre-#325 pair).
+pub const PROJECTION_SHRINK_WEIGHT_UNANCHORED_OVERHAUL: f32 = 0.20;
+
 /// Retained-talent fraction at/below which the overhaul weight applies in full.
 const OVERHAUL_RETAINED_FULL: f32 = 0.20;
 /// Retained-talent fraction at/above which the stable weight applies in full;
@@ -2140,18 +2159,28 @@ pub fn program_anchor(
 /// [`OVERHAUL_RETAINED_FULL`] (see [`retained_talent_fraction`]). Teams with no
 /// measurable turnover get the stable weight unchanged.
 pub fn transition_shrink_weight(p: &ProjectedRoster) -> f32 {
+    // Which regime? A roster with no program level is anchored on a raw
+    // one-season baseline (see PROJECTION_SHRINK_WEIGHT_UNANCHORED), and the
+    // anchored weights would be actively wrong for it.
+    let (stable, overhaul) = if p.program_level.is_some() {
+        (PROJECTION_SHRINK_WEIGHT, PROJECTION_SHRINK_WEIGHT_OVERHAUL)
+    } else {
+        (
+            PROJECTION_SHRINK_WEIGHT_UNANCHORED,
+            PROJECTION_SHRINK_WEIGHT_UNANCHORED_OVERHAUL,
+        )
+    };
     let Some(retained) = retained_talent_fraction(p) else {
-        return PROJECTION_SHRINK_WEIGHT;
+        return stable;
     };
     if retained >= STABLE_RETAINED_FULL {
-        PROJECTION_SHRINK_WEIGHT
+        stable
     } else if retained <= OVERHAUL_RETAINED_FULL {
-        PROJECTION_SHRINK_WEIGHT_OVERHAUL
+        overhaul
     } else {
         let t =
             (retained - OVERHAUL_RETAINED_FULL) / (STABLE_RETAINED_FULL - OVERHAUL_RETAINED_FULL);
-        PROJECTION_SHRINK_WEIGHT_OVERHAUL
-            + t * (PROJECTION_SHRINK_WEIGHT - PROJECTION_SHRINK_WEIGHT_OVERHAUL)
+        overhaul + t * (stable - overhaul)
     }
 }
 
@@ -2306,8 +2335,11 @@ mod tests {
             inbound_cam_v3_sum: 0.0,
             departures_cam_v3_sum,
             departures_abs_cam_v3_sum: departures_cam_v3_sum.abs(),
-            program_level: None,
-            program_level_o: None,
+            // The COMMON case: a program with enough history to anchor on, so
+            // ramp tests exercise the served (anchored) weights. Tests about
+            // the un-anchored regime set this back to `None` explicitly.
+            program_level: Some(0.0),
+            program_level_o: Some(0.0),
         }
     }
 
@@ -2384,6 +2416,45 @@ mod tests {
         assert!(retained_talent_fraction(&bad_but_intact).unwrap() > 0.40);
         assert!(
             (transition_shrink_weight(&bad_but_intact) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6
+        );
+    }
+
+    /// A roster with no program level falls back to the pre-#325 weights —
+    /// the anchored 0.70 was earned by the anchor and is a regression without
+    /// it (+0.204 MAE on the 682 corpus rows in that state).
+    #[test]
+    fn unanchored_rosters_keep_the_pre_anchor_weights() {
+        let anchored = roster_with(&[12.0, 12.0], 6.0);
+        assert!(
+            (transition_shrink_weight(&anchored) - PROJECTION_SHRINK_WEIGHT).abs() < 1e-6,
+            "a roster WITH a program level gets the anchored weight"
+        );
+
+        let mut unanchored = roster_with(&[12.0, 12.0], 6.0);
+        unanchored.program_level = None;
+        assert!(
+            (transition_shrink_weight(&unanchored) - PROJECTION_SHRINK_WEIGHT_UNANCHORED).abs()
+                < 1e-6,
+            "a roster with no program level must not inherit the anchored weight"
+        );
+
+        // The ramp still applies inside the un-anchored regime, between the
+        // pre-#325 pair rather than the anchored one.
+        let mut overhaul = roster_with(&[4.0], 20.0);
+        overhaul.program_level = None;
+        assert!(
+            (transition_shrink_weight(&overhaul) - PROJECTION_SHRINK_WEIGHT_UNANCHORED_OVERHAUL)
+                .abs()
+                < 1e-6
+        );
+
+        // And a team with no measurable turnover AND no level still lands on
+        // the un-anchored stable weight, not the anchored one.
+        let mut empty = roster_with(&[], 0.0);
+        empty.program_level = None;
+        assert!(retained_talent_fraction(&empty).is_none());
+        assert!(
+            (transition_shrink_weight(&empty) - PROJECTION_SHRINK_WEIGHT_UNANCHORED).abs() < 1e-6
         );
     }
 

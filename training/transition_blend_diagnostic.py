@@ -158,7 +158,7 @@ def mae(rows, w):
 
 def ramp_pred(r):
     """Prediction under the SERVED transition ramp (not a flat weight)."""
-    return blend(r, served_weight(r["returning"]))
+    return blend(r, served_weight(r["returning"], r.get("program_level") is not None))
 
 
 def ramp_mae(rows):
