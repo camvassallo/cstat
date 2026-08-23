@@ -56,7 +56,7 @@ from served_blend import (
     W_OVERHAUL,
     W_STABLE,
     blend,
-    mirror_mismatches,
+    unverified_rows,
     served_weight,
 )
 
@@ -67,7 +67,7 @@ MIN_QUAL = 5                # player qualifying gate (mirror the roster model)
 # The served blend lives in `served_blend` — one mirror of
 # `roster_projection.rs` for every Python consumer, so a retune touches one
 # file instead of however many diagnostics happen to reconstruct the formula.
-# `mirror_mismatches` is what catches that mirror drifting from the Rust.
+# `unverified_rows` is what catches that mirror drifting from the Rust.
 
 
 def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
@@ -142,10 +142,10 @@ def load_rows(conn, dump: Path | None = None) -> tuple[list[dict], str]:
     # The dump records the weight the Rust actually derived, so a drift between
     # `served_blend`'s mirror and the served constants surfaces here — before it
     # is baked into a retuned constant.
-    stale = mirror_mismatches(bt)
+    stale = unverified_rows(bt)
     if stale:
-        print(f"  ** WARNING: {stale} rows where `served_blend`'s mirrored constants "
-              f"disagree with the dump's served `baseline_weight`. Either the mirror is "
+        print(f"  ** WARNING: {stale} rows this mirror could not be confirmed "
+              f"against (drifted or missing `baseline_weight`). Either the mirror is "
               f"stale against roster_projection.rs or this dump predates the current "
               f"blend — fix that before reading anything below.")
     return rows, source

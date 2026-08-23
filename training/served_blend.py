@@ -12,9 +12,9 @@ that has not existed since June".
 Consumers should call `served_prediction(row)` on a backtest-dump row rather
 than assembling the blend themselves. Rows from dumps written before #322/#325
 lack `retained` / `program_level`; both degrade to the older behaviour rather
-than crashing, and `mirror_mismatches` reports rows where these constants
-disagree with the `baseline_weight` the Rust actually used — which is the
-signal that this file is stale, not that the data is wrong.
+than crashing, and `unverified_rows` reports rows this mirror cannot be confirmed
+against — the signal that this file is stale against the Rust, or that the
+dump predates the blend it describes.
 """
 
 from __future__ import annotations
@@ -66,15 +66,28 @@ def served_prediction(row: dict) -> float:
     return blend(row, served_weight(row.get("retained")))
 
 
-def mirror_mismatches(rows: list[dict], tol: float = 1e-4) -> int:
-    """Rows where `served_weight` disagrees with the dump's own
-    `baseline_weight`. Non-zero means these constants have drifted from
-    roster_projection.rs (or the dump predates them) — anything computed off
-    this module is then untrustworthy, so callers should say so loudly."""
+def unverified_rows(rows: list[dict], tol: float = 1e-4) -> int:
+    """Rows this mirror could **not be confirmed against**.
+
+    Counts two things deliberately, because both mean the same thing to a
+    caller — the numbers below are not the served projection:
+
+    1. rows whose dumped `baseline_weight` disagrees with `served_weight`
+       (the mirror has drifted from roster_projection.rs), and
+    2. rows carrying no `baseline_weight` at all (a dump written before #322,
+       so there is nothing to check and the older served formula applied).
+
+    Counting only (1) is a trap, and the first version of this function fell
+    into it: a pre-#322 dump has none of these fields, scored 0 mismatches,
+    and reported "verified" having checked nothing — while `load_backtest`
+    picks its default dump by FILENAME, which is exactly how a superseded one
+    gets selected in the first place. A guard that says all-clear when it
+    cannot check anything is worse than no guard."""
     n = 0
     for r in rows:
         served = r.get("baseline_weight")
         if served is None:
+            n += 1
             continue
         if abs(float(served) - served_weight(r.get("retained"))) > tol:
             n += 1

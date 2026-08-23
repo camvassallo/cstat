@@ -44,7 +44,7 @@ from sqlalchemy import text
 from cae_feasibility import mean, variance_components
 from compute_cae import EVAL_DIR, load_backtest
 from db import get_engine
-from served_blend import OFFSET, W_STABLE, mirror_mismatches, served_prediction
+from served_blend import OFFSET, W_STABLE, served_prediction, unverified_rows
 
 # Kept for the summary artifact's provenance field. The blend itself comes from
 # `served_blend`, which mirrors roster_projection.rs — this script hardcoded
@@ -61,12 +61,12 @@ def attach_program_key(bt: list[dict], conn) -> list[dict]:
         r.id: r.natstat_id
         for r in conn.execute(text("SELECT id::text AS id, natstat_id FROM teams"))
     }
-    stale = mirror_mismatches(bt)
+    stale = unverified_rows(bt)
     if stale:
-        print(f"  ** WARNING: {stale} rows where `served_blend`'s mirrored constants "
-              f"disagree with the dump's own `baseline_weight`. Either this dump "
+        print(f"  ** WARNING: {stale} of {len(bt)} rows could not be confirmed against "
+              f"`served_blend` (drifted or missing `baseline_weight`). Either this dump "
               f"predates the current served blend or the mirror is stale against "
-              f"roster_projection.rs — the `served` column below is not what anyone "
+              f"roster_projection.rs — the `served` column below is then not what anyone "
               f"is served, which is the exact defect this comparison exists to avoid.")
     rows, dropped = [], 0
     for r in bt:
@@ -235,7 +235,8 @@ def main() -> None:
 
     summary = {
         "generated_at": dt.datetime.utcnow().isoformat() + "Z",
-        "base": args.base, "shrink_weight": SHRINK_WEIGHT, "offset": OFFSET,
+        "base": args.base, "blend": "served_blend: turnover ramp + program anchor",
+        "shrink_weight_stable": SHRINK_WEIGHT, "offset": OFFSET,
         "start_year": args.start_year, "targets": ev["targets"],
         "overall_served_or_chosen": s, "reference_roster_proj": ref,
         "per_year": ev["per_year"], "floor": floor, "helps": helps, "verdict": verdict,
