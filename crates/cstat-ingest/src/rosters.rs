@@ -309,6 +309,18 @@ pub fn parse_title_season(title: &str) -> TitleSeason {
     bare.map_or(TitleSeason::Unknown, TitleSeason::Bare)
 }
 
+/// How well a page's own title supports the season it is being read as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeasonEvidence {
+    /// The title states the target season as an unambiguous span.
+    Confirmed,
+    /// The title names a bare year consistent with the target. Real evidence,
+    /// but it could denote either end of the span.
+    Inferred(String),
+    /// The title says nothing about any season. No evidence at all.
+    Absent,
+}
+
 /// Does a page claiming `claimed` describe the roster for cstat season
 /// `target`? Returns `Err(reason)` when it demonstrably does not.
 ///
@@ -321,15 +333,20 @@ pub fn parse_title_season(title: &str) -> TitleSeason {
 /// JSON API is gated on its structured `season.title` instead of this — and the
 /// verbatim title is stored on every row so the case is auditable rather than
 /// invisible.
-pub fn season_gate(claimed: TitleSeason, target: i32) -> Result<Option<String>, String> {
+///
+/// [`SeasonEvidence::Absent`] is NOT treated as acceptance. Four schools
+/// publish a roster titled only "Roster | Arkansas Razorbacks", and granting
+/// those the same standing as a page that names its season would hand the
+/// strongest verdict to the pages we know least about — see [`finish`].
+pub fn season_gate(claimed: TitleSeason, target: i32) -> Result<SeasonEvidence, String> {
     match claimed {
-        TitleSeason::Span(y) if y == target => Ok(None),
+        TitleSeason::Span(y) if y == target => Ok(SeasonEvidence::Confirmed),
         TitleSeason::Span(y) => Err(format!("page serves the {} season, not {target}", span(y))),
-        TitleSeason::Bare(y) if y == target || y == target - 1 => Ok(Some(format!(
-            "season inferred from a bare year ({y}) rather than a span"
-        ))),
+        TitleSeason::Bare(y) if y == target || y == target - 1 => Ok(SeasonEvidence::Inferred(
+            format!("season inferred from a bare year ({y}) rather than a span"),
+        )),
         TitleSeason::Bare(y) => Err(format!("page serves {y}, not {target}")),
-        TitleSeason::Unknown => Ok(Some("roster title carries no season".to_string())),
+        TitleSeason::Unknown => Ok(SeasonEvidence::Absent),
     }
 }
 
@@ -1133,6 +1150,7 @@ fn finish(
         players: Vec::new(),
         note: None,
     };
+    let mut season_unconfirmed = false;
     match season_gate(claimed, target) {
         Err(why) => {
             return TeamRosterFetch {
@@ -1141,8 +1159,16 @@ fn finish(
                 ..base
             };
         }
-        Ok(Some(caveat)) => notes.push(caveat),
-        Ok(None) => {}
+        Ok(SeasonEvidence::Inferred(caveat)) => notes.push(caveat),
+        Ok(SeasonEvidence::Absent) => {
+            season_unconfirmed = true;
+            notes.push(
+                "roster title names no season, so this page cannot be confirmed as the \
+                 target one — players kept, absence not trusted"
+                    .to_string(),
+            );
+        }
+        Ok(SeasonEvidence::Confirmed) => {}
     }
 
     let marker = title_subset_marker(&title.unwrap_or_default());
@@ -1156,6 +1182,12 @@ fn finish(
             "only {} player(s), below the {MIN_TRUSTED_ROSTER} needed to trust an absence",
             players.len()
         ));
+        FetchStatus::Partial
+    } else if season_unconfirmed {
+        // `Ok` means "a full roster FOR THE REQUESTED SEASON", and that is
+        // exactly the half we cannot assert here. Absence is the only thing
+        // withheld: the players are still stored and still true, so the
+        // eligibility section — which reads presence — is unaffected.
         FetchStatus::Partial
     } else {
         FetchStatus::Ok
@@ -1427,26 +1459,32 @@ mod tests {
         // The Campbell/Navy failure: still serving 2025-26 in late August.
         // This must be an error, not a small-roster warning.
         assert!(season_gate(TitleSeason::Span(2026), 2027).is_err());
-        assert!(season_gate(TitleSeason::Span(2027), 2027).is_ok());
+        assert_eq!(
+            season_gate(TitleSeason::Span(2027), 2027),
+            Ok(SeasonEvidence::Confirmed)
+        );
     }
 
     #[test]
     fn a_bare_year_is_accepted_for_either_end_of_the_span_but_flagged() {
         // Lipscomb titles the 2026-27 roster "2026 Men's Basketball Roster".
         for y in [2026, 2027] {
-            let caveat = season_gate(TitleSeason::Bare(y), 2027).expect("accepted");
-            assert!(caveat.is_some(), "bare year {y} must carry a caveat");
+            let ev = season_gate(TitleSeason::Bare(y), 2027).expect("accepted");
+            assert!(
+                matches!(ev, SeasonEvidence::Inferred(_)),
+                "bare year {y} must be inferred, not confirmed"
+            );
         }
         assert!(season_gate(TitleSeason::Bare(2025), 2027).is_err());
     }
 
     #[test]
-    fn a_title_with_no_season_is_accepted_with_a_caveat() {
+    fn a_title_with_no_season_is_accepted_but_never_confirmed() {
         // Refusing outright would drop schools whose page simply says
         // "Roster"; accepting silently would let a stale one through unnoticed.
         assert_eq!(
             season_gate(TitleSeason::Unknown, 2027),
-            Ok(Some("roster title carries no season".to_string()))
+            Ok(SeasonEvidence::Absent)
         );
     }
 
@@ -1742,6 +1780,27 @@ mod tests {
         );
         assert_eq!(f.status, FetchStatus::Partial);
         assert_eq!(f.players.len(), 5);
+    }
+
+    #[test]
+    fn a_title_with_no_season_keeps_players_but_forfeits_absence() {
+        // Four schools (Arkansas, Georgia Tech, Miami, Troy) publish a roster
+        // titled only "Roster | <School>". Marking those `Ok` would hand the
+        // strongest verdict — the one that licenses reading a departure from a
+        // missing name — to the pages carrying the least evidence, and nothing
+        // would surface it if one of them started serving last season.
+        let f = finish(
+            TitleSeason::Unknown,
+            2027,
+            Some("Roster | Arkansas Razorbacks".into()),
+            dummy(15),
+            PLATFORM_ROSTER_TABLE,
+            "u".into(),
+        );
+        assert_eq!(f.status, FetchStatus::Partial);
+        assert!(!f.status.licenses_absence());
+        assert_eq!(f.players.len(), 15, "presence is still a fact");
+        assert!(f.note.unwrap().contains("names no season"));
     }
 
     #[test]

@@ -51,7 +51,7 @@ verdict, and only `status = 'ok'` licenses reading anything from an absence:
 | status | meaning | players stored | absence usable |
 | --- | --- | --- | --- |
 | `ok` | full roster for the target season | yes | **yes** |
-| `partial` | right season, subset by size or by its own title | yes | no |
+| `partial` | right season but a subset (by size or its own title), **or** a season we could not confirm | yes | no |
 | `stale_season` | page serves a different season | **no** | no |
 | `unsupported` | reachable, layout we cannot parse | no | no |
 | `unreachable` | DNS/TLS/HTTP failure, or no roster page found | no | no |
@@ -59,10 +59,20 @@ verdict, and only `status = 'ok'` licenses reading anything from an absence:
 `stale_season` is the one status that discards its players. Last season's names
 are not a small truth about this season, they are the wrong roster.
 
-Two rules produce `partial`: a headcount below `MIN_TRUSTED_ROSTER` (9), and a
+Three rules produce `partial`: a headcount below `MIN_TRUSTED_ROSTER` (9); a
 title containing `returner` / `incoming` / `newcomer` / `signee` / `commit` /
-`recruit`, which is the only place a school ever states that the page is a
-subset on purpose.
+`recruit` (matched as whole words), which is the only place a school ever
+states that the page is a subset on purpose; and a title that names **no
+season at all**.
+
+That last one matters more than it looks. `ok` means "a full roster *for the
+requested season*", and four schools — Arkansas, Georgia Tech, Miami, Troy —
+publish a roster titled only "Roster | Arkansas Razorbacks". Treating those as
+`ok` would hand the strongest verdict, the one that licenses reading a
+departure from a missing name, to the pages carrying the least evidence, and
+nothing would surface it if one of them quietly started serving last season.
+Only absence is withheld: their players are still stored and still true, so the
+audit's eligibility section, which reads presence, is unaffected.
 
 ## Platforms
 
@@ -204,8 +214,15 @@ The team → athletics-host map is `data/team_sites.json`, keyed by
 (`web3.ncaa.org/directory/api/directory/memberList?type=12&division=I`, whose
 `athleticWebUrl` field covers all 367 D-I members) and then verified by fetching
 every one; the ~40 name-match misses and 8 mis-assignments were corrected by
-hand. It is a plain committed file — fix an entry and re-run, no regeneration
-step.
+hand. It is a plain committed file — fix an entry and re-run, no regeneration step.
+
+Each entry also carries the `platform` (and, for the HTML platforms, the
+`path`) discovered on the last successful fetch. That is a hint, not a
+contract: a stale one costs an extra request and is re-probed, never a wrong
+answer. Keeping it current is worth doing after a sweep that recovers new
+schools — without it those teams probe the Sidearm JSON API first every run,
+take a 404, and store it as a `note` on a fetch that then succeeds, which reads
+as a failure on an `ok` row.
 
 Both tables are laptop-written and prod has no writer for them, so a full
 `sync_to_prod.sh` carries them. A targeted push must name **both**, since
@@ -217,7 +234,7 @@ Both tables are laptop-written and prod has no writer for them, so a full
 
 ## Coverage, 2026-08-23
 
-364 teams: **301 `ok`**, 6 `partial`, 36 `stale_season`, 6 `unsupported`, 15
+364 teams: **298 `ok`**, 9 `partial`, 36 `stale_season`, 6 `unsupported`, 15
 `unreachable`. 4,473 players, **2,257 with a previous school** — the D2 / JuCo /
 international signal, present on just over half of all rows.
 

@@ -50,7 +50,9 @@
   "platform": "sidearm_nextgen"
  },
  "Arizona St.": {
-  "host": "thesundevils.com"
+  "host": "thesundevils.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
  },
  "Arkansas": {
   "host": "arkansasrazorbacks.com",
@@ -72,7 +74,9 @@
   "platform": "sidearm_nextgen"
  },
  "Auburn": {
-  "host": "auburntigers.com"
+  "host": "auburntigers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
  },
  "Austin Peay": {
   "host": "letsgopeay.com",
@@ -460,7 +464,9 @@
   "platform": "sidearm_legacy"
  },
  "Georgia Tech": {
-  "host": "ramblinwreck.com"
+  "host": "ramblinwreck.com",
+  "path": "/sports/m-baskbl/roster",
+  "platform": "roster_table"
  },
  "Gonzaga": {
   "host": "gozags.com",
@@ -604,7 +610,8 @@
   "platform": "sidearm_nextgen"
  },
  "Kansas St.": {
-  "host": "kstatesports.com"
+  "host": "kstatesports.com",
+  "platform": "sidearm_nextgen"
  },
  "Kennesaw St.": {
   "host": "ksuowls.com",
@@ -663,7 +670,9 @@
   "platform": "sidearm_nextgen"
  },
  "Little Rock": {
-  "host": "lrtrojans.com"
+  "host": "lrtrojans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
  },
  "Long Beach St.": {
   "host": "longbeachstate.com",
@@ -765,7 +774,9 @@
   "platform": "sidearm_legacy"
  },
  "Miami FL": {
-  "host": "miamihurricanes.com"
+  "host": "miamihurricanes.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "roster_table"
  },
  "Miami OH": {
   "host": "miamiredhawks.com",
@@ -861,7 +872,9 @@
   "platform": "sidearm_legacy"
  },
  "Nebraska": {
-  "host": "huskers.com"
+  "host": "huskers.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
  },
  "Nebraska Omaha": {
   "host": "omavs.com",
@@ -977,7 +990,9 @@
   "platform": "sidearm_legacy"
  },
  "Northwestern": {
-  "host": "nusports.com"
+  "host": "nusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
  },
  "Northwestern St.": {
   "host": "nsudemons.com",
@@ -985,7 +1000,9 @@
   "platform": "sidearm_legacy"
  },
  "Notre Dame": {
-  "host": "fightingirish.com"
+  "host": "fightingirish.com",
+  "path": "/sports/mbball/roster",
+  "platform": "wmt_table"
  },
  "Oakland": {
   "host": "goldengrizzlies.com",
@@ -1005,7 +1022,9 @@
   "platform": "sidearm_nextgen"
  },
  "Oklahoma St.": {
-  "host": "okstate.com"
+  "host": "okstate.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "roster_table"
  },
  "Old Dominion": {
   "host": "odusports.com",
@@ -1036,7 +1055,9 @@
   "platform": "sidearm_legacy"
  },
  "Penn St.": {
-  "host": "gopsusports.com"
+  "host": "gopsusports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
  },
  "Pepperdine": {
   "host": "pepperdinewaves.com",
@@ -1075,7 +1096,9 @@
   "platform": "sidearm_nextgen"
  },
  "Purdue": {
-  "host": "purduesports.com"
+  "host": "purduesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
  },
  "Purdue Fort Wayne": {
   "host": "gomastodons.com",
@@ -1179,7 +1202,9 @@
   "platform": "sidearm_legacy"
  },
  "San Diego St.": {
-  "host": "goaztecs.com"
+  "host": "goaztecs.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
  },
  "San Francisco": {
   "host": "usfdons.com",
@@ -1215,7 +1240,9 @@
   "platform": "sidearm_legacy"
  },
  "South Carolina": {
-  "host": "gamecocksonline.com"
+  "host": "gamecocksonline.com",
+  "path": "/sports/mbball/roster",
+  "platform": "roster_table"
  },
  "South Carolina St.": {
   "host": "scsuathletics.com",
@@ -1342,7 +1369,9 @@
   "platform": "sidearm_nextgen"
  },
  "Texas A&M": {
-  "host": "12thman.com"
+  "host": "12thman.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
  },
  "Texas A&M Corpus Christi": {
   "host": "goislanders.com",
@@ -1378,7 +1407,9 @@
   "platform": "sidearm_legacy"
  },
  "Troy": {
-  "host": "troytrojans.com"
+  "host": "troytrojans.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "roster_table"
  },
  "Tulane": {
   "host": "tulanegreenwave.com",
@@ -1416,10 +1447,14 @@
   "platform": "sidearm_legacy"
  },
  "UCF": {
-  "host": "ucfknights.com"
+  "host": "ucfknights.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt_table"
  },
  "UCLA": {
-  "host": "uclabruins.com"
+  "host": "uclabruins.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
  },
  "UMBC": {
   "host": "umbcretrievers.com",
@@ -1514,7 +1549,9 @@
   "platform": "sidearm_legacy"
  },
  "Vanderbilt": {
-  "host": "vucommodores.com"
+  "host": "vucommodores.com",
+  "path": "/sports/mbball/roster",
+  "platform": "wmt"
  },
  "Vermont": {
   "host": "uvmathletics.com",
@@ -1532,7 +1569,9 @@
   "platform": "wmt"
  },
  "Virginia Tech": {
-  "host": "hokiesports.com"
+  "host": "hokiesports.com",
+  "path": "/sports/mens-basketball/roster",
+  "platform": "wmt"
  },
  "Wagner": {
   "host": "wagnerathletics.com",
