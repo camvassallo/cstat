@@ -749,6 +749,23 @@ export interface ProjectedTeam {
   /// roster model. < 0.50 = "leaning on the new roster".
   baseline_weight: number;
 
+  // --- Conference for the season being projected. Display + search only. ---
+  /// The conference this team plays in during the *projected* season — not the
+  /// base season's. For a played season that's the ingested value; for the
+  /// upcoming forecast the server lays the curated realignment diff over last
+  /// season's league, so Gonzaga reads Pac-12 rather than West Coast. Null for
+  /// an independent, an unlabelled team, or one that has left Division I.
+  conference: string | null;
+  /// The base (prior) season's conference, present **only when the team
+  /// changed leagues**. Its presence is the "realigned" signal — the UI badges
+  /// on it rather than diffing anything itself.
+  prev_conference: string | null;
+  /// This program stops playing Division I basketball in the projected season
+  /// (e.g. Saint Francis reclassifying to Division III for 2026-27). It still
+  /// has a base-season roster so it still appears, but it has no destination
+  /// league — distinguishing it from a plain null `conference`.
+  left_division_i: boolean;
+
   // --- Display-only coach grade. NOT part of any AdjEM above. ---
   // A PIT backtest (training/pit_cae_backtest.py) showed an additive coach term
   // beats the projection's noise floor but FAILS a program-persistence null, so

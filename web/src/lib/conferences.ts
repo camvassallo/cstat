@@ -40,6 +40,10 @@ export const CONFERENCE_NAMES: Record<string, string> = {
   SUMMIT: 'Summit',
   SUNBELT: 'Sun Belt',
   SWAC: 'SWAC',
+  // The WAC rebranded as the United Athletic Conference on 2026-07-01. Both
+  // codes stay mapped: UAC labels 2026-27 onward, WAC still labels the 2015-26
+  // history, which we continue to serve.
+  UAC: 'United Athletic',
   WAC: 'WAC',
   WCC: 'West Coast',
 };

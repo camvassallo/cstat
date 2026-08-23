@@ -2039,7 +2039,7 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
 /// to the Big 12) and leaves historical seasons null (rendered "Independent").
 /// We keep the target labels in NatStat's vocabulary so the frontend's P5
 /// filter and existing display are unaffected. See issues #171 and #122.
-const TORVIK_CONF_TO_CSTAT: &[(&str, &str)] = &[
+pub const TORVIK_CONF_TO_CSTAT: &[(&str, &str)] = &[
     ("A10", "A-10"),
     ("ACC", "ACC"),
     ("AE", "A-EAST"),
@@ -2072,6 +2072,11 @@ const TORVIK_CONF_TO_CSTAT: &[(&str, &str)] = &[
     ("Slnd", "SLC"),
     ("Sum", "SUMMIT"),
     ("SWAC", "SWAC"),
+    // The WAC rebranded as the United Athletic Conference on 2026-07-01. The
+    // old code stays mapped for the 2015-2026 history; the new one is here so
+    // the correction keeps working the first time a 2027 Torvik row lands,
+    // rather than silently leaving nine teams unlabelled.
+    ("UAC", "UAC"),
     ("WAC", "WAC"),
     ("WCC", "WCC"),
 ];

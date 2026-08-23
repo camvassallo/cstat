@@ -11,6 +11,7 @@ use axum::{
     routing::get,
 };
 use cstat_core::inference::Predictor;
+use cstat_core::realignment::TargetConference;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
     DraftScenario, ProjectedRoster, UncertainCause, compose_all_projections, fetch_draft_entrants,
@@ -176,6 +177,28 @@ struct ProjectedTeam {
     /// flag "leaning on the new roster" and keeps the blend auditable.
     baseline_weight: f32,
 
+    // --- Conference for the season being projected. Display + search only. ---
+    // `teams.conference` is season-scoped, but the live forecast projects a
+    // season that has no `teams` rows yet, so the DB's only answer is last
+    // year's league — wrong for the 31 programs that realigned into 2026-27
+    // (30 changed conference, one left Division I). These three
+    // fields carry the *target*-season answer: the ingested season's conference
+    // when there is one, else the base season's with the curated realignment
+    // diff laid over it (`cstat_core::realignment`). Never read by the model.
+    /// The conference this team plays in during the projected season. `None`
+    /// for an independent, an unlabelled team, or one that has left Division I
+    /// (see `left_division_i`, which distinguishes those cases).
+    conference: Option<String>,
+    /// The base (prior) season's conference, populated **only when it differs**
+    /// from `conference` — i.e. this is exactly the set of teams that moved.
+    /// Lets the UI badge a realigned team without diffing anything itself.
+    prev_conference: Option<String>,
+    /// This program stops playing Division I basketball in the projected
+    /// season. It still has a base-season roster, so it still reaches the
+    /// projection — but it has no destination league, and labelling it with
+    /// last year's would put a team on the board that isn't in the division.
+    left_division_i: bool,
+
     // --- Display-only coach grade. NEVER folded into any AdjEM field above. ---
     // A point-in-time backtest (`training/pit_cae_backtest.py`, 2026-06-03)
     // showed an additive coach term DOES beat the projection's noise floor
@@ -206,6 +229,16 @@ struct ProjectedTeam {
     /// "South Florida" for Bryan Hodgson → Providence. `None` for a first-time /
     /// promoted D-I coach with no prior coachdict row. Display-only.
     coach_prev_team: Option<String>,
+}
+
+/// Target-season conference attached to a projected team (see
+/// `ProjectedTeam`'s conference fields). Display + search only.
+struct TeamConference {
+    conference: Option<String>,
+    /// Set only when the team changed leagues between the base and target
+    /// seasons — so its presence *is* the "realigned" signal.
+    prev_conference: Option<String>,
+    left_division_i: bool,
 }
 
 /// Display-only coach CAE attached to a projected team (see `ProjectedTeam`'s
@@ -479,6 +512,16 @@ async fn projection_list(
             std::collections::HashMap::new()
         });
 
+    // Target-season conference per team (display + search only; the projection
+    // never reads it). Degrade to an empty map rather than 500 the page — a
+    // missing conference column is cosmetic.
+    let conf_map = fetch_conferences(&state.db.pool, base_season, year)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "conference fetch failed; projections render without it");
+            std::collections::HashMap::new()
+        });
+
     // Base-season CamPom O/D split per player, for the cohort O/D sums
     // (display-only roster-shape decoration). Cosmetic — degrade to empty
     // (sums read 0 and the UI hides the split) rather than 500.
@@ -507,6 +550,11 @@ async fn projection_list(
         ) else {
             continue;
         };
+        if let Some(tc) = conf_map.get(&p.team_id) {
+            row.conference = tc.conference.clone();
+            row.prev_conference = tc.prev_conference.clone();
+            row.left_division_i = tc.left_division_i;
+        }
         if let Some(cc) = coach_map.get(&p.team_id) {
             row.coach_id = Some(cc.coach_id);
             row.coach_name = Some(cc.coach_name.clone());
@@ -721,6 +769,9 @@ fn predict_team(
             baseline_weight,
             // Coach fields are decorative and filled by the handler after this
             // returns (predict_team has no DB access); default to absent here.
+            conference: None,
+            prev_conference: None,
+            left_division_i: false,
             coach_id: None,
             coach_name: None,
             coach_cae_shrunk: None,
@@ -1172,6 +1223,19 @@ async fn projection_team_detail(
             tracing::warn!(error = %e, "coach CAE fetch failed for team detail; rendering without it");
             std::collections::HashMap::new()
         });
+    // Same target-season conference the list route serves, so the team page and
+    // the Future grid can't disagree about which league a team is in.
+    let conf_map = fetch_conferences(pool, base_season, year)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "conference fetch failed for team detail; rendering without it");
+            std::collections::HashMap::new()
+        });
+    if let Some(tc) = conf_map.get(&resolved_id) {
+        row.conference = tc.conference.clone();
+        row.prev_conference = tc.prev_conference.clone();
+        row.left_division_i = tc.left_division_i;
+    }
     if let Some(cc) = coach_map.get(&resolved_id) {
         row.coach_id = Some(cc.coach_id);
         row.coach_name = Some(cc.coach_name.clone());
@@ -1564,6 +1628,138 @@ async fn fetch_actual_adj_em(
         .collect())
 }
 
+/// Conference for the *projected* season per team, keyed by **base-season**
+/// team_id (the key `ProjectedTeam` carries).
+///
+/// Two sources, in priority order:
+///
+///  1. **The target season's own `teams` row**, when the season has been
+///     ingested and Torvik has labelled it. That is the authoritative,
+///     realignment-accurate answer (see `compute::TORVIK_CONF_TO_CSTAT`) and it
+///     is what a graded past season on this page should show.
+///  2. **The base season's conference plus the curated realignment diff**
+///     (`cstat_core::realignment`), for the live forecast — where the target
+///     season does not exist yet and the base season's league is simply stale
+///     for everyone who moved.
+///
+/// So the curated file is a stopgap that retires itself: the day 2027 is
+/// ingested, branch 1 takes over and the capture stops being consulted.
+///
+/// Display and search only. The projection is roster-based and never reads a
+/// conference.
+async fn fetch_conferences(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+    target_season: i32,
+) -> Result<std::collections::HashMap<Uuid, TeamConference>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        base_team_id: Uuid,
+        short_name: String,
+        base_conference: Option<String>,
+        target_conference: Option<String>,
+    }
+    // `natstat_id` is the cross-season team key (`teams.id` is season-scoped),
+    // so the self-join is on that, not on the UUID.
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT t.id           AS base_team_id,
+               t.short_name,
+               t.conference   AS base_conference,
+               tgt.conference AS target_conference
+        FROM teams t
+        LEFT JOIN teams tgt
+               ON tgt.natstat_id = t.natstat_id
+              AND tgt.season = $2
+        WHERE t.season = $1
+        "#,
+    )
+    .bind(base_season)
+    .bind(target_season)
+    .fetch_all(pool)
+    .await?;
+
+    let curated = cstat_core::realignment::for_season(target_season);
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let verdict = curated
+                .map(|c| c.target_conference(&r.short_name, r.base_conference.as_deref()))
+                .unwrap_or(TargetConference::Unchanged);
+            let entry = resolve_conference(verdict, r.base_conference, r.target_conference);
+            (r.base_team_id, entry)
+        })
+        .collect())
+}
+
+/// Decide one team's target-season conference from the ingested values and the
+/// curated verdict. Split out from [`fetch_conferences`] so the precedence rule
+/// below is unit-testable without a database.
+///
+/// The ingested target season is authoritative — with one exception, and the
+/// exception is the whole reason this is a named function.
+///
+/// `ingest/teams.rs` writes NatStat's `conference` field into `teams.conference`
+/// verbatim, and NatStat *mislabels realignment* — that is precisely why the
+/// Torvik correction (`compute::TORVIK_CONF_TO_CSTAT`) exists and overwrites it.
+/// Torvik publishes for a new season weeks after `current_natstat_season()`
+/// rolls forward (the gap `SOURCE_NOT_PUBLISHED_GRACE_HOURS` is built around),
+/// so for that window the target-season row reports the league the team just
+/// **left**. Taking it at face value would revert the Conf column to the
+/// pre-move league on the Future tab's default landing season, silently, for the
+/// two weeks the realignment is most newsworthy — the exact failure this feature
+/// exists to prevent.
+///
+/// So: when the ingested target conference is *still the one the capture says
+/// the team left*, the ingest has not caught up and the capture is the better
+/// answer. Any other ingested value — Torvik's correction, or a genuinely
+/// different outcome such as a cancelled move — beats the capture, so this
+/// cannot pin a stale answer in place.
+fn resolve_conference(
+    verdict: TargetConference<'_>,
+    base_conference: Option<String>,
+    target_conference: Option<String>,
+) -> TeamConference {
+    // Does the ingested target season still report the league the capture says
+    // this team departed?
+    let ingest_lags = match (&verdict, target_conference.as_deref()) {
+        (TargetConference::Moved { from, .. }, Some(t))
+        | (TargetConference::LeftDivisionI { from }, Some(t)) => *from == t,
+        _ => false,
+    };
+
+    // An ingested target season wins where it carries a conference at all and
+    // isn't lagging the capture. A row that exists with a NULL conference
+    // (ingested, not yet labelled) is less informative than the base season, so
+    // it falls through rather than blanking the column.
+    if !ingest_lags && let Some(target) = target_conference {
+        let prev = base_conference.filter(|b| *b != target);
+        return TeamConference {
+            conference: Some(target),
+            prev_conference: prev,
+            left_division_i: false,
+        };
+    }
+
+    match verdict {
+        TargetConference::Moved { from, to } => TeamConference {
+            conference: Some(to.to_string()),
+            prev_conference: Some(from.to_string()),
+            left_division_i: false,
+        },
+        TargetConference::LeftDivisionI { from } => TeamConference {
+            conference: None,
+            prev_conference: Some(from.to_string()),
+            left_division_i: true,
+        },
+        TargetConference::Unchanged => TeamConference {
+            conference: base_conference,
+            prev_conference: None,
+            left_division_i: false,
+        },
+    }
+}
+
 /// Display-only coach CAE per projected team, keyed by **base-season**
 /// team_id (the key `ProjectedTeam` carries). For each base-season program it
 /// resolves the coach leading them into the target season — preferring a
@@ -1657,6 +1853,92 @@ async fn fetch_coach_cae(
 mod tests {
     use super::*;
     use cstat_core::roster_projection::PROJECTION_SHRINK_WEIGHT as SHRINK_WEIGHT;
+
+    /// The ingested target season is authoritative once it has been corrected.
+    #[test]
+    fn ingested_target_conference_wins_and_flags_the_move() {
+        let tc = resolve_conference(
+            TargetConference::Moved {
+                from: "WCC",
+                to: "PAC-12",
+            },
+            Some("WCC".into()),
+            Some("PAC-12".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("PAC-12"));
+        assert_eq!(tc.prev_conference.as_deref(), Some("WCC"));
+        assert!(!tc.left_division_i);
+    }
+
+    /// The regression this rule exists for: the target season is ingested but
+    /// still carries NatStat's pre-move label, because Torvik hasn't published
+    /// for it yet. Taking the DB at face value would put Gonzaga back in the
+    /// West Coast Conference on the Future tab for the two weeks the move is
+    /// most newsworthy.
+    #[test]
+    fn capture_wins_while_the_ingest_still_reports_the_league_left() {
+        let tc = resolve_conference(
+            TargetConference::Moved {
+                from: "WCC",
+                to: "PAC-12",
+            },
+            Some("WCC".into()),
+            Some("WCC".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("PAC-12"));
+        assert_eq!(tc.prev_conference.as_deref(), Some("WCC"));
+    }
+
+    /// ...but the capture must not be able to pin a stale answer in place. Any
+    /// ingested value other than the one the capture says was departed wins —
+    /// including a move that was called off and landed somewhere else.
+    #[test]
+    fn any_other_ingested_value_beats_the_capture() {
+        let tc = resolve_conference(
+            TargetConference::Moved {
+                from: "WCC",
+                to: "PAC-12",
+            },
+            Some("WCC".into()),
+            Some("BIGEAST".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("BIGEAST"));
+    }
+
+    /// Same lag rule for a program leaving Division I: NatStat listing it in
+    /// its old league for the target season is not evidence it stayed.
+    #[test]
+    fn leaving_division_i_survives_a_lagging_ingest() {
+        let tc = resolve_conference(
+            TargetConference::LeftDivisionI { from: "NEC" },
+            Some("NEC".into()),
+            Some("NEC".into()),
+        );
+        assert!(tc.left_division_i);
+        assert_eq!(tc.conference, None);
+        assert_eq!(tc.prev_conference.as_deref(), Some("NEC"));
+    }
+
+    /// An ingested row with no conference yet is less informative than the base
+    /// season, so it must not blank the column.
+    #[test]
+    fn null_target_conference_falls_back_instead_of_blanking() {
+        let tc = resolve_conference(TargetConference::Unchanged, Some("ACC".into()), None);
+        assert_eq!(tc.conference.as_deref(), Some("ACC"));
+        assert_eq!(tc.prev_conference, None);
+    }
+
+    /// A team that didn't move gets no badge, even across an ingested season.
+    #[test]
+    fn unchanged_team_carries_no_prev_conference() {
+        let tc = resolve_conference(
+            TargetConference::Unchanged,
+            Some("ACC".into()),
+            Some("ACC".into()),
+        );
+        assert_eq!(tc.conference.as_deref(), Some("ACC"));
+        assert_eq!(tc.prev_conference, None);
+    }
 
     #[test]
     fn shrink_blends_raw_with_baseline_and_offset() {
