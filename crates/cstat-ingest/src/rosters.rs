@@ -572,6 +572,52 @@ impl NgPlayer {
 // Platform: HTML (Sidearm legacy + WMT)
 // ---------------------------------------------------------------------------
 
+/// Does this string read as an eligibility label rather than, say, a major?
+///
+/// Guards the `custom1` fallback in [`parse_sidearm_legacy`]. That slot is
+/// school-configurable — Lamar fills it with "Sr.-TR", others with a course of
+/// study — so taking it unconditionally would file "Business Administration" as
+/// a class year for every player at those schools.
+///
+/// Deliberately permissive about SUFFIXES ("Sr.-TR", "Fr.-HS") and prefixes
+/// ("R-Jr.", "RS-Fr."), because those carry the redshirt and transfer markers
+/// that are the whole reason the raw label is stored instead of a normalised
+/// one.
+fn looks_like_class_year(v: &str) -> bool {
+    let lower = v.trim().to_lowercase();
+    if lower.is_empty() || lower.len() > 24 {
+        return false;
+    }
+    const WORDS: &[&str] = &[
+        "fr",
+        "so",
+        "jr",
+        "sr",
+        "gr",
+        "freshman",
+        "sophomore",
+        "junior",
+        "senior",
+        "graduate",
+        "grad",
+        "redshirt",
+        "fifth",
+        "sixth",
+        "1st",
+        "2nd",
+        "3rd",
+        "4th",
+        "5th",
+        "6th",
+    ];
+    // Split on the separators these labels use so "r-jr." and "sr.-tr" reduce
+    // to their parts.
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .any(|t| WORDS.contains(&t))
+}
+
 /// Is this container a STAFF card rather than a player card?
 ///
 /// WMT renders the coaching staff on the same roster page, in cards that reuse
@@ -681,6 +727,11 @@ fn parse_sidearm_legacy(html: &str) -> Vec<RosterPlayer> {
     let last = sel(".sidearm-roster-player-last-name");
     let jersey = sel(".sidearm-roster-player-jersey-number");
     let year = sel(".sidearm-roster-player-academic-year");
+    // Schools that configure no academic-year field sometimes put the class in
+    // the generic `custom1` slot instead (Lamar: "Sr.-TR"). That slot is
+    // school-configurable and holds a major or a nickname elsewhere, so it is
+    // only accepted when the value actually looks like a class year.
+    let custom1 = sel(".sidearm-roster-player-custom1");
     let position = sel(".sidearm-roster-player-position-long-short");
     // Sites that never render the `-long-short` child put the position inside
     // `-position`, which ALSO wraps the height, weight and jersey spans — so a
@@ -706,7 +757,8 @@ fn parse_sidearm_legacy(html: &str) -> Vec<RosterPlayer> {
         out.push(RosterPlayer {
             name,
             jersey: pick(&el, &jersey),
-            class_year_raw: pick(&el, &year),
+            class_year_raw: pick(&el, &year)
+                .or_else(|| pick(&el, &custom1).filter(|v| looks_like_class_year(v))),
             position: pick(&el, &position).or_else(|| {
                 pick_excluding(
                     &el,
@@ -773,7 +825,14 @@ fn parse_wmt(html: &str) -> Vec<RosterPlayer> {
     let f_class = sel(".roster-player-list-profile-field--class-level");
     let basic = sel(".roster-player-card-profile-field__value--basic");
     let hometown = sel(".roster-player-card-profile-field__value--hometown, \
-         .roster-player-list-profile-field--hometown");
+         .roster-player-list-profile-field--hometown, \
+         .roster-card__hometown");
+    // Iowa's shape: explicit `__label` / `__value` pairs.
+    let labelled = sel(".roster-card-profile-field");
+    let field_label = sel(".roster-card-profile-field__label");
+    let field_value = sel(".roster-card-profile-field__value");
+    // Clemson's shape: an unlabelled ordered run of values.
+    let info_item = sel(".roster-players-cards-item__info-item");
     let school = sel(".roster-player-card-profile-field__value--school, \
          .roster-player-list-profile-field--high-school");
     let previous = sel(
@@ -794,6 +853,56 @@ fn parse_wmt(html: &str) -> Vec<RosterPlayer> {
             .and_then(parse_height_inches);
         let mut weight = pick(&el, &f_weight).as_deref().and_then(parse_weight_lbs);
         let mut class_year = pick(&el, &f_class);
+        let mut labelled_hometown: Option<String> = None;
+        let mut labelled_school: Option<String> = None;
+        let mut labelled_prev: Option<String> = None;
+
+        // Iowa's shape: explicit `__label` / `__value` pairs, reusing
+        // `assign_by_label` so the label vocabulary stays shared with the table
+        // parser rather than growing a second word list to keep in sync.
+        for field in el.select(&labelled) {
+            let (Some(l), Some(fv)) = (pick(&field, &field_label), pick(&field, &field_value))
+            else {
+                continue;
+            };
+            let mut tmp = RosterPlayer::default();
+            assign_by_label(&mut tmp, &l.to_lowercase(), fv);
+            class_year = class_year.or(tmp.class_year_raw);
+            height = height.or(tmp.height_inches);
+            weight = weight.or(tmp.weight_lbs);
+            labelled_hometown = labelled_hometown.or(tmp.hometown);
+            labelled_school = labelled_school.or(tmp.high_school);
+            labelled_prev = labelled_prev.or(tmp.previous_school);
+        }
+
+        // Clemson's shape: an unlabelled ORDERED run — height, weight, then
+        // hometown, high school and class in that order, the middle two
+        // optional (David Fuchs has a hometown and a class but no high school).
+        // Height and weight are picked out by content; the remainder is
+        // positional, anchored on class always coming last.
+        if class_year.is_none() && labelled_hometown.is_none() {
+            let mut rest: Vec<String> = Vec::new();
+            for v in el
+                .select(&info_item)
+                .filter_map(|e| clean(&e.text().collect::<String>()))
+            {
+                if height.is_none() && v.contains(['-', '\'', '\u{2032}']) {
+                    height = parse_height_inches(&v);
+                } else if weight.is_none() && v.to_lowercase().contains("lb") {
+                    weight = parse_weight_lbs(&v);
+                } else {
+                    rest.push(v);
+                }
+            }
+            class_year = rest.pop();
+            labelled_hometown = if rest.is_empty() {
+                None
+            } else {
+                Some(rest.remove(0))
+            };
+            labelled_school = rest.pop();
+        }
+
         // Card layout: classify the unlabeled triple by what each value looks
         // like. Whatever is neither a height nor a weight is the eligibility
         // label, which is the field we most need and the one with no stable
@@ -824,9 +933,9 @@ fn parse_wmt(html: &str) -> Vec<RosterPlayer> {
             position: pick(&el, &position),
             height_inches: height,
             weight_lbs: weight,
-            hometown: pick(&el, &hometown),
-            high_school: pick(&el, &school),
-            previous_school: pick(&el, &previous),
+            hometown: pick(&el, &hometown).or(labelled_hometown),
+            high_school: pick(&el, &school).or(labelled_school),
+            previous_school: pick(&el, &previous).or(labelled_prev),
         };
         if has_player_fields(&row) {
             out.push(row);
@@ -883,62 +992,8 @@ fn parse_roster_table(html: &str) -> Vec<RosterPlayer> {
             }
             let mut p = RosterPlayer::default();
             for (h, v) in headers.iter().zip(cells.iter()) {
-                if v.is_empty() {
-                    continue;
-                }
-                let v = v.clone();
-                // Origin columns first, and as a GROUP. Schools combine them
-                // in whatever pairing they like — Arkansas ships
-                // "High School/Previous School", Troy ships
-                // "Hometown / High School" — so the header is read for every
-                // origin field it names and the cell is split across them in
-                // order. Testing the single-field spellings first would file
-                // Troy's whole "Waldorf, Md. / Bullis School" as a high school
-                // and lose the hometown entirely.
-                let origins = origin_fields(h);
-                if !origins.is_empty() {
-                    for (field, part) in origins.iter().zip(split_origin(&v, origins.len())) {
-                        match field {
-                            OriginField::Hometown => p.hometown = part,
-                            OriginField::HighSchool => p.high_school = part,
-                            OriginField::PreviousSchool => p.previous_school = part,
-                        }
-                    }
-                } else if h.contains("name") {
-                    p.name = v;
-                } else if h.contains("pos") {
-                    p.position = Some(v);
-                // WEIGHT BEFORE HEIGHT. "weight" contains the substring "ht",
-                // so a `contains("ht")` test claims the weight column first,
-                // fails to read "165 lbs." as a height, and — because the
-                // assignment is unconditional — overwrites the height already
-                // read from the real column with None. Kentucky, Miami,
-                // Oklahoma St. and South Carolina lost BOTH measurements to
-                // that; Arkansas escaped only because it abbreviates to
-                // "Ht"/"Wt", and "height" does not contain "wt".
-                //
-                // The assignments are also now conditional, so no later column
-                // can blank a field an earlier one filled.
-                } else if h.contains("wt") || h.contains("weight") {
-                    if let Some(w) = parse_weight_lbs(&v) {
-                        p.weight_lbs = Some(w);
-                    }
-                } else if h.contains("ht") || h.contains("height") {
-                    if let Some(inches) = parse_height_inches(&v) {
-                        p.height_inches = Some(inches);
-                    }
-                // "year" does NOT contain "yr" — Georgia Tech's header is
-                // "YEAR" and Troy's is "Year", and matching only "yr" silently
-                // dropped the class for both. That is the field the eligibility
-                // audit reads: Georgia Tech alone lists two players as "5th".
-                } else if h.contains("yr")
-                    || h.contains("year")
-                    || h.contains("class")
-                    || h.contains("cl.")
-                {
-                    p.class_year_raw = Some(v);
-                } else if h.contains("num") || h.contains('#') || h.contains("no.") {
-                    p.jersey = Some(v);
+                if !v.is_empty() {
+                    assign_by_label(&mut p, h, v.clone());
                 }
             }
             if !p.name.is_empty() && has_player_fields(&p) {
@@ -986,6 +1041,70 @@ fn origin_fields(header: &str) -> Vec<OriginField> {
     }
     out.sort_by_key(|(at, _)| *at);
     out.into_iter().map(|(_, f)| f).collect()
+}
+
+/// Assign one labelled value onto a player row.
+///
+/// Shared by the table parser, which gets its labels from a `<th>` row, and by
+/// WMT's label/value card DOM, which gets them from a `__label` span. Both
+/// vocabularies are the same words in the same free-text soup, so keeping one
+/// implementation means a header spelling fixed for one platform is fixed for
+/// the other — the "YEAR"/"Height"/"Last School" cases were each found on one
+/// platform and apply to both.
+fn assign_by_label(p: &mut RosterPlayer, label: &str, v: String) {
+    // Origin columns first, and as a GROUP. Schools combine them
+    // in whatever pairing they like — Arkansas ships
+    // "High School/Previous School", Troy ships
+    // "Hometown / High School" — so the header is read for every
+    // origin field it names and the cell is split across them in
+    // order. Testing the single-field spellings first would file
+    // Troy's whole "Waldorf, Md. / Bullis School" as a high school
+    // and lose the hometown entirely.
+    let origins = origin_fields(label);
+    if !origins.is_empty() {
+        for (field, part) in origins.iter().zip(split_origin(&v, origins.len())) {
+            match field {
+                OriginField::Hometown => p.hometown = part,
+                OriginField::HighSchool => p.high_school = part,
+                OriginField::PreviousSchool => p.previous_school = part,
+            }
+        }
+    } else if label.contains("name") {
+        p.name = v;
+    } else if label.contains("pos") {
+        p.position = Some(v);
+    // WEIGHT BEFORE HEIGHT. "weight" contains the substring "ht",
+    // so a `contains("ht")` test claims the weight column first,
+    // fails to read "165 lbs." as a height, and — because the
+    // assignment is unconditional — overwrites the height already
+    // read from the real column with None. Kentucky, Miami,
+    // Oklahoma St. and South Carolina lost BOTH measurements to
+    // that; Arkansas escaped only because it abbreviates to
+    // "Ht"/"Wt", and "height" does not contain "wt".
+    //
+    // The assignments are also now conditional, so no later column
+    // can blank a field an earlier one filled.
+    } else if label.contains("wt") || label.contains("weight") {
+        if let Some(w) = parse_weight_lbs(&v) {
+            p.weight_lbs = Some(w);
+        }
+    } else if label.contains("ht") || label.contains("height") {
+        if let Some(inches) = parse_height_inches(&v) {
+            p.height_inches = Some(inches);
+        }
+    // "year" does NOT contain "yr" — Georgia Tech's header is
+    // "YEAR" and Troy's is "Year", and matching only "yr" silently
+    // dropped the class for both. That is the field the eligibility
+    // audit reads: Georgia Tech alone lists two players as "5th".
+    } else if label.contains("yr")
+        || label.contains("year")
+        || label.contains("class")
+        || label.contains("cl.")
+    {
+        p.class_year_raw = Some(v);
+    } else if label.contains("num") || label.contains('#') || label.contains("no.") {
+        p.jersey = Some(v);
+    }
 }
 
 /// Split a combined origin cell into `n` parts.
@@ -1791,6 +1910,34 @@ mod tests {
         assert_eq!(rows[0].position.as_deref(), Some("G"));
         assert_eq!(rows[0].height_inches, Some(73));
         assert_eq!(rows[0].weight_lbs, Some(160));
+    }
+
+    #[test]
+    fn custom1_is_read_as_a_class_only_when_it_looks_like_one() {
+        // Lamar configures no academic-year field and puts "Sr.-TR" in the
+        // generic custom1 slot. Other schools put a major there, so taking it
+        // unconditionally would file "Business Administration" as a class year.
+        assert!(looks_like_class_year("Sr.-TR"));
+        assert!(looks_like_class_year("R-Jr."));
+        assert!(looks_like_class_year("RS-Fr."));
+        assert!(looks_like_class_year("Fifth Year"));
+        assert!(looks_like_class_year("5th"));
+        assert!(!looks_like_class_year("Business Administration"));
+        assert!(!looks_like_class_year("History, Technology and Society"));
+        assert!(!looks_like_class_year(""));
+
+        let html = r#"
+          <li class="sidearm-roster-player">
+            <span class="sidearm-roster-player-custom1">Sr.-TR</span>
+            <div class="sidearm-roster-player-name"><h3><a href="/x">Caden Hinker</a></h3></div>
+          </li>
+          <li class="sidearm-roster-player">
+            <span class="sidearm-roster-player-custom1">Business Administration</span>
+            <div class="sidearm-roster-player-name"><h3><a href="/y">Other Guy</a></h3></div>
+          </li>"#;
+        let rows = parse_sidearm_legacy(html);
+        assert_eq!(rows[0].class_year_raw.as_deref(), Some("Sr.-TR"));
+        assert_eq!(rows[1].class_year_raw, None, "a major is not a class year");
     }
 
     const WMT_CARD: &str = r#"
