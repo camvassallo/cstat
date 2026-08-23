@@ -184,6 +184,65 @@ async fn bootstrap_year(
     Ok((returns.len(), contested))
 }
 
+/// The key order curated return rows are written in. Identity first, then the
+/// two behaviour-bearing fields, then provenance.
+const RETURN_KEY_ORDER: &[&str] = &["name", "current_team", "status", "reason", "source", "note"];
+
+/// Render curated returns with a stable key order.
+///
+/// `serde_json::to_string_pretty` cannot do this: without the `preserve_order`
+/// feature a `Value` object is a `BTreeMap`, so it emits keys alphabetically —
+/// `current_team, name, note, reason, source, status`. Round-tripping the file
+/// through it reorders every row, so a 23-row resolution produces a 48-row
+/// diff and the change is unreviewable. Reviewability is the entire reason
+/// [`resolve_reason`] stops before loading, so churning the file would defeat
+/// the feature.
+///
+/// Enabling `preserve_order` workspace-wide would fix it globally and is the
+/// wrong trade here: `cstat_core::provenance` builds fingerprints out of
+/// `json!` values, and silently changing their key order risks every model node
+/// reporting drift at once.
+///
+/// Keys outside [`RETURN_KEY_ORDER`] are emitted after the known ones, sorted,
+/// so a field this binary does not model still survives a round-trip.
+fn render_returns(rows: &[serde_json::Value]) -> Result<String, ReturnIngestError> {
+    let enc = |v: &serde_json::Value| -> Result<String, ReturnIngestError> {
+        serde_json::to_string(v).map_err(|e| std::io::Error::other(e.to_string()).into())
+    };
+    let mut out = String::from("[\n");
+    for (i, row) in rows.iter().enumerate() {
+        let Some(obj) = row.as_object() else {
+            return Err(std::io::Error::other("returns file must be an array of objects").into());
+        };
+        let mut keys: Vec<&String> = obj.keys().collect();
+        keys.sort_by_key(|k| {
+            (
+                RETURN_KEY_ORDER
+                    .iter()
+                    .position(|o| o == k)
+                    .unwrap_or(usize::MAX),
+                (*k).clone(),
+            )
+        });
+        out.push_str("  {\n");
+        for (j, k) in keys.iter().enumerate() {
+            out.push_str(&format!(
+                "    {}: {}",
+                enc(&serde_json::Value::from(k.as_str()))?,
+                enc(&obj[*k])?
+            ));
+            out.push_str(if j + 1 < keys.len() { ",\n" } else { "\n" });
+        }
+        out.push_str(if i + 1 < rows.len() {
+            "  },\n"
+        } else {
+            "  }\n"
+        });
+    }
+    out.push_str("]\n");
+    Ok(out)
+}
+
 /// What a court outcome does to a cohort of curated returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolution {
@@ -260,10 +319,7 @@ pub fn resolve_reason(
                 }
             }
         }
-        let mut out = serde_json::to_string_pretty(&rows)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        out.push('\n');
-        std::fs::write(&path, out)?;
+        std::fs::write(&path, render_returns(&rows)?)?;
         info!(year, matched, ?outcome, "resolved curated returns");
         reports.push(ResolveReport {
             year,
@@ -317,6 +373,55 @@ mod tests {
         // A field the Rust struct does not model survives the round-trip;
         // deserializing into `PlayerReturn` would have dropped it.
         assert_eq!(out[0]["curator_only"], "keep me");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn granted_rewrite_touches_only_the_changed_fields() {
+        // Reviewability is the whole reason `resolve_reason` stops before
+        // loading, so the rewrite must not churn the file. Round-tripping
+        // through `serde_json::to_string_pretty` reorders every key
+        // alphabetically and turns a two-field edit into a whole-file diff.
+        //
+        // Seeded from the canonical rendering, not the raw fixture, so the
+        // comparison measures the resolve's churn rather than the fixture's
+        // hand-written whitespace.
+        let dir = scratch("stable");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(FILE).unwrap();
+        let before = render_returns(&parsed).unwrap();
+        std::fs::write(dir.join("2026_returns.json"), &before).unwrap();
+
+        resolve_reason(&dir, "injunction", Resolution::Granted, "R.").unwrap();
+        let after = std::fs::read_to_string(dir.join("2026_returns.json")).unwrap();
+
+        let lines: Vec<&str> = before.lines().collect();
+        let changed: Vec<&str> = after
+            .lines()
+            .filter(|l| !lines.contains(l))
+            .map(str::trim)
+            .collect();
+        assert!(
+            !changed.is_empty(),
+            "the resolve must actually change something"
+        );
+        assert!(
+            changed
+                .iter()
+                .all(|l| l.starts_with("\"status\"") || l.starts_with("\"note\"")),
+            "only status and note may move; got {changed:?}"
+        );
+        // Key order has to be read off the TEXT: parsing back through
+        // `serde_json::Value` sorts the keys, which is the very behaviour
+        // `render_returns` exists to work around.
+        let first_key = after
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with('"'))
+            .unwrap_or_default();
+        assert!(
+            first_key.starts_with("\"name\""),
+            "identity key must lead each row, got {first_key:?}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
