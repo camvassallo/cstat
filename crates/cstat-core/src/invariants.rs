@@ -121,10 +121,91 @@ async fn team_with_games_missing_adjem(
     ))
 }
 
+/// Games where NatStat published player box scores but **never published team
+/// box scores**, verified against the live feed and therefore permanently
+/// unfillable by any re-run.
+///
+/// Excluded from [`completed_game_missing_team_stats`] so that check has a
+/// clean baseline (#232). Before this list existed it reported the same 22
+/// violations on every single nightly, which meant a 23rd — a real one — was
+/// indistinguishable from the standing noise at a glance. A permanent warning
+/// is not a warning; it is a habit of skimming.
+///
+/// **How these were verified (2026-09-07), and how to verify the next one.**
+/// Query the feed directly on three independent paths and confirm all three
+/// agree the rows do not exist:
+///
+/// ```text
+/// teamperfs/mbb/{date},{date}/0     → NO_DATA, or the game id absent
+/// teamperfs/mbb/{season},{TEAMCODE} → the game id absent from the team's season
+/// count(team_game_stats for team)   → equals the upstream row count exactly
+/// ```
+///
+/// The third is the decisive one: for 2026 Princeton the feed carries 28 team
+/// perf rows against 29 completed games, and we stored 28. Illinois, 36 against
+/// 37, stored 36. We wrote every row we were given — there is no pipeline loss
+/// here to find. 20 of the 22 fall on 2026-02-27, where the whole date answers
+/// `NO_DATA` for `teamperfs` while `playerperfs` returns normally.
+///
+/// **Add to this list only after running that check.** An entry asserts a fact
+/// about the upstream feed, not a preference about log volume; guessing here
+/// silently deletes the signal the invariant exists to carry. Entries are
+/// self-retiring — if NatStat ever backfills a game, its rows simply appear and
+/// the exclusion stops matching. `crates/cstat-core/tests/invariants_known_gaps.rs`
+/// fails when an entry is no longer needed, so the list cannot quietly rot.
+pub const UPSTREAM_TEAM_STATS_GAPS: &[(i32, &str)] = &[
+    // 2026-02-27 — entire slate; `teamperfs` returns NO_DATA for the date.
+    (2026, "1480578"), // Princeton / Harvard
+    (2026, "1480579"), // Cornell / Yale
+    (2026, "1480580"), // Columbia / Brown
+    (2026, "1480864"), // Canisius / Merrimack
+    (2026, "1481324"), // Iona / Rider
+    (2026, "1481325"), // Texas St. / Appalachian St.
+    (2026, "1481326"), // Sacred Heart / Mount St. Mary's
+    (2026, "1482825"), // Fairfield / Siena
+    (2026, "1484146"), // Penn / Dartmouth
+    (2026, "1484147"), // James Madison / Coastal Carolina
+    (2026, "1484148"), // Troy / Louisiana Monroe
+    (2026, "1484149"), // Arkansas St. / Louisiana
+    (2026, "1484150"), // Georgia St. / Old Dominion
+    (2026, "1484151"), // Marshall / Georgia Southern
+    (2026, "1485439"), // George Washington / Dayton
+    (2026, "1485441"), // Niagara / Quinnipiac
+    (2026, "1485442"), // Saint Peter's / Manhattan
+    (2026, "1490607"), // Illinois / Michigan
+    (2026, "1504986"), // Western Michigan / Miami OH
+    (2026, "1504988"), // Kent St. / Akron
+    // Isolated single games: the date is otherwise complete upstream
+    // (2026-02-12 carries 56 of 57 games, 2026-03-03 carries 52 of 53).
+    (2026, "1503406"), // 2026-02-12 · Cal St. Bakersfield / Hawaii
+    (2026, "1505037"), // 2026-03-03 · Fresno St. / San Jose St.
+];
+
+/// The known-gap ids for one season, for binding into a `!= ALL($2)` filter.
+pub fn known_team_stats_gaps(season: i32) -> Vec<String> {
+    UPSTREAM_TEAM_STATS_GAPS
+        .iter()
+        .filter(|(s, _)| *s == season)
+        .map(|(_, id)| (*id).to_string())
+        .collect()
+}
+
 /// A completed game between two resolved teams must have both sides'
 /// `team_game_stats` rows — four factors / AdjEM / W-L all recompute from
 /// them, so a missing side silently skews every derived team metric.
-async fn completed_game_missing_team_stats(
+///
+/// Excludes [`UPSTREAM_TEAM_STATS_GAPS`]: games the feed demonstrably never
+/// published, which no run can fix and which were drowning out everything else
+/// this check had to say (#232).
+///
+/// **Triaging a fresh violation.** The shape tells you where to look first.
+/// *Both* sides absent is the upstream signature — check the feed before
+/// suspecting the pipeline. Exactly *one* side absent is not: NatStat publishes
+/// a game's two team rows together, so a single side means we wrote one and
+/// lost the other, and that is ours. Either way the ingest's own answer is in
+/// `ingest_runs.notes` for the run that covered the date (#202) — a non-zero
+/// `unknown_game` there says the perf arrived and we had nowhere to put it.
+pub async fn completed_game_missing_team_stats(
     pool: &PgPool,
     season: i32,
 ) -> Result<Option<InvariantViolation>, sqlx::Error> {
@@ -135,11 +216,13 @@ async fn completed_game_missing_team_stats(
         WHERE g.season = $1
           AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
           AND g.home_team_id IS NOT NULL AND g.away_team_id IS NOT NULL
+          AND g.natstat_id <> ALL($2)
           AND (SELECT COUNT(*) FROM team_game_stats tgs WHERE tgs.game_id = g.id) < 2
         ORDER BY g.natstat_id
         "#,
     )
     .bind(season)
+    .bind(known_team_stats_gaps(season))
     .fetch_all(pool)
     .await?;
 

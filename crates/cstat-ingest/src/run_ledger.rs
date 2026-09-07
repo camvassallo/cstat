@@ -174,6 +174,30 @@ impl<'a> RunLedger<'a> {
         started_at: DateTime<Utc>,
         error: Option<&str>,
     ) {
+        self.record_with_notes(step, status, rows_touched, started_at, error, None)
+            .await
+    }
+
+    /// [`record`](RunLedger::record) plus the `notes` column: free-text context
+    /// about a step that **succeeded**, where `error` would be a lie.
+    ///
+    /// Its reason for existing is #202. The box-score steps can write fewer
+    /// rows than the feed handed them — an orphaned perf whose game was never
+    /// stored, a non-D1 side we do not carry — and until now that loss reached
+    /// only the tracing log, which Railway rotates. A step that skipped rows is
+    /// still `ok`: the run did everything it could. But "ok, and here is what
+    /// it cost" has to be answerable from SQL months later, because the ledger
+    /// is what survives, and because `/api/health/ingest` reads this table and
+    /// would otherwise call a lossy step perfectly fresh.
+    pub async fn record_with_notes(
+        &self,
+        step: &str,
+        status: StepStatus,
+        rows_touched: Option<i64>,
+        started_at: DateTime<Utc>,
+        error: Option<&str>,
+        notes: Option<&str>,
+    ) {
         let ended_at = Utc::now();
         let (window_start, window_end) = match self.window {
             Some((s, e)) => (Some(s), Some(e)),
@@ -182,8 +206,8 @@ impl<'a> RunLedger<'a> {
         let res = sqlx::query(
             "INSERT INTO ingest_runs \
              (run_id, season, step, status, rows_touched, started_at, ended_at, error, \
-              window_start, window_end) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+              window_start, window_end, notes) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(self.run_id)
         .bind(self.season)
@@ -195,6 +219,7 @@ impl<'a> RunLedger<'a> {
         .bind(error)
         .bind(window_start)
         .bind(window_end)
+        .bind(notes)
         .execute(self.pool)
         .await;
 

@@ -8,6 +8,145 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+/// Why an upsert declined to write a row.
+///
+/// Every variant is a row the feed handed us that never reached the database.
+/// Before #202 each of these was a bare `Ok(false)` the caller counted as "not
+/// written" and then forgot: no log, no counter, no ledger note. An
+/// under-fetched `games` step therefore orphaned every perf referencing a game
+/// we had not stored, while the nightly still recorded `player_perfs` as `ok`,
+/// posted a green Slack heartbeat, and reset the `/api/health/ingest`
+/// staleness clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    /// The payload carried no usable player / team / game code to key on.
+    /// Malformed upstream record; always anomalous.
+    MissingIdentifier,
+    /// The game payload had no parseable `gameday`. Always anomalous.
+    MissingDate,
+    /// The referenced game has no `games` row. **This is the #202 alarm.** In a
+    /// date-range run the `games` step covers the same window and runs first,
+    /// so every perf's game should already be stored; a non-zero count means
+    /// box scores were dropped on the floor.
+    UnknownGame,
+    /// The team code resolved to no `teams` row for this season. Routine and
+    /// expected — NatStat's perf feeds carry the non-D1 side of a game and we
+    /// only store D1 teams. Counted for completeness but deliberately **not**
+    /// alarmed on: a warning that is non-zero every single night is how #232
+    /// happened.
+    UnresolvedTeam,
+}
+
+/// Per-reason tally of rows an ingest loop declined to write.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SkipCounts {
+    pub missing_identifier: u64,
+    pub missing_date: u64,
+    pub unknown_game: u64,
+    pub unresolved_team: u64,
+}
+
+impl SkipCounts {
+    fn record(&mut self, reason: SkipReason) {
+        match reason {
+            SkipReason::MissingIdentifier => self.missing_identifier += 1,
+            SkipReason::MissingDate => self.missing_date += 1,
+            SkipReason::UnknownGame => self.unknown_game += 1,
+            SkipReason::UnresolvedTeam => self.unresolved_team += 1,
+        }
+    }
+
+    pub fn total(&self) -> u64 {
+        self.missing_identifier + self.missing_date + self.unknown_game + self.unresolved_team
+    }
+
+    /// Skips that mean **we** lost data, as opposed to the routine non-D1
+    /// filtering. Only these earn a `warn!` — see [`SkipReason::UnresolvedTeam`].
+    pub fn anomalous(&self) -> u64 {
+        self.missing_identifier + self.missing_date + self.unknown_game
+    }
+
+    /// Compact `reason=n` breakdown for `ingest_runs.notes`, or `None` when
+    /// nothing was skipped. Reasons that did not fire are omitted, so the note
+    /// is only ever as long as it needs to be.
+    pub fn summary(&self) -> Option<String> {
+        if self.total() == 0 {
+            return None;
+        }
+        let parts: Vec<String> = [
+            ("missing_identifier", self.missing_identifier),
+            ("missing_date", self.missing_date),
+            ("unknown_game", self.unknown_game),
+            ("unresolved_team", self.unresolved_team),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(label, n)| format!("{label}={n}"))
+        .collect();
+        Some(format!("skipped {} ({})", self.total(), parts.join(", ")))
+    }
+}
+
+/// What one ingest loop wrote, and what it threw away doing so.
+///
+/// Replaces the bare `u64` these functions used to return. Callers that only
+/// need the count read [`IngestOutcome::written`]; the nightly additionally
+/// stamps [`IngestOutcome::skipped`] into `ingest_runs.notes`, so the loss
+/// survives log retention and is answerable from SQL months later.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct IngestOutcome {
+    pub written: u64,
+    pub skipped: SkipCounts,
+}
+
+impl IngestOutcome {
+    fn record(&mut self, upsert: Upsert) {
+        match upsert {
+            Upsert::Wrote => self.written += 1,
+            Upsert::Skipped(r) => self.skipped.record(r),
+        }
+    }
+
+    /// The standard audit pair for a finished loop: the full breakdown always
+    /// goes to `info!` next to the write count, and a `warn!` fires only when
+    /// an anomalous reason is non-zero. `scope` is the caller's own context
+    /// (season, window, team) rendered for the message.
+    fn log(&self, what: &str, scope: &str) {
+        let s = self.skipped;
+        info!(
+            written = self.written,
+            skipped = s.total(),
+            missing_identifier = s.missing_identifier,
+            missing_date = s.missing_date,
+            unknown_game = s.unknown_game,
+            unresolved_team = s.unresolved_team,
+            scope,
+            "{what} ingested"
+        );
+        if s.anomalous() > 0 {
+            warn!(
+                missing_identifier = s.missing_identifier,
+                missing_date = s.missing_date,
+                unknown_game = s.unknown_game,
+                scope,
+                "{what}: rows dropped before write — the feed referenced records we could not store"
+            );
+        }
+    }
+}
+
+/// Outcome of a single upsert: either the row was written, or it was declined
+/// for a named reason. Replaces the `bool` these helpers used to return, whose
+/// `false` arm carried no information at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Upsert {
+    Wrote,
+    Skipped(SkipReason),
+}
+
+/// Shorthand for the three upsert helpers' return type.
+type UpsertResult = Result<Upsert, NatStatError>;
+
 /// Ingest all MBB games for a season, including player box scores via hydration.
 ///
 /// Uses `games;boxscores` hydration to get game results + box scores in fewer API calls.
@@ -15,23 +154,21 @@ pub async fn ingest_games(
     client: &NatStatClient,
     pool: &PgPool,
     season: i32,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let pages = client
         .get_all_pages("games", Some(&season.to_string()), None)
         .await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let games = extract_results(page);
         for game in games {
-            if upsert_game(game, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_game(game, pool, season).await?);
         }
     }
 
-    info!(count, season, "games ingested");
-    Ok(count)
+    outcome.log("games", &format!("season={season}"));
+    Ok(outcome)
 }
 
 /// Ingest games for a specific date range.
@@ -41,22 +178,20 @@ pub async fn ingest_games_by_date_range(
     season: i32,
     start: &str,
     end: &str,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let range = format!("{},{}", start, end);
     let pages = client.get_all_pages("games", Some(&range), None).await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let games = extract_results(page);
         for game in games {
-            if upsert_game(game, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_game(game, pool, season).await?);
         }
     }
 
-    info!(count, season, start, end, "games ingested for date range");
-    Ok(count)
+    outcome.log("games", &format!("season={season} {start}..{end}"));
+    Ok(outcome)
 }
 
 /// Ingest player performances (box scores) for all games in a season.
@@ -66,23 +201,21 @@ pub async fn ingest_player_performances(
     client: &NatStatClient,
     pool: &PgPool,
     season: i32,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let pages = client
         .get_all_pages("playerperfs", Some(&season.to_string()), None)
         .await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
         for perf in perfs {
-            if upsert_player_game_stats(perf, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_player_game_stats(perf, pool, season).await?);
         }
     }
 
-    info!(count, season, "player performances ingested");
-    Ok(count)
+    outcome.log("player performances", &format!("season={season}"));
+    Ok(outcome)
 }
 
 /// Ingest player performances for a specific team and season.
@@ -91,27 +224,25 @@ pub async fn ingest_player_performances_by_team(
     pool: &PgPool,
     season: i32,
     team_code: &str,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let range = format!("{},{}", season, team_code);
     let pages = client
         .get_all_pages("playerperfs", Some(&range), None)
         .await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
         for perf in perfs {
-            if upsert_player_game_stats(perf, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_player_game_stats(perf, pool, season).await?);
         }
     }
 
-    info!(
-        count,
-        season, team_code, "player performances ingested for team"
+    outcome.log(
+        "player performances",
+        &format!("season={season} team={team_code}"),
     );
-    Ok(count)
+    Ok(outcome)
 }
 
 /// Ingest player performances for a specific date range.
@@ -121,37 +252,35 @@ pub async fn ingest_player_performances_by_date_range(
     season: i32,
     start: &str,
     end: &str,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let range = format!("{},{}", start, end);
     let pages = client
         .get_all_pages("playerperfs", Some(&range), None)
         .await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
         for perf in perfs {
-            if upsert_player_game_stats(perf, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_player_game_stats(perf, pool, season).await?);
         }
     }
 
-    info!(
-        count,
-        season, start, end, "player performances ingested for date range"
+    outcome.log(
+        "player performances",
+        &format!("season={season} {start}..{end}"),
     );
-    Ok(count)
+    Ok(outcome)
 }
 
-async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, NatStatError> {
+async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
     let natstat_id = match game
         .get("id")
         .or_else(|| game.get("code"))
         .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
     {
         Some(id) => id.trim_matches('"').to_string(),
-        None => return Ok(false),
+        None => return Ok(Upsert::Skipped(SkipReason::MissingIdentifier)),
     };
 
     let game_date = match game
@@ -164,7 +293,7 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, N
         Some(d) => d,
         None => {
             warn!(natstat_id, "game missing date, skipping");
-            return Ok(false);
+            return Ok(Upsert::Skipped(SkipReason::MissingDate));
         }
     };
 
@@ -322,14 +451,10 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> Result<bool, N
     .execute(pool)
     .await?;
 
-    Ok(true)
+    Ok(Upsert::Wrote)
 }
 
-async fn upsert_player_game_stats(
-    perf: &Value,
-    pool: &PgPool,
-    season: i32,
-) -> Result<bool, NatStatError> {
+async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> UpsertResult {
     // Get player code — NatStat v4 uses "player-code" or nested player.code
     let player_natstat_id = match perf
         .get("player-code")
@@ -338,7 +463,7 @@ async fn upsert_player_game_stats(
         .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
     {
         Some(id) => id.trim_matches('"').to_string(),
-        None => return Ok(false),
+        None => return Ok(Upsert::Skipped(SkipReason::MissingIdentifier)),
     };
 
     // Get game code — NatStat v4 uses "game-code" or nested game.code
@@ -349,7 +474,7 @@ async fn upsert_player_game_stats(
         .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
     {
         Some(id) => id.trim_matches('"').to_string(),
-        None => return Ok(false),
+        None => return Ok(Upsert::Skipped(SkipReason::MissingIdentifier)),
     };
 
     // Resolve game first — if game is missing we can't store anything.
@@ -359,7 +484,7 @@ async fn upsert_player_game_stats(
             .fetch_optional(pool)
             .await?;
     let Some((game_id, game_date)) = game_row else {
-        return Ok(false);
+        return Ok(Upsert::Skipped(SkipReason::UnknownGame));
     };
 
     // Resolve team — NatStat v4 uses "team-code" or nested team.code
@@ -369,7 +494,7 @@ async fn upsert_player_game_stats(
         .or_else(|| perf.get("team").and_then(|t| t.get("code")))
         .and_then(|c| c.as_str());
     let Some(team_id) = team_id_by_code_and_season(pool, team_code, season).await? else {
-        return Ok(false);
+        return Ok(Upsert::Skipped(SkipReason::UnresolvedTeam));
     };
 
     // Resolve player — auto-create a minimal record if we've never seen them before.
@@ -595,7 +720,7 @@ async fn upsert_player_game_stats(
     .execute(pool)
     .await?;
 
-    Ok(true)
+    Ok(Upsert::Wrote)
 }
 
 /// Ingest team performances for every team in a season.
@@ -607,23 +732,24 @@ pub async fn ingest_all_team_performances(
     client: &NatStatClient,
     pool: &PgPool,
     season: i32,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let pages = client
         .get_all_pages("teamperfs", Some(&season.to_string()), None)
         .await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
         for perf in perfs {
-            if upsert_team_game_stats(perf, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_team_game_stats(perf, pool, season).await?);
         }
     }
 
-    info!(count, season, "team performances ingested (season-wide)");
-    Ok(count)
+    outcome.log(
+        "team performances (season-wide)",
+        &format!("season={season}"),
+    );
+    Ok(outcome)
 }
 
 /// Ingest team performances (team-level box scores) for a specific date range.
@@ -637,27 +763,25 @@ pub async fn ingest_team_performances_by_date_range(
     season: i32,
     start: &str,
     end: &str,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let range = format!("{},{}", start, end);
     let pages = client
         .get_all_pages("teamperfs", Some(&range), None)
         .await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
         for perf in perfs {
-            if upsert_team_game_stats(perf, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_team_game_stats(perf, pool, season).await?);
         }
     }
 
-    info!(
-        count,
-        season, start, end, "team performances ingested for date range"
+    outcome.log(
+        "team performances",
+        &format!("season={season} {start}..{end}"),
     );
-    Ok(count)
+    Ok(outcome)
 }
 
 /// Ingest team performances (team-level box scores) for a specific team and season.
@@ -666,31 +790,28 @@ pub async fn ingest_team_performances(
     pool: &PgPool,
     season: i32,
     team_code: &str,
-) -> Result<u64, NatStatError> {
+) -> Result<IngestOutcome, NatStatError> {
     let range = format!("{},{}", season, team_code);
     let pages = client
         .get_all_pages("teamperfs", Some(&range), None)
         .await?;
 
-    let mut count = 0u64;
+    let mut outcome = IngestOutcome::default();
     for page in &pages {
         let perfs = extract_results(page);
         for perf in perfs {
-            if upsert_team_game_stats(perf, pool, season).await? {
-                count += 1;
-            }
+            outcome.record(upsert_team_game_stats(perf, pool, season).await?);
         }
     }
 
-    info!(count, season, team_code, "team performances ingested");
-    Ok(count)
+    outcome.log(
+        "team performances",
+        &format!("season={season} team={team_code}"),
+    );
+    Ok(outcome)
 }
 
-async fn upsert_team_game_stats(
-    perf: &Value,
-    pool: &PgPool,
-    season: i32,
-) -> Result<bool, NatStatError> {
+async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> UpsertResult {
     let team_code = perf
         .get("team-code")
         .or_else(|| perf.get("team").and_then(|t| t.get("code")))
@@ -703,12 +824,12 @@ async fn upsert_team_game_stats(
         .map(|s| s.trim_matches('"').to_string());
 
     let Some(game_id_str) = game_natstat_id else {
-        return Ok(false);
+        return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
     };
 
     let team_id = team_id_by_code_and_season(pool, team_code, season).await?;
     let Some(team_id) = team_id else {
-        return Ok(false);
+        return Ok(Upsert::Skipped(SkipReason::UnresolvedTeam));
     };
 
     let game_row: Option<(Uuid, NaiveDate)> =
@@ -718,7 +839,7 @@ async fn upsert_team_game_stats(
             .await?;
 
     let Some((game_id, game_date)) = game_row else {
-        return Ok(false);
+        return Ok(Upsert::Skipped(SkipReason::UnknownGame));
     };
 
     let opponent_code = perf
@@ -823,5 +944,78 @@ async fn upsert_team_game_stats(
     .execute(pool)
     .await?;
 
-    Ok(true)
+    Ok(Upsert::Wrote)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silent_loop_reports_nothing() {
+        let o = IngestOutcome::default();
+        assert_eq!(o.skipped.summary(), None);
+        assert_eq!(o.skipped.total(), 0);
+        assert_eq!(o.skipped.anomalous(), 0);
+    }
+
+    #[test]
+    fn summary_names_only_the_reasons_that_fired() {
+        let mut o = IngestOutcome::default();
+        o.record(Upsert::Wrote);
+        o.record(Upsert::Skipped(SkipReason::UnknownGame));
+        o.record(Upsert::Skipped(SkipReason::UnknownGame));
+        o.record(Upsert::Skipped(SkipReason::UnresolvedTeam));
+
+        assert_eq!(o.written, 1);
+        assert_eq!(
+            o.skipped.summary().unwrap(),
+            "skipped 3 (unknown_game=2, unresolved_team=1)"
+        );
+    }
+
+    /// The distinction the warn/degrade decision hangs on: a non-D1 opponent is
+    /// routine and must not raise an alarm, while an orphaned perf is #202's
+    /// whole point. Getting this backwards recreates #232 in a new channel.
+    #[test]
+    fn non_d1_skips_are_counted_but_not_anomalous() {
+        let mut o = IngestOutcome::default();
+        for _ in 0..34 {
+            o.record(Upsert::Skipped(SkipReason::UnresolvedTeam));
+        }
+        assert_eq!(o.skipped.total(), 34);
+        assert_eq!(o.skipped.anomalous(), 0);
+        assert_eq!(
+            o.skipped.summary().unwrap(),
+            "skipped 34 (unresolved_team=34)"
+        );
+
+        o.record(Upsert::Skipped(SkipReason::UnknownGame));
+        assert_eq!(o.skipped.anomalous(), 1);
+    }
+
+    #[test]
+    fn every_reason_lands_in_its_own_bucket() {
+        let mut o = IngestOutcome::default();
+        for r in [
+            SkipReason::MissingIdentifier,
+            SkipReason::MissingDate,
+            SkipReason::UnknownGame,
+            SkipReason::UnresolvedTeam,
+        ] {
+            o.record(Upsert::Skipped(r));
+        }
+        let s = o.skipped;
+        assert_eq!(
+            (
+                s.missing_identifier,
+                s.missing_date,
+                s.unknown_game,
+                s.unresolved_team
+            ),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(s.total(), 4);
+        assert_eq!(s.anomalous(), 3);
+    }
 }
