@@ -1196,6 +1196,16 @@ pub async fn resolve_player_id_for_season(
           ON t2.torvik_pid = t1.torvik_pid AND t2.season = $2
         WHERE t1.player_id = $1
           AND t2.player_id IS NOT NULL
+        -- `t1.player_id = $1` is not unique: `torvik_player_stats` is UNIQUE
+        -- on (torvik_pid, season), not (player_id, season), so a duplicated
+        -- pair gives two `t1` rows carrying two different pids and leading to
+        -- two different players in the target season. Without an ORDER BY the
+        -- one that survives LIMIT 1 is whatever the plan emitted first, and
+        -- for the pairs that are two humans sharing a name (#313) that means
+        -- a cross-season link that lands on the wrong person, differently on
+        -- different runs. Lowest pid, matching every other collapse since
+        -- #306, so this resolves to the same profile the pages show.
+        ORDER BY t1.torvik_pid
         LIMIT 1
         "#,
     )
@@ -1234,6 +1244,13 @@ pub async fn get_player_available_seasons(
                     SELECT t.torvik_pid
                     FROM torvik_player_stats t
                     WHERE t.player_id = p.id
+                    -- Same non-uniqueness as `resolve_player_id_for_season`
+                    -- above: a duplicated (player, season) pair offers two
+                    -- pids here, and an unordered LIMIT 1 takes either. The
+                    -- pid chosen drives the whole UNION branch below, so on a
+                    -- two-humans pair an arbitrary pick puts the OTHER
+                    -- person's seasons in this player's season selector.
+                    ORDER BY t.torvik_pid
                     LIMIT 1
                 ) AS tor_pid
             FROM players p

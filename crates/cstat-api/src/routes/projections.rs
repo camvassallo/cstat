@@ -1374,8 +1374,29 @@ async fn projection_team_detail(
                      ON pa.player_id = p.id AND pa.season = $1
                  LEFT JOIN player_season_stats pss
                      ON pss.player_id = p.id AND pss.season = $1
-                 LEFT JOIN torvik_player_stats tps
-                     ON tps.player_id = p.id AND tps.season = $1
+                 -- One Torvik profile per (player, season) -- see
+                 -- `get_team_roster` (queries.rs) for why the collapse is
+                 -- mandatory. `torvik_player_stats` is UNIQUE on (torvik_pid,
+                 -- season), NOT on (player_id, season).
+                 --
+                 -- The fan-out does not repeat a departure row -- the JSON
+                 -- below is built from `projection.departures`, and this
+                 -- result collapses into a HashMap keyed on `p.id`. It made
+                 -- the surviving row a coin flip instead: whichever copy the
+                 -- plan emitted last won the key, so a departing player's CAM
+                 -- chip could change between two identical requests.
+                 --
+                 -- LATERAL rather than the DISTINCT ON the season-wide sites
+                 -- use, matching `get_team_roster`: `$2` is a departure list
+                 -- of tens of ids, so this is a handful of probes of
+                 -- `idx_torvik_player_stats_player` rather than a season-wide
+                 -- de-duplication for a few dozen rows.
+                 LEFT JOIN LATERAL (
+                     SELECT * FROM torvik_player_stats t
+                     WHERE t.player_id = p.id AND t.season = $1
+                     ORDER BY t.torvik_pid
+                     LIMIT 1
+                 ) tps ON TRUE
                  WHERE p.id = ANY($2)",
             )
             .bind(base_season)

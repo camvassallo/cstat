@@ -167,8 +167,31 @@ async fn recruit_list(
         FROM recruits r
         LEFT JOIN teams t
             ON t.id = r.committed_team_id
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = r.cstat_player_id AND tps.season = $2
+        -- One Torvik profile per (player, season) -- see `get_team_roster`
+        -- (queries.rs) for why the collapse is mandatory.
+        -- `torvik_player_stats` is UNIQUE on (torvik_pid, season), NOT on
+        -- (player_id, season).
+        --
+        -- This is the one call site in the #312 group where the fan-out
+        -- reaches the response as a REPEATED ROW rather than a
+        -- non-deterministic value: the list is built from this query's rows,
+        -- one per `recruits` record, so a recruit whose resolved player has
+        -- two profiles in `target_season` was rendered twice, each copy
+        -- carrying its own CAM. Locally that is the 2025 class at 892 rows for
+        -- 883 recruits, plus 2016/2019/2020. The repeat also double-counted
+        -- that recruit in the freshman-projection batch below.
+        --
+        -- Scoped to `$2` inside the subquery rather than relying on the qual
+        -- propagating: the outer join fixes `tps.season` to a bound parameter,
+        -- not to a column of the driving table, so there is no equivalence for
+        -- the planner to push through and the de-duplication would otherwise
+        -- sort every season.
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id, season) *
+            FROM torvik_player_stats
+            WHERE player_id IS NOT NULL AND season = $2
+            ORDER BY player_id, season, torvik_pid
+        ) tps ON tps.player_id = r.cstat_player_id AND tps.season = $2
         LEFT JOIN player_archetypes pa
             ON pa.player_id = r.cstat_player_id AND pa.season = $2
         LEFT JOIN player_season_stats pss

@@ -161,8 +161,30 @@ async fn draft_board(
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = p.id AND tps.season = pss.season
+        -- One Torvik profile per (player, season) -- see `get_team_roster`
+        -- (queries.rs) for why the collapse is mandatory.
+        -- `torvik_player_stats` is UNIQUE on (torvik_pid, season), NOT on
+        -- (player_id, season), so a bare join puts a duplicated player into
+        -- the bucket index below two or three times.
+        --
+        -- As in `transfers.rs` the symptom is a non-deterministic pick rather
+        -- than a duplicated board row: the response is one row per big-board
+        -- entry, and the copies share a name and a team, so neither the
+        -- `team_matches` filter nor the minutes fallback can separate them.
+        -- Whichever the plan emitted first won, and its CAM/CAMO/CAMD went to
+        -- the board.
+        --
+        -- Lowest `torvik_pid`, the tiebreak used since #306/#309. DISTINCT ON
+        -- rather than a LATERAL because this query is season-wide, and
+        -- `pss.season = $1` reaches the subquery through the join equivalence
+        -- (verified under EXPLAIN), so the de-duplication stays inside the one
+        -- season being drafted.
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id, season) *
+            FROM torvik_player_stats
+            WHERE player_id IS NOT NULL
+            ORDER BY player_id, season, torvik_pid
+        ) tps ON tps.player_id = p.id AND tps.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = p.id AND pa.season = pss.season
         WHERE pss.season = $1

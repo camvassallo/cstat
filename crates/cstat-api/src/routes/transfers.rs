@@ -197,8 +197,37 @@ async fn fetch_candidates(
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = p.id AND tps.season = pss.season
+        -- One Torvik profile per (player, season) -- see `get_team_roster`
+        -- (queries.rs) for why this collapse is mandatory rather than
+        -- defensive. `torvik_player_stats` is UNIQUE on (torvik_pid, season),
+        -- NOT on (player_id, season): 287 (player, season) pairs locally carry
+        -- two or three profiles for one human, and a bare join here put 57
+        -- extra candidates into the 2026 bucket index.
+        --
+        -- The symptom is NOT a duplicated table row -- the response is one row
+        -- per `transfers` record, not per candidate -- it is a NON-DETERMINISTIC
+        -- pick. Both copies share the player's name and team, so neither the
+        -- `team_matches` filter nor the minutes-played fallback below can tell
+        -- them apart, and the winner is whichever order the plan happened to
+        -- emit. Where the copies disagree on CAM (26 of the 287 pairs) the
+        -- transfers page served a different number run to run.
+        --
+        -- Lowest `torvik_pid` wins, the tiebreak used since #306/#309, so a
+        -- human keeps one identity across every surface that shows them.
+        --
+        -- `season BETWEEN $1 AND $2` is repeated INSIDE the subquery on
+        -- purpose. Postgres propagates an equality qual into a subquery through
+        -- the join equivalence -- which is why the season-wide sibling sites
+        -- can leave it out -- but it does not do that for a range, so without
+        -- this the de-duplication sorts all 58k rows across every season on
+        -- every call (85 ms against 17 ms locally).
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id, season) *
+            FROM torvik_player_stats
+            WHERE player_id IS NOT NULL
+              AND season BETWEEN $1 AND $2
+            ORDER BY player_id, season, torvik_pid
+        ) tps ON tps.player_id = p.id AND tps.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = p.id AND pa.season = pss.season
         LEFT JOIN player_on_off oo
