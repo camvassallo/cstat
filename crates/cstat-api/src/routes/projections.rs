@@ -1372,8 +1372,23 @@ async fn projection_team_detail(
                  FROM players p
                  LEFT JOIN player_archetypes pa
                      ON pa.player_id = p.id AND pa.season = $1
-                 LEFT JOIN player_season_stats pss
-                     ON pss.player_id = p.id AND pss.season = $1
+                 -- One stint per player, largest first — same shape as the
+                 -- Torvik collapse below and for the same reason.
+                 -- `player_season_stats` is UNIQUE on (player_id, team_id,
+                 -- season), so a player with rows at two schools in the base
+                 -- season returns two rows here and the `HashMap` keyed on
+                 -- `p.id` resolves that by last-write-wins: 18 players in
+                 -- 2024, each showing whichever stint's MPG the plan emitted
+                 -- last. Games played, then minutes, then `team_id` for
+                 -- determinism, matching `recruits.rs`.
+                 LEFT JOIN LATERAL (
+                     SELECT * FROM player_season_stats s
+                     WHERE s.player_id = p.id AND s.season = $1
+                     ORDER BY s.games_played DESC NULLS LAST,
+                              s.minutes_per_game DESC NULLS LAST,
+                              s.team_id
+                     LIMIT 1
+                 ) pss ON TRUE
                  -- One Torvik profile per (player, season) -- see
                  -- `get_team_roster` (queries.rs) for why the collapse is
                  -- mandatory. `torvik_player_stats` is UNIQUE on (torvik_pid,
