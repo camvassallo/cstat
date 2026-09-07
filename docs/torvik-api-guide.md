@@ -363,6 +363,15 @@ Some statistics are "better" when lower. When applying color coding or percentil
 
 Use `pid` (player ID) to join player stats, game stats, and any derived data. The `pid` field is consistent across all endpoints for the same season.
 
+**It is not stable across fetches of the same season, and cstat stores one row per `pid`.** Torvik retires and renumbers pids between fetches, so a player can appear under one id in one pull and a different id in a later one. `torvik_player_stats` is `UNIQUE (torvik_pid, season)` and `ingest_torvik_player_stats` upserts without deleting, so the retired row stays behind — still linked to the cstat player, indefinitely. 262 of the 287 duplicated `(player_id, season)` pairs in the local database are exactly that, and they are why `player_id` cannot be assumed unique per season anywhere downstream.
+
+The tell is `player_name` (migration 049): the ingest writes it on every upsert, and the parser can only leave it empty, never NULL. So a NULL name marks a row no ingest has touched since that migration — a `pid` the current feed no longer carries. In every duplicated pair the lower pid carries a name and the higher one usually does not.
+
+Two consequences worth knowing before writing a query or a loader:
+
+- **Never join `torvik_player_stats` on `player_id` without collapsing to one profile per `(player, season)`** — `DISTINCT ON (player_id, season) ... ORDER BY player_id, season, torvik_pid` for season-wide queries, `LEFT JOIN LATERAL ... ORDER BY torvik_pid LIMIT 1` for single-team ones. Lowest `torvik_pid` is the tiebreak used everywhere since #306. `crates/cstat-core/tests/torvik_join_shape.rs` fails the build on a bare join.
+- **Joining on `torvik_pid` is always safe** — that is the actual unique key, and it is what the point-in-time and trajectory builders use.
+
 ### Linking Games
 
 Use `muid` (matchup unique ID) to group all player rows belonging to the same game.

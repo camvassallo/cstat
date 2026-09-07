@@ -43,8 +43,21 @@ const ON_CLAUSE_LOOKAHEAD: usize = 3;
 /// `trajectory.rs` joins Torvik on `torvik_pid` and then joins
 /// `player_season_stats` on `player_id` immediately below, which is exactly
 /// the safe-then-unrelated pair that a naive window calls a violation.
-const CLAUSE_ENDS: [&str; 6] = [
-    "JOIN ", "WHERE ", "GROUP BY", "ORDER BY", "LIMIT ", "UNION ",
+/// The qualified spellings matter as much as the bare one: `LEFT JOIN` does
+/// not start with `JOIN`, so without them a multi-line join whose ON clause is
+/// not on the very next line reads straight into its neighbour.
+const CLAUSE_ENDS: [&str; 11] = [
+    "JOIN ",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "INNER JOIN",
+    "OUTER JOIN",
+    "FULL JOIN",
+    "CROSS JOIN",
+    "WHERE ",
+    "GROUP BY",
+    "ORDER BY",
+    "LIMIT ",
 ];
 
 fn repo_root() -> PathBuf {

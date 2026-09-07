@@ -908,8 +908,12 @@ fn link_players(
     let mut order: Vec<usize> = (0..rows.len()).filter(|&i| rows[i].pid.is_some()).collect();
     order.sort_by_key(|&i| rows[i].pid);
 
-    let mut sole_candidate: Vec<usize> = Vec::new();
-    let mut unmatched_early: Vec<usize> = Vec::new();
+    // `(row index, the one cstat player that name resolves to)`. The target is
+    // resolved once, here, rather than recomputed by each loop below: they used
+    // to derive it separately and the second indexed the first's map with `[]`,
+    // so any drift between them would panic inside the nightly ingest.
+    let mut sole_candidate: Vec<(usize, Option<usize>)> = Vec::new();
+    let mut refused_outright: Vec<usize> = Vec::new();
     for i in order {
         let r = &rows[i];
         let team = team_ids[r.team.as_str()];
@@ -931,17 +935,23 @@ fn link_players(
                 player_ids[i] = Some(roster.players[c].id);
             }
             // Team-confirmed, but a lower-pid row already took this player.
-            // It still goes to the fallback passes — they guard on `claimed`,
-            // so they cannot hand the same player back, but they can pair it
-            // with a DIFFERENT unclaimed player if one genuinely fits. For a
-            // same-team duplicate no such player exists and the row ends
-            // unlinked, which is the point.
+            //
+            // This one does NOT go on to the fallback passes, and the
+            // asymmetry with phase 1b below is the point. Both this row's
+            // NAME and its TEAM agree with the player that was taken, so it is
+            // a duplicate of that specific person — and the fallbacks key on
+            // family or given name within the team, which is weaker evidence
+            // than what this row just matched on. Letting it through means a
+            // Torvik row for one Barnes at Alcorn St. can be handed to a
+            // different, unclaimed Barnes on the same roster: brothers and
+            // cousins on one team are common enough in this sport that the
+            // pairing would look plausible and be wrong. Unlinked is correct.
             Some(_) => {
                 stats.duplicate_claim_refused += 1;
                 refused_pids.extend(r.pid);
-                unmatched_early.push(i);
+                refused_outright.push(i);
             }
-            None => sole_candidate.push(i),
+            None => sole_candidate.push((i, (candidates.len() == 1).then(|| candidates[0]))),
         }
     }
 
@@ -961,30 +971,17 @@ fn link_players(
     // ambiguous, and picking the first one is how Torvik's Xavier "Anthony
     // Robinson" ended up attached to Missouri's.
     let mut wanted_by: HashMap<Uuid, u32> = HashMap::new();
-    for &i in &sole_candidate {
-        let candidates = roster
-            .by_name
-            .get(&normalize_name(&rows[i].player_name))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        if candidates.len() == 1 {
-            *wanted_by
-                .entry(roster.players[candidates[0]].id)
-                .or_default() += 1;
+    for (_, candidate) in &sole_candidate {
+        if let Some(c) = candidate {
+            *wanted_by.entry(roster.players[*c].id).or_default() += 1;
         }
     }
 
-    let mut unmatched: Vec<usize> = unmatched_early;
-    for i in sole_candidate {
-        let candidates = roster
-            .by_name
-            .get(&normalize_name(&rows[i].player_name))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        if candidates.len() == 1 {
-            let c = candidates[0];
+    let mut unmatched: Vec<usize> = Vec::new();
+    for (i, candidate) in sole_candidate {
+        if let Some(c) = candidate {
             let id = roster.players[c].id;
-            if !claimed.contains(&id) && wanted_by[&id] == 1 {
+            if !claimed.contains(&id) && wanted_by.get(&id) == Some(&1) {
                 stats.name_only += 1;
                 // Diagnostic only: how much of this tier is carrying a team
                 // disagreement rather than an unresolved team. It is the
@@ -1001,6 +998,12 @@ fn link_players(
             }
             stats.duplicate_claim_refused += 1;
             refused_pids.extend(rows[i].pid);
+            // Unlike a phase-1a refusal, this row DOES go on to the fallback
+            // passes. Its team does not agree with the player it was refused,
+            // so it may well be a different person who plays for the team it
+            // names, and the family / given-name passes are exactly where such
+            // a person is found. They guard on `claimed`, so they cannot hand
+            // back the player this row was just refused.
         }
         unmatched.push(i);
     }
@@ -1029,6 +1032,13 @@ fn link_players(
         &mut stats.given_fallback,
     );
 
+    // Phase-1a refusals rejoin here, after every pass that could have paired
+    // them off has run. They belong in `unlinked` and in the rotation sample
+    // like any other row nothing links, and are only kept out of the passes
+    // themselves.
+    unmatched.extend(refused_outright);
+    unmatched.sort_unstable();
+
     stats.unlinked = unmatched.len() as u64;
     let mut rotation: Vec<usize> = unmatched
         .iter()
@@ -1055,7 +1065,29 @@ fn link_players(
         "season {season}: every pid-carrying row must be counted exactly once"
     );
 
+    // Drop any pid that ended up linked after all.
+    //
+    // A phase-1b refusal is recorded before the row goes on to the fallback
+    // passes, and those passes routinely rescue it: the row was refused the
+    // one same-named player, and the family or given-name pass then finds it
+    // the different person it actually belongs to. Without this the post-upsert
+    // clear would delete the link the fallback had just established, so the row
+    // would come out of the ingest unlinked and nothing would say why.
+    //
+    // Six rows across the twelve local seasons take that path, so this is not
+    // hypothetical. It also covers the harder-to-see case of two rows sharing a
+    // `torvik_pid`, where the clear — keyed on `(season, torvik_pid)`, the
+    // table's unique key — cannot tell the linked row from the refused one.
+    let linked_pids: HashSet<i32> = player_ids
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| id.is_some())
+        .filter_map(|(i, _)| rows[i].pid)
+        .collect();
+    refused_pids.retain(|pid| !linked_pids.contains(pid));
     refused_pids.sort_unstable();
+    refused_pids.dedup();
+
     Links {
         player_ids,
         refused_pids,
@@ -1679,6 +1711,87 @@ mod tests {
         assert_eq!(links.player_ids, vec![None, Some(mcghee)]);
         assert_eq!(links.stats.exact, 1);
         assert_eq!(links.stats.duplicate_claim_refused, 1);
+    }
+
+    #[test]
+    fn link_does_not_hand_a_refused_duplicate_to_a_teammate_with_the_same_surname() {
+        // A phase-1a refusal matched the taken player on BOTH name and team,
+        // so it is a duplicate of that person -- and it must not then be
+        // offered to the family-name fallback, which matches on weaker
+        // evidence than it just cleared.
+        //
+        // Two Barneses on one roster is the shape that makes this bite:
+        // without the guard, the second Torvik "Corey Barnes" row loses Corey
+        // and is handed Devon, so one brother's season is served under the
+        // other's name. Latent on the current database -- no affected team has
+        // an unclaimed same-surname teammate -- which is exactly why it needs
+        // a test rather than a measurement.
+        let (corey, devon) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let team = Uuid::from_u128(90);
+        let r = roster(
+            &[
+                (corey, "Corey Barnes", Some(team)),
+                (devon, "Devon Barnes", Some(team)),
+            ],
+            &[(team, "Alcorn St.", "Alcorn State Braves")],
+        );
+        let rows = [
+            torvik_row("Corey Barnes", "Alcorn St.", 100, 25.0),
+            torvik_row("Corey Barnes", "Alcorn St.", 200, 21.0),
+        ];
+        let links = link_players(&r, &rows, 2026);
+        assert_eq!(links.player_ids, vec![Some(corey), None]);
+        assert_eq!(
+            links.stats.family_fallback, 0,
+            "Devon Barnes was handed Corey's row"
+        );
+        assert_eq!(links.stats.duplicate_claim_refused, 1);
+        assert_eq!(links.stats.unlinked, 1);
+    }
+
+    #[test]
+    fn link_still_lets_an_off_team_refusal_reach_the_fallbacks() {
+        // The mirror of the test above, and the reason the two refusal kinds
+        // are not treated alike. This row's team does NOT agree with the
+        // player it was refused, so it may be a different person who really
+        // does play for the team it names -- and the family-name pass is
+        // where such a person is found.
+        //
+        // cstat holds one "Jared Harper", on Auburn, plus Fairfield's
+        // "Jonathan Harper" whom Torvik calls Jared. Auburn's row takes Jared;
+        // Fairfield's is refused by name, and then correctly recovered.
+        let (auburn_harper, fairfield_harper) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (auburn, fairfield) = (Uuid::from_u128(90), Uuid::from_u128(91));
+        let r = roster(
+            &[
+                (auburn_harper, "Jared Harper", Some(auburn)),
+                (fairfield_harper, "Jonathan Harper", Some(fairfield)),
+            ],
+            &[
+                (auburn, "Auburn", "Auburn Tigers"),
+                (fairfield, "Fairfield", "Fairfield Stags"),
+            ],
+        );
+        let rows = [
+            torvik_row("Jared Harper", "Fairfield", 38453, 12.0),
+            torvik_row("Jared Harper", "Auburn", 45330, 32.0),
+        ];
+        let links = link_players(&r, &rows, 2017);
+        assert_eq!(
+            links.player_ids,
+            vec![Some(fairfield_harper), Some(auburn_harper)]
+        );
+        assert_eq!(links.stats.exact, 1);
+        assert_eq!(links.stats.family_fallback, 1);
+        // And the refusal must not be left on the clear list. The pid is
+        // recorded when phase 1b refuses the row, before the fallback rescues
+        // it; if it stays there, `ingest_torvik_player_stats` deletes the link
+        // the fallback just made and the row comes out unlinked with nothing
+        // to explain it. Six rows locally take exactly this path.
+        assert!(
+            links.refused_pids.is_empty(),
+            "a row the fallback recovered is still queued to have its link cleared",
+        );
     }
 
     #[test]
