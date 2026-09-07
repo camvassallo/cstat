@@ -354,7 +354,8 @@ exactly one message per run:
   phantom rosters, misidentified players, dedupes) appear only when non-zero, and
   **warnings** lists any `Warning`-severity invariant as `check count (sample,
   sample, +N)` — up to three samples, so a reported PBP hole names the dates to
-  backfill rather than just asserting one exists.
+  backfill rather than just asserting one exists. The warnings line also carries
+  **dropped box-score rows** (see below) and `source_not_published` notes.
 - **Degraded** (`:warning:`) — the run completed but a best-effort feed
   (forecasts / ELO / Torvik) failed, or rate-budget headroom got low. Lists each
   issue, with the same window/duration header and warnings line.
@@ -366,6 +367,47 @@ Slack outage never affects the ingest. Create the webhook at
 `api.slack.com/apps → Incoming Webhooks`. If the nightly success ping becomes
 noise, mute the channel rather than unsetting the var — you still want the
 degraded/critical posts.
+
+### Dropped box-score rows (#202)
+
+The three box-score steps can write fewer rows than the feed handed them, and
+until #202 that loss reached nothing at all — the upserts returned a bare
+`false`, the callers counted only the successes, and the step still recorded
+`ok`. Each step now tallies what it declined to write, by reason, and reports it
+in two places that answer different questions:
+
+- **`ingest_runs.notes`** carries the full breakdown, e.g.
+  `skipped 36 (unknown_game=2, unresolved_team=34)`. Written by the three
+  box-score steps only — every other step still records a NULL note, so a NULL
+  here means "this step does not report skips", not "this step skipped nothing".
+  This is the audit trail: it outlives Railway's log retention, so "what did last
+  February cost us" is a SQL query rather than an archaeology project.
+- **The Slack `warnings:` line** carries only the reasons that mean *we* lost
+  something — `unknown_game`, `missing_identifier`, `missing_date`.
+
+The split is the point. `unresolved_team` is the non-D1 side of a game, which we
+do not store; it is non-zero on essentially every run (a normal night skips a few
+dozen). Announcing that nightly would make the line worthless for the reasons
+that matter, which is the failure #232 documents one channel over. The step stays
+`ok` either way — it did everything the feed allowed.
+
+**`unknown_game` is the one to act on.** In a date-range run the `games` step
+covers the same window and runs first, so every perf's game should already be
+stored. A non-zero count means box scores arrived with nowhere to put them:
+
+```sql
+SELECT started_at, step, rows_touched, notes
+FROM ingest_runs
+WHERE notes LIKE '%unknown_game%'
+ORDER BY started_at DESC LIMIT 20;
+```
+
+Note what these counters do **not** cover: a row the feed never handed us at all.
+Fetch-completeness is a separate gap from upsert-completeness — four games across
+2015/2016/2018 were lost that way, present upstream and simply never fetched, and
+it was the `completed_game_missing_team_stats` invariant that caught them, not
+these counters. Re-running `update --from/--to` over the affected date refills
+them.
 
 ### Error channels — `#errors-api` and `#errors-web`
 

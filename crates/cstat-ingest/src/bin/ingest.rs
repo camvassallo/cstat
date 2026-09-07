@@ -793,7 +793,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::Games { year, from, to } => {
-            let count = match (from, to) {
+            let outcome = match (from, to) {
                 (Some(f), Some(t)) => {
                     cstat_ingest::ingest::games::ingest_games_by_date_range(
                         &client, &db.pool, year, &f, &t,
@@ -802,11 +802,16 @@ async fn main() -> Result<()> {
                 }
                 _ => cstat_ingest::ingest::games::ingest_games(&client, &db.pool, year).await?,
             };
-            println!("Ingested {count} games for {year}");
+            println!("Ingested {} games for {year}", outcome.written);
+            // #202: the count alone reads as success even when the feed handed
+            // us rows we threw away, so say what was dropped and why.
+            if let Some(s) = outcome.skipped.summary() {
+                println!("  {s}");
+            }
         }
 
         Commands::Perfs { year, from, to } => {
-            let count = match (from, to) {
+            let outcome = match (from, to) {
                 (Some(f), Some(t)) => {
                     cstat_ingest::ingest::games::ingest_player_performances_by_date_range(
                         &client, &db.pool, year, &f, &t,
@@ -818,7 +823,13 @@ async fn main() -> Result<()> {
                         .await?
                 }
             };
-            println!("Ingested {count} player performances for {year}");
+            println!(
+                "Ingested {} player performances for {year}",
+                outcome.written
+            );
+            if let Some(s) = outcome.skipped.summary() {
+                println!("  {s}");
+            }
         }
 
         Commands::PlayByPlay {

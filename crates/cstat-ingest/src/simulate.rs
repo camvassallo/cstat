@@ -821,7 +821,7 @@ pub async fn ingest_box_score_window(
     let pp =
         games::ingest_player_performances_by_date_range(client, pool, season, from, to).await?;
     let tp = games::ingest_team_performances_by_date_range(client, pool, season, from, to).await?;
-    Ok((g, pp, tp))
+    Ok((g.written, pp.written, tp.written))
 }
 
 /// Human-readable end-of-run report (also the artifact a weekly wrapper can

@@ -1,3 +1,4 @@
+use super::games::IngestOutcome;
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::notify;
@@ -236,6 +237,45 @@ impl Default for BootstrapOptions {
     }
 }
 
+/// Record a successful box-score step, carrying its #202 skip breakdown with it.
+///
+/// The step is `ok` either way — it did everything the feed allowed — but "how
+/// many rows did this cost us" has to land somewhere durable, and the two
+/// destinations answer different questions:
+///
+/// - **`ingest_runs.notes`** gets the full breakdown, benign classes included.
+///   That is the audit trail: it outlives Railway's log retention, and it is
+///   the row `/api/health/ingest` is looking at when it calls the step fresh.
+/// - **`skips`** (the run summary's warnings line) gets only the *anomalous*
+///   classes. A perf whose game we never stored is a loss; the non-D1 side of a
+///   game is Tuesday. Announcing the second one nightly would make the line
+///   worthless for the first — which is #232, exactly, one channel over.
+async fn record_box_score_step(
+    ledger: &RunLedger<'_>,
+    step: &str,
+    outcome: IngestOutcome,
+    started_at: chrono::DateTime<Utc>,
+    skips: &mut Vec<String>,
+) {
+    let note = outcome.skipped.summary();
+    ledger
+        .record_with_notes(
+            step,
+            StepStatus::Ok,
+            Some(outcome.written as i64),
+            started_at,
+            None,
+            note.as_deref(),
+        )
+        .await;
+    if outcome.skipped.anomalous() > 0 {
+        skips.push(format!(
+            "{step}: {}",
+            note.unwrap_or_else(|| "skipped rows".to_string())
+        ));
+    }
+}
+
 impl<'a> SeasonIngester<'a> {
     pub fn new(client: &'a NatStatClient, pool: &'a PgPool, season: i32) -> Self {
         Self {
@@ -262,11 +302,15 @@ impl<'a> SeasonIngester<'a> {
         report.teams = super::teams::ingest_teams(self.client, self.pool, self.season).await?;
 
         info!("step 2/7: ingesting games");
-        report.games = super::games::ingest_games(self.client, self.pool, self.season).await?;
+        report.games = super::games::ingest_games(self.client, self.pool, self.season)
+            .await?
+            .written;
 
         info!("step 3/7: ingesting player performances");
         report.player_performances =
-            super::games::ingest_player_performances(self.client, self.pool, self.season).await?;
+            super::games::ingest_player_performances(self.client, self.pool, self.season)
+                .await?
+                .written;
 
         info!("step 4/7: ingesting team details");
         report.team_details =
@@ -274,7 +318,9 @@ impl<'a> SeasonIngester<'a> {
 
         info!("step 5/7: ingesting team performances");
         report.team_performances =
-            super::games::ingest_all_team_performances(self.client, self.pool, self.season).await?;
+            super::games::ingest_all_team_performances(self.client, self.pool, self.season)
+                .await?
+                .written;
 
         info!("step 6/7: ingesting ELO ratings");
         report.elo_ratings =
@@ -371,7 +417,8 @@ impl<'a> SeasonIngester<'a> {
             start_date,
             end_date,
         )
-        .await?;
+        .await?
+        .written;
 
         ingest.player_performances = super::games::ingest_player_performances_by_date_range(
             self.client,
@@ -380,7 +427,8 @@ impl<'a> SeasonIngester<'a> {
             start_date,
             end_date,
         )
-        .await?;
+        .await?
+        .written;
 
         // Team-level box scores must be ingested too — `team_game_stats` feeds
         // four-factors / AdjEM / W-L derivation. Omitting this is why games
@@ -393,7 +441,8 @@ impl<'a> SeasonIngester<'a> {
             start_date,
             end_date,
         )
-        .await?;
+        .await?
+        .written;
 
         info!(
             season = self.season,
@@ -923,6 +972,16 @@ impl<'a> SeasonIngester<'a> {
         // channel over from the 503 it names.
         let mut source_warnings: Vec<String> = Vec::new();
 
+        // Rows the three box-score steps could not write (#202). Same channel as
+        // `source_warnings` and for a related reason, but the opposite kind of
+        // fact: a source warning says the upstream has nothing, this says the
+        // upstream had something and it did not reach the database. Only the
+        // anomalous classes land here — a perf whose game we never stored, a
+        // payload with no usable id, a game with no date. The routine non-D1
+        // skips stay in `ingest_runs.notes` where they can be audited without
+        // being announced.
+        let mut box_score_skips: Vec<String> = Vec::new();
+
         // Did barttorvik tell us, this run, that it has not published our season
         // yet? The per-game path cannot say so itself — a not-yet-published
         // season is a bare 404 there, indistinguishable from a file that moved —
@@ -1029,11 +1088,9 @@ impl<'a> SeasonIngester<'a> {
         )
         .await
         {
-            Ok(n) => {
-                report.ingest.games = n;
-                ledger
-                    .record("games", StepStatus::Ok, Some(n as i64), t0, None)
-                    .await;
+            Ok(outcome) => {
+                report.ingest.games = outcome.written;
+                record_box_score_step(&ledger, "games", outcome, t0, &mut box_score_skips).await;
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -1064,10 +1121,9 @@ impl<'a> SeasonIngester<'a> {
         )
         .await
         {
-            Ok(n) => {
-                report.ingest.player_performances = n;
-                ledger
-                    .record("player_perfs", StepStatus::Ok, Some(n as i64), t0, None)
+            Ok(outcome) => {
+                report.ingest.player_performances = outcome.written;
+                record_box_score_step(&ledger, "player_perfs", outcome, t0, &mut box_score_skips)
                     .await;
             }
             Err(e) => {
@@ -1097,10 +1153,9 @@ impl<'a> SeasonIngester<'a> {
         )
         .await
         {
-            Ok(n) => {
-                report.ingest.team_performances = n;
-                ledger
-                    .record("team_perfs", StepStatus::Ok, Some(n as i64), t0, None)
+            Ok(outcome) => {
+                report.ingest.team_performances = outcome.written;
+                record_box_score_step(&ledger, "team_perfs", outcome, t0, &mut box_score_skips)
                     .await;
             }
             Err(e) => {
@@ -2232,8 +2287,17 @@ impl<'a> SeasonIngester<'a> {
         // knowing, not actionable tonight". Source warnings lead, because an
         // unpublished feed explains the numbers above it — a reader seeing
         // CamPom flat needs that sentence before the invariant list, not after.
+        // `box_score_skips` (#202) shares it too, and belongs at the front:
+        // rows the ingest dropped explain a thin night before any downstream
+        // check does, and unlike the other two it names a loss that is OURS.
+        // It rides the warnings line rather than `failures` for the reason
+        // #232 taught — a channel that is red on a routine condition stops
+        // being read — but it can only be routine if it is rare, so the
+        // *benign* skip class (a non-D1 side we do not carry) is counted into
+        // the ledger note and deliberately kept off this line.
         let warn_line = {
-            let mut parts = source_warnings.clone();
+            let mut parts = box_score_skips.clone();
+            parts.extend(source_warnings.clone());
             parts.extend(invariant_warnings.clone());
             if parts.is_empty() {
                 String::new()
@@ -2464,11 +2528,13 @@ impl<'a> SeasonIngester<'a> {
             self.season,
             &code,
         )
-        .await?;
+        .await?
+        .written;
 
         let team_performances =
             super::games::ingest_team_performances(self.client, self.pool, self.season, &code)
-                .await?;
+                .await?
+                .written;
 
         Ok(TeamReport {
             code,
