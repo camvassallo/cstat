@@ -505,34 +505,72 @@ async fn roster_and_list_agree_on_which_profile_wins() {
 //     coin flip, also not a repeated row.
 // ---------------------------------------------------------------------------
 
-/// Row count for the `recruits.rs` list join, Torvik spelled bare or
-/// collapsed. Counts rows rather than selecting the payload: the invariant is
-/// that the list holds one row per `recruits` record.
-async fn recruit_rows(pool: &PgPool, torvik_join: &str, year: i32) -> i64 {
+/// Row count for the `recruits.rs` list, with EVERY join it makes, so that any
+/// of them fanning out is visible.
+///
+/// Reproducing only the Torvik join is what the first version of this test did,
+/// and it is why the `player_season_stats` fan-out survived a round of review:
+/// a test that isolates one join cannot see a second one on the same query, and
+/// this list had two. `torvik_join` and `stats_join` are spelled in so each can
+/// be swapped to its pre-fix form independently.
+async fn recruit_rows(pool: &PgPool, torvik_join: &str, stats_join: &str, year: i32) -> i64 {
     let sql = format!(
         r#"
         SELECT count(*)
         FROM recruits r
+        LEFT JOIN teams t ON t.id = r.committed_team_id
         {torvik_join}
+        LEFT JOIN player_archetypes pa
+            ON pa.player_id = r.cstat_player_id AND pa.season = $2
+        {stats_join}
+        LEFT JOIN teams tm_prior
+            ON tm_prior.natstat_id = t.natstat_id AND tm_prior.season = r.year
+        LEFT JOIN team_season_stats adjem
+            ON adjem.team_id = tm_prior.id AND adjem.season = r.year
+        LEFT JOIN (
+            SELECT year, committed_team_id, AVG(composite_rating) AS mean_rating
+            FROM recruits
+            WHERE composite_rating IS NOT NULL AND committed_team_id IS NOT NULL
+            GROUP BY year, committed_team_id
+        ) peer
+            ON peer.year = r.year AND peer.committed_team_id = r.committed_team_id
         WHERE r.year = $1
         "#
     );
     sqlx::query_scalar(&sql)
         .bind(year)
+        .bind(year + 1)
         .fetch_one(pool)
         .await
         .unwrap()
 }
 
-const RECRUIT_JOIN_BARE: &str = "LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = r.cstat_player_id AND tps.season = r.year + 1";
+const RECRUIT_TORVIK_BARE: &str = "LEFT JOIN torvik_player_stats tps
+            ON tps.player_id = r.cstat_player_id AND tps.season = $2";
 
-const RECRUIT_JOIN_COLLAPSED: &str = "LEFT JOIN (
+const RECRUIT_TORVIK_COLLAPSED: &str = "LEFT JOIN (
             SELECT DISTINCT ON (player_id, season) *
             FROM torvik_player_stats
-            WHERE player_id IS NOT NULL
+            WHERE player_id IS NOT NULL AND season = $2
             ORDER BY player_id, season, torvik_pid
-        ) tps ON tps.player_id = r.cstat_player_id AND tps.season = r.year + 1";
+        ) tps ON tps.player_id = r.cstat_player_id AND tps.season = $2";
+
+/// The second fan-out on this query. `player_season_stats` is UNIQUE on
+/// (player_id, team_id, season), so a player carrying rows at two schools in
+/// one season multiplies the recruit's row exactly as a duplicated Torvik
+/// profile did.
+const RECRUIT_STATS_BARE: &str = "LEFT JOIN player_season_stats pss
+            ON pss.player_id = r.cstat_player_id AND pss.season = $2";
+
+const RECRUIT_STATS_COLLAPSED: &str = "LEFT JOIN (
+            SELECT DISTINCT ON (player_id) *
+            FROM player_season_stats
+            WHERE season = $2
+            ORDER BY player_id,
+                     games_played DESC NULLS LAST,
+                     minutes_per_game DESC NULLS LAST,
+                     team_id
+        ) pss ON pss.player_id = r.cstat_player_id";
 
 #[tokio::test]
 #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-core \
@@ -557,20 +595,33 @@ async fn recruit_list_serves_one_row_per_recruit() {
             .await
             .unwrap();
 
-        let collapsed = recruit_rows(&pool, RECRUIT_JOIN_COLLAPSED, year).await;
+        let collapsed = recruit_rows(
+            &pool,
+            RECRUIT_TORVIK_COLLAPSED,
+            RECRUIT_STATS_COLLAPSED,
+            year,
+        )
+        .await;
         assert_eq!(
             collapsed, recruits,
             "class {year}: the list joins out to {collapsed} rows for {recruits} \
-             recruits — the Torvik join is fanning rows out again",
+             recruits — something on this query is fanning rows out again",
         );
 
-        // Not vacuous: the pre-fix join really did exceed the recruit count
-        // for this class. A class whose duplicated profiles all belong to
-        // recruits who never got a Torvik row in their freshman season is a
-        // legitimate data state, so it is noted rather than failed.
-        let bare = recruit_rows(&pool, RECRUIT_JOIN_BARE, year).await;
-        if bare > recruits {
-            eprintln!("class {year}: bare join served {bare} rows for {recruits} recruits");
+        // Not vacuous, and attributed: each pre-fix join is restored on its
+        // own, so the test says WHICH one a class exercises rather than only
+        // that some duplication existed. A class whose duplicates all belong
+        // to recruits with no row in their freshman season is a legitimate
+        // data state, noted rather than failed.
+        let bare_torvik =
+            recruit_rows(&pool, RECRUIT_TORVIK_BARE, RECRUIT_STATS_COLLAPSED, year).await;
+        let bare_stats =
+            recruit_rows(&pool, RECRUIT_TORVIK_COLLAPSED, RECRUIT_STATS_BARE, year).await;
+        if bare_torvik > recruits || bare_stats > recruits {
+            eprintln!(
+                "class {year}: {recruits} recruits — bare Torvik join serves \
+                 {bare_torvik}, bare season-stats join serves {bare_stats}"
+            );
             exercised += 1;
         }
     }
@@ -701,7 +752,12 @@ async fn name_bucket_candidates_hold_each_stint_once() {
 /// The most rows `projections.rs`'s departure enrichment returns for any one
 /// player id. That query collapses into a `HashMap` keyed on the id, so
 /// anything above 1 is a silent last-write-wins over two Torvik profiles.
-async fn max_departure_rows_per_player(pool: &PgPool, torvik_join: &str, season: i32) -> i64 {
+async fn max_departure_rows_per_player(
+    pool: &PgPool,
+    torvik_join: &str,
+    stats_join: &str,
+    season: i32,
+) -> i64 {
     let sql = format!(
         r#"
         SELECT COALESCE(max(n), 0) FROM (
@@ -709,6 +765,7 @@ async fn max_departure_rows_per_player(pool: &PgPool, torvik_join: &str, season:
             FROM players p
             LEFT JOIN player_archetypes pa
                 ON pa.player_id = p.id AND pa.season = $1
+            {stats_join}
             {torvik_join}
             WHERE p.season = $1
             GROUP BY p.id
@@ -724,6 +781,21 @@ async fn max_departure_rows_per_player(pool: &PgPool, torvik_join: &str, season:
 
 const DEPARTURE_JOIN_BARE: &str = "LEFT JOIN torvik_player_stats tps
                  ON tps.player_id = p.id AND tps.season = $1";
+
+/// The enrichment's other multi-row join, for the same reason as the recruits
+/// list: `player_season_stats` is UNIQUE on (player_id, team_id, season), not
+/// on the (player_id, season) pair the HashMap is keyed by.
+const DEPARTURE_STATS_BARE: &str = "LEFT JOIN player_season_stats pss
+                 ON pss.player_id = p.id AND pss.season = $1";
+
+const DEPARTURE_STATS_COLLAPSED: &str = "LEFT JOIN LATERAL (
+                     SELECT * FROM player_season_stats s
+                     WHERE s.player_id = p.id AND s.season = $1
+                     ORDER BY s.games_played DESC NULLS LAST,
+                              s.minutes_per_game DESC NULLS LAST,
+                              s.team_id
+                     LIMIT 1
+                 ) pss ON TRUE";
 
 const DEPARTURE_JOIN_COLLAPSED: &str = "LEFT JOIN LATERAL (
                      SELECT * FROM torvik_player_stats t
@@ -750,16 +822,23 @@ async fn departure_enrichment_resolves_one_profile_per_player() {
         return;
     }
 
-    // `player_archetypes` is UNIQUE on (player_id, season) and
-    // `player_season_stats` is joined on the same key the HashMap is built
-    // from, so Torvik was the only join here that could put two rows under one
-    // id. The projection's departure list is a subset of the base season's
-    // players, so guarding the whole season is a superset of what the route
-    // actually asks for.
+    // `player_archetypes` is UNIQUE on (player_id, season), so it cannot
+    // multiply a row. Torvik and `player_season_stats` both can, and both are
+    // checked here: an earlier version of this test assumed the season-stats
+    // join was keyed the way the HashMap is, which is wrong — its UNIQUE key
+    // carries `team_id` as well, and that assumption is how the second fan-out
+    // survived a round of review. The projection's departure list is a subset
+    // of the base season's players, so guarding the whole season is a superset
+    // of what the route asks for.
     let mut exercised = 0usize;
     for &season in &seasons {
-        let collapsed =
-            max_departure_rows_per_player(&pool, DEPARTURE_JOIN_COLLAPSED, season).await;
+        let collapsed = max_departure_rows_per_player(
+            &pool,
+            DEPARTURE_JOIN_COLLAPSED,
+            DEPARTURE_STATS_COLLAPSED,
+            season,
+        )
+        .await;
         assert_eq!(
             collapsed, 1,
             "season {season}: departure enrichment returns up to {collapsed} rows \
@@ -767,7 +846,25 @@ async fn departure_enrichment_resolves_one_profile_per_player() {
              last-write-wins, so the served CAM is a coin flip",
         );
 
-        if max_departure_rows_per_player(&pool, DEPARTURE_JOIN_BARE, season).await > 1 {
+        let bare_torvik = max_departure_rows_per_player(
+            &pool,
+            DEPARTURE_JOIN_BARE,
+            DEPARTURE_STATS_COLLAPSED,
+            season,
+        )
+        .await;
+        let bare_stats = max_departure_rows_per_player(
+            &pool,
+            DEPARTURE_JOIN_COLLAPSED,
+            DEPARTURE_STATS_BARE,
+            season,
+        )
+        .await;
+        if bare_torvik > 1 || bare_stats > 1 {
+            eprintln!(
+                "season {season}: bare Torvik join returns up to {bare_torvik} rows \
+                 per player, bare season-stats join up to {bare_stats}"
+            );
             exercised += 1;
         }
     }
