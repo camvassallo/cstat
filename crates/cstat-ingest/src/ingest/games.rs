@@ -487,13 +487,24 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
         return Ok(Upsert::Skipped(SkipReason::UnknownGame));
     };
 
-    // Resolve team — NatStat v4 uses "team-code" or nested team.code
+    // Resolve team — NatStat v4 uses "team-code" or nested team.code.
+    //
+    // The two failure modes are split deliberately. `team_id_by_code_and_season`
+    // answers `None` both for "no code in the payload" and for "code resolves to
+    // no D1 team", and collapsing them would file a MALFORMED payload under the
+    // one class that is never alarmed on. That is not hypothetical at the scale
+    // that matters: if NatStat renamed this field, every row would lose its code
+    // at once, the step would write nothing, and the run summary would report
+    // the whole outage as routine non-D1 filtering.
     let team_code = perf
         .get("team-code")
         .or_else(|| perf.get("team_code"))
         .or_else(|| perf.get("team").and_then(|t| t.get("code")))
         .and_then(|c| c.as_str());
-    let Some(team_id) = team_id_by_code_and_season(pool, team_code, season).await? else {
+    let Some(team_code) = team_code else {
+        return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
+    };
+    let Some(team_id) = team_id_by_code_and_season(pool, Some(team_code), season).await? else {
         return Ok(Upsert::Skipped(SkipReason::UnresolvedTeam));
     };
 
@@ -812,11 +823,6 @@ pub async fn ingest_team_performances(
 }
 
 async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> UpsertResult {
-    let team_code = perf
-        .get("team-code")
-        .or_else(|| perf.get("team").and_then(|t| t.get("code")))
-        .and_then(|c| c.as_str());
-
     let game_natstat_id = perf
         .get("game")
         .and_then(|g| g.get("id"))
@@ -827,11 +833,13 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
         return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
     };
 
-    let team_id = team_id_by_code_and_season(pool, team_code, season).await?;
-    let Some(team_id) = team_id else {
-        return Ok(Upsert::Skipped(SkipReason::UnresolvedTeam));
-    };
-
+    // Game before team, matching `upsert_player_game_stats`. The order decides
+    // which bucket a row lands in when BOTH are true — an orphaned game whose
+    // side is also non-D1 — and the two steps have to agree, because the whole
+    // use of these counters is reading `team_perfs` against `player_perfs` for
+    // the same window. Checking the team first here meant a `games` under-fetch
+    // showed up as `unknown_game` on one step and `unresolved_team` on the
+    // other: the same event, one of the two spellings silent.
     let game_row: Option<(Uuid, NaiveDate)> =
         sqlx::query_as("SELECT id, game_date FROM games WHERE natstat_id = $1")
             .bind(&game_id_str)
@@ -840,6 +848,19 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
 
     let Some((game_id, game_date)) = game_row else {
         return Ok(Upsert::Skipped(SkipReason::UnknownGame));
+    };
+
+    // Absent code vs unresolvable code — see the note in
+    // `upsert_player_game_stats`; the same collapse would hide the same outage.
+    let team_code = perf
+        .get("team-code")
+        .or_else(|| perf.get("team").and_then(|t| t.get("code")))
+        .and_then(|c| c.as_str());
+    let Some(team_code) = team_code else {
+        return Ok(Upsert::Skipped(SkipReason::MissingIdentifier));
+    };
+    let Some(team_id) = team_id_by_code_and_season(pool, Some(team_code), season).await? else {
+        return Ok(Upsert::Skipped(SkipReason::UnresolvedTeam));
     };
 
     let opponent_code = perf

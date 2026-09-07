@@ -34,8 +34,24 @@ async fn pool() -> PgPool {
 async fn every_known_gap_is_still_needed() {
     let pool = pool().await;
     let mut stale = Vec::new();
+    let mut skipped_seasons = Vec::new();
 
     for (season, natstat_id) in UPSTREAM_TEAM_STATS_GAPS {
+        // A season this DB never ingested has no games to compare against, and
+        // every entry in it would look stale. That failure would be actively
+        // harmful — it reads as "delete these", and deleting a verified upstream
+        // gap silently re-opens the noise #232 closed. Skip and say so instead.
+        let ingested: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM games WHERE season = $1 LIMIT 1")
+                .bind(season)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        if ingested == 0 {
+            skipped_seasons.push(*season);
+            continue;
+        }
+
         let row: Option<(i64,)> = sqlx::query_as(
             r#"
             SELECT (SELECT COUNT(*) FROM team_game_stats tgs WHERE tgs.game_id = g.id)
@@ -63,6 +79,14 @@ async fn every_known_gap_is_still_needed() {
             )),
             Some(_) => {}
         }
+    }
+
+    if !skipped_seasons.is_empty() {
+        skipped_seasons.sort_unstable();
+        skipped_seasons.dedup();
+        eprintln!(
+            "note: {skipped_seasons:?} not ingested in this DB — their entries were not checked"
+        );
     }
 
     assert!(
