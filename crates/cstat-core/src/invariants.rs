@@ -182,7 +182,7 @@ pub const UPSTREAM_TEAM_STATS_GAPS: &[(i32, &str)] = &[
 ];
 
 /// The known-gap ids for one season, for binding into a `!= ALL($2)` filter.
-pub fn known_team_stats_gaps(season: i32) -> Vec<String> {
+fn known_team_stats_gaps(season: i32) -> Vec<String> {
     UPSTREAM_TEAM_STATS_GAPS
         .iter()
         .filter(|(s, _)| *s == season)

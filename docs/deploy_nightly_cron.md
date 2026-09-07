@@ -376,10 +376,12 @@ until #202 that loss reached nothing at all — the upserts returned a bare
 `ok`. Each step now tallies what it declined to write, by reason, and reports it
 in two places that answer different questions:
 
-- **`ingest_runs.notes`** carries the full breakdown for every step, e.g.
-  `skipped 36 (unknown_game=2, unresolved_team=34)`. This is the audit trail: it
-  outlives Railway's log retention, so "what did last February cost us" is a SQL
-  query rather than an archaeology project.
+- **`ingest_runs.notes`** carries the full breakdown, e.g.
+  `skipped 36 (unknown_game=2, unresolved_team=34)`. Written by the three
+  box-score steps only — every other step still records a NULL note, so a NULL
+  here means "this step does not report skips", not "this step skipped nothing".
+  This is the audit trail: it outlives Railway's log retention, so "what did last
+  February cost us" is a SQL query rather than an archaeology project.
 - **The Slack `warnings:` line** carries only the reasons that mean *we* lost
   something — `unknown_game`, `missing_identifier`, `missing_date`.
 
