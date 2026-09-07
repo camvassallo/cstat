@@ -167,12 +167,63 @@ async fn recruit_list(
         FROM recruits r
         LEFT JOIN teams t
             ON t.id = r.committed_team_id
-        LEFT JOIN torvik_player_stats tps
-            ON tps.player_id = r.cstat_player_id AND tps.season = $2
+        -- One Torvik profile per (player, season) -- see `get_team_roster`
+        -- (queries.rs) for why the collapse is mandatory.
+        -- `torvik_player_stats` is UNIQUE on (torvik_pid, season), NOT on
+        -- (player_id, season).
+        --
+        -- This is the one call site in the #312 group where the fan-out
+        -- reaches the response as a REPEATED ROW rather than a
+        -- non-deterministic value: the list is built from this query's rows,
+        -- one per `recruits` record, so a recruit whose resolved player has
+        -- two profiles in `target_season` was rendered twice, each copy
+        -- carrying its own CAM. Locally that is the 2025 class at 892 rows for
+        -- 883 recruits, plus 2016/2019/2020. The repeat also double-counted
+        -- that recruit in the freshman-projection batch below.
+        --
+        -- Scoped to `$2` inside the subquery rather than relying on the qual
+        -- propagating: the outer join fixes `tps.season` to a bound parameter,
+        -- not to a column of the driving table, so there is no equivalence for
+        -- the planner to push through and the de-duplication would otherwise
+        -- sort every season.
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id, season) *
+            FROM torvik_player_stats
+            WHERE player_id IS NOT NULL AND season = $2
+            ORDER BY player_id, season, torvik_pid
+        ) tps ON tps.player_id = r.cstat_player_id AND tps.season = $2
         LEFT JOIN player_archetypes pa
             ON pa.player_id = r.cstat_player_id AND pa.season = $2
-        LEFT JOIN player_season_stats pss
-            ON pss.player_id = r.cstat_player_id AND pss.season = $2
+        -- One stint per player, largest first — the SECOND fan-out in this
+        -- query, and the one that survives the Torvik collapse above.
+        -- `player_season_stats` is UNIQUE on (player_id, team_id, season), so a
+        -- player with rows at two schools in one season multiplies this row
+        -- exactly the way a duplicated Torvik profile did. Collapsing only
+        -- Torvik left six of the fourteen ingested classes still repeating a
+        -- recruit, which is #312's reported symptom arriving through a
+        -- different join.
+        --
+        -- The pairs are not the mid-season transfers the UNIQUE key exists
+        -- for. They are name-collision residue of the same family as #138 and
+        -- #313: 2016 "Jared Harper" holds Auburn's 32 games and Fairfield's 8,
+        -- and 2018 "Souleymane Koureissi" holds five stints across Richmond,
+        -- Georgia, Massachusetts, Nevada and High Point. Until those are
+        -- repaired at the source the honest thing to show on a recruiting page
+        -- is the school where the player actually spent the season.
+        --
+        -- Hence games played, then minutes, then `team_id` purely to make the
+        -- pick deterministic. That is the same disambiguation `transfers.rs`
+        -- applies to its own candidates, so the two pages agree on which stint
+        -- a player's freshman year was.
+        LEFT JOIN (
+            SELECT DISTINCT ON (player_id) *
+            FROM player_season_stats
+            WHERE season = $2
+            ORDER BY player_id,
+                     games_played DESC NULLS LAST,
+                     minutes_per_game DESC NULLS LAST,
+                     team_id
+        ) pss ON pss.player_id = r.cstat_player_id
         LEFT JOIN teams tm_prior
             ON tm_prior.natstat_id = t.natstat_id AND tm_prior.season = r.year
         LEFT JOIN team_season_stats adjem
