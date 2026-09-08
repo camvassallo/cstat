@@ -1901,6 +1901,7 @@ mod tests {
 
         let mut total_dupes = 0usize;
         let mut total_to_repair = 0i64;
+        let mut total_refused = 0usize;
         for season in seasons {
             let roster = SeasonRoster::load(&pool, season).await.unwrap();
             let raw: Vec<(String, String, i32, Option<f64>)> = sqlx::query_as(
@@ -1984,12 +1985,18 @@ mod tests {
                 }
             }
 
-            // Every refusal has real work behind it. The rows the linker now
-            // refuses are exactly the rows currently holding the link it is
-            // refusing, so the upsert's COALESCE would leave them untouched
-            // and the fix would be inert without the explicit clear in
-            // `ingest_torvik_player_stats`. Asserting it here is what stops
-            // that clear from being deleted as redundant.
+            // How much of the clear's work is outstanding on THIS database.
+            //
+            // Reported, not asserted, and the distinction is the whole point:
+            // this number is a property of when the database was last
+            // ingested, not of the code. It read 18 before the seasons were
+            // re-ingested under the fix and reads 0 after, which is the
+            // healthy steady state — a version of this that required it to be
+            // positive went red the moment the repair it was guarding actually
+            // landed. The non-vacuity anchor is `total_refused` below, which
+            // depends on the linker still refusing rows rather than on the
+            // database still needing repair.
+            total_refused += links.refused_pids.len();
             if !links.refused_pids.is_empty() {
                 let still_linked: i64 = sqlx::query_scalar(
                     "SELECT count(*) FROM torvik_player_stats
@@ -2016,11 +2023,21 @@ mod tests {
             );
         }
         assert_eq!(total_dupes, 0);
-        eprintln!("{total_to_repair} rows across all seasons need the link cleared");
+        eprintln!(
+            "{total_refused} rows refused across all seasons; {total_to_repair} of them \
+             still carry a link a re-ingest would clear (0 once every season has been \
+             re-ingested under the fix)"
+        );
+
+        // The refusal path must actually fire, or every assertion above passed
+        // over a cohort of nothing. This is the invariant that survives the
+        // repair: the linker keeps refusing these rows on every run, whether
+        // or not the database still has stale links for it to clean up.
         assert!(
-            total_to_repair > 0,
-            "nothing to repair — either this database has already been \
-             re-ingested under the fix, or the refusal path stopped firing",
+            total_refused > 0,
+            "the linker refused nothing on any season — either this database \
+             holds no same-named collisions at all, or the refusal path in \
+             pass 1 has stopped firing",
         );
     }
 
