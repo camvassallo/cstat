@@ -187,6 +187,45 @@ async fn projection_roster_frame_holds_one_slot_per_player() {
     // needs a loaded `Predictor`, and what is under test here is the join, not
     // the model. Runs the pre-fix and post-fix joins side by side so the test
     // cannot pass by the cohort being empty.
+    //
+    // The duplicate is SYNTHESIZED here rather than taken from the data, and
+    // that is the point. This test used to require the newest season to still
+    // contain a real duplicated pair, which made it a hostage to the data
+    // being broken: #330 prunes the stale rows that supplied those pairs, and
+    // the moment the newest season came out clean the test declared itself
+    // vacuous and failed. A guard for a collapse should not stop working when
+    // the thing it guards against has been cleaned up. Inserting one duplicate
+    // inside a transaction that is always rolled back exercises the join for
+    // as long as the join exists, on any database.
+    let mut tx = pool.begin().await.unwrap();
+    let season: i32 = sqlx::query_scalar("SELECT max(season) FROM player_season_stats")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    let inserted = sqlx::query(
+        r#"
+        INSERT INTO torvik_player_stats (player_id, torvik_pid, season, team_name)
+        SELECT t.player_id,
+               (SELECT max(torvik_pid) FROM torvik_player_stats) + 1,
+               t.season,
+               t.team_name
+        FROM torvik_player_stats t
+        JOIN player_season_stats pss
+          ON pss.player_id = t.player_id AND pss.season = t.season
+        WHERE t.season = $1 AND t.player_id IS NOT NULL
+        LIMIT 1
+        "#,
+    )
+    .bind(season)
+    .execute(&mut *tx)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert_eq!(
+        inserted, 1,
+        "could not synthesize a duplicate Torvik profile in season {season} —          no linked row there also has a player_season_stats row",
+    );
+
     let row = sqlx::query(
         r#"
         WITH bare AS (
@@ -215,23 +254,28 @@ async fn projection_roster_frame_holds_one_slot_per_player() {
             ) d)
         "#,
     )
-    .fetch_one(&pool)
+    .fetch_one(&mut *tx)
     .await
     .unwrap();
 
     let (bare, collapsed, distinct): (i64, i64, i64) = (row.get(0), row.get(1), row.get(2));
+    tx.rollback().await.unwrap();
     assert_eq!(
         collapsed, distinct,
         "the projection roster frame holds {collapsed} rows for {distinct} \
          (player, season) pairs",
     );
-    assert!(
-        bare > collapsed,
-        "the pre-fix join returned {bare} rows against {collapsed} — the \
-         newest season no longer exercises the fan-out, so this test is \
-         passing vacuously",
+    assert_eq!(
+        bare,
+        collapsed + 1,
+        "the pre-fix join returned {bare} rows against {collapsed} — one \
+         synthetic duplicate should fan out to exactly one extra row, so the \
+         collapse is either not collapsing or removing more than the duplicate",
     );
-    eprintln!("projection frame: {bare} rows before, {collapsed} after");
+    eprintln!(
+        "projection frame, with one synthetic duplicate: {bare} rows before the \
+         collapse, {collapsed} after"
+    );
 }
 
 #[tokio::test]

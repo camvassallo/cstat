@@ -199,6 +199,50 @@ pub async fn ingest_torvik_player_stats(
 
     let unlinked_refused = clear_refused_links(pool, season, &links.refused_pids).await?;
 
+    // Drop the rows this fetch no longer carries (#330). Runs after the
+    // upserts, so the table has already absorbed everything the feed does
+    // carry and what remains unmatched is genuinely retired.
+    let live_pids: Vec<i32> = players.iter().filter_map(|p| p.pid).collect();
+    let mut conn = pool.acquire().await?;
+    let prune = prune_stale_rows(&mut conn, season, &live_pids).await?;
+    drop(conn);
+    match prune {
+        PruneOutcome::Pruned { deleted, existing } => {
+            info!(
+                season,
+                deleted,
+                existing,
+                "pruned Torvik rows whose pid the current feed no longer carries"
+            );
+        }
+        PruneOutcome::Refused { stale, existing } => {
+            // Loud, because the two things this distinguishes look identical
+            // from the outside: either Torvik really did retire a tenth of a
+            // season, or the fetch is short or for the wrong year. The prune
+            // assumes the second and leaves the table alone.
+            warn!(
+                season,
+                stale,
+                existing,
+                max_share = PRUNE_MAX_STALE_SHARE,
+                "refused to prune Torvik rows — the stale set is too large a \
+                 share of the season to be pid churn, so the fetch is the more \
+                 likely thing to be wrong. Nothing was deleted; check the feed \
+                 before overriding by hand."
+            );
+        }
+        PruneOutcome::EmptyFetch { existing } => {
+            warn!(
+                season,
+                existing,
+                "refused to prune Torvik rows — the fetch carried no pids at \
+                 all, which is a failed request rather than a season that lost \
+                 every player. Nothing was deleted."
+            );
+        }
+        PruneOutcome::NothingStale { .. } | PruneOutcome::NoExistingRows => {}
+    }
+
     let s = &links.stats;
     info!(
         season,
@@ -790,6 +834,121 @@ struct Links {
     /// it was given before the fix. These pids are cleared explicitly instead.
     refused_pids: Vec<i32>,
     stats: LinkStats,
+}
+
+/// The largest share of a season's rows [`prune_stale_rows`] will delete in one
+/// run before deciding it is looking at a bad fetch rather than pid churn.
+///
+/// Sized from the real backlog rather than picked round: the worst season in
+/// the local database is 2026 at 59 stale rows out of 5,037, or 1.17%, and the
+/// twelve-season total is 309 of 58,709. Five percent leaves four times the
+/// headroom the observed churn needs while still refusing anything that could
+/// plausibly be a truncated feed — 5% of a season is ~250 rows, and Torvik has
+/// never retired a tenth of that in one go.
+const PRUNE_MAX_STALE_SHARE: f64 = 0.05;
+
+/// What [`prune_stale_rows`] did, for the run log.
+#[derive(Debug, PartialEq, Eq)]
+enum PruneOutcome {
+    /// The season held no rows yet — first ingest, nothing to prune against.
+    NoExistingRows,
+    /// Every row in the table is in the fetch.
+    NothingStale { existing: i64 },
+    /// Deleted the rows the fetch no longer carries.
+    Pruned { deleted: u64, existing: i64 },
+    /// Declined: the stale set is too large a share of the season to be pid
+    /// churn, so the fetch is the thing more likely to be wrong.
+    Refused { stale: i64, existing: i64 },
+    /// Declined: the fetch carried no pids at all.
+    ///
+    /// Its own variant rather than a `Refused` with `stale == existing`,
+    /// because the share guard happens to catch this too and that coincidence
+    /// is not something to depend on: raise `PRUNE_MAX_STALE_SHARE` for a
+    /// one-off backfill and the empty fetch — the single input most easily
+    /// produced by a failed request — would take a whole season with it.
+    /// Distinct variants also keep the two operator messages distinct, since
+    /// "the feed returned nothing" and "the feed disagrees with the table"
+    /// call for different next steps.
+    EmptyFetch { existing: i64 },
+}
+
+/// Delete `torvik_player_stats` rows for `season` whose `torvik_pid` the
+/// current fetch did not return (#330).
+///
+/// The ingest upserts on `(torvik_pid, season)` and, before this, never
+/// deleted. Torvik retires and renumbers pids between fetches, so a player
+/// whose pid changed left the old row behind — still linked to the cstat
+/// player, indefinitely, and fanning out every join that keys on
+/// `(player_id, season)`. 262 of the 287 duplicated pairs found in #313 were
+/// that, and the read paths since #307 have been collapsing around rows that
+/// should not exist.
+///
+/// **This is the destructive half of the fix, and the guard is the design.** A
+/// truncated or wrong-season fetch must never be read as "those pids are
+/// gone", so the stale set is bounded as a share of the season before anything
+/// is deleted — see [`PRUNE_MAX_STALE_SHARE`]. Bounding what gets DELETED is
+/// deliberately stronger than sanity-checking the fetch size: a fetch for the
+/// wrong season returns a plausible row count and a completely disjoint pid
+/// set, which a size check waves through and this refuses.
+///
+/// An empty pid set is refused outright rather than treated as "everything is
+/// stale". `NOT (pid = ANY('{}'))` is true for every row, so the one input
+/// that would delete a whole season is the one a failed fetch most easily
+/// produces.
+///
+/// No foreign key references this table, so a delete cascades nothing. The
+/// per-game rows in `torvik_player_game_stats` key on `pid` with no FK, so a
+/// pruned pid leaves its game rows inert rather than orphaned — every consumer
+/// reaches them by joining `torvik_player_stats` on `torvik_pid`.
+///
+/// Deleting is also self-healing in the direction that matters: the rows are a
+/// projection of the feed, so if this ever removes something live, the next
+/// successful ingest re-inserts it. What is lost in that window is the
+/// `player_id` link and the computed CamPom composites, both of which the
+/// nightly rebuilds.
+async fn prune_stale_rows(
+    conn: &mut sqlx::PgConnection,
+    season: i32,
+    live_pids: &[i32],
+) -> Result<PruneOutcome, sqlx::Error> {
+    let existing: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM torvik_player_stats WHERE season = $1")
+            .bind(season)
+            .fetch_one(&mut *conn)
+            .await?;
+    if existing == 0 {
+        return Ok(PruneOutcome::NoExistingRows);
+    }
+    if live_pids.is_empty() {
+        return Ok(PruneOutcome::EmptyFetch { existing });
+    }
+
+    let stale: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM torvik_player_stats
+          WHERE season = $1 AND NOT (torvik_pid = ANY($2))",
+    )
+    .bind(season)
+    .bind(live_pids)
+    .fetch_one(&mut *conn)
+    .await?;
+    if stale == 0 {
+        return Ok(PruneOutcome::NothingStale { existing });
+    }
+    if stale as f64 > existing as f64 * PRUNE_MAX_STALE_SHARE {
+        return Ok(PruneOutcome::Refused { stale, existing });
+    }
+
+    let deleted = sqlx::query(
+        "DELETE FROM torvik_player_stats
+          WHERE season = $1 AND NOT (torvik_pid = ANY($2))",
+    )
+    .bind(season)
+    .bind(live_pids)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+
+    Ok(PruneOutcome::Pruned { deleted, existing })
 }
 
 /// Clear `player_id` on the rows a link run actively refused (#313).
@@ -2022,6 +2181,194 @@ mod tests {
         .await
         .unwrap();
         assert!(restored.is_some(), "test left the database modified");
+    }
+
+    // prune_stale_rows (issue #330)
+    //
+    // Every case runs against the real table inside a transaction that is
+    // always rolled back, so the guard is exercised on real season shapes
+    // rather than on a fixture that could be sized to make it pass.
+
+    /// The newest season with rows, and its live pid set — the input a good
+    /// fetch produces.
+    async fn newest_season_pids(pool: &PgPool) -> Option<(i32, Vec<i32>)> {
+        let season: Option<i32> = sqlx::query_scalar("SELECT max(season) FROM torvik_player_stats")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let season = season?;
+        let pids: Vec<i32> = sqlx::query_scalar(
+            "SELECT torvik_pid FROM torvik_player_stats WHERE season = $1 ORDER BY torvik_pid",
+        )
+        .bind(season)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        Some((season, pids))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
+                torvik::tests::prune -- --ignored --nocapture"]
+    async fn prune_deletes_only_the_pids_the_fetch_dropped() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .unwrap();
+        let Some((season, all_pids)) = newest_season_pids(&pool).await else {
+            eprintln!("no Torvik rows locally; nothing to exercise");
+            return;
+        };
+        assert!(
+            all_pids.len() > 20,
+            "season {season} is too small to exercise"
+        );
+
+        // A fetch that dropped three pids — the shape of ordinary pid churn.
+        let dropped: Vec<i32> = all_pids.iter().rev().take(3).copied().collect();
+        let live: Vec<i32> = all_pids
+            .iter()
+            .filter(|p| !dropped.contains(p))
+            .copied()
+            .collect();
+
+        let mut tx = pool.begin().await.unwrap();
+        let outcome = prune_stale_rows(&mut tx, season, &live).await.unwrap();
+        assert_eq!(
+            outcome,
+            PruneOutcome::Pruned {
+                deleted: 3,
+                existing: all_pids.len() as i64,
+            },
+        );
+
+        let survivors: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM torvik_player_stats WHERE season = $1")
+                .bind(season)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        assert_eq!(survivors, all_pids.len() as i64 - 3);
+
+        // And it took the three named, not three arbitrary rows.
+        let gone: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM torvik_player_stats
+              WHERE season = $1 AND torvik_pid = ANY($2)",
+        )
+        .bind(season)
+        .bind(&dropped)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(gone, 0, "the pids the fetch dropped are still present");
+
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
+                torvik::tests::prune -- --ignored --nocapture"]
+    async fn prune_refuses_a_short_fetch_rather_than_emptying_the_season() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .unwrap();
+        let Some((season, all_pids)) = newest_season_pids(&pool).await else {
+            eprintln!("no Torvik rows locally; nothing to exercise");
+            return;
+        };
+        let existing = all_pids.len() as i64;
+
+        // Half a season — a truncated feed.
+        let half: Vec<i32> = all_pids.iter().take(all_pids.len() / 2).copied().collect();
+        // A plausible row count for an entirely disjoint pid set — the
+        // wrong-season fetch, which a fetch-SIZE check would wave straight
+        // through and which is the reason the guard bounds deletions instead.
+        let disjoint: Vec<i32> = all_pids.iter().map(|p| p + 10_000_000).collect();
+        // The empty fetch, the one input that would otherwise match every row.
+        let empty: Vec<i32> = Vec::new();
+
+        // The empty fetch must land on its OWN variant. Asserting only
+        // "refused" would pass with the empty-fetch guard deleted, because the
+        // share guard catches it by arithmetic accident — and that accident
+        // evaporates the moment anyone raises the share for a backfill.
+        for (label, live, want_empty) in [
+            ("truncated", half, false),
+            ("wrong season", disjoint, false),
+            ("empty", empty, true),
+        ] {
+            let mut tx = pool.begin().await.unwrap();
+            let outcome = prune_stale_rows(&mut tx, season, &live).await.unwrap();
+            if want_empty {
+                assert!(
+                    matches!(outcome, PruneOutcome::EmptyFetch { .. }),
+                    "an empty fetch must be refused as EmptyFetch, not \
+                     incidentally by the share guard: {outcome:?}",
+                );
+            } else {
+                assert!(
+                    matches!(outcome, PruneOutcome::Refused { .. }),
+                    "{label} fetch was not refused: {outcome:?}",
+                );
+            }
+            let survivors: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM torvik_player_stats WHERE season = $1")
+                    .bind(season)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                survivors, existing,
+                "{label} fetch deleted rows despite being refused",
+            );
+            tx.rollback().await.unwrap();
+            eprintln!("  {label} fetch refused, {survivors} rows untouched");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
+                torvik::tests::prune -- --ignored --nocapture"]
+    async fn prune_is_a_no_op_on_a_complete_fetch_and_an_unseen_season() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .unwrap();
+        let Some((season, all_pids)) = newest_season_pids(&pool).await else {
+            eprintln!("no Torvik rows locally; nothing to exercise");
+            return;
+        };
+
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(
+            prune_stale_rows(&mut tx, season, &all_pids).await.unwrap(),
+            PruneOutcome::NothingStale {
+                existing: all_pids.len() as i64,
+            },
+            "a fetch carrying every stored pid should delete nothing",
+        );
+
+        // A season the table has never seen: no baseline to prune against, so
+        // the first ingest of a year must not read as "everything is stale".
+        assert_eq!(
+            prune_stale_rows(&mut tx, season + 50, &[1, 2, 3])
+                .await
+                .unwrap(),
+            PruneOutcome::NoExistingRows,
+        );
+        tx.rollback().await.unwrap();
     }
 
     // link_players against the real database (issue #313)
