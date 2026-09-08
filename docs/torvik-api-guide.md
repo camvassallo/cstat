@@ -363,9 +363,14 @@ Some statistics are "better" when lower. When applying color coding or percentil
 
 Use `pid` (player ID) to join player stats, game stats, and any derived data. The `pid` field is consistent across all endpoints for the same season.
 
-**It is not stable across fetches of the same season, and cstat stores one row per `pid`.** Torvik retires and renumbers pids between fetches, so a player can appear under one id in one pull and a different id in a later one. `torvik_player_stats` is `UNIQUE (torvik_pid, season)` and `ingest_torvik_player_stats` upserts without deleting, so the retired row stays behind — still linked to the cstat player, indefinitely. 262 of the 287 duplicated `(player_id, season)` pairs in the local database are exactly that, and they are why `player_id` cannot be assumed unique per season anywhere downstream.
+**It is not stable across fetches of the same season.** Torvik retires and renumbers pids between fetches, so a player can appear under one id in one pull and a different id in a later one. `torvik_player_stats` is `UNIQUE (torvik_pid, season)`, so the two pulls produce two rows for one human.
 
-The tell is `player_name` (migration 049): the ingest writes it on every upsert, and the parser can only leave it empty, never NULL. So a NULL name marks a row no ingest has touched since that migration — a `pid` the current feed no longer carries. In every duplicated pair the lower pid carries a name and the higher one usually does not.
+`ingest_torvik_player_stats` used to upsert without ever deleting, which left the retired row behind — still linked to the cstat player, indefinitely. 262 of the 287 duplicated `(player_id, season)` pairs found in #313 were exactly that. **Since #330 the ingest prunes them**: after the upserts it deletes rows for that season whose `torvik_pid` the current fetch did not return, so a retired pid survives only until the next ingest of its season. That prune refuses to run when the stale set is more than 5% of the season, or when the fetch carried no pids at all, on the grounds that a feed disagreeing with the table that violently is more likely to be the broken half.
+
+Two consequences of the churn outlive the prune:
+
+- **A pruned pid's rows in `torvik_player_game_stats` are left in place.** That table keys on `pid` with no foreign key, and every consumer reaches it by joining `torvik_player_stats` on `torvik_pid`, so those rows go inert rather than orphaned.
+- **`player_id` still cannot be assumed unique per `(player, season)`.** The prune removes the stale cause; the linker fix in #313 removes the double-claim cause; a residue of pre-#243 links remains (#332), and until that is cleared the partial unique index cannot be added.
 
 Two consequences worth knowing before writing a query or a loader:
 
