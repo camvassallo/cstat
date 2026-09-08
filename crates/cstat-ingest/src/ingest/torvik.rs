@@ -197,32 +197,7 @@ pub async fn ingest_torvik_player_stats(
         upserted += 1;
     }
 
-    // Clear links the linker actively refused (#313).
-    //
-    // Not covered by the upsert above: its
-    // `player_id = COALESCE(EXCLUDED.player_id, torvik_player_stats.player_id)`
-    // exists so a run that fails to match does not throw away a link an
-    // earlier run established, which is right for a row that simply matched
-    // nothing — and exactly wrong for one the linker decided must NOT hold the
-    // player it currently holds. Without this the #313 fix would be inert on
-    // every row it was written for: 2017's Fairfield Jared Harper would keep
-    // Auburn's Jared Harper forever, because a re-ingest only ever adds links.
-    //
-    // Scoped to the pids this run refused, so it can only ever undo the
-    // specific claim that was found to be wrong.
-    let mut unlinked_refused: u64 = 0;
-    if !links.refused_pids.is_empty() {
-        unlinked_refused = sqlx::query(
-            "UPDATE torvik_player_stats
-                SET player_id = NULL, updated_at = now()
-              WHERE season = $1 AND torvik_pid = ANY($2) AND player_id IS NOT NULL",
-        )
-        .bind(season)
-        .bind(&links.refused_pids)
-        .execute(pool)
-        .await?
-        .rows_affected();
-    }
+    let unlinked_refused = clear_refused_links(pool, season, &links.refused_pids).await?;
 
     let s = &links.stats;
     info!(
@@ -815,6 +790,49 @@ struct Links {
     /// it was given before the fix. These pids are cleared explicitly instead.
     refused_pids: Vec<i32>,
     stats: LinkStats,
+}
+
+/// Clear `player_id` on the rows a link run actively refused (#313).
+///
+/// Not covered by the ingest's upsert: its
+/// `player_id = COALESCE(EXCLUDED.player_id, torvik_player_stats.player_id)`
+/// exists so a run that fails to match does not throw away a link an earlier
+/// run established, which is right for a row that simply matched nothing — and
+/// exactly wrong for one the linker decided must NOT hold the player it
+/// currently holds. Without this the #313 fix is inert on every row it was
+/// written for: 2017's Fairfield Jared Harper keeps Auburn's Jared Harper
+/// forever, because a re-ingest only ever adds links.
+///
+/// Scoped to the pids the run refused, so it can only ever undo the specific
+/// claim that was found to be wrong, and to `season`, so a pid Torvik reused
+/// in another year is untouched.
+///
+/// A free function rather than four lines inline in
+/// `ingest_torvik_player_stats` purely so it is reachable from a test: that
+/// function needs a live barttorvik fetch, so nothing could exercise this, and
+/// the assertion that used to stand in for a test could not survive the repair
+/// it was guarding actually landing.
+async fn clear_refused_links<'e, E>(
+    exec: E,
+    season: i32,
+    refused_pids: &[i32],
+) -> Result<u64, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    if refused_pids.is_empty() {
+        return Ok(0);
+    }
+    Ok(sqlx::query(
+        "UPDATE torvik_player_stats
+            SET player_id = NULL, updated_at = now()
+          WHERE season = $1 AND torvik_pid = ANY($2) AND player_id IS NOT NULL",
+    )
+    .bind(season)
+    .bind(refused_pids)
+    .execute(exec)
+    .await?
+    .rows_affected())
 }
 
 /// Resolve every Torvik row for a season to a cstat player.
@@ -1858,6 +1876,133 @@ mod tests {
         assert_eq!(links.player_ids, vec![Some(sandro)]);
         assert_eq!(links.stats.name_only, 1);
         assert_eq!(links.stats.name_only_team_disagreed, 1);
+    }
+
+    /// The clear that makes the #313 fix non-inert, exercised directly.
+    ///
+    /// It lives in `ingest_torvik_player_stats`, which needs a live barttorvik
+    /// fetch, so before this nothing reached it: deleting the `UPDATE`
+    /// altogether left every test in the suite green. That is how it should
+    /// NOT have been guarded — by an assertion elsewhere that the database
+    /// still needed the repair, which went red as soon as the repair landed.
+    ///
+    /// Runs inside a transaction that is always rolled back, so it can use the
+    /// real table without leaving anything behind.
+    #[tokio::test]
+    #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
+                torvik::tests::clear_refused -- --ignored --nocapture"]
+    async fn clear_refused_links_unlinks_exactly_the_named_pids() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .unwrap();
+
+        // Two linked rows in one season, plus the same pid in another season.
+        let victims: Vec<(i32, i32)> = sqlx::query_as(
+            "SELECT season, torvik_pid FROM torvik_player_stats
+              WHERE player_id IS NOT NULL
+              ORDER BY season DESC, torvik_pid
+              LIMIT 2",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        if victims.len() < 2 {
+            eprintln!("fewer than two linked Torvik rows locally; nothing to exercise");
+            return;
+        }
+        let (season, target) = victims[0];
+        let (_, bystander) = victims[1];
+
+        let mut tx = pool.begin().await.unwrap();
+
+        let cleared = clear_refused_links(&mut *tx, season, &[target])
+            .await
+            .unwrap();
+        // Exactly one row, and the assertion reads in both directions: 0 means
+        // the clear did nothing, anything above 1 means it reached rows it was
+        // never handed.
+        assert_eq!(
+            cleared, 1,
+            "clearing one refused pid touched {cleared} rows — 0 means the clear \
+             is a no-op, more than 1 means it is not scoped to the pids given",
+        );
+
+        let target_link: Option<Uuid> = sqlx::query_scalar(
+            "SELECT player_id FROM torvik_player_stats WHERE season = $1 AND torvik_pid = $2",
+        )
+        .bind(season)
+        .bind(target)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert!(target_link.is_none(), "target still linked after the clear");
+
+        // A pid the run did not refuse keeps its link. Without the
+        // `torvik_pid = ANY($2)` predicate this clear would empty the season.
+        let bystander_link: Option<Uuid> = sqlx::query_scalar(
+            "SELECT player_id FROM torvik_player_stats WHERE season = $1 AND torvik_pid = $2",
+        )
+        .bind(season)
+        .bind(bystander)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert!(
+            bystander_link.is_some(),
+            "the clear reached a pid it was not given — it is not scoped to `refused_pids`",
+        );
+
+        // Season scoping: the same pid in a different year is untouched. Torvik
+        // reuses pids across seasons, so without `season = $1` a refusal in one
+        // year would unlink that player's every other year.
+        let other_season_survivors: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM torvik_player_stats
+              WHERE torvik_pid = $1 AND season <> $2 AND player_id IS NOT NULL",
+        )
+        .bind(target)
+        .bind(season)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        let other_season_total: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM torvik_player_stats WHERE torvik_pid = $1 AND season <> $2",
+        )
+        .bind(target)
+        .bind(season)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if other_season_total > 0 {
+            assert!(
+                other_season_survivors > 0,
+                "the clear crossed a season boundary for pid {target}",
+            );
+        }
+
+        // An empty refusal list must be a no-op, not "clear the season".
+        assert_eq!(
+            clear_refused_links(&mut *tx, season, &[]).await.unwrap(),
+            0,
+            "an empty refusal list did something",
+        );
+
+        tx.rollback().await.unwrap();
+
+        // And the rollback really happened — the database is as we found it.
+        let restored: Option<Uuid> = sqlx::query_scalar(
+            "SELECT player_id FROM torvik_player_stats WHERE season = $1 AND torvik_pid = $2",
+        )
+        .bind(season)
+        .bind(target)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(restored.is_some(), "test left the database modified");
     }
 
     // link_players against the real database (issue #313)
