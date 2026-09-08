@@ -1902,21 +1902,36 @@ mod tests {
             .unwrap();
 
         // Two linked rows in one season, plus the same pid in another season.
-        let victims: Vec<(i32, i32)> = sqlx::query_as(
-            "SELECT season, torvik_pid FROM torvik_player_stats
-              WHERE player_id IS NOT NULL
-              ORDER BY season DESC, torvik_pid
+        // Both rows must come from ONE season, or the bystander check below
+        // queries a (season, pid) pair that does not exist and dies in
+        // `fetch_one` instead of saying what it wanted. Pinning the season in
+        // SQL is what guarantees it, rather than trusting `ORDER BY season
+        // DESC` to return two rows from the same year.
+        let season: Option<i32> = sqlx::query_scalar(
+            "SELECT max(season) FROM torvik_player_stats WHERE player_id IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let Some(season) = season else {
+            eprintln!("no linked Torvik rows locally; nothing to exercise");
+            return;
+        };
+        let victims: Vec<i32> = sqlx::query_scalar(
+            "SELECT torvik_pid FROM torvik_player_stats
+              WHERE player_id IS NOT NULL AND season = $1
+              ORDER BY torvik_pid
               LIMIT 2",
         )
+        .bind(season)
         .fetch_all(&pool)
         .await
         .unwrap();
         if victims.len() < 2 {
-            eprintln!("fewer than two linked Torvik rows locally; nothing to exercise");
+            eprintln!("fewer than two linked Torvik rows in season {season}; nothing to exercise");
             return;
         }
-        let (season, target) = victims[0];
-        let (_, bystander) = victims[1];
+        let (target, bystander) = (victims[0], victims[1]);
 
         let mut tx = pool.begin().await.unwrap();
 
@@ -1969,20 +1984,24 @@ mod tests {
         .fetch_one(&mut *tx)
         .await
         .unwrap();
-        let other_season_total: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM torvik_player_stats WHERE torvik_pid = $1 AND season <> $2",
+        // Compared against how many were LINKED beforehand, not how many rows
+        // exist. A pid that was already unlinked in another season would
+        // otherwise read as the clear having reached across the boundary.
+        let other_season_linked_before: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM torvik_player_stats
+              WHERE torvik_pid = $1 AND season <> $2 AND player_id IS NOT NULL",
         )
         .bind(target)
         .bind(season)
         .fetch_one(&pool)
         .await
         .unwrap();
-        if other_season_total > 0 {
-            assert!(
-                other_season_survivors > 0,
-                "the clear crossed a season boundary for pid {target}",
-            );
-        }
+        assert_eq!(
+            other_season_survivors, other_season_linked_before,
+            "pid {target} was linked in {other_season_linked_before} other season(s) \
+             before the clear and {other_season_survivors} after — the clear is not \
+             scoped to the season it was given",
+        );
 
         // An empty refusal list must be a no-op, not "clear the season".
         assert_eq!(
