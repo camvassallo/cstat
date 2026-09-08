@@ -177,6 +177,17 @@ FROM base
 -- Tiebreak matches `cstat_core::trajectory` exactly (games, then minutes, then
 -- team_id). It has to: this frame trains the model that query serves, and #319
 -- fixed the Torvik half of this same pair while leaving this half alone.
+--
+-- Games-before-minutes is the repo-wide convention (`projections.rs`,
+-- `recruits.rs`, #329), and it is NOT obviously the best rule here: on the 29
+-- affected player-seasons it picks a different row than total minutes would in
+-- 9 of them, and 2019 Brandon Miller resolves to a 29-game 7.8-MPG stint over
+-- a 28-game 34.1-MPG one. Kept anyway, because a per-query tiebreak is how a
+-- player ends up with different identities on different surfaces, which is the
+-- thing the convention exists to prevent. Worth revisiting as one decision
+-- across every site — but note the affected population is almost entirely data
+-- artifacts (#335's collector rows and the same-name misidentification family)
+-- rather than genuine two-team seasons, so it shrinks as those are fixed.
 JOIN LATERAL (
     SELECT * FROM player_season_stats s
     WHERE s.player_id = base.pid_n AND s.season = base.s_n
@@ -224,12 +235,20 @@ LEFT JOIN LATERAL (
 -- subsamples by row position, so an unordered read makes the fit — and
 -- therefore the OOF predictions this model persists — irreproducible.
 --
--- `(torvik_pid, s_n)` NOW determines a row: the laterals above collapse the
--- `player_season_stats` fan-out that used to break that (#331). Until then a
--- multi-stint player emitted one row per stint combination — 274 of them
--- exact duplicates, double-weighting those player-seasons in the fit — while
--- the serving query had the same fan-out and resolved it by taking whichever
--- row came first. The two halves disagreed about which stint a player was.
+-- The laterals above close the `player_season_stats` half of what used to
+-- break `(torvik_pid, s_n)` as a key (#331). Measured over 2015-2026 the old
+-- frame carried 125 surplus rows across those four joins — 69 of them from
+-- pssN/pssNP1 alone, affecting 33 player-seasons — each an exact duplicate
+-- that double-weighted a multi-team player-season in the fit. Serving had the
+-- same fan-out and resolved it by taking whichever row came first, so the two
+-- halves disagreed about which stint a player even was.
+--
+-- `(torvik_pid, s_n)` still does NOT fully determine a row, and the residual
+-- is NOT this: `tpsN` joins `torvik_player_stats` on `player_id`, which fans
+-- out on duplicate profiles. Three rows remain, for pids 65690 / 72029 /
+-- 72085 — exactly #332's legacy immortal links. Collapsing them with a
+-- tiebreak would paper over that issue with the coin flip it exists to end,
+-- so they are left to clear when its repair runs. Shape tracked in #336.
 --
 -- `db.canonical_frame_order` remains the ordering guarantee; this clause is
 -- kept so the DB returns a sensible order for anyone running the query by
