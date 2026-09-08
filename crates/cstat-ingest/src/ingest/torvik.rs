@@ -202,10 +202,21 @@ pub async fn ingest_torvik_player_stats(
     // Drop the rows this fetch no longer carries (#330). Runs after the
     // upserts, so the table has already absorbed everything the feed does
     // carry and what remains unmatched is genuinely retired.
+    //
+    // Note the prune is unreachable on a failed fetch: `fetch_player_stats`
+    // is the first thing this function does and its `?` returns before any of
+    // this, so a network-less run — the `simulate` harness among them, where
+    // the Torvik steps go to barttorvik live rather than through fixtures —
+    // deletes nothing rather than concluding the season lost every player.
+    //
+    // In a transaction so the guard's decision cannot be invalidated between
+    // being made and being acted on: the count that clears the share threshold
+    // and the DELETE that acts on it must see one snapshot, or a concurrent
+    // insert could widen the delete past the bound that authorised it.
     let live_pids: Vec<i32> = players.iter().filter_map(|p| p.pid).collect();
-    let mut conn = pool.acquire().await?;
-    let prune = prune_stale_rows(&mut conn, season, &live_pids).await?;
-    drop(conn);
+    let mut tx = pool.begin().await?;
+    let prune = prune_stale_rows(&mut tx, season, &live_pids).await?;
+    tx.commit().await?;
     match prune {
         PruneOutcome::Pruned { deleted, existing } => {
             info!(
@@ -900,6 +911,10 @@ enum PruneOutcome {
 /// per-game rows in `torvik_player_game_stats` key on `pid` with no FK, so a
 /// pruned pid leaves its game rows inert rather than orphaned — every consumer
 /// reaches them by joining `torvik_player_stats` on `torvik_pid`.
+///
+/// Callers must run this inside a transaction: the count that clears the share
+/// threshold and the DELETE that acts on it have to see one snapshot, or a
+/// concurrent insert could widen the delete past the bound that authorised it.
 ///
 /// Deleting is also self-healing in the direction that matters: the rows are a
 /// projection of the feed, so if this ever removes something live, the next
