@@ -2011,9 +2011,19 @@ pub async fn get_league_averages(
         SELECT
             (SELECT AVG(ppg) FROM player_season_stats
              WHERE season = $1 AND games_played >= 10 AND minutes_per_game >= 10) AS avg_ppg,
-            (SELECT AVG(game_score) FROM player_game_stats pgs
-             JOIN player_season_stats pss ON pss.player_id = pgs.player_id AND pss.season = pgs.season
-             WHERE pgs.season = $1 AND pss.games_played >= 10 AND pss.minutes_per_game >= 10) AS avg_game_score
+            -- EXISTS, not a JOIN: `player_season_stats` is UNIQUE on
+            -- (player_id, team_id, season), so joining it on (player_id,
+            -- season) alone counted a two-stint player's game rows once per
+            -- stint and double-weighted them in the average (#331). The gate
+            -- is a membership question, so ask it as one — that also stops
+            -- the row count depending on how many teams someone played for.
+            (SELECT AVG(pgs.game_score) FROM player_game_stats pgs
+             WHERE pgs.season = $1
+               AND EXISTS (SELECT 1 FROM player_season_stats pss
+                           WHERE pss.player_id = pgs.player_id
+                             AND pss.season = pgs.season
+                             AND pss.games_played >= 10
+                             AND pss.minutes_per_game >= 10)) AS avg_game_score
         "#,
     )
     .bind(season)

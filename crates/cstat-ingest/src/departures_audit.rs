@@ -127,6 +127,12 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
                    AS qualified
         FROM players p
         JOIN teams t ON t.id = p.team_id
+        -- ALLOW_PSS_PLAYER_ID_JOIN: keyed without `team_id`, and safe because
+        -- `pss` is read only through `bool_or(...)` under the GROUP BY below.
+        -- A two-stint player fans this out, and the aggregate absorbs it —
+        -- "did ANY stint clear the qualification gate" is also the semantic
+        -- this audit wants, so collapsing to one stint would be the wrong fix
+        -- here rather than a neutral one (#331).
         LEFT JOIN player_season_stats pss
                ON pss.player_id = p.id AND pss.season = p.season
         -- One Torvik profile per (player, season), same de-duplication the
