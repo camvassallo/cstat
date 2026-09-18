@@ -43,6 +43,14 @@ struct Cli {
     command: Commands,
 }
 
+/// CLI spelling of `torvik::ReconcileLinks`, minus `Off` — absence of the flag
+/// is off.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ReconcileLinksArg {
+    Report,
+    Apply,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Bootstrap a season end-to-end: NatStat ingest + Torvik + compute.
@@ -299,6 +307,15 @@ enum Commands {
         /// Prereq for point-in-time CamPom (see ROADMAP §"CamPom overfitting audit").
         #[arg(long)]
         persist_games: bool,
+
+        /// One-time repair (#332), run on top of the normal ingest for the
+        /// year: after linking, find rows still holding a `player_id` this run
+        /// did not produce — the links the upsert's COALESCE preserves forever
+        /// — and `report` them or `apply` the clear. Only rows whose Torvik
+        /// team resolved count, and apply refuses when the set is too large a
+        /// share of the season to be legacy residue. Not for the nightly.
+        #[arg(long, value_enum)]
+        reconcile_links: Option<ReconcileLinksArg>,
     },
 
     /// Ingest head coaches from barttorvik's `coachdict.json` into the
@@ -1000,16 +1017,85 @@ async fn main() -> Result<()> {
             year,
             rebounds,
             persist_games,
+            reconcile_links,
         } => {
+            use cstat_ingest::ingest::torvik::{
+                ReconcileLinks, ReconcileOutcome, TorvikIngestOptions,
+            };
             let torvik = TorkvikClient::new();
-            let (upserted, matched) =
-                cstat_ingest::ingest::torvik::ingest_torvik_player_stats(&torvik, &db.pool, year)
-                    .await?;
+            let opts = TorvikIngestOptions {
+                reconcile_links: match reconcile_links {
+                    None => ReconcileLinks::Off,
+                    Some(ReconcileLinksArg::Report) => ReconcileLinks::Report,
+                    Some(ReconcileLinksArg::Apply) => ReconcileLinks::Apply,
+                },
+            };
+            let out = cstat_ingest::ingest::torvik::ingest_torvik_player_stats_with(
+                &torvik, &db.pool, year, opts,
+            )
+            .await?;
+            let (upserted, matched) = (out.upserted, out.matched);
             println!(
                 "Torvik player stats: {upserted} upserted, {matched} matched to cstat players \
                  ({} unlinked)",
                 upserted.saturating_sub(matched)
             );
+            if let Some(rec) = out.reconcile {
+                let unjudged = rec.unjudged_rows;
+                let unresolved = rec.unresolved_teams;
+                let list = |stale: &[cstat_ingest::ingest::torvik::StaleLink]| {
+                    for s in stale {
+                        println!(
+                            "  pid {:>7}  {} ({})  ->  held by {} ({})",
+                            s.torvik_pid,
+                            s.torvik_name,
+                            s.torvik_team,
+                            s.held_player,
+                            s.held_team.as_deref().unwrap_or("no team")
+                        );
+                    }
+                };
+                match rec.outcome {
+                    ReconcileOutcome::Clean => {
+                        println!(
+                            "Reconcile: clean — no row the linker could judge in {year} holds a \
+                             link it would not make"
+                        );
+                    }
+                    ReconcileOutcome::Reported { stale } => {
+                        println!(
+                            "Reconcile: {} stale link(s) in {year} the current linker would not \
+                             produce (nothing changed; re-run with --reconcile-links apply):",
+                            stale.len()
+                        );
+                        list(&stale);
+                    }
+                    ReconcileOutcome::Applied { cleared, stale } => {
+                        println!("Reconcile: cleared {cleared} stale link(s) in {year}:");
+                        list(&stale);
+                    }
+                    ReconcileOutcome::Refused { stale, linked } => {
+                        println!(
+                            "Reconcile: REFUSED — {} stale of {linked} linked rows in {year} is too \
+                             large a share to be legacy residue; the roster the linker saw is the \
+                             likelier thing to be wrong. Nothing changed. The set:",
+                            stale.len()
+                        );
+                        list(&stale);
+                    }
+                }
+                // Whatever the outcome said, it said it only about rows whose
+                // team the linker resolved. Name the rest, so "clean" on a
+                // season with a respelled school is read as partial.
+                if unjudged > 0 {
+                    println!(
+                        "  {unjudged} row(s) on {} unresolved Torvik team(s) were NOT judged \
+                         (an unmatched row there is an abstention, not a verdict): {}",
+                        unresolved.len(),
+                        unresolved.join(", ")
+                    );
+                }
+            }
 
             // Both flags consume the same gzip JSON from
             // `barttorvik.com/{year}_all_advgames.json.gz` — fetch once and

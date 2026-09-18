@@ -14,6 +14,99 @@ pub async fn ingest_torvik_player_stats(
     pool: &PgPool,
     season: i32,
 ) -> anyhow::Result<(u64, u64)> {
+    let out = ingest_torvik_player_stats_with(client, pool, season, Default::default()).await?;
+    Ok((out.upserted, out.matched))
+}
+
+/// What to do with a link the current linker would NOT produce (#332).
+///
+/// The upsert keeps a previously established link when this run fails to
+/// match (`player_id = COALESCE(EXCLUDED.player_id, ...)`), and that is
+/// deliberate: a transient miss — an unresolved team, a feed hiccup, a
+/// renamed school — must not throw away good linkage across the whole
+/// table. The cost is that a link nothing would create today is also
+/// nothing that would ever remove it. Two of those survived the #313 fix:
+/// 2020 Xavier Johnson (George Mason) and Chris Harris (Southeast Missouri
+/// St.), coin-flipped onto a same-named player before #243's two-candidate
+/// rule existed. This mode finds them by asking the linker and comparing.
+///
+/// It is a one-time repair, not part of the nightly, and `Off` is the default
+/// everywhere: an operator turns it on for a season, reads the report, then
+/// runs it again with `Apply`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReconcileLinks {
+    #[default]
+    Off,
+    /// Name every stale link; change nothing.
+    Report,
+    /// Clear them, bounded by [`RECONCILE_MAX_STALE_SHARE`].
+    Apply,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TorvikIngestOptions {
+    pub reconcile_links: ReconcileLinks,
+}
+
+/// A `torvik_player_stats` row holding a link this run did not make.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleLink {
+    pub torvik_pid: i32,
+    pub torvik_name: String,
+    pub torvik_team: String,
+    /// The cstat player the row is wrongly attached to, and that player's team.
+    pub held_player: String,
+    pub held_team: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReconcileOutcome {
+    /// Every link in the table for this fetch is one the linker made.
+    Clean,
+    Reported {
+        stale: Vec<StaleLink>,
+    },
+    Applied {
+        cleared: u64,
+        stale: Vec<StaleLink>,
+    },
+    /// The stale set was too large a share of the season's linked rows to be
+    /// a handful of legacy coin-flips. Nothing was cleared.
+    Refused {
+        stale: Vec<StaleLink>,
+        linked: i64,
+    },
+}
+
+/// What a reconcile run concluded, plus what it declined to conclude.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReconcileReport {
+    pub outcome: ReconcileOutcome,
+    /// Torvik team names the linker could not resolve this run. Rows on them
+    /// were not judged — an unmatched row there is an abstention, not a
+    /// verdict — so a `Clean` outcome is only as complete as this list is
+    /// empty. Surfaced so "clean" cannot be read as "every link is right"
+    /// on a season where the linker never saw part of the roster.
+    pub unresolved_teams: Vec<String>,
+    /// How many fetched rows the abstention rule set aside: on one of those
+    /// teams AND unmatched. Not every row on an unresolved team — a unique
+    /// name still links through the name-only tier without one.
+    pub unjudged_rows: usize,
+}
+
+pub struct TorvikIngestOutcome {
+    pub upserted: u64,
+    pub matched: u64,
+    /// `None` unless [`TorvikIngestOptions::reconcile_links`] was on.
+    pub reconcile: Option<ReconcileReport>,
+}
+
+pub async fn ingest_torvik_player_stats_with(
+    client: &TorkvikClient,
+    pool: &PgPool,
+    season: i32,
+    opts: TorvikIngestOptions,
+) -> anyhow::Result<TorvikIngestOutcome> {
     let players = client.fetch_player_stats(season).await?;
     // Resolve every Torvik row to a cstat player up front (see `link_players`)
     // rather than row-by-row: the nickname-tolerant fallbacks need to know
@@ -199,6 +292,36 @@ pub async fn ingest_torvik_player_stats(
 
     let unlinked_refused = clear_refused_links(pool, season, &links.refused_pids).await?;
 
+    // The #332 repair. Sits between the refusal clear and the prune on
+    // purpose: after the clear, so a refused pid is not double-reported; before
+    // the prune, so it only ever reasons about pids the fetch still carries.
+    let reconcile = match opts.reconcile_links {
+        ReconcileLinks::Off => None,
+        mode => {
+            let candidates = stale_link_candidates(&players, &links);
+            let mut tx = pool.begin().await?;
+            let outcome = reconcile_stale_links(&mut tx, season, &candidates, mode).await?;
+            tx.commit().await?;
+            let unresolved_teams = links.stats.unresolved_teams.clone();
+            // Exactly the rows the abstention rule in `stale_link_candidates`
+            // set aside: on an unresolved team AND unmatched. A row on such a
+            // team that still linked (a unique name clears the name-only tier
+            // without a team) was judged, and is not counted here.
+            let unjudged_rows = players
+                .iter()
+                .zip(&links.player_ids)
+                .filter(|(p, linked)| {
+                    p.pid.is_some() && linked.is_none() && unresolved_teams.contains(&p.team)
+                })
+                .count();
+            Some(ReconcileReport {
+                outcome,
+                unresolved_teams,
+                unjudged_rows,
+            })
+        }
+    };
+
     // Drop the rows this fetch no longer carries (#330). Runs after the
     // upserts, so the table has already absorbed everything the feed does
     // carry and what remains unmatched is genuinely retired.
@@ -290,7 +413,11 @@ pub async fn ingest_torvik_player_stats(
             "Torvik rows left unlinked to a cstat player"
         );
     }
-    Ok((upserted, matched))
+    Ok(TorvikIngestOutcome {
+        upserted,
+        matched,
+        reconcile,
+    })
 }
 
 /// Persist all per-game Torvik rows into `torvik_player_game_stats`.
@@ -1007,6 +1134,129 @@ where
     .execute(exec)
     .await?
     .rows_affected())
+}
+
+/// The largest share of a season's LINKED rows [`reconcile_stale_links`] will
+/// clear in one run. Tighter than [`PRUNE_MAX_STALE_SHARE`], deliberately: pid
+/// churn is a routine property of the feed, but a link the linker would not
+/// reproduce is supposed to be a rare legacy residue — #332 found two in
+/// twelve seasons. A large set means the ROSTER is what changed underneath the
+/// linker (a `SeasonRoster::load` that came back short, a mass re-teaming),
+/// and clearing on that would be the #243 outage again from the other side:
+/// hundreds of rotation players off the leaderboard because one input was
+/// briefly wrong. Raise it for a deliberate mass repair; do not lower the
+/// default to make a run pass.
+const RECONCILE_MAX_STALE_SHARE: f64 = 0.02;
+
+/// The pids whose link, if the table holds one, this run did NOT produce.
+///
+/// That is the set the upsert's `COALESCE` preserves and nothing else can
+/// reach: matched nothing, and not refused (a refused pid is cleared by
+/// [`clear_refused_links`] already).
+///
+/// One more condition, and it is what makes `Apply` safe: **the row's Torvik
+/// team must have resolved.** An unmatched row on an unresolved team is not a
+/// verdict from the linker, it is an abstention — it never saw the team, so
+/// the team-confirmed tier could not fire and a non-unique name had nothing
+/// left to fall through to. Torvik respelling one school between fetches
+/// would otherwise turn every same-named player on it into a "stale link"
+/// and `Apply` would clear them, which is the transient miss the `COALESCE`
+/// exists to survive. A legacy coin-flip, by contrast, sits on a team the
+/// linker resolved fine and still declined to link — the two #332 cases both
+/// did. Pure, so the shape is unit-testable without a database.
+fn stale_link_candidates(rows: &[crate::torvik::TorkvikPlayerSeason], links: &Links) -> Vec<i32> {
+    let refused: std::collections::HashSet<i32> = links.refused_pids.iter().copied().collect();
+    let unresolved: std::collections::HashSet<&str> = links
+        .stats
+        .unresolved_teams
+        .iter()
+        .map(String::as_str)
+        .collect();
+    rows.iter()
+        .zip(&links.player_ids)
+        .filter_map(|(r, linked)| match (r.pid, linked) {
+            (Some(pid), None)
+                if !refused.contains(&pid) && !unresolved.contains(r.team.as_str()) =>
+            {
+                Some(pid)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Find, and on `Apply` clear, the candidate pids that still hold a link.
+///
+/// Reads the table AFTER this run's upserts, so what it sees is what the
+/// `COALESCE` kept. The count that authorises the clear and the `UPDATE` that
+/// performs it run on the caller's transaction for the same reason the prune
+/// does — the decision and the act must see one snapshot.
+///
+/// Takes the transaction rather than the pool so a test can drive it inside
+/// one it then rolls back, against the real table, the way
+/// `clear_refused_links` is exercised.
+async fn reconcile_stale_links(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    season: i32,
+    candidates: &[i32],
+    mode: ReconcileLinks,
+) -> Result<ReconcileOutcome, sqlx::Error> {
+    if candidates.is_empty() {
+        return Ok(ReconcileOutcome::Clean);
+    }
+    let stale: Vec<StaleLink> =
+        sqlx::query_as::<_, (i32, Option<String>, String, String, Option<String>)>(
+            "SELECT t.torvik_pid, t.player_name, t.team_name, p.name, tm.short_name
+           FROM torvik_player_stats t
+           JOIN players p ON p.id = t.player_id
+           LEFT JOIN teams tm ON tm.id = p.team_id
+          WHERE t.season = $1 AND t.torvik_pid = ANY($2) AND t.player_id IS NOT NULL
+          ORDER BY t.torvik_pid",
+        )
+        .bind(season)
+        .bind(candidates)
+        .fetch_all(&mut **tx)
+        .await?
+        .into_iter()
+        .map(
+            |(torvik_pid, torvik_name, torvik_team, held_player, held_team)| StaleLink {
+                torvik_pid,
+                torvik_name: torvik_name.unwrap_or_default(),
+                torvik_team,
+                held_player,
+                held_team,
+            },
+        )
+        .collect();
+    if stale.is_empty() {
+        return Ok(ReconcileOutcome::Clean);
+    }
+    if mode == ReconcileLinks::Report {
+        return Ok(ReconcileOutcome::Reported { stale });
+    }
+
+    let linked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM torvik_player_stats WHERE season = $1 AND player_id IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_one(&mut **tx)
+    .await?;
+    if stale.len() as f64 > linked as f64 * RECONCILE_MAX_STALE_SHARE {
+        return Ok(ReconcileOutcome::Refused { stale, linked });
+    }
+
+    let pids: Vec<i32> = stale.iter().map(|s| s.torvik_pid).collect();
+    let cleared = sqlx::query(
+        "UPDATE torvik_player_stats
+            SET player_id = NULL, updated_at = now()
+          WHERE season = $1 AND torvik_pid = ANY($2) AND player_id IS NOT NULL",
+    )
+    .bind(season)
+    .bind(&pids)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(ReconcileOutcome::Applied { cleared, stale })
 }
 
 /// Resolve every Torvik row for a season to a cstat player.
@@ -2050,6 +2300,289 @@ mod tests {
         assert_eq!(links.player_ids, vec![Some(sandro)]);
         assert_eq!(links.stats.name_only, 1);
         assert_eq!(links.stats.name_only_team_disagreed, 1);
+    }
+
+    /// The #332 residue, end to end through the linker: two same-named cstat
+    /// players, a Torvik row on a THIRD team, so no team confirms it and the
+    /// sole-candidate tier cannot apply. The linker correctly leaves it
+    /// unmatched — and, crucially, NOT refused, which is why
+    /// `clear_refused_links` never reaches it and the COALESCE keeps whatever
+    /// link an older run left behind. The candidate list has to name it.
+    #[test]
+    fn stale_candidates_include_the_ambiguous_unmatched_row_but_not_a_refusal() {
+        let (pitt, chi) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (t_pitt, t_chi, t_gm) = (
+            Uuid::from_u128(90),
+            Uuid::from_u128(91),
+            Uuid::from_u128(92),
+        );
+        let r = roster(
+            &[
+                (pitt, "Xavier Johnson", Some(t_pitt)),
+                (chi, "Xavier Johnson", Some(t_chi)),
+            ],
+            // George Mason is a team cstat KNOWS — with no Xavier Johnson on
+            // it, because NatStat never ingested him. That is the #332 shape
+            // exactly: the team resolves, the linker has full information, and
+            // still declines. (A team that did NOT resolve would be an
+            // abstention, and `stale_link_candidates` skips those.)
+            &[
+                (t_pitt, "Pittsburgh", "Pittsburgh Panthers"),
+                (t_chi, "Chicago St.", "Chicago State Cougars"),
+                (t_gm, "George Mason", "George Mason Patriots"),
+            ],
+        );
+        let rows = [
+            // Team-confirmed: links to Pitt's.
+            torvik_row("Xavier Johnson", "Pittsburgh", 65690, 33.3),
+            // George Mason's — the #332 row. Two candidates, neither on the
+            // Torvik team: unmatched, not refused.
+            torvik_row("Xavier Johnson", "George Mason", 72085, 29.3),
+            // A second Pitt row for the same name: team-confirms to a player
+            // already claimed, so this one IS refused (phase 1a).
+            torvik_row("Xavier Johnson", "Pittsburgh", 99999, 5.0),
+        ];
+        let links = link_players(&r, &rows, 2020);
+        assert_eq!(links.player_ids, vec![Some(pitt), None, None]);
+        assert_eq!(links.refused_pids, vec![99999]);
+        assert!(
+            links.stats.unresolved_teams.is_empty(),
+            "fixture must resolve every team"
+        );
+
+        // Only the unmatched-and-not-refused row is a reconcile candidate.
+        // The refused one is already on the clear list; naming it here too
+        // would double-count a repair the run made on its own.
+        assert_eq!(stale_link_candidates(&rows, &links), vec![72085]);
+    }
+
+    /// An unmatched row on a team the linker could not resolve is an
+    /// abstention, not a verdict, and must not be a candidate — otherwise a
+    /// respelled school name turns its whole same-named roster into "stale
+    /// links" for `Apply` to clear.
+    #[test]
+    fn stale_candidates_exclude_rows_whose_team_did_not_resolve() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (t_a, t_b) = (Uuid::from_u128(90), Uuid::from_u128(91));
+        let r = roster(
+            &[(a, "Jalen Smith", Some(t_a)), (b, "Jalen Smith", Some(t_b))],
+            &[
+                (t_a, "Maryland", "Maryland Terrapins"),
+                (t_b, "Purdue", "Purdue Boilermakers"),
+            ],
+        );
+        let rows = [
+            // Same shape as the #332 case, but the Torvik team is one cstat
+            // does not know. Unmatched either way; the difference is WHY.
+            torvik_row("Jalen Smith", "Some Other School", 4242, 20.0),
+        ];
+        let links = link_players(&r, &rows, 2020);
+        assert_eq!(links.player_ids, vec![None]);
+        assert_eq!(links.stats.unresolved_teams, vec!["Some Other School"]);
+        assert!(
+            stale_link_candidates(&rows, &links).is_empty(),
+            "an abstention was treated as a verdict"
+        );
+    }
+
+    #[test]
+    fn stale_candidates_skip_rows_with_no_pid() {
+        let r = roster(&[], &[]);
+        let mut row = torvik_row("Nobody", "Nowhere", 1, 10.0);
+        row.pid = None;
+        let links = link_players(&r, &[row.clone()], 2020);
+        assert_eq!(links.player_ids, vec![None]);
+        assert!(stale_link_candidates(&[row], &links).is_empty());
+    }
+
+    /// Which cstat player a `(season, pid)` row currently holds, if any.
+    async fn held_link(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        season: i32,
+        pid: i32,
+    ) -> Option<Uuid> {
+        sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT player_id FROM torvik_player_stats WHERE season = $1 AND torvik_pid = $2",
+        )
+        .bind(season)
+        .bind(pid)
+        .fetch_one(&mut **tx)
+        .await
+        .unwrap()
+    }
+
+    /// The repair, against the real table inside a rolled-back transaction.
+    /// Plants a link the linker would not make (any linked row will do — we
+    /// hand its pid to the reconcile as a candidate, which is the linker's
+    /// verdict in miniature), then checks `Report` names it and changes
+    /// nothing, `Apply` clears exactly it, and a bystander is untouched.
+    #[tokio::test]
+    #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
+                torvik::tests::reconcile -- --ignored --nocapture"]
+    async fn reconcile_reports_then_clears_exactly_the_candidates() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .unwrap();
+        let season: Option<i32> = sqlx::query_scalar(
+            "SELECT max(season) FROM torvik_player_stats WHERE player_id IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let Some(season) = season else {
+            eprintln!("no linked Torvik rows locally; nothing to exercise");
+            return;
+        };
+        let victims: Vec<i32> = sqlx::query_scalar(
+            "SELECT torvik_pid FROM torvik_player_stats
+              WHERE player_id IS NOT NULL AND season = $1
+              ORDER BY torvik_pid LIMIT 2",
+        )
+        .bind(season)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        if victims.len() < 2 {
+            eprintln!("fewer than two linked rows in {season}; nothing to exercise");
+            return;
+        }
+        let (target, bystander) = (victims[0], victims[1]);
+
+        let mut tx = pool.begin().await.unwrap();
+        let before = held_link(&mut tx, season, target).await;
+        assert!(before.is_some(), "victim must start linked");
+
+        // Report: named, untouched.
+        let out = reconcile_stale_links(&mut tx, season, &[target], ReconcileLinks::Report)
+            .await
+            .unwrap();
+        match &out {
+            ReconcileOutcome::Reported { stale } => {
+                assert_eq!(stale.len(), 1);
+                assert_eq!(stale[0].torvik_pid, target);
+            }
+            other => panic!("expected Reported, got {other:?}"),
+        }
+        assert_eq!(
+            held_link(&mut tx, season, target).await,
+            before,
+            "report mode changed a row"
+        );
+
+        // Apply: cleared, and only it.
+        let out = reconcile_stale_links(&mut tx, season, &[target], ReconcileLinks::Apply)
+            .await
+            .unwrap();
+        match out {
+            ReconcileOutcome::Applied { cleared, stale } => {
+                assert_eq!(
+                    cleared, 1,
+                    "apply touched {cleared} rows, expected exactly 1"
+                );
+                assert_eq!(stale[0].torvik_pid, target);
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert_eq!(
+            held_link(&mut tx, season, target).await,
+            None,
+            "target still linked after apply"
+        );
+        assert!(
+            held_link(&mut tx, season, bystander).await.is_some(),
+            "bystander lost its link"
+        );
+
+        // A candidate the table does not hold a link for is not a finding.
+        let out = reconcile_stale_links(&mut tx, season, &[target], ReconcileLinks::Apply)
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            ReconcileOutcome::Clean,
+            "a cleared row was reported again"
+        );
+
+        tx.rollback().await.unwrap();
+    }
+
+    /// The guard: hand the reconcile MORE candidates than the share allows and
+    /// it must refuse without clearing any. This is the #243 outage from the
+    /// other side — a roster that came back short would make every linked row
+    /// look stale — so it is the assertion that matters most.
+    #[tokio::test]
+    #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
+                torvik::tests::reconcile -- --ignored --nocapture"]
+    async fn reconcile_refuses_a_mass_clear_rather_than_emptying_the_season() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .unwrap();
+        let season: Option<i32> = sqlx::query_scalar(
+            "SELECT max(season) FROM torvik_player_stats WHERE player_id IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let Some(season) = season else {
+            eprintln!("no linked Torvik rows locally; nothing to exercise");
+            return;
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let linked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM torvik_player_stats WHERE season = $1 AND player_id IS NOT NULL",
+        )
+        .bind(season)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        // Just over the share, so it is the bound that trips and not some
+        // incidental cap.
+        let over = (linked as f64 * RECONCILE_MAX_STALE_SHARE).floor() as i64 + 1;
+        let all: Vec<i32> = sqlx::query_scalar(
+            "SELECT torvik_pid FROM torvik_player_stats
+              WHERE season = $1 AND player_id IS NOT NULL ORDER BY torvik_pid LIMIT $2",
+        )
+        .bind(season)
+        .bind(over)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+        if (all.len() as i64) < over {
+            eprintln!(
+                "not enough linked rows in {season} to exceed the share; nothing to exercise"
+            );
+            return;
+        }
+
+        let out = reconcile_stale_links(&mut tx, season, &all, ReconcileLinks::Apply)
+            .await
+            .unwrap();
+        match out {
+            ReconcileOutcome::Refused { stale, linked: l } => {
+                assert_eq!(stale.len(), all.len());
+                assert_eq!(l, linked);
+            }
+            other => panic!("expected Refused, got {other:?}"),
+        }
+        let still: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM torvik_player_stats WHERE season = $1 AND player_id IS NOT NULL",
+        )
+        .bind(season)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(still, linked, "a refused reconcile cleared rows anyway");
+        tx.rollback().await.unwrap();
     }
 
     /// The clear that makes the #313 fix non-inert, exercised directly.
