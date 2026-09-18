@@ -42,8 +42,60 @@ function isThirdPartyScript(filename: string): boolean {
   }
 }
 
+// The filename check above only covers the `error` event. An
+// `unhandledrejection` has no filename, so an extension that rejects a promise
+// inside our page walks straight past it — the concrete case is MetaMask's
+// `inpage.js` rejecting with "Failed to connect to MetaMask" on pages that
+// never asked for a wallet (#339). The extension origin is still there, in the
+// stack, so that is what this reads.
+const EXTENSION_SCHEMES = ['chrome-extension://', 'moz-extension://', 'safari-web-extension://', 'safari-extension://']
+
+export function isExtensionStack(stack: string): boolean {
+  return EXTENSION_SCHEMES.some((scheme) => stack.includes(scheme))
+}
+
+// Crawlers that execute JavaScript render the SPA and then hit its failure
+// paths in ways no person does: Meta's link-preview renderer abandons lazy
+// chunk fetches ("Failed to fetch dynamically imported module", eight alerts
+// in a week, every one of them this UA — #339), and Baidu's / Bing's renderers
+// report the status Cloudflare's bot management handed them. None of it is a
+// crash a visitor saw, and each one displaces a real report behind the
+// channel's 30s throttle. Crawler *traffic* is already visible in the HTTP log;
+// what it does with our JS is not something we act on. Substring, lowercase:
+// the UAs all self-identify, and matching the generic `bot` / `spider` /
+// `crawl` tokens catches the long tail without a registry to maintain.
+const CRAWLER_UA_MARKERS = [
+  'externalagent', // meta-externalagent — Facebook / Instagram link previews
+  'facebookexternalhit',
+  'googlebot',
+  'bingbot',
+  'baiduspider',
+  'yandex',
+  'duckduckbot',
+  'applebot',
+  'ahrefsbot',
+  'semrushbot',
+  'petalbot',
+  'bytespider',
+  'gptbot',
+  'claudebot',
+  'headlesschrome',
+  'bot/',
+  'bot;',
+  'spider',
+  'crawl',
+]
+
+export function isCrawlerUserAgent(userAgent: string): boolean {
+  const ua = userAgent.toLowerCase()
+  return CRAWLER_UA_MARKERS.some((marker) => ua.includes(marker))
+}
+
 function report(r: ClientErrorReport): void {
   try {
+    // One funnel for every path in (global listeners and the boundary), so the
+    // noise filters can't be bypassed by whichever path a future caller takes.
+    if (isCrawlerUserAgent(r.user_agent) || isExtensionStack(r.stack)) return
     if (sent >= MAX_REPORTS_PER_LOAD) return
     const key = `${r.kind}|${r.message}|${r.source}`
     if (seen.has(key)) return

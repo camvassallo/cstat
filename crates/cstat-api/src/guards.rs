@@ -331,36 +331,111 @@ fn alert_target(uri: &axum::http::Uri) -> String {
     format!("{path}?{redacted}")
 }
 
-/// Tap responses and alert `#errors-api` on a 5xx — a genuine server fault.
+/// Upper bound on a 5xx body the tap will buffer to read its cause. Every
+/// handler's error body is a one-line `{"error": "..."}`, so this is a safety
+/// rail against buffering something unexpected, not a size anyone hits.
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// Longest cause string that goes into the log line and the Slack post. A
+/// Postgres error with its statement echoed back can run long; the first few
+/// hundred chars carry the diagnosis, the rest is the query.
+const MAX_CAUSE_CHARS: usize = 500;
+
+/// Pull the human-readable cause out of a 5xx body. Every route builds its
+/// error response as `{"error": "<text>"}`, so that field is the answer when
+/// it is there; anything else (a non-JSON body, or JSON of another shape) is
+/// reported verbatim so an unfamiliar failure still says *something*. Empty
+/// stays empty rather than becoming `""` in quotes. Capped at
+/// [`MAX_CAUSE_CHARS`] on a char boundary; control characters are folded to
+/// spaces so a multi-line body stays on one log line.
+fn error_cause(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    let cause = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+        .unwrap_or_else(|| text.trim().to_owned());
+    let mut folded: String = cause
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if let Some((idx, _)) = folded.char_indices().nth(MAX_CAUSE_CHARS) {
+        folded.truncate(idx);
+        folded.push('…');
+    }
+    folded
+}
+
+/// Tap responses on a 5xx — a genuine server fault — and do the two things
+/// nothing else does: **log the cause** and alert `#errors-api`.
+///
 /// Deliberately ignores 4xx (client errors: bad params, 404s) and the two
 /// *intentional* backpressure statuses that are technically 5xx-adjacent: 503
-/// load-shed (this file) is deliberate, and 408 timeout is a 4xx anyway. The
-/// post is spawned + throttled so it never adds latency to the request path and
-/// a flood can't spam Slack. No-op unless `SLACK_WEBHOOK_ERRORS_API` is set.
+/// load-shed (this file) is deliberate, and 408 timeout is a 4xx anyway.
 ///
-/// The alert includes the full request target (`{method} {path}?{query}`,
-/// secrets redacted) so the failing request is reproducible. The method + URI
-/// are cheap to clone (small enum / refcounted `Bytes`); the target string is
+/// This is the only observer of a 500's cause (#338). The handlers put the
+/// failure text into the JSON body and nowhere else, prod's `RUST_LOG` is
+/// scoped to `cstat_api` so `TraceLayer`'s `on_failure` line never emits, and
+/// the Slack post used to carry the URL alone — so a 500 handed its diagnosis
+/// to the client (usually a crawler) and the process log recorded only that
+/// Slack was posted to. Two `/api/predict` failures in September 2026 were
+/// lost that way. So on the 5xx branch the body is buffered, its `error` field
+/// read back, and the cause goes into a `tracing::error!` line under this
+/// crate's target (which prod's filter admits) together with the elapsed time
+/// — a `~15000ms` reads as the 15s `statement_timeout` without guessing — and
+/// into the Slack message. The body is then handed on to the client unchanged.
+///
+/// The post is spawned + throttled so it never adds latency to the request
+/// path and a flood can't spam Slack. No-op unless `SLACK_WEBHOOK_ERRORS_API`
+/// is set. The alert includes the full request target (`{method}
+/// {path}?{query}`, secrets redacted) so the failing request is reproducible.
+/// The method + URI are cheap to clone (small enum / refcounted `Bytes`);
+/// everything else here — the body buffer, the cause, the target string — is
 /// only built on the rare 5xx branch, so the >99.9% success path allocates
-/// nothing here.
+/// nothing.
 pub async fn error_alert(req: Request, next: Next) -> Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
+    let started = Instant::now();
     let resp = next.run(req).await;
     let status = resp.status();
-    if status.is_server_error()
-        && status != StatusCode::SERVICE_UNAVAILABLE
-        && ERROR_5XX_THROTTLE.allow()
-    {
+    if !status.is_server_error() || status == StatusCode::SERVICE_UNAVAILABLE {
+        return resp;
+    }
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+    // Buffer the body to read the cause, then rebuild the response from the
+    // same bytes so the client sees exactly what the handler wrote (the
+    // original `Content-Length` still matches). A body that fails to buffer
+    // — over the cap, or a stream error — is passed on empty: the client was
+    // getting a 5xx either way, and the log line still records that it
+    // happened, just without a cause.
+    let (parts, body) = resp.into_parts();
+    let bytes = axum::body::to_bytes(body, MAX_ERROR_BODY_BYTES)
+        .await
+        .unwrap_or_default();
+    let cause = error_cause(&bytes);
+    let target = alert_target(&uri);
+
+    tracing::error!(
+        %method, %target, %status, elapsed_ms, cause = %cause,
+        "request failed"
+    );
+
+    if ERROR_5XX_THROTTLE.allow() {
+        let cause_line = if cause.is_empty() {
+            String::new()
+        } else {
+            format!("\n> {cause}")
+        };
         let msg = format!(
-            ":rotating_light: *cstat-api {status}* on `{method} {target}` \
-             _(further error alerts throttled for {}s)_",
+            ":rotating_light: *cstat-api {status}* on `{method} {target}` after {elapsed_ms}ms\
+             {cause_line}\n_(further error alerts throttled for {}s)_",
             ERROR_ALERT_COOLDOWN.as_secs(),
-            target = alert_target(&uri),
         );
         tokio::spawn(async move { notify::post_slack(SlackChannel::ErrorsApi, &msg).await });
     }
-    resp
+
+    Response::from_parts(parts, axum::body::Body::from(bytes))
 }
 
 /// Install a panic hook that forwards an unexpected panic (in a request handler
@@ -583,6 +658,83 @@ mod tests {
             !throttle.allow(),
             "a second alert inside the cooldown must be suppressed"
         );
+    }
+
+    #[test]
+    fn error_cause_reads_the_error_field_and_falls_back_to_raw_text() {
+        // The shape every route emits.
+        assert_eq!(
+            error_cause(
+                br#"{"error":"query failed: canceling statement due to statement timeout"}"#
+            ),
+            "query failed: canceling statement due to statement timeout"
+        );
+        // JSON of another shape, or not JSON at all: report it as-is rather
+        // than swallowing an unfamiliar failure.
+        assert_eq!(error_cause(br#"{"detail":"x"}"#), r#"{"detail":"x"}"#);
+        assert_eq!(
+            error_cause(b"  Internal Server Error\n"),
+            "Internal Server Error"
+        );
+        assert_eq!(error_cause(b""), "");
+        // Multi-line bodies fold onto one log line.
+        assert_eq!(
+            error_cause(br#"{"error":"line one\nline two"}"#),
+            "line one line two"
+        );
+        // Capped on a char boundary, with a marker so the cut is visible.
+        let long = format!(r#"{{"error":"{}"}}"#, "é".repeat(MAX_CAUSE_CHARS + 20));
+        let capped = error_cause(long.as_bytes());
+        assert_eq!(capped.chars().count(), MAX_CAUSE_CHARS + 1);
+        assert!(capped.ends_with('…'));
+    }
+
+    /// The tap now consumes the body on the 5xx branch to read its cause, so
+    /// the thing to pin is that the client still gets exactly what the handler
+    /// wrote — status, headers and bytes — and that the 2xx path is untouched.
+    /// (The Slack post is a no-op here: no webhook env var in tests.)
+    #[tokio::test]
+    async fn error_alert_passes_the_5xx_body_through_unchanged() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::middleware::from_fn;
+        use axum::routing::get;
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route(
+                "/boom",
+                get(|| async {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": "query failed: boom" })),
+                    )
+                }),
+            )
+            .route("/ok", get(|| async { Json(json!({ "ok": true })) }))
+            .layer(from_fn(error_alert));
+
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri("/boom").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], br#"{"error":"query failed: boom"}"#);
+
+        let resp = app
+            .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], br#"{"ok":true}"#);
     }
 
     #[test]
