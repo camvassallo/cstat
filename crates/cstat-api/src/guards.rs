@@ -408,11 +408,18 @@ pub async fn error_alert(req: Request, next: Next) -> Response {
     // original `Content-Length` still matches). A body that fails to buffer
     // — over the cap, or a stream error — is passed on empty: the client was
     // getting a 5xx either way, and the log line still records that it
-    // happened, just without a cause.
-    let (parts, body) = resp.into_parts();
-    let bytes = axum::body::to_bytes(body, MAX_ERROR_BODY_BYTES)
-        .await
-        .unwrap_or_default();
+    // happened, just without a cause. The handler's `Content-Length` has to
+    // go with it, though: hyper treats a body that ends short of the declared
+    // length as a broken response and drops the connection, which would turn
+    // "a 500 with no body" into "no response at all".
+    let (mut parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, MAX_ERROR_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            parts.headers.remove(header::CONTENT_LENGTH);
+            axum::body::Bytes::new()
+        }
+    };
     let cause = error_cause(&bytes);
     let target = alert_target(&uri);
 
@@ -735,6 +742,54 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], br#"{"ok":true}"#);
+    }
+
+    /// A 5xx body over the buffering cap is passed on empty — and its
+    /// `Content-Length` must go with it, or hyper sees a body that ends short
+    /// of the declared length and drops the connection instead of sending the
+    /// 500 at all. `Json` / `String` responses never carry the header at this
+    /// layer (hyper derives it at write time), so the handler here sets it
+    /// explicitly, the way a file-serving service would.
+    #[tokio::test]
+    async fn error_alert_drops_content_length_when_the_body_cannot_be_buffered() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::middleware::from_fn;
+        use axum::routing::get;
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route(
+                "/huge",
+                get(|| async {
+                    let body = "x".repeat(MAX_ERROR_BODY_BYTES + 1);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        [(header::CONTENT_LENGTH, body.len().to_string())],
+                        body,
+                    )
+                }),
+            )
+            .layer(from_fn(error_alert));
+
+        let resp = app
+            .oneshot(Request::builder().uri("/huge").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // Axum re-derives `Content-Length` from the (now empty) body above this
+        // layer, so what must NOT be here is the handler's original length.
+        let declared = resp
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .map(|v| v.to_str().unwrap().to_owned());
+        assert!(
+            matches!(declared.as_deref(), None | Some("0")),
+            "stale Content-Length survived: {declared:?}"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        assert!(body.is_empty());
     }
 
     #[test]

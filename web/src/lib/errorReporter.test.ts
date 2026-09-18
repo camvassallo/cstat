@@ -65,6 +65,15 @@ describe('isCrawlerUserAgent', () => {
         'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1',
       ),
     ).toBe(false)
+    // A person browsing inside the Yandex search app is not YandexBot.
+    expect(
+      isCrawlerUserAgent(
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 YandexSearch/7.30',
+      ),
+    ).toBe(false)
+    expect(
+      isCrawlerUserAgent('Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)'),
+    ).toBe(true)
     // An empty UA is not evidence of a crawler.
     expect(isCrawlerUserAgent('')).toBe(false)
   })

@@ -70,7 +70,7 @@ const CRAWLER_UA_MARKERS = [
   'googlebot',
   'bingbot',
   'baiduspider',
-  'yandex',
+  'yandexbot', // not the bare vendor name: humans browse in the Yandex search app (`YandexSearch/…`)
   'duckduckbot',
   'applebot',
   'ahrefsbot',
