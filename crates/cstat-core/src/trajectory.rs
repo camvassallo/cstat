@@ -303,7 +303,40 @@ pub async fn fetch_player_trajectory_row(
             rec.weight           AS recruit_weight,
             rec.position         AS recruit_position,
             rec.year             AS recruit_year
-        FROM player_season_stats pss
+        -- One row per (player, season). `player_season_stats` is UNIQUE on
+        -- (player_id, team_id, season), NOT (player_id, season), so a player
+        -- with two stints in one season multiplies every row of this query
+        -- (#331). Largest stint wins, then minutes, then `team_id` for
+        -- determinism — the same tiebreak `projections.rs` and `recruits.rs`
+        -- use, so a player keeps one identity across every surface.
+        --
+        -- Determinism is the point, not the row count. Both entry points
+        -- collapsed the surplus silently and arbitrarily: this query ends in
+        -- `fetch_optional` (first row wins) and the batch one below builds a
+        -- `HashMap` keyed on player_id (last row wins). Either way the served
+        -- feature vector was a coin flip between stints — the #266 failure
+        -- mode, same request, different answer.
+        --
+        -- Games-before-minutes is the convention rather than the obviously
+        -- right rule: on the 29 affected player-seasons it picks a different
+        -- row than total minutes would in 9, and 2019 Brandon Miller resolves
+        -- to a 29-game 7.8-MPG stint over a 28-game 34.1-MPG one. Kept because
+        -- a per-query tiebreak is how one human ends up with different
+        -- identities on different surfaces. The affected population is almost
+        -- entirely data artifacts (#335, and the same-name misidentification
+        -- family) rather than real two-team seasons, so it shrinks as those
+        -- are fixed. `train_trajectory_model.py` carries the same note.
+        FROM (
+            SELECT * FROM player_season_stats s
+            WHERE s.player_id = $1
+              AND s.season = $2
+              AND s.games_played >= 5
+              AND s.minutes_per_game >= 5
+            ORDER BY s.games_played DESC NULLS LAST,
+                     s.minutes_per_game DESC NULLS LAST,
+                     s.team_id
+            LIMIT 1
+        ) pss
         JOIN players ply ON ply.id = pss.player_id
         -- One Torvik profile per (player, season). Unlike the roster-frame
         -- builders, this one was a genuine train/serve MISMATCH rather than a
@@ -324,19 +357,29 @@ pub async fn fetch_player_trajectory_row(
             ON oo.player_id = pss.player_id AND oo.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
-        LEFT JOIN recruits rec
-            ON rec.cstat_player_id = pss.player_id
+        -- `recruits` carries NO unique constraint on `cstat_player_id` (it is
+        -- UNIQUE on (year, recruit_key)), so two rows resolving to one player
+        -- fan this out too — 3 players locally. Lowest year, then id, which is
+        -- deterministic rather than principled; nothing established a rule.
+        LEFT JOIN LATERAL (
+            SELECT * FROM recruits r
+            WHERE r.cstat_player_id = pss.player_id
+            ORDER BY r.year, r.id
+            LIMIT 1
+        ) rec ON TRUE
         -- Prior-PRIOR (N-1) season via the cross-season torvik_pid (stable
         -- across transfers). Two-hop: tps (current) → tps_nm1 (N-1, same
         -- torvik_pid) → pss_nm1 (N-1 box/role). NULL → history sentinels.
         LEFT JOIN torvik_player_stats tps_nm1
             ON tps_nm1.torvik_pid = tps.torvik_pid AND tps_nm1.season = pss.season - 1
-        LEFT JOIN player_season_stats pss_nm1
-            ON pss_nm1.player_id = tps_nm1.player_id AND pss_nm1.season = pss.season - 1
-        WHERE pss.player_id = $1
-          AND pss.season = $2
-          AND pss.games_played >= 5
-          AND pss.minutes_per_game >= 5
+        LEFT JOIN LATERAL (
+            SELECT * FROM player_season_stats s
+            WHERE s.player_id = tps_nm1.player_id AND s.season = pss.season - 1
+            ORDER BY s.games_played DESC NULLS LAST,
+                     s.minutes_per_game DESC NULLS LAST,
+                     s.team_id
+            LIMIT 1
+        ) pss_nm1 ON TRUE
         "#,
     )
     .bind(player_id)
@@ -431,7 +474,26 @@ pub async fn fetch_player_trajectory_rows(
             rec.weight           AS recruit_weight,
             rec.position         AS recruit_position,
             rec.year             AS recruit_year
-        FROM player_season_stats pss
+        -- One row per (player, season), collapsed on the same tiebreak and
+        -- for the same reason as `fetch_player_trajectory_row` above — see
+        -- that query's note for the fan-out, the #266 determinism argument
+        -- and the games-before-minutes caveat. Here the arbitrary pick was
+        -- the `HashMap` insert below, where the last duplicate silently wins.
+        --
+        -- `player_id` is season-scoped (one row per natstat_id per season) and
+        -- no `player_season_stats` row disagrees with its player's season, so
+        -- DISTINCT ON (player_id) already pins a single season.
+        FROM (
+            SELECT DISTINCT ON (s.player_id) s.*
+            FROM player_season_stats s
+            WHERE s.player_id = ANY($1)
+              AND s.games_played >= 5
+              AND s.minutes_per_game >= 5
+            ORDER BY s.player_id,
+                     s.games_played DESC NULLS LAST,
+                     s.minutes_per_game DESC NULLS LAST,
+                     s.team_id
+        ) pss
         JOIN players ply ON ply.id = pss.player_id
         -- One Torvik profile per (player, season). Unlike the roster-frame
         -- builders, this one was a genuine train/serve MISMATCH rather than a
@@ -452,18 +514,29 @@ pub async fn fetch_player_trajectory_rows(
             ON oo.player_id = pss.player_id AND oo.season = pss.season
         LEFT JOIN player_archetypes pa
             ON pa.player_id = pss.player_id AND pa.season = pss.season
-        LEFT JOIN recruits rec
-            ON rec.cstat_player_id = pss.player_id
+        -- `recruits` carries NO unique constraint on `cstat_player_id` (it is
+        -- UNIQUE on (year, recruit_key)), so two rows resolving to one player
+        -- fan this out too — 3 players locally. Lowest year, then id, which is
+        -- deterministic rather than principled; nothing established a rule.
+        LEFT JOIN LATERAL (
+            SELECT * FROM recruits r
+            WHERE r.cstat_player_id = pss.player_id
+            ORDER BY r.year, r.id
+            LIMIT 1
+        ) rec ON TRUE
         -- Prior-PRIOR (N-1) season via the cross-season torvik_pid (stable
         -- across transfers). Two-hop: tps (current) → tps_nm1 (N-1, same
         -- torvik_pid) → pss_nm1 (N-1 box/role). NULL → history sentinels.
         LEFT JOIN torvik_player_stats tps_nm1
             ON tps_nm1.torvik_pid = tps.torvik_pid AND tps_nm1.season = pss.season - 1
-        LEFT JOIN player_season_stats pss_nm1
-            ON pss_nm1.player_id = tps_nm1.player_id AND pss_nm1.season = pss.season - 1
-        WHERE pss.player_id = ANY($1)
-          AND pss.games_played >= 5
-          AND pss.minutes_per_game >= 5
+        LEFT JOIN LATERAL (
+            SELECT * FROM player_season_stats s
+            WHERE s.player_id = tps_nm1.player_id AND s.season = pss.season - 1
+            ORDER BY s.games_played DESC NULLS LAST,
+                     s.minutes_per_game DESC NULLS LAST,
+                     s.team_id
+            LIMIT 1
+        ) pss_nm1 ON TRUE
         "#,
     )
     .bind(player_ids)

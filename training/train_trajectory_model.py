@@ -167,10 +167,45 @@ SELECT
     pssNM1.usage_rate AS prior2_usg,
     pssNM1.ppg AS prior2_ppg
 FROM base
-JOIN player_season_stats pssN
-    ON pssN.player_id = base.pid_n AND pssN.season = base.s_n
-JOIN player_season_stats pssNP1
-    ON pssNP1.player_id = base.pid_np1 AND pssNP1.season = base.s_np1
+-- One row per (player, season). `player_season_stats` is UNIQUE on
+-- (player_id, team_id, season), NOT (player_id, season), so a player with two
+-- stints in one season fans these joins out (#331). The 5 GP / 5 MPG gate
+-- lives INSIDE each lateral rather than in the WHERE below, which keeps
+-- membership identical to the pre-collapse frame — a player qualifies if ANY
+-- stint clears the gate, and we then take the largest qualifying one.
+--
+-- Tiebreak matches `cstat_core::trajectory` exactly (games, then minutes, then
+-- team_id). It has to: this frame trains the model that query serves, and #319
+-- fixed the Torvik half of this same pair while leaving this half alone.
+--
+-- Games-before-minutes is the repo-wide convention (`projections.rs`,
+-- `recruits.rs`, #329), and it is NOT obviously the best rule here: on the 29
+-- affected player-seasons it picks a different row than total minutes would in
+-- 9 of them, and 2019 Brandon Miller resolves to a 29-game 7.8-MPG stint over
+-- a 28-game 34.1-MPG one. Kept anyway, because a per-query tiebreak is how a
+-- player ends up with different identities on different surfaces, which is the
+-- thing the convention exists to prevent. Worth revisiting as one decision
+-- across every site — but note the affected population is almost entirely data
+-- artifacts (#335's collector rows and the same-name misidentification family)
+-- rather than genuine two-team seasons, so it shrinks as those are fixed.
+JOIN LATERAL (
+    SELECT * FROM player_season_stats s
+    WHERE s.player_id = base.pid_n AND s.season = base.s_n
+      AND s.minutes_per_game >= 5 AND s.games_played >= 5
+    ORDER BY s.games_played DESC NULLS LAST,
+             s.minutes_per_game DESC NULLS LAST,
+             s.team_id
+    LIMIT 1
+) pssN ON TRUE
+JOIN LATERAL (
+    SELECT * FROM player_season_stats s
+    WHERE s.player_id = base.pid_np1 AND s.season = base.s_np1
+      AND s.minutes_per_game >= 5 AND s.games_played >= 5
+    ORDER BY s.games_played DESC NULLS LAST,
+             s.minutes_per_game DESC NULLS LAST,
+             s.team_id
+    LIMIT 1
+) pssNP1 ON TRUE
 JOIN players plyN
     ON plyN.id = base.pid_n
 JOIN torvik_player_stats tpsN
@@ -179,30 +214,45 @@ LEFT JOIN player_archetypes paN
     ON paN.player_id = base.pid_n AND paN.season = base.s_n
 LEFT JOIN player_on_off ooN
     ON ooN.player_id = base.pid_n AND ooN.season = base.s_n
-LEFT JOIN player_season_stats pssNM1
-    ON pssNM1.player_id = base.pid_nm1 AND pssNM1.season = base.s_n - 1
-LEFT JOIN recruits rec
-    ON rec.cstat_player_id = base.pid_n
-WHERE pssN.minutes_per_game >= 5
-  AND pssN.games_played >= 5
-  AND pssNP1.minutes_per_game >= 5
-  AND pssNP1.games_played >= 5
+LEFT JOIN LATERAL (
+    SELECT * FROM player_season_stats s
+    WHERE s.player_id = base.pid_nm1 AND s.season = base.s_n - 1
+    ORDER BY s.games_played DESC NULLS LAST,
+             s.minutes_per_game DESC NULLS LAST,
+             s.team_id
+    LIMIT 1
+) pssNM1 ON TRUE
+-- `recruits` has no unique key on `cstat_player_id` (it is UNIQUE on
+-- (year, recruit_key)), so this fans out too. Same collapse, same reason.
+LEFT JOIN LATERAL (
+    SELECT * FROM recruits r
+    WHERE r.cstat_player_id = base.pid_n
+    ORDER BY r.year, r.id
+    LIMIT 1
+) rec ON TRUE
+-- Qualification gate now lives in the pssN / pssNP1 laterals above.
 -- Deterministic row order (issue #222). LightGBM's `bagging_fraction`
 -- subsamples by row position, so an unordered read makes the fit — and
 -- therefore the OOF predictions this model persists — irreproducible.
 --
--- `(torvik_pid, s_n)` alone does NOT determine a row: `player_season_stats`
--- is unique on `(player_id, team_id, season)`, so a player who appears on
--- two teams in one season fans the pssN / pssNP1 / pssNM1 joins out.
+-- The laterals above close the `player_season_stats` half of what used to
+-- break `(torvik_pid, s_n)` as a key (#331). Measured over 2015-2026 the old
+-- frame carried 125 surplus rows across those four joins — 69 of them from
+-- pssN/pssNP1 alone, affecting 33 player-seasons — each an exact duplicate
+-- that double-weighted a multi-team player-season in the fit. Serving had the
+-- same fan-out and resolved it by taking whichever row came first, so the two
+-- halves disagreed about which stint a player even was.
 --
--- The team ids narrow it but do NOT fully close it; this frame was still
--- unstable with them in place. `db.canonical_frame_order` is what actually
--- guarantees the order. This clause is kept so the DB returns a sensible
--- order for anyone running the query by hand, not as the guarantee.
+-- `(torvik_pid, s_n)` still does NOT fully determine a row, and the residual
+-- is NOT this: `tpsN` joins `torvik_player_stats` on `player_id`, which fans
+-- out on duplicate profiles. Three rows remain, for pids 65690 / 72029 /
+-- 72085 — exactly #332's legacy immortal links. Collapsing them with a
+-- tiebreak would paper over that issue with the coin flip it exists to end,
+-- so they are left to clear when its repair runs. Shape tracked in #336.
 --
--- (Those fan-out rows are a pre-existing property of this query — 274 of
--- them are exact duplicates, which double-weights multi-team player-seasons
--- in training. Out of scope here; noted in #222.)
+-- `db.canonical_frame_order` remains the ordering guarantee; this clause is
+-- kept so the DB returns a sensible order for anyone running the query by
+-- hand. The team ids are now single-valued and no longer load-bearing.
 ORDER BY base.torvik_pid, base.s_n,
          pssN.team_id, pssNP1.team_id, pssNM1.team_id
 """
