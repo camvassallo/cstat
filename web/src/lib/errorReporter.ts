@@ -48,10 +48,19 @@ function isThirdPartyScript(filename: string): boolean {
 // `inpage.js` rejecting with "Failed to connect to MetaMask" on pages that
 // never asked for a wallet (#339). The extension origin is still there, in the
 // stack, so that is what this reads.
+//
+// Only the TOP frame decides — the first line that carries a location. An
+// extension that wraps `fetch` or `XMLHttpRequest` (ad blockers do) leaves its
+// frame lower in the stack of a genuine crash in our code, and a match
+// anywhere would drop that crash as extension noise. For a boundary-caught
+// error the component stack comes first and is ours, which is right: that
+// error was thrown inside our render tree whatever called into it.
 const EXTENSION_SCHEMES = ['chrome-extension://', 'moz-extension://', 'safari-web-extension://', 'safari-extension://']
 
 export function isExtensionStack(stack: string): boolean {
-  return EXTENSION_SCHEMES.some((scheme) => stack.includes(scheme))
+  const topFrame = stack.split('\n').find((line) => line.includes('://'))
+  if (!topFrame) return false
+  return EXTENSION_SCHEMES.some((scheme) => topFrame.includes(scheme))
 }
 
 // Crawlers that execute JavaScript render the SPA and then hit its failure

@@ -91,6 +91,20 @@ describe('isExtensionStack', () => {
     expect(isExtensionStack('at foo (moz-extension://abc/content.js:1:1)')).toBe(true)
   })
 
+  it('keeps a crash in our code that merely passed through an extension wrapper', () => {
+    // An ad blocker that wraps `fetch` sits below our frame in a genuine app
+    // crash. The top frame is ours, so this is ours to hear about.
+    expect(
+      isExtensionStack(
+        [
+          "TypeError: Cannot read properties of undefined (reading 'map')",
+          '    at Pe (https://camalytics.org/assets/index-3-rxmRr3.js:11:7597)',
+          '    at window.fetch (chrome-extension://cjpalhdlnbpafiamejdnhcphjbkeiagm/js/contentscript.js:1:1)',
+        ].join('\n'),
+      ),
+    ).toBe(false)
+  })
+
   it('keeps our own frames, and an empty stack', () => {
     expect(
       isExtensionStack(
