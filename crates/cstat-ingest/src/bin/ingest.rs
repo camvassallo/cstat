@@ -308,11 +308,12 @@ enum Commands {
         #[arg(long)]
         persist_games: bool,
 
-        /// One-time repair (#332): after linking, find rows still holding a
-        /// `player_id` this run did not produce — the links the upsert's
-        /// COALESCE preserves forever — and `report` them or `apply` the
-        /// clear. Apply refuses when the set is too large a share of the
-        /// season to be legacy residue. Not for the nightly.
+        /// One-time repair (#332), run on top of the normal ingest for the
+        /// year: after linking, find rows still holding a `player_id` this run
+        /// did not produce — the links the upsert's COALESCE preserves forever
+        /// — and `report` them or `apply` the clear. Only rows whose Torvik
+        /// team resolved count, and apply refuses when the set is too large a
+        /// share of the season to be legacy residue. Not for the nightly.
         #[arg(long, value_enum)]
         reconcile_links: Option<ReconcileLinksArg>,
     },

@@ -1118,17 +1118,36 @@ const RECONCILE_MAX_STALE_SHARE: f64 = 0.02;
 
 /// The pids whose link, if the table holds one, this run did NOT produce.
 ///
-/// That is exactly the set the upsert's `COALESCE` preserves and nothing else
-/// can reach: matched nothing, and not refused (a refused pid is cleared by
-/// [`clear_refused_links`] already). Pure, so the shape is unit-testable
-/// without a database — the linker is the expensive part and it has already
-/// run.
+/// That is the set the upsert's `COALESCE` preserves and nothing else can
+/// reach: matched nothing, and not refused (a refused pid is cleared by
+/// [`clear_refused_links`] already).
+///
+/// One more condition, and it is what makes `Apply` safe: **the row's Torvik
+/// team must have resolved.** An unmatched row on an unresolved team is not a
+/// verdict from the linker, it is an abstention — it never saw the team, so
+/// the team-confirmed tier could not fire and a non-unique name had nothing
+/// left to fall through to. Torvik respelling one school between fetches
+/// would otherwise turn every same-named player on it into a "stale link"
+/// and `Apply` would clear them, which is the transient miss the `COALESCE`
+/// exists to survive. A legacy coin-flip, by contrast, sits on a team the
+/// linker resolved fine and still declined to link — the two #332 cases both
+/// did. Pure, so the shape is unit-testable without a database.
 fn stale_link_candidates(rows: &[crate::torvik::TorkvikPlayerSeason], links: &Links) -> Vec<i32> {
     let refused: std::collections::HashSet<i32> = links.refused_pids.iter().copied().collect();
+    let unresolved: std::collections::HashSet<&str> = links
+        .stats
+        .unresolved_teams
+        .iter()
+        .map(String::as_str)
+        .collect();
     rows.iter()
         .zip(&links.player_ids)
         .filter_map(|(r, linked)| match (r.pid, linked) {
-            (Some(pid), None) if !refused.contains(&pid) => Some(pid),
+            (Some(pid), None)
+                if !refused.contains(&pid) && !unresolved.contains(r.team.as_str()) =>
+            {
+                Some(pid)
+            }
             _ => None,
         })
         .collect()
@@ -2260,15 +2279,25 @@ mod tests {
     #[test]
     fn stale_candidates_include_the_ambiguous_unmatched_row_but_not_a_refusal() {
         let (pitt, chi) = (Uuid::from_u128(1), Uuid::from_u128(2));
-        let (t_pitt, t_chi) = (Uuid::from_u128(90), Uuid::from_u128(91));
+        let (t_pitt, t_chi, t_gm) = (
+            Uuid::from_u128(90),
+            Uuid::from_u128(91),
+            Uuid::from_u128(92),
+        );
         let r = roster(
             &[
                 (pitt, "Xavier Johnson", Some(t_pitt)),
                 (chi, "Xavier Johnson", Some(t_chi)),
             ],
+            // George Mason is a team cstat KNOWS — with no Xavier Johnson on
+            // it, because NatStat never ingested him. That is the #332 shape
+            // exactly: the team resolves, the linker has full information, and
+            // still declines. (A team that did NOT resolve would be an
+            // abstention, and `stale_link_candidates` skips those.)
             &[
                 (t_pitt, "Pittsburgh", "Pittsburgh Panthers"),
                 (t_chi, "Chicago St.", "Chicago State Cougars"),
+                (t_gm, "George Mason", "George Mason Patriots"),
             ],
         );
         let rows = [
@@ -2284,11 +2313,44 @@ mod tests {
         let links = link_players(&r, &rows, 2020);
         assert_eq!(links.player_ids, vec![Some(pitt), None, None]);
         assert_eq!(links.refused_pids, vec![99999]);
+        assert!(
+            links.stats.unresolved_teams.is_empty(),
+            "fixture must resolve every team"
+        );
 
         // Only the unmatched-and-not-refused row is a reconcile candidate.
         // The refused one is already on the clear list; naming it here too
         // would double-count a repair the run made on its own.
         assert_eq!(stale_link_candidates(&rows, &links), vec![72085]);
+    }
+
+    /// An unmatched row on a team the linker could not resolve is an
+    /// abstention, not a verdict, and must not be a candidate — otherwise a
+    /// respelled school name turns its whole same-named roster into "stale
+    /// links" for `Apply` to clear.
+    #[test]
+    fn stale_candidates_exclude_rows_whose_team_did_not_resolve() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (t_a, t_b) = (Uuid::from_u128(90), Uuid::from_u128(91));
+        let r = roster(
+            &[(a, "Jalen Smith", Some(t_a)), (b, "Jalen Smith", Some(t_b))],
+            &[
+                (t_a, "Maryland", "Maryland Terrapins"),
+                (t_b, "Purdue", "Purdue Boilermakers"),
+            ],
+        );
+        let rows = [
+            // Same shape as the #332 case, but the Torvik team is one cstat
+            // does not know. Unmatched either way; the difference is WHY.
+            torvik_row("Jalen Smith", "Some Other School", 4242, 20.0),
+        ];
+        let links = link_players(&r, &rows, 2020);
+        assert_eq!(links.player_ids, vec![None]);
+        assert_eq!(links.stats.unresolved_teams, vec!["Some Other School"]);
+        assert!(
+            stale_link_candidates(&rows, &links).is_empty(),
+            "an abstention was treated as a verdict"
+        );
     }
 
     #[test]
