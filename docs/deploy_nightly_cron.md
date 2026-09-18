@@ -417,9 +417,20 @@ Two error buckets are wired and set on the **API service** (not the cron):
   **boot/serve failure** (bad `DATABASE_URL`, migration mismatch, missing
   `NATSTAT_API_KEY`, or an ONNX export whose meta drifted — otherwise a silent
   Railway crash-loop), on any **5xx** response, and on a **panic** in a handler.
-  The 5xx tap and panic hook share one in-process throttle (one alert / 60s) so a
-  crash loop can't flood the channel. Load-shed 503s and 408 timeouts are
+  The 5xx tap and panic hook each have an in-process throttle (one alert / 60s)
+  so a crash loop can't flood the channel. Load-shed 503s and 408 timeouts are
   deliberate backpressure and are excluded.
+
+  The 5xx tap is also the **only place a 500's cause is recorded** (#338). The
+  handlers put the failure text in the JSON body and nowhere else, and the
+  service's `RUST_LOG` (`cstat_api=info,cstat_ingest=info`) excludes
+  `tower_http`, so `TraceLayer`'s failure line never emits. The tap reads the
+  body's `error` field back on the 5xx branch and writes a
+  `cstat_api::guards: request failed` line with `method`, `target`, `status`,
+  `elapsed_ms` and `cause` — that filter admits it, so no env change is needed
+  — and quotes the same cause in the Slack post. When reading these: an
+  `elapsed_ms` of ~15000 is the API pool's per-connection `statement_timeout`
+  (`Database::connect_api`), and ~10000 is its `acquire_timeout`.
 - **`SLACK_WEBHOOK_ERRORS_WEB`** → `#errors-web`. Fires when the SPA's global
   `error` / `unhandledrejection` reporter (`web/src/lib/errorReporter.ts`) posts
   an uncaught browser error to `POST /api/client-error`, which relays it. Both

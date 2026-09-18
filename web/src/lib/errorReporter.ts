@@ -42,8 +42,69 @@ function isThirdPartyScript(filename: string): boolean {
   }
 }
 
+// The filename check above only covers the `error` event. An
+// `unhandledrejection` has no filename, so an extension that rejects a promise
+// inside our page walks straight past it — the concrete case is MetaMask's
+// `inpage.js` rejecting with "Failed to connect to MetaMask" on pages that
+// never asked for a wallet (#339). The extension origin is still there, in the
+// stack, so that is what this reads.
+//
+// Only the TOP frame decides — the first line that carries a location. An
+// extension that wraps `fetch` or `XMLHttpRequest` (ad blockers do) leaves its
+// frame lower in the stack of a genuine crash in our code, and a match
+// anywhere would drop that crash as extension noise. For a boundary-caught
+// error the component stack comes first and is ours, which is right: that
+// error was thrown inside our render tree whatever called into it.
+const EXTENSION_SCHEMES = ['chrome-extension://', 'moz-extension://', 'safari-web-extension://', 'safari-extension://']
+
+export function isExtensionStack(stack: string): boolean {
+  const topFrame = stack.split('\n').find((line) => line.includes('://'))
+  if (!topFrame) return false
+  return EXTENSION_SCHEMES.some((scheme) => topFrame.includes(scheme))
+}
+
+// Crawlers that execute JavaScript render the SPA and then hit its failure
+// paths in ways no person does: Meta's link-preview renderer abandons lazy
+// chunk fetches ("Failed to fetch dynamically imported module", eight alerts
+// in a week, every one of them this UA — #339), and Baidu's / Bing's renderers
+// report the status Cloudflare's bot management handed them. None of it is a
+// crash a visitor saw, and each one displaces a real report behind the
+// channel's 30s throttle. Crawler *traffic* is already visible in the HTTP log;
+// what it does with our JS is not something we act on. Substring, lowercase:
+// the UAs all self-identify, and matching the generic `bot` / `spider` /
+// `crawl` tokens catches the long tail without a registry to maintain.
+const CRAWLER_UA_MARKERS = [
+  'externalagent', // meta-externalagent — Facebook / Instagram link previews
+  'facebookexternalhit',
+  'googlebot',
+  'bingbot',
+  'baiduspider',
+  'yandexbot', // not the bare vendor name: humans browse in the Yandex search app (`YandexSearch/…`)
+  'duckduckbot',
+  'applebot',
+  'ahrefsbot',
+  'semrushbot',
+  'petalbot',
+  'bytespider',
+  'gptbot',
+  'claudebot',
+  'headlesschrome',
+  'bot/',
+  'bot;',
+  'spider',
+  'crawl',
+]
+
+export function isCrawlerUserAgent(userAgent: string): boolean {
+  const ua = userAgent.toLowerCase()
+  return CRAWLER_UA_MARKERS.some((marker) => ua.includes(marker))
+}
+
 function report(r: ClientErrorReport): void {
   try {
+    // One funnel for every path in (global listeners and the boundary), so the
+    // noise filters can't be bypassed by whichever path a future caller takes.
+    if (isCrawlerUserAgent(r.user_agent) || isExtensionStack(r.stack)) return
     if (sent >= MAX_REPORTS_PER_LOAD) return
     const key = `${r.kind}|${r.message}|${r.source}`
     if (seen.has(key)) return
