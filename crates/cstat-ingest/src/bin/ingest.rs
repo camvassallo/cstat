@@ -1041,6 +1041,8 @@ async fn main() -> Result<()> {
                 upserted.saturating_sub(matched)
             );
             if let Some(rec) = out.reconcile {
+                let unjudged = rec.unjudged_rows;
+                let unresolved = rec.unresolved_teams;
                 let list = |stale: &[cstat_ingest::ingest::torvik::StaleLink]| {
                     for s in stale {
                         println!(
@@ -1053,9 +1055,12 @@ async fn main() -> Result<()> {
                         );
                     }
                 };
-                match rec {
+                match rec.outcome {
                     ReconcileOutcome::Clean => {
-                        println!("Reconcile: clean — every link in {year} is one the linker made");
+                        println!(
+                            "Reconcile: clean — no row the linker could judge in {year} holds a \
+                             link it would not make"
+                        );
                     }
                     ReconcileOutcome::Reported { stale } => {
                         println!(
@@ -1078,6 +1083,17 @@ async fn main() -> Result<()> {
                         );
                         list(&stale);
                     }
+                }
+                // Whatever the outcome said, it said it only about rows whose
+                // team the linker resolved. Name the rest, so "clean" on a
+                // season with a respelled school is read as partial.
+                if unjudged > 0 {
+                    println!(
+                        "  {unjudged} row(s) on {} unresolved Torvik team(s) were NOT judged \
+                         (an unmatched row there is an abstention, not a verdict): {}",
+                        unresolved.len(),
+                        unresolved.join(", ")
+                    );
                 }
             }
 

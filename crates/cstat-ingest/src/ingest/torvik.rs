@@ -78,11 +78,25 @@ pub enum ReconcileOutcome {
     },
 }
 
+/// What a reconcile run concluded, plus what it declined to conclude.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReconcileReport {
+    pub outcome: ReconcileOutcome,
+    /// Torvik team names the linker could not resolve this run. Rows on them
+    /// were not judged — an unmatched row there is an abstention, not a
+    /// verdict — so a `Clean` outcome is only as complete as this list is
+    /// empty. Surfaced so "clean" cannot be read as "every link is right"
+    /// on a season where the linker never saw part of the roster.
+    pub unresolved_teams: Vec<String>,
+    /// How many fetched rows sat on those teams.
+    pub unjudged_rows: usize,
+}
+
 pub struct TorvikIngestOutcome {
     pub upserted: u64,
     pub matched: u64,
     /// `None` unless [`TorvikIngestOptions::reconcile_links`] was on.
-    pub reconcile: Option<ReconcileOutcome>,
+    pub reconcile: Option<ReconcileReport>,
 }
 
 pub async fn ingest_torvik_player_stats_with(
@@ -286,7 +300,16 @@ pub async fn ingest_torvik_player_stats_with(
             let mut tx = pool.begin().await?;
             let outcome = reconcile_stale_links(&mut tx, season, &candidates, mode).await?;
             tx.commit().await?;
-            Some(outcome)
+            let unresolved_teams = links.stats.unresolved_teams.clone();
+            let unjudged_rows = players
+                .iter()
+                .filter(|p| p.pid.is_some() && unresolved_teams.contains(&p.team))
+                .count();
+            Some(ReconcileReport {
+                outcome,
+                unresolved_teams,
+                unjudged_rows,
+            })
         }
     };
 
