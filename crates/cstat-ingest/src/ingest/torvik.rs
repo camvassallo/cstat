@@ -88,7 +88,9 @@ pub struct ReconcileReport {
     /// empty. Surfaced so "clean" cannot be read as "every link is right"
     /// on a season where the linker never saw part of the roster.
     pub unresolved_teams: Vec<String>,
-    /// How many fetched rows sat on those teams.
+    /// How many fetched rows the abstention rule set aside: on one of those
+    /// teams AND unmatched. Not every row on an unresolved team — a unique
+    /// name still links through the name-only tier without one.
     pub unjudged_rows: usize,
 }
 
@@ -301,9 +303,16 @@ pub async fn ingest_torvik_player_stats_with(
             let outcome = reconcile_stale_links(&mut tx, season, &candidates, mode).await?;
             tx.commit().await?;
             let unresolved_teams = links.stats.unresolved_teams.clone();
+            // Exactly the rows the abstention rule in `stale_link_candidates`
+            // set aside: on an unresolved team AND unmatched. A row on such a
+            // team that still linked (a unique name clears the name-only tier
+            // without a team) was judged, and is not counted here.
             let unjudged_rows = players
                 .iter()
-                .filter(|p| p.pid.is_some() && unresolved_teams.contains(&p.team))
+                .zip(&links.player_ids)
+                .filter(|(p, linked)| {
+                    p.pid.is_some() && linked.is_none() && unresolved_teams.contains(&p.team)
+                })
                 .count();
             Some(ReconcileReport {
                 outcome,
