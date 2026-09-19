@@ -132,6 +132,29 @@ Class-of-2022 index (the Kentucky `Wells` TRO, the dismissed North Carolina
 plaintiff the tracker says has signed professionally (two of Godfrey's) is
 not coming back and gets no row.
 
+**The inverse question — who could be missing — is bounded, and that is the
+pass to run first.** The only players who can be absent from the capture are
+the Class of 2022 with four D-I seasons (the Wisne class); everyone else is
+either on a live feed or not eligible for the argument. `--open-cohort` lists
+the ones nothing accounts for — no row, not in the portal, not a draft entrant
+— by CAM, so the search is a dozen names rather than a crawl:
+
+```bash
+... --year 2026 --open-cohort --min-cam 8
+```
+
+Each open player is exactly one of three things, and the default (no row →
+departed) is right for two of them: **signed professionally** (a two-way,
+Exhibit 10, standard or overseas contract — no row, and a captured player who
+signs comes OUT, which is how Jamarques Lawrence left the file), **suing**
+(a `contested` row), or **genuinely done** (no row). Drafted is not signed:
+Trey Kaufman-Renn and Roddy Gayle were drafted or went to Summer League, hold
+no contract, and are suing — they stay. Kohler signed an Exhibit 10 in June
+and later committed to BYU under a court order — the test is "currently under
+contract", so he stays too. Run on 2026-09-18 at CAM ≥ 8: 39 open, 33 signed,
+3 with no suit and no signing (Saunders, Nickel, Carroll), 3 suing (White,
+Griffen, Alexis) — the three rows this pass added.
+
 The three false-positive shapes seen so far, so the next pass knows what to
 look for: a same-name player in another sport (`Tristan Smith v. NCAA` is a
 Clemson football player; cstat has one at Northern Iowa), a case from a past

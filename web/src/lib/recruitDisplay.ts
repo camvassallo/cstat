@@ -12,6 +12,8 @@ export interface RecruitLineFields {
   /// Committed but never played the (completed) target season — a redshirt /
   /// non-enrollment. Only ever true for a graded past season.
   did_not_play?: boolean;
+  /// Former professional filed as a recruit — displayed, not scored.
+  former_pro?: boolean;
 }
 
 /// One line of the Recruits-column hover tooltip: `#<rank> <name> (<stars>★)`,
@@ -23,5 +25,6 @@ export function recruitTooltipLine(r: RecruitLineFields): string {
   const rank = r.composite_rank != null ? `#${r.composite_rank} ` : '';
   const stars = r.star_rating ?? '?';
   const redshirt = r.did_not_play ? ' — redshirt (did not play)' : '';
-  return `${rank}${r.name} (${stars}★)${redshirt}`;
+  const pro = r.former_pro ? ' — former pro (not counted)' : '';
+  return `${rank}${r.name} (${stars}★)${redshirt}${pro}`;
 }

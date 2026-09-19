@@ -235,6 +235,23 @@ pub struct RecruitMeta {
     /// graded projections, never a model's training data. Serving-internal.
     #[serde(skip)]
     pub did_not_play: bool,
+    /// The "recruit" is a former professional — 247 files ex-G League
+    /// players as class-of-N high-school recruits with "G League" as the
+    /// school. Two things are wrong with scoring him as a freshman: the
+    /// freshman model was fit on high-school recruits and has nothing to
+    /// say about a 23-year-old with pro seasons behind him, and whether he
+    /// may play at all is the open question in front of the courts (the
+    /// Hudson TRO was narrowed on 2026-09-11 specifically to exclude former
+    /// professionals). So he is displayed but not scored, like the
+    /// commits-feed cohort. Served so the UI can label the row.
+    pub former_pro: bool,
+}
+
+/// 247's school field for a recruit who last played professionally.
+/// Exact match on the value the feed actually emits; prep programs like
+/// Overtime Elite are amateur and must not trip this.
+fn is_pro_league(school: Option<&str>) -> bool {
+    matches!(school.map(str::trim), Some(s) if s.eq_ignore_ascii_case("G League"))
 }
 
 /// Replacement-level CamPom for a freshman we can't project per-recruit.
@@ -819,6 +836,11 @@ struct RecruitRow {
     // G-League, issue #175). Commits-sourced rows are displayed but kept OUT
     // of the scored roster — see `RecruitMeta::feeds_projection`.
     institution_group: String,
+    // 247's "school" for the recruit. Usually a high school or prep program;
+    // for a former professional re-entering college it reads "G League"
+    // (RJ Luis, class of 2026, ranked #3 — a Jazz two-way behind him and no
+    // high-school season to model), which is how the feed files ex-pros.
+    high_school: Option<String>,
     composite_rank: Option<i32>,
     star_rating: Option<i16>,
     // Resolved cstat player (set once the recruit's freshman season ingests).
@@ -1183,6 +1205,7 @@ pub async fn compose_all_projections(
             r.id            AS recruit_id,
             r.full_name,
             r.institution_group,
+            r.high_school,
             r.composite_rank,
             r.star_rating,
             r.cstat_player_id,
@@ -1461,8 +1484,10 @@ pub async fn compose_all_projections(
             projected_campom_lower: pred.as_ref().map(|p| p.lower),
             projected_campom_upper: pred.as_ref().map(|p| p.upper),
             // Commits-feed rows display but don't feed the AdjEM calibrator.
-            feeds_projection: r.institution_group != "commits",
+            feeds_projection: r.institution_group != "commits"
+                && !is_pro_league(r.high_school.as_deref()),
             did_not_play,
+            former_pro: is_pro_league(r.high_school.as_deref()),
         };
         recruits_by_team
             .entry(team_id)
@@ -2705,6 +2730,7 @@ mod tests {
                     projected_campom_upper: None,
                     feeds_projection: true,
                     did_not_play: false,
+                    former_pro: false,
                 },
             ),
             (
@@ -2719,6 +2745,7 @@ mod tests {
                     projected_campom_upper: None,
                     feeds_projection: true,
                     did_not_play: false,
+                    former_pro: false,
                 },
             ),
         ];
@@ -2770,6 +2797,7 @@ mod tests {
             projected_campom_upper: None,
             feeds_projection: feeds,
             did_not_play: false,
+            former_pro: false,
         };
         let r = ProjectedRoster {
             team_id: Uuid::new_v4(),
@@ -2820,6 +2848,7 @@ mod tests {
             projected_campom_upper: None,
             feeds_projection: true,
             did_not_play,
+            former_pro: false,
         };
         let r = ProjectedRoster {
             team_id: Uuid::new_v4(),
