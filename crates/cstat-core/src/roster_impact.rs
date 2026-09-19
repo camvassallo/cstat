@@ -30,6 +30,14 @@ use uuid::Uuid;
 ///   inbound_cam_v3_sum]`.
 pub const ROSTER_IMPACT_NUM_FEATURES: usize = 27;
 
+/// Slot of `cam_wmean` — the canonical-minutes-weighted mean projected
+/// cam_v3 of the 13-man rotation. Read back by the projections route as the
+/// displayed roster-talent number, so what the Future page shows is exactly
+/// what the model reads.
+pub const ROSTER_IMPACT_CAM_WMEAN_SLOT: usize = 1;
+/// Slot of `cam_sum` — Σ projected cam_v3 over the rotation.
+pub const ROSTER_IMPACT_CAM_SUM_SLOT: usize = 2;
+
 /// Feature names, wire-locked to the ONNX input column order. Must match
 /// `roster_impact_model_meta.json::features` byte-for-byte — the boot
 /// validator (`inference::validate_roster_impact_meta`) fails fast on drift.

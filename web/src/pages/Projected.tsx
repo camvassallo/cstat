@@ -13,6 +13,7 @@ import {
 } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
+import { camTier, camTierColor } from '../components/cam';
 import { pctileTextColor } from '../components/pctile';
 import { BAND_CHIP_CLASS, BAND_CHIP_TOP_STRONG } from '../components/scale';
 import { recruitTooltipLine } from '../lib/recruitDisplay';
@@ -34,18 +35,29 @@ type EligibilityMode = 'weighted' | 'in' | 'out';
 // chips — reads the swapped value without knowing a toggle exists.
 function applyEligibilityMode(t: ProjectedTeam, mode: EligibilityMode): ProjectedTeam {
   if (mode === 'weighted') return t;
+  // `roster_raw_adj_em` is the roster model's number for the 50/50 roster
+  // only — the server derives one anchor per team from it and does not
+  // re-score the raw per headline. For a team with a pending case the
+  // swapped headline is a different roster, so "recent form adds X"
+  // computed against the weighted raw would fold the eligibility swing into
+  // history's share. Drop it rather than say something wrong; the tooltip
+  // simply omits the line in a what-if mode. Teams with no case keep it —
+  // their headline does not move.
+  const raw = t.eligibility_pending_count > 0 ? null : t.roster_raw_adj_em;
   return mode === 'in'
     ? {
         ...t,
         midpoint_adj_em: t.adj_em_eligibility_in,
         projected_adj_o: t.adj_o_eligibility_in,
         projected_adj_d: t.adj_d_eligibility_in,
+        roster_raw_adj_em: raw,
       }
     : {
         ...t,
         midpoint_adj_em: t.adj_em_eligibility_out,
         projected_adj_o: t.adj_o_eligibility_out,
         projected_adj_d: t.adj_d_eligibility_out,
+        roster_raw_adj_em: raw,
       };
 }
 
@@ -410,11 +422,21 @@ function buildColumns(
         // one. Both failures are silent; a threshold a hair under the cap is
         // correct for both, so only genuine roster-overhaul teams light up.
         const leansRoster = w < 0.699;
+        // What history actually contributed, not the nominal weight: since
+        // #325 the anchor can collapse onto the roster model's own number, so
+        // a "70%" weight is 0 in effect for a team whose roster lands inside
+        // its recent range. The difference is the honest figure.
+        const raw = p.data?.roster_raw_adj_em;
+        const historyLine =
+          raw != null
+            ? `\nRoster model alone: ${fmtSigned(raw)} · recent form ${p.value - raw >= 0 ? 'adds' : 'takes'} ${Math.abs(p.value - raw).toFixed(1)}`
+            : '';
         const title =
           `${bw}% recent-form anchor (last season ${baseline >= 0 ? '+' : ''}${baseline.toFixed(1)}, ` +
           `pulled toward the program's three-year level) ` +
           `+ ${100 - bw}% the roster model's projection` +
-          (leansRoster ? ' — leaning on the new roster (heavy turnover)' : '');
+          (leansRoster ? ' — leaning on the new roster (heavy turnover)' : '') +
+          historyLine;
         return (
           <span title={title} className="inline-flex items-center gap-1">
             {chip}
@@ -504,10 +526,40 @@ function buildColumns(
       },
     },
     {
+      // The roster's talent as the model reads it. Read off the same feature
+      // vector the projection is scored from (the minutes-weighted mean CAM
+      // of the 13-man rotation), so this column and Proj AdjEM can never
+      // disagree about what the roster is — it is the answer to "how good
+      // are the players, before any history is blended in".
+      headerName: 'Roster CAM',
+      colId: 'roster_cam',
+      ...flexCol(1, 110),
+      ...divider,
+      headerTooltip:
+        "How much talent is on the projected roster, on the same scale as a player's CAM: the projected next-season CAM of the 13-man rotation, weighted by the minutes each rotation slot plays. Read straight off what the roster model scores, before last season's result is blended in — so a team with a high Roster CAM and a lower Proj AdjEM is one whose roster outruns its recent history, and vice versa. Pending eligibility cases count at 50/50 regardless of the toggle. Hover for the rotation's CAM total.",
+      valueGetter: (p) => (p.data as ProjectedTeam | undefined)?.roster_cam_wmean ?? null,
+      comparator: nullsLast,
+      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t || p.value == null) return dashCell;
+        const tier = camTier(p.value);
+        const sum = t.roster_cam_sum;
+        const tip =
+          `Rotation CAM ${fmtSigned(p.value)} (minutes-weighted mean, ${tier ?? '—'})` +
+          (sum != null ? `\nΣ CAM over the 13-man rotation: ${fmtSigned(sum)}` : '');
+        return (
+          <span title={tip} className="inline-flex items-baseline gap-1 whitespace-nowrap">
+            <span className={`px-1.5 rounded border text-xs font-semibold ${camTierColor(tier)}`}>
+              {fmtSigned(p.value)}
+            </span>
+          </span>
+        );
+      },
+    },
+    {
       headerName: 'Returning',
       colId: 'returning',
       ...flexCol(1, 120),
-      ...divider,
       headerTooltip:
         "Returning players, shown as their *projected* next-season CAM (trajectory forecast) with the share of last season's roster value retained beneath — i.e. roster continuity. 51% kept = a stable veteran core; 20% = a near-total rebuild. Excludes graduating seniors, outbound portal, and firm draft departures.",
       comparator: (_a, _b, na, nb) =>

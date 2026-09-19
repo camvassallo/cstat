@@ -12,7 +12,10 @@ use axum::{
 };
 use cstat_core::inference::Predictor;
 use cstat_core::realignment::TargetConference;
-use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
+use cstat_core::roster_impact::{
+    ROSTER_IMPACT_CAM_SUM_SLOT, ROSTER_IMPACT_CAM_WMEAN_SLOT, apply_projected_cam_v3,
+    build_roster_impact_features,
+};
 use cstat_core::roster_projection::{
     ProjectedRoster, UncertainCause, compose_all_projections, fetch_draft_entrants,
     fetch_player_departures, load_mock_draft, normalize_player_name, project_returner_cam_v3,
@@ -212,6 +215,25 @@ struct ProjectedTeam {
     /// roster projection. See `roster_projection::transition_shrink_weight`. Lets the UI
     /// flag "leaning on the new roster" and keeps the blend auditable.
     baseline_weight: f32,
+
+    /// Roster talent, read straight off the feature vector the model scores
+    /// (`roster_impact::ROSTER_IMPACT_CAM_WMEAN_SLOT`): the projected
+    /// next-season CAM of the 13-man rotation, weighted by the canonical
+    /// minutes each rotation slot plays. On the same scale as a player's CAM,
+    /// so it reads as "the average CAM of the players who will be on the
+    /// floor". Expected over the draft / eligibility scenarios at the same
+    /// `p_return` as the midpoint. `None` when the roster is too thin to score.
+    roster_cam_wmean: Option<f32>,
+    /// Σ projected next-season CAM over the same rotation — the raw talent
+    /// total behind `roster_cam_wmean`, before the minutes weighting.
+    roster_cam_sum: Option<f32>,
+    /// The roster model's own AdjEM for this roster, BEFORE the blend pulls
+    /// it toward the program's recent form — the p̄-blended raw the anchor
+    /// is derived from. `midpoint_adj_em − roster_raw_adj_em` is exactly what
+    /// history contributed, so the UI can say "roster model +27.8, history
+    /// +5.3" instead of a weight that (since #325) can be 70% on paper and
+    /// 0% in effect. `None` when the roster is too thin to score.
+    roster_raw_adj_em: Option<f32>,
 
     // --- Conference for the season being projected. Display + search only. ---
     // `teams.conference` is season-scoped, but the live forecast projects a
@@ -812,7 +834,9 @@ fn predict_team(
                 too_thin: bool,
                 adjo_floor: Option<f32>,
                 adjo_ceiling: Option<f32>,
-                eligibility: Option<((f32, f32), (f32, f32))>|
+                eligibility: Option<((f32, f32), (f32, f32))>,
+                talent: Option<(f32, f32)>,
+                roster_raw: Option<f32>|
      -> ProjectedTeam {
         let blend = |f: Option<f32>, c: Option<f32>| {
             f.zip(c).map(|(f, c)| p_return * c + (1.0 - p_return) * f)
@@ -877,6 +901,9 @@ fn predict_team(
             baseline_adj_em: baseline,
             actual_adj_em: actual,
             baseline_weight,
+            roster_cam_wmean: talent.map(|(wmean, _)| wmean),
+            roster_cam_sum: talent.map(|(_, sum)| sum),
+            roster_raw_adj_em: roster_raw,
             // Coach fields are decorative and filled by the handler after this
             // returns (predict_team has no DB access); default to absent here.
             conference: None,
@@ -897,7 +924,7 @@ fn predict_team(
         // qualifying-player roster (no freshmen / recruits modeled, so
         // the rate-stat aggregates over-weight the few starters). Surface
         // the row with metadata so the UI can show "—" and a tooltip.
-        return Some(base(None, None, true, None, None, None));
+        return Some(base(None, None, true, None, None, None, None, None));
     }
 
     // Score each scenario with the roster-impact model, AND the AdjO half
@@ -912,7 +939,9 @@ fn predict_team(
     // (logged) so the caller bails the whole team — matches the prior
     // per-scenario error handling without naming `ort::Error` (not a direct
     // dep of this crate).
-    let score = |eligibility: bool, draft: bool, label: &str| -> Option<(f32, f32)> {
+    // The third element is the rotation talent `(cam_wmean, cam_sum)` read off
+    // the same vector, so the displayed number cannot drift from the scored one.
+    let score = |eligibility: bool, draft: bool, label: &str| -> Option<(f32, f32, (f32, f32))> {
         let mut roster = p.materialize(eligibility, draft);
         apply_projected_cam_v3(&mut roster, projected_cam);
         let feats =
@@ -931,10 +960,19 @@ fn predict_team(
                 return None;
             }
         };
-        Some((net, adjo))
+        let talent = (
+            feats[ROSTER_IMPACT_CAM_WMEAN_SLOT],
+            feats[ROSTER_IMPACT_CAM_SUM_SLOT],
+        );
+        Some((net, adjo, talent))
     };
-    let (floor_raw, floor_o_raw) = score(false, false, "floor")?;
-    let (ceiling_raw, ceiling_o_raw) = score(true, true, "ceiling")?;
+    let (floor_raw, floor_o_raw, floor_talent) = score(false, false, "floor")?;
+    let (ceiling_raw, ceiling_o_raw, ceiling_talent) = score(true, true, "ceiling")?;
+    // Expected rotation talent at the same `p_return` the midpoint blends on.
+    let talent = (
+        p_return * ceiling_talent.0 + (1.0 - p_return) * floor_talent.0,
+        p_return * ceiling_talent.1 + (1.0 - p_return) * floor_talent.1,
+    );
 
     // Program-anchored baselines (#325): last season shrunk toward the
     // program's own multi-season level by whatever this year's roster does not
@@ -965,8 +1003,8 @@ fn predict_team(
     //   out: eligibility denied  = p̄_draft·(roster+draft) + (1−p̄_draft)·floor
     //   in:  eligibility cleared = p̄_draft·ceiling        + (1−p̄_draft)·(roster+elig)
     let eligibility = if p.has_eligibility_case() {
-        let (draft_only_raw, draft_only_o_raw) = score(false, true, "eligibility-out")?;
-        let (elig_only_raw, elig_only_o_raw) = score(true, false, "eligibility-in")?;
+        let (draft_only_raw, draft_only_o_raw, _) = score(false, true, "eligibility-out")?;
+        let (elig_only_raw, elig_only_o_raw, _) = score(true, false, "eligibility-in")?;
         let mix = |c: f32, f: f32| p_draft * c + (1.0 - p_draft) * f;
         let out = (
             shrink(mix(draft_only_raw, floor_raw), anchor, baseline_weight),
@@ -996,6 +1034,8 @@ fn predict_team(
         Some(shrink(floor_o_raw, anchor_o, baseline_weight)),
         Some(shrink(ceiling_o_raw, anchor_o, baseline_weight)),
         eligibility,
+        Some(talent),
+        Some(blended_raw),
     ))
 }
 
