@@ -10,6 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `pr.md` is a gitignored local scratch file for drafting PR descriptions. **The input is a plaintext bullet list of changes** — the user (or you, from the diff) drops a flat list of what changed into it, and you expand that into a full PR description in place. Expanded form (the PR **body** only): `## Summary`, `## Changes` (the bullets, fleshed out), and `## Verification` if applicable. Keep it Markdown; never stage or commit it.
 
+**No authorship or tooling attribution anywhere** — not in `pr.md`, not in PR bodies, not in commit messages. No "Generated with Claude Code", no robot emoji, no `Co-Authored-By` trailer, no "written by" line of any kind. The PR body describes the change and the commit message describes the commit; nothing else.
+
 **The title does NOT go in `pr.md`.** Do not put a `# Title` heading at the top — `pr.md` is body-only, opening with `## Summary`. The title belongs on the PR itself: when a PR exists, apply it with `gh pr edit <n> --title "…"` (and push the body with `--body-file pr.md` if the user wants it published); at PR-creation time it's `gh pr create --title "…" --body-file pr.md`. If no PR exists yet, state the proposed title in chat so the user has it. (This is the one sanctioned PR mutation flow — the "leave git to the user" rule in Version Control still governs commits/branches/pushes; only set a PR title/body when the user has asked you to populate the PR.)
 
 ## Documentation Style
