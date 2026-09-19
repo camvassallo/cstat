@@ -28,7 +28,7 @@ type NavItem = { to: string; label: string };
 // analysis pages), the forecast pod (game predictor + preseason projections),
 // and the just-for-fun games. Rankings / Lineups / Coaches stay top-level.
 const PLAYERS_ITEMS: NavItem[] = [
-  { to: '/players', label: 'Overview' },
+  { to: '/players', label: 'Player Rankings' },
   { to: '/players/compare', label: 'Compare' },
   { to: '/archetypes', label: 'Archetypes' },
   { to: '/players?mode=transfers', label: 'Transfer Portal' },
@@ -211,7 +211,7 @@ export default function Layout() {
   const currentMode = new URLSearchParams(search).get('mode');
 
   // Per-item active state (query-aware). The Players group shares the
-  // `/players` pathname across its mode tabs, so Overview vs Transfers/…/Draft
+  // `/players` pathname across its mode tabs, so Player Rankings vs Transfers/…/Draft
   // is disambiguated by the `?mode=` param; Compare / Archetypes are their own
   // pathnames; Future matches any /projected route.
   const itemActive = (to: string): boolean => {
@@ -219,7 +219,7 @@ export default function Layout() {
     const mode = query ? new URLSearchParams(query).get('mode') : null;
     if (path === '/players') {
       if (mode) return pathname === '/players' && currentMode === mode;
-      // Overview: bare /players (no mode) plus the player detail pages.
+      // Player Rankings: bare /players (no mode) plus the player detail pages.
       return (
         (pathname === '/players' && !currentMode) ||
         (pathname.startsWith('/players/') && pathname !== '/players/compare')
