@@ -333,7 +333,13 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
                 .flatten()
                 .and_then(|id| proj_by_id.get(&id));
             let Some(dest) = dest else {
-                unplaced_real.push((r, "still a departure on that team — the row matched nobody"));
+                let why = if moved_to.contains_key(&(team, key.clone())) {
+                    "moved in the portal to a destination cstat cannot resolve — the row \
+                     has nowhere to place him"
+                } else {
+                    "still a departure on that team — the row matched nobody"
+                };
+                unplaced_real.push((r, why));
                 continue;
             };
             let dest_team = dest.team_name.as_str();

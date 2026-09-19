@@ -102,6 +102,7 @@ STOP_WORDS = {
     "Swimming", "Golf", "Tennis", "Summer", "League", "NBA", "Draft", "Bylaw", "Bylaws",
     "Exhibit", "Consumer", "Sales", "Practices", "Fair", "Business", "Unfair",
     "Competition", "Law", "Deceptive", "Trade", "Free", "Enterprise", "Open", "Courts",
+    "Justice", "Chief", "Commissioner", "President", "Coach", "Attorney", "Counsel",
 }
 
 

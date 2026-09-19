@@ -1490,7 +1490,14 @@ pub async fn compose_all_projections(
         // that is an observed move, and "portal above returns" still holds
         // for it — the row's effect follows him to the destination instead
         // (see the arrivals split further down).
-        if t.destination_institution.is_none() && eligibility_returns.contains_key(&pid) {
+        // "No destination" is NULL or blank: 247 clears the field when a
+        // commit is withdrawn, and prod's row for Mitchell reads `Committed`
+        // with an empty destination.
+        let no_destination = t
+            .destination_institution
+            .as_deref()
+            .is_none_or(|d| d.trim().is_empty());
+        if no_destination && eligibility_returns.contains_key(&pid) {
             continue;
         }
         // Outbound is deliberately NOT filtered on `left_program`: the source
