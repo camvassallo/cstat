@@ -806,6 +806,12 @@ struct PlayerRow {
     name: String,
     /// The player's cstat team for the season, if teamed.
     team_id: Option<Uuid>,
+    /// Whether any `player_game_stats` row belongs to this record. False is a
+    /// phantom — a `players` row NatStat minted under a punctuation variant of
+    /// a real player's name (`CJ Delancy` beside `C.J. Delancy`, #264) that
+    /// never accrued a box score. Read by phase 1a of [`link_players`] to
+    /// break a same-name-same-team tie (#355).
+    has_box_rows: bool,
 }
 
 /// One season's cstat players and teams, indexed for in-process matching.
@@ -832,10 +838,18 @@ struct TeamRow {
 
 impl SeasonRoster {
     async fn load(pool: &PgPool, season: i32) -> anyhow::Result<Self> {
-        let rows = sqlx::query_as::<_, (Uuid, String, Option<Uuid>)>(
-            r#"SELECT p.id, p.name, p.team_id
+        // ORDER BY is load-bearing (#355). Phase 1a of `link_players` takes the
+        // first on-team candidate for a name, so with no ordering the linker's
+        // answer for a same-name-same-team pair was whatever heap order the
+        // table happened to be in — local and prod disagreed on 20 players in
+        // 2025 alone, and a VACUUM FULL could flip either one. natstat_id is
+        // the stable cross-database key; `id` only breaks a tie it cannot.
+        let rows = sqlx::query_as::<_, (Uuid, String, Option<Uuid>, bool)>(
+            r#"SELECT p.id, p.name, p.team_id,
+                      EXISTS (SELECT 1 FROM player_game_stats g WHERE g.player_id = p.id)
                FROM players p
-               WHERE p.season = $1"#,
+               WHERE p.season = $1
+               ORDER BY p.natstat_id, p.id"#,
         )
         .bind(season)
         .fetch_all(pool)
@@ -843,7 +857,12 @@ impl SeasonRoster {
 
         let players: Vec<PlayerRow> = rows
             .into_iter()
-            .map(|(id, name, team_id)| PlayerRow { id, name, team_id })
+            .map(|(id, name, team_id, has_box_rows)| PlayerRow {
+                id,
+                name,
+                team_id,
+                has_box_rows,
+            })
             .collect();
 
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::with_capacity(players.len());
@@ -1264,13 +1283,16 @@ async fn reconcile_stale_links(
 /// Three passes, each strictly more permissive than the last and each barred
 /// from taking a player an earlier pass already claimed (issue #243):
 ///
-/// 1. **Exact name.** Normalized name plus the resolved team. If no candidate
-///    is on that team but the name matches exactly one cstat player in the
-///    whole season, take it — that covers a team cstat hasn't resolved and
-///    genuine cstat team-label errors. Two-or-more candidates with no team
-///    agreement are left unlinked rather than coin-flipped onto the first one,
-///    which is how Torvik's Xavier "Anthony Robinson" ended up attached to
-///    Missouri's.
+/// 1. **Exact name.** Normalized name plus the resolved team. Two candidates
+///    on the SAME team — a punctuation-variant phantom beside the real record
+///    (#264) — resolve to the one with box rows, then load order, which
+///    `SeasonRoster::load` pins with an ORDER BY (#355); before that the pick
+///    was heap order and local and prod disagreed. If no candidate is on that
+///    team but the name matches exactly one cstat player in the whole season,
+///    take it — that covers a team cstat hasn't resolved and genuine cstat
+///    team-label errors. Two-or-more candidates with no team agreement are
+///    left unlinked rather than coin-flipped onto the first one, which is how
+///    Torvik's Xavier "Anthony Robinson" ended up attached to Missouri's.
 /// 2. **Family name + team.** Torvik uses the common name where NatStat keeps
 ///    the legal one — Obi/Obadiah Toppin, Ja/Temetrius Morant, Johnny/Jonathan
 ///    Davis. Nicknames bear no systematic relation to the legal given name, so
@@ -1365,11 +1387,23 @@ fn link_players(
             .map(Vec::as_slice)
             .unwrap_or_default();
 
+        // Among same-name candidates on the resolved team, prefer one that has
+        // box rows (#355). A punctuation-variant phantom (`CJ` beside `C.J.`)
+        // normalizes to the same key and sits on the same team, and it is
+        // never the right answer: link it and the Torvik row attaches to a
+        // record with no games, so `compute_campom` has no SOS to adjust by
+        // and the real player — who is on the leaderboard — serves no CAM.
+        // Stable sort, so among candidates that all played, load order (now
+        // deterministic) still decides; a second Torvik row for that name then
+        // finds the pick claimed and is refused, as before.
         let on_team = team.and_then(|t| {
-            candidates
+            let mut on: Vec<usize> = candidates
                 .iter()
                 .copied()
-                .find(|&c| roster.players[c].team_id == Some(t))
+                .filter(|&c| roster.players[c].team_id == Some(t))
+                .collect();
+            on.sort_by_key(|&c| !roster.players[c].has_box_rows);
+            on.first().copied()
         });
         match on_team {
             Some(c) if claimed.insert(roster.players[c].id) => {
@@ -1751,6 +1785,9 @@ mod tests {
                 id: *id,
                 name: (*name).to_string(),
                 team_id: *team_id,
+                // Every fixture player played unless a test says otherwise
+                // by flipping this on the built roster.
+                has_box_rows: true,
             })
             .collect();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
@@ -1908,6 +1945,83 @@ mod tests {
         assert_eq!(links.player_ids, vec![Some(id)]);
         assert_eq!(links.stats.name_only, 1);
         assert_eq!(links.stats.unresolved_teams, vec!["Some Other School"]);
+    }
+
+    /// The #355 case: two `players` rows for one human on one team, differing
+    /// only by punctuation (`CJ Delancy` beside `C.J. Delancy`, #264), with the
+    /// phantom — the one that never played — listed FIRST. That is the load
+    /// order that fooled the local database on 19 players in 2025, while prod
+    /// happened to load them the other way round. The link must go to the twin
+    /// with box rows regardless of which the roster lists first.
+    #[test]
+    fn link_prefers_the_same_name_teammate_who_actually_played() {
+        let (phantom, real) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let chi = Uuid::from_u128(90);
+        let mut r = roster(
+            &[
+                (phantom, "CJ Delancy", Some(chi)),
+                (real, "C.J. Delancy", Some(chi)),
+            ],
+            &[(chi, "Chicago St.", "Chicago State Cougars")],
+        );
+        // Both normalize to one key — that is what makes them candidates for
+        // the same Torvik row in the first place.
+        assert_eq!(normalize_name("CJ Delancy"), normalize_name("C.J. Delancy"));
+        r.players[0].has_box_rows = false;
+
+        let rows = [torvik_row("CJ Delancy", "Chicago St.", 76279, 12.0)];
+        let links = link_players(&r, &rows, 2025);
+        assert_eq!(
+            links.player_ids,
+            vec![Some(real)],
+            "the Torvik row linked to the phantom, which has no games and so no SOS \
+             and no served CAM — exactly the failure #355 describes"
+        );
+        assert_eq!(links.stats.exact, 1);
+        assert!(links.refused_pids.is_empty());
+    }
+
+    /// The same fixture with the real player first must give the same answer:
+    /// the preference is by box rows, not by position. Together with the test
+    /// above this pins that load order no longer decides the outcome.
+    #[test]
+    fn link_same_name_teammate_preference_is_order_independent() {
+        let (real, phantom) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let chi = Uuid::from_u128(90);
+        let mut r = roster(
+            &[
+                (real, "C.J. Delancy", Some(chi)),
+                (phantom, "CJ Delancy", Some(chi)),
+            ],
+            &[(chi, "Chicago St.", "Chicago State Cougars")],
+        );
+        r.players[1].has_box_rows = false;
+        let rows = [torvik_row("CJ Delancy", "Chicago St.", 76279, 12.0)];
+        let links = link_players(&r, &rows, 2025);
+        assert_eq!(links.player_ids, vec![Some(real)]);
+    }
+
+    /// When both same-name teammates genuinely played (brothers on one
+    /// roster), nothing distinguishes them and the first in load order wins —
+    /// deterministic now that the load is ordered, but still a guess. The
+    /// second Torvik row for that name finds its pick claimed and is refused,
+    /// which is the pre-existing #313 behaviour and not something this
+    /// tiebreak changes.
+    #[test]
+    fn link_two_real_same_name_teammates_still_resolve_by_order_then_refuse() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let t = Uuid::from_u128(90);
+        let r = roster(
+            &[(a, "Jalen Smith", Some(t)), (b, "Jalen Smith", Some(t))],
+            &[(t, "Maryland", "Maryland Terrapins")],
+        );
+        let rows = [
+            torvik_row("Jalen Smith", "Maryland", 10, 30.0),
+            torvik_row("Jalen Smith", "Maryland", 11, 5.0),
+        ];
+        let links = link_players(&r, &rows, 2020);
+        assert_eq!(links.player_ids, vec![Some(a), None]);
+        assert_eq!(links.refused_pids, vec![11]);
     }
 
     #[test]
@@ -2583,6 +2697,70 @@ mod tests {
         .unwrap();
         assert_eq!(still, linked, "a refused reconcile cleared rows anyway");
         tx.rollback().await.unwrap();
+    }
+
+    /// The #355 invariant on the real table: no linked Torvik row may point at
+    /// a `players` record with no box rows while a same-name teammate WITH box
+    /// rows exists. The unit tests above pin the linker's rule; this pins that
+    /// the database agrees, which is what catches a re-ingest that regressed
+    /// it or a load order the fixtures did not think of. It reads 19 before
+    /// the fix on the local database and 0 after.
+    ///
+    /// "Same name" here is `regexp_replace(lower(name), '[^a-z]', '')`, a
+    /// SQL stand-in for `normalize_name` that is deliberately conservative:
+    /// it covers the punctuation and initialism shapes every one of the 19
+    /// had, but it deletes a diacritic where `normalize_name` folds it, so a
+    /// `José` / `Jose` twin pair is caught by the linker fix and NOT by this
+    /// guard. It under-reports rather than false-alarms; a miss here is a
+    /// weaker check, not a wrong one.
+    #[tokio::test]
+    #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
+                torvik::tests::no_torvik_link -- --ignored --nocapture"]
+    async fn no_torvik_link_points_at_a_phantom_twin() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .unwrap();
+        let offenders: Vec<(i32, i32, String)> = sqlx::query_as(
+            r#"
+            WITH linked AS (
+                SELECT t.season, t.torvik_pid, t.player_id, p.name, p.team_id,
+                       EXISTS (SELECT 1 FROM player_game_stats g WHERE g.player_id = p.id) AS played
+                FROM torvik_player_stats t
+                JOIN players p ON p.id = t.player_id
+                WHERE t.player_id IS NOT NULL
+            )
+            SELECT l.season, l.torvik_pid, l.name
+            FROM linked l
+            WHERE NOT l.played
+              AND EXISTS (
+                  SELECT 1 FROM players q
+                  WHERE q.season = l.season AND q.team_id = l.team_id AND q.id <> l.player_id
+                    AND regexp_replace(lower(q.name), '[^a-z]', '', 'g')
+                        = regexp_replace(lower(l.name), '[^a-z]', '', 'g')
+                    AND EXISTS (SELECT 1 FROM player_game_stats g WHERE g.player_id = q.id))
+            ORDER BY l.season, l.torvik_pid
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            offenders.is_empty(),
+            "{} Torvik row(s) link to a zero-game twin while the same-name teammate who \
+             played is unlinked (#355) — re-run `cstat-ingest torvik --year YYYY` for the \
+             season(s) and the fixed linker will move them:\n  {}",
+            offenders.len(),
+            offenders
+                .iter()
+                .map(|(s, pid, n)| format!("{s} pid {pid} {n}"))
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
     }
 
     /// The clear that makes the #313 fix non-inert, exercised directly.
