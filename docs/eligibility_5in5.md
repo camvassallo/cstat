@@ -27,20 +27,28 @@ Sigma positive cam_gbpm_v3, seniors:        2,748
 Sigma positive cam_gbpm_v3, all players:    6,374   -> seniors are 43%
 ```
 
-## Two populations, only one self-healing
+## Three populations, none self-healing
 
-**Movers — already correct, no work needed.** A senior who takes his extra year
-at another school appears in the 247 portal feed, and the projection's arrivals
+**Movers — placed, but too confidently.** A senior who takes his extra year at
+another school appears in the 247 portal feed, and the projection's arrivals
 path has no class filter (`age_up_class_year` has an explicit `Sr -> Sr`
 branch). He lands on his new team. Measured: of the 56 players who entered the
-2026 portal after June 1 and resolve to a cstat player, **53 were `Sr`**.
+2026 portal after June 1 and resolve to a cstat player, **53 were `Sr`**. That
+was called "already correct, no work needed" when this doc was first written,
+and it stopped being correct on 2026-08-21: the Tenth Circuit stayed the
+class-wide injunction, and every one of those movers became a firm arrival at
+a school he was not, at that moment, eligible to play for. The curated capture
+now follows a mover to his destination — see the arrivals split below.
 
 **Stay-puts — invisible.** A senior who takes the extra year at the same school
 appears in no feed. Not the portal, not the draft list, and not Torvik's
 `class_year`, which does not exist for a season that has not been played. He is
 simply deleted from his team's projection.
 
-Everything below exists for the second group.
+**Uncommitted portal entrants — a third shape.** Under a court order the portal
+reopens for a week and a senior enters it to shop the fifth year; some then stay
+(Mark Mitchell, Missouri). The feed shows `Entered` with no destination, which
+the projection reads as a departure to nowhere.
 
 ## Representation: reuse `uncertain`, do not build an eligibility model
 
@@ -73,6 +81,27 @@ change to the served 27-feature roster-impact vector**.
 The principle: **observations beat inferences, and curation beats both.** The
 senior check moved from position 2 to position 7 as part of this work; it is the
 only inferred channel and now sits below everything it can be checked against.
+
+Two refinements to row 2, both about what a portal row actually observes:
+
+* **A `Committed` destination is a move, and the row follows him.** He is a
+  `Transferred` departure on his base team either way; at the destination a
+  `contested` row routes him to `uncertain` (ceiling only, `?`) instead of
+  `arrivals`, and `granted` leaves him an ordinary arrival. The row is keyed
+  by base-season team because that is the roster it is matched against; what
+  it asserts is a property of the player.
+* **An `Entered` row with no destination is intent, not a move**, so a
+  curated row naming his base team beats it: he is skipped by the portal
+  bucketing (and left out of `outbound_cam_v3_sum` — the row says the talent
+  did not walk) and falls through to rows 3/4. A row written before a player
+  enters the portal can therefore hold him on his old team until he commits
+  somewhere, at which point the commit wins; that window is the cost of the
+  rule, and it is bounded by the feed.
+
+A contested arrival stays in `inbound_cam_v3_sum` (the feature measures what
+the portal moved, which he did), so the served feature vector is unchanged for
+every team without one. That is the same documented asymmetry the uncertain
+bucket already has against `retained_talent_fraction` (#324).
 
 Three ordering choices are load-bearing and should not be "tidied":
 
@@ -124,6 +153,17 @@ which is precisely what the fresh portal data surfaced. Routing him to
 
 `year` is the **base** season, matching `player_departures.year` and
 `draft_entrants.year`: rows in `2026_returns.json` affect the 2027 projection.
+
+| Sourcing | Path |
+| --- | --- |
+| Named-plaintiff worklist | `scripts/eligibility_litigation_worklist.py` (College Sports Litigation Tracker + its Class-of-2022 case index) |
+| Suits the tracker has no filings for | `data/returns/2026_litigation_supplement.json` (press-transcribed plaintiff lists) |
+| Per-court resolution | `cstat-ingest returns --resolve-reason injunction --case "<suit>" --as granted\|departed` |
+
+The capture's `case` field (JSON-only, never loaded) is what makes the last
+row work: the 2026 cohort rides on a federal class action and two dozen state
+suits that resolve one court at a time. `data/returns/README.md` has the
+curation rules and the false-positive shapes seen so far.
 
 A capture row is matched to a roster player by normalized `(name, team)` at
 projection time, so the loader cannot tell a typo from a real player — a
