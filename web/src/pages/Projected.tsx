@@ -17,37 +17,6 @@ import { pctileTextColor } from '../components/pctile';
 import { BAND_CHIP_CLASS, BAND_CHIP_TOP_STRONG } from '../components/scale';
 import { recruitTooltipLine } from '../lib/recruitDisplay';
 import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
-import ModeToggle from '../components/ModeToggle';
-
-// How the eligibility-pending cohort enters the projected columns (#346).
-// `weighted` ("50/50" on screen) is the served midpoint — every case at
-// its 50/50 — and the default: it is the site's forecast, the number the team
-// page headline and the game predictor's preseason anchor use, so the grid
-// must agree with them until the reader asks a what-if. `in` / `out`
-// swap in the server's "every case clears" / "none do" headlines; the draft
-// declarants stay blended at their own probability in all three, which is why
-// this cannot simply be the ceiling or the floor.
-type EligibilityMode = 'weighted' | 'in' | 'out';
-
-// Rewrite the three projected columns for the chosen mode so every consumer
-// downstream — the sort, the rank columns, the O/D percentile colors, the
-// chips — reads the swapped value without knowing a toggle exists.
-function applyEligibilityMode(t: ProjectedTeam, mode: EligibilityMode): ProjectedTeam {
-  if (mode === 'weighted') return t;
-  return mode === 'in'
-    ? {
-        ...t,
-        midpoint_adj_em: t.adj_em_eligibility_in,
-        projected_adj_o: t.adj_o_eligibility_in,
-        projected_adj_d: t.adj_d_eligibility_in,
-      }
-    : {
-        ...t,
-        midpoint_adj_em: t.adj_em_eligibility_out,
-        projected_adj_o: t.adj_o_eligibility_out,
-        projected_adj_d: t.adj_d_eligibility_out,
-      };
-}
 
 // Projectable-year definitions are shared with the team projection ledger via
 // `season.ts` so both surfaces publish the same list (incl. the upcoming
@@ -655,12 +624,10 @@ export function ProjectedYearRedirect() {
 }
 
 function ProjectionView({ year }: { year: number }) {
-  // Rows exactly as served; `teams` below is the mode-adjusted view.
-  const [served, setServed] = useState<ProjectedTeam[] | null>(null);
+  const [teams, setTeams] = useState<ProjectedTeam[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [baseSeason, setBaseSeason] = useState<number | null>(null);
   const [search, setSearch] = useState('');
-  const [eligibilityMode, setEligibilityMode] = useState<EligibilityMode>('weighted');
   const isMobile = useIsMobile();
 
   // Publish the projectable years to the site-wide season picker in the
@@ -677,7 +644,7 @@ function ProjectionView({ year }: { year: number }) {
     fetchProjections(year)
       .then((r) => {
         if (canceled) return;
-        setServed(r.teams);
+        setTeams(r.teams);
         setBaseSeason(r.base_season);
       })
       .catch((e) => {
@@ -687,18 +654,6 @@ function ProjectionView({ year }: { year: number }) {
       canceled = true;
     };
   }, [year]);
-
-  // The rows the page works from: the served rows with the projected columns
-  // swapped for the eligibility mode. Everything below (ranks, O/D
-  // percentiles, filter, grid) reads `teams`, so the toggle is one substitution.
-  const teams = useMemo(
-    () => served?.map((t) => applyEligibilityMode(t, eligibilityMode)) ?? null,
-    [served, eligibilityMode],
-  );
-  const pendingTeams = useMemo(
-    () => served?.filter((t) => t.eligibility_pending_count > 0).length ?? 0,
-    [served],
-  );
 
   // Past seasons carry actuals; the live forecast year doesn't.
   const hasActuals = useMemo(
@@ -810,26 +765,6 @@ function ProjectionView({ year }: { year: number }) {
           {baseSeason != null &&
             ` · based on ${seasonLabel(baseSeason)} → projecting ${seasonLabel(year)}`}
         </span>
-        {pendingTeams > 0 && (
-          <span className="ml-auto flex items-center gap-2">
-            <span
-              className="text-xs text-gray-500"
-              title={`${pendingTeams} teams have players whose eligibility for next season is before a court or waiver desk (the Pending column). 50/50: each case counted at even odds — the site's forecast, and the number the team pages and the game predictor use. Included: every case clears. Excluded: none do. Declared draft entrants stay at their own probability in all three; the rank and the O/D split follow the choice.`}
-            >
-              Pending eligibility
-            </span>
-            <ModeToggle<EligibilityMode>
-              ariaLabel="How pending eligibility cases count"
-              value={eligibilityMode}
-              onChange={setEligibilityMode}
-              options={[
-                { value: 'weighted', label: '50/50' },
-                { value: 'in', label: 'Included' },
-                { value: 'out', label: 'Excluded' },
-              ]}
-            />
-          </span>
-        )}
       </div>
       <div
         style={{

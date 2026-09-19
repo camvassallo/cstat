@@ -685,17 +685,6 @@ export interface ProjectedTeam {
   floor_adj_em: number | null;
   /// (ceiling + floor) / 2, or null when the prediction is gated out.
   midpoint_adj_em: number | null;
-  /// The Future page's eligibility toggle: the headline (and its O/D
-  /// split) with the team's eligibility cases treated as all cleared (`_in`)
-  /// or all denied (`_out`), draft declarants still blended at their own
-  /// probability. Equal to the midpoint / O / D for a team with no case;
-  /// null when too thin.
-  adj_em_eligibility_in: number | null;
-  adj_em_eligibility_out: number | null;
-  adj_o_eligibility_in: number | null;
-  adj_o_eligibility_out: number | null;
-  adj_d_eligibility_in: number | null;
-  adj_d_eligibility_out: number | null;
   returning_count: number;
   /// Σ base-season (prior) CamPom of the returning players — the
   /// continuity denominator + "prior → projected" tooltip base.
