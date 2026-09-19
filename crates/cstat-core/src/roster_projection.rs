@@ -415,6 +415,23 @@ impl ProjectedRoster {
     /// commits feed existed. (Wiring unranked commits into the projection is a
     /// deliberate follow-up gated on a roster-impact retrain.)
     pub fn for_scenario(&self, scenario: DraftScenario) -> Vec<PlayerRow> {
+        let all = scenario == DraftScenario::Ceiling;
+        self.materialize(all, all)
+    }
+
+    /// The scored roster with each half of the uncertain bucket switched on
+    /// or off independently: `eligibility` for the 5-in-5 cases
+    /// ([`UncertainCause::EligibilityUnsettled`]), `draft` for the declared
+    /// entrants ([`UncertainCause::DraftDeclared`]). [`Self::for_scenario`]
+    /// is the `(false, false)` / `(true, true)` pair.
+    ///
+    /// The two mixed rosters exist for the Future page's eligibility toggle
+    /// (#346): "what is this team if every case clears / none do" is a
+    /// question about the eligibility cohort ALONE, and neither bound answers
+    /// it once the team also has a draft declarant — the floor drops him,
+    /// the ceiling keeps him, and the honest answer blends him at his own
+    /// mock-board probability while the eligibility half is fixed one way.
+    pub fn materialize(&self, eligibility: bool, draft: bool) -> Vec<PlayerRow> {
         let mut out: Vec<PlayerRow> = Vec::with_capacity(
             self.returning.len() + self.arrivals.len() + self.recruits.len() + self.uncertain.len(),
         );
@@ -426,10 +443,25 @@ impl ProjectedRoster {
                 .filter(|(_, m)| m.feeds_projection && !m.did_not_play)
                 .map(|(p, _)| p.clone()),
         );
-        if scenario == DraftScenario::Ceiling {
-            out.extend(self.uncertain.iter().map(|(p, _)| p.clone()));
-        }
+        out.extend(
+            self.uncertain
+                .iter()
+                .filter(|(_, u)| match u.cause {
+                    UncertainCause::EligibilityUnsettled => eligibility,
+                    UncertainCause::DraftDeclared => draft,
+                })
+                .map(|(p, _)| p.clone()),
+        );
         out
+    }
+
+    /// Whether any uncertain player is a 5-in-5 eligibility case. The
+    /// serving layer skips the two extra scenario scores when this is false,
+    /// since both mixed rosters then equal a bound it already scored.
+    pub fn has_eligibility_case(&self) -> bool {
+        self.uncertain
+            .iter()
+            .any(|(_, u)| u.cause == UncertainCause::EligibilityUnsettled)
     }
 
     /// Count of recruits that feed the scored roster — i.e. excluding the
@@ -2389,6 +2421,57 @@ mod tests {
             class_year: None,
             cam_v3,
         }
+    }
+
+    #[test]
+    fn materialize_switches_each_uncertain_half_independently() {
+        let elig = pr(9.0, Some(3.0));
+        let draft = pr(20.0, Some(8.0));
+        let mk = |row: &PlayerRow, cause| {
+            (
+                row.clone(),
+                UncertainPlayer {
+                    player_id: row.player_id,
+                    name: "x".into(),
+                    reason: "x".into(),
+                    cause,
+                    incoming_from: None,
+                },
+            )
+        };
+        let p = ProjectedRoster {
+            team_id: Uuid::new_v4(),
+            team_name: "T".into(),
+            team_full_name: "T".into(),
+            returning: vec![pr(30.0, Some(5.0))],
+            arrivals: vec![],
+            recruits: vec![],
+            uncertain: vec![
+                mk(&elig, UncertainCause::EligibilityUnsettled),
+                mk(&draft, UncertainCause::DraftDeclared),
+            ],
+            departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum: 0.0,
+            departures_abs_cam_v3_sum: 0.0,
+            program_level: None,
+            program_level_o: None,
+        };
+        let ids = |rows: Vec<PlayerRow>| rows.iter().map(|r| r.player_id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(p.materialize(false, false)),
+            ids(p.for_scenario(DraftScenario::Floor))
+        );
+        assert_eq!(
+            ids(p.materialize(true, true)),
+            ids(p.for_scenario(DraftScenario::Ceiling))
+        );
+        let only_elig = ids(p.materialize(true, false));
+        assert!(only_elig.contains(&elig.player_id) && !only_elig.contains(&draft.player_id));
+        let only_draft = ids(p.materialize(false, true));
+        assert!(only_draft.contains(&draft.player_id) && !only_draft.contains(&elig.player_id));
+        assert!(p.has_eligibility_case());
     }
 
     #[test]
