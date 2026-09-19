@@ -38,6 +38,18 @@ Usage (the training venv has psycopg2):
     cd training && ./.venv/bin/python ../scripts/eligibility_litigation_worklist.py \
         --year 2026 [--html saved_tracker.html] [--emit candidates.json] [--all-names]
 
+The inverse question — "who COULD be missing?" — is `--open-cohort`. The
+population that can be absent from the capture is finite: the Class of 2022
+with four D-I seasons (first Torvik season = year-3, four seasons on record),
+which is the Wisne class. Every such senior who has no capture row, is not in
+the portal and is not a draft entrant is projected as gone by the `Sr`
+inference, and is one of exactly three things: signed professionally (the
+default is right), suing (needs a `contested` row), or genuinely done (the
+default is right). The mode prints them by CAM so the search is bounded — a
+dozen names worth a look, not a crawl — and skips the tracker entirely.
+
+    ... --year 2026 --open-cohort [--min-cam 8]
+
 Exit status is 0 regardless; there is nothing to gate here.
 """
 from __future__ import annotations
@@ -306,6 +318,99 @@ def load_roster(year: int) -> dict[str, list[dict]]:
     return roster
 
 
+def open_cohort(year: int, min_cam: float) -> list[dict]:
+    """Class-of-(year-4) seniors with four D-I seasons whom nothing accounts
+    for: no capture row, no live portal row, no draft entry. Keyed on
+    `torvik_pid` for the season count because `natstat_id` breaks on a
+    transfer (a new id per team), which would read a transfer's history as a
+    one-season career and drop him from the cohort."""
+    try:
+        import psycopg2  # type: ignore
+    except ImportError:
+        sys.exit("psycopg2 not importable — run with training/.venv/bin/python")
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        env = REPO / ".env"
+        if env.exists():
+            for ln in env.read_text().splitlines():
+                if ln.startswith("DATABASE_URL="):
+                    url = ln.split("=", 1)[1].strip().strip('"')
+    if not url:
+        sys.exit("DATABASE_URL not set")
+    conn = psycopg2.connect(url)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        WITH seasons AS (
+            SELECT torvik_pid, min(season) AS first_season, count(DISTINCT season) AS n_seasons
+            FROM torvik_player_stats WHERE torvik_pid IS NOT NULL GROUP BY 1
+        ),
+        seniors AS (
+            SELECT p.id, p.name, COALESCE(t.short_name, t.name) AS team, tps.torvik_pid,
+                   tps.cam_gbpm_v3_psos AS cam, COALESCE(pss.minutes_per_game, 0) AS mpg
+            FROM players p
+            JOIN teams t ON t.id = p.team_id
+            JOIN torvik_player_stats tps ON tps.player_id = p.id AND tps.season = p.season
+            LEFT JOIN player_season_stats pss
+                   ON pss.player_id = p.id AND pss.season = p.season AND pss.team_id = p.team_id
+            WHERE p.season = %(year)s AND tps.class_year = 'Sr'
+        ),
+        cohort AS (
+            SELECT s.* FROM seniors s JOIN seasons x ON x.torvik_pid = s.torvik_pid
+            WHERE x.first_season = %(year)s - 3 AND x.n_seasons = 4
+        ),
+        norm AS (SELECT c.*, lower(regexp_replace(c.name, '[^A-Za-z]', '', 'g')) AS k FROM cohort c),
+        captured AS (
+            SELECT lower(regexp_replace(player_name, '[^A-Za-z]', '', 'g')) AS k
+            FROM player_returns WHERE year = %(year)s
+        ),
+        portal AS (
+            SELECT cstat_player_id FROM transfers
+            WHERE year = %(year)s AND status <> 'Withdrawn' AND cstat_player_id IS NOT NULL
+        ),
+        draft AS (
+            SELECT lower(regexp_replace(player_name, '[^A-Za-z]', '', 'g')) AS k
+            FROM draft_entrants WHERE year = %(year)s
+        )
+        SELECT name, team, cam, mpg,
+               k IN (SELECT k FROM captured) AS captured,
+               id IN (SELECT cstat_player_id FROM portal) AS in_portal,
+               k IN (SELECT k FROM draft) AS in_draft
+        FROM norm
+        ORDER BY cam DESC NULLS LAST, name
+        """,
+        {"year": year},
+    )
+    rows = [
+        {
+            "name": name, "team": team, "cam": None if cam is None else round(float(cam), 1),
+            "mpg": round(float(mpg), 1), "captured": captured, "in_portal": in_portal, "in_draft": in_draft,
+        }
+        for name, team, cam, mpg, captured, in_portal, in_draft in cur.fetchall()
+    ]
+    conn.close()
+    total = len(rows)
+    counts = {
+        "captured": sum(r["captured"] for r in rows),
+        "in_portal": sum(r["in_portal"] and not r["captured"] for r in rows),
+        "in_draft": sum(r["in_draft"] and not r["captured"] and not r["in_portal"] for r in rows),
+    }
+    open_rows = [r for r in rows if not (r["captured"] or r["in_portal"] or r["in_draft"])]
+    print(
+        f"Class of {year - 4}, four D-I seasons, labelled Sr in {year}: {total} players — "
+        f"{counts['captured']} captured, {counts['in_portal']} in the portal, "
+        f"{counts['in_draft']} on the draft list, {len(open_rows)} open "
+        f"({sum(1 for r in open_rows if (r['cam'] or -99) >= min_cam)} at CAM >= {min_cam:g}).\n"
+    )
+    print("OPEN — nothing accounts for these; each is signed pro (no row), suing (`contested` row), or done (no row):")
+    print(f"    {'PLAYER':<26} {'TEAM':<22} {'CAM':>5} {'MPG':>5}")
+    for r in open_rows:
+        if (r["cam"] or -99) < min_cam:
+            continue
+        print(f"    {r['name']:<26} {r['team']:<22} {r['cam'] if r['cam'] is not None else '—':>5} {r['mpg']:>5}")
+    return open_rows
+
+
 def load_capture(year: int) -> dict[str, dict]:
     path = REPO / "data" / "returns" / f"{year}_returns.json"
     if not path.exists():
@@ -321,12 +426,22 @@ def main() -> None:
     ap.add_argument("--emit", type=Path, help="write unambiguous, uncaptured candidates as templated capture rows")
     ap.add_argument("--all-names", action="store_true", help="also print name tokens that matched nobody")
     ap.add_argument(
+        "--open-cohort",
+        action="store_true",
+        help="skip the tracker; list the four-season Class-of-(year-4) seniors nothing accounts for",
+    )
+    ap.add_argument("--min-cam", type=float, default=5.0, help="--open-cohort: CAM floor for the printed list")
+    ap.add_argument(
         "--extra",
         type=Path,
         help="JSON of cases the tracker has no prose for, {\"Case v. NCAA\": {\"court\": ..., "
         "\"latest\": ..., \"names\": [...]}} — matched exactly like a tracker block",
     )
     args = ap.parse_args()
+
+    if args.open_cohort:
+        open_cohort(args.year, args.min_cam)
+        return
 
     lines = to_text(fetch_tracker(args.html))
     sheet = load_sheet()

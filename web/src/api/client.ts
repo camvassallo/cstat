@@ -667,6 +667,10 @@ export interface ProjectedRecruit {
   /// the live upcoming projection. Excluded from the projection's scored roster
   /// and contribution sum; surfaced here so the report card can flag it.
   did_not_play?: boolean;
+  /// A former professional the recruit feed filed as a freshman (school
+  /// "G League"). Displayed, not scored — the freshman model has nothing to
+  /// say about him and his eligibility is the open question.
+  former_pro?: boolean;
 }
 
 export interface ProjectedTeam {
@@ -854,6 +858,10 @@ export interface ProjectedRecruitDetail {
   /// live upcoming projection. Excluded from the scored roster + contribution
   /// sum; the card greys and tags it.
   did_not_play?: boolean;
+  /// A former professional the recruit feed filed as a freshman (school
+  /// "G League"). Displayed, not scored — the freshman model has nothing to
+  /// say about him and his eligibility is the open question.
+  former_pro?: boolean;
 }
 export interface ProjectedDeparture {
   /// `left_program` covers the exits no feed reports — signed professionally

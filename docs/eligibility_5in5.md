@@ -157,6 +157,7 @@ which is precisely what the fresh portal data surfaced. Routing him to
 | Sourcing | Path |
 | --- | --- |
 | Named-plaintiff worklist | `scripts/eligibility_litigation_worklist.py` (College Sports Litigation Tracker + its Class-of-2022 case index) |
+| Who could be missing | `... --open-cohort`: the four-season Class-of-2022 seniors nothing accounts for, by CAM; each is signed (no row), suing (`contested`), or done (no row) |
 | Suits the tracker has no filings for | `data/returns/2026_litigation_supplement.json` (press-transcribed plaintiff lists) |
 | Per-court resolution | `cstat-ingest returns --resolve-reason injunction --case "<suit>" --as granted\|departed` |
 
@@ -256,6 +257,16 @@ So:
 
 None of it changes what is scored: the cohort is still ceiling-only and still
 weighted at `ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY`.
+
+One adjacent population the capture cannot reach: a former professional the
+247 recruit feed files as a class-of-N high-school recruit (school field
+"G League" — RJ Luis, class of 2026, ranked #3, committed to LSU). He is not
+on any base-season roster, so no `player_returns` row can match him, and the
+freshman model was pricing him as a 5.8-CAM freshman. `RecruitMeta::former_pro`
+marks those rows; they display (tagged, struck through) but are not scored,
+like the commits-feed cohort. Exact match on "G League" only — Overtime Elite
+and the NBL Next Stars programs are filed under the same field and their
+players demonstrably enrol and play.
 
 ## Curate conservatively
 

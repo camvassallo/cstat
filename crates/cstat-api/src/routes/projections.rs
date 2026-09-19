@@ -649,10 +649,13 @@ fn predict_team(
     // still summed here, as it always has been — a pre-existing display choice,
     // not changed by this PR. No-op on the live upcoming projection, where
     // did_not_play is always false.
+    // Former pros filed as recruits are dropped from the displayed sum too:
+    // the UI tags them "not counted", and the freshman-model number on them
+    // is not a projection of anything.
     let recruits_cam_v3_sum: f32 = p
         .recruits
         .iter()
-        .filter(|(_, m)| !m.did_not_play)
+        .filter(|(_, m)| !m.did_not_play && !m.former_pro)
         .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
         .sum::<f64>() as f32;
 
@@ -745,6 +748,7 @@ fn predict_team(
                 // greys + tags these so a graded report card explains why they
                 // add nothing. Always false for the live upcoming projection.
                 "did_not_play": m.did_not_play,
+                "former_pro": m.former_pro,
             })
         })
         .collect();
@@ -1393,6 +1397,7 @@ async fn projection_team_detail(
                 // Redshirt / non-enroll (completed seasons only); false on the
                 // live upcoming projection. Frontend greys + tags these.
                 "did_not_play": meta.did_not_play,
+                "former_pro": meta.former_pro,
             })
         })
         .collect();

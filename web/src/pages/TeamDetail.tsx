@@ -2242,10 +2242,15 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
   // nothing that year and is excluded from the projection's scored roster, so
   // grey the whole card and tag it — the report card explains why it adds zero.
   const dnp = r.did_not_play === true;
+  // A former professional filed as a recruit (school "G League"): same
+  // treatment — greyed, struck-through projection — with its own tag, because
+  // "redshirt" would be a false statement about why he adds nothing.
+  const pro = r.former_pro === true;
+  const excluded = dnp || pro;
   return (
     <div
       className={`flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2 ${
-        dnp ? 'opacity-55' : ''
+        excluded ? 'opacity-55' : ''
       }`}
     >
       <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -2272,18 +2277,28 @@ function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
             redshirt
           </span>
         )}
+        {pro && (
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-700/50 border border-gray-600 text-gray-300 shrink-0"
+            title="Played professionally before college. Not a freshman, so not scored as one — and whether he may play at all is before the courts. Excluded from the projected roster."
+          >
+            former pro
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2 text-xs">
         {r.projected_cam_v3 != null && (
           <span
             className={
-              dnp
+              excluded
                 ? 'px-1.5 rounded border border-gray-700 text-gray-500 line-through'
                 : `px-1.5 rounded border ${camTierColor(camTier(r.projected_cam_v3))}`
             }
             title={
               dnp
                 ? `Did not play — the projected freshman CAM ${r.projected_cam_v3.toFixed(1)} is not counted toward this team's projection.`
+                : pro
+                  ? `Former professional — the freshman model's ${r.projected_cam_v3.toFixed(1)} is not a real projection for him and is not counted toward this team's projection.`
                 : r.projected_campom_lower != null && r.projected_campom_upper != null
                   ? `freshman-impact projection: ${r.projected_cam_v3.toFixed(1)} (${r.projected_campom_lower.toFixed(1)}–${r.projected_campom_upper.toFixed(1)}).${
                       r.projected_cam_v3 >= 10
