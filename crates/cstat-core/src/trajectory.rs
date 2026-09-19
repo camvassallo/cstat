@@ -186,8 +186,15 @@ pub const TRAJECTORY_FEATURE_NAMES: [&str; TRAJECTORY_NUM_FEATURES] = [
 /// carries, and `is_transfer` is 0.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Destination {
-    /// Base-season UUID of the destination program (the same season as the
-    /// player's source row, so `is_transfer` is a plain id comparison).
+    /// Base-season UUID of the destination program. `is_transfer` is
+    /// `team_id != row.src_team_id`, an id comparison rather than a
+    /// program-identity one: for every row the roster projection scores, a
+    /// returner's source row IS the base-season row of this team, and an
+    /// arrival's is another program's (or, for a sat-out arrival under #146,
+    /// an earlier season's row of another program — still not this id, still
+    /// a transfer). The trainer derives the flag from `natstat_id`; the two
+    /// agree on every reachable case, because a player who sat out and came
+    /// back to the same program has no base-season row and is never projected.
     pub team_id: Uuid,
     /// The program's AdjEM in the base season. `None` → [`DEST_LEVEL_FILL`].
     pub prior_adj_em: Option<f64>,
