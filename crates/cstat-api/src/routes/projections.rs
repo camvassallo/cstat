@@ -120,15 +120,34 @@ struct ProjectedTeam {
     /// entry is `{name, composite_rank, star_rating, tier}` from
     /// `RecruitMeta`.
     top_recruits: Vec<serde_json::Value>,
-    /// Count of players in the uncertain bucket — the spread
-    /// (ceiling - floor) is roughly proportional to this.
+    /// Count of uncertain players who were on LAST SEASON'S roster —
+    /// declared-draft plus, since issue #220, unsettled 5-in-5 eligibility
+    /// for a stay-put. The spread (ceiling - floor) is roughly proportional
+    /// to this plus `uncertain_incoming_count`.
     uncertain_count: usize,
-    /// Σ base-season cam_v3 of the uncertain cohort (declared-draft plus,
-    /// since issue #220, unsettled 5-in-5 eligibility).
-    /// They were on last season's roster, so this completes the
-    /// "last season's roster value" base the ledger normalizes against:
+    /// Σ base-season cam_v3 of that prior-roster uncertain cohort. They were
+    /// on last season's roster, so this completes the "last season's roster
+    /// value" base the ledger normalizes against:
     /// `base = returning + departures + uncertain` (all prior-season).
+    /// Contested ARRIVALS are deliberately not in it — see the next two.
     uncertain_cam_v3_sum: f32,
+    /// Count of uncertain players arriving from another program — a
+    /// `contested` 5-in-5 mover (Xaivian Lee, Florida -> Gonzaga). Never on
+    /// this roster, so not in the last-season base and not a departure of
+    /// any kind; they are the incoming half of the eligibility-pending
+    /// cohort the UI lists under its own heading.
+    uncertain_incoming_count: usize,
+    /// Σ base-season (prior-school) cam_v3 of the incoming uncertain cohort.
+    uncertain_incoming_cam_v3_sum: f32,
+    /// Count of the eligibility-pending cohort specifically (cause
+    /// `eligibility_unsettled`), both halves — what the Future grid's
+    /// Pending column counts. Draft declarants are excluded.
+    eligibility_pending_count: usize,
+    /// Σ PROJECTED next-season cam_v3 of the eligibility-pending cohort —
+    /// what they would add to the scored roster if every court ruled for
+    /// them. Ceiling-only by construction; not part of the projected roster
+    /// value the ledger totals.
+    eligibility_pending_projected_cam_v3_sum: f32,
     /// Count of recorded departures (Sr + outbound + firm draft-gone).
     departures_count: usize,
     /// Σ base-season cam_v3 across all departures (graduating seniors +
@@ -658,12 +677,38 @@ fn predict_team(
         .iter()
         .map(|a| proj_or_prior(a.player_id, a.cam_v3))
         .sum::<f64>() as f32;
-    // Prior-season value of the uncertain cohort — completes the
-    // last-season roster base (returning + departures + uncertain).
+    // Prior-season value of the uncertain cohort — split by provenance.
+    // The prior-roster half completes the last-season roster base
+    // (returning + departures + uncertain); the incoming half was never on
+    // this roster and must stay out of it, or a contested arrival inflates
+    // "last season's value" at a school he has not played for.
     let uncertain_cam_v3_sum: f32 = p
         .uncertain
         .iter()
+        .filter(|(_, u)| u.incoming_from.is_none())
         .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
+        .sum::<f64>() as f32;
+    let uncertain_incoming_count = p
+        .uncertain
+        .iter()
+        .filter(|(_, u)| u.incoming_from.is_some())
+        .count();
+    let uncertain_incoming_cam_v3_sum: f32 = p
+        .uncertain
+        .iter()
+        .filter(|(_, u)| u.incoming_from.is_some())
+        .map(|(row, _)| row.cam_v3.unwrap_or(0.0))
+        .sum::<f64>() as f32;
+    let eligibility_pending_count = p
+        .uncertain
+        .iter()
+        .filter(|(_, u)| u.cause == UncertainCause::EligibilityUnsettled)
+        .count();
+    let eligibility_pending_projected_cam_v3_sum: f32 = p
+        .uncertain
+        .iter()
+        .filter(|(_, u)| u.cause == UncertainCause::EligibilityUnsettled)
+        .map(|(row, _)| proj_or_prior(row.player_id, row.cam_v3))
         .sum::<f64>() as f32;
 
     // Prior-season O/D split sums per cohort (gated/uncovered players
@@ -754,8 +799,12 @@ fn predict_team(
             recruits_count: p.recruits.len(),
             recruits_cam_v3_sum,
             top_recruits: top_recruits.clone(),
-            uncertain_count: p.uncertain.len(),
+            uncertain_count: p.uncertain.len() - uncertain_incoming_count,
             uncertain_cam_v3_sum,
+            uncertain_incoming_count,
+            uncertain_incoming_cam_v3_sum,
+            eligibility_pending_count,
+            eligibility_pending_projected_cam_v3_sum,
             departures_count: p.departures.len(),
             departures_cam_v3_sum: p.departures_cam_v3_sum,
             returning_cam_o_sum,
@@ -1048,11 +1097,27 @@ async fn projection_team_detail(
     // base-season player_season_stats row. Arrivals link out to their
     // source-team page in the played base season (e.g. UCLA in 2025
     // for a 2025-portal transfer), per the cross-season link rule.
+    //
+    // Contested arrivals sit in `uncertain` rather than `arrivals` but link
+    // out the same way — the "from Florida" chip is what tells the reader
+    // Lee is pending AT Gonzaga rather than leaving it — so their ids ride
+    // along in the same lookup.
+    let arrival_pids: Vec<Uuid> = projection
+        .arrivals
+        .iter()
+        .map(|a| a.player_id)
+        .chain(
+            projection
+                .uncertain
+                .iter()
+                .filter(|(_, u)| u.incoming_from.is_some())
+                .map(|(_, u)| u.player_id),
+        )
+        .collect();
     let arrival_sources: std::collections::HashMap<Uuid, (Uuid, String)> =
-        if projection.arrivals.is_empty() {
+        if arrival_pids.is_empty() {
             std::collections::HashMap::new()
         } else {
-            let arrival_pids: Vec<Uuid> = projection.arrivals.iter().map(|a| a.player_id).collect();
             // No season filter: an arrival's `player_id` is season-scoped (one
             // row per player per season), so it pins its own source season —
             // base_season for a normal transfer, an earlier season for a player
@@ -1516,11 +1581,16 @@ async fn projection_team_detail(
                 }
                 UncertainCause::EligibilityUnsettled => None,
             };
+            let source = meta
+                .incoming_from
+                .and_then(|_| arrival_sources.get(&meta.player_id));
             json!({
                 "player_id": meta.player_id,
                 "name": meta.name,
                 "reason": meta.reason,
                 "cause": meta.cause,
+                "source_team_id": source.map(|(tid, _)| *tid),
+                "source_team_name": source.map(|(_, n)| n.clone()),
                 "mpg": row.mpg,
                 "cam_v3": row.cam_v3,
                 "primary_class": row.primary_class,
@@ -2054,6 +2124,7 @@ mod tests {
             name: "Top Senior".into(),
             reason: "…".into(),
             cause,
+            incoming_from: None,
         };
         // Same name, on the board as a projected top-5 pick.
         let mut mock = std::collections::HashMap::new();

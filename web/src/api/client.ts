@@ -702,11 +702,22 @@ export interface ProjectedTeam {
   recruits_cam_v3_sum: number;
   /// Up to 5 highest-ranked recruits for UI display.
   top_recruits: ProjectedRecruit[];
+  /// Uncertain players who were on LAST SEASON'S roster (declared draft
+  /// entrants + stay-put eligibility cases). A contested portal arrival is
+  /// in the bucket but not in this count.
   uncertain_count: number;
-  /// Σ base-season CamPom of the uncertain (declared-draft) cohort —
+  /// Σ base-season CamPom of that prior-roster uncertain cohort —
   /// completes the last-season roster base for the % normalization
   /// (`base = returning + departures + uncertain`).
   uncertain_cam_v3_sum: number;
+  /// Uncertain players arriving from another program (a contested 5-in-5
+  /// mover). Never on this roster, so outside the last-season base.
+  uncertain_incoming_count: number;
+  uncertain_incoming_cam_v3_sum: number;
+  /// Eligibility cases only (both halves), and what they would add to the
+  /// scored roster if every court ruled for them. Ceiling-only.
+  eligibility_pending_count: number;
+  eligibility_pending_projected_cam_v3_sum: number;
   departures_count: number;
   /// Σ base-season CamPom across all departures (Sr + portal-out + draft).
   departures_cam_v3_sum: number;
@@ -898,10 +909,13 @@ export interface ProjectedUncertain {
   name: string;
   reason: string;
   cause: UncertainCause;
+  /// Set when the uncertainty rides on a portal move — a contested 5-in-5
+  /// arrival. He was on THIS team last season only when these are null.
+  source_team_id: string | null;
+  source_team_name: string | null;
   // Source-season MPG / CamPom from the player's PlayerRow on the
-  // base-season roster (always populated for uncertain since the
-  // bucket only contains qualified returners — same gate as
-  // ProjectedReturning).
+  // base-season roster (for a contested arrival, his prior school's row —
+  // same gate as ProjectedReturning).
   mpg: number;
   cam_v3: number | null;
   primary_class: string | null;

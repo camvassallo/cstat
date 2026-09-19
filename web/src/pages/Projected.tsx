@@ -544,6 +544,33 @@ function buildColumns(
       },
     },
     {
+      // The eligibility-pending cohort (issue #220): players whose fifth
+      // season is before a court or waiver desk — a stay-put senior or a
+      // contested portal arrival. They are in the ceiling scenario only, so
+      // this column is what the projection would GAIN if every case cleared,
+      // not a term in the roster flow. It sits beside Departures rather than
+      // inside it because a contested arrival was never on this roster.
+      headerName: 'Pending',
+      colId: 'eligibility_pending',
+      ...flexCol(1, 110),
+      headerTooltip:
+        "Players whose eligibility for next season is unresolved — a stay-put senior or an incoming transfer waiting on a court or waiver ruling. Shown as their projected next-season CAM. They count toward the ceiling projection, not the floor; hover a team for the split.",
+      comparator: (_a, _b, na, nb) =>
+        ((na.data as ProjectedTeam | undefined)?.eligibility_pending_projected_cam_v3_sum ?? 0) -
+        ((nb.data as ProjectedTeam | undefined)?.eligibility_pending_projected_cam_v3_sum ?? 0),
+      cellRenderer: (p: { data?: ProjectedTeam }) => {
+        const t = p.data;
+        if (!t || t.eligibility_pending_count === 0) return dashCell;
+        const val = t.eligibility_pending_projected_cam_v3_sum;
+        const staying = t.eligibility_pending_count - t.uncertain_incoming_count;
+        const tip =
+          `${t.eligibility_pending_count} eligibility ${t.eligibility_pending_count === 1 ? 'case' : 'cases'} · Σ projected CAM ${fmtSigned(val)} if cleared` +
+          `\n${staying} staying · ${t.uncertain_incoming_count} arriving` +
+          '\nCounted in the ceiling projection only.';
+        return flowCellView(fmtSigned(val), `? ${t.eligibility_pending_count}`, 'text-amber-300', tip);
+      },
+    },
+    {
       headerName: 'Departures',
       colId: 'departures',
       ...flexCol(1, 130),

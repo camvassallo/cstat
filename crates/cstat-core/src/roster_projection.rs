@@ -151,6 +151,13 @@ pub struct UncertainPlayer {
     /// this is, which decides how the player's return probability may be
     /// estimated — see [`UncertainCause`].
     pub cause: UncertainCause,
+    /// Base-season team he is ARRIVING from, when the uncertainty rides on a
+    /// portal move; `None` when he was on this team's roster last season.
+    /// A contested mover (Xaivian Lee, Florida -> Gonzaga) is in Gonzaga's
+    /// bucket but was never on Gonzaga's roster, so he belongs neither in
+    /// "last season's value" nor under a Departures heading — the serving
+    /// layer needs this to keep him out of both.
+    pub incoming_from: Option<Uuid>,
 }
 
 /// Why a player is in the `uncertain` bucket. Behaviour-bearing: it selects
@@ -1669,6 +1676,7 @@ pub async fn compose_all_projections(
                                 name: name.clone(),
                                 reason: format!("eligibility contested ({reason})"),
                                 cause: UncertainCause::EligibilityUnsettled,
+                                incoming_from: None,
                             },
                         ));
                     }
@@ -1724,6 +1732,7 @@ pub async fn compose_all_projections(
                                  (5-in-5 eligibility unconfirmed)"
                             .into(),
                         cause: UncertainCause::EligibilityUnsettled,
+                        incoming_from: None,
                     },
                 ));
                 continue;
@@ -1747,6 +1756,7 @@ pub async fn compose_all_projections(
                         name: name.clone(),
                         reason: "declared for NBA draft (status pending)".into(),
                         cause: UncertainCause::DraftDeclared,
+                        incoming_from: None,
                     },
                 ));
                 continue;
@@ -1789,6 +1799,7 @@ pub async fn compose_all_projections(
                             name: (*name).to_string(),
                             reason: format!("eligibility contested ({reason})"),
                             cause: UncertainCause::EligibilityUnsettled,
+                            incoming_from: player_team.get(pid).copied(),
                         },
                     ));
                 }
@@ -2366,6 +2377,7 @@ mod tests {
                 name: "X".into(),
                 reason: "draft".into(),
                 cause: UncertainCause::DraftDeclared,
+                incoming_from: None,
             },
         )];
         let r = ProjectedRoster {
@@ -2634,6 +2646,7 @@ mod tests {
                 name: "X".into(),
                 reason: "draft".into(),
                 cause: UncertainCause::DraftDeclared,
+                incoming_from: None,
             },
         )];
         let r = ProjectedRoster {
