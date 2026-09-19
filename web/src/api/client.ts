@@ -780,6 +780,21 @@ export interface ProjectedTeam {
   /// means the cap never arrives as the exact decimal (see `Projected.tsx`).
   baseline_weight: number;
 
+  /// Roster talent, read off the exact feature vector the roster model
+  /// scores: the projected next-season CAM of the 13-man rotation weighted by
+  /// the minutes each rotation slot plays. Same scale as a player's CAM, so it
+  /// reads as "the average CAM of the players who will be on the floor".
+  /// Expected over the draft / eligibility scenarios at the midpoint's
+  /// `p_return`. Null when the roster is too thin to score.
+  roster_cam_wmean: number | null;
+  /// Σ projected next-season CAM over that rotation — the talent total
+  /// behind `roster_cam_wmean`, before the minutes weighting.
+  roster_cam_sum: number | null;
+  /// The roster model's own AdjEM for this roster, before the blend pulls it
+  /// toward the program's recent form. `midpoint_adj_em − roster_raw_adj_em`
+  /// is exactly what history contributed. Null when too thin to score.
+  roster_raw_adj_em: number | null;
+
   // --- Conference for the season being projected. Display + search only. ---
   /// The conference this team plays in during the *projected* season — not the
   /// base season's. For a played season that's the ingested value; for the
