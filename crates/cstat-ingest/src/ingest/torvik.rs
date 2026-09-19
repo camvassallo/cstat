@@ -2705,6 +2705,14 @@ mod tests {
     /// the database agrees, which is what catches a re-ingest that regressed
     /// it or a load order the fixtures did not think of. It reads 19 before
     /// the fix on the local database and 0 after.
+    ///
+    /// "Same name" here is `regexp_replace(lower(name), '[^a-z]', '')`, a
+    /// SQL stand-in for `normalize_name` that is deliberately conservative:
+    /// it covers the punctuation and initialism shapes every one of the 19
+    /// had, but it deletes a diacritic where `normalize_name` folds it, so a
+    /// `José` / `Jose` twin pair is caught by the linker fix and NOT by this
+    /// guard. It under-reports rather than false-alarms; a miss here is a
+    /// weaker check, not a wrong one.
     #[tokio::test]
     #[ignore = "needs a populated local DB; run: DATABASE_URL=... cargo test -p cstat-ingest \
                 torvik::tests::no_torvik_link -- --ignored --nocapture"]
