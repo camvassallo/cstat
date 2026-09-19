@@ -431,8 +431,11 @@ def open_cohort(year: int, min_cam: float) -> list[dict]:
     # he already holds; a commit inside the window the class injunction was
     # in force (2026-07-31 to the 2026-08-21 stay) means the injunction.
     movers = [r for r in rows if r["in_portal"] and not r["captured"] and r["portal_status"] == "Committed"]
-    if movers:
-        print()
+    shown = [r for r in movers if (r["cam"] or -99) >= min_cam]
+    print(
+        f"\n{len(movers)} uncaptured committed mover(s) in the cohort, {len(shown)} at CAM >= {min_cam:g}."
+    )
+    if shown:
         print(
             "MOVERS — committed to a new school for a fifth season, no row, so each is a FIRM arrival "
             "at the destination today. A commit dated inside the injunction window is a `contested` "
@@ -440,9 +443,7 @@ def open_cohort(year: int, min_cam: float) -> list[dict]:
             "no row:"
         )
         print(f"    {'PLAYER':<26} {'FROM':<22} {'TO':<22} {'DATE':<11} {'CAM':>5}")
-        for r in sorted(movers, key=lambda r: (r["portal_date"] or datetime.date.min), reverse=True):
-            if (r["cam"] or -99) < min_cam:
-                continue
+        for r in sorted(shown, key=lambda r: (r["portal_date"] or datetime.date.min), reverse=True):
             print(
                 f"    {r['name']:<26} {r['team']:<22} {(r['dest'] or '?'):<22} "
                 f"{str(r['portal_date'] or '?'):<11} {r['cam'] if r['cam'] is not None else '—':>5}"
