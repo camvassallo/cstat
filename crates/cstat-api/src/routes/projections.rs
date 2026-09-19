@@ -14,7 +14,7 @@ use cstat_core::inference::Predictor;
 use cstat_core::realignment::TargetConference;
 use cstat_core::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use cstat_core::roster_projection::{
-    DraftScenario, ProjectedRoster, UncertainCause, compose_all_projections, fetch_draft_entrants,
+    ProjectedRoster, UncertainCause, compose_all_projections, fetch_draft_entrants,
     fetch_player_departures, load_mock_draft, normalize_player_name, project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
@@ -81,6 +81,23 @@ struct ProjectedTeam {
     /// exactly to the served net (lower = better defense, KenPom
     /// convention). `None` for too-thin rosters.
     projected_adj_d: Option<f32>,
+    /// The Future page's eligibility toggle (#346): the headline with the
+    /// team's 5-in-5 eligibility cases treated as ALL cleared (`_in`) or ALL
+    /// denied (`_out`), while any declared draft entrants stay blended at
+    /// their own mock-board probability. Neither bound answers this once a
+    /// team has both kinds of uncertainty — the floor drops the declarant,
+    /// the ceiling keeps him — so each is its own scored roster
+    /// (`ProjectedRoster::materialize`), shrunk toward the SAME anchor at the
+    /// same weight as `midpoint_adj_em`, so the difference between the three
+    /// is purely who is on the roster. Equal to `midpoint_adj_em` for a team
+    /// with no eligibility case (no extra model calls are made); `None` for
+    /// too-thin rosters. O and D follow the same construction.
+    adj_em_eligibility_in: Option<f32>,
+    adj_em_eligibility_out: Option<f32>,
+    adj_o_eligibility_in: Option<f32>,
+    adj_o_eligibility_out: Option<f32>,
+    adj_d_eligibility_in: Option<f32>,
+    adj_d_eligibility_out: Option<f32>,
     /// Count of qualifying returning players (excludes Sr, outbound
     /// portal, firm draft departures, and the uncertain cohort).
     returning_count: usize,
@@ -362,6 +379,25 @@ fn mean_return_probability(
     sum / p.uncertain.len() as f32
 }
 
+/// Mean return probability over the DRAFT declarants only — the weight the
+/// eligibility toggle blends them at while the eligibility cohort is fixed
+/// one way (#346). `0.5` when there are none, where it cancels.
+fn mean_draft_return_probability(
+    p: &ProjectedRoster,
+    mock_by_name: &std::collections::HashMap<String, (i32, String)>,
+) -> f32 {
+    let draft: Vec<f32> = p
+        .uncertain
+        .iter()
+        .filter(|(_, u)| u.cause == UncertainCause::DraftDeclared)
+        .map(|(_, u)| player_return_probability(u, mock_by_name))
+        .collect();
+    if draft.is_empty() {
+        return 0.5;
+    }
+    draft.iter().sum::<f32>() / draft.len() as f32
+}
+
 /// One uncertain player's return probability, dispatched on why he is
 /// uncertain. Split out from the mean so the dispatch is unit-testable without
 /// standing up a whole `ProjectedRoster`.
@@ -557,12 +593,14 @@ async fn projection_list(
         let baseline_o = baseline_o_map.get(&p.team_id).copied();
         let actual = actual_map.get(&p.team_id).copied();
         let p_return = mean_return_probability(p, &mock_by_name);
+        let p_draft = mean_draft_return_probability(p, &mock_by_name);
         let Some(mut row) = predict_team(
             p,
             &state.predictor,
             baseline,
             actual,
             p_return,
+            p_draft,
             &projected_cam,
             &cam_od_map,
             baseline_o,
@@ -620,6 +658,7 @@ fn predict_team(
     baseline: Option<f32>,
     actual: Option<f32>,
     p_return: f32,
+    p_draft: f32,
     projected_cam: &std::collections::HashMap<Uuid, f64>,
     cam_od: &std::collections::HashMap<Uuid, (f32, f32)>,
     baseline_o: Option<f32>,
@@ -761,11 +800,15 @@ fn predict_team(
     // `adjo_floor`/`adjo_ceiling` are the already-shrunk AdjO bounds (or
     // None for too-thin); blended on the same `p_return` weight as the net,
     // then AdjD derived as AdjO − AdjEM so the split reconciles exactly.
+    // `eligibility` carries the two toggle headlines as already-shrunk
+    // `(net, adjo)` pairs — `(in, out)` — or `None` for a team with no
+    // eligibility case, where both collapse onto the midpoint.
     let base = |floor: Option<f32>,
                 ceiling: Option<f32>,
                 too_thin: bool,
                 adjo_floor: Option<f32>,
-                adjo_ceiling: Option<f32>|
+                adjo_ceiling: Option<f32>,
+                eligibility: Option<((f32, f32), (f32, f32))>|
      -> ProjectedTeam {
         let blend = |f: Option<f32>, c: Option<f32>| {
             f.zip(c).map(|(f, c)| p_return * c + (1.0 - p_return) * f)
@@ -773,6 +816,13 @@ fn predict_team(
         let midpoint_adj_em = blend(floor, ceiling);
         let projected_adj_o = blend(adjo_floor, adjo_ceiling);
         let projected_adj_d = projected_adj_o.zip(midpoint_adj_em).map(|(o, em)| o - em);
+        let (elig_in, elig_out) = match eligibility {
+            Some((i, o)) => (Some(i), Some(o)),
+            None => (
+                midpoint_adj_em.zip(projected_adj_o),
+                midpoint_adj_em.zip(projected_adj_o),
+            ),
+        };
         ProjectedTeam {
             team_id: p.team_id,
             team_name: p.team_name.clone(),
@@ -782,6 +832,12 @@ fn predict_team(
             midpoint_adj_em,
             projected_adj_o,
             projected_adj_d,
+            adj_em_eligibility_in: elig_in.map(|(em, _)| em),
+            adj_em_eligibility_out: elig_out.map(|(em, _)| em),
+            adj_o_eligibility_in: elig_in.map(|(_, o)| o),
+            adj_o_eligibility_out: elig_out.map(|(_, o)| o),
+            adj_d_eligibility_in: elig_in.map(|(em, o)| o - em),
+            adj_d_eligibility_out: elig_out.map(|(em, o)| o - em),
             returning_count: p.returning.len(),
             returning_cam_v3_sum,
             returning_projected_cam_v3_sum,
@@ -837,7 +893,7 @@ fn predict_team(
         // qualifying-player roster (no freshmen / recruits modeled, so
         // the rate-stat aggregates over-weight the few starters). Surface
         // the row with metadata so the UI can show "—" and a tooltip.
-        return Some(base(None, None, true, None, None));
+        return Some(base(None, None, true, None, None, None));
     }
 
     // Score each scenario with the roster-impact model, AND the AdjO half
@@ -852,8 +908,8 @@ fn predict_team(
     // (logged) so the caller bails the whole team — matches the prior
     // per-scenario error handling without naming `ort::Error` (not a direct
     // dep of this crate).
-    let score = |scenario, label: &str| -> Option<(f32, f32)> {
-        let mut roster = p.for_scenario(scenario);
+    let score = |eligibility: bool, draft: bool, label: &str| -> Option<(f32, f32)> {
+        let mut roster = p.materialize(eligibility, draft);
         apply_projected_cam_v3(&mut roster, projected_cam);
         let feats =
             build_roster_impact_features(&roster, p.outbound_cam_v3_sum, p.inbound_cam_v3_sum);
@@ -873,8 +929,8 @@ fn predict_team(
         };
         Some((net, adjo))
     };
-    let (floor_raw, floor_o_raw) = score(DraftScenario::Floor, "floor")?;
-    let (ceiling_raw, ceiling_o_raw) = score(DraftScenario::Ceiling, "ceiling")?;
+    let (floor_raw, floor_o_raw) = score(false, false, "floor")?;
+    let (ceiling_raw, ceiling_o_raw) = score(true, true, "ceiling")?;
 
     // Program-anchored baselines (#325): last season shrunk toward the
     // program's own multi-season level by whatever this year's roster does not
@@ -897,12 +953,45 @@ fn predict_team(
     // shrink toward the prior-season *offense* anchor at the SAME weight, so
     // the derived AdjD shrinks toward prior defense and the split stays
     // coherent with the net headline.
+    // The eligibility toggle's two headlines (#346). Only a team with an
+    // eligibility case pays for the two mixed-roster scores; the draft
+    // declarants are blended at their own mean probability either way, and
+    // both results shrink toward the anchors derived above so the only
+    // thing that differs between them and the midpoint is the roster.
+    //   out: eligibility denied  = p̄_draft·(roster+draft) + (1−p̄_draft)·floor
+    //   in:  eligibility cleared = p̄_draft·ceiling        + (1−p̄_draft)·(roster+elig)
+    let eligibility = if p.has_eligibility_case() {
+        let (draft_only_raw, draft_only_o_raw) = score(false, true, "eligibility-out")?;
+        let (elig_only_raw, elig_only_o_raw) = score(true, false, "eligibility-in")?;
+        let mix = |c: f32, f: f32| p_draft * c + (1.0 - p_draft) * f;
+        let out = (
+            shrink(mix(draft_only_raw, floor_raw), anchor, baseline_weight),
+            shrink(
+                mix(draft_only_o_raw, floor_o_raw),
+                anchor_o,
+                baseline_weight,
+            ),
+        );
+        let inn = (
+            shrink(mix(ceiling_raw, elig_only_raw), anchor, baseline_weight),
+            shrink(
+                mix(ceiling_o_raw, elig_only_o_raw),
+                anchor_o,
+                baseline_weight,
+            ),
+        );
+        Some((inn, out))
+    } else {
+        None
+    };
+
     Some(base(
         Some(shrink(floor_raw, anchor, baseline_weight)),
         Some(shrink(ceiling_raw, anchor, baseline_weight)),
         false,
         Some(shrink(floor_o_raw, anchor_o, baseline_weight)),
         Some(shrink(ceiling_o_raw, anchor_o, baseline_weight)),
+        eligibility,
     ))
 }
 
@@ -1281,6 +1370,7 @@ async fn projection_team_detail(
         baseline,
         actual,
         p_return,
+        mean_draft_return_probability(&projection, &mock_by_name),
         &projected_cam,
         &cam_od_map,
         baseline_o,
@@ -2152,5 +2242,83 @@ mod tests {
         // And it is the neutral 0.5, which is what keeps the materialized
         // `team_preseason_projection` equal to the served midpoint.
         assert!((ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn eligibility_toggle_weight_reads_the_draft_declarants_only() {
+        use cstat_core::roster_projection::{ProjectedRoster, UncertainCause, UncertainPlayer};
+
+        let uncertain = |name: &str, cause| UncertainPlayer {
+            player_id: Uuid::new_v4(),
+            name: name.into(),
+            reason: "…".into(),
+            cause,
+            incoming_from: None,
+        };
+        let row = cstat_core::roster_features::PlayerRow {
+            player_id: Uuid::new_v4(),
+            total_min: 0.0,
+            mpg: 0.0,
+            ppg: None,
+            rpg: None,
+            apg: None,
+            spg: None,
+            bpg: None,
+            topg: None,
+            ts: None,
+            efg: None,
+            usg: None,
+            ast_pct: None,
+            tov_pct: None,
+            orb_pct: None,
+            drb_pct: None,
+            stl_pct: None,
+            blk_pct: None,
+            ft_rate: None,
+            primary_class: None,
+            secondary_class: None,
+            class_year: None,
+            cam_v3: None,
+        };
+        let roster = |uncertain: Vec<UncertainPlayer>| ProjectedRoster {
+            team_id: Uuid::new_v4(),
+            team_name: "T".into(),
+            team_full_name: "T".into(),
+            returning: vec![],
+            arrivals: vec![],
+            recruits: vec![],
+            uncertain: uncertain.into_iter().map(|u| (row.clone(), u)).collect(),
+            departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum: 0.0,
+            departures_abs_cam_v3_sum: 0.0,
+            program_level: None,
+            program_level_o: None,
+        };
+        // Lottery-projected declarant (0.05) next to an eligibility case (0.5).
+        let mut mock = std::collections::HashMap::new();
+        mock.insert(
+            normalize_player_name("Lottery Pick"),
+            (3, "BOS".to_string()),
+        );
+        let both = roster(vec![
+            uncertain("Lottery Pick", UncertainCause::DraftDeclared),
+            uncertain("Senior Case", UncertainCause::EligibilityUnsettled),
+        ]);
+        // The served midpoint averages both kinds: (0.05 + 0.5) / 2.
+        assert!((mean_return_probability(&both, &mock) - 0.275).abs() < 1e-6);
+        // The toggle fixes the eligibility half one way and blends ONLY the
+        // declarant, at his own board probability — otherwise "every case
+        // clears" would still be diluted by a player who is probably in the
+        // NBA, and "none do" would still carry half of him.
+        assert!((mean_draft_return_probability(&both, &mock) - 0.05).abs() < 1e-6);
+        // No declarants: the weight cancels (both mixed rosters equal a bound
+        // already scored), so any value is fine — 0.5 is the convention.
+        let elig_only = roster(vec![uncertain(
+            "Senior Case",
+            UncertainCause::EligibilityUnsettled,
+        )]);
+        assert!((mean_draft_return_probability(&elig_only, &mock) - 0.5).abs() < 1e-6);
     }
 }
