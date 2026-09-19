@@ -60,51 +60,51 @@
   "input_provenance": {
     "trajectory_oof_predictions": {
       "n_rows": 25302,
-      "digest": "c2b4471a3576fa98da7c7e052bb652e9",
+      "digest": "8d4c4ffde1d1fb85f3927cd4a8b8b349",
       "by_season": {
         "2016": {
           "n_rows": 2085,
-          "digest": "aeaf43b3f25afca3dca64b6e55b9bf42"
+          "digest": "5fd6634038e32259c62a714645b69bcb"
         },
         "2017": {
           "n_rows": 2140,
-          "digest": "ffcbda27a9c8dea6b3d0c2848398bede"
+          "digest": "8c4d35e05a30d107bd43b1f4153f8024"
         },
         "2018": {
           "n_rows": 2114,
-          "digest": "cdec7104ab779113642f514ae456688d"
+          "digest": "8e2b4a355f5767d9e4d6830da95155d9"
         },
         "2019": {
           "n_rows": 2080,
-          "digest": "c929c57f7c30ad7007d2ede9b1fa1e43"
+          "digest": "d5610ef4f619e713e4dd60e3c912446e"
         },
         "2020": {
           "n_rows": 2140,
-          "digest": "ab7bb97ae9901566202f303d2b299df6"
+          "digest": "595e4be915a8e6d4e849faf83785876f"
         },
         "2021": {
           "n_rows": 2214,
-          "digest": "2a6bfb80781f5c99229c972bfba20baa"
+          "digest": "360233e493cddb3ab65270e49a85a04d"
         },
         "2022": {
           "n_rows": 2674,
-          "digest": "5d1c0bf1c129566dad4513f9b9756ede"
+          "digest": "d21b55416b9861be0a6ff089edc46631"
         },
         "2023": {
           "n_rows": 2477,
-          "digest": "2e65aa06b5ec83ed0a0ee353ebc771da"
+          "digest": "7a22bd33e897815f4a49404f1a75bb7e"
         },
         "2024": {
           "n_rows": 2552,
-          "digest": "29afffcf814bdeee0b4b8bcb508c4bfc"
+          "digest": "864dfeeacdc2bead6d9557276ae8d0bd"
         },
         "2025": {
           "n_rows": 2532,
-          "digest": "a85050dae8429963001e614defdc40c4"
+          "digest": "8c2ecbd598c0c3cbe02d9a67a4e24d82"
         },
         "2026": {
           "n_rows": 2294,
-          "digest": "3eb416cdb0c25845a91a4fdddb16ee77"
+          "digest": "4de17fd32dc257dd4a0e65298f01fad0"
         }
       }
     },
@@ -328,64 +328,64 @@
   "oof_provenance": {
     "trajectory_oof_predictions": {
       "n_rows": 25302,
-      "digest": "c2b4471a3576fa98da7c7e052bb652e9"
+      "digest": "8d4c4ffde1d1fb85f3927cd4a8b8b349"
     },
     "freshman_oof_predictions": {
       "n_rows": 5980,
       "digest": "3550cda81f41dd59a9f0faa4a874e4fd"
     }
   },
-  "final_n_estimators": 244,
+  "final_n_estimators": 266,
   "backtest_loso": {
-    "pooled_mae": 3.380925566407825,
+    "pooled_mae": 3.3486140911101026,
     "naive_mae": 7.0264895519337855,
     "per_season": {
       "2015": {
-        "mae": 2.9403887003445437,
+        "mae": 3.016609025571199,
         "n": 351
       },
       "2016": {
-        "mae": 3.2602593403033544,
+        "mae": 3.1802281108023727,
         "n": 351
       },
       "2017": {
-        "mae": 2.945733098685175,
+        "mae": 2.960548964283387,
         "n": 351
       },
       "2018": {
-        "mae": 3.037874297294251,
+        "mae": 3.0519373052113674,
         "n": 351
       },
       "2019": {
-        "mae": 3.1141403893683397,
+        "mae": 3.1253688081504967,
         "n": 353
       },
       "2020": {
-        "mae": 3.347138756937305,
+        "mae": 3.2385098489399247,
         "n": 353
       },
       "2021": {
-        "mae": 4.068304785810751,
+        "mae": 3.9231699089402614,
         "n": 341
       },
       "2022": {
-        "mae": 3.5990182537989694,
+        "mae": 3.6673077929149582,
         "n": 352
       },
       "2023": {
-        "mae": 3.14052894632441,
+        "mae": 3.1451889624190548,
         "n": 362
       },
       "2024": {
-        "mae": 3.04038840856269,
+        "mae": 3.1359159186654124,
         "n": 362
       },
       "2025": {
-        "mae": 3.2037482659288736,
+        "mae": 3.0915191579748367,
         "n": 364
       },
       "2026": {
-        "mae": 4.8640941747177715,
+        "mae": 4.639189708106253,
         "n": 364
       }
     }

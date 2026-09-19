@@ -2,7 +2,7 @@
 
 ## What it is
 
-The trajectory model projects a returning player's **next-season CamPom v3** from their prior-season stats plus a multi-season history block (so it sees a player's *progression trajectory*, not just a single snapshot). Three LightGBM regressors trained on the same 60-feature input share one feature shape:
+The trajectory model projects a returning player's **next-season CamPom v3** from their prior-season stats plus a multi-season history block (so it sees a player's *progression trajectory*, not just a single snapshot). Three LightGBM regressors trained on the same 65-feature input share one feature shape:
 
 - `trajectory_mean_model.onnx` — regression objective (`mean` prediction)
 - `trajectory_q10_model.onnx` — quantile objective at α=0.1 (`lower` band)
@@ -73,8 +73,18 @@ The N-1 row is joined on the cross-season `torvik_pid` (so a transfer's prior-pr
 ## What's NOT in the feature set (and why)
 
 - ~**Recruit rank** (`composite_rank`, `years_since_recruit`, `is_ranked`) — every row in the 2024–2026 training data has a recruiting class of 2021–2024, and we only have class-of-2026 in the `recruits` table today. So `composite_rank` would be NULL on 100% of training rows. Deferred to a follow-up ablation experiment, gated on the historical recruit ingest (2021–2025 backfill).~ *(shipped — 11 recruit features now in the trained model; recruit classes 2021-2026 ingested; coverage is partial but LightGBM handles NULL via `is_ranked=0` sentinel).*
-- **Destination team for transferring players** — v1 model is destination-agnostic. Cross-team transferring returners (joined via `torvik_pid`) are projected against the same prior as same-team returners; the model has no signal about how a Princeton→Duke transfer's role will change. Wider bands and a `direction` arrow that may surprise are the price; documented limitation.
-- **Last-season team identity / strength** — implicitly encoded through the player's own minute/usage/CamPom but no explicit team-strength column. Adding `prior_team_adj_em` is the natural v2 feature.
+- ~**Destination team for transferring players** — v1 model is destination-agnostic.~ *(shipped 2026-09 as the destination block, below.)*
+- ~**Last-season team identity / strength**~ *(shipped as `src_prior_adj_em`, part of the same block.)*
+
+## The destination block (2026-09)
+
+Five features appended after the recruit block, all known before the target season starts: `dest_prior_adj_em` (the destination program's AdjEM in season N), `dest_program_level` (its mean over N-3..N-1, ≥ 2 seasons, else the prior — the served anchor's window), `src_prior_adj_em` (the source program's, season N), `dest_minus_src`, and `is_transfer`. A missing prior is the D-I mean (0.0); a missing level is the prior. Serve side: `trajectory::Destination`, built by `roster_projection::destination_map` for every returner, arrival and uncertain player on the slate — each one's destination is the roster he is listed on, so the trajectory model and the blend's anchor read the same program strength. The transfers page resolves the 247 destination to a team and passes it; the player page passes `None`, which projects him back at his current program.
+
+**Why.** The #351 audit traced the elite-team under-projection to projected roster CAM rather than the calibrator, and the trajectory model's out-of-fold error turned out to be conditioned on where the player ends up, *ex ante*: on 2024+ targets, returners at a program whose prior-season AdjEM was ≥ 25 were under-projected by −0.95 each, transfers into one by −1.13, and players heading to weak programs over-projected by +0.3 to +0.8. Across a 13-man rotation that is the size of the gap.
+
+**Validation** (`experiment_trajectory_destination.py`, `eval_history/trajectory_destination_20260919_summary.json`): leave-one-pair-out MAE 2.083 → 2.008, better in every one of the 11 folds (paired z=−16.4; 2024+ targets −0.105, z=−11.4). The destination-tier bias goes to ≈0 (returners ≥25: +0.13 / −0.36; transfers in: −0.55 on 2024+). At the team level — summing per-player error over a destination team-season's projected players — elite destinations on 2024+ targets go from −7.07 to −3.02, weak ones from +2.45 to +0.84. The ablation isolates the mechanism: the source program's strength alone (destination-blind for transfers) fixes returners but leaves transfers-into-elite at −1.33, so it is the destination's strength that carries the signal, not a transfer flag (gain share: `dest_prior_adj_em` 12%, `dest_program_level` 6%, `is_transfer` ≈ 0).
+
+**What it does not fix.** The block carries the destination *program's* strength, not the role the player will fill in it: the largest misses are the same before and after — mid-major stars who became the go-to option at an elite program (Lendeborg UAB→Michigan 13 → 22.4, Knecht Northern Colorado→Tennessee 7 → 18.3, Boyd SDSU→Wisconsin 7 → 17.0). It closes about half the elite-team gap, not all of it.
 
 ## Backtest
 
@@ -129,7 +139,7 @@ Prior CamPom is the dominant signal, which is intuitive — it's the most-aggreg
 - **Pooled LOPO MAE is ~2.2 CamPom points.** Render projections as directional, not point estimates. The 80% band width (q90 − q10) is what users should read for confidence.
 - **Bands wider on freshmen and low-minute returners** — the model correctly flags thin-signal cases. Don't try to tighten them.
 - **Selection bias on returners** (per ROADMAP §5c caveat): top-ranked freshmen who *return* are negatively selected (the Cooper Flagg / Boozer cohort leaves for the draft; the 5-stars who stay are disproportionately those whose freshman year disappointed). The model doesn't see the leave-for-draft cohort, so projections for "5-star high-impact freshman" → year 2 will systematically underestimate the elite ceiling.
-- **Transferring returners get destination-agnostic projections.** The arrow direction may be misleading if the player is joining a roster with a very different usage / role profile.
+- **Transferring returners project against the destination program's strength, not the role they will fill in it** (see the destination block). A mid-major star becoming an elite program's first option is still under-projected.
 - **Sat-out transfers project from their last played season, not the portal year** (issue #146). The serving helper `fetch_player_trajectory_rows` keys off each player's *own* (season-scoped) source season rather than a fixed year, so a player who skipped a season to preserve eligibility (e.g. Caden Pierce: Princeton 2025 → sat out 2026 → Purdue 2027) still gets a projection — built from his 2025 line. **The model is still strictly one-season-forward**, so this is a 2025 → 2026 projection shown on a 2027 arrival ("his level one year past his last game"). It is **no longer blind to a non-monotonic history**, however: the multi-season history block (above) feeds the 2024 level (CamPom 10.34) and the −10.0 `delta_campom` slope alongside the 2025 dip (0.34), so the model sees the prior peak rather than only the down year. (Verified: the serve-path N-1 join resolves `prior2_campom=10.34, delta_campom=-10.00` for Pierce's 2025 row.)
 
 ## Retraining playbook
@@ -168,7 +178,7 @@ The boot-time validator in `crates/cstat-core/src/inference.rs::validate_traject
 - `quantile_alphas` aren't exactly `{q10: 0.1, q90: 0.9}`
 
 When changing the feature set:
-1. Update `NUMERIC_FEATURE_COLS` / `ARCH_FEATURE_COLS` in `train_trajectory_model.py`.
+1. Update `NUMERIC_FEATURE_COLS` / `ARCH_FEATURE_COLS` / `DEST_FEATURE_COLS` in `train_trajectory_model.py`.
 2. Mirror the order in `TRAJECTORY_FEATURE_NAMES` (Rust) and update `TRAJECTORY_NUM_FEATURES`.
 3. Update `build_trajectory_features` in Rust to populate the new slots.
 4. Retrain the chain (`./training/retrain_downstream.sh --from trajectory`) — a feature change reshapes the OOF, so Layer 2 is stale too. Boot will fail loudly if anything's out of sync.
@@ -180,5 +190,6 @@ When adding a new pair-fold (new season ingested):
 ## Open questions
 
 - **Walk-forward CV** vs the current LOPO. With 11 pairs (2015→2016 … 2025→2026) we have ample folds to do walk-forward CV: train on `≤ N`, predict `N+1`, advance. Currently the LOPO holds 1 pair out anywhere in the timeline, including pairs that come *after* training rows — walk-forward would tighten the honesty story by predicting only with prior-season data. Implementation lift is small; the existing `leave_one_pair_out` loop just needs an order constraint.
-- **Destination-aware projection** for transferring players. Easy feature add: `dest_team_adj_em` (target team AdjEM at season N, since season N+1 doesn't exist yet at projection time). Requires the projection caller to also supply the destination team — fine for the 2027 projection page consumer, but `/api/players/:id` doesn't know the destination, so this would either need a separate endpoint or a "no projection available for transfers" gate.
+- ~**Destination-aware projection** for transferring players.~ *(shipped 2026-09; `/api/players/:id` projects the player back at his current program.)*
+- **Destination-aware freshman projection.** The freshman model has the same blind spot for recruits at elite programs; the same block is the obvious experiment.
 - **Calibration over time**: once we have OOF predictions from this model on a real future season, plot predicted vs actual binned by predicted-CamPom — the model should be well-calibrated near the mean and progressively over-/under-confident at the tails.

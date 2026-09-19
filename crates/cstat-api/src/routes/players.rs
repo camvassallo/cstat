@@ -254,7 +254,9 @@ async fn player_detail(
         let pred = match oof_pred {
             Some(p) => p,
             None => {
-                let features = cstat_core::trajectory::build_trajectory_features(&row, season);
+                // `None`: the player page projects him back at his current
+                // program. The roster projection passes a `Destination`.
+                let features = cstat_core::trajectory::build_trajectory_features(&row, season, None);
                 match state.predictor.predict_trajectory(&features) {
                     Ok(p) => p,
                     Err(e) => {
@@ -407,7 +409,7 @@ async fn player_progression(
             let pred = match oof_pred {
                 Some(p) => p,
                 None => {
-                    let features = cstat_core::trajectory::build_trajectory_features(&row, latest_season);
+                    let features = cstat_core::trajectory::build_trajectory_features(&row, latest_season, None);
                     match state.predictor.predict_trajectory(&features) {
                         Ok(p) => p,
                         Err(e) => {

@@ -46,9 +46,20 @@ use crate::roster_features::ARCHETYPES;
 /// `TRAJECTORY_NUM_FEATURES = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES`.
 const TRAJECTORY_HEAD_FEATURES: usize = 49;
 
+/// Size of the destination block appended after the recruit block: where
+/// the player will play next season, as five ex-ante numbers. See
+/// [`Destination`] and the trailer of [`build_trajectory_features`].
+pub const TRAJECTORY_DEST_FEATURES: usize = 5;
+
 /// Number of input features each of the three trajectory ONNX models expects.
 /// Wire-locked to `trajectory_model_meta.json::features` order.
-pub const TRAJECTORY_NUM_FEATURES: usize = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES;
+pub const TRAJECTORY_NUM_FEATURES: usize =
+    TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES + TRAJECTORY_DEST_FEATURES;
+
+/// What a program's prior-season AdjEM is fed when it has none (a program
+/// new to Division I): 0.0, the D-I mean by construction. Mirrors the
+/// trainer's `DEST_LEVEL_FILL`.
+const DEST_LEVEL_FILL: f64 = 0.0;
 
 /// Sentinel for missing on/off features — mirrors training's
 /// `ONOFF_MISSING_SENTINEL`. Cleanly outside every real range (net ratings
@@ -143,7 +154,54 @@ pub const TRAJECTORY_FEATURE_NAMES: [&str; TRAJECTORY_NUM_FEATURES] = [
     "recruit_bmi_proxy",
     "recruit_position_code",
     "years_since_recruit",
+    // Destination block (5) — `TRAJECTORY_DEST_FEATURES`. The model was
+    // destination-agnostic through v1; these carry where the player plays
+    // next season. Order mirrors the trainer's `DEST_FEATURE_COLS`.
+    "dest_prior_adj_em",
+    "dest_program_level",
+    "src_prior_adj_em",
+    "dest_minus_src",
+    "is_transfer",
 ];
+
+/// Where a player will play in the target season — the team being projected.
+///
+/// The trajectory model was destination-agnostic through v1 and its
+/// out-of-fold error was conditioned on exactly this: players heading to a
+/// program whose prior-season AdjEM was ≥ 25 were under-projected by about a
+/// point each (returners −0.95, transfers in −1.13 on 2024+ targets),
+/// players heading to weak programs over-projected by +0.3 to +0.8. Across
+/// a 13-man rotation that was the size of the elite-team gap no calibrator
+/// or blend change closed (#351). Adding the destination cut the
+/// leave-one-pair-out MAE 2.083 → 2.008 in every fold and removed the
+/// destination-tier bias (`training/experiment_trajectory_destination.py`).
+///
+/// All three fields are known before the season starts: for the roster
+/// projection a returner's and an arrival's destination is the team being
+/// composed (its base-season `team_id`, prior-season AdjEM and 3-year
+/// `program_level` are already on the composed roster), and a transfer's is
+/// its portal commitment. Callers that project a player in isolation (the
+/// player page's band) pass `None`, which reads as "returns to the same
+/// program": the destination is then the source team the row itself
+/// carries, and `is_transfer` is 0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Destination {
+    /// Base-season UUID of the destination program. `is_transfer` is
+    /// `team_id != row.src_team_id`, an id comparison rather than a
+    /// program-identity one: for every row the roster projection scores, a
+    /// returner's source row IS the base-season row of this team, and an
+    /// arrival's is another program's (or, for a sat-out arrival under #146,
+    /// an earlier season's row of another program — still not this id, still
+    /// a transfer). The trainer derives the flag from `natstat_id`; the two
+    /// agree on every reachable case, because a player who sat out and came
+    /// back to the same program has no base-season row and is never projected.
+    pub team_id: Uuid,
+    /// The program's AdjEM in the base season. `None` → [`DEST_LEVEL_FILL`].
+    pub prior_adj_em: Option<f64>,
+    /// Mean AdjEM over the three seasons before the base season (≥ 2 of
+    /// them), the served anchor's window. `None` → the prior.
+    pub program_level: Option<f64>,
+}
 
 /// One player's prior-season row, joined across `player_season_stats`,
 /// `torvik_player_stats`, `players`, `player_on_off`, and
@@ -222,6 +280,13 @@ pub struct TrajectoryPlayerRow {
     pub recruit_weight: Option<i32>,
     pub recruit_position: Option<String>,
     pub recruit_year: Option<i32>,
+    // Source program — the team this prior-season row belongs to, its AdjEM
+    // that season and its 3-year level. The destination block reads these
+    // for the source half, and as the destination too when the caller
+    // projects the player as a returner (`Destination` = `None`).
+    pub src_team_id: Uuid,
+    pub src_prior_adj_em: Option<f64>,
+    pub src_program_level: Option<f64>,
 }
 
 /// `class_year` text → integer code. Mirrors the Python `CLASS_YEAR_CODES`
@@ -302,7 +367,10 @@ pub async fn fetch_player_trajectory_row(
             rec.height           AS recruit_height,
             rec.weight           AS recruit_weight,
             rec.position         AS recruit_position,
-            rec.year             AS recruit_year
+            rec.year             AS recruit_year,
+            pss.team_id          AS src_team_id,
+            tss_src.adj_efficiency_margin AS src_prior_adj_em,
+            src_level.level      AS src_program_level
         -- One row per (player, season). `player_season_stats` is UNIQUE on
         -- (player_id, team_id, season), NOT (player_id, season), so a player
         -- with two stints in one season multiplies every row of this query
@@ -380,6 +448,21 @@ pub async fn fetch_player_trajectory_row(
                      s.team_id
             LIMIT 1
         ) pss_nm1 ON TRUE
+        -- Source program's strength: its AdjEM in this season and its mean
+        -- over the three before (≥ 2), reached through `natstat_id` because
+        -- team UUIDs are season-scoped. Same window and gate as the roster
+        -- projection's `program_level`, and as the trainer's `PAIRED_QUERY`.
+        LEFT JOIN team_season_stats tss_src ON tss_src.team_id = pss.team_id
+        JOIN teams t_src ON t_src.id = pss.team_id
+        LEFT JOIN LATERAL (
+            SELECT AVG(h.adj_efficiency_margin) AS level
+            FROM teams th
+            JOIN team_season_stats h ON h.team_id = th.id
+            WHERE th.natstat_id = t_src.natstat_id
+              AND th.season BETWEEN pss.season - 3 AND pss.season - 1
+              AND h.adj_efficiency_margin IS NOT NULL
+            HAVING count(*) >= 2
+        ) src_level ON TRUE
         "#,
     )
     .bind(player_id)
@@ -473,7 +556,10 @@ pub async fn fetch_player_trajectory_rows(
             rec.height           AS recruit_height,
             rec.weight           AS recruit_weight,
             rec.position         AS recruit_position,
-            rec.year             AS recruit_year
+            rec.year             AS recruit_year,
+            pss.team_id          AS src_team_id,
+            tss_src.adj_efficiency_margin AS src_prior_adj_em,
+            src_level.level      AS src_program_level
         -- One row per (player, season), collapsed on the same tiebreak and
         -- for the same reason as `fetch_player_trajectory_row` above — see
         -- that query's note for the fan-out, the #266 determinism argument
@@ -537,6 +623,21 @@ pub async fn fetch_player_trajectory_rows(
                      s.team_id
             LIMIT 1
         ) pss_nm1 ON TRUE
+        -- Source program's strength: its AdjEM in this season and its mean
+        -- over the three before (≥ 2), reached through `natstat_id` because
+        -- team UUIDs are season-scoped. Same window and gate as the roster
+        -- projection's `program_level`, and as the trainer's `PAIRED_QUERY`.
+        LEFT JOIN team_season_stats tss_src ON tss_src.team_id = pss.team_id
+        JOIN teams t_src ON t_src.id = pss.team_id
+        LEFT JOIN LATERAL (
+            SELECT AVG(h.adj_efficiency_margin) AS level
+            FROM teams th
+            JOIN team_season_stats h ON h.team_id = th.id
+            WHERE th.natstat_id = t_src.natstat_id
+              AND th.season BETWEEN pss.season - 3 AND pss.season - 1
+              AND h.adj_efficiency_margin IS NOT NULL
+            HAVING count(*) >= 2
+        ) src_level ON TRUE
         "#,
     )
     .bind(player_ids)
@@ -564,9 +665,13 @@ pub async fn fetch_player_trajectory_rows(
 /// `prior_season` is the season the row represents (= `s_n` in the
 /// trajectory pairing). It's used by the recruit block to compute
 /// `years_since_recruit = prior_season - recruit.year`.
+///
+/// `dest` is where the player plays in the target season; `None` projects
+/// him as a returner to the source program (see [`Destination`]).
 pub fn build_trajectory_features(
     row: &TrajectoryPlayerRow,
     prior_season: i32,
+    dest: Option<&Destination>,
 ) -> [f32; TRAJECTORY_NUM_FEATURES] {
     let total_min = match (row.minutes_per_game, row.games_played) {
         (Some(m), Some(g)) => Some(m * g as f64),
@@ -702,12 +807,40 @@ pub fn build_trajectory_features(
         arch[11],
     ];
 
+    // Destination block (5). Fills mirror the trainer column-for-column: a
+    // missing prior is the D-I mean, a missing 3-year level is the prior,
+    // and a returner's destination is his source program.
+    let src_prior = row.src_prior_adj_em.unwrap_or(DEST_LEVEL_FILL);
+    let (dest_prior, dest_level, is_transfer) = match dest {
+        Some(d) => {
+            let prior = d.prior_adj_em.unwrap_or(DEST_LEVEL_FILL);
+            let level = d.program_level.unwrap_or(prior);
+            let moved = if d.team_id != row.src_team_id {
+                1.0
+            } else {
+                0.0
+            };
+            (prior, level, moved)
+        }
+        None => (src_prior, row.src_program_level.unwrap_or(src_prior), 0.0),
+    };
+    let dest_block: [f64; TRAJECTORY_DEST_FEATURES] = [
+        dest_prior,
+        dest_level,
+        src_prior,
+        dest_prior - src_prior,
+        is_transfer,
+    ];
+
     let mut out = [0.0_f32; TRAJECTORY_NUM_FEATURES];
     for (i, v) in values_head.iter().enumerate() {
         out[i] = *v as f32;
     }
     for (i, v) in recruit_block.iter().enumerate() {
         out[TRAJECTORY_HEAD_FEATURES + i] = *v;
+    }
+    for (i, v) in dest_block.iter().enumerate() {
+        out[TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES + i] = *v as f32;
     }
     out
 }
@@ -822,13 +955,16 @@ mod tests {
             recruit_weight: None,
             recruit_position: None,
             recruit_year: None,
+            src_team_id: Uuid::nil(),
+            src_prior_adj_em: Some(12.0),
+            src_program_level: Some(9.0),
         }
     }
 
     #[test]
     fn feature_vector_layout() {
         let row = make_row();
-        let v = build_trajectory_features(&row, 2026);
+        let v = build_trajectory_features(&row, 2026, None);
         // Spot-checks against the locked feature order.
         assert_eq!(v[0], 28.4); // prior_mpg
         assert_eq!(v[1], 32.0); // prior_gp
@@ -892,7 +1028,7 @@ mod tests {
         row.recruit_position = Some("SF".into());
         row.recruit_year = Some(2025);
 
-        let v = build_trajectory_features(&row, 2026);
+        let v = build_trajectory_features(&row, 2026, None);
 
         let idx = |name: &str| {
             TRAJECTORY_FEATURE_NAMES
@@ -918,11 +1054,67 @@ mod tests {
         // order. If someone reorders one without the other, this test
         // (and the boot validator) catch it before a stale model serves
         // garbage predictions.
-        let trailing = &TRAJECTORY_FEATURE_NAMES[TRAJECTORY_HEAD_FEATURES..];
-        assert_eq!(trailing.len(), RECRUIT_FEATURE_NAMES.len());
-        for (got, expected) in trailing.iter().zip(RECRUIT_FEATURE_NAMES.iter()) {
+        let recruit = &TRAJECTORY_FEATURE_NAMES
+            [TRAJECTORY_HEAD_FEATURES..TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES];
+        assert_eq!(recruit.len(), RECRUIT_FEATURE_NAMES.len());
+        for (got, expected) in recruit.iter().zip(RECRUIT_FEATURE_NAMES.iter()) {
             assert_eq!(got, expected);
         }
+        // The destination block trails it, in the trainer's order.
+        let dest = &TRAJECTORY_FEATURE_NAMES[TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES..];
+        assert_eq!(
+            dest,
+            &[
+                "dest_prior_adj_em",
+                "dest_program_level",
+                "src_prior_adj_em",
+                "dest_minus_src",
+                "is_transfer",
+            ]
+        );
+    }
+
+    /// The destination block: `None` reads as a returner to the source
+    /// program (dest = src, is_transfer 0); a `Destination` on another team
+    /// flags the move and carries its own levels, with the training fills.
+    #[test]
+    fn destination_block_fills_match_training() {
+        let row = make_row();
+        let base = TRAJECTORY_HEAD_FEATURES + RECRUIT_NUM_FEATURES;
+        let v = build_trajectory_features(&row, 2026, None);
+        assert_eq!(
+            &v[base..],
+            &[12.0, 9.0, 12.0, 0.0, 0.0],
+            "returner: dest == src"
+        );
+
+        let elite = Destination {
+            team_id: Uuid::from_u128(7),
+            prior_adj_em: Some(30.0),
+            program_level: Some(26.5),
+        };
+        let v = build_trajectory_features(&row, 2026, Some(&elite));
+        assert_eq!(&v[base..], &[30.0, 26.5, 12.0, 18.0, 1.0], "transfer up");
+
+        // Same team id as the source → not a transfer even when passed.
+        let same = Destination {
+            team_id: row.src_team_id,
+            prior_adj_em: Some(12.0),
+            program_level: None,
+        };
+        let v = build_trajectory_features(&row, 2026, Some(&same));
+        assert_eq!(
+            &v[base..],
+            &[12.0, 12.0, 12.0, 0.0, 0.0],
+            "missing level → prior"
+        );
+
+        // A source with no history at all takes the D-I mean for both.
+        let mut fresh = make_row();
+        fresh.src_prior_adj_em = None;
+        fresh.src_program_level = None;
+        let v = build_trajectory_features(&fresh, 2026, None);
+        assert_eq!(&v[base..], &[0.0, 0.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -984,8 +1176,11 @@ mod tests {
             recruit_weight: None,
             recruit_position: None,
             recruit_year: None,
+            src_team_id: Uuid::nil(),
+            src_prior_adj_em: None,
+            src_program_level: None,
         };
-        let v = build_trajectory_features(&row, 2026);
+        let v = build_trajectory_features(&row, 2026, None);
         // Sentinel slots: class_year_code (-1), recruit_composite_rank (-1),
         // recruit_position_rank (-1), recruit_position_code (-1),
         // years_since_recruit (-1), the three on/off features (-999), and the

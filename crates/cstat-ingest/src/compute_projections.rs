@@ -21,7 +21,7 @@
 use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_projection::{
-    compose_all_projections, fetch_draft_entrants, fetch_player_departures,
+    compose_all_projections, destination_map, fetch_draft_entrants, fetch_player_departures,
     project_returner_cam_v3, project_returner_cam_v3_banded, score_projection_adj_em,
 };
 use sqlx::PgPool;
@@ -231,28 +231,31 @@ pub async fn run(
             traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
             traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
         }
-        let projected_cam = project_returner_cam_v3(pool, predictor, &traj_ids, year)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    "trajectory cam_v3 projection failed; falling back to current-season cam_v3"
-                );
-                HashMap::new()
-            });
+        let destinations = destination_map(&projections, |t| baseline_map.get(&t).copied());
+        let projected_cam =
+            project_returner_cam_v3(pool, predictor, &traj_ids, year, &destinations)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "trajectory cam_v3 projection failed; falling back to current-season cam_v3"
+                    );
+                    HashMap::new()
+                });
 
         // Banded (mean + q10/q90) twin of the above, for the per-player
         // `player_season_projection` materialization below. The team-AdjEM
         // scoring only needs the mean; the projected-players page wants the band.
-        let projected_cam_banded = project_returner_cam_v3_banded(pool, predictor, &traj_ids, year)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    "banded trajectory projection failed; per-player bands omitted"
-                );
-                HashMap::new()
-            });
+        let projected_cam_banded =
+            project_returner_cam_v3_banded(pool, predictor, &traj_ids, year, &destinations)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "banded trajectory projection failed; per-player bands omitted"
+                    );
+                    HashMap::new()
+                });
 
         // Name / natstat_id for every real (non-recruit) player on any roster.
         let mut real_ids: Vec<Uuid> = Vec::new();

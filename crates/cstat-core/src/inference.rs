@@ -2059,8 +2059,11 @@ mod tests {
             recruit_weight: None,
             recruit_position: None,
             recruit_year: None,
+            src_team_id: uuid::Uuid::nil(),
+            src_prior_adj_em: Some(12.0),
+            src_program_level: Some(9.0),
         };
-        let features = build_trajectory_features(&row, 2026);
+        let features = build_trajectory_features(&row, 2026, None);
         let pred = predictor
             .predict_trajectory(&features)
             .expect("trajectory prediction failed");
@@ -2155,6 +2158,9 @@ mod tests {
             recruit_weight: None,
             recruit_position: None,
             recruit_year: None,
+            src_team_id: uuid::Uuid::nil(),
+            src_prior_adj_em: Some(12.0),
+            src_program_level: Some(9.0),
         };
         let elite = TrajectoryPlayerRow {
             minutes_per_game: Some(33.0),
@@ -2200,9 +2206,12 @@ mod tests {
             recruit_weight: None,
             recruit_position: None,
             recruit_year: None,
+            src_team_id: uuid::Uuid::nil(),
+            src_prior_adj_em: Some(12.0),
+            src_program_level: Some(9.0),
         };
-        let feats_solid = build_trajectory_features(&solid, 2026);
-        let feats_elite = build_trajectory_features(&elite, 2026);
+        let feats_solid = build_trajectory_features(&solid, 2026, None);
+        let feats_elite = build_trajectory_features(&elite, 2026, None);
 
         let single_solid = predictor.predict_trajectory(&feats_solid).unwrap();
         let single_elite = predictor.predict_trajectory(&feats_elite).unwrap();
