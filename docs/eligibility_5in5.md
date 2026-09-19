@@ -231,7 +231,31 @@ Fixed in two places, both needed:
   summary reports success.
 
 The UI renders the cohort as a `?` chip (`ProjectedPlayers.tsx`), alongside
-Ret / Tfr / Fr.
+Ret / Tfr / Fr, with an **All / Eligible** toggle that drops the cohort
+from the ranking (and renumbers it) for a floor-only view.
+
+## Presentation: a contested arrival is not a departure
+
+`UncertainPlayer.incoming_from` records the base-season team a contested
+mover is arriving from (`None` for a player who was on this roster). The
+serving layer needs it because the uncertain bucket used to be rendered as a
+sub-list of the team page's Departures card, and "last season's value" summed
+everyone in it — both wrong for Xaivian Lee at Gonzaga, who was never there.
+So:
+
+* `/api/projections/{year}` keeps `uncertain_count` / `uncertain_cam_v3_sum`
+  to the prior-roster half (the last-season base stays honest) and adds
+  `uncertain_incoming_*`, `eligibility_pending_count` and
+  `eligibility_pending_projected_cam_v3_sum`.
+* The team page has an **Eligibility pending** card for every
+  `eligibility_unsettled` player — `arriving` with a "from $TEAM" link, or
+  `staying` — and a ceiling-only ledger row for what they would add. Draft
+  declarants stay under Departures, where "might leave" is the honest frame.
+* The Future grid has a **Pending** column (projected CAM if every case
+  cleared, with the staying/arriving split on hover).
+
+None of it changes what is scored: the cohort is still ceiling-only and still
+weighted at `ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY`.
 
 ## Curate conservatively
 

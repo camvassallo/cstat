@@ -13,6 +13,14 @@ import { classColor } from './archetypeColors';
 import { agNullsBottom } from './tableSort';
 import { TableToolbar, TableSearchInput } from './TableToolbar';
 import { seasonHref } from './season';
+import ModeToggle from './ModeToggle';
+
+// Whether the unresolved (`?`) cohort — eligibility cases before a court or
+// waiver desk, and declared draft entrants — is in the ranking. "All" is the
+// ceiling view (everyone who might be on a roster); "Eligible" is the floor
+// (only players whose status is settled). Defaults to All so a user who never
+// touches it sees the same list as before the control existed.
+type PendingMode = 'all' | 'settled';
 
 // Cohort chip. Returners/transfers carry a real base-season player row (and a
 // link); freshmen are synthesized from a recruit commit (no player page).
@@ -216,6 +224,7 @@ export default function ProjectedPlayers({ year }: { year: number }) {
   const [baseSeason, setBaseSeason] = useState(year - 1);
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState('');
+  const [pendingMode, setPendingMode] = useState<PendingMode>('all');
 
   const [isDesktop, setIsDesktop] = useState(
     () => window.matchMedia('(min-width: 768px)').matches,
@@ -252,16 +261,29 @@ export default function ProjectedPlayers({ year }: { year: number }) {
     };
   }, [year]);
 
-  // Projected-CAM rank over the loaded pool (best = 1), keyed by player_id.
+  // The pool the grid shows. Excluding the unresolved cohort is a view
+  // choice, not a search, so it happens here rather than through the grid's
+  // quick filter — and the rank below is over the visible pool, so a player
+  // does not read "#14" in a list that only has twelve rows above him.
+  const visibleRows = useMemo(
+    () => (pendingMode === 'all' ? rows : rows.filter((p) => p.source !== 'uncertain')),
+    [rows, pendingMode],
+  );
+  const pendingCount = useMemo(
+    () => rows.filter((p) => p.source === 'uncertain').length,
+    [rows],
+  );
+
+  // Projected-CAM rank over the visible pool (best = 1), keyed by player_id.
   // Fixed to each player regardless of search/sort (mirrors the Players grid).
   const rank = useMemo(() => {
     const m = new Map<string, number>();
-    [...rows]
+    [...visibleRows]
       .filter((p) => p.campom != null)
       .sort((a, b) => b.campom - a.campom)
       .forEach((p, i) => m.set(p.player_id, i + 1));
     return m;
-  }, [rows]);
+  }, [visibleRows]);
 
   const columns = useMemo(
     () => buildColumns(rank, baseSeason, year, isDesktop),
@@ -272,7 +294,7 @@ export default function ProjectedPlayers({ year }: { year: number }) {
     <div>
       <TableToolbar
         title={`${year} Projected Players`}
-        count={rows.length}
+        count={visibleRows.length}
         countLabel="projected"
         search={
           <TableSearchInput
@@ -280,6 +302,27 @@ export default function ProjectedPlayers({ year }: { year: number }) {
             onChange={setSearchInput}
             placeholder="Search players…"
           />
+        }
+        controls={
+          pendingCount > 0 ? (
+            <>
+              <span
+                className="text-xs text-gray-500"
+                title={`${pendingCount} players carry a ? chip — eligibility or draft status unresolved, counted toward a team's ceiling but not its floor. All includes them; Eligible shows only players whose status is settled.`}
+              >
+                Show
+              </span>
+              <ModeToggle<PendingMode>
+                ariaLabel="Unresolved players"
+                value={pendingMode}
+                onChange={setPendingMode}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'settled', label: 'Eligible' },
+                ]}
+              />
+            </>
+          ) : undefined
         }
       />
 
@@ -291,7 +334,7 @@ export default function ProjectedPlayers({ year }: { year: number }) {
         <div style={{ width: '100%' }}>
           <AgGridReact<ProjectedPlayer>
             theme={gridTheme}
-            rowData={rows}
+            rowData={visibleRows}
             columnDefs={columns}
             loading={loading}
             domLayout="autoHeight"

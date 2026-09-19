@@ -1403,6 +1403,8 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
   const growth = p.returning_projected_cam_v3_sum - p.returning_cam_v3_sum;
   const projectedRoster =
     p.returning_projected_cam_v3_sum + p.arrivals_projected_cam_v3_sum + p.recruits_cam_v3_sum;
+  // `uncertain_count` is the prior-roster half only; a contested portal
+  // arrival is in the uncertain bucket but was not on last season's roster.
   const lastCount = p.returning_count + p.departures_count + p.uncertain_count;
 
   return (
@@ -1455,6 +1457,20 @@ function RosterLedger({ p }: { p: ProjectedTeam }) {
         annot={pctOf(p.recruits_cam_v3_sum) != null ? `+${pctOf(p.recruits_cam_v3_sum)}%` : null}
         annotTone="text-slate-400"
       />
+      {p.eligibility_pending_count > 0 && (
+        // Not a term in the total: these players are in the ceiling scenario
+        // only, and the projected roster value below is the floor roster. The
+        // row says what they would add if every court ruled for them.
+        <LedgerRow
+          indent
+          label="? Eligibility pending"
+          detail={`${p.eligibility_pending_count} · if cleared`}
+          value={fmt(p.eligibility_pending_projected_cam_v3_sum)}
+          valueTone="text-amber-300"
+          annot="ceiling only"
+          annotTone="text-amber-300/70"
+        />
+      )}
       <div className="my-1 border-t border-slate-700" />
       <LedgerRow
         strong
@@ -1582,6 +1598,12 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   const uncertainSorted = [...uncertain].sort((x, y) =>
     cmpDesc(x.projected_campom_mean ?? x.cam_v3, y.projected_campom_mean ?? y.cam_v3),
   );
+  // The bucket holds two unrelated open questions, and they get two headings:
+  // eligibility cases (a stay-put senior or a contested portal arrival, both
+  // waiting on a court) under their own card, draft declarants under
+  // Departures, where "might leave" is the honest framing.
+  const eligibilityPending = uncertainSorted.filter((u) => u.cause === 'eligibility_unsettled');
+  const draftPending = uncertainSorted.filter((u) => u.cause === 'draft_declared');
 
   // Proj AdjEM chip color tier — mirrors `adjEmTone` on Projected but
   // duplicated here rather than promoted to a shared module so the
@@ -1795,137 +1817,35 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
           )}
         </RosterCard>
 
-        <RosterCard title={`Departures (${departures.length})${uncertain.length > 0 ? ` · ? ${uncertain.length}` : ''}`}>
-          {departures.length === 0 && uncertain.length === 0 ? (
+        <RosterCard
+          title={`Eligibility pending (${eligibilityPending.length})`}
+          hint="Before a court or waiver desk. Counted in the ceiling, not the floor."
+        >
+          {eligibilityPending.length === 0 ? (
+            <Empty label="No eligibility cases" />
+          ) : (
+            eligibilityPending.map((u) => (
+              <UncertainRow key={u.player_id} u={u} base_season={base_season} />
+            ))
+          )}
+        </RosterCard>
+
+        <RosterCard title={`Departures (${departures.length})${draftPending.length > 0 ? ` · ? ${draftPending.length}` : ''}`}>
+          {departures.length === 0 && draftPending.length === 0 ? (
             <Empty label="No departures" />
           ) : (
             <>
-              {/* Unresolved players (?) render above firm departures — they're
-                  the highest-stakes uncertainty on the roster and deserve
-                  visual priority over confirmed departures the user can no
-                  longer act on. Two kinds live here: declared draft entrants,
-                  and (issue #220) seniors whose 5-in-5 eligibility is
-                  unsettled. Each row carries the same name link + archetype
-                  chip + counterfactual "if they stayed" projection as the
-                  firm-departure rows; the Tankathon mock-pick chip is
-                  draft-only. */}
-              {uncertainSorted.map((u) => {
-                // The bucket holds two unrelated kinds of uncertainty, and
-                // every chip below has to be told which one it is looking at.
-                // Rendering the draft copy for an eligibility case does not
-                // merely look odd — it asserts the player declared for a draft
-                // he never entered.
-                const isDraft = u.cause === 'draft_declared';
-                // Tankathon mock-pick informational chip. Top-30 picks are
-                // green (the model effectively treats them as gone since
-                // withdrawal rates from the lottery are near zero), 31-60
-                // amber (real consideration but withdrawal common), and
-                // missing-from-board styled muted to flag "declared but
-                // not projected to be drafted — high withdrawal odds."
-                // is informational only; no auto-promotion.
-                //
-                // Shown for declarants only. The API already withholds
-                // `mock_pick` for the eligibility cohort, so keying the chip on
-                // a null pick would silently render the muted "mock: NR"
-                // variant — whose tooltip is the one that says "declared
-                // players who fall off the board often withdraw".
-                const mockTone =
-                  u.mock_pick == null
-                    ? 'text-slate-400 border-slate-600/40'
-                    : u.mock_pick <= 30
-                      ? 'text-emerald-300 border-emerald-600/40'
-                      : 'text-amber-300 border-amber-600/40';
-                const mockLabel =
-                  u.mock_pick == null
-                    ? 'mock: NR'
-                    : `mock #${u.mock_pick}`;
-                const mockTitle =
-                  u.mock_pick == null
-                    ? 'Not on the current mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
-                    : u.mock_pick <= 30
-                      ? `Mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
-                      : `Mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
-                // What has to happen for him to be on next season's roster —
-                // the premise behind the projected-CAM number beside it.
-                const returnClause = isDraft
-                  ? 'If they withdraw and return'
-                  : 'If they are ruled eligible';
-                return (
-                  <div key={u.player_id} className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <div className="truncate">
-                        <SeasonLink
-                          to={`/players/${u.player_id}?season=${base_season}`}
-                          className="text-blue-400 hover:underline"
-                        >
-                          {u.name}
-                        </SeasonLink>
-                      </div>
-                      {u.primary_class && (
-                        <span
-                          className="text-[10px] font-bold uppercase tracking-wide"
-                          style={{ color: classColor(u.primary_class) }}
-                        >
-                          {u.primary_class}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
-                      {u.mpg != null && (
-                        <span title="Prior-season MPG">{u.mpg.toFixed(0)}'</span>
-                      )}
-                      {u.projected_campom_mean != null ? (
-                        <span className="flex items-center gap-1.5">
-                          {u.cam_v3 != null && (
-                            <>
-                              <span
-                                className="text-[10px] text-gray-500"
-                                title="Prior-season CAM"
-                              >
-                                {u.cam_v3.toFixed(1)}
-                              </span>
-                              <span className="text-gray-600 text-[10px]">→</span>
-                            </>
-                          )}
-                          <span
-                            className={`px-1.5 rounded border ${camTierColor(camTier(u.projected_campom_mean))}`}
-                            title={
-                              u.projected_campom_lower != null && u.projected_campom_upper != null
-                                ? `${returnClause}: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
-                                : `${returnClause}: projected ${u.projected_campom_mean.toFixed(1)}.`
-                            }
-                          >
-                            {u.projected_campom_mean.toFixed(1)}
-                          </span>
-                        </span>
-                      ) : (
-                        u.cam_v3 != null && (
-                          <span
-                            className={`px-1.5 rounded border ${camTierColor(camTier(u.cam_v3))}`}
-                            title={`Prior-season CAM: ${u.cam_v3.toFixed(1)}`}
-                          >
-                            {u.cam_v3.toFixed(1)}
-                          </span>
-                        )
-                      )}
-                      {isDraft && (
-                        <span
-                          className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
-                          title={mockTitle}
-                        >
-                          {mockLabel}
-                        </span>
-                      )}
-                      <span
-                        className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400"
-                        title={u.reason}
-                      >
-                        {isDraft ? '? draft (TBD)' : '? eligibility'}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+              {/* Declared draft entrants (?) render above firm departures —
+                  the highest-stakes open question on the roster, ahead of
+                  departures the user can no longer act on. Eligibility cases
+                  are NOT here: a contested arrival was never on this roster,
+                  so "Departures" is the wrong heading for the cohort, and it
+                  has its own card above. */}
+              {uncertainSorted
+                .filter((u) => u.cause === 'draft_declared')
+                .map((u) => (
+                  <UncertainRow key={u.player_id} u={u} base_season={base_season} />
+                ))}
               {departuresSorted.map((d) => {
                 // Mirror PlayerCard's row shape: name · archetype on the
                 // left, stats + status chip on the right. The right-most
@@ -2064,11 +1984,20 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   );
 }
 
-function RosterCard({ title, children }: { title: string; children: React.ReactNode }) {
+function RosterCard({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-800">
-      <div className="px-4 py-2 border-b border-gray-800 text-sm font-semibold text-gray-300 uppercase tracking-wide">
-        {title}
+      <div className="px-4 py-2 border-b border-gray-800 text-sm font-semibold text-gray-300 uppercase tracking-wide flex items-baseline justify-between gap-3">
+        <span>{title}</span>
+        {hint && <span className="text-[10px] font-normal normal-case tracking-normal text-gray-500">{hint}</span>}
       </div>
       <div className="p-2 space-y-1">{children}</div>
     </div>
@@ -2167,6 +2096,145 @@ function PlayerCard({
       </div>
     </div>
   );
+}
+
+// One unresolved (`?`) player row. Two unrelated kinds of uncertainty share
+// the shape: a declared draft entrant whose withdrawal is TBD, and (issue
+// #220) a player whose 5-in-5 eligibility is before a court or waiver desk.
+// Each carries the same name link + archetype chip + "if he is on the roster"
+// projection; the Tankathon mock-pick chip is draft-only, and the "from $TEAM"
+// link is for the eligibility cases arriving through the portal — Xaivian Lee
+// is pending AT Gonzaga, not leaving it, and the link is what says so.
+function UncertainRow({ u, base_season }: { u: ProjectedUncertain; base_season: number }) {
+    // The bucket holds two unrelated kinds of uncertainty, and
+    // every chip below has to be told which one it is looking at.
+    // Rendering the draft copy for an eligibility case does not
+    // merely look odd — it asserts the player declared for a draft
+    // he never entered.
+    const isDraft = u.cause === 'draft_declared';
+    // Tankathon mock-pick informational chip. Top-30 picks are
+    // green (the model effectively treats them as gone since
+    // withdrawal rates from the lottery are near zero), 31-60
+    // amber (real consideration but withdrawal common), and
+    // missing-from-board styled muted to flag "declared but
+    // not projected to be drafted — high withdrawal odds."
+    // is informational only; no auto-promotion.
+    //
+    // Shown for declarants only. The API already withholds
+    // `mock_pick` for the eligibility cohort, so keying the chip on
+    // a null pick would silently render the muted "mock: NR"
+    // variant — whose tooltip is the one that says "declared
+    // players who fall off the board often withdraw".
+    const mockTone =
+      u.mock_pick == null
+        ? 'text-slate-400 border-slate-600/40'
+        : u.mock_pick <= 30
+          ? 'text-emerald-300 border-emerald-600/40'
+          : 'text-amber-300 border-amber-600/40';
+    const mockLabel =
+      u.mock_pick == null
+        ? 'mock: NR'
+        : `mock #${u.mock_pick}`;
+    const mockTitle =
+      u.mock_pick == null
+        ? 'Not on the current mock draft (top 60). Declared players who fall off the board often withdraw before the deadline.'
+        : u.mock_pick <= 30
+          ? `Mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — first-round projection. Withdrawal from this tier is rare.`
+          : `Mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
+    // What has to happen for him to be on next season's roster —
+    // the premise behind the projected-CAM number beside it.
+    const returnClause = isDraft
+      ? 'If they withdraw and return'
+      : 'If they are ruled eligible';
+    return (
+      <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="truncate">
+            <SeasonLink
+              to={`/players/${u.player_id}?season=${base_season}`}
+              className="text-blue-400 hover:underline"
+            >
+              {u.name}
+            </SeasonLink>
+            {u.source_team_id && u.source_team_name && (
+              <span className="text-xs text-gray-400 ml-2">
+                from{' '}
+                <SeasonLink
+                  to={`/teams/${u.source_team_id}?season=${base_season}`}
+                  className="text-blue-400 hover:underline"
+                >
+                  {u.source_team_name}
+                </SeasonLink>
+              </span>
+            )}
+          </div>
+          {u.primary_class && (
+            <span
+              className="text-[10px] font-bold uppercase tracking-wide"
+              style={{ color: classColor(u.primary_class) }}
+            >
+              {u.primary_class}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 text-xs text-gray-400 tabular-nums">
+          {u.mpg != null && (
+            <span title="Prior-season MPG">{u.mpg.toFixed(0)}'</span>
+          )}
+          {u.projected_campom_mean != null ? (
+            <span className="flex items-center gap-1.5">
+              {u.cam_v3 != null && (
+                <>
+                  <span
+                    className="text-[10px] text-gray-500"
+                    title="Prior-season CAM"
+                  >
+                    {u.cam_v3.toFixed(1)}
+                  </span>
+                  <span className="text-gray-600 text-[10px]">→</span>
+                </>
+              )}
+              <span
+                className={`px-1.5 rounded border ${camTierColor(camTier(u.projected_campom_mean))}`}
+                title={
+                  u.projected_campom_lower != null && u.projected_campom_upper != null
+                    ? `${returnClause}: projected ${u.projected_campom_mean.toFixed(1)} (${u.projected_campom_lower.toFixed(1)}–${u.projected_campom_upper.toFixed(1)}). Current ${u.cam_v3 != null ? u.cam_v3.toFixed(1) : '—'}.`
+                    : `${returnClause}: projected ${u.projected_campom_mean.toFixed(1)}.`
+                }
+              >
+                {u.projected_campom_mean.toFixed(1)}
+              </span>
+            </span>
+          ) : (
+            u.cam_v3 != null && (
+              <span
+                className={`px-1.5 rounded border ${camTierColor(camTier(u.cam_v3))}`}
+                title={`Prior-season CAM: ${u.cam_v3.toFixed(1)}`}
+              >
+                {u.cam_v3.toFixed(1)}
+              </span>
+            )
+          )}
+          {isDraft && (
+            <span
+              className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${mockTone}`}
+              title={mockTitle}
+            >
+              {mockLabel}
+            </span>
+          )}
+          <span
+            className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-amber-400"
+            title={u.reason}
+          >
+            {/* The eligibility rows sit under an "Eligibility pending" header,
+                so the chip says which half of the cohort he is in rather
+                than repeating the header. */}
+            {isDraft ? '? draft (TBD)' : u.source_team_id ? 'arriving' : 'staying'}
+          </span>
+        </div>
+      </div>
+    );
 }
 
 function RecruitCard({ r }: { r: ProjectedRecruitDetail }) {
