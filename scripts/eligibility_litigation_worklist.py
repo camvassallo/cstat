@@ -46,7 +46,12 @@ the portal and is not a draft entrant is projected as gone by the `Sr`
 inference, and is one of exactly three things: signed professionally (the
 default is right), suing (needs a `contested` row), or genuinely done (the
 default is right). The mode prints them by CAM so the search is bounded — a
-dozen names worth a look, not a crawl — and skips the tracker entirely.
+dozen names worth a look, not a crawl — and skips the tracker entirely. A
+second section lists the cohort's uncaptured portal MOVERS: the portal does
+not resolve those the way it resolves everyone else, because a four-season
+senior who committed somewhere for a fifth season projects as a firm arrival
+until a row makes him a `?` there, and the commit date says whether he holds
+a waiver (old-rules commit) or is riding the stayed injunction.
 
     ... --year 2026 --open-cohort [--min-cam 8]
 
@@ -55,6 +60,7 @@ Exit status is 0 regardless; there is nothing to gate here.
 from __future__ import annotations
 
 import argparse
+import datetime
 import html
 import json
 import os
@@ -372,12 +378,18 @@ def open_cohort(year: int, min_cam: float) -> list[dict]:
             SELECT lower(regexp_replace(player_name, '[^A-Za-z]', '', 'g')) AS k
             FROM draft_entrants WHERE year = %(year)s
         )
-        SELECT name, team, cam, mpg,
-               k IN (SELECT k FROM captured) AS captured,
-               id IN (SELECT cstat_player_id FROM portal) AS in_portal,
-               k IN (SELECT k FROM draft) AS in_draft
-        FROM norm
-        ORDER BY cam DESC NULLS LAST, name
+        SELECT n.name, n.team, n.cam, n.mpg,
+               n.k IN (SELECT k FROM captured) AS captured,
+               n.id IN (SELECT cstat_player_id FROM portal) AS in_portal,
+               n.k IN (SELECT k FROM draft) AS in_draft,
+               tr.destination_institution, tr.status, tr.status_date::date
+        FROM norm n
+        LEFT JOIN LATERAL (
+            SELECT destination_institution, status, status_date FROM transfers
+            WHERE year = %(year)s AND status <> 'Withdrawn' AND cstat_player_id = n.id
+            ORDER BY status_date DESC NULLS LAST LIMIT 1
+        ) tr ON TRUE
+        ORDER BY n.cam DESC NULLS LAST, n.name
         """,
         {"year": year},
     )
@@ -385,8 +397,9 @@ def open_cohort(year: int, min_cam: float) -> list[dict]:
         {
             "name": name, "team": team, "cam": None if cam is None else round(float(cam), 1),
             "mpg": round(float(mpg), 1), "captured": captured, "in_portal": in_portal, "in_draft": in_draft,
+            "dest": dest, "portal_status": status, "portal_date": date,
         }
-        for name, team, cam, mpg, captured, in_portal, in_draft in cur.fetchall()
+        for name, team, cam, mpg, captured, in_portal, in_draft, dest, status, date in cur.fetchall()
     ]
     conn.close()
     total = len(rows)
@@ -408,6 +421,33 @@ def open_cohort(year: int, min_cam: float) -> list[dict]:
         if (r["cam"] or -99) < min_cam:
             continue
         print(f"    {r['name']:<26} {r['team']:<22} {r['cam'] if r['cam'] is not None else '—':>5} {r['mpg']:>5}")
+
+    # The portal does NOT resolve a Class-of-2022 mover the way it resolves
+    # everyone else. A four-season senior who committed somewhere for a
+    # fifth season is, by construction, playing on contested eligibility, and
+    # without a row he projects as a FIRM arrival at his new school (Seth
+    # Trimble at Louisville, 2026). The commit date is the tell: a commit
+    # under the old rules (before the 2026-06-23 rule change) means a waiver
+    # he already holds; a commit inside the window the class injunction was
+    # in force (2026-07-31 to the 2026-08-21 stay) means the injunction.
+    movers = [r for r in rows if r["in_portal"] and not r["captured"] and r["portal_status"] == "Committed"]
+    shown = [r for r in movers if (r["cam"] or -99) >= min_cam]
+    print(
+        f"\n{len(movers)} uncaptured committed mover(s) in the cohort, {len(shown)} at CAM >= {min_cam:g}."
+    )
+    if shown:
+        print(
+            "MOVERS — committed to a new school for a fifth season, no row, so each is a FIRM arrival "
+            "at the destination today. A commit dated inside the injunction window is a `contested` "
+            "row (case Wisne unless named elsewhere); an old-rules commit is a waiver holder and needs "
+            "no row:"
+        )
+        print(f"    {'PLAYER':<26} {'FROM':<22} {'TO':<22} {'DATE':<11} {'CAM':>5}")
+        for r in sorted(shown, key=lambda r: (r["portal_date"] or datetime.date.min), reverse=True):
+            print(
+                f"    {r['name']:<26} {r['team']:<22} {(r['dest'] or '?'):<22} "
+                f"{str(r['portal_date'] or '?'):<11} {r['cam'] if r['cam'] is not None else '—':>5}"
+            )
     return open_rows
 
 
