@@ -11,12 +11,29 @@ reads the table, not these files.
 
 ## When a row is needed
 
-Only for players **staying at the same school**. A senior who takes his extra
-year somewhere else already resolves himself: he appears in the 247 portal
-feed, and the projection's arrivals path has no class filter, so he lands on
-his new team correctly with no curation.
+A row describes a **player**, keyed by the team he played for in `year`, and
+its `status` follows him wherever the portal sends him:
 
-One case is also detected automatically and needs no row: a senior who entered
+* **Stays put** (no portal row, or a withdrawal) — `granted` projects him as
+  an ordinary returner, `contested` puts him in his team's uncertain bucket.
+  No feed reports a stay-put, so every one of these needs a row.
+* **Committed elsewhere** in the portal — `contested` puts him in his
+  **destination's** uncertain bucket instead of its firm arrivals (`?` at the
+  new school, in its ceiling, out of its floor). `granted` changes nothing:
+  he was already an ordinary arrival, which is the pre-existing behaviour.
+  So a mover needs a row only when his eligibility is contested — and under
+  the Tenth Circuit's 2026-08-21 stay that is most of the headline cases
+  (Darrion Williams at Texas Tech, Chauncey Wiggins at Gonzaga, RJ Godfrey at
+  Arizona), every one of whom was a firm arrival before this rule.
+* **Entered the portal with no destination** — the row is read as an
+  assertion that he is coming back to `current_team` (Mark Mitchell: entered,
+  committed to Kentucky, un-committed, returned to Missouri under a Kentucky
+  TRO). A portal entry is evidence of intent, not of a move, so the row beats
+  it. A `Committed` destination is an observed move and beats the row. Do
+  not write a row for an uncommitted portal entrant unless you mean that he
+  is staying.
+
+One case is detected automatically and needs no row: a senior who entered
 the portal and then withdrew. `compose_all_projections` routes him to the
 uncertain bucket on its own. Add a `granted` row here only to *promote* him out
 of it once his eligibility is settled.
@@ -41,7 +58,8 @@ of it once his eligibility is settled.
 | `name` | yes | Matched to a roster player by normalized name + team. |
 | `current_team` | yes | The school he is returning to (= the one he played for in `year`). |
 | `status` | no, defaults `contested` | `granted` → projected as an ordinary returner. `contested` → uncertain bucket: present in the ceiling, absent from the floor, shown as `?`. |
-| `reason` | no, defaults `5in5` | Display only: `5in5`, `waiver`, `injunction`, `medical`, `other`. |
+| `reason` | no, defaults `5in5` | Display only: `5in5`, `waiver`, `injunction`, `medical`, `other`. `injunction` covers every row that rests on a court — order granted, stayed, or still pending. |
+| `case` | no | Which suit the row rides on, as the tracker names it (`Godfrey v. NCAA`). JSON-only: not loaded into the table, not served. It exists so one court's ruling can be applied to exactly that court's plaintiffs (`--resolve-reason injunction --case "Godfrey v. NCAA"`). |
 | `source` | no | URL or outlet slug for the report. |
 | `note` | no | Anything the columns don't carry. |
 
@@ -86,10 +104,47 @@ starting point. It is not the same as the file being missing — the loader erro
 on a missing directory on purpose, because silently writing nothing is the
 failure this capture exists to prevent.
 
+## Sourcing: the litigation IS the roster signal
+
+The official-roster scrape (`cstat-ingest rosters`) turned out to be all over
+the place — partial "(Returners)" pages, last season's roster left up all
+summer. The suits are a better source for the population that matters: a
+player who is a **named plaintiff** against the NCAA is, by construction, a
+player who intends to play in the target season and whose eligibility to do
+so is unresolved. That is the `contested` bucket, exactly.
+
+```bash
+# Named plaintiffs on the College Sports Litigation Tracker, matched to the
+# base-season roster; prints per case with team / class / CAM, flags what is
+# already captured, lists the index cases the tracker has no filings for.
+cd training && ./.venv/bin/python ../scripts/eligibility_litigation_worklist.py \
+    --year 2026 --extra ../data/returns/2026_litigation_supplement.json \
+    --emit /tmp/candidates.json
+```
+
+It is a worklist, not a loader: a name-shaped token is not a player (judges,
+attorneys and same-name athletes in other sports all match), so review the
+output against the case text before merging `--emit`'s rows. Two things it
+cannot do for you: the tracker has no filings for some suits in its own
+Class-of-2022 index (the Kentucky `Wells` TRO, the dismissed North Carolina
+`Okpara` suit, the Lubbock `Atwell` TRO), so those plaintiff lists live in
+`2026_litigation_supplement.json`, transcribed from press reports; and a
+plaintiff the tracker says has signed professionally (two of Godfrey's) is
+not coming back and gets no row.
+
+The three false-positive shapes seen so far, so the next pass knows what to
+look for: a same-name player in another sport (`Tristan Smith v. NCAA` is a
+Clemson football player; cstat has one at Northern Iowa), a case from a past
+season (`Hickman v. NCAA` was 2025-26), and a multi-sport suit whose prose
+never says which plaintiff plays what (`Hudson v. NCAA` — three names were
+left out for that reason).
+
 ## The class-of-2022 litigation (2026-27)
 
-Most of the `2026_returns.json` rows are `contested` rather than `granted`, and
-the reason is a single live case rather than 23 separate judgement calls.
+Most of the `2026_returns.json` rows are `contested` rather than `granted`.
+Twenty-three are the roster-evidence cohort described below, tagged
+`case: Wisne v. NCAA`; the rest are named plaintiffs in one of two dozen
+suits, each tagged with its own `case`.
 
 On **2026-07-31** Judge Charlotte Sweeney (D. Colo.) granted a class-wide
 injunction letting every Division I athlete from the 2022 freshman class who had
@@ -110,16 +165,29 @@ used two non-D-I years first can look identical, and players holding their own
 Atwell is a named plaintiff in the North Carolina suit, so his individual
 outcome may diverge from the cohort's.
 
-**Revisit when the Tenth Circuit rules.** Both outcomes are one command, keyed
-on `reason` because that column already tags the cohort exactly:
+**Revisit when a court rules — and scope the sweep to that court.** The
+cohort is not one suit. It rides on the federal class action AND a dozen
+state suits (Ohio, Georgia, Kentucky, Texas, California, ...) that the NCAA
+appeals one court at a time, and a state appellate decision resolves that
+suit's plaintiffs and nobody else. `reason` tags the mechanism; `case` tags
+the suit:
 
 ```bash
-# Athletes win — the cohort is eligible.
+# Tenth Circuit rules on the class — sweep every row resting on a court.
 cargo run --bin cstat-ingest -- returns --resolve-reason injunction --as granted
-
-# NCAA wins — the cohort is not coming back.
 cargo run --bin cstat-ingest -- returns --resolve-reason injunction --as departed
+
+# Georgia Court of Appeals rules on Godfrey — only those thirty.
+cargo run --bin cstat-ingest -- returns --resolve-reason injunction \
+    --case "Godfrey v. NCAA" --as departed
 ```
+
+The unscoped sweep is only right in the **athletes win** direction: a class
+win makes everyone eligible, but a class loss does not end a state suit with
+its own order (Kentucky's TRO was never part of the Tenth Circuit stay). For
+an NCAA win on the class, resolve the rows whose `case` is `Wisne v. NCAA`
+and the dismissed suits that now ride it (`Okpara`, `Dalley`, `Koonin`), and
+leave the live state cases for their own courts.
 
 `--as departed` DELETES the rows rather than writing some "denied" status. That
 is the correct encoding, not a shortcut: the projection's default for an

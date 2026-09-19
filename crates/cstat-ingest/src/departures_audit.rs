@@ -251,13 +251,32 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
     // `departed`, and a perfectly good row for the other one was reported as
     // "still a departure — the row matched nobody (check the team string)".
     // The message named the team; the check did not contain one.
+    //
+    // A row's status FOLLOWS the player through the portal: a `contested`
+    // player who committed elsewhere is a `Transferred` departure on the row's
+    // team and lands in his DESTINATION's `uncertain` bucket (`granted` → its
+    // `arrivals`). So a departure on the named team is only a miss when it is
+    // not a portal move with a resolved destination; when it is, the bucket
+    // check runs against the destination instead.
     let mut departed: HashSet<(&str, String)> = HashSet::new();
+    let mut moved_to: HashMap<(&str, String), Option<Uuid>> = HashMap::new();
     let mut uncertain: HashSet<(&str, String)> = HashSet::new();
     let mut returning: HashSet<(&str, String)> = HashSet::new();
+    let mut arrivals: HashSet<(&str, String)> = HashSet::new();
+    let proj_by_id: HashMap<Uuid, &cstat_core::roster_projection::ProjectedRoster> =
+        projections.iter().map(|p| (p.team_id, p)).collect();
     for p in &projections {
         let team = p.team_name.as_str();
         for d in &p.departures {
-            departed.insert((team, normalize_player_name(departure_name(d))));
+            let key = (team, normalize_player_name(departure_name(d)));
+            if let DepartureReason::Transferred {
+                destination_team_id,
+                ..
+            } = d
+            {
+                moved_to.insert(key.clone(), *destination_team_id);
+            }
+            departed.insert(key);
         }
         for (_, u) in &p.uncertain {
             uncertain.insert((team, normalize_player_name(&u.name)));
@@ -265,6 +284,11 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
         for r in &p.returning {
             if let Some(m) = meta_by_id.get(&r.player_id) {
                 returning.insert((team, normalize_player_name(&m.name)));
+            }
+        }
+        for r in &p.arrivals {
+            if let Some(m) = meta_by_id.get(&r.player_id) {
+                arrivals.insert((team, normalize_player_name(&m.name)));
             }
         }
     }
@@ -299,7 +323,35 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
         };
         let team = proj.team_name.as_str();
         if departed.contains(&(team, key.clone())) {
-            unplaced_real.push((r, "still a departure on that team — the row matched nobody"));
+            // A portal move to a resolved D-I destination: the row applies
+            // there, not here. An unresolved destination (non-D-I school, name
+            // miss) means the projection cannot place him anywhere, so the
+            // row cannot have done anything either.
+            let dest = moved_to
+                .get(&(team, key.clone()))
+                .copied()
+                .flatten()
+                .and_then(|id| proj_by_id.get(&id));
+            let Some(dest) = dest else {
+                unplaced_real.push((r, "still a departure on that team — the row matched nobody"));
+                continue;
+            };
+            let dest_team = dest.team_name.as_str();
+            match r.parsed_status() {
+                ReturnStatus::Granted if !arrivals.contains(&(dest_team, key.clone())) => {
+                    unplaced_real.push((
+                        r,
+                        "curated `granted` and moved, but not in his destination's arrivals",
+                    ))
+                }
+                ReturnStatus::Contested if !uncertain.contains(&(dest_team, key.clone())) => {
+                    unplaced_real.push((
+                        r,
+                        "curated `contested` and moved, but not in his destination's uncertain bucket",
+                    ))
+                }
+                _ => {}
+            }
             continue;
         }
         // Known name, not departing, but never entered the projection: a

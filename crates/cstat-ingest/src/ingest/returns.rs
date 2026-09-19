@@ -12,11 +12,15 @@
 //! Why hand-curated. The NCAA's age-based 5-in-5 rule (issue #220) invalidated
 //! cstat's only eligibility mechanism — a `class_year == 'Sr'` string check —
 //! for the 2027 season onward. Seniors who take the extra year *elsewhere*
-//! resolve themselves through the 247 portal feed. Seniors who take it *at the
-//! same school* appear in no feed at all: not the portal, not the draft list,
-//! and not Torvik's `class_year`, which does not exist for a season that hasn't
-//! been played. Until that changes, a human reading the news is the only
-//! source, exactly as it was for the non-portal exits in issue #215.
+//! are placed by the 247 portal feed — but placed as firm arrivals, which
+//! under a stayed injunction is a school they cannot yet play for; a
+//! `contested` row follows such a player to his destination's uncertain
+//! bucket. Seniors who take it *at the same school* appear in no feed at all:
+//! not the portal, not the draft list, and not Torvik's `class_year`, which
+//! does not exist for a season that hasn't been played. Until that changes, a
+//! human reading the news — and the court dockets, via
+//! `scripts/eligibility_litigation_worklist.py` — is the only source, exactly
+//! as it was for the non-portal exits in issue #215.
 //!
 //! The one automatic signal — a senior who entered the portal and withdrew —
 //! is derived in `compose_all_projections` and needs no row here. Use this file
@@ -185,8 +189,22 @@ async fn bootstrap_year(
 }
 
 /// The key order curated return rows are written in. Identity first, then the
-/// two behaviour-bearing fields, then provenance.
-const RETURN_KEY_ORDER: &[&str] = &["name", "current_team", "status", "reason", "source", "note"];
+/// two behaviour-bearing fields, then the litigation key, then provenance.
+///
+/// `case` is a JSON-only field: which suit the row rides on ("Godfrey v.
+/// NCAA"), so a ruling in one court can be applied to exactly its plaintiffs
+/// with `--resolve-reason injunction --case "Godfrey v. NCAA"`. It is not
+/// loaded into `player_returns` — nothing served reads it — and `PlayerReturn`
+/// ignores it on deserialize, which is why no migration was needed.
+const RETURN_KEY_ORDER: &[&str] = &[
+    "name",
+    "current_team",
+    "status",
+    "reason",
+    "case",
+    "source",
+    "note",
+];
 
 /// Render curated returns with a stable key order.
 ///
@@ -264,16 +282,23 @@ pub struct ResolveReport {
     pub outcome: Resolution,
 }
 
-/// Apply a court outcome to every curated return carrying `reason`.
+/// Apply a court outcome to every curated return carrying `reason` — and, when
+/// `case` is given, only those whose `case` field equals it.
 ///
 /// Eligibility litigation resolves per *cohort*, not per player: one Tenth
-/// Circuit ruling decides all 23 class-of-2022 rows in `2026_returns.json` at
-/// once. Hand-editing 23 rows on the day a ruling lands is how a capture goes
+/// Circuit ruling decides every row riding the class-wide injunction at once.
+/// Hand-editing those rows on the day a ruling lands is how a capture goes
 /// stale, and it is the one edit most likely to be made in a hurry.
 ///
-/// Keyed on `reason` because that column already tags the cohort exactly —
-/// `injunction` for the rows riding the class-wide injunction — so no new
-/// grouping concept is needed.
+/// Keyed on `reason` because that column already tags the mechanism —
+/// `injunction` for every row that rests on a court order, granted, stayed or
+/// pending. The cohort is not one suit, though: the 2026 capture rides on a
+/// federal class action AND a dozen state suits (Ohio, Georgia, Kentucky,
+/// Texas, California, ...), each of which the NCAA appeals separately. A
+/// Georgia Court of Appeals decision resolves Godfrey's thirty plaintiffs and
+/// nobody else, so `case` narrows the sweep to the rows that carry that suit's
+/// name. Without it — the Tenth Circuit ruling on the class — the whole reason
+/// is swept, exactly as before.
 ///
 /// Rewrites the JSON in place and deliberately does **not** load. The file is
 /// the source of record; the point of stopping here is that the change lands as
@@ -286,6 +311,7 @@ pub struct ResolveReport {
 pub fn resolve_reason(
     dir: &Path,
     reason: &str,
+    case: Option<&str>,
     outcome: Resolution,
     note_suffix: &str,
 ) -> Result<Vec<ResolveReport>, ReturnIngestError> {
@@ -309,6 +335,7 @@ pub fn resolve_reason(
         // obvious reaction to an ambiguous first run is to run it again.
         let hits = |v: &serde_json::Value| {
             field(v, "reason") == reason
+                && case.is_none_or(|c| field(v, "case") == c)
                 && match outcome {
                     Resolution::Granted => field(v, "status") != "granted",
                     Resolution::Departed => true,
@@ -377,7 +404,7 @@ mod tests {
     #[test]
     fn granted_flips_only_the_cohort_and_keeps_unmodelled_fields() {
         let dir = scratch("granted");
-        let r = resolve_reason(&dir, "injunction", Resolution::Granted, "RESOLVED.").unwrap();
+        let r = resolve_reason(&dir, "injunction", None, Resolution::Granted, "RESOLVED.").unwrap();
         assert_eq!(r[0].matched, 2);
         let out = rows(&dir);
         assert_eq!(out.len(), 3, "granted must not remove rows");
@@ -409,7 +436,7 @@ mod tests {
         let before = render_returns(&parsed).unwrap();
         std::fs::write(dir.join("2026_returns.json"), &before).unwrap();
 
-        resolve_reason(&dir, "injunction", Resolution::Granted, "R.").unwrap();
+        resolve_reason(&dir, "injunction", None, Resolution::Granted, "R.").unwrap();
         let after = std::fs::read_to_string(dir.join("2026_returns.json")).unwrap();
 
         let lines: Vec<&str> = before.lines().collect();
@@ -448,11 +475,11 @@ mod tests {
         // Re-running is the obvious reaction to an ambiguous first run, so it
         // must not stamp the resolution note a second time.
         let dir = scratch("twice");
-        let first = resolve_reason(&dir, "injunction", Resolution::Granted, "R.").unwrap();
+        let first = resolve_reason(&dir, "injunction", None, Resolution::Granted, "R.").unwrap();
         assert_eq!(first[0].matched, 2);
         let after_one = std::fs::read_to_string(dir.join("2026_returns.json")).unwrap();
 
-        let second = resolve_reason(&dir, "injunction", Resolution::Granted, "R.").unwrap();
+        let second = resolve_reason(&dir, "injunction", None, Resolution::Granted, "R.").unwrap();
         assert!(second.is_empty(), "second run must report nothing to do");
         assert_eq!(
             std::fs::read_to_string(dir.join("2026_returns.json")).unwrap(),
@@ -470,10 +497,10 @@ mod tests {
         );
 
         // Departed is idempotent for the other reason: the rows are gone.
-        let third = resolve_reason(&dir, "injunction", Resolution::Departed, "").unwrap();
+        let third = resolve_reason(&dir, "injunction", None, Resolution::Departed, "").unwrap();
         assert_eq!(third[0].matched, 2);
         assert!(
-            resolve_reason(&dir, "injunction", Resolution::Departed, "")
+            resolve_reason(&dir, "injunction", None, Resolution::Departed, "")
                 .unwrap()
                 .is_empty()
         );
@@ -483,7 +510,7 @@ mod tests {
     #[test]
     fn departed_removes_only_the_cohort() {
         let dir = scratch("departed");
-        let r = resolve_reason(&dir, "injunction", Resolution::Departed, "unused").unwrap();
+        let r = resolve_reason(&dir, "injunction", None, Resolution::Departed, "unused").unwrap();
         assert_eq!(r[0].matched, 2);
         let out = rows(&dir);
         assert_eq!(out.len(), 1, "the two injunction rows must be gone");
@@ -492,10 +519,49 @@ mod tests {
     }
 
     #[test]
+    fn case_filter_narrows_the_sweep_to_one_suit() {
+        let dir = scratch("case_filter");
+        std::fs::write(
+            dir.join("2026_returns.json"),
+            r#"[
+      {"name":"A One","current_team":"Duke","status":"contested","reason":"injunction","case":"Godfrey v. NCAA"},
+      {"name":"B Two","current_team":"Penn","status":"contested","reason":"injunction","case":"Wisne v. NCAA"},
+      {"name":"C Three","current_team":"Iona","status":"contested","reason":"injunction"}
+    ]"#,
+        )
+        .unwrap();
+        let r = resolve_reason(
+            &dir,
+            "injunction",
+            Some("Godfrey v. NCAA"),
+            Resolution::Departed,
+            "",
+        )
+        .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].matched, 1, "only the Godfrey row should go");
+        let left = rows(&dir);
+        assert_eq!(left.len(), 2);
+        assert!(left.iter().all(|v| v["name"] != "A One"));
+        // A row with no `case` is untouched by a case-scoped sweep — it is not
+        // known to ride on that suit — but the unscoped sweep still takes it.
+        let r = resolve_reason(&dir, "injunction", None, Resolution::Granted, "R.").unwrap();
+        assert_eq!(r[0].matched, 2);
+        // The `case` key survives the rewrite, in its slot after `reason`.
+        let raw = std::fs::read_to_string(dir.join("2026_returns.json")).unwrap();
+        let reason_at = raw.find("\"reason\"").unwrap();
+        let case_at = raw.find("\"case\"").unwrap();
+        assert!(
+            reason_at < case_at,
+            "case should be rendered after reason:\n{raw}"
+        );
+    }
+
+    #[test]
     fn a_reason_nobody_carries_rewrites_nothing() {
         let dir = scratch("nomatch");
         let before = std::fs::read_to_string(dir.join("2026_returns.json")).unwrap();
-        let r = resolve_reason(&dir, "medical", Resolution::Departed, "unused").unwrap();
+        let r = resolve_reason(&dir, "medical", None, Resolution::Departed, "unused").unwrap();
         assert!(r.is_empty());
         // Byte-identical: a no-op must not reformat the curator's file.
         assert_eq!(

@@ -457,6 +457,14 @@ enum Commands {
         #[arg(long, value_name = "REASON")]
         resolve_reason: Option<String>,
 
+        /// Narrow `--resolve-reason` to the rows whose `case` field equals
+        /// this (e.g. `"Godfrey v. NCAA"`). The 2026 capture rides on a
+        /// federal class action AND a dozen state suits that the NCAA appeals
+        /// one court at a time; a state appellate ruling resolves that suit's
+        /// plaintiffs and nobody else. Omit it for a ruling on the class.
+        #[arg(long, value_name = "CASE", requires = "resolve_reason")]
+        case: Option<String>,
+
         /// What the ruling decided. `granted` flips those rows to granted so
         /// they project as ordinary returners; `departed` deletes them, which
         /// IS the correct encoding — an unlisted senior already defaults to
@@ -1227,6 +1235,7 @@ async fn main() -> Result<()> {
         Commands::Returns {
             dir,
             resolve_reason,
+            case,
             outcome,
         } => {
             if let Some(reason) = resolve_reason {
@@ -1242,19 +1251,30 @@ async fn main() -> Result<()> {
                 // if nothing read it.
                 let suffix = match res {
                     Resolution::Granted => format!(
-                        "RESOLVED {}: the {reason} claim succeeded and eligibility is settled.",
-                        cstat_ingest::today_utc()
+                        "RESOLVED {}: the {reason} claim{} succeeded and eligibility is settled.",
+                        cstat_ingest::today_utc(),
+                        case.as_deref()
+                            .map(|c| format!(" in {c}"))
+                            .unwrap_or_default()
                     ),
                     Resolution::Departed => String::new(),
                 };
-                let reports =
-                    cstat_ingest::ingest::returns::resolve_reason(&dir, &reason, res, &suffix)?;
+                let reports = cstat_ingest::ingest::returns::resolve_reason(
+                    &dir,
+                    &reason,
+                    case.as_deref(),
+                    res,
+                    &suffix,
+                )?;
                 let total: usize = reports.iter().map(|r| r.matched).sum();
                 if total == 0 {
                     println!(
-                        "returns: nothing to resolve — no row with reason {reason:?} in {} \
+                        "returns: nothing to resolve — no row with reason {reason:?}{} in {} \
                          would change. (Rows already at that outcome are left alone, so \
                          re-running is safe.)",
+                        case.as_deref()
+                            .map(|c| format!(" and case {c:?}"))
+                            .unwrap_or_default(),
                         dir.display()
                     );
                     return Ok(());

@@ -549,9 +549,14 @@ impl ReturnStatus {
 /// 5-in-5 rule). Deserializes from `data/returns/{year}_returns.json` AND maps
 /// from a `player_returns` row (the `player_name` column aliases to `name`).
 ///
-/// This is the *stay-put* channel. A senior who takes his extra year at another
-/// school already arrives correctly through the 247 portal feed and needs no
-/// row here.
+/// `current_team` is the team he played for in the BASE season — the row is
+/// matched against that roster — but the status it carries is a property of
+/// the player and follows him wherever the portal sends him: a `contested`
+/// mover lands in his destination's `uncertain` bucket rather than its firm
+/// `arrivals`, and a `granted` mover is an ordinary arrival (the pre-existing
+/// behaviour, which needed no row). A row is therefore needed for a mover only
+/// when his eligibility is contested; a stay-put needs one either way, because
+/// no feed reports him.
 #[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
 pub struct PlayerReturn {
     pub name: String,
@@ -1469,6 +1474,25 @@ pub async fn compose_all_projections(
         let Some(&source_team_id) = player_team.get(&pid) else {
             continue; // resolved cstat_player_id but the player no longer in our roster fetch
         };
+        // A portal ENTRY with no destination is an observation of intent, not
+        // of a move — and for the 5-in-5 cohort it is routinely the state of a
+        // player who entered under a court order to shop his fifth year and
+        // then chose to stay (Mark Mitchell, Missouri, 2026: entered Aug 1,
+        // committed to Kentucky, un-committed, and returned to Missouri under
+        // a Kentucky TRO). A curated `player_returns` row naming his base team
+        // is the newer, positive assertion that he is coming back to it, so it
+        // beats the entry: he is neither outbound nor an arrival and falls
+        // through to the eligibility branch below, which buckets him by the
+        // row's status. He is also kept OUT of `outbound_cam_v3_sum` — the row
+        // says the talent did not walk, and counting it as lost while
+        // materializing him in the ceiling would contradict the row on a
+        // served feature. A row does NOT outrank a `Committed` destination:
+        // that is an observed move, and "portal above returns" still holds
+        // for it — the row's effect follows him to the destination instead
+        // (see the arrivals split further down).
+        if t.destination_institution.is_none() && eligibility_returns.contains_key(&pid) {
+            continue;
+        }
         // Outbound is deliberately NOT filtered on `left_program`: the source
         // team loses the player either way, and `outbound_cam_v3_sum` (a served
         // model feature) should keep counting the talent that walked.
@@ -1522,6 +1546,13 @@ pub async fn compose_all_projections(
     // Fold in the sat-out transfers (issue #146) so their destination's
     // `arrivals` lookup resolves to the prior-season source PlayerRow.
     player_row_lookup.extend(satout_lookup);
+    // Display names for the contested-arrival split below. Base-season roster
+    // only — a curated return row can only ever match a base-season player, so
+    // a sat-out arrival never needs one.
+    let name_by_pid: HashMap<Uuid, &str> = roster_by_team
+        .values()
+        .flat_map(|rows| rows.iter().map(|(r, name)| (r.player_id, name.as_str())))
+        .collect();
 
     let mut out: Vec<ProjectedRoster> = Vec::with_capacity(teams.len());
     for team in &teams {
@@ -1615,7 +1646,9 @@ pub async fn compose_all_projections(
             // Curated row first, matching the `left_program` precedent at the
             // top of this loop: hand-entered beats every derived channel, and a
             // `granted` row is how an operator overrides the automatic signal
-            // further down.
+            // further down. Reached by stay-puts, withdrawals, and — since the
+            // bucketing above skips them — players who entered the portal with
+            // no destination and have a row naming this team.
             if let Some((status, reason)) = eligibility_returns.get(&pid) {
                 match status {
                     ReturnStatus::Granted => {
@@ -1716,14 +1749,45 @@ pub async fn compose_all_projections(
         }
 
         // Incoming portal arrivals (their season-N source-team PlayerRow).
-        let arrivals: Vec<PlayerRow> = incoming_by_team
-            .get(&team.id)
-            .map(|pids| {
-                pids.iter()
-                    .filter_map(|p| player_row_lookup.get(p).cloned())
-                    .collect()
-            })
-            .unwrap_or_default();
+        //
+        // A curated `contested` eligibility row FOLLOWS the player through the
+        // portal. The row is keyed by his base-season team, but what it
+        // asserts is a property of the player — "a court or a waiver desk has
+        // not yet said he may play in the target season" — and that is just as
+        // true at his destination as it would have been had he stayed. Under
+        // the Tenth Circuit's 2026-08-21 stay of the class-wide injunction, the
+        // headline 5-in-5 cases are almost all movers (Darrion Williams, NC
+        // State -> Texas Tech; Chauncey Wiggins, Florida St. -> Gonzaga; RJ
+        // Godfrey, Clemson -> Arizona), and before this split every one of them
+        // was a FIRM arrival at a school he was not, at that moment, eligible
+        // to play for. So: contested -> the destination's `uncertain` (ceiling
+        // only, `?` in the UI), granted or no row -> an ordinary arrival.
+        //
+        // He stays in `inbound_cam_v3_sum` either way. That feature measures
+        // what the portal moved, which he did; it is the same documented
+        // asymmetry the uncertain bucket already has against
+        // `retained_talent_fraction` (#324), and it means the served feature
+        // vector is unchanged for every team without a contested arrival.
+        let mut arrivals: Vec<PlayerRow> = Vec::new();
+        for pid in incoming_by_team.get(&team.id).into_iter().flatten() {
+            let Some(row) = player_row_lookup.get(pid).cloned() else {
+                continue;
+            };
+            match (eligibility_returns.get(pid), name_by_pid.get(pid)) {
+                (Some((ReturnStatus::Contested, reason)), Some(name)) => {
+                    uncertain.push((
+                        row,
+                        UncertainPlayer {
+                            player_id: *pid,
+                            name: (*name).to_string(),
+                            reason: format!("eligibility contested ({reason})"),
+                            cause: UncertainCause::EligibilityUnsettled,
+                        },
+                    ));
+                }
+                _ => arrivals.push(row),
+            }
+        }
 
         let recruits: Vec<(PlayerRow, RecruitMeta)> =
             recruits_by_team.remove(&team.id).unwrap_or_default();
