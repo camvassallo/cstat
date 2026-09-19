@@ -28,8 +28,19 @@ reuse it without divergence.
 
 Cross-season pairing is via `torvik_pid` (per memory: stable cross-season
 key; `natstat_id` breaks on transfers — different code per team).
-Transfers ARE included; the model is destination-agnostic in v1
-(documented limitation).
+Transfers ARE included. The model was destination-agnostic through v1;
+since 2026-09 it carries a five-feature destination block (where the player
+plays in season N+1 — the program's prior-season AdjEM and 3-year level,
+the source program's, their difference, and a transfer flag). All five are
+known before the season starts, and the serve side feeds the team being
+projected as the destination (`trajectory::Destination`). Validated
+leave-one-pair-out: MAE 2.083 → 2.008, better in all 11 folds (z=−16), and
+the destination-tier bias — returners at a ≥25 program −0.95, transfers
+into one −1.13 on 2024+ targets — goes to ≈0. The ablation proves it is the
+destination's strength that matters, not a transfer flag: prior-team
+strength alone leaves transfers-into-elite at −1.33
+(`experiment_trajectory_destination.py`,
+eval_history/trajectory_destination_20260919_summary.json).
 
 Three LightGBMs trained per run: mean + q=0.1 + q=0.9. Three ONNX files
 shipped so the Rust inference path can return (predicted, lower, upper)
@@ -106,6 +117,17 @@ SELECT
     base.s_n,
     base.s_np1,
     base.target_campom,
+    -- Destination block (raw): the season-N+1 team's program strength in
+    -- season N and its 3-year level, the season-N team's strength, and the
+    -- program identities to derive `is_transfer`. Reached through
+    -- `natstat_id` because team UUIDs are season-scoped. Same window and
+    -- `>= 2` gate as the roster projection's `program_level`, and as the
+    -- Rust serve path (`trajectory.rs`, `roster_projection::fetch_program_levels`).
+    tN.natstat_id    AS src_ns,
+    tNP1.natstat_id  AS dest_ns,
+    em_src.adj_efficiency_margin  AS src_prior_adj_em_raw,
+    em_dest.adj_efficiency_margin AS dest_prior_adj_em_raw,
+    dest_level.level AS dest_program_level_raw,
     -- Volume / context
     pssN.minutes_per_game AS prior_mpg,
     pssN.games_played AS prior_gp,
@@ -230,6 +252,25 @@ LEFT JOIN LATERAL (
     ORDER BY r.year, r.id
     LIMIT 1
 ) rec ON TRUE
+JOIN teams tN ON tN.id = pssN.team_id
+JOIN teams tNP1 ON tNP1.id = pssNP1.team_id
+LEFT JOIN team_season_stats em_src ON em_src.team_id = pssN.team_id
+-- The destination program's season-N row, by program identity (its N+1
+-- team UUID is a different row).
+LEFT JOIN LATERAL (
+    SELECT tss.adj_efficiency_margin
+    FROM teams t JOIN team_season_stats tss ON tss.team_id = t.id
+    WHERE t.natstat_id = tNP1.natstat_id AND t.season = base.s_n
+    LIMIT 1
+) em_dest ON TRUE
+LEFT JOIN LATERAL (
+    SELECT AVG(tss.adj_efficiency_margin) AS level
+    FROM teams t JOIN team_season_stats tss ON tss.team_id = t.id
+    WHERE t.natstat_id = tNP1.natstat_id
+      AND t.season BETWEEN base.s_n - 3 AND base.s_n - 1
+      AND tss.adj_efficiency_margin IS NOT NULL
+    HAVING count(*) >= 2
+) dest_level ON TRUE
 -- Qualification gate now lives in the pssN / pssNP1 laterals above.
 -- Deterministic row order (issue #222). LightGBM's `bagging_fraction`
 -- subsamples by row position, so an unordered read makes the fit — and
@@ -291,10 +332,21 @@ NUMERIC_FEATURE_COLS = [
     "delta_campom", "delta_mpg", "delta_usg",
 ]
 ARCH_FEATURE_COLS = [f"arch_{a.lower()}" for a in ARCHETYPES]
-# Numeric (37) + archetype shares (12) + recruit block (11) = 60 features.
-# Recruit block order is locked in `training/recruit_features.py` and
-# mirrored by `cstat-core::recruit_features::RECRUIT_FEATURE_NAMES`.
-FEATURE_COLS = NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS + list(RECRUIT_FEATURE_NAMES)
+# Destination block (5). Order is the wire contract — mirrored by
+# `cstat-core::trajectory::TRAJECTORY_FEATURE_NAMES`, which appends these
+# after the recruit block. Fills mirror `build_trajectory_features`: a
+# missing prior is the D-I mean (0.0), a missing 3-year level is the prior.
+DEST_FEATURE_COLS = [
+    "dest_prior_adj_em", "dest_program_level", "src_prior_adj_em",
+    "dest_minus_src", "is_transfer",
+]
+DEST_LEVEL_FILL = 0.0
+# Numeric (37) + archetype shares (12) + recruit block (11) + destination
+# block (5) = 65 features. Recruit block order is locked in
+# `training/recruit_features.py` and mirrored by
+# `cstat-core::recruit_features::RECRUIT_FEATURE_NAMES`.
+FEATURE_COLS = (NUMERIC_FEATURE_COLS + ARCH_FEATURE_COLS + list(RECRUIT_FEATURE_NAMES)
+                + DEST_FEATURE_COLS)
 
 # On/off features are NULL where the player_on_off rollup has no row
 # (sub-rotation players, 2019's missing PBP) or where the swing has no
@@ -380,6 +432,18 @@ def build_dataset() -> pd.DataFrame:
         df[col] = df[col].fillna(SLOPE_DELTA_FILL).astype(float)
     prior2_cov = float((df["has_prior2"] == 1.0).mean())
     print(f"  prior-2 season coverage: {prior2_cov:.1%}")
+
+    # Destination block. `is_transfer` is read off the program identities
+    # BEFORE any fill, so a program with no AdjEM row still counts as a move.
+    df["is_transfer"] = (df["src_ns"] != df["dest_ns"]).astype(float)
+    df["src_prior_adj_em"] = df["src_prior_adj_em_raw"].fillna(DEST_LEVEL_FILL).astype(float)
+    df["dest_prior_adj_em"] = df["dest_prior_adj_em_raw"].fillna(DEST_LEVEL_FILL).astype(float)
+    df["dest_program_level"] = (
+        df["dest_program_level_raw"].fillna(df["dest_prior_adj_em"]).astype(float)
+    )
+    df["dest_minus_src"] = df["dest_prior_adj_em"] - df["src_prior_adj_em"]
+    print(f"  transfers: {int(df['is_transfer'].sum()):,} of {len(df):,}; "
+          f"destination prior missing: {int(df['dest_prior_adj_em_raw'].isna().sum())}")
 
     print(f"After gates: {len(df):,} rows.")
     print(f"  by pair: {df.groupby(['s_n', 's_np1']).size().to_dict()}")
@@ -802,7 +866,7 @@ def main() -> None:
         "mae_by_current_campom": by_campom,
         "top_features": [{"name": n, "importance": int(i)} for n, i in importance[:25]],
         "known_limitations": [
-            "Destination-agnostic: cross-team transferring returners are projected against a destination-blind prior. Documented in §5c.",
+            "Destination block carries the destination PROGRAM's strength, not the role the player will fill in it: a mid-major star who becomes the go-to option at an elite program (Lendeborg 2026, Knecht 2024) is still under-projected.",
             "Recruit-rank deferred: ablation experiment runs after historical recruit ingest (class-of-2021–2025 backfill).",
             "Selection bias on returners: only includes players who returned for N+1; doesn't model the leave-for-draft cohort.",
         ],

@@ -1,0 +1,595 @@
+{
+  "generated_at": "2026-09-19T04:31:21.163576+00:00",
+  "n": 25302,
+  "sets": {
+    "base": [
+      "prior_mpg",
+      "prior_gp",
+      "prior_total_min",
+      "prior_height_in",
+      "prior_class_year_code",
+      "prior_ppg",
+      "prior_rpg",
+      "prior_apg",
+      "prior_spg",
+      "prior_bpg",
+      "prior_topg",
+      "prior_ts",
+      "prior_efg",
+      "prior_usg",
+      "prior_ast_pct",
+      "prior_tov_pct",
+      "prior_orb_pct",
+      "prior_drb_pct",
+      "prior_stl_pct",
+      "prior_blk_pct",
+      "prior_ft_rate",
+      "prior_ogbpm",
+      "prior_dgbpm",
+      "prior_gbpm",
+      "prior_campom",
+      "prior_on_net_rtg",
+      "prior_net_on_off",
+      "prior_on_poss_share",
+      "prior2_campom",
+      "prior2_mpg",
+      "prior2_gp",
+      "prior2_usg",
+      "prior2_ppg",
+      "has_prior2",
+      "delta_campom",
+      "delta_mpg",
+      "delta_usg",
+      "arch_wizard",
+      "arch_sorcerer",
+      "arch_warlock",
+      "arch_bard",
+      "arch_ranger",
+      "arch_barbarian",
+      "arch_paladin",
+      "arch_monk",
+      "arch_cleric",
+      "arch_druid",
+      "arch_rogue",
+      "arch_fighter",
+      "recruit_is_ranked",
+      "recruit_composite_rank",
+      "recruit_composite_rating",
+      "recruit_star_rating",
+      "recruit_position_rank",
+      "recruit_rank_movement",
+      "recruit_height_in",
+      "recruit_weight_lb",
+      "recruit_bmi_proxy",
+      "recruit_position_code",
+      "years_since_recruit"
+    ],
+    "context": [
+      "prior_mpg",
+      "prior_gp",
+      "prior_total_min",
+      "prior_height_in",
+      "prior_class_year_code",
+      "prior_ppg",
+      "prior_rpg",
+      "prior_apg",
+      "prior_spg",
+      "prior_bpg",
+      "prior_topg",
+      "prior_ts",
+      "prior_efg",
+      "prior_usg",
+      "prior_ast_pct",
+      "prior_tov_pct",
+      "prior_orb_pct",
+      "prior_drb_pct",
+      "prior_stl_pct",
+      "prior_blk_pct",
+      "prior_ft_rate",
+      "prior_ogbpm",
+      "prior_dgbpm",
+      "prior_gbpm",
+      "prior_campom",
+      "prior_on_net_rtg",
+      "prior_net_on_off",
+      "prior_on_poss_share",
+      "prior2_campom",
+      "prior2_mpg",
+      "prior2_gp",
+      "prior2_usg",
+      "prior2_ppg",
+      "has_prior2",
+      "delta_campom",
+      "delta_mpg",
+      "delta_usg",
+      "arch_wizard",
+      "arch_sorcerer",
+      "arch_warlock",
+      "arch_bard",
+      "arch_ranger",
+      "arch_barbarian",
+      "arch_paladin",
+      "arch_monk",
+      "arch_cleric",
+      "arch_druid",
+      "arch_rogue",
+      "arch_fighter",
+      "recruit_is_ranked",
+      "recruit_composite_rank",
+      "recruit_composite_rating",
+      "recruit_star_rating",
+      "recruit_position_rank",
+      "recruit_rank_movement",
+      "recruit_height_in",
+      "recruit_weight_lb",
+      "recruit_bmi_proxy",
+      "recruit_position_code",
+      "years_since_recruit",
+      "is_transfer",
+      "src_prior_adj_em"
+    ],
+    "dest": [
+      "prior_mpg",
+      "prior_gp",
+      "prior_total_min",
+      "prior_height_in",
+      "prior_class_year_code",
+      "prior_ppg",
+      "prior_rpg",
+      "prior_apg",
+      "prior_spg",
+      "prior_bpg",
+      "prior_topg",
+      "prior_ts",
+      "prior_efg",
+      "prior_usg",
+      "prior_ast_pct",
+      "prior_tov_pct",
+      "prior_orb_pct",
+      "prior_drb_pct",
+      "prior_stl_pct",
+      "prior_blk_pct",
+      "prior_ft_rate",
+      "prior_ogbpm",
+      "prior_dgbpm",
+      "prior_gbpm",
+      "prior_campom",
+      "prior_on_net_rtg",
+      "prior_net_on_off",
+      "prior_on_poss_share",
+      "prior2_campom",
+      "prior2_mpg",
+      "prior2_gp",
+      "prior2_usg",
+      "prior2_ppg",
+      "has_prior2",
+      "delta_campom",
+      "delta_mpg",
+      "delta_usg",
+      "arch_wizard",
+      "arch_sorcerer",
+      "arch_warlock",
+      "arch_bard",
+      "arch_ranger",
+      "arch_barbarian",
+      "arch_paladin",
+      "arch_monk",
+      "arch_cleric",
+      "arch_druid",
+      "arch_rogue",
+      "arch_fighter",
+      "recruit_is_ranked",
+      "recruit_composite_rank",
+      "recruit_composite_rating",
+      "recruit_star_rating",
+      "recruit_position_rank",
+      "recruit_rank_movement",
+      "recruit_height_in",
+      "recruit_weight_lb",
+      "recruit_bmi_proxy",
+      "recruit_position_code",
+      "years_since_recruit",
+      "dest_prior_adj_em",
+      "dest_program_level",
+      "src_prior_adj_em",
+      "dest_minus_src",
+      "is_transfer"
+    ]
+  },
+  "pooled": {
+    "base": {
+      "mae": 2.0830438649842966,
+      "bias": -0.0048381132276848334
+    },
+    "context": {
+      "mae": 2.0425101251099833,
+      "bias": -0.0009879033009568372
+    },
+    "dest": {
+      "mae": 2.0082744076018506,
+      "bias": 0.003488951472514331
+    }
+  },
+  "per_pair": {
+    "2015->2016": {
+      "base": 2.0381784716698608,
+      "context": 1.995835643455686,
+      "dest": 1.9649958025151097
+    },
+    "2016->2017": {
+      "base": 2.034544372551245,
+      "context": 2.0076527805372777,
+      "dest": 2.0173432327795906
+    },
+    "2017->2018": {
+      "base": 2.0507890646299134,
+      "context": 2.0054819566614404,
+      "dest": 1.9828656436824508
+    },
+    "2018->2019": {
+      "base": 2.0808800677227173,
+      "context": 2.05321248733714,
+      "dest": 2.02851190502885
+    },
+    "2019->2020": {
+      "base": 1.9916698465734604,
+      "context": 1.9340185030173238,
+      "dest": 1.9166925587754624
+    },
+    "2020->2021": {
+      "base": 2.041569135889168,
+      "context": 1.9949358612822856,
+      "dest": 1.9586436913706349
+    },
+    "2021->2022": {
+      "base": 2.0865444619265743,
+      "context": 2.067238959699749,
+      "dest": 2.0177599571763043
+    },
+    "2022->2023": {
+      "base": 2.057658298804245,
+      "context": 2.0163140785718072,
+      "dest": 1.9973642190376497
+    },
+    "2023->2024": {
+      "base": 2.103473510976074,
+      "context": 2.0549665042197107,
+      "dest": 2.000721686353307
+    },
+    "2024->2025": {
+      "base": 2.1566434963261956,
+      "context": 2.108075057107446,
+      "dest": 2.0683776813687227
+    },
+    "2025->2026": {
+      "base": 2.2453868391830856,
+      "context": 2.2022279777567912,
+      "dest": 2.120336104719254
+    }
+  },
+  "by_dest_tier": {
+    "returner|a >=25|2016-23": {
+      "n": 807,
+      "base": {
+        "bias": -0.5169681813873311,
+        "mae": 2.576703313455913
+      },
+      "context": {
+        "bias": 0.020536954856055164,
+        "mae": 2.535818977685935
+      },
+      "dest": {
+        "bias": 0.13254479092308025,
+        "mae": 2.545261109952325
+      }
+    },
+    "returner|a >=25|2024+": {
+      "n": 240,
+      "base": {
+        "bias": -0.9491967239919614,
+        "mae": 2.712431724161061
+      },
+      "context": {
+        "bias": -0.45380338369971723,
+        "mae": 2.609356421585369
+      },
+      "dest": {
+        "bias": -0.35670394061095984,
+        "mae": 2.5672829136289383
+      }
+    },
+    "returner|b 10-25|2016-23": {
+      "n": 3000,
+      "base": {
+        "bias": -0.34785698941371707,
+        "mae": 2.2839365288002096
+      },
+      "context": {
+        "bias": -0.08597274269144252,
+        "mae": 2.2445416997010934
+      },
+      "dest": {
+        "bias": 0.027715070081398542,
+        "mae": 2.242005929084934
+      }
+    },
+    "returner|b 10-25|2024+": {
+      "n": 800,
+      "base": {
+        "bias": -0.5891145248411503,
+        "mae": 2.3883586911368053
+      },
+      "context": {
+        "bias": -0.2949441595128327,
+        "mae": 2.334054250147523
+      },
+      "dest": {
+        "bias": -0.2778165936522936,
+        "mae": 2.35090897560147
+      }
+    },
+    "returner|c 0-10|2016-23": {
+      "n": 3128,
+      "base": {
+        "bias": -0.11062051308630402,
+        "mae": 2.0229747529125195
+      },
+      "context": {
+        "bias": 0.01934611415824604,
+        "mae": 1.9890467994194208
+      },
+      "dest": {
+        "bias": 0.02436300091426109,
+        "mae": 1.9913346676370045
+      }
+    },
+    "returner|c 0-10|2024+": {
+      "n": 805,
+      "base": {
+        "bias": -0.3072699016289293,
+        "mae": 2.057771088175059
+      },
+      "context": {
+        "bias": -0.1172373172126775,
+        "mae": 2.0285214297175003
+      },
+      "dest": {
+        "bias": -0.09184807591838073,
+        "mae": 2.035208435529516
+      }
+    },
+    "returner|d <0|2016-23": {
+      "n": 8661,
+      "base": {
+        "bias": 0.14725515968113692,
+        "mae": 1.8691125198380574
+      },
+      "context": {
+        "bias": -0.0020470444455675143,
+        "mae": 1.8350437715522527
+      },
+      "dest": {
+        "bias": -0.05855537130310177,
+        "mae": 1.8246363124835914
+      }
+    },
+    "returner|d <0|2024+": {
+      "n": 2575,
+      "base": {
+        "bias": 0.3005323133095489,
+        "mae": 1.848351555240727
+      },
+      "context": {
+        "bias": 0.21379483361063392,
+        "mae": 1.8152670009560394
+      },
+      "dest": {
+        "bias": 0.17662791570245434,
+        "mae": 1.797621555484007
+      }
+    },
+    "transfer|a >=25|2016-23": {
+      "n": 99,
+      "base": {
+        "bias": -0.43672492056586126,
+        "mae": 2.501146340389108
+      },
+      "context": {
+        "bias": -0.5788710094976244,
+        "mae": 2.454378602253619
+      },
+      "dest": {
+        "bias": 0.5332872939540989,
+        "mae": 2.3582556795503886
+      }
+    },
+    "transfer|a >=25|2024+": {
+      "n": 167,
+      "base": {
+        "bias": -1.1341397966687832,
+        "mae": 3.1054361270593
+      },
+      "context": {
+        "bias": -1.3333894281538277,
+        "mae": 3.1148986708047004
+      },
+      "dest": {
+        "bias": -0.5542030298534453,
+        "mae": 2.8411690990634337
+      }
+    },
+    "transfer|b 10-25|2016-23": {
+      "n": 555,
+      "base": {
+        "bias": -0.5087214348762389,
+        "mae": 2.4041201910207786
+      },
+      "context": {
+        "bias": -0.5834802950542887,
+        "mae": 2.335555318579448
+      },
+      "dest": {
+        "bias": 0.2686389821782505,
+        "mae": 2.21850200558596
+      }
+    },
+    "transfer|b 10-25|2024+": {
+      "n": 810,
+      "base": {
+        "bias": -0.615677024464166,
+        "mae": 2.566494480534703
+      },
+      "context": {
+        "bias": -0.7325975193148189,
+        "mae": 2.5287175953502747
+      },
+      "dest": {
+        "bias": -0.04564020689596405,
+        "mae": 2.403229360134088
+      }
+    },
+    "transfer|c 0-10|2016-23": {
+      "n": 524,
+      "base": {
+        "bias": 0.1342505604601804,
+        "mae": 2.2043442436004277
+      },
+      "context": {
+        "bias": 0.017213194477315702,
+        "mae": 2.1559448040485636
+      },
+      "dest": {
+        "bias": 0.24640515225834075,
+        "mae": 2.0775220923645445
+      }
+    },
+    "transfer|c 0-10|2024+": {
+      "n": 564,
+      "base": {
+        "bias": -0.33195975242674686,
+        "mae": 2.326421871025805
+      },
+      "context": {
+        "bias": -0.41343445418418584,
+        "mae": 2.253442063301225
+      },
+      "dest": {
+        "bias": -0.18777180369584345,
+        "mae": 2.173868588648786
+      }
+    },
+    "transfer|d <0|2016-23": {
+      "n": 1150,
+      "base": {
+        "bias": 0.8390030960319099,
+        "mae": 2.2096855920772254
+      },
+      "context": {
+        "bias": 0.712637896625319,
+        "mae": 2.158038584646935
+      },
+      "dest": {
+        "bias": 0.0837017623253478,
+        "mae": 1.948576570927675
+      }
+    },
+    "transfer|d <0|2024+": {
+      "n": 1417,
+      "base": {
+        "bias": 0.5273642342572452,
+        "mae": 2.1823227217010626
+      },
+      "context": {
+        "bias": 0.4686872424308448,
+        "mae": 2.112688546715554
+      },
+      "dest": {
+        "bias": 0.045344109859943714,
+        "mae": 1.9730266591745904
+      }
+    }
+  },
+  "team_level": {
+    "a >=25|2016-23": {
+      "teams": 146,
+      "players_per_team": 6.205479452054795,
+      "base": -3.153623900791756,
+      "context": -0.27900621487279664,
+      "dest": 1.0942403313450793
+    },
+    "a >=25|2024+": {
+      "teams": 59,
+      "players_per_team": 6.898305084745763,
+      "base": -7.071331522063687,
+      "context": -5.620149942196972,
+      "dest": -3.019675453087384
+    },
+    "b 10-25|2016-23": {
+      "teams": 548,
+      "players_per_team": 6.487226277372263,
+      "base": -2.4195462857617946,
+      "context": -1.0615872113676235,
+      "dest": 0.423795338235629
+    },
+    "b 10-25|2024+": {
+      "teams": 213,
+      "players_per_team": 7.55868544600939,
+      "base": -4.5539437074596,
+      "context": -3.8937057195083074,
+      "dest": -1.2170039554345808
+    },
+    "c 0-10|2016-23": {
+      "teams": 559,
+      "players_per_team": 6.533094812164579,
+      "base": -0.49315504696390755,
+      "context": 0.12439062431682835,
+      "dest": 0.3673054859448645
+    },
+    "c 0-10|2024+": {
+      "teams": 193,
+      "players_per_team": 7.0932642487046635,
+      "base": -2.2516972599998617,
+      "context": -1.6971661788398247,
+      "dest": -0.9318186445531204
+    },
+    "d <0|2016-23": {
+      "teams": 1550,
+      "players_per_team": 6.329677419354839,
+      "base": 1.4453099989903377,
+      "context": 0.5172929865651978,
+      "dest": -0.2650909962464608
+    },
+    "d <0|2024+": {
+      "teams": 621,
+      "players_per_team": 6.428341384863124,
+      "base": 2.4495101879462235,
+      "context": 1.9559605782156029,
+      "dest": 0.8358606869651529
+    }
+  },
+  "paired_vs_base": {
+    "context": {
+      "delta": -0.040533739874313454,
+      "z": -13.089493029162927,
+      "targets_2024+": {
+        "delta": -0.04686522058227585,
+        "z": -8.080427778235606
+      }
+    },
+    "dest": {
+      "delta": -0.07476945738244631,
+      "z": -16.356832025865423,
+      "targets_2024+": {
+        "delta": -0.10471375505145736,
+        "z": -11.415432362450426
+      }
+    }
+  },
+  "dest_gain_share": {
+    "dest_prior_adj_em": 0.12040287569734151,
+    "dest_program_level": 0.0632763928669347,
+    "src_prior_adj_em": 0.0094211407859349,
+    "dest_minus_src": 0.0026338765854094894,
+    "is_transfer": 0.0014984695495963525
+  }
+}

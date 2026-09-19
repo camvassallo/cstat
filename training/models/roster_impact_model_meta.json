@@ -49,229 +49,229 @@
   "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
   "cam_v3_source": "oof",
   "cam_v3_coverage": {
-    "n_player_rows": 47328,
-    "trajectory_oof": 25412,
-    "freshman_oof": 5982,
-    "actual_fallback": 15769,
-    "no_cam_v3": 165,
-    "oof_pct": 66.3
+    "n_player_rows": 47072,
+    "trajectory_oof": 25325,
+    "freshman_oof": 5967,
+    "actual_fallback": 15606,
+    "no_cam_v3": 174,
+    "oof_pct": 66.5
   },
   "input_provenance": {
     "trajectory_oof_predictions": {
-      "n_rows": 25382,
-      "digest": "46fd527c762e16813d57221589b94130",
+      "n_rows": 25302,
+      "digest": "8d4c4ffde1d1fb85f3927cd4a8b8b349",
       "by_season": {
         "2016": {
-          "n_rows": 2086,
-          "digest": "c8a4212338550757a55ad799ee6274bf"
+          "n_rows": 2085,
+          "digest": "5fd6634038e32259c62a714645b69bcb"
         },
         "2017": {
-          "n_rows": 2151,
-          "digest": "c7cc7210177f86902a899d6b6282aa30"
+          "n_rows": 2140,
+          "digest": "8c4d35e05a30d107bd43b1f4153f8024"
         },
         "2018": {
-          "n_rows": 2121,
-          "digest": "84ace4d73000f014d10614474c28e416"
+          "n_rows": 2114,
+          "digest": "8e2b4a355f5767d9e4d6830da95155d9"
         },
         "2019": {
-          "n_rows": 2086,
-          "digest": "f5479fe586f7c73dc1e56775d270d04f"
+          "n_rows": 2080,
+          "digest": "d5610ef4f619e713e4dd60e3c912446e"
         },
         "2020": {
-          "n_rows": 2152,
-          "digest": "acf9596632f353ac7c0a9b7d4f324764"
+          "n_rows": 2140,
+          "digest": "595e4be915a8e6d4e849faf83785876f"
         },
         "2021": {
-          "n_rows": 2221,
-          "digest": "a318f6ad557c8bc93df7275b75878fe8"
+          "n_rows": 2214,
+          "digest": "360233e493cddb3ab65270e49a85a04d"
         },
         "2022": {
-          "n_rows": 2684,
-          "digest": "fc7a48f0ec94697e915273ecb421d5ed"
+          "n_rows": 2674,
+          "digest": "d21b55416b9861be0a6ff089edc46631"
         },
         "2023": {
-          "n_rows": 2487,
-          "digest": "ae698d52aba51aaf6070f64130203d35"
+          "n_rows": 2477,
+          "digest": "7a22bd33e897815f4a49404f1a75bb7e"
         },
         "2024": {
-          "n_rows": 2560,
-          "digest": "7a7fb408590bbe458e5468a14ef807c7"
+          "n_rows": 2552,
+          "digest": "864dfeeacdc2bead6d9557276ae8d0bd"
         },
         "2025": {
-          "n_rows": 2538,
-          "digest": "abb99ad1db976e6d4926c345b3f6b4bf"
+          "n_rows": 2532,
+          "digest": "8c2ecbd598c0c3cbe02d9a67a4e24d82"
         },
         "2026": {
-          "n_rows": 2296,
-          "digest": "25d91c931b89db4560ad621df321cdab"
+          "n_rows": 2294,
+          "digest": "4de17fd32dc257dd4a0e65298f01fad0"
         }
       }
     },
     "freshman_oof_predictions": {
-      "n_rows": 5979,
-      "digest": "21913ef3cf3fcf94e910b533e11c4378",
+      "n_rows": 5980,
+      "digest": "3550cda81f41dd59a9f0faa4a874e4fd",
       "by_season": {
         "2015": {
           "n_rows": 545,
-          "digest": "30bbffc4ad58c2ff1b933d05fac9c5a1"
+          "digest": "2ea34db689566be98c848cae73562ae1"
         },
         "2016": {
           "n_rows": 431,
-          "digest": "75759b63cfc6669f8fe38c09c9f615c5"
+          "digest": "fb3d057960330cbd36190b5908783778"
         },
         "2017": {
           "n_rows": 441,
-          "digest": "2ae39a413270f846331dc7f079de471e"
+          "digest": "2a05a9bf07b8b3936c8a5071da7853fd"
         },
         "2018": {
           "n_rows": 528,
-          "digest": "508d87e9d49672f17bc4019508a70fa5"
+          "digest": "0f92d9ba2ca89548ecc7806b8c3e1ff9"
         },
         "2019": {
           "n_rows": 507,
-          "digest": "9a71191f3951a728026ff8c8daac805c"
+          "digest": "669f15c855448c9a99957ff2bf7fa878"
         },
         "2020": {
           "n_rows": 549,
-          "digest": "d55bcc00e0424de6630c74e75fc7b93a"
+          "digest": "570f71e31a640cc0cd95b8f8a82d108f"
         },
         "2021": {
           "n_rows": 514,
-          "digest": "49292493f58968484fba6f156e4b6d7e"
+          "digest": "f02f8c8a36a52cbc491c81903e45d26d"
         },
         "2022": {
           "n_rows": 398,
-          "digest": "8a898151eea5dfcd4b254f17ebd63b50"
+          "digest": "1e7bcfb527a21eb0a71b8d44aa974dc7"
         },
         "2023": {
           "n_rows": 521,
-          "digest": "d4226ab8f02105c7a04ab8b31c9899bb"
+          "digest": "9e6cabaace8e5a3dad70ce1f5d676e91"
         },
         "2024": {
           "n_rows": 556,
-          "digest": "f4fa56e504c50dafd753a48be1f88872"
+          "digest": "b699439f9a8580a4380ab1e4fb8315ac"
         },
         "2025": {
-          "n_rows": 500,
-          "digest": "a7de53e155356c407bd51f664bafd624"
+          "n_rows": 501,
+          "digest": "101375837bc458829c8a9acb8520a975"
         },
         "2026": {
           "n_rows": 489,
-          "digest": "c743ae96ce6921dfa2dd1bac89997137"
+          "digest": "ba09e7707f9546f6675e36d28a2775ee"
         }
       }
     },
     "torvik_player_stats.cam_v3": {
-      "n_rows": 58709,
-      "digest": "13260ada64ef328ae580020e522b5a4f",
+      "n_rows": 58400,
+      "digest": "b66f472834442eff02788519e3e85dc3",
       "by_season": {
         "2015": {
-          "n_rows": 4733,
-          "digest": "b772f4b074eadcc078e87c3b744656d9"
+          "n_rows": 4723,
+          "digest": "c260eb37d4ecae574f90a88503016e69"
         },
         "2016": {
-          "n_rows": 4722,
-          "digest": "7b95a78b300364340f73bea786743b71"
+          "n_rows": 4696,
+          "digest": "025e1dc728be8d2598a44b5856a01ae3"
         },
         "2017": {
-          "n_rows": 4758,
-          "digest": "b3f031383cdb8348ffcbe0286d547b56"
+          "n_rows": 4742,
+          "digest": "3beb81354bfa8ade9724f76718844e8e"
         },
         "2018": {
-          "n_rows": 4724,
-          "digest": "d776144252a6e814d998e9a288e71d6d"
+          "n_rows": 4703,
+          "digest": "b0d76b79c8337ec67a866d0731aec979"
         },
         "2019": {
-          "n_rows": 4778,
-          "digest": "b17e037e32ef24b23308588acc869a6a"
+          "n_rows": 4739,
+          "digest": "09763ca153feaf489c1e01841a7686e6"
         },
         "2020": {
-          "n_rows": 4763,
-          "digest": "f9611f4ea318265043a41d78ec8033d0"
+          "n_rows": 4733,
+          "digest": "254a04557ec3332f5842a58a7cae6a8e"
         },
         "2021": {
-          "n_rows": 4994,
-          "digest": "681f4a87717b391dbb469a1bf3652b22"
+          "n_rows": 4970,
+          "digest": "355e5d2d4d5c08465354b445ee7d1788"
         },
         "2022": {
-          "n_rows": 5038,
-          "digest": "134f852f15decdd1beccbb24c8c4b73f"
+          "n_rows": 5011,
+          "digest": "8ca47e048d7d759ee155d661b15aa1f7"
         },
         "2023": {
-          "n_rows": 5061,
-          "digest": "3591c9ce9d80901c530153504f8d37c0"
+          "n_rows": 5043,
+          "digest": "1af4b222e567032040c4e9d1716e942b"
         },
         "2024": {
-          "n_rows": 5016,
-          "digest": "4389c81a4b6397417f462f24cff97f73"
+          "n_rows": 5002,
+          "digest": "4e1bc4807d42e6642eafd806e25893ba"
         },
         "2025": {
-          "n_rows": 5085,
-          "digest": "9686683c552397c84dcc13d0eb49ebb8"
+          "n_rows": 5060,
+          "digest": "1738f138a18cde8307aa5e4deb91622d"
         },
         "2026": {
-          "n_rows": 5037,
-          "digest": "2a906b62d59822da4fee158b90d6ed2a"
+          "n_rows": 4978,
+          "digest": "579a334fd0c9cefe53f1ccbeb689aaad"
         }
       }
     },
     "player_archetypes": {
-      "n_rows": 40791,
-      "digest": "f3e9ad89a9cb59e56b4a21f8c5f91e4c",
+      "n_rows": 40798,
+      "digest": "8cae339f4b8dce976e80d9aa4cef19d5",
       "by_season": {
         "2015": {
-          "n_rows": 3079,
-          "digest": "bacd398923b9c5f07fff7c931629af89"
+          "n_rows": 3078,
+          "digest": "f3ac491735f4564cfa772fc985701b61"
         },
         "2016": {
           "n_rows": 3267,
-          "digest": "3040eea6f55c03b520622e6cb3ad7198"
+          "digest": "7d79f9a5bf9a8eeb2c8868c5b3f965d7"
         },
         "2017": {
-          "n_rows": 3352,
-          "digest": "176107ae095a27b336d14312dbfda94a"
+          "n_rows": 3351,
+          "digest": "bc91ef605431cc33c419984f5c3f5c73"
         },
         "2018": {
-          "n_rows": 3322,
-          "digest": "1aeccefa210bffc85f3797a6289ca620"
+          "n_rows": 3321,
+          "digest": "3cb0f8f86fe0e940f018b2959be071b6"
         },
         "2019": {
           "n_rows": 3378,
-          "digest": "8dea2b9233555526c99789f8c2795ee6"
+          "digest": "fa7e96f5711b48b4c43b4013570566f8"
         },
         "2020": {
           "n_rows": 3378,
-          "digest": "bdec72d67f6402318362ec18594ac9e8"
+          "digest": "f4d2ec47a4f4b339ee1715b77cb2ba95"
         },
         "2021": {
-          "n_rows": 3269,
-          "digest": "f6dac74a95f72efbfeda209870afd3e7"
+          "n_rows": 3270,
+          "digest": "f71447505cd50a805d94c8d6fee09e00"
         },
         "2022": {
-          "n_rows": 3521,
-          "digest": "7b3ec66192d8b3e6924da5ee72d3a3ac"
+          "n_rows": 3526,
+          "digest": "265aae34fc2ca7d55740a3f4abf42ebd"
         },
         "2023": {
-          "n_rows": 3495,
-          "digest": "9ef7a1c78b51baec1d896df3b8784ac6"
+          "n_rows": 3497,
+          "digest": "b42f6331581ad7e3f2b244450588b667"
         },
         "2024": {
-          "n_rows": 3545,
-          "digest": "92b1d7729d08aefd6d306068e3bf1de5"
+          "n_rows": 3546,
+          "digest": "81ddaaba3a849014df152c0410c5a8f5"
         },
         "2025": {
           "n_rows": 3570,
-          "digest": "fd1daf58cac0d48ad92b3650b640b848"
+          "digest": "a49fc8642452b48aed99868a96e182fd"
         },
         "2026": {
-          "n_rows": 3615,
-          "digest": "ea632759e224e32c3891cec89787605f"
+          "n_rows": 3616,
+          "digest": "82a10ab2bd4401860cf2563e0319721a"
         }
       }
     },
     "team_season_stats.adj": {
       "n_rows": 4268,
-      "digest": "e216ea52385f4a277dac65698d8a7b36",
+      "digest": "ad4a9438ef447c055cb240b110550210",
       "by_season": {
         "2015": {
           "n_rows": 351,
@@ -279,7 +279,7 @@
         },
         "2016": {
           "n_rows": 351,
-          "digest": "5fd2937d62ad7aa772f2672806072401"
+          "digest": "53959b753a184a54dd96bf7f48c9045a"
         },
         "2017": {
           "n_rows": 351,
@@ -326,15 +326,15 @@
   },
   "oof_provenance": {
     "trajectory_oof_predictions": {
-      "n_rows": 25382,
-      "digest": "46fd527c762e16813d57221589b94130"
+      "n_rows": 25302,
+      "digest": "8d4c4ffde1d1fb85f3927cd4a8b8b349"
     },
     "freshman_oof_predictions": {
-      "n_rows": 5979,
-      "digest": "21913ef3cf3fcf94e910b533e11c4378"
+      "n_rows": 5980,
+      "digest": "3550cda81f41dd59a9f0faa4a874e4fd"
     }
   },
-  "final_n_estimators": 259,
+  "final_n_estimators": 255,
   "loso_export_seasons": [
     2016,
     2017,
@@ -379,211 +379,211 @@
   "backtest_loso": {
     "per_season": {
       "2015": {
-        "mae": 2.6135097033411983,
-        "rmse": 3.522287805060392,
-        "r2": 0.9460219962453422,
+        "mae": 2.617948848028114,
+        "rmse": 3.551373899023739,
+        "r2": 0.9451268441560771,
         "n": 351
       },
       "2016": {
-        "mae": 3.540654101413037,
-        "rmse": 4.554022672718198,
-        "r2": 0.9078421518232469,
+        "mae": 3.5541485190898543,
+        "rmse": 4.538937299111666,
+        "r2": 0.9084497344912946,
         "n": 351
       },
       "2017": {
-        "mae": 3.646329974801898,
-        "rmse": 4.592423558789077,
-        "r2": 0.9096716769216111,
+        "mae": 3.7747581681169566,
+        "rmse": 4.694314437271104,
+        "r2": 0.905619031803266,
         "n": 351
       },
       "2018": {
-        "mae": 3.7161938256426086,
-        "rmse": 4.73985397218862,
-        "r2": 0.8973747222678161,
+        "mae": 3.668007458995841,
+        "rmse": 4.662573481926428,
+        "r2": 0.9006939288374207,
         "n": 351
       },
       "2019": {
-        "mae": 3.669154579350488,
-        "rmse": 4.7010417875639865,
-        "r2": 0.8984504903416471,
+        "mae": 3.6858373144689724,
+        "rmse": 4.6211095519822045,
+        "r2": 0.9018744427243789,
         "n": 353
       },
       "2020": {
-        "mae": 3.515832549161393,
-        "rmse": 4.554808113403805,
-        "r2": 0.9008959792123199,
+        "mae": 3.488971106076868,
+        "rmse": 4.514375596129822,
+        "r2": 0.9026476403048337,
         "n": 353
       },
       "2021": {
-        "mae": 4.319515438542852,
-        "rmse": 5.520730537760184,
-        "r2": 0.8662184031427265,
+        "mae": 4.180248880399208,
+        "rmse": 5.402011033574138,
+        "r2": 0.8719102998209163,
         "n": 341
       },
       "2022": {
-        "mae": 3.8777564525442063,
-        "rmse": 4.920147964763807,
-        "r2": 0.8841067363616446,
+        "mae": 3.8220739261967562,
+        "rmse": 4.837374671449284,
+        "r2": 0.8879733579218198,
         "n": 352
       },
       "2023": {
-        "mae": 3.7682688271828493,
-        "rmse": 4.831009017170219,
-        "r2": 0.884117907893805,
+        "mae": 3.6408402405090645,
+        "rmse": 4.714057400472275,
+        "r2": 0.8896606645919544,
         "n": 362
       },
       "2024": {
-        "mae": 3.5815183732144154,
-        "rmse": 4.598883592641708,
-        "r2": 0.9060990898356004,
+        "mae": 3.5744165292713994,
+        "rmse": 4.62511145110384,
+        "r2": 0.9050249845333033,
         "n": 362
       },
       "2025": {
-        "mae": 3.7202020649181047,
-        "rmse": 4.743195659605459,
-        "r2": 0.9134513241091132,
+        "mae": 3.7491435613638666,
+        "rmse": 4.80497973773536,
+        "r2": 0.9111819018645606,
         "n": 364
       },
       "2026": {
-        "mae": 3.9648224629038897,
-        "rmse": 5.079391070308324,
-        "r2": 0.9071858214108505,
+        "mae": 3.882124970591926,
+        "rmse": 4.882360231133011,
+        "r2": 0.9142467354688002,
         "n": 364
       }
     },
     "pooled": {
-      "mae": 3.660764920399328,
-      "rmse": 4.716318317801581,
-      "r2": 0.9025215912260942
+      "mae": 3.63620772501939,
+      "rmse": 4.670398651306696,
+      "r2": 0.904410354435231
     },
     "best_iterations": [
-      103,
-      307,
-      341,
-      157,
-      468,
-      195,
-      301,
-      190,
-      138,
-      310,
-      321,
-      276
+      145,
+      192,
+      203,
+      230,
+      197,
+      273,
+      278,
+      224,
+      166,
+      700,
+      216,
+      236
     ]
   },
   "cv_5fold": {
-    "mae": 3.654678509591375,
-    "rmse": 4.697321409888587,
-    "r2": 0.9031400497917048
+    "mae": 3.6247920703773224,
+    "rmse": 4.665358757853969,
+    "r2": 0.9044325568674589
   },
   "feature_importance": [
     {
       "name": "cam_sum",
-      "importance": 408
-    },
-    {
-      "name": "cam_wmean",
-      "importance": 272
+      "importance": 385
     },
     {
       "name": "arch_bard",
-      "importance": 266
+      "importance": 276
     },
     {
       "name": "arch_sorcerer",
-      "importance": 256
+      "importance": 265
+    },
+    {
+      "name": "cam_wmean",
+      "importance": 264
     },
     {
       "name": "arch_ranger",
-      "importance": 228
-    },
-    {
-      "name": "arch_fighter",
-      "importance": 184
+      "importance": 226
     },
     {
       "name": "outbound_cam_v3_sum",
-      "importance": 168
+      "importance": 184
     },
     {
-      "name": "arch_cleric",
-      "importance": 163
+      "name": "arch_fighter",
+      "importance": 173
     },
     {
       "name": "arch_druid",
-      "importance": 162
+      "importance": 167
     },
     {
       "name": "arch_paladin",
-      "importance": 156
+      "importance": 166
     },
     {
-      "name": "arch_rogue",
-      "importance": 155
-    },
-    {
-      "name": "inbound_cam_v3_sum",
-      "importance": 140
+      "name": "arch_cleric",
+      "importance": 146
     },
     {
       "name": "cam_top7_mean",
-      "importance": 136
+      "importance": 143
     },
     {
-      "name": "exp_fr_share",
-      "importance": 134
-    },
-    {
-      "name": "arch_wizard",
-      "importance": 130
-    },
-    {
-      "name": "arch_monk",
-      "importance": 127
-    },
-    {
-      "name": "exp_sr_share",
-      "importance": 119
-    },
-    {
-      "name": "roster_size",
-      "importance": 117
-    },
-    {
-      "name": "exp_jr_share",
-      "importance": 113
-    },
-    {
-      "name": "cam_top3_mean",
-      "importance": 102
+      "name": "arch_rogue",
+      "importance": 142
     },
     {
       "name": "exp_so_share",
-      "importance": 90
+      "importance": 140
     },
     {
-      "name": "cam_top1",
-      "importance": 87
+      "name": "arch_wizard",
+      "importance": 137
+    },
+    {
+      "name": "exp_fr_share",
+      "importance": 128
+    },
+    {
+      "name": "exp_jr_share",
+      "importance": 111
+    },
+    {
+      "name": "arch_monk",
+      "importance": 111
+    },
+    {
+      "name": "roster_size",
+      "importance": 110
+    },
+    {
+      "name": "inbound_cam_v3_sum",
+      "importance": 103
+    },
+    {
+      "name": "exp_sr_share",
+      "importance": 102
     },
     {
       "name": "arch_barbarian",
+      "importance": 89
+    },
+    {
+      "name": "cam_top1",
+      "importance": 84
+    },
+    {
+      "name": "cam_top3_mean",
       "importance": 82
     },
     {
       "name": "arch_warlock",
-      "importance": 80
+      "importance": 64
     },
     {
       "name": "cam_count_gt5",
-      "importance": 8
+      "importance": 25
     },
     {
       "name": "cam_count_gt10",
-      "importance": 2
+      "importance": 1
     },
     {
       "name": "cam_count_gt15",
-      "importance": 0
+      "importance": 1
     }
   ]
 }

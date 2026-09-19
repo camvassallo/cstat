@@ -5,10 +5,13 @@ use axum::{
     response::Json,
     routing::get,
 };
-use cstat_core::roster_projection::{TRANSFER_SEASON_LOOKBACK, normalize_player_name as normalize};
+use cstat_core::roster_projection::{
+    TRANSFER_SEASON_LOOKBACK, fetch_baseline_adj_em, fetch_program_levels,
+    normalize_player_name as normalize,
+};
 use cstat_core::team_name_match::{team_match_score, team_matches};
 use cstat_core::trajectory::{
-    TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
+    Destination, TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
     fetch_trajectory_oof,
 };
 use serde::Serialize;
@@ -80,9 +83,9 @@ struct EnrichedTransfer {
     url_247: Option<String>,
     /// Phase 5c trajectory projection — predicted CamPom for the
     /// transfer's first season at the destination (= year+1). Computed
-    /// from the player's source-season stats; the trajectory model is
-    /// destination-agnostic (no team feature), so the projection
-    /// assumes a role similar to what they played at their source.
+    /// from the player's source-season stats plus the destination's
+    /// program strength (`trajectory::Destination`) when `next_team_id`
+    /// resolved; otherwise destination-blind, as a returner.
     /// NULL when the player didn't match a cstat row, or didn't pass
     /// the trajectory qualification gate (≥5 GP, ≥5 MPG), or batch
     /// inference failed. The Phase 6 honesty note applies here too:
@@ -555,6 +558,30 @@ async fn transfer_list(
             }
         }
         if !need_live.is_empty() {
+            // The destination is the resolved next team (a base-season row,
+            // the same season the source rows come from), with the program
+            // strength the Future page's ledger uses for the same player —
+            // so a transfer projects to one number on both pages. A transfer
+            // whose destination did not resolve (entered, undecided, or a
+            // non-D-I school) projects destination-blind, as a returner.
+            let (dest_baseline, dest_levels) = tokio::try_join!(
+                fetch_baseline_adj_em(&state.db.pool, year),
+                fetch_program_levels(&state.db.pool, year),
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = ?e, "destination strength fetch failed; transfers project destination-blind");
+                (HashMap::new(), HashMap::new())
+            });
+            let destination_of = |e: &EnrichedTransfer| -> Option<Destination> {
+                let team_id = e.next_team_id?;
+                Some(Destination {
+                    team_id,
+                    prior_adj_em: dest_baseline.get(&team_id).map(|v| f64::from(*v)),
+                    program_level: dest_levels
+                        .get(&team_id)
+                        .and_then(|(net, _)| net.map(f64::from)),
+                })
+            };
             match fetch_player_trajectory_rows(&state.db.pool, &need_live).await {
                 Ok(row_map) => {
                     let mut indices: Vec<usize> = Vec::new();
@@ -568,7 +595,12 @@ async fn transfer_list(
                             // `src_season` is the player's own source season —
                             // `year` for a normal transfer, earlier for a sat-out
                             // one (issue #146, e.g. Pierce's Princeton 2025).
-                            feature_vectors.push(build_trajectory_features(row, *src_season));
+                            let dest = destination_of(e);
+                            feature_vectors.push(build_trajectory_features(
+                                row,
+                                *src_season,
+                                dest.as_ref(),
+                            ));
                         }
                     }
                     match state.predictor.predict_trajectory_batch(&feature_vectors) {

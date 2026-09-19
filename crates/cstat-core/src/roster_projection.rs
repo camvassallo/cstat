@@ -42,7 +42,7 @@ use crate::roster_features::{PlayerRow, QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use crate::roster_impact::{apply_projected_cam_v3, build_roster_impact_features};
 use crate::team_name_match::team_match_score;
 use crate::trajectory::{
-    TrajectoryPrediction, build_trajectory_features, fetch_player_trajectory_rows,
+    Destination, TrajectoryPrediction, build_trajectory_features, fetch_player_trajectory_rows,
     fetch_trajectory_oof,
 };
 use serde::{Deserialize, Serialize};
@@ -805,10 +805,85 @@ impl RosterRow {
 /// One row from `teams` for the base season — minimum we need for
 /// 247-side name resolution.
 #[derive(sqlx::FromRow, Clone)]
-struct TeamRow {
-    id: Uuid,
-    name: String,
-    short_name: Option<String>,
+pub struct TeamRow {
+    pub id: Uuid,
+    pub name: String,
+    pub short_name: Option<String>,
+}
+
+/// `team_season_stats.adj_efficiency_margin` for every team in `season`,
+/// keyed by team UUID — the blend's `baseline` and a trajectory
+/// [`Destination`]'s `prior_adj_em`. Teams with no AdjEM yet are absent.
+pub async fn fetch_baseline_adj_em(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<Uuid, f32>, sqlx::Error> {
+    let rows: Vec<(Uuid, f64)> = sqlx::query_as(
+        r#"SELECT team_id, adj_efficiency_margin FROM team_season_stats
+           WHERE season = $1 AND adj_efficiency_margin IS NOT NULL"#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(t, v)| (t, v as f32)).collect())
+}
+
+/// The base season's team rows, for [`resolve_team_id`].
+pub async fn fetch_team_rows(pool: &PgPool, base_season: i32) -> Result<Vec<TeamRow>, sqlx::Error> {
+    sqlx::query_as::<_, TeamRow>(r#"SELECT id, name, short_name FROM teams WHERE season = $1"#)
+        .bind(base_season)
+        .fetch_all(pool)
+        .await
+}
+
+/// Each program's own level over the 3 seasons BEFORE `base_season` —
+/// `(net, offense)` means — keyed by base-season team UUID. Season-scoped
+/// UUIDs mean this hops through `natstat_id` to reach the same program's
+/// older rows. The `HAVING count(*) >= 2` gate mirrors the backtest: one
+/// prior season is not a level estimate, it is another single sample, and a
+/// team with fewer than two is absent here (`program_level = None`) and is
+/// left on the raw baseline — measured as a no-op, 19 of 2,626 team-seasons.
+///
+/// Read by `compose_all_projections` for the blend's anchor and by every
+/// surface that builds a trajectory [`Destination`], so the level the
+/// trajectory model sees is the level the anchor uses.
+pub async fn fetch_program_levels(
+    pool: &PgPool,
+    base_season: i32,
+) -> Result<HashMap<Uuid, (Option<f32>, Option<f32>)>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct ProgramLevelRow {
+        team_id: Uuid,
+        level: Option<f64>,
+        level_o: Option<f64>,
+    }
+    let rows: Vec<ProgramLevelRow> = sqlx::query_as::<_, ProgramLevelRow>(
+        r#"
+        SELECT t_base.id AS team_id,
+               AVG(tss.adj_efficiency_margin)    AS level,
+               AVG(tss.adj_offense)              AS level_o
+        FROM teams t_base
+        JOIN teams t_hist ON t_hist.natstat_id = t_base.natstat_id
+        JOIN team_season_stats tss ON tss.team_id = t_hist.id
+        WHERE t_base.season = $1
+          AND t_hist.season BETWEEN $1 - 3 AND $1 - 1
+          AND tss.adj_efficiency_margin IS NOT NULL
+        GROUP BY t_base.id
+        HAVING count(*) >= 2
+        "#,
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.team_id,
+                (r.level.map(|v| v as f32), r.level_o.map(|v| v as f32)),
+            )
+        })
+        .collect())
 }
 
 /// One row from `transfers` for the base year. We only need the
@@ -875,7 +950,7 @@ struct RecruitRow {
 
 /// Resolve a 247 short name to a team_id at the given season by best
 /// match score across the supplied teams. `None` when no team matches.
-fn resolve_team_id(teams: &[TeamRow], short: &str) -> Option<Uuid> {
+pub fn resolve_team_id(teams: &[TeamRow], short: &str) -> Option<Uuid> {
     teams
         .iter()
         .filter_map(|t| {
@@ -1044,46 +1119,7 @@ pub async fn compose_all_projections(
             .fetch_all(pool)
             .await?;
 
-    // The program's own level over the 3 seasons BEFORE the base season,
-    // keyed by base-season team UUID. Season-scoped UUIDs mean this has to
-    // hop through `natstat_id` to reach the same program's older rows. The
-    // `HAVING count(*) >= 2` gate mirrors the backtest: one prior season is
-    // not a level estimate, it is another single sample, and a team with
-    // fewer than two takes `program_level = None` and is left on the raw
-    // baseline (measured as a no-op — 19 of 2,626 team-seasons).
-    #[derive(sqlx::FromRow)]
-    struct ProgramLevelRow {
-        team_id: Uuid,
-        level: Option<f64>,
-        level_o: Option<f64>,
-    }
-    let program_levels: Vec<ProgramLevelRow> = sqlx::query_as::<_, ProgramLevelRow>(
-        r#"
-        SELECT t_base.id AS team_id,
-               AVG(tss.adj_efficiency_margin)    AS level,
-               AVG(tss.adj_offense)              AS level_o
-        FROM teams t_base
-        JOIN teams t_hist ON t_hist.natstat_id = t_base.natstat_id
-        JOIN team_season_stats tss ON tss.team_id = t_hist.id
-        WHERE t_base.season = $1
-          AND t_hist.season BETWEEN $1 - 3 AND $1 - 1
-          AND tss.adj_efficiency_margin IS NOT NULL
-        GROUP BY t_base.id
-        HAVING count(*) >= 2
-        "#,
-    )
-    .bind(base_season)
-    .fetch_all(pool)
-    .await?;
-    let program_level: HashMap<Uuid, (Option<f32>, Option<f32>)> = program_levels
-        .into_iter()
-        .map(|r| {
-            (
-                r.team_id,
-                (r.level.map(|v| v as f32), r.level_o.map(|v| v as f32)),
-            )
-        })
-        .collect();
+    let program_level = fetch_program_levels(pool, base_season).await?;
 
     let roster_rows: Vec<RosterRow> = sqlx::query_as::<_, RosterRow>(
         r#"
@@ -1933,6 +1969,43 @@ pub async fn compose_all_projections(
 /// season (season-scoped `player_id`, so it's self-pinning — a returner's
 /// base season, or an earlier season for a sat-out arrival; issue #146).
 ///
+impl ProjectedRoster {
+    /// This roster as a trajectory [`Destination`]: the team being composed,
+    /// its base-season AdjEM (`baseline`, the same number the blend anchors
+    /// on) and its 3-year `program_level`.
+    pub fn destination(&self, baseline: Option<f32>) -> Destination {
+        Destination {
+            team_id: self.team_id,
+            prior_adj_em: baseline.map(f64::from),
+            program_level: self.program_level.map(f64::from),
+        }
+    }
+}
+
+/// `player_id → Destination` for every returner, arrival and uncertain
+/// player across `projections` — each one's destination is the roster he is
+/// listed on. Every surface that projects the slate builds its map here so a
+/// returner and an arrival to the same team see the same destination.
+pub fn destination_map(
+    projections: &[ProjectedRoster],
+    baseline: impl Fn(Uuid) -> Option<f32>,
+) -> HashMap<Uuid, Destination> {
+    let mut out = HashMap::new();
+    for p in projections {
+        let dest = p.destination(baseline(p.team_id));
+        for id in p
+            .returning
+            .iter()
+            .map(|r| r.player_id)
+            .chain(p.arrivals.iter().map(|a| a.player_id))
+            .chain(p.uncertain.iter().map(|(row, _)| row.player_id))
+        {
+            out.insert(id, dest);
+        }
+    }
+    out
+}
+
 /// Returns a `player_id → projected cam_v3` map. Players the trajectory
 /// model can't score (no qualifying prior season) are simply absent;
 /// `roster_impact::apply_projected_cam_v3` then leaves their existing
@@ -1944,6 +2017,7 @@ pub async fn project_returner_cam_v3(
     predictor: &Predictor,
     player_ids: &[Uuid],
     target_season: i32,
+    destinations: &HashMap<Uuid, Destination>,
 ) -> Result<HashMap<Uuid, f64>, sqlx::Error> {
     if player_ids.is_empty() {
         return Ok(HashMap::new());
@@ -1970,7 +2044,11 @@ pub async fn project_returner_cam_v3(
         // year — so the feature block's season-derived inputs stay correct.
         for (pid, (row, src_season)) in row_map {
             ids.push(pid);
-            feats.push(build_trajectory_features(&row, src_season));
+            feats.push(build_trajectory_features(
+                &row,
+                src_season,
+                destinations.get(&pid),
+            ));
         }
         if !feats.is_empty() {
             match predictor.predict_trajectory_batch(&feats) {
@@ -2008,6 +2086,7 @@ pub async fn project_returner_cam_v3_banded(
     predictor: &Predictor,
     player_ids: &[Uuid],
     target_season: i32,
+    destinations: &HashMap<Uuid, Destination>,
 ) -> Result<HashMap<Uuid, TrajectoryPrediction>, sqlx::Error> {
     if player_ids.is_empty() {
         return Ok(HashMap::new());
@@ -2028,7 +2107,11 @@ pub async fn project_returner_cam_v3_banded(
         let mut feats = Vec::with_capacity(row_map.len());
         for (pid, (row, src_season)) in row_map {
             ids.push(pid);
-            feats.push(build_trajectory_features(&row, src_season));
+            feats.push(build_trajectory_features(
+                &row,
+                src_season,
+                destinations.get(&pid),
+            ));
         }
         if !feats.is_empty() {
             match predictor.predict_trajectory_batch(&feats) {

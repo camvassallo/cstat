@@ -17,8 +17,9 @@ use cstat_core::roster_impact::{
     build_roster_impact_features,
 };
 use cstat_core::roster_projection::{
-    ProjectedRoster, UncertainCause, compose_all_projections, fetch_draft_entrants,
-    fetch_player_departures, load_mock_draft, normalize_player_name, project_returner_cam_v3,
+    ProjectedRoster, UncertainCause, compose_all_projections, destination_map,
+    fetch_draft_entrants, fetch_player_departures, load_mock_draft, normalize_player_name,
+    project_returner_cam_v3,
 };
 use cstat_core::trajectory::{
     TRAJECTORY_NUM_FEATURES, build_trajectory_features, fetch_player_trajectory_rows,
@@ -569,15 +570,25 @@ async fn projection_list(
         traj_ids.extend(p.arrivals.iter().map(|a| a.player_id));
         traj_ids.extend(p.uncertain.iter().map(|(row, _)| row.player_id));
     }
-    let projected_cam = project_returner_cam_v3(&state.db.pool, &state.predictor, &traj_ids, year)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                error = %e,
-                "trajectory cam_v3 projection failed; projecting on current-season cam_v3",
-            );
-            std::collections::HashMap::new()
-        });
+    // Each player's destination is the roster he is listed on — its baseline
+    // and program level are what the blend anchors on, so the trajectory
+    // model and the anchor read the same program strength.
+    let destinations = destination_map(&projections, |t| baseline_map.get(&t).copied());
+    let projected_cam = project_returner_cam_v3(
+        &state.db.pool,
+        &state.predictor,
+        &traj_ids,
+        year,
+        &destinations,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %e,
+            "trajectory cam_v3 projection failed; projecting on current-season cam_v3",
+        );
+        std::collections::HashMap::new()
+    });
 
     // Display-only coach grade per team (descriptive; never feeds the
     // projection — see the coach fields on `ProjectedTeam`). A failure here is
@@ -1348,9 +1359,17 @@ async fn projection_team_detail(
                     // `src_season` is each player's own season — base_season for a
                     // returner, an earlier season for a sat-out arrival (issue
                     // #146) — so season-derived features stay correct.
+                    // Everyone here is projected onto THIS team — a departure
+                    // included, since his chip is the "had he stayed"
+                    // counterfactual — so the destination is the same for all.
+                    let dest = projection.destination(baseline);
                     for (pid, (row, src_season)) in row_map {
                         ids.push(pid);
-                        feature_vectors.push(build_trajectory_features(&row, src_season));
+                        feature_vectors.push(build_trajectory_features(
+                            &row,
+                            src_season,
+                            Some(&dest),
+                        ));
                     }
                     match state.predictor.predict_trajectory_batch(&feature_vectors) {
                         Ok(preds) => {
