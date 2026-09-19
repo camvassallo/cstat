@@ -155,19 +155,6 @@ contract", so he stays too. Run on 2026-09-18 at CAM ≥ 8: 39 open, 33 signed,
 3 with no suit and no signing (Saunders, Nickel, Carroll), 3 suing (White,
 Griffen, Alexis) — the three rows this pass added.
 
-**The portal does not resolve a Class-of-2022 mover.** For everyone else, a
-portal commit is the answer; for a four-season senior it is the question —
-he committed somewhere for a fifth season he may not have, and without a row
-he projects as a FIRM arrival at his new school (Seth Trimble at Louisville,
-2026). `--open-cohort` prints these as a second MOVERS section with the
-commit date, which is the tell: a commit under the old rules (before the
-2026-06-23 rule change) means a waiver he already holds and needs no row; a
-commit inside the window the class injunction was in force (2026-07-31 to
-the 2026-08-21 stay) means the injunction, and is a `contested` row tagged
-`Wisne v. NCAA` unless he is named in a suit of his own. Twelve such rows
-were added on 2026-09-18 (Trimble and Fredrick King are Wells plaintiffs;
-Handlogten's medical waiver was denied and he is on an order).
-
 The three false-positive shapes seen so far, so the next pass knows what to
 look for: a same-name player in another sport (`Tristan Smith v. NCAA` is a
 Clemson football player; cstat has one at Northern Iowa), a case from a past
