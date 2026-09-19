@@ -21,6 +21,9 @@ targets, leave-one-season-out:
                                               baseline when fewer than 2)
   d_base_nf  adj_em - baseline, shipped features only (no baseline feature)
   level_lf   adj_em, with the two level features added
+  lin_only   OLS on cam_sum / cam_wmean / cam_top7_mean / baseline / level
+  lin_tree   that linear stage, plus a tree fit on its residual (the
+             candidate that reached the end-to-end backtest — a pooled tie)
 
 The residual variants also get `baseline` / `program_level` as features,
 so the tree can still learn reversion; the point is that the LEVEL enters
