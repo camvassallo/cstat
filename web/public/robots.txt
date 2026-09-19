@@ -1,12 +1,13 @@
 # camalytics.org crawl policy.
 #
 # Two layers, kept in sync BY HAND — this file is the published policy, and
-# Cloudflare AI Crawl Control (Security → AI Crawl Control → Crawlers, on BOTH
-# the camalytics.org and campom.org zones) is the enforcement. A crawler that
-# honours robots.txt never sends the request; one that does not is refused at
-# the edge. Neither layer prepends anything to this file: an earlier version
-# claimed Cloudflare's managed robots.txt was prepended here, and it was not
-# (#343) — so a directive that is not written below is not published anywhere.
+# Cloudflare AI Crawl Control (a top-level item in the zone's left nav →
+# Crawlers tab, on BOTH the camalytics.org and campom.org zones) is the
+# enforcement. A crawler that honours robots.txt never sends the request; one
+# that does not is refused at the edge. Neither layer prepends anything to
+# this file: an earlier version claimed Cloudflare's managed robots.txt was
+# prepended here, and it was not (#343) — so a directive that is not written
+# below is not published anywhere.
 #
 # Search crawlers (Googlebot, Applebot, Bingbot, …) are welcome on the SPA
 # pages — /predict, /players/*, /teams/*, /coaches/* etc. — but NOT on the JSON
@@ -26,8 +27,9 @@ Disallow: /api/
 # executes JavaScript (meta-externalagent) rendered the app in headless Chrome,
 # fetched /api/* like a browser in spite of the disallow above, and at ~10
 # requests/s drove Postgres into statement_timeout (#338) — 85% of all origin
-# traffic and 99.9% of crawler traffic on the day it was measured. This group
-# is the same set blocked in AI Crawl Control; change both together.
+# traffic in a 24h edge-log window, 99.9% of crawler requests in Cloudflare's
+# own tally. This group is the same set blocked in AI Crawl Control; change
+# both together.
 #
 # Deliberately NOT listed, because they are user-initiated or produce
 # citations: facebookexternalhit and Meta-ExternalFetcher (link previews / OG
