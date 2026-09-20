@@ -26,11 +26,28 @@ learned a calibration slope for *unbiased* inputs and then inherited
 the upstream bias raw at serve. v2 trains on the held-out OOF cam_v3
 the upstream models actually emit — `trajectory_oof_predictions` for
 returners, `freshman_oof_predictions` for recruits — so this calibrator
-absorbs that bias directly. The cohort neither OOF table covers (true
-walk-on freshmen, JUCO arrivals, pre-2015 priors, 2015 itself) falls
-back to actual `cam_gbpm_v3_psos`; that cohort skews to low-minute
-bench slots, so its weight in the load-bearing minutes-weighted
-aggregates is small. `build_dataset` prints the per-source coverage.
+absorbs that bias directly.
+
+The cohort neither OOF table covers (walk-ons, unranked freshmen, JUCO
+and international arrivals, pre-2015 priors) is **dropped from the frame**
+(v3, 2026-09). Through v2 those rows fell back to the player's actual
+target-season `cam_gbpm_v3_psos`, on the reasoning that they were
+low-minute bench slots of little weight. Measured, they were not: 27–30%
+of the rotation's |CAM| magnitude, ~3 rows per roster and ~1.6 inside its
+top seven, 60 rows over 11 seasons above +10. Since Σ cam_v3 ≈ AdjEM by
+construction that was a slice of the target sitting in the features — and
+a train/serve mismatch on top, because a served roster never contains
+these players at all: the projection composes returners, arrivals and
+ranked recruits, each of which carries a model projection, and nothing
+else. A calibrator trained on rosters that always include the realized
+value of three extra bodies learns a different slope from the one it is
+asked to apply. "Train on what you serve" therefore means the frame holds
+ONLY projected rows, and `roster_size` reads as it does at serve. The same
+change moves the archetype join to the PRIOR season, which is what the
+serve side feeds (a returner's or arrival's base-season class; none for a
+recruit) — v2 read the target season's assignment, computed from the very
+stats it was predicting. `build_dataset` prints the per-source coverage
+and the dropped count.
 
 Rotation normalization — train/serve parity. Both this script and the
 Rust `roster_impact::build_roster_impact_features` rank each roster by
@@ -149,8 +166,15 @@ LEFT JOIN trajectory_oof_predictions traj
     ON traj.torvik_pid = tps.torvik_pid AND traj.target_season = pss.season
 LEFT JOIN freshman_oof_predictions fresh
     ON fresh.cstat_player_id = pss.player_id AND fresh.target_season = pss.season
+-- Archetype from the PRIOR season, reached through the cross-season
+-- `torvik_pid` (player UUIDs are season-scoped). This is what the serve
+-- side feeds: a returner's or arrival's base-season class, and nothing
+-- for a recruit (no prior season, so NULL here too). v2 joined the target
+-- season's assignment, which is computed from the stats being predicted.
+LEFT JOIN torvik_player_stats tps_prev
+    ON tps_prev.torvik_pid = tps.torvik_pid AND tps_prev.season = pss.season - 1
 LEFT JOIN player_archetypes pa
-    ON pa.player_id = pss.player_id AND pa.season = pss.season
+    ON pa.player_id = tps_prev.player_id AND pa.season = pss.season - 1
 WHERE pss.season = ANY(%(seasons)s)
   AND COALESCE(pss.games_played, 0) >= 5
   AND COALESCE(pss.minutes_per_game, 0) >= 5
@@ -443,6 +467,15 @@ def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
         f"(team, target_season) portal rows."
     )
     coverage = cam_v3_coverage(players)
+    # Only projected rows make the frame — see the module docstring. A player
+    # with no OOF projection is not on a served roster, so he is not on a
+    # training one either. Rows with no cam_v3 at all (no Torvik profile)
+    # keep their slot, as they do at serve.
+    pre_rows = len(players)
+    players = players[players["campom_source"] != "actual_fallback"].reset_index(drop=True)
+    coverage["dropped_actual_fallback_rows"] = int(pre_rows - len(players))
+    print(f"  dropped {pre_rows - len(players):,} actual-fallback player rows "
+          f"(frame holds projected rows only)")
 
     agg = (
         players.groupby(["team_id", "season"], as_index=False)
@@ -687,9 +720,11 @@ def main() -> None:
         # Honored verbatim by the Rust boot validator (`validate_model_meta`
         # checks this equals `QUAL_FILTER_STRING`).
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
-        # v2: trained on projected (held-out OOF) cam_v3, "train on what
-        # you serve". v1 was "actual" same-season cam_v3. See module docstring.
-        "cam_v3_source": "oof",
+        # v3: trained on projected (held-out OOF) cam_v3 ONLY — rows with no
+        # projection are dropped rather than filled with the target-season
+        # actual (v2), and archetypes are the prior season's. See the module
+        # docstring.
+        "cam_v3_source": "oof_only",
         # Per-source provenance of the training cam_v3 inputs.
         "cam_v3_coverage": coverage,
         # Fingerprint of every input this frame was built from — the OOF
