@@ -148,13 +148,19 @@ Regenerating the OOF is not a refresh — it `TRUNCATE`s the table and reloads
 it, invalidating every Layer 2 model beneath. Run it when Layer 0 data changed
 or a Layer 1 model was edited. Not to be safe.
 
-### The cohort that falls back
+### The cohort with no projection
 
-Players neither OOF table covers — true walk-on freshmen, JUCO arrivals,
-pre-2015 priors, 2015 itself — fall back to actual `cam_gbpm_v3_psos`. That
-cohort skews to low-minute bench slots, so its weight in the minutes-weighted
-aggregates is small. `build_dataset` prints per-source coverage on every run;
-a large shift there is worth reading before trusting a retrain.
+Players neither OOF table covers — walk-ons, unranked freshmen, JUCO and
+international arrivals, pre-2015 priors — are **dropped from the Layer 2
+frame** (2026-09-20). Until then they fell back to their actual target-season
+`cam_gbpm_v3_psos` on the belief that they were bench slots of little weight;
+measured, they were 27–30% of the rotation's |CAM| — a slice of the target in
+the features, and a roster shape the serve path never composes. Removing them
+took the end-to-end served MAE 5.526 → 5.410 and the coach-grade reliability
+guards from the floor (ICC 0.052 / split-half 0.050) to 0.107 / 0.213; the
+in-frame LOSO MAE went 3.61 → 5.61, which is what a leak leaving looks like.
+`build_dataset` prints per-source coverage and the dropped count on every
+run; the meta records both. Details: `docs/projections_methodology.md`.
 
 ---
 

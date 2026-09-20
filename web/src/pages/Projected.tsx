@@ -456,7 +456,7 @@ function buildColumns(
       field: 'roster_raw_adj_em',
       ...flexCol(1, 100),
       headerTooltip:
-        "What this roster projects to on its own — the roster model's AdjEM from the projected players, with no weight on last season or the program's history. Compare with Proj AdjEM: the difference is what recent form added or took away. A team whose Roster AdjEM sits well below its Proj AdjEM is being held up by its history; one where they match is being ranked purely on its players.",
+        "What this roster projects to on its own — the roster model's AdjEM from the projected players, with no weight on last season or the program's history. Compare with Proj AdjEM: the difference is what recent form added or took away. A team whose Roster AdjEM sits well below its Proj AdjEM is being held up by its history; one where they match is being ranked purely on its players. Computed on the 50/50 roster, so it is blank in a what-if view for a team with a pending eligibility case.",
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         const chip = adjEmChip(p.value);
