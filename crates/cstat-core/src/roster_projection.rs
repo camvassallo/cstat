@@ -2170,6 +2170,15 @@ pub async fn project_returner_cam_v3_banded(
 /// 0.80 → 5.5506 whole-corpus MAE). A retune of the weight without the anchor
 /// change, or vice versa, is not a partial improvement — the two constants are
 /// fit together and only make sense together.
+///
+/// **Re-derived 2026-09-20 after the roster-frame leak fix and left at 0.70.**
+/// With the calibrator no longer trained on target-season actuals
+/// (`train_roster_impact_model.py`, v3) the raw projection is good enough
+/// that the LOSO refit picks 0.45–0.55 — but out of sample that is a tie
+/// with 0.70 (paired z=+0.94 against the served constant), because the
+/// surface has flattened rather than moved. A refit that does not beat the
+/// served constant out of sample is not a reason to change it; the number
+/// stays until one does.
 pub const PROJECTION_SHRINK_WEIGHT: f32 = 0.70;
 
 /// Additive bias correction applied after the baseline shrink. The roster-impact model's

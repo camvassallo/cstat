@@ -445,6 +445,32 @@ function buildColumns(
         );
       },
     },
+    {
+      // The roster model's own verdict, before any history is blended in.
+      // Proj AdjEM minus this is exactly what the program anchor contributed
+      // (0 for a roster that projects inside its program's recent range,
+      // up to ~70% of the gap otherwise) — so the two columns side by side
+      // are the audit of how much of a ranking is roster and how much is
+      // pedigree. Same field the Proj AdjEM tooltip quotes.
+      headerName: 'Roster AdjEM',
+      field: 'roster_raw_adj_em',
+      ...flexCol(1, 100),
+      headerTooltip:
+        "What this roster projects to on its own — the roster model's AdjEM from the projected players, with no weight on last season or the program's history. Compare with Proj AdjEM: the difference is what recent form added or took away. A team whose Roster AdjEM sits well below its Proj AdjEM is being held up by its history; one where they match is being ranked purely on its players. Computed on the 50/50 roster, so it is blank in a what-if view for a team with a pending eligibility case.",
+      comparator: nullsLast,
+      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
+        const chip = adjEmChip(p.value);
+        const served = p.data?.midpoint_adj_em;
+        if (p.value == null || served == null) return chip;
+        const gap = served - p.value;
+        const tip =
+          `Roster model alone: ${fmtSigned(p.value)}` +
+          (Math.abs(gap) < 0.05
+            ? '\nMatches Proj AdjEM — this ranking is entirely the roster.'
+            : `\nRecent form ${gap > 0 ? 'adds' : 'takes'} ${Math.abs(gap).toFixed(1)} to reach Proj AdjEM ${fmtSigned(served)}.`);
+        return <span title={tip}>{chip}</span>;
+      },
+    },
     projEffCol('o'),
     projEffCol('d'),
     ...actualColumns,

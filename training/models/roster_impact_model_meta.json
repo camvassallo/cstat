@@ -15,7 +15,7 @@
     2025,
     2026
   ],
-  "n_rows": 4255,
+  "n_rows": 4129,
   "n_features": 27,
   "features": [
     "roster_size",
@@ -47,14 +47,15 @@
     "inbound_cam_v3_sum"
   ],
   "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
-  "cam_v3_source": "oof",
+  "cam_v3_source": "oof_only",
   "cam_v3_coverage": {
     "n_player_rows": 47072,
     "trajectory_oof": 25348,
     "freshman_oof": 5974,
     "actual_fallback": 15605,
     "no_cam_v3": 145,
-    "oof_pct": 66.5
+    "oof_pct": 66.5,
+    "dropped_actual_fallback_rows": 15605
   },
   "input_provenance": {
     "trajectory_oof_predictions": {
@@ -334,7 +335,7 @@
       "digest": "686969bf329d67b4ccd89e4c1d47d498"
     }
   },
-  "final_n_estimators": 220,
+  "final_n_estimators": 136,
   "loso_export_seasons": [
     2016,
     2017,
@@ -349,17 +350,17 @@
     2026
   ],
   "loso_train_rows": {
-    "2016": 3904,
-    "2017": 3904,
-    "2018": 3904,
-    "2019": 3902,
-    "2020": 3902,
-    "2021": 3914,
-    "2022": 3903,
-    "2023": 3893,
-    "2024": 3893,
-    "2025": 3891,
-    "2026": 3891
+    "2016": 3778,
+    "2017": 3778,
+    "2018": 3778,
+    "2019": 3776,
+    "2020": 3776,
+    "2021": 3788,
+    "2022": 3779,
+    "2023": 3769,
+    "2024": 3767,
+    "2025": 3765,
+    "2026": 3766
   },
   "canonical_rotation_mpg": [
     32.0,
@@ -379,207 +380,207 @@
   "backtest_loso": {
     "per_season": {
       "2015": {
-        "mae": 2.6487857360765616,
-        "rmse": 3.539925806559984,
-        "r2": 0.9454800485601157,
-        "n": 351
+        "mae": 12.441932326579927,
+        "rmse": 15.247748636959985,
+        "r2": -0.014576295926259863,
+        "n": 230
       },
       "2016": {
-        "mae": 3.5243143623818214,
-        "rmse": 4.5287314307594215,
-        "r2": 0.9088609759101421,
+        "mae": 5.134761733109813,
+        "rmse": 6.535073842153009,
+        "r2": 0.8102192145777083,
         "n": 351
       },
       "2017": {
-        "mae": 3.720935308522733,
-        "rmse": 4.620549672845184,
-        "r2": 0.9085618644056598,
+        "mae": 5.245368617024345,
+        "rmse": 6.691832040560831,
+        "r2": 0.8082081539482092,
         "n": 351
       },
       "2018": {
-        "mae": 3.620311513893063,
-        "rmse": 4.585036939613552,
-        "r2": 0.903969298916683,
+        "mae": 5.055199492421021,
+        "rmse": 6.35255020004334,
+        "r2": 0.8156595543929761,
         "n": 351
       },
       "2019": {
-        "mae": 3.734403415802451,
-        "rmse": 4.667192590527181,
-        "r2": 0.899907611705964,
+        "mae": 5.3046544456192395,
+        "rmse": 6.577327528891278,
+        "r2": 0.8012127411853072,
         "n": 353
       },
       "2020": {
-        "mae": 3.4549166501339035,
-        "rmse": 4.478319799719498,
-        "r2": 0.9041965142688345,
+        "mae": 4.900500430988756,
+        "rmse": 6.439908069449136,
+        "r2": 0.801888156528245,
         "n": 353
       },
       "2021": {
-        "mae": 4.159242114063648,
-        "rmse": 5.407346865840119,
-        "r2": 0.8716571338436543,
+        "mae": 5.329679897719445,
+        "rmse": 6.757483083508015,
+        "r2": 0.7995651618827311,
         "n": 341
       },
       "2022": {
-        "mae": 3.8463794901745816,
-        "rmse": 4.876809558053365,
-        "r2": 0.8861394024036588,
-        "n": 352
+        "mae": 5.337202044517311,
+        "rmse": 6.718352522222834,
+        "r2": 0.7842111453848295,
+        "n": 350
       },
       "2023": {
-        "mae": 3.569343629529335,
-        "rmse": 4.7095916857693325,
-        "r2": 0.8898696186023988,
-        "n": 362
+        "mae": 4.978735588625653,
+        "rmse": 6.345041965993459,
+        "r2": 0.8004461465561424,
+        "n": 360
       },
       "2024": {
-        "mae": 3.5338544417125832,
-        "rmse": 4.552026064414126,
-        "r2": 0.9080028341155565,
+        "mae": 4.987455222040852,
+        "rmse": 6.243463456283097,
+        "r2": 0.8269322624401946,
         "n": 362
       },
       "2025": {
-        "mae": 3.7419141545545913,
-        "rmse": 4.769232153418214,
-        "r2": 0.9124985450089302,
+        "mae": 5.314119568254256,
+        "rmse": 6.733092633576852,
+        "r2": 0.8255995797286136,
         "n": 364
       },
       "2026": {
-        "mae": 3.8160075591254365,
-        "rmse": 4.829726581370805,
-        "r2": 0.9160856733756664,
-        "n": 364
+        "mae": 5.676619304759462,
+        "rmse": 7.1712354216821526,
+        "r2": 0.8126613470301813,
+        "n": 363
       }
     },
     "pooled": {
-      "mae": 3.613639036312252,
-      "rmse": 4.646906158179389,
-      "r2": 0.9053695835645353
+      "mae": 5.609121427646529,
+      "rmse": 7.355625137388325,
+      "r2": 0.7634341936428528
     },
     "best_iterations": [
-      154,
-      206,
-      265,
-      196,
-      197,
-      195,
-      307,
-      175,
-      134,
-      368,
+      9,
+      121,
       207,
-      237
+      135,
+      145,
+      95,
+      162,
+      97,
+      115,
+      196,
+      139,
+      210
     ]
   },
   "cv_5fold": {
-    "mae": 3.622913864976322,
-    "rmse": 4.659128589024135,
-    "r2": 0.9047068606348585
+    "mae": 5.434942613719703,
+    "rmse": 6.986151969439925,
+    "r2": 0.7858097418651754
   },
   "feature_importance": [
     {
-      "name": "cam_sum",
-      "importance": 369
-    },
-    {
       "name": "cam_wmean",
-      "importance": 256
-    },
-    {
-      "name": "arch_bard",
-      "importance": 243
-    },
-    {
-      "name": "arch_sorcerer",
-      "importance": 221
-    },
-    {
-      "name": "arch_ranger",
-      "importance": 197
-    },
-    {
-      "name": "arch_fighter",
-      "importance": 164
-    },
-    {
-      "name": "outbound_cam_v3_sum",
-      "importance": 162
-    },
-    {
-      "name": "arch_paladin",
-      "importance": 151
-    },
-    {
-      "name": "arch_rogue",
-      "importance": 149
-    },
-    {
-      "name": "arch_druid",
-      "importance": 139
-    },
-    {
-      "name": "arch_cleric",
-      "importance": 133
+      "importance": 292
     },
     {
       "name": "cam_top7_mean",
-      "importance": 119
-    },
-    {
-      "name": "arch_wizard",
-      "importance": 112
-    },
-    {
-      "name": "roster_size",
-      "importance": 108
+      "importance": 256
     },
     {
       "name": "exp_fr_share",
-      "importance": 102
+      "importance": 186
     },
     {
-      "name": "exp_jr_share",
-      "importance": 94
-    },
-    {
-      "name": "inbound_cam_v3_sum",
-      "importance": 85
-    },
-    {
-      "name": "arch_monk",
-      "importance": 82
-    },
-    {
-      "name": "exp_so_share",
-      "importance": 81
-    },
-    {
-      "name": "cam_top1",
-      "importance": 75
-    },
-    {
-      "name": "exp_sr_share",
-      "importance": 73
+      "name": "cam_sum",
+      "importance": 165
     },
     {
       "name": "cam_top3_mean",
-      "importance": 62
+      "importance": 154
     },
     {
-      "name": "arch_barbarian",
-      "importance": 54
+      "name": "exp_sr_share",
+      "importance": 118
     },
     {
-      "name": "arch_warlock",
+      "name": "cam_top1",
+      "importance": 113
+    },
+    {
+      "name": "exp_so_share",
+      "importance": 110
+    },
+    {
+      "name": "roster_size",
+      "importance": 72
+    },
+    {
+      "name": "outbound_cam_v3_sum",
+      "importance": 68
+    },
+    {
+      "name": "exp_jr_share",
+      "importance": 60
+    },
+    {
+      "name": "arch_ranger",
       "importance": 51
     },
     {
+      "name": "arch_bard",
+      "importance": 48
+    },
+    {
+      "name": "inbound_cam_v3_sum",
+      "importance": 46
+    },
+    {
+      "name": "arch_wizard",
+      "importance": 43
+    },
+    {
+      "name": "arch_sorcerer",
+      "importance": 36
+    },
+    {
+      "name": "arch_fighter",
+      "importance": 34
+    },
+    {
+      "name": "arch_barbarian",
+      "importance": 31
+    },
+    {
+      "name": "arch_druid",
+      "importance": 29
+    },
+    {
+      "name": "arch_cleric",
+      "importance": 26
+    },
+    {
+      "name": "arch_monk",
+      "importance": 25
+    },
+    {
+      "name": "arch_rogue",
+      "importance": 23
+    },
+    {
+      "name": "arch_paladin",
+      "importance": 20
+    },
+    {
+      "name": "arch_warlock",
+      "importance": 19
+    },
+    {
       "name": "cam_count_gt5",
-      "importance": 16
+      "importance": 15
     },
     {
       "name": "cam_count_gt10",
-      "importance": 2
+      "importance": 0
     },
     {
       "name": "cam_count_gt15",
