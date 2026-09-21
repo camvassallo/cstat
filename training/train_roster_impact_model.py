@@ -55,18 +55,23 @@ who ACTUALLY played the target season — their CAM was held out, their
 presence was not. The serve path composes ex-ante: returners less the four
 departure channels, plus portal arrivals and ranked recruits, before anyone
 has played. Those are different rosters: the ex-post one already knows who
-transferred in June, who never got eligible, who was hurt in October. Same
-team-seasons, same OOF CAM values, same params, walk-forward 2021-2026, the
-ex-post frame scored 5.26 MAE where the ex-ante one scored 5.56 (z=-5.1),
-and 4.84 vs 5.41 on level-changers — a calibrator learning on rosters
-cleaner than the ones it scores (`top_band_experiment.py`). So the frame
-is now cut by the Rust side that composes the served rosters:
-`cstat-ingest projections-backtest --frame-out --frame-only` writes every
-composed team-season's `build_roster_impact_features` vector plus its
-actual AdjEM to `frames/roster_impact_ex_ante.json`, and `build_dataset`
-reads that. The Python aggregation (`aggregate_team_season`, `PLAYER_QUERY`)
-is kept as `build_sql_dataset` for the diagnostics that reuse it; no
-served model trains on it.
+transferred in June, who never got eligible, who was hurt in October — and
+the in-frame LOSO number it produced (5.61) did not agree with the
+end-to-end backtest (5.49) that scores the ex-ante rosters the site
+serves. So the frame is now cut by the Rust side that composes the served
+rosters: `cstat-ingest projections-backtest --frame-out --frame-only`
+writes every composed team-season's `build_roster_impact_features` vector
+plus its actual AdjEM to `frames/roster_impact_ex_ante.json`, and
+`build_dataset` reads that. Judged end to end against the v3 model on the
+same 2,961 team-seasons: in-frame LOSO 5.39 vs backtest 5.42 (they agree
+now), raw bias +0.24 -> +0.09, served pooled a tie (5.410 -> 5.412), 2024+
+and high-turnover rosters slightly better, the pre-portal-era top 10
+slightly worse (+0.19). A consistency fix, not an accuracy win: it makes
+the in-frame number mean what it says, which is what lets a calibrator
+experiment be judged here without the Rust round trip. The Python
+aggregation (`aggregate_team_season`, `PLAYER_QUERY`) is kept as
+`build_sql_dataset` for the diagnostics that reuse it; no served model
+trains on it.
 
 Rotation normalization — train/serve parity. Both this script and the
 Rust `roster_impact::build_roster_impact_features` rank each roster by
@@ -476,6 +481,24 @@ FRAME_CMD = (
 )
 
 
+def oof_snapshot(engine) -> dict:
+    """Row count + newest `created_at` per OOF table, in the shape the Rust
+    frame writer stamps (`projections_backtest.rs::dump_frame_json`). Both
+    Layer 1 trainers TRUNCATE + reload, so a retrain that lands the same row
+    count still moves the timestamp."""
+    row = pd.read_sql(
+        "SELECT (SELECT count(*) FROM trajectory_oof_predictions) AS traj_n, "
+        "(SELECT max(created_at)::text FROM trajectory_oof_predictions) AS traj_at, "
+        "(SELECT count(*) FROM freshman_oof_predictions) AS fresh_n, "
+        "(SELECT max(created_at)::text FROM freshman_oof_predictions) AS fresh_at",
+        engine,
+    ).iloc[0]
+    return {
+        "trajectory_oof_predictions": {"n_rows": int(row["traj_n"]), "max_created_at": row["traj_at"]},
+        "freshman_oof_predictions": {"n_rows": int(row["fresh_n"]), "max_created_at": row["fresh_at"]},
+    }
+
+
 def build_dataset(frame: Path = FRAME_PATH) -> tuple[pd.DataFrame, list[str], dict]:
     """The v4 frame: the served ex-ante composition, cut by the Rust backtest.
 
@@ -495,19 +518,12 @@ def build_dataset(frame: Path = FRAME_PATH) -> tuple[pd.DataFrame, list[str], di
     raw = json.loads(frame.read_text())
     feature_cols = list(raw["feature_names"])
     engine = get_engine()
-    live = pd.read_sql(
-        "SELECT (SELECT count(*) FROM trajectory_oof_predictions) AS traj, "
-        "(SELECT count(*) FROM freshman_oof_predictions) AS fresh",
-        engine,
-    ).iloc[0]
-    stamped = raw["provenance"]["oof_rows"]
-    if (int(live["traj"]), int(live["fresh"])) != (
-        int(stamped["trajectory_oof_predictions"]), int(stamped["freshman_oof_predictions"])
-    ):
+    live = oof_snapshot(engine)
+    stamped = raw["provenance"]["oof_snapshot"]
+    if live != stamped:
         raise SystemExit(
-            f"calibrator frame {frame.name} was cut from a different OOF snapshot "
-            f"(frame: {stamped}; live: traj={int(live['traj'])}, fresh={int(live['fresh'])}). "
-            f"Re-cut it:\n  {FRAME_CMD}"
+            f"calibrator frame {frame.name} was cut from a different OOF snapshot.\n"
+            f"  frame: {stamped}\n  live:  {live}\nRe-cut it:\n  {FRAME_CMD}"
         )
     rows = raw["rows"]
     df = pd.DataFrame(

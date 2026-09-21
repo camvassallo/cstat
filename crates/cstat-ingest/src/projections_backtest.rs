@@ -12,11 +12,12 @@
 //! The same composition is also the **training frame** for the roster-impact
 //! calibrator (`--frame-out`, `--frame-only`): every team-season's ex-ante
 //! 27-feature vector plus its actual, so `train_roster_impact_model.py`
-//! learns on the roster shape it will score. It used to learn on the
+//! learns on the roster shape it will score. Through v3 it learned on the
 //! players who *actually played* the target season (their CAM held out,
-//! their presence not), which is a composition the serve path never sees —
-//! same rows, same OOF CAM, same params, that frame scored 5.26 walk-forward
-//! where the ex-ante one scored 5.56 (2026-09-20, `top_band_experiment.py`).
+//! their presence not) — a composition the serve path never sees, and one on
+//! which its in-frame LOSO number (5.61) did not agree with this backtest
+//! (5.49). On this frame the two agree (5.39 / 5.42); served accuracy is a
+//! tie (2026-09-20, `docs/projections_methodology.md` v4).
 //!
 //! Two predictions per team, both measured against the same actual:
 //!  - **roster-impact** — the leave-one-season-out roster-impact model scored on
@@ -209,11 +210,11 @@ async fn fetch_actual_adj_em(
     Ok(rows.into_iter().collect())
 }
 
-/// Run the backtest for one target season. Returns the per-team results
-/// (teams with no actual AdjEM, or below the qualifying gate, are omitted).
 /// Compose and (when `loso_model` is `Some`) score every team for one target
-/// season. `None` is the frame-only path: the composition and features are
-/// identical, `roster_proj` is NaN and nothing downstream may read it.
+/// season. Returns the per-team results (teams with no actual AdjEM, or below
+/// the qualifying gate, are omitted). `None` is the frame-only path: the
+/// composition and features are identical, `roster_proj` is NaN and nothing
+/// downstream may read it.
 async fn backtest_year(
     pool: &PgPool,
     predictor: &Predictor,
@@ -600,23 +601,48 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult], provenance: &Value) -
 /// [`ROSTER_IMPACT_FEATURE_NAMES`], so the trainer can assert the wire order
 /// it will export back to ONNX is the order these were built in.
 ///
-/// The provenance block carries the row counts of the two OOF tables the
-/// composition read. The trainer compares them with its own fingerprint at
-/// read time and refuses a frame built from a different OOF snapshot: the
-/// frame is a file, and a file can outlive the tables it was cut from.
+/// The provenance block carries the row count and newest `created_at` of the
+/// two OOF tables the composition read. The trainer compares them with the
+/// live tables at read time and refuses a frame built from a different OOF
+/// snapshot: the frame is a file, and a file can outlive the tables it was
+/// cut from.
 async fn dump_frame_json(
     pool: &PgPool,
     path: &Path,
     results: &[TeamResult],
     years: &[i32],
 ) -> Result<()> {
-    use serde_json::json;
-    let (traj_n, fresh_n): (i64, i64) = sqlx::query_as(
+    // Row count AND newest `created_at` per OOF table: both Layer 1 trainers
+    // TRUNCATE + reload, so a retrain that happens to land the same row
+    // count still moves the timestamp.
+    let snap: (i64, Option<String>, i64, Option<String>) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM trajectory_oof_predictions),
-                (SELECT count(*) FROM freshman_oof_predictions)",
+                (SELECT max(created_at)::text FROM trajectory_oof_predictions),
+                (SELECT count(*) FROM freshman_oof_predictions),
+                (SELECT max(created_at)::text FROM freshman_oof_predictions)",
     )
     .fetch_one(pool)
     .await?;
+    let oof_snapshot = serde_json::json!({
+        "trajectory_oof_predictions": { "n_rows": snap.0, "max_created_at": snap.1 },
+        "freshman_oof_predictions": { "n_rows": snap.2, "max_created_at": snap.3 },
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all {}", parent.display()))?;
+    }
+    let f = std::fs::File::create(path)
+        .with_context(|| format!("create frame file {}", path.display()))?;
+    serde_json::to_writer(f, &frame_json(results, years, oof_snapshot))
+        .with_context(|| format!("write frame {}", path.display()))?;
+    Ok(())
+}
+
+/// The frame document itself, split from the I/O so the schema is testable:
+/// Python reads `feature_names`, `provenance.oof_snapshot` and each row's
+/// `team_id` / `season` / `actual` / `features` by name.
+fn frame_json(results: &[TeamResult], years: &[i32], oof_snapshot: Value) -> Value {
+    use serde_json::json;
     let rows: Vec<Value> = results
         .iter()
         .map(|r| {
@@ -629,31 +655,17 @@ async fn dump_frame_json(
             })
         })
         .collect();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create_dir_all {}", parent.display()))?;
-    }
-    let f = std::fs::File::create(path)
-        .with_context(|| format!("create frame file {}", path.display()))?;
-    serde_json::to_writer(
-        f,
-        &json!({
-            "provenance": {
-                "produced_by": "cstat-ingest projections-backtest --frame-out",
-                "generated_at": chrono::Utc::now().to_rfc3339(),
-                "seasons": years,
-                "composition": "ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3",
-                "oof_rows": {
-                    "trajectory_oof_predictions": traj_n,
-                    "freshman_oof_predictions": fresh_n,
-                },
-            },
-            "feature_names": ROSTER_IMPACT_FEATURE_NAMES,
-            "rows": rows,
-        }),
-    )
-    .with_context(|| format!("write frame {}", path.display()))?;
-    Ok(())
+    json!({
+        "provenance": {
+            "produced_by": "cstat-ingest projections-backtest --frame-out",
+            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "seasons": years,
+            "composition": "ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3",
+            "oof_snapshot": oof_snapshot,
+        },
+        "feature_names": ROSTER_IMPACT_FEATURE_NAMES,
+        "rows": rows,
+    })
 }
 
 #[cfg(test)]
@@ -675,6 +687,38 @@ mod dump_format_tests {
             uncertain_cam_v3_sum: 3.5,
             features: [0.0; ROSTER_IMPACT_NUM_FEATURES],
         }
+    }
+
+    /// Same contract for the calibrator frame: `train_roster_impact_model.
+    /// build_dataset` reads these keys by name and the Rust boot validator
+    /// then checks the ONNX it exports against `ROSTER_IMPACT_FEATURE_NAMES`,
+    /// so the feature list written here must be that list, in that order.
+    #[test]
+    fn frame_carries_feature_names_snapshot_and_rows() {
+        let snap = json!({"trajectory_oof_predictions": {"n_rows": 1, "max_created_at": "t"},
+                          "freshman_oof_predictions": {"n_rows": 2, "max_created_at": "u"}});
+        let v = frame_json(&[one_result()], &[2026], snap.clone());
+        assert_eq!(v["provenance"]["oof_snapshot"], snap);
+        assert_eq!(v["provenance"]["seasons"], json!([2026]));
+        let names: Vec<&str> = v["feature_names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap())
+            .collect();
+        assert_eq!(names, ROSTER_IMPACT_FEATURE_NAMES.to_vec());
+        let row = &v["rows"][0];
+        for key in ["team_id", "team_name", "season", "actual", "features"] {
+            assert!(!row[key].is_null(), "frame row missing `{key}`");
+        }
+        assert_eq!(
+            row["features"].as_array().unwrap().len(),
+            ROSTER_IMPACT_NUM_FEATURES
+        );
+        assert!(
+            row.get("roster_proj").is_none(),
+            "the frame carries no scores"
+        );
     }
 
     /// The dump envelope is a cross-language format contract: Rust writes it,

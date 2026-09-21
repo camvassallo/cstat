@@ -349,7 +349,8 @@ enum Commands {
 
         /// Also write the calibrator's ex-ante training frame — every
         /// composed team-season's 27 roster-impact features plus its actual
-        /// AdjEM — which `train_roster_impact_model.py --frame` trains on.
+        /// AdjEM — which `train_roster_impact_model.py` reads from
+        /// `training/frames/roster_impact_ex_ante.json`.
         #[arg(long)]
         frame_out: Option<std::path::PathBuf>,
 
