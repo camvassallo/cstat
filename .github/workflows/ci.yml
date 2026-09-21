@@ -104,6 +104,9 @@ jobs:
       # The walk-forward harness (#361): the fold generator's "train strictly
       # earlier" invariant and the rank metrics' identities. Database-free.
       - run: python test_walk_forward.py
+      # The look-ahead guard (#362) needs a database and the release binary;
+      # here it reports its skip so a silent pass is visible in the log.
+      - run: python test_lookahead_guard.py
 
   # ── Frontend ────────────────────────────────────────────
 

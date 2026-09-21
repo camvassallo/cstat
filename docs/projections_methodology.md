@@ -160,11 +160,11 @@ The headline number for this projection is **walk-forward**: the calibrator refi
 
 | | pooled | 2024+ | top-25 (ex-ante) | top-10 | level-changers | membership@25 | rho, pred top 25 |
 |---|---|---|---|---|---|---|---|
-| served, walk-forward | **5.467** | 5.480 | 5.565 | 6.278 | 5.252 | 0.713 | 0.536 |
-| served, LOSO (same rows) | 5.458 | 5.456 | 5.587 | 6.327 | 5.324 | 0.733 | 0.425 |
-| raw calibrator, walk-forward | 5.586 | 5.600 | 5.967 | 6.823 | 5.403 | 0.687 | 0.499 |
+| served, walk-forward | **5.494** | 5.516 | 5.671 | 6.275 | 5.359 | 0.713 | 0.452 |
+| served, LOSO (same rows) | 5.459 | 5.482 | 5.600 | 6.216 | 5.460 | 0.713 | 0.441 |
+| raw calibrator, walk-forward | 5.615 | 5.636 | 6.109 | 6.882 | 5.505 | 0.680 | 0.438 |
 
-LOSO's optimism at this layer is 0.009 pooled (z=−0.5): the number the docs above quote as LOSO is honest to within noise. The blend is worth 0.12 pooled and 0.40–0.55 at the top over the raw calibrator, forward-chained. The three fitted blend constants are re-searched inside each fold on earlier walk-forward rows: the refit is fold-stable at w=0.55 / overhaul 0.20 / shrink 0.75 against the served 0.70 / 0.55 / 1.0 and scores a tie out of sample (+0.016, z=+0.9), so the served constants pass the "not fit to the test set" check; a refit that *beats* them forward-chained is the signal to change them.
+The rows are the rosters as served — since #362 the backtest composes ex-ante, with the recruits who went on to redshirt or never enrol still on the roster, as they were in August (the retroactive exclusion in `docs/redshirt_handling.md` stays on the *displayed* historical grade). LOSO's optimism at this layer is within noise (−0.035, z=−1.8 — LOSO happens to be slightly *worse* here): the number the docs above quote as LOSO is honest. The blend is worth 0.12 pooled and 0.44–0.61 at the top over the raw calibrator, forward-chained (z=+3.2 / +2.6). The three fitted blend constants are re-searched inside each fold on earlier walk-forward rows: the refit sits at w≈0.55 / overhaul 0.20–0.30 / shrink 0.75 in most folds against the served 0.70 / 0.55 / 1.0 and scores a tie out of sample (+0.024, z=+1.4), so the served constants pass the "not fit to the test set" check; a refit that *beats* them forward-chained is the signal to change them.
 
 ## The AdjO / AdjD split (display)
 

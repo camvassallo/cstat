@@ -47,6 +47,10 @@
 //!    `freshman_oof_predictions` (held out, like the returner channel);
 //!    only a recruit the OOF table does not cover falls back to live
 //!    freshman inference. See `roster_projection::compose_all_projections`.
+//!  - Rosters are composed EX-ANTE — a committed recruit who went on to
+//!    redshirt or never enrol is on the roster, as he was on the served
+//!    August projection. `--retro-exclude-no-shows` applies the displayed
+//!    grade's retroactive exclusion instead (comparisons only; #362).
 //!  - Uncertain (declared-draft) cohort is assumed empty: the 2024 /
 //!    2025 base seasons have no `early_entrants.json`, so floor == ceiling.
 
@@ -221,6 +225,7 @@ async fn backtest_year(
     predictor: &Predictor,
     loso_model: Option<&RosterImpactModel>,
     year: i32,
+    retro_exclude_no_shows: bool,
 ) -> Result<Vec<TeamResult>> {
     let base_season = year - 1;
 
@@ -240,13 +245,26 @@ async fn backtest_year(
     // starts at base 2026), so this is a no-op for most backtest folds.
     let departures = fetch_player_departures(pool, base_season).await?;
 
+    // Composed EX-ANTE by default (`target_season_complete = false`): a
+    // committed recruit who went on to redshirt or never enrol stays on the
+    // roster, exactly as he was on the August projection the site served. The
+    // retroactive no-show exclusion (`docs/redshirt_handling.md`, PR 1) is for
+    // the *displayed* historical grade — `compute-projections` and the route
+    // still pass the clock verdict — but the backtest judges what was served,
+    // and since #360 the same composition is the calibrator's training frame:
+    // trained on rosters with the ~20% of recruits who never played already
+    // removed, it scored rosters that still had them (#362's look-ahead guard
+    // found 126 of 311 teams in 2026 composed differently once the target
+    // season was hidden). Training on the served composition is what lets it
+    // price expected attrition in. `--retro-exclude-no-shows` reproduces the
+    // old graded composition for comparisons; it is not a training frame.
     let projections = compose_all_projections(
         pool,
         base_season,
         &entrants,
         &departures,
         predictor,
-        crate::target_season_retro_complete(year),
+        retro_exclude_no_shows && crate::target_season_retro_complete(year),
     )
     .await
     .with_context(|| format!("compose_all_projections base {base_season}"))?;
@@ -377,6 +395,20 @@ fn blend_sweep(results: &[TeamResult]) -> (f64, f64) {
     (best.0, best.1)
 }
 
+/// What a backtest run writes and how it composes — the CLI flags, grouped.
+#[derive(Debug, Default)]
+pub struct BacktestOptions {
+    /// Per-team prediction dump (`--output`).
+    pub output: Option<std::path::PathBuf>,
+    /// The calibrator's ex-ante training frame (`--frame-out`).
+    pub frame_out: Option<std::path::PathBuf>,
+    /// Compose and write the frame without scoring (`--frame-only`).
+    pub frame_only: bool,
+    /// Apply the displayed grade's retroactive no-show exclusion to completed
+    /// target seasons (`--retro-exclude-no-shows`). Comparisons only.
+    pub retro_exclude_no_shows: bool,
+}
+
 /// Run the backtest across `years` and print the report. Returns Ok even
 /// when roster-impact underperforms — this is a diagnostic, not a CI gate; the
 /// printed verdict carries the conclusion.
@@ -396,19 +428,21 @@ pub async fn run(
     predictor: &Predictor,
     model_dir: &Path,
     years: &[i32],
-    output_path: Option<&Path>,
-    frame_out: Option<&Path>,
-    frame_only: bool,
+    opts: &BacktestOptions,
 ) -> Result<()> {
     println!("{}", "=".repeat(72));
     println!("roster-impact projection backtest — target seasons: {years:?}");
     println!("{}", "=".repeat(72));
 
-    if frame_only {
-        let path = frame_out.context("--frame-only needs --frame-out")?;
+    let retro = opts.retro_exclude_no_shows;
+    if opts.frame_only {
+        let path = opts
+            .frame_out
+            .as_deref()
+            .context("--frame-only needs --frame-out")?;
         let mut pooled: Vec<TeamResult> = Vec::new();
         for &year in years {
-            pooled.extend(backtest_year(pool, predictor, None, year).await?);
+            pooled.extend(backtest_year(pool, predictor, None, year, retro).await?);
         }
         dump_frame_json(pool, path, &pooled, years).await?;
         println!(
@@ -443,7 +477,7 @@ pub async fn run(
 
     let mut pooled: Vec<TeamResult> = Vec::new();
     for &year in years {
-        let yr = backtest_year(pool, predictor, Some(&loso[&year]), year).await?;
+        let yr = backtest_year(pool, predictor, Some(&loso[&year]), year, retro).await?;
         report(&format!("season {year}"), &yr);
         pooled.extend(yr);
     }
@@ -508,7 +542,7 @@ pub async fn run(
         true,
     )?;
 
-    if let Some(path) = frame_out {
+    if let Some(path) = opts.frame_out.as_deref() {
         dump_frame_json(pool, path, &pooled, years).await?;
         println!(
             "  wrote calibrator frame ({} rows) → {}",
@@ -517,7 +551,7 @@ pub async fn run(
         );
     }
 
-    if let Some(path) = output_path {
+    if let Some(path) = opts.output.as_deref() {
         dump_per_team_json(path, &pooled, &provenance)?;
         println!("  wrote per-team dump → {}", path.display());
 

@@ -202,8 +202,9 @@ Use the script. It runs the chain in dependency order and cannot skip a step:
 ./training/retrain_downstream.sh --from cae       # resume after a failed stage
 ```
 
-Stages, in order: `trajectory freshman frame roster_impact roster_adjo backtest
-cae projections`. Layer 1 is opt-in; `--from` into a Layer 1 stage implies
+Stages, in order: `guard trajectory freshman frame roster_impact roster_adjo
+backtest cae projections`. `guard` is the look-ahead check (§3c) and is put
+back into any `--from` plan that contains a frame-building stage. Layer 1 is opt-in; `--from` into a Layer 1 stage implies
 `--with-layer1`, because "start here and run everything after" must not
 silently drop the stage immediately following.
 
@@ -481,9 +482,13 @@ train-on-everything-else):
 |---|---|---|---|---|
 | 1 | trajectory (player CamPom) | 2.030 | 2.026 | 0.004 |
 | 1 | freshman | 2.120 | 2.091 | 0.029 |
-| 2 | roster_impact raw | 5.586 | 5.533 | 0.054 |
-| 2 | roster_adjo raw (era-relative target, #368) | 3.959 | 3.871 | −0.088 |
-| 2+4 | served projection | **5.467** | 5.458 | 0.009 |
+| 2 | roster_impact raw | 5.615 | 5.552 | 0.063 |
+| 2 | roster_adjo raw (era-relative target, #368) | 3.985 | 3.895 | −0.090 |
+| 2+4 | served projection | **5.494** | 5.459 | −0.035 |
+
+(Post-#362 tree: the backtest and the frame compose rosters exactly as served,
+no-shows included; the pre-#362 served number, 5.467, scored rosters with the
+recruits who never played already removed — see §3c.)
 
 The look-ahead everyone was right to worry about is worth almost nothing at
 every layer: the tree does not lean on the future. That is now a measured
@@ -495,6 +500,40 @@ started fitting to later seasons. The first thing the scorecard caught was
 walk-forward has to extrapolate it. Retraining it relative to the base
 season's league mean (#368) closed the gap (3.96 / 3.87) — the table above is
 the post-#368 tree.
+
+## 3c. The look-ahead guard: features must not see the target season (#362)
+
+The last three model PRs each found a leak or a train/serve skew by hand
+(#358, #199, #360). `training/lookahead_guard.py` is that audit as a test. For
+a target season S it creates a schema of views that hide season S from every
+season-scoped table — except the target and the row-defining columns each
+frame is allowed to read there (`ALLOWED`: the player's season-S CamPom and
+team, the qualification gate, the team's season-S AdjEM/AdjO, program
+identity) — rebuilds each frame with `search_path = lookahead_guard, public`,
+and requires every feature column to be byte-identical on the rows both
+builds share. Rows that need season S to exist are reported, not failed: a
+player with no season-S stats is not a training row, which is target
+selection the trainers document, not look-ahead in a feature. Covers the two
+Layer 1 frames (Python) and the calibrator frame (the Rust backtest, run with
+the masked search_path in `DATABASE_URL`). Wired as the `guard` stage of the
+chain runner and `test_lookahead_guard.py` in the training guards (it skips,
+audibly, without a database or the release binary).
+
+**What it caught on its first run.** The calibrator frame was composed with
+the retroactive no-show exclusion (`docs/redshirt_handling.md`, PR 1): for a
+completed target season, committed recruits with no box score were dropped —
+126 of 311 teams in 2026 changed composition when season 2026 was hidden.
+The live August projection includes those recruits, so the calibrator was
+trained on rosters with ~20% of ranked recruits already removed and scored
+rosters that still had them. The backtest now composes ex-ante
+(`target_season_complete = false`; `--retro-exclude-no-shows` reproduces the
+old graded composition for comparisons and must not feed a frame). Scored on
+identical served rosters, a calibrator trained either way is a tie (+0.015,
+z=+1.1; recruit-heavy teams +0.003) — no-shows carry near-zero projected CAM
+— so the served number moving 5.467 → 5.494 is the *test* becoming honest,
+not the model changing. The displayed historical grade (`compute-projections`,
+the route) keeps the exclusion; coach grades, which score against the
+backtest dump, now use the August expectation.
 
 ## 4. Artifact policy for `training/eval_history/`
 
@@ -564,6 +603,10 @@ healthy while serving in-sample projections — elite 2024 transfers projecting
 - `training/test_walk_forward.py` — the #361 harness: a walk-forward training
   row is strictly earlier than the season it is scored on, and the rank
   metrics' identities. In the `Training Guards` CI job.
+- `training/lookahead_guard.py` / `test_lookahead_guard.py` — the #362
+  look-ahead guard (§3c): every training frame's features are invariant to
+  the target season's data. Database-backed; the `guard` stage of
+  `retrain_downstream.sh`, and an audible skip in CI.
 
 
 ### Still convention (nothing will stop you)

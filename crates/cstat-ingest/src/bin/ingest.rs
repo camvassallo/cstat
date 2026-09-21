@@ -359,6 +359,14 @@ enum Commands {
         /// trained on it exists (the `frame` stage of retrain_downstream.sh).
         #[arg(long, requires = "frame_out")]
         frame_only: bool,
+
+        /// Compose completed target seasons with the retroactive no-show
+        /// exclusion (recruits who never recorded a box score dropped), the
+        /// way the displayed historical grade does. The default is the
+        /// served, ex-ante composition; this exists for comparisons only and
+        /// must not feed a training frame (#362).
+        #[arg(long)]
+        retro_exclude_no_shows: bool,
     },
 
     /// Materialize the preseason roster-impact projection per (season, team)
@@ -1169,6 +1177,7 @@ async fn main() -> Result<()> {
             output,
             frame_out,
             frame_only,
+            retro_exclude_no_shows,
         } => {
             let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
@@ -1179,9 +1188,12 @@ async fn main() -> Result<()> {
                 &predictor,
                 std::path::Path::new(&model_dir),
                 &years,
-                output.as_deref(),
-                frame_out.as_deref(),
-                frame_only,
+                &cstat_ingest::projections_backtest::BacktestOptions {
+                    output,
+                    frame_out,
+                    frame_only,
+                    retro_exclude_no_shows,
+                },
             )
             .await?;
         }
