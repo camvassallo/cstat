@@ -189,6 +189,13 @@ def test_roster_impact_frame_is_deterministic() -> None:
         return _skip(
             "test_roster_impact_frame_is_deterministic", "no database reachable"
         )
+    # Since v4 the frame is a file the Rust backtest cuts (the `frame` stage);
+    # a checkout that has not cut one should skip, not die in build_dataset.
+    if not R.FRAME_PATH.exists():
+        return _skip(
+            "test_roster_impact_frame_is_deterministic",
+            f"no calibrator frame at {R.FRAME_PATH} — run the frame stage",
+        )
     a, cols, _ = R.build_dataset()
     b, _, _ = R.build_dataset()
     assert _frame_digest(a[cols]) == _frame_digest(b[cols]), (

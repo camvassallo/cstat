@@ -46,8 +46,32 @@ ONLY projected rows, and `roster_size` reads as it does at serve. The same
 change moves the archetype join to the PRIOR season, which is what the
 serve side feeds (a returner's or arrival's base-season class; none for a
 recruit) — v2 read the target season's assignment, computed from the very
-stats it was predicting. `build_dataset` prints the per-source coverage
+stats it was predicting. `build_sql_dataset` prints the per-source coverage
 and the dropped count.
+
+**v4 (2026-09): the frame is the served composition itself.** v3 removed
+the unprojected bodies but still composed each rotation from the players
+who ACTUALLY played the target season — their CAM was held out, their
+presence was not. The serve path composes ex-ante: returners less the four
+departure channels, plus portal arrivals and ranked recruits, before anyone
+has played. Those are different rosters: the ex-post one already knows who
+transferred in June, who never got eligible, who was hurt in October — and
+the in-frame LOSO number it produced (5.61) did not agree with the
+end-to-end backtest (5.49) that scores the ex-ante rosters the site
+serves. So the frame is now cut by the Rust side that composes the served
+rosters: `cstat-ingest projections-backtest --frame-out --frame-only`
+writes every composed team-season's `build_roster_impact_features` vector
+plus its actual AdjEM to `frames/roster_impact_ex_ante.json`, and
+`build_dataset` reads that. Judged end to end against the v3 model on the
+same 2,961 team-seasons: in-frame LOSO 5.39 vs backtest 5.42 (they agree
+now), raw bias +0.24 -> +0.09, served pooled a tie (5.410 -> 5.412), 2024+
+and high-turnover rosters slightly better, the pre-portal-era top 10
+slightly worse (+0.19). A consistency fix, not an accuracy win: it makes
+the in-frame number mean what it says, which is what lets a calibrator
+experiment be judged here without the Rust round trip. The Python
+aggregation (`aggregate_team_season`, `PLAYER_QUERY`) is kept as
+`build_sql_dataset` for the diagnostics that reuse it; no served model
+trains on it.
 
 Rotation normalization — train/serve parity. Both this script and the
 Rust `roster_impact::build_roster_impact_features` rank each roster by
@@ -70,6 +94,7 @@ sum). `roster_size` is kept as the depth feature.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -448,7 +473,102 @@ def cam_v3_coverage(players: pd.DataFrame) -> dict:
     return cov
 
 
-def build_dataset() -> tuple[pd.DataFrame, list[str], dict]:
+FRAME_PATH = Path(__file__).parent / "frames" / "roster_impact_ex_ante.json"
+FRAME_CMD = (
+    "cargo run --release --bin cstat-ingest -- projections-backtest "
+    "--years 2016,...,2026 --frame-out training/frames/roster_impact_ex_ante.json "
+    "--frame-only   (or: ./training/retrain_downstream.sh --from frame)"
+)
+
+
+def oof_snapshot(engine) -> dict:
+    """Row count + newest `created_at` per OOF table, in the shape the Rust
+    frame writer stamps (`projections_backtest.rs::dump_frame_json`). Both
+    Layer 1 trainers TRUNCATE + reload, so a retrain that lands the same row
+    count still moves the timestamp."""
+    row = pd.read_sql(
+        "SELECT (SELECT count(*) FROM trajectory_oof_predictions) AS traj_n, "
+        "(SELECT max(created_at)::text FROM trajectory_oof_predictions) AS traj_at, "
+        "(SELECT count(*) FROM freshman_oof_predictions) AS fresh_n, "
+        "(SELECT max(created_at)::text FROM freshman_oof_predictions) AS fresh_at",
+        engine,
+    ).iloc[0]
+    return {
+        "trajectory_oof_predictions": {"n_rows": int(row["traj_n"]), "max_created_at": row["traj_at"]},
+        "freshman_oof_predictions": {"n_rows": int(row["fresh_n"]), "max_created_at": row["fresh_at"]},
+    }
+
+
+def build_dataset(frame: Path = FRAME_PATH) -> tuple[pd.DataFrame, list[str], dict]:
+    """The v4 frame: the served ex-ante composition, cut by the Rust backtest.
+
+    Returns `(df, feature_cols, coverage)` in the same shape `build_sql_dataset`
+    did — `team_id` is the TARGET-season UUID (the frame carries the base-season
+    one; re-keyed here through `teams.natstat_id`), `adj_efficiency_margin` the
+    target, `feature_cols` in `ROSTER_IMPACT_FEATURE_NAMES` order.
+
+    Refuses a frame cut from a different OOF snapshot than the live tables: the
+    frame is a file, and a file outlives the tables it was cut from. A Layer 1
+    retrain without a re-cut would otherwise train the calibrator on stale
+    projections while `input_provenance` — taken from the live DB — said
+    CURRENT.
+    """
+    if not frame.exists():
+        raise SystemExit(f"calibrator frame {frame} not found — cut it first:\n  {FRAME_CMD}")
+    raw = json.loads(frame.read_text())
+    feature_cols = list(raw["feature_names"])
+    engine = get_engine()
+    live = oof_snapshot(engine)
+    stamped = raw["provenance"]["oof_snapshot"]
+    if live != stamped:
+        raise SystemExit(
+            f"calibrator frame {frame.name} was cut from a different OOF snapshot.\n"
+            f"  frame: {stamped}\n  live:  {live}\nRe-cut it:\n  {FRAME_CMD}"
+        )
+    rows = raw["rows"]
+    df = pd.DataFrame(
+        [r["features"] for r in rows], columns=feature_cols, dtype="float64"
+    )
+    df.insert(0, "base_team_id", [str(r["team_id"]) for r in rows])
+    df.insert(1, "season", [int(r["season"]) for r in rows])
+    df["adj_efficiency_margin"] = [float(r["actual"]) for r in rows]
+    # Base-season UUID -> target-season UUID, the key every consumer of this
+    # frame (the AdjO trainer's target merge, `canonical_frame_order`) expects.
+    ids = pd.read_sql(
+        "SELECT base.id AS base_team_id, tgt.id AS team_id "
+        "FROM teams base JOIN teams tgt ON tgt.natstat_id = base.natstat_id "
+        "AND tgt.season = base.season + 1",
+        engine,
+    )
+    ids["base_team_id"] = ids["base_team_id"].astype(str)
+    df = df.merge(ids, on="base_team_id", how="left")
+    unresolved = int(df["team_id"].isna().sum())
+    if unresolved:
+        raise SystemExit(f"{unresolved} frame rows have no target-season team row")
+    df = df.drop(columns=["base_team_id"])
+    df = df[["team_id", "season", *feature_cols, "adj_efficiency_margin"]]
+    df = canonical_frame_order(df)
+    coverage = {
+        "frame": frame.name,
+        "frame_sha256": hashlib.sha256(frame.read_bytes()).hexdigest(),
+        "frame_provenance": raw["provenance"],
+        "n_rows": int(len(df)),
+        "seasons": sorted(int(s) for s in df["season"].unique()),
+    }
+    print(
+        f"Loaded ex-ante frame {frame.name}: {len(df):,} team-seasons "
+        f"{coverage['seasons'][0]}-{coverage['seasons'][-1]}, {len(feature_cols)} features "
+        f"(cut {raw['provenance']['generated_at']})"
+    )
+    return df, feature_cols, coverage
+
+
+def build_sql_dataset() -> tuple[pd.DataFrame, list[str], dict]:
+    """The v3 (ex-post composition) frame, built in SQL/pandas from the players
+    who actually played each target season. NOT what the served models train
+    on any more — kept for `decompose_projection_error.py` and the
+    diagnostics that reuse `aggregate_team_season`. See the module docstring
+    (v4) for why."""
     engine = get_engine()
     players = pd.read_sql(PLAYER_QUERY, engine, params={"seasons": list(SEASONS)})
     teams = pd.read_sql(TEAM_QUERY, engine, params={"seasons": list(SEASONS)})
@@ -720,12 +840,12 @@ def main() -> None:
         # Honored verbatim by the Rust boot validator (`validate_model_meta`
         # checks this equals `QUAL_FILTER_STRING`).
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
-        # v3: trained on projected (held-out OOF) cam_v3 ONLY — rows with no
-        # projection are dropped rather than filled with the target-season
-        # actual (v2), and archetypes are the prior season's. See the module
-        # docstring.
+        # v4: the frame IS the served composition — cut by `projections-backtest
+        # --frame-out` from the ex-ante rosters, OOF cam_v3 only (v3), no
+        # ex-post presence (v4). See the module docstring.
         "cam_v3_source": "oof_only",
-        # Per-source provenance of the training cam_v3 inputs.
+        "frame_source": "ex_ante_backtest_composition",
+        # Which frame file, its digest and the OOF snapshot it was cut from.
         "cam_v3_coverage": coverage,
         # Fingerprint of every input this frame was built from — the OOF
         # tables plus the Layer 0 sources (issue #223). Superset of the
