@@ -561,6 +561,7 @@ def build_dataset(frame: Path = FRAME_PATH) -> tuple[pd.DataFrame, list[str], di
         engine,
     )
     ids["base_team_id"] = ids["base_team_id"].astype(str)
+    ids["team_id"] = ids["team_id"].astype(str)
     df = df.merge(ids, on="base_team_id", how="left")
     unresolved = int(df["team_id"].isna().sum())
     if unresolved:
@@ -851,13 +852,13 @@ def walk_forward_block(df: pd.DataFrame, feature_cols: list[str], n_estimators: 
     preds["wf refit"] = refit_preds
 
     table = team_table([r for r, _ in scored], preds, reference="wf served")
-    served_loso = loso_on_same_rows(loso, df["adj_efficiency_margin"], df["season"], WALK_FROM)
+    raw_loso_same_rows = loso_on_same_rows(loso, df["adj_efficiency_margin"], df["season"], WALK_FROM)
     return {
         "walk_from": WALK_FROM,
         "raw_walk_from": RAW_WALK_FROM,
         "protocol": "train < S, test S; fixed n_estimators (export protocol); served blend on top; constants refit on earlier walk-forward rows",
         "raw": raw_block,
-        "raw_loso_same_rows": served_loso,
+        "raw_loso_same_rows": raw_loso_same_rows,
         "served": table,
         "constants_refit": {
             "served": {"w_stable": W_STABLE, "w_overhaul": W_OVERHAUL, "shrink": PROGRAM_ANCHOR_SHRINK},

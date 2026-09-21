@@ -53,9 +53,10 @@ def main() -> int:
     adjo = _load("roster_adjo_model_meta.json")["walk_forward"]
     print("\nLayer 2 (per team; raw calibrator, fixed-iteration export protocol)")
     print(f"  {'model':<12}{'walk-forward':>14}{'same rows, LOSO':>22}{'optimism':>10}{'n':>8}")
-    raw_wf = ri["raw"]["pooled"]["mae"]
+    # ri["raw"] starts at raw_walk_from; the reported raw number is the
+    # served table's "wf raw" column, which is on the walk_from+ rows the
+    # same-rows LOSO covers.
     raw_loso = ri["raw_loso_same_rows"].get("mae")
-    # ri["raw"] starts at raw_walk_from; the same-rows LOSO is on walk_from+.
     served = ri["served"]
     wf_raw_reported = served["cohorts"]["all"]["wf raw"]["mae"]
     print(f"  {'roster_impact':<12}{wf_raw_reported:>14.3f}{raw_loso:>22.3f}{raw_loso - wf_raw_reported:>+10.3f}{served['n']:>8}")

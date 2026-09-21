@@ -234,7 +234,7 @@ per_season = W.per_season
 mae_bias = W.mae_bias
 paired_z = W.paired_z
 top_n = W.top_n_ex_ante
-METRICS = tuple((label if label != "rho(actual T25)" else "rho(actual T25)", fn) for label, fn in W.RANK_METRICS)
+METRICS = tuple(W.RANK_METRICS)
 
 
 def main() -> None:
