@@ -183,7 +183,8 @@ before they disagreed (5.61 / 5.49) and the in-frame one was optimistic on
 rosters no served row resembles. Served accuracy is a tie pooled; the raw bias
 went +0.24 → +0.09. The frame is a file, so a Layer 1 retrain that skips the
 `frame` stage would train the calibrators on stale projections — the trainer
-compares the frame's OOF row counts with the live tables and refuses.
+compares the frame's OOF snapshot (row count and newest `created_at` per
+table) with the live tables and refuses.
 
 ---
 

@@ -43,9 +43,10 @@
 //!    ROADMAP §5b v2 tightening; the live `/api/projections` route still
 //!    uses the all-seasons model, correct there because the live target
 //!    year is genuinely unseen.
-//!  - Recruit cam_v3 comes from `compose_all_projections`, which runs
-//!    live freshman inference — mildly in-sample for the freshman model
-//!    on historical targets.
+//!  - Recruit cam_v3 on a historical target comes from
+//!    `freshman_oof_predictions` (held out, like the returner channel);
+//!    only a recruit the OOF table does not cover falls back to live
+//!    freshman inference. See `roster_projection::compose_all_projections`.
 //!  - Uncertain (declared-draft) cohort is assumed empty: the 2024 /
 //!    2025 base seasons have no `early_entrants.json`, so floor == ceiling.
 
@@ -490,9 +491,9 @@ pub async fn run(
     );
     println!("{}", "-".repeat(72));
     println!(
-        "  Caveats: roster-impact model is now leave-one-season-out (no \
-         in-sample leak from the roster model); recruit cam_v3 still uses \
-         live freshman inference (mildly in-sample). See module docs.",
+        "  Caveats: roster-impact model is leave-one-season-out and recruit \
+         cam_v3 is the held-out freshman OOF where the table covers the \
+         recruit; uncovered recruits use live inference. See module docs.",
     );
 
     // Which models scored this backtest (#238). The LOSO set is the whole
