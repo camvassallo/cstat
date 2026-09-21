@@ -4,10 +4,12 @@ decomposition for the Future page.
 
 The served `roster_impact_model.onnx` maps projected-roster aggregates ->
 next-season team AdjEM (net). This trains an identical-shape model on the
-SAME feature frame whose target is next-season `adj_offense` (absolute,
-~105 scale). At serve time the Rust route runs both, keeps the net headline
-untouched, and derives AdjD = AdjO - AdjEM (exact reconciliation, since
-AdjEM = AdjO - AdjD holds to ~0.025 in the data).
+SAME feature frame whose target is next-season `adj_offense` relative to
+the base season's league mean (see below; the serve path adds the mean
+back, so the served number is on the absolute ~105 scale). At serve time
+the Rust route runs both, keeps the net headline untouched, and derives
+AdjD = AdjO - AdjEM (exact reconciliation, since AdjEM = AdjO - AdjD holds
+to ~0.025 in the data).
 
 Why NET+SPLIT and not two independent models: validated in
 `validation/exp_team_adjod_projection.py` (LOSO, 4,255 team-seasons) —

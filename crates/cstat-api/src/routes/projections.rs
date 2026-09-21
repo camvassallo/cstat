@@ -1872,9 +1872,9 @@ async fn fetch_league_mean_adj_o(
     .bind(base_season)
     .fetch_one(pool)
     .await?;
-    mean.map(|m| m as f32).ok_or_else(|| {
-        sqlx::Error::Protocol(format!("no adj_offense rows for base season {base_season}"))
-    })
+    // `avg` over zero rows is NULL, not an error; surface it as the row-level
+    // miss it is rather than serving AdjO ~100 points low.
+    mean.map(|m| m as f32).ok_or(sqlx::Error::RowNotFound)
 }
 
 /// Base-season CamPom O/D split per player, envelope-gated jointly
