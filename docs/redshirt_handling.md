@@ -118,8 +118,21 @@ keeps every PR here well-tested and free of speculative modeling.
 ### PR 1 — retroactive redshirt-recruit exclusion — SHIPPED (this PR)
 
 **Goal:** stop crediting recruits who never played, for projections of
-*completed* seasons (backtests, grading, the "what we projected for 2026" view).
+*completed* seasons (the "what we projected for 2026" view).
 The live upcoming-season projection is untouched.
+
+> **Scope narrowed 2026-09-21 (#362).** The exclusion no longer applies to
+> `projections-backtest` — neither to its scoring nor to the calibrator
+> training frame it cuts (#360). Both now compose exactly what was served in
+> August, no-shows included: the backtest judges the served projection, and
+> a calibrator trained on rosters with the no-shows already removed scored
+> rosters that still had them (the look-ahead guard found 126 of 311 teams in
+> 2026 composed differently once the target season was hidden). Measured on
+> identical served rosters, training either way is a tie (+0.015, z=+1.1),
+> which is the "redshirts carry near-zero cam_v3" prediction below holding.
+> `--retro-exclude-no-shows` reproduces the old graded composition for
+> comparisons. `compute-projections` and the route keep the exclusion for the
+> displayed historical grade, as before.
 
 **As built:**
 1. **Completeness gate = a clock verdict, not game volume.** The caller passes

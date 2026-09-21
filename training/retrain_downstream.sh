@@ -27,6 +27,11 @@
 #
 # THE CHAIN
 #
+#   guard (runs first whenever a frame-building stage is in the plan)
+#     lookahead_guard.py: rebuilds each training frame with the target
+#                      season hidden and refuses to continue if any FEATURE
+#                      moved (#362). All three frames when Layer 1 is in the
+#                      plan; the calibrator frame alone for a `--from frame`.
 #   Layer 1 (opt-in, --with-layer1) — these WRITE the OOF tables
 #     trajectory     TRUNCATEs + reloads trajectory_oof_predictions
 #     freshman       TRUNCATEs + reloads freshman_oof_predictions
@@ -104,7 +109,7 @@ EVAL_DIR="$TRAINING_DIR/eval_history"
 # below is what covers that gap rather than this line (#263).
 YEARS="2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026"
 
-ALL_STAGES=(trajectory freshman frame roster_impact roster_adjo backtest cae projections)
+ALL_STAGES=(guard trajectory freshman frame roster_impact roster_adjo backtest cae projections)
 LAYER1=(trajectory freshman)
 
 WITH_LAYER1=0
@@ -204,6 +209,13 @@ else
     is_in "$s" "${LAYER1[@]}" && (( ! WITH_LAYER1 )) && continue
     PLAN+=("$s")
   done
+  # The guard precedes every frame-building stage in ALL_STAGES, so a `--from`
+  # into one of them would leave it out. It exists to run before those
+  # stages, so put it back whenever one of them is in the plan; `--only`
+  # lists are taken literally.
+  if ! is_in guard "${PLAN[@]}" && { is_in frame "${PLAN[@]}" || is_in trajectory "${PLAN[@]}" || is_in freshman "${PLAN[@]}"; }; then
+    PLAN=(guard "${PLAN[@]}")
+  fi
 fi
 (( ${#PLAN[@]} )) || die "empty plan"
 
@@ -255,6 +267,17 @@ FRAME="$TRAINING_DIR/frames/roster_impact_ex_ante.json"
 WROTE=()
 
 stage_banner() { echo; echo "══ $1 ═══════════════════════════════════════"; }
+
+run_guard() {
+  local frames="calibrator"
+  if is_in trajectory "${PLAN[@]}" || is_in freshman "${PLAN[@]}"; then
+    frames="trajectory,freshman,calibrator"
+  fi
+  stage_banner "guard — look-ahead: features invariant to the target season ($frames)"
+  ( cd "$REPO_ROOT" && cargo build --release -p cstat-ingest >/dev/null )
+  ( cd "$TRAINING_DIR" && "$VENV_PY" lookahead_guard.py --frames "$frames" ) \
+    || die "a training frame reads the target season — fix the frame before retraining on it"
+}
 
 run_trajectory() {
   stage_banner "trajectory — rewrites trajectory_oof_predictions"

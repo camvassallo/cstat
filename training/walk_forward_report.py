@@ -40,13 +40,15 @@ def main() -> int:
     print("walk-forward scorecard — train < S, test S; the canonical judge (#361)")
     print("=" * 72)
 
+    # "optimism" = walk-forward − LOSO-family on identical rows: how much the
+    # train-on-everything-else number flattered. Positive = it did.
     print("\nLayer 1 (per player, CamPom MAE; test target seasons from walk_from)")
     print(f"  {'model':<12}{'walk-forward':>14}{'same rows, LOPO/LOCO':>22}{'optimism':>10}{'n':>8}")
     for name, file, _, same_key in LAYER1:
         w = _load(file)["walk_forward"]
         wf = w["pooled"]["mae"]
         same = w.get(same_key, {}).get("mae")
-        opt = f"{same - wf:+.3f}" if same is not None else "   —"
+        opt = f"{wf - same:+.3f}" if same is not None else "   —"
         print(f"  {name:<12}{wf:>14.3f}{(f'{same:.3f}' if same is not None else '—'):>22}{opt:>10}{w['pooled']['n']:>8}")
 
     ri = _load("roster_impact_model_meta.json")["walk_forward"]
@@ -59,7 +61,7 @@ def main() -> int:
     raw_loso = ri["raw_loso_same_rows"].get("mae")
     served = ri["served"]
     wf_raw_reported = served["cohorts"]["all"]["wf raw"]["mae"]
-    print(f"  {'roster_impact':<12}{wf_raw_reported:>14.3f}{raw_loso:>22.3f}{raw_loso - wf_raw_reported:>+10.3f}{served['n']:>8}")
+    print(f"  {'roster_impact':<12}{wf_raw_reported:>14.3f}{raw_loso:>22.3f}{wf_raw_reported - raw_loso:>+10.3f}{served['n']:>8}")
     print(f"  {'roster_adjo':<12}{adjo['pooled']['mae']:>14.3f}{'—':>22}{'—':>10}{adjo['pooled']['n']:>8}")
 
     print(f"\nServed projection (Layer 2 + Layer 4 blend), test {ri['walk_from']}+, n={served['n']}")
