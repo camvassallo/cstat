@@ -258,8 +258,9 @@ and are now Rust `const`s:
 
 | Constant | Where | Tuned by |
 |---|---|---|
-| `PROJECTION_SHRINK_WEIGHT` (0.45) | `roster_projection.rs` | `transition_blend_diagnostic.py`, off the backtest dump |
-| `PROJECTION_SHRINK_WEIGHT_OVERHAUL` (0.20) | `roster_projection.rs` | same |
+| `PROJECTION_SHRINK_WEIGHT` (0.70 anchored / 0.30 unanchored) | `roster_projection.rs` | `transition_blend_diagnostic.py`, off the backtest dump |
+| `PROJECTION_SHRINK_WEIGHT_OVERHAUL` (0.55 / 0.20) | `roster_projection.rs` | same |
+| `PROGRAM_ANCHOR_SHRINK` (1.0) | `roster_projection.rs` | `program_anchor_era_diagnostic.py` |
 | `PRESEASON_PEAK_WEIGHT` (0.70) | `predict.rs` | `cstat-ingest measure-blend-accuracy` |
 | `PRESEASON_DECAY_DAYS` (42) | `predict.rs` | same |
 | `PRESEASON_HOME_COURT_ADVANTAGE` (3.5) | `predict.rs` | same |
@@ -271,8 +272,20 @@ raw projector. Their own doc comment records that they were last retuned
 2026-06-27 "after the multi-season-trajectory calibrator refit," which is the
 tell — a Layer 2 retrain is exactly the event that can move their optimum.
 
-**`retrain_downstream.sh` does not run either tuner, and nothing checks them**
-(#236). That is deliberate rather than an oversight: both tools *report* a
+**Since #361 the three projection constants ARE re-checked on every Layer 2
+retrain**, forward-chained: `train_roster_impact_model.py` re-searches
+`PROJECTION_SHRINK_WEIGHT`, `_OVERHAUL` and `PROGRAM_ANCHOR_SHRINK` inside each
+walk-forward fold — on earlier seasons' held-out raw predictions only — and
+scores the refit against the served values on the held-out season
+(`walk_forward.constants_refit` in the meta, printed by the scorecard). The
+refit is fold-stable at 0.55 / 0.20 / 0.75 and scores a tie with the served
+0.70 / 0.55 / 1.0 (pooled +0.016, z=+0.9, 2021–2026), which is what "the served
+constants were not fit to the test set" looks like as a number. A refit that
+beats the served constants out of sample is the signal to change them; a refit
+that merely differs is not. The three `predict.rs` constants are still not
+re-checked by the chain (#236).
+
+**`retrain_downstream.sh` does not run either tuner** (#236). That is deliberate rather than an oversight: both tools *report* a
 recommended value, they do not write code, so there is no honest way to
 automate the step.
 But it means the constants keep carrying their last-measured assumption until
@@ -447,6 +460,39 @@ so it moves on sync and not on deploy.
 
 ---
 
+## 3b. How the tree is judged: walk-forward is the canonical number (#361)
+
+Every model here forecasts a season from what was known before it, and until
+2026-09 every one of them was judged leave-one-season-out (or its pair/class
+variant), which trains on seasons *after* the one being scored. Two things
+were wrong with that: the number is optimistic, and a variant can win LOSO and
+lose forward-chained (#359 and #360 both found that shape). So every trainer
+now also runs **walk-forward** — train on seasons strictly earlier than S,
+test on S, for S = 2021..2026 — through one harness (`training/walk_forward.py`:
+fold generator, the cohort table, the rank metric set) and stamps a
+`walk_forward` block into its meta beside the LOSO block. `walk_forward_report.py`
+prints the four as one scorecard, which is the last thing `retrain_downstream.sh`
+prints and the number the methodology docs quote.
+
+What it found on the 2026-09-21 tree (identical rows, walk-forward vs
+train-on-everything-else):
+
+| layer | model | walk-forward | LOSO-family, same rows | optimism |
+|---|---|---|---|---|
+| 1 | trajectory (player CamPom) | 2.030 | 2.026 | 0.004 |
+| 1 | freshman | 2.120 | 2.091 | 0.029 |
+| 2 | roster_impact raw | 5.586 | 5.533 | 0.054 |
+| 2+4 | served projection | **5.467** | 5.458 | 0.009 |
+
+The look-ahead everyone was right to worry about is worth almost nothing at
+every layer: the tree does not lean on the future. That is now a measured
+fact rather than a hope, and it holds only as long as the scorecard keeps
+saying so — a Layer 2 change that opens a gap between the two columns has
+started fitting to later seasons. `roster_adjo` is the one model with a real
+forward gap (walk-forward 4.48 against LOSO 4.10, 2026 alone 5.75): `adj_offense`
+trends across eras and LOSO interpolates that trend while walk-forward has to
+extrapolate it. Display-only, but the honest number is the larger one.
+
 ## 4. Artifact policy for `training/eval_history/`
 
 Every `cae` run writes `training/eval_history/cae_compute_*_summary.json`.
@@ -512,6 +558,9 @@ healthy while serving in-sample projections — elite 2024 transfers projecting
   `Training Guards` CI job; the load-bearing check is that the generalized
   digest still reduces exactly to the #218 construction, because a drift there
   makes every committed stamp incomparable and the API refuses to boot.
+- `training/test_walk_forward.py` — the #361 harness: a walk-forward training
+  row is strictly earlier than the season it is scored on, and the rank
+  metrics' identities. In the `Training Guards` CI job.
 
 
 ### Still convention (nothing will stop you)

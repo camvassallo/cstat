@@ -104,8 +104,17 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
+from export_onnx import canonical_opset_order
 from db import canonical_frame_order, get_engine
 from provenance import input_provenance, oof_provenance_from
+from served_blend import (
+    PROGRAM_ANCHOR_SHRINK,
+    W_OVERHAUL,
+    W_STABLE,
+    prediction_with,
+    served_prediction,
+)
+from walk_forward import WALK_FROM, loso_on_same_rows, regression_walk_forward, team_table
 
 OUT_DIR = Path(__file__).parent / "models"
 SEASONS = (2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026)
@@ -474,6 +483,9 @@ def cam_v3_coverage(players: pd.DataFrame) -> dict:
 
 
 FRAME_PATH = Path(__file__).parent / "frames" / "roster_impact_ex_ante.json"
+# Carried on the frame beside the features (#361): what the served blend
+# combines the raw calibrator output with. Never features.
+BLEND_INPUT_COLS = ("baseline", "retained", "program_level")
 FRAME_CMD = (
     "cargo run --release --bin cstat-ingest -- projections-backtest "
     "--years 2016,...,2026 --frame-out training/frames/roster_impact_ex_ante.json "
@@ -505,7 +517,9 @@ def build_dataset(frame: Path = FRAME_PATH) -> tuple[pd.DataFrame, list[str], di
     Returns `(df, feature_cols, coverage)` in the same shape `build_sql_dataset`
     did — `team_id` is the TARGET-season UUID (the frame carries the base-season
     one; re-keyed here through `teams.natstat_id`), `adj_efficiency_margin` the
-    target, `feature_cols` in `ROSTER_IMPACT_FEATURE_NAMES` order.
+    target, `feature_cols` in `ROSTER_IMPACT_FEATURE_NAMES` order — plus the
+    served blend's inputs (`BLEND_INPUT_COLS`) and `team_name` as extra
+    non-feature columns.
 
     Refuses a frame cut from a different OOF snapshot than the live tables: the
     frame is a file, and a file outlives the tables it was cut from. A Layer 1
@@ -532,6 +546,12 @@ def build_dataset(frame: Path = FRAME_PATH) -> tuple[pd.DataFrame, list[str], di
     df.insert(0, "base_team_id", [str(r["team_id"]) for r in rows])
     df.insert(1, "season", [int(r["season"]) for r in rows])
     df["adj_efficiency_margin"] = [float(r["actual"]) for r in rows]
+    # The served blend's inputs ride along, NOT as features (`feature_cols`
+    # is fixed above, from the frame's `feature_names`): they let the
+    # walk-forward block judge the served projection end to end in-frame.
+    for col in BLEND_INPUT_COLS:
+        df[col] = [None if r.get(col) is None else float(r[col]) for r in rows]
+    df["team_name"] = [r["team_name"] for r in rows]
     # Base-season UUID -> target-season UUID, the key every consumer of this
     # frame (the AdjO trainer's target merge, `canonical_frame_order`) expects.
     ids = pd.read_sql(
@@ -541,12 +561,13 @@ def build_dataset(frame: Path = FRAME_PATH) -> tuple[pd.DataFrame, list[str], di
         engine,
     )
     ids["base_team_id"] = ids["base_team_id"].astype(str)
+    ids["team_id"] = ids["team_id"].astype(str)
     df = df.merge(ids, on="base_team_id", how="left")
     unresolved = int(df["team_id"].isna().sum())
     if unresolved:
         raise SystemExit(f"{unresolved} frame rows have no target-season team row")
     df = df.drop(columns=["base_team_id"])
-    df = df[["team_id", "season", *feature_cols, "adj_efficiency_margin"]]
+    df = df[["team_id", "season", *feature_cols, "adj_efficiency_margin", *BLEND_INPUT_COLS, "team_name"]]
     df = canonical_frame_order(df)
     coverage = {
         "frame": frame.name,
@@ -723,6 +744,130 @@ def random_kfold(df: pd.DataFrame, feature_cols: list[str], n_splits: int = 5) -
     return out
 
 
+# Raw walk-forward starts earlier than the reported test range so the
+# constant refit below has held-out raw predictions to fit on: for test
+# season S it sweeps the constants on seasons RAW_WALK_FROM..S-1, all scored
+# by models that never saw them. 2019 leaves three training seasons behind
+# the first raw fold and two refit seasons behind the first reported one.
+RAW_WALK_FROM = 2019
+REFIT_GRID = {
+    "w_stable": [round(0.30 + 0.05 * i, 2) for i in range(13)],     # 0.30..0.90
+    "w_overhaul": [round(0.20 + 0.05 * i, 2) for i in range(13)],   # 0.20..0.80
+    "shrink": [0.5, 0.75, 1.0],
+}
+
+
+def _rows(df: pd.DataFrame) -> list[dict]:
+    """Frame rows as the dicts `served_blend` and `walk_forward` read."""
+    return [
+        {
+            "season": int(r.season),
+            "team": r.team_name,
+            "actual": float(r.adj_efficiency_margin),
+            "baseline": float(r.baseline),
+            "retained": None if pd.isna(r.retained) else float(r.retained),
+            "program_level": None if pd.isna(r.program_level) else float(r.program_level),
+        }
+        for r in df.itertuples(index=False)
+    ]
+
+
+def walk_forward_block(df: pd.DataFrame, feature_cols: list[str], n_estimators: int) -> dict:
+    """The canonical judge (#361): the calibrator refit walk-forward with the
+    export protocol (fixed `n_estimators`, no early stopping — exactly what
+    the LOSO export set and therefore the Rust backtest use), then the SERVED
+    projection on top of it, judged on the cohort table and rank metrics
+    from `walk_forward.py`, against three references on the same rows:
+
+      loso served      the LOSO calibrator through the served blend — what
+                       the projections backtest and every prior diagnostic
+                       report, restricted to the walk-forward rows, so the
+                       optimism of training on later seasons is read as a
+                       number rather than assumed
+      wf raw           the walk-forward calibrator alone
+      wf served        the served blend on the walk-forward calibrator —
+                       THE headline
+      wf refit         the same, with the three fitted blend constants
+                       (`W_STABLE`, `W_OVERHAUL`, `PROGRAM_ANCHOR_SHRINK`)
+                       re-searched inside each fold on earlier walk-forward
+                       rows — the Layer 4 clause of #361: if the refit
+                       disagrees with the served constants, the served
+                       constants were fit to the test set
+    """
+    params = lgb_params()
+    params.pop("early_stopping_rounds", None)
+    params["n_estimators"] = n_estimators
+
+    def fit_predict(x_tr, y_tr, x_te):
+        return lgb.LGBMRegressor(**params).fit(x_tr, y_tr).predict(x_te)
+
+    print("\n  raw calibrator, walk-forward (fixed n_estimators, the export protocol):")
+    raw_block, raw = regression_walk_forward(
+        df[feature_cols], df["season"], df["adj_efficiency_margin"], fit_predict, RAW_WALK_FROM, "raw"
+    )
+    # LOSO under the same fixed-iteration protocol, for the same-rows comparison.
+    loso = pd.Series(np.nan, index=df.index, dtype=float)
+    for s in sorted(df["season"].unique()):
+        tr, te = df["season"] != s, df["season"] == s
+        loso.loc[te] = fit_predict(df.loc[tr, feature_cols], df.loc[tr, "adj_efficiency_margin"], df.loc[te, feature_cols])
+
+    rows = _rows(df)
+    scored = [(r, i) for r, i in zip(rows, df.index) if r["season"] >= WALK_FROM]
+    preds = {
+        "loso served": {id(r): served_prediction({**r, "roster_proj": float(loso[i])}) for r, i in scored},
+        "wf raw": {id(r): float(raw[i]) for r, i in scored},
+        "wf served": {id(r): served_prediction({**r, "roster_proj": float(raw[i])}) for r, i in scored},
+    }
+
+    # Layer 4: refit the served constants inside each fold.
+    refit_preds: dict[int, float] = {}
+    per_fold: dict[str, dict] = {}
+    by_season: dict[int, list[tuple[dict, int]]] = {}
+    for r, i in zip(rows, df.index):
+        if raw.notna()[i]:
+            by_season.setdefault(r["season"], []).append((r, i))
+    for s in sorted(by_season):
+        if s < WALK_FROM:
+            continue
+        pool = [(r, i) for t in by_season if t < s for r, i in by_season[t]]
+        best = (W_STABLE, W_OVERHAUL, PROGRAM_ANCHOR_SHRINK, float("inf"))
+        for ws in REFIT_GRID["w_stable"]:
+            for wo in REFIT_GRID["w_overhaul"]:
+                if wo > ws:
+                    continue
+                for sh in REFIT_GRID["shrink"]:
+                    mae = float(np.mean([
+                        abs(prediction_with({**r, "roster_proj": float(raw[i])}, ws, wo, sh) - r["actual"]) for r, i in pool
+                    ]))
+                    if mae < best[3]:
+                        best = (ws, wo, sh, mae)
+        ws, wo, sh, fit_mae = best
+        for r, i in by_season[s]:
+            refit_preds[id(r)] = prediction_with({**r, "roster_proj": float(raw[i])}, ws, wo, sh)
+        test_mae_refit = float(np.mean([abs(refit_preds[id(r)] - r["actual"]) for r, _ in by_season[s]]))
+        test_mae_served = float(np.mean([abs(preds["wf served"][id(r)] - r["actual"]) for r, _ in by_season[s]]))
+        per_fold[str(s)] = {"w_stable": ws, "w_overhaul": wo, "shrink": sh, "refit_pool_seasons": sorted(t for t in by_season if t < s),
+                            "refit_pool_mae": fit_mae, "test_mae_refit": test_mae_refit, "test_mae_served": test_mae_served}
+        print(f"  refit {s}: w_stable {ws:.2f}  w_overhaul {wo:.2f}  shrink {sh:.2f}   test MAE refit {test_mae_refit:.3f} vs served {test_mae_served:.3f}")
+    preds["wf refit"] = refit_preds
+
+    table = team_table([r for r, _ in scored], preds, reference="wf served")
+    raw_loso_same_rows = loso_on_same_rows(loso, df["adj_efficiency_margin"], df["season"], WALK_FROM)
+    return {
+        "walk_from": WALK_FROM,
+        "raw_walk_from": RAW_WALK_FROM,
+        "protocol": "train < S, test S; fixed n_estimators (export protocol); served blend on top; constants refit on earlier walk-forward rows",
+        "raw": raw_block,
+        "raw_loso_same_rows": raw_loso_same_rows,
+        "served": table,
+        "constants_refit": {
+            "served": {"w_stable": W_STABLE, "w_overhaul": W_OVERHAUL, "shrink": PROGRAM_ANCHOR_SHRINK},
+            "grid": REFIT_GRID,
+            "per_fold": per_fold,
+        },
+    }
+
+
 def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -> None:
     import onnxmltools
     from onnxmltools.convert.common.data_types import FloatTensorType
@@ -738,6 +883,7 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     # changed nothing. Naming it after the artifact makes the bytes a function
     # of the model alone.
     onnx_model.graph.name = onnx_path.stem
+    canonical_opset_order(onnx_model)
     onnxmltools.utils.save_model(onnx_model, str(onnx_path))
 
 
@@ -816,6 +962,11 @@ def main() -> None:
     final = lgb.LGBMRegressor(**final_params)
     final.fit(X, y)
 
+    print("\n" + "=" * 60)
+    print(f"Walk-forward (the canonical judge, #361): test {WALK_FROM}+, train strictly earlier")
+    print("=" * 60)
+    walk = walk_forward_block(df, feature_cols, final_n)
+
     print("\nFeature importances:")
     importance = sorted(zip(feature_cols, final.feature_importances_), key=lambda x: -x[1])
     for name, imp in importance:
@@ -867,6 +1018,9 @@ def main() -> None:
         "loso_export_seasons": list(LOSO_EXPORT_SEASONS),
         "loso_train_rows": dict(zip(LOSO_EXPORT_SEASONS, loso_train_ns)),
         "canonical_rotation_mpg": list(CANONICAL_ROTATION_MPG),
+        # The headline. LOSO below trains on later seasons and is kept for
+        # continuity; this block is what the methodology docs quote.
+        "walk_forward": walk,
         "backtest_loso": loso,
         "cv_5fold": cv,
         "feature_importance": [

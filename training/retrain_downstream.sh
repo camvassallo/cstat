@@ -355,6 +355,17 @@ elif is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}"; then
   echo "        its job — rerun with both stages."
 fi
 
+# ── Walk-forward scorecard (#361) ───────────────────────
+# The number a retrain is judged on. Every trainer stamps a `walk_forward`
+# block into its meta; this prints the four as one table. Report-only here —
+# the trainers are what write it — so a partial run still shows the whole
+# tree, with whichever metas the run did not touch as they were.
+if is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}" || is_in trajectory "${PLAN[@]}" || is_in freshman "${PLAN[@]}"; then
+  stage_banner "scorecard — walk-forward, every layer"
+  ( cd "$TRAINING_DIR" && "$VENV_PY" walk_forward_report.py ) \
+    || echo "→ NOTE: a meta has no walk_forward block; retrain that model so its headline is comparable"
+fi
+
 # ── Cross-layer staleness (#223) ────────────────────────
 # The stamp check above compares the two Layer 2 halves against EACH OTHER; it
 # cannot see a Layer 1 retrain that was never followed by a Layer 2 one, since

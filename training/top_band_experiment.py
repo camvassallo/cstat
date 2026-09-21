@@ -98,19 +98,17 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import math
-from itertools import combinations
 from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
 from sklearn.isotonic import IsotonicRegression
 
 from compute_cae import EVAL_DIR, load_backtest
 from db import get_engine
 from served_blend import served_prediction, unverified_rows
+import walk_forward as W
 from train_roster_impact_model import build_dataset, build_sql_dataset, lgb_params
 
 START_YEAR = 2018
@@ -224,73 +222,19 @@ def calibrator_walk(frame: pd.DataFrame, cols, top50: set) -> dict[str, dict]:
 
 
 # ------------------------------------------------------------------- metrics
-def per_season(rows, pred, fn):
-    vals = []
-    for s in sorted({r["season"] for r in rows}):
-        rs = [r for r in rows if r["season"] == s and id(r) in pred]
-        if len(rs) >= 50:
-            vals.append(fn(rs, pred))
-    return float(np.mean(vals)) if vals else float("nan")
-
-
-def membership25(rs, pred):
-    p = {id(r) for r in sorted(rs, key=lambda r: -pred[id(r)])[:25]}
-    a = {id(r) for r in sorted(rs, key=lambda r: -r["actual"])[:25]}
-    return len(p & a) / 25
-
-
-def rho_actual25(rs, pred):
-    top = sorted(rs, key=lambda r: -r["actual"])[:25]
-    return spearmanr([pred[id(r)] for r in top], [r["actual"] for r in top]).correlation
-
-
-def rho_pred25(rs, pred):
-    top = sorted(rs, key=lambda r: -pred[id(r)])[:25]
-    return spearmanr([pred[id(r)] for r in top], [r["actual"] for r in top]).correlation
-
-
-def rho_field(rs, pred):
-    return spearmanr([pred[id(r)] for r in rs], [r["actual"] for r in rs]).correlation
-
-
-def concordance50(rs, pred):
-    top = sorted(rs, key=lambda r: -r["actual"])[:50]
-    ok = tot = 0
-    for a, b in combinations(top, 2):
-        d = (pred[id(a)] - pred[id(b)]) * (a["actual"] - b["actual"])
-        if d != 0:
-            tot += 1
-            ok += d > 0
-    return ok / tot
-
-
-def worst_miss10(rs, pred):
-    top = sorted(rs, key=lambda r: -pred[id(r)])[:10]
-    return max(abs(pred[id(r)] - r["actual"]) for r in top)
-
-
-def mae_bias(rows, pred):
-    e = [pred[id(r)] - r["actual"] for r in rows if id(r) in pred]
-    return (sum(abs(x) for x in e) / len(e), sum(e) / len(e)) if e else (float("nan"), float("nan"))
-
-
-def paired_z(rows, a, b):
-    d = [abs(a[id(r)] - r["actual"]) - abs(b[id(r)] - r["actual"]) for r in rows if id(r) in a and id(r) in b]
-    m = sum(d) / len(d)
-    sd = math.sqrt(sum((x - m) ** 2 for x in d) / max(len(d) - 1, 1))
-    return m, (m / (sd / math.sqrt(len(d))) if sd > 0 else 0.0)
-
-
-def top_n(rows, n):
-    out = []
-    for s in sorted({r["season"] for r in rows}):
-        out += sorted((r for r in rows if r["season"] == s), key=lambda r: -r["baseline"])[:n]
-    return out
-
-
-METRICS = (("membership@25", membership25), ("rho(actual T25)", rho_actual25),
-           ("rho(pred T25)", rho_pred25), ("concordance T50", concordance50),
-           ("worst miss T10", worst_miss10), ("rho(field)", rho_field))
+# The metric set lives in `walk_forward.py` since #361 (it was written here
+# first); the names below keep this script's tables readable as recorded.
+membership25 = W.membership25
+rho_actual25 = W.rho_actual_top25
+rho_pred25 = W.rho_pred_top25
+rho_field = W.rho_field
+concordance50 = W.concordance_top50
+worst_miss10 = W.worst_miss_top10
+per_season = W.per_season
+mae_bias = W.mae_bias
+paired_z = W.paired_z
+top_n = W.top_n_ex_ante
+METRICS = tuple(W.RANK_METRICS)
 
 
 def main() -> None:

@@ -596,11 +596,14 @@ fn dump_per_team_json(path: &Path, results: &[TeamResult], provenance: &Value) -
 /// Write the calibrator's ex-ante training frame.
 ///
 /// Schema: `{"provenance": {...}, "feature_names": [...27], "rows": [{team_id,
-/// team_name, season, actual, features: [...27]}]}`. `team_id` is the
-/// BASE-season UUID, as in the per-team dump; the trainer re-keys on
-/// `teams.natstat_id` to join its targets. `feature_names` is
-/// [`ROSTER_IMPACT_FEATURE_NAMES`], so the trainer can assert the wire order
-/// it will export back to ONNX is the order these were built in.
+/// team_name, season, actual, baseline, retained, program_level,
+/// features: [...27]}]}`. `team_id` is the BASE-season UUID, as in the
+/// per-team dump; the trainer re-keys on `teams.natstat_id` to join its
+/// targets. `feature_names` is [`ROSTER_IMPACT_FEATURE_NAMES`], so the
+/// trainer can assert the wire order it will export back to ONNX is the
+/// order these were built in. `baseline` / `retained` / `program_level` are
+/// NOT features — they are the served blend's inputs, carried so the trainer
+/// can judge the served projection walk-forward in-frame (#361).
 ///
 /// The provenance block carries the row count and newest `created_at` of the
 /// two OOF tables the composition read. The trainer compares them with the
@@ -652,6 +655,9 @@ fn frame_json(results: &[TeamResult], years: &[i32], oof_snapshot: Value) -> Val
                 "team_name": r.team_name,
                 "season": r.season,
                 "actual": r.actual,
+                "baseline": r.baseline,
+                "retained": r.retained,
+                "program_level": r.program_level,
                 "features": r.features,
             })
         })
@@ -709,8 +715,20 @@ mod dump_format_tests {
             .collect();
         assert_eq!(names, ROSTER_IMPACT_FEATURE_NAMES.to_vec());
         let row = &v["rows"][0];
-        for key in ["team_id", "team_name", "season", "actual", "features"] {
+        for key in [
+            "team_id",
+            "team_name",
+            "season",
+            "actual",
+            "baseline",
+            "features",
+        ] {
             assert!(!row[key].is_null(), "frame row missing `{key}`");
+        }
+        // Blend inputs ride along by name; `retained` / `program_level` are
+        // nullable and must be present as keys even when null.
+        for key in ["retained", "program_level"] {
+            assert!(row.get(key).is_some(), "frame row missing `{key}`");
         }
         assert_eq!(
             row["features"].as_array().unwrap().len(),

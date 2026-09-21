@@ -101,6 +101,9 @@ jobs:
       # the #218 one, and a drift there makes the next retrain's stamps
       # incomparable — surfacing as a production API that refuses to boot.
       - run: python test_provenance.py
+      # The walk-forward harness (#361): the fold generator's "train strictly
+      # earlier" invariant and the rank metrics' identities. Database-free.
+      - run: python test_walk_forward.py
 
   # ── Frontend ────────────────────────────────────────────
 

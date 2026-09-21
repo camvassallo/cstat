@@ -32,13 +32,16 @@ PROGRAM_ANCHOR_SHRINK = 1.0      # PROGRAM_ANCHOR_SHRINK
 OFFSET = 0.0                     # PROJECTION_OFFSET
 
 
-def served_weight(retained: float | None, anchored: bool = True) -> float:
+def served_weight(retained: float | None, anchored: bool = True,
+                  w_stable: float = W_STABLE, w_overhaul: float = W_OVERHAUL) -> float:
     """Baseline weight the ramp gives a roster with this retained-talent
     fraction. `anchored` is whether the roster has a program level — without
     one the blend is anchored on a raw one-season baseline and keeps the
-    pre-#325 pair."""
-    stable = W_STABLE if anchored else W_STABLE_UNANCHORED
-    overhaul = W_OVERHAUL if anchored else W_OVERHAUL_UNANCHORED
+    pre-#325 pair. `w_stable` / `w_overhaul` override the anchored pair for
+    the walk-forward constant refit (#361); the served values are the
+    defaults."""
+    stable = w_stable if anchored else W_STABLE_UNANCHORED
+    overhaul = w_overhaul if anchored else W_OVERHAUL_UNANCHORED
     if retained is None or retained >= RETAINED_FULL_STABLE:
         return stable
     if retained <= RETAINED_FULL_OVERHAUL:
@@ -49,7 +52,7 @@ def served_weight(retained: float | None, anchored: bool = True) -> float:
 
 
 def program_anchor(baseline: float, program_level: float | None,
-                   roster_proj: float) -> float:
+                   roster_proj: float, shrink: float = PROGRAM_ANCHOR_SHRINK) -> float:
     """Last season shrunk toward the program's multi-season level by the part
     of the move this year's roster does not corroborate (#325)."""
     if program_level is None:
@@ -59,14 +62,14 @@ def program_anchor(baseline: float, program_level: float | None,
         return baseline
     corroboration = (roster_proj - program_level) / dev
     uncorroborated = min(max(1.0 - corroboration, 0.0), 1.0)
-    return baseline - PROGRAM_ANCHOR_SHRINK * uncorroborated * dev
+    return baseline - shrink * uncorroborated * dev
 
 
-def blend(row: dict, w: float) -> float:
+def blend(row: dict, w: float, shrink: float = PROGRAM_ANCHOR_SHRINK) -> float:
     """The blend at an ARBITRARY baseline weight — for weight sweeps. Still
     anchored, because the anchor is not part of the weight being swept."""
     anchor = program_anchor(float(row["baseline"]), row.get("program_level"),
-                            float(row["roster_proj"]))
+                            float(row["roster_proj"]), shrink)
     return w * anchor + (1.0 - w) * float(row["roster_proj"]) + OFFSET
 
 
@@ -74,6 +77,15 @@ def served_prediction(row: dict) -> float:
     """What the serving path would produce for this backtest-dump row."""
     return blend(row, served_weight(row.get("retained"),
                                     row.get("program_level") is not None))
+
+
+def prediction_with(row: dict, w_stable: float, w_overhaul: float, shrink: float) -> float:
+    """The served formula with its three fitted constants replaced — the
+    walk-forward refit in `train_roster_impact_model.py` sweeps these on
+    training seasons and scores the held-out one (#361). Ramp breakpoints and
+    the unanchored pair are not refit: they are structure, not fit."""
+    return blend(row, served_weight(row.get("retained"), row.get("program_level") is not None,
+                                    w_stable, w_overhaul), shrink)
 
 
 def unverified_rows(rows: list[dict], tol: float = 1e-4) -> int:
