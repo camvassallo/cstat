@@ -189,7 +189,7 @@ When adding a new pair-fold (new season ingested):
 
 ## Open questions
 
-- **Walk-forward CV** vs the current LOPO. With 11 pairs (2015→2016 … 2025→2026) we have ample folds to do walk-forward CV: train on `≤ N`, predict `N+1`, advance. Currently the LOPO holds 1 pair out anywhere in the timeline, including pairs that come *after* training rows — walk-forward would tighten the honesty story by predicting only with prior-season data. Implementation lift is small; the existing `leave_one_pair_out` loop just needs an order constraint.
+- ~**Walk-forward CV** vs the current LOPO.~ *(done 2026-09-21, #361: the trainer runs both and stamps `walk_forward` beside `backtest_lopo`. On the same 14,772 rows (targets 2021–2026) walk-forward MAE is 2.030 against 2.026 LOPO — training on later pairs buys 0.004, so the LOPO number was honest. `walk_forward_report.py` prints the tree-wide scorecard.)*
 - ~**Destination-aware projection** for transferring players.~ *(shipped 2026-09; `/api/players/:id` projects the player back at his current program.)*
 - **Destination-aware freshman projection.** The freshman model has the same blind spot for recruits at elite programs; the same block is the obvious experiment.
 - **Calibration over time**: once we have OOF predictions from this model on a real future season, plot predicted vs actual binned by predicted-CamPom — the model should be well-calibrated near the mean and progressively over-/under-confident at the tails.

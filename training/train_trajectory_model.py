@@ -65,6 +65,8 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
+from export_onnx import canonical_opset_order
+from walk_forward import WALK_FROM, loso_on_same_rows, regression_walk_forward
 from db import canonical_frame_order, get_engine
 from provenance import input_provenance
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
@@ -719,6 +721,7 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     # random UUID, so two exports of an identical model differ in bytes while
     # predicting identically. See train_roster_impact_model.export_to_onnx.
     onnx_model.graph.name = onnx_path.stem
+    canonical_opset_order(onnx_model)
     onnxmltools.utils.save_model(onnx_model, str(onnx_path))
 
 
@@ -762,6 +765,24 @@ def main() -> None:
     print("5-fold random CV")
     print("=" * 60)
     cv, oof_preds = kfold_cv(df)
+
+    # The canonical judge (#361). LOPO above holds out one PAIR and trains on
+    # the other ten — including later pairs whose features contain the
+    # held-out target season's CamPom. Walk-forward trains on pairs whose
+    # target season is strictly earlier than the one scored, which is the
+    # only thing the serving path can ever do.
+    print("\n" + "=" * 60)
+    print(f"Walk-forward (mean model; test target seasons {WALK_FROM}+, train on earlier pairs)")
+    print("=" * 60)
+
+    def fit_predict(x_tr, y_tr, x_te):
+        return lgb.LGBMRegressor(**lgb_params()).fit(x_tr, y_tr).predict(x_te)
+
+    walk, _ = regression_walk_forward(df[FEATURE_COLS], df["s_np1"], df["target_campom"], fit_predict, WALK_FROM, "trajectory")
+    walk["lopo_same_rows"] = loso_on_same_rows(lopo_mean, df["target_campom"], df["s_np1"], WALK_FROM)
+    if walk["lopo_same_rows"]:
+        print(f"  LOPO on the same rows: MAE {walk['lopo_same_rows']['mae']:.3f}  "
+              f"(walk-forward {walk['pooled']['mae']:.3f}; the difference is what training on later pairs buys)")
 
     print("\n" + "=" * 60)
     print("LOPO quantile predictions (q=0.1, q=0.9) for OOF persistence")
@@ -854,6 +875,8 @@ def main() -> None:
         # Captured next to the frame read, not here — see main().
         "input_provenance": stamp,
         "baseline_naive": naive,
+        # The headline (#361); LOPO is kept beside it for continuity.
+        "walk_forward": walk,
         "backtest_lopo": lopo,
         "cv_5fold": cv,
         "mae_by_prior_class_year": by_class,

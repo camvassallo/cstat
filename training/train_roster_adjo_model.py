@@ -32,6 +32,7 @@ from sklearn.metrics import mean_absolute_error
 
 from db import get_engine
 from provenance import input_provenance, oof_provenance_from
+from walk_forward import WALK_FROM, regression_walk_forward
 from train_roster_impact_model import (
     build_dataset,
     lgb_params,
@@ -111,6 +112,17 @@ def main() -> None:
     final = lgb.LGBMRegressor(**final_params)
     final.fit(df[feature_cols], df[TARGET])
 
+    # The canonical judge (#361): train strictly earlier, fixed iterations.
+    print("\n" + "=" * 60)
+    print(f"Walk-forward (test {WALK_FROM}+, target={TARGET})")
+    print("=" * 60)
+    wf_params = dict(final_params)
+
+    def fit_predict(x_tr, y_tr, x_te):
+        return lgb.LGBMRegressor(**wf_params).fit(x_tr, y_tr).predict(x_te)
+
+    walk, _ = regression_walk_forward(df[feature_cols], df["season"], df[TARGET], fit_predict, WALK_FROM, "adjo")
+
     onnx_path = OUT_DIR / "roster_adjo_model.onnx"
     export_to_onnx(final, len(feature_cols), onnx_path)
     print(f"Exported ONNX → {onnx_path}")
@@ -141,6 +153,7 @@ def main() -> None:
         # views of the same snapshot.
         "oof_provenance": oof_provenance_from(stamp),
         "final_n_estimators": final_n,
+        "walk_forward": walk,
         "backtest_loso": {"pooled_mae": loso_mae, "naive_mae": naive,
                           "per_season": per_season},
     }

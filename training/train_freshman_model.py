@@ -68,6 +68,8 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
+from export_onnx import canonical_opset_order
+from walk_forward import WALK_FROM, loso_on_same_rows, regression_walk_forward
 from db import canonical_frame_order, get_engine
 from provenance import input_provenance
 from recruit_features import RECRUIT_FEATURE_NAMES, derive_recruit_features
@@ -471,6 +473,7 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     # random UUID, so two exports of an identical model differ in bytes while
     # predicting identically. See train_roster_impact_model.export_to_onnx.
     onnx_model.graph.name = onnx_path.stem
+    canonical_opset_order(onnx_model)
     onnx_path.write_bytes(onnx_model.SerializeToString())
 
 
@@ -527,6 +530,21 @@ def main() -> None:
     print("Leave-one-class-out CV (rigorous out-of-sample test)")
     print("=" * 60)
     loco, loco_mean = leave_one_class_out_cv(df)
+
+    # The canonical judge (#361): a recruit's target season is recruit_year+1;
+    # train on classes whose target season is strictly earlier.
+    print("\n" + "=" * 60)
+    print(f"Walk-forward (mean model; test target seasons {WALK_FROM}+, train on earlier classes)")
+    print("=" * 60)
+    target_season = df["recruit_year"].astype(int) + 1
+
+    def fit_predict(x_tr, y_tr, x_te):
+        return lgb.LGBMRegressor(**lgb_params("regression")).fit(x_tr, y_tr).predict(x_te)
+
+    walk, _ = regression_walk_forward(df[FEATURE_COLS], target_season, df["target_campom"], fit_predict, WALK_FROM, "freshman")
+    walk["loco_same_rows"] = loso_on_same_rows(loco_mean, df["target_campom"], target_season, WALK_FROM)
+    if walk["loco_same_rows"]:
+        print(f"  LOCO on the same rows: MAE {walk['loco_same_rows']['mae']:.3f}  (walk-forward {walk['pooled']['mae']:.3f})")
     pooled = loco["pooled"]
     print(
         f"  pooled (n={pooled['n']}): MAE {pooled['mae']:.3f}  RMSE {pooled['rmse']:.3f}  "
@@ -602,6 +620,8 @@ def main() -> None:
         "tier_thresholds": TIER_THRESHOLDS,
         "tier_mean_baseline": baseline,
         "cv_5fold": cv,
+        # The headline (#361); LOCO is kept beside it for continuity.
+        "walk_forward": walk,
         "loco_cv": loco,
         "top_features": [{"name": n, "importance": int(i)} for n, i in importance],
         "known_limitations": [

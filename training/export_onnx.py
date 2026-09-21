@@ -18,6 +18,22 @@ from onnxmltools.convert.common.data_types import FloatTensorType
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", Path(__file__).parent / "models"))
 
 
+def canonical_opset_order(onnx_model) -> None:
+    """Sort `opset_import` by domain, in place (issue #222, found in #361).
+
+    The converter emits the two opset entries (`""` and `ai.onnx.ml`) in a
+    set-iteration order that depends on the process's string-hash seed, so
+    two exports of an identical model from two Python processes differed in
+    the last 20 bytes and nothing else. The graph, the trees and every
+    prediction were the same — but "byte-identical ONNX" is the proof that a
+    retrain changed nothing, and that proof was flaky. A sorted list is a
+    function of the model alone.
+    """
+    entries = sorted(onnx_model.opset_import, key=lambda o: (o.domain, o.version))
+    del onnx_model.opset_import[:]
+    onnx_model.opset_import.extend(entries)
+
+
 def _remove_zipmap(onnx_model):
     """
     Replace the ZipMap node (sequence-of-maps) with a direct tensor output.
@@ -88,6 +104,7 @@ def export_model(lgb_path: str, onnx_path: str, n_features: int, is_classifier: 
         # instead of sequence(map), which ort doesn't support.
         _remove_zipmap(onnx_model)
 
+    canonical_opset_order(onnx_model)
     onnxmltools.utils.save_model(onnx_model, onnx_path)
     print(f"Exported: {onnx_path}")
 

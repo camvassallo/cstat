@@ -154,6 +154,18 @@ Each returner / arrival gets a forward-looking `cam_v3`:
 
 This is what makes returner growth and freshman upside count: a junior projected to break out, or an elite freshman, moves the team projection through their `cam_v3`.
 
+## How the projection is judged (walk-forward, #361)
+
+The headline number for this projection is **walk-forward**: the calibrator refit on seasons strictly earlier than S with the export protocol (fixed iterations), the served blend on top, scored on S, for S = 2021–2026 — what the serving path could actually have done each August. `train_roster_impact_model.py` runs it on every retrain (`walk_forward` in the meta; `training/walk_forward_report.py` prints the tree), against the LOSO number every prior diagnostic reported, on identical rows. 2026-09-21 tree, n=1,960:
+
+| | pooled | 2024+ | top-25 (ex-ante) | top-10 | level-changers | membership@25 | rho, pred top 25 |
+|---|---|---|---|---|---|---|---|
+| served, walk-forward | **5.467** | 5.480 | 5.565 | 6.278 | 5.252 | 0.713 | 0.536 |
+| served, LOSO (same rows) | 5.458 | 5.456 | 5.587 | 6.327 | 5.324 | 0.733 | 0.425 |
+| raw calibrator, walk-forward | 5.586 | 5.600 | 5.967 | 6.823 | 5.403 | 0.687 | 0.499 |
+
+LOSO's optimism at this layer is 0.009 pooled (z=−0.5): the number the docs above quote as LOSO is honest to within noise. The blend is worth 0.12 pooled and 0.40–0.55 at the top over the raw calibrator, forward-chained. The three fitted blend constants are re-searched inside each fold on earlier walk-forward rows: the refit is fold-stable at w=0.55 / overhaul 0.20 / shrink 0.75 against the served 0.70 / 0.55 / 1.0 and scores a tie out of sample (+0.016, z=+0.9), so the served constants pass the "not fit to the test set" check; a refit that *beats* them forward-chained is the signal to change them.
+
 ## Scoring & calibration
 
 Each scenario's feature vector is scored by `predict_roster_impact`, then blended with the team's base-season AdjEM:
