@@ -4,10 +4,12 @@ decomposition for the Future page.
 
 The served `roster_impact_model.onnx` maps projected-roster aggregates ->
 next-season team AdjEM (net). This trains an identical-shape model on the
-SAME feature frame whose target is next-season `adj_offense` (absolute,
-~105 scale). At serve time the Rust route runs both, keeps the net headline
-untouched, and derives AdjD = AdjO - AdjEM (exact reconciliation, since
-AdjEM = AdjO - AdjD holds to ~0.025 in the data).
+SAME feature frame whose target is next-season `adj_offense` relative to
+the base season's league mean (see below; the serve path adds the mean
+back, so the served number is on the absolute ~105 scale). At serve time
+the Rust route runs both, keeps the net headline untouched, and derives
+AdjD = AdjO - AdjEM (exact reconciliation, since AdjEM = AdjO - AdjD holds
+to ~0.025 in the data).
 
 Why NET+SPLIT and not two independent models: validated in
 `validation/exp_team_adjod_projection.py` (LOSO, 4,255 team-seasons) —
@@ -19,6 +21,20 @@ Reuses `build_dataset` / `lgb_params` / `export_to_onnx` from the net
 trainer so the feature contract is byte-identical (the Rust boot validator
 reuses ROSTER_IMPACT_FEATURE_NAMES for this model). Display-only — NOT a
 coach grade, and it never moves the served net forecast.
+
+**The target is relative to the base season's league mean (#368).** Absolute
+AdjO drifts with the scoring environment — the D-I mean rose 100.3 → 107.5
+over 2021–2026 — and the 27 roster-CAM features carry no signal about it, so
+an absolute-target model is centred on the 11-season mean and runs ~5 low
+in 2026 before the blend (walk-forward bias −4.8; MAE 4.48 vs 4.10 LOSO,
+because LOSO interpolates the drift and walk-forward has to extrapolate
+it). The model now predicts `adj_offense − mean(adj_offense, base season)`
+and the serve path adds the base season's mean back — ex-ante, since the
+base season is complete in August. Measured through the served blend,
+walk-forward: AdjO 4.304 → 3.917, derived AdjD 3.940 → 3.650
+(`experiment_od_decomposition.py`). The meta's `target` names the relative
+form and the Rust boot validator refuses any other value, so an old binary
+cannot serve this model as absolute or the reverse.
 """
 from __future__ import annotations
 
@@ -41,10 +57,19 @@ from train_roster_impact_model import (
     OUT_DIR,
 )
 
-TARGET = "adj_offense"
+# The column the model is fit on. Wire-locked: `cstat_core::inference`
+# refuses to boot on any other value (`ROSTER_ADJO_TARGET`), because the serve
+# path adds the base season's league mean to the model's output and a model
+# trained on absolute AdjO would then be served ~100 points high.
+TARGET = "adj_offense_relative_to_base_league_mean"
+ABSOLUTE = "adj_offense"
 
 
-def load_target(seasons) -> pd.DataFrame:
+def load_target(seasons) -> tuple[pd.DataFrame, dict[int, float]]:
+    """Per (target-season team, season): absolute AdjO, the base season's
+    league mean, and the relative target. Also returns the league means by
+    season, stamped into the meta so the training-time definition is on
+    record next to the one the serve path computes."""
     eng = get_engine()
     od = pd.read_sql(
         "SELECT team_id, season, adj_offense FROM team_season_stats "
@@ -52,7 +77,16 @@ def load_target(seasons) -> pd.DataFrame:
         eng, params={"seasons": list(seasons)},
     )
     od["team_id"] = od["team_id"].astype(str)
-    return od
+    # The D-I mean over every team with an AdjO that season — the same
+    # population `fetch_league_mean_adj_o` averages on the Rust side.
+    league = pd.read_sql(
+        "SELECT season, avg(adj_offense) AS league_mean_adjo FROM team_season_stats "
+        "WHERE adj_offense IS NOT NULL GROUP BY season", eng,
+    )
+    means = {int(r.season): float(r.league_mean_adjo) for r in league.itertuples()}
+    od["league_mean_adjo_base"] = od["season"].map(lambda s: means.get(int(s) - 1))
+    od[TARGET] = od[ABSOLUTE] - od["league_mean_adjo_base"]
+    return od, means
 
 
 def main() -> None:
@@ -66,10 +100,12 @@ def main() -> None:
     # feature_cols is fixed BEFORE this merge, so adj_offense can never leak
     # in as a feature (same discipline as the validation experiment).
     df["team_id"] = df["team_id"].astype(str)
-    df = df.merge(load_target(SEASONS), on=["team_id", "season"], how="inner").reset_index(drop=True)
+    targets, league_means = load_target(SEASONS)
+    df = df.merge(targets, on=["team_id", "season"], how="inner").reset_index(drop=True)
     df = df.dropna(subset=[TARGET]).reset_index(drop=True)
-    assert TARGET not in feature_cols, "target leaked into features"
+    assert TARGET not in feature_cols and ABSOLUTE not in feature_cols, "target leaked into features"
     print(f"Features: {len(feature_cols)} | rows with {TARGET}: {len(df)}")
+    print("  league mean AdjO by season: " + ", ".join(f"{s}: {m:.2f}" for s, m in sorted(league_means.items())))
 
     # LOSO: honest per-season MAE + the early-stopping iteration budget for
     # the final fit (mirrors train_roster_impact_model.leave_one_season_out).
@@ -129,7 +165,10 @@ def main() -> None:
 
     meta = {
         "model": "roster_adjo_model",
+        # Wire-locked against `cstat_core::inference::ROSTER_ADJO_TARGET`.
         "target": TARGET,
+        "serve_add_back": "league mean adj_offense of the base season (team_season_stats, every team with an AdjO)",
+        "league_mean_adjo_by_season": {str(k): v for k, v in sorted(league_means.items())},
         "decomposition": "NET+SPLIT: AdjD derived as AdjO - AdjEM at serve time",
         "seasons": list(SEASONS),
         "n_rows": int(len(df)),

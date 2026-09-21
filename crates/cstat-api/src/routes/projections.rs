@@ -541,6 +541,14 @@ async fn projection_list(
                 Json(json!({ "error": format!("baseline AdjO fetch failed: {e}") })),
             )
         })?;
+    let league_mean_o = fetch_league_mean_adj_o(&state.db.pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
+            )
+        })?;
 
     // Actual target-season AdjEM, keyed by base-season team_id. Empty
     // for the live forecast year (target season not played yet) — those
@@ -637,6 +645,7 @@ async fn projection_list(
             &projected_cam,
             &cam_od_map,
             baseline_o,
+            league_mean_o,
         ) else {
             continue;
         };
@@ -695,6 +704,7 @@ fn predict_team(
     projected_cam: &std::collections::HashMap<Uuid, f64>,
     cam_od: &std::collections::HashMap<Uuid, (f32, f32)>,
     baseline_o: Option<f32>,
+    league_mean_o: f32,
 ) -> Option<ProjectedTeam> {
     // Recruits count toward the qualifying-size gate: a returners-thin
     // team with a strong freshman class (e.g. Duke with 4 incoming
@@ -964,8 +974,12 @@ fn predict_team(
                 return None;
             }
         };
+        // The AdjO model predicts the offset from the base season's league
+        // mean (`ROSTER_ADJO_TARGET`, #368); the mean is added back here so
+        // everything downstream — the anchor, the blend, the derived AdjD —
+        // stays on the absolute scale it always used.
         let adjo = match predictor.predict_roster_adjo(&feats) {
-            Ok(v) => v,
+            Ok(v) => v + league_mean_o,
             Err(e) => {
                 tracing::warn!(team = %p.team_name, error = ?e, "{label} adjo predict failed");
                 return None;
@@ -1183,6 +1197,14 @@ async fn projection_team_detail(
         })?
         .get(&resolved_id)
         .copied();
+    let league_mean_o = fetch_league_mean_adj_o(pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
+            )
+        })?;
 
     // Actual target-season AdjEM for this team (None for the live year).
     let actual = fetch_actual_adj_em(pool, base_season, year)
@@ -1437,6 +1459,7 @@ async fn projection_team_detail(
         &projected_cam,
         &cam_od_map,
         baseline_o,
+        league_mean_o,
     ) else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1830,6 +1853,28 @@ async fn fetch_baseline_adj_o(
         .into_iter()
         .map(|r| (r.team_id, r.adj_offense as f32))
         .collect())
+}
+
+/// The base season's D-I mean `adj_offense` — what the AdjO model's output
+/// is relative to (`cstat_core::inference::ROSTER_ADJO_TARGET`, #368).
+/// Averaged over every team with an AdjO that season, the same population
+/// `train_roster_adjo_model.py::load_target` averages; the trainer stamps
+/// its per-season values into the meta (`league_mean_adjo_by_season`) so
+/// the two definitions can be compared. An error, not a default: a base
+/// season with no AdjO rows cannot be projected from at all.
+async fn fetch_league_mean_adj_o(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+) -> Result<f32, sqlx::Error> {
+    let mean: Option<f64> = sqlx::query_scalar(
+        "SELECT avg(adj_offense) FROM team_season_stats WHERE season = $1 AND adj_offense IS NOT NULL",
+    )
+    .bind(base_season)
+    .fetch_one(pool)
+    .await?;
+    // `avg` over zero rows is NULL, not an error; surface it as the row-level
+    // miss it is rather than serving AdjO ~100 points low.
+    mean.map(|m| m as f32).ok_or(sqlx::Error::RowNotFound)
 }
 
 /// Base-season CamPom O/D split per player, envelope-gated jointly
