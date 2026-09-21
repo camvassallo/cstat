@@ -475,23 +475,25 @@ fold generator, the cohort table, the rank metric set) and stamps a
 prints the four as one scorecard, which is the last thing `retrain_downstream.sh`
 prints and the number the methodology docs quote.
 
-What it found on the 2026-09-21 tree (identical rows, walk-forward vs
-train-on-everything-else):
+What it found on the 2026-09-21 tree (identical rows; "optimism" is
+walk-forward minus the train-on-everything-else number, positive when the old
+number flattered):
 
 | layer | model | walk-forward | LOSO-family, same rows | optimism |
 |---|---|---|---|---|
 | 1 | trajectory (player CamPom) | 2.030 | 2.026 | 0.004 |
 | 1 | freshman | 2.120 | 2.091 | 0.029 |
 | 2 | roster_impact raw | 5.615 | 5.552 | 0.063 |
-| 2 | roster_adjo raw (era-relative target, #368) | 3.985 | 3.895 | −0.090 |
-| 2+4 | served projection | **5.494** | 5.459 | −0.035 |
+| 2 | roster_adjo raw (era-relative target, #368) | 3.985 | 3.895 | 0.090 |
+| 2+4 | served projection | **5.494** | 5.459 | 0.035 |
 
 (Post-#362 tree: the backtest and the frame compose rosters exactly as served,
 no-shows included; the pre-#362 served number, 5.467, scored rosters with the
 recruits who never played already removed — see §3c.)
 
-The look-ahead everyone was right to worry about is worth almost nothing at
-every layer: the tree does not lean on the future. That is now a measured
+The look-ahead everyone was right to worry about is worth little at every
+layer — under 0.1 everywhere, 0.035 on the served number (paired z=−1.8) — the
+tree does not lean much on the future. That is now a measured
 fact rather than a hope, and it holds only as long as the scorecard keeps
 saying so — a Layer 2 change that opens a gap between the two columns has
 started fitting to later seasons. The first thing the scorecard caught was

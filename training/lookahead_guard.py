@@ -102,10 +102,25 @@ def _columns(conn, table: str) -> list[str]:
     ), {"t": table}).fetchall()]
 
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db"}
+
+
+def refuse_unless_local(url: str) -> None:
+    """The guard creates and drops a schema. Views only, and dropped after —
+    but it is DDL on whatever `DATABASE_URL` names, so it runs against a
+    local database and nothing else. Same posture as `simulate`'s host guard."""
+    from sqlalchemy.engine import make_url
+
+    host = make_url(url).host or ""
+    if host not in LOCAL_HOSTS:
+        raise SystemExit(f"lookahead_guard refuses to run against non-local host {host!r} (DDL: a view schema)")
+
+
 @contextmanager
 def masked_schema(season: int):
     """Create the view schema for `season`, yield the masked DATABASE_URL,
     drop the schema afterwards whatever happens."""
+    refuse_unless_local(db.DATABASE_URL)
     engine = create_engine(db.DATABASE_URL)
     with engine.begin() as conn:
         conn.execute(text(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE"))
