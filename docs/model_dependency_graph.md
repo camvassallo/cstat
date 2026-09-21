@@ -56,7 +56,8 @@ LAYER 2  team calibrators                         [TRAIN ON Layer 1's OOF]
       departures + arrivals + recruits, OOF cam_v3), as 27 calibrator
       features + actual AdjEM. Both trainers read this file; each refuses
       one cut from a different OOF snapshot than the live tables.
-  train_roster_impact_model.py -> roster_impact_model.onnx        (served, net AdjEM)
+  train_roster_impact_model.py -> roster_impact_model.onnx        (served, net AdjEM;
+                                                                   OLS on 3 CAM aggregates since #363)
                                -> roster_impact_loso/*.onnx       (gitignored, feeds backtest)
   train_roster_adjo_model.py   -> roster_adjo_model.onnx          (served, AdjO half)
       both share that one frame via build_dataset;
@@ -483,13 +484,14 @@ number flattered):
 |---|---|---|---|---|
 | 1 | trajectory (player CamPom) | 2.030 | 2.026 | 0.004 |
 | 1 | freshman | 2.120 | 2.091 | 0.029 |
-| 2 | roster_impact raw | 5.615 | 5.552 | 0.063 |
+| 2 | roster_impact raw (OLS, #363) | 5.490 | 5.492 | −0.002 |
 | 2 | roster_adjo raw (era-relative target, #368) | 3.985 | 3.895 | 0.090 |
-| 2+4 | served projection | **5.494** | 5.459 | 0.035 |
+| 2+4 | served projection | **5.410** | 5.409 | 0.001 |
 
-(Post-#362 tree: the backtest and the frame compose rosters exactly as served,
-no-shows included; the pre-#362 served number, 5.467, scored rosters with the
-recruits who never played already removed — see §3c.)
+(Post-#363 tree: the backtest and the frame compose rosters exactly as served,
+no-shows included (§3c), and the net calibrator is linear. The tree
+calibrator's served number on the same rows was 5.494; the pre-#362 5.467
+scored rosters with the recruits who never played already removed.)
 
 The look-ahead everyone was right to worry about is worth little at every
 layer — under 0.1 everywhere, 0.035 on the served number (paired z=−1.8) — the
