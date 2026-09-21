@@ -58,8 +58,8 @@ cargo run --bin cstat-ingest -- simulate --year 2026 --from 2025-11-02 --to 2025
 cd training && ./.venv/bin/python -m archetypes --seasons 2015,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026 [--diagnostics]
 
 # Retrain the model tree from a node downward, in dependency order. USE THIS
-# rather than running trainers by hand — the chain is roster_impact -> roster_adjo
-# -> backtest -> cae -> compute-projections, and hand-running it is what let
+# rather than running trainers by hand — the chain is frame -> roster_impact ->
+# roster_adjo -> backtest -> cae -> compute-projections, and hand-running it is what let
 # `roster_adjo` serve a three-generation-stale OOF for months (#218). The two
 # roster-frame models also stamp their meta with an OOF fingerprint and the API
 # REFUSES TO BOOT if they disagree, so retraining one without the other is a
@@ -290,7 +290,7 @@ ONNX models are loaded at API startup via the `ort` crate (ONNX Runtime):
 Python pipeline in `/training/`:
 - LightGBM models for margin (regression), win probability (classification), and total points (regression), each with a leak-free point-in-time variant (`pit_*`)
 - 49 point-in-time diff-features from team/roster/form/context (`features.py`); `GBPM_VARIANT=pit_cam_v3` asof-merges a point-in-time CamPom grid for the honest in-season backtest
-- Projection models, in dependency order: `train_trajectory_model.py` (returner year-over-year CamPom, mean + q10/q90) and `train_freshman_model.py` (recruit first-season CamPom) are **Layer 1** — they persist held-out predictions to the `*_oof_predictions` tables; `train_roster_impact_model.py` (roster aggregate → team AdjEM, the served preseason calibrator) and `train_roster_adjo_model.py` (the display-only AdjO half, same frame) are **Layer 2**, trained on those OOF tables rather than on actuals. All leave-one-season/class-out backtested. Because Layer 2 trains on Layer 1's *predictions*, it absorbs upstream bias rather than compounding it — which makes the failure mode **desynchronization**, not bad data. Retrain from the highest stale node downward via `retrain_downstream.sh`; graph and protocol in `docs/model_dependency_graph.md`.
+- Projection models, in dependency order: `train_trajectory_model.py` (returner year-over-year CamPom, mean + q10/q90) and `train_freshman_model.py` (recruit first-season CamPom) are **Layer 1** — they persist held-out predictions to the `*_oof_predictions` tables; `train_roster_impact_model.py` (roster aggregate → team AdjEM, the served preseason calibrator) and `train_roster_adjo_model.py` (the display-only AdjO half, same frame) are **Layer 2**, trained on those OOF tables rather than on actuals — through a frame the Rust backtest cuts from the SERVED ex-ante roster composition (`projections-backtest --frame-out --frame-only`, `training/frames/`, gitignored); the trainers refuse a frame cut from a different OOF snapshot than the live tables. All leave-one-season/class-out backtested. Because Layer 2 trains on Layer 1's *predictions*, it absorbs upstream bias rather than compounding it — which makes the failure mode **desynchronization**, not bad data. Retrain from the highest stale node downward via `retrain_downstream.sh`; graph and protocol in `docs/model_dependency_graph.md`.
 - `compute_cae.py` computes coach-above-expectation grades from the roster-projection residual (descriptive, display-only)
 - Exports to ONNX format in `training/models/` (target_opset=15); `export_onnx.py` removes ZipMap for ort compatibility and honors a `MODEL_DIR` override
 

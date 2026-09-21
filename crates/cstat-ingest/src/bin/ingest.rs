@@ -346,6 +346,18 @@ enum Commands {
         /// `{team_id, team_name, season, roster_proj, boxscore_proj, baseline, actual}`.
         #[arg(long)]
         output: Option<std::path::PathBuf>,
+
+        /// Also write the calibrator's ex-ante training frame — every
+        /// composed team-season's 27 roster-impact features plus its actual
+        /// AdjEM — which `train_roster_impact_model.py --frame` trains on.
+        #[arg(long)]
+        frame_out: Option<std::path::PathBuf>,
+
+        /// Compose and write `--frame-out` WITHOUT scoring: needs no LOSO
+        /// models, so the frame can be cut before the calibrator that is
+        /// trained on it exists (the `frame` stage of retrain_downstream.sh).
+        #[arg(long, requires = "frame_out")]
+        frame_only: bool,
     },
 
     /// Materialize the preseason roster-impact projection per (season, team)
@@ -1151,7 +1163,12 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::ProjectionsBacktest { years, output } => {
+        Commands::ProjectionsBacktest {
+            years,
+            output,
+            frame_out,
+            frame_only,
+        } => {
             let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
@@ -1162,6 +1179,8 @@ async fn main() -> Result<()> {
                 std::path::Path::new(&model_dir),
                 &years,
                 output.as_deref(),
+                frame_out.as_deref(),
+                frame_only,
             )
             .await?;
         }

@@ -87,6 +87,14 @@ __pycache__/
 # before re-running them.
 /training/eval_history/projections_backtest_per_team_*.json
 
+# The roster-impact calibrator's training frame — the served ex-ante roster
+# composition for every historical team-season, cut by
+# `cstat-ingest projections-backtest --frame-out … --frame-only` (the `frame`
+# stage of retrain_downstream.sh). Same policy as the dumps above: 1.6MB of
+# floats that change on every Layer 1 retrain, regenerable in seconds. The
+# model meta records its sha256 and the OOF snapshot it was cut from.
+/training/frames/
+
 # Raw API snapshots from `cstat-ingest transfers` — bootstrap data dumped
 # locally for repeatable seeds and offline dev. Re-derivable from the live
 # 247 API. The canonical store is the `transfers` DB table.

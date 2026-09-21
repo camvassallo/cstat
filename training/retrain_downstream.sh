@@ -31,6 +31,14 @@
 #     trajectory     TRUNCATEs + reloads trajectory_oof_predictions
 #     freshman       TRUNCATEs + reloads freshman_oof_predictions
 #   Layer 2 — the roster-frame calibrators, trained on Layer 1's OOF output
+#     frame          projections-backtest --frame-only: composes every
+#                      historical team-season's SERVED (ex-ante) roster from
+#                      the OOF tables and writes its 27 calibrator features +
+#                      actual to training/frames/roster_impact_ex_ante.json.
+#                      Both calibrators train on this file; it is the reason
+#                      the in-frame LOSO number and the end-to-end backtest
+#                      number agree (v4, 2026-09). Needs no LOSO models, so it
+#                      can run on a fresh clone.
 #     roster_impact  served net AdjEM + the gitignored LOSO export set
 #     roster_adjo    display-only AdjO half (the step that kept getting missed)
 #   Layer 3 — derived products, no training
@@ -72,6 +80,8 @@
 #   ./training/retrain_downstream.sh                     # Layer 2 + 3
 #   ./training/retrain_downstream.sh --with-layer1       # the whole tree
 #   ./training/retrain_downstream.sh --only roster_adjo,backtest
+#   ./training/retrain_downstream.sh --from frame        # re-cut the calibrator
+#                                                        # frame + everything below
 #   ./training/retrain_downstream.sh --from cae          # resume after a failure
 #   ./training/retrain_downstream.sh --dry-run           # print the plan
 #   ./training/retrain_downstream.sh --years 2016,…,2026 # override the historical
@@ -94,7 +104,7 @@ EVAL_DIR="$TRAINING_DIR/eval_history"
 # below is what covers that gap rather than this line (#263).
 YEARS="2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026"
 
-ALL_STAGES=(trajectory freshman roster_impact roster_adjo backtest cae projections)
+ALL_STAGES=(trajectory freshman frame roster_impact roster_adjo backtest cae projections)
 LAYER1=(trajectory freshman)
 
 WITH_LAYER1=0
@@ -238,6 +248,10 @@ fi
 RUN_TAG="$(date -u +%Y%m%d_%H%M%S)"
 N_SEASONS="$(awk -F',' '{print NF}' <<< "$YEARS")"
 BT_DUMP="$EVAL_DIR/projections_backtest_per_team_full_${N_SEASONS}season_run${RUN_TAG}.json"
+# Fixed path, not run-tagged: the trainers resolve it by name, and a Layer 1
+# retrain that skips this stage is caught by the trainer itself (it refuses a
+# frame cut from a different OOF snapshot than the live tables).
+FRAME="$TRAINING_DIR/frames/roster_impact_ex_ante.json"
 WROTE=()
 
 stage_banner() { echo; echo "══ $1 ═══════════════════════════════════════"; }
@@ -252,6 +266,13 @@ run_freshman() {
   stage_banner "freshman — rewrites freshman_oof_predictions"
   ( cd "$TRAINING_DIR" && "$VENV_PY" train_freshman_model.py )
   WROTE+=("training/models/freshman_{mean,q10,q90}_model.onnx + meta")
+}
+
+run_frame() {
+  stage_banner "frame — ex-ante calibrator frame from the served composition"
+  ( cd "$REPO_ROOT" && cargo run --release --bin cstat-ingest -- \
+      projections-backtest --years "$YEARS" --frame-out "$FRAME" --frame-only )
+  WROTE+=("${FRAME#"$REPO_ROOT"/} (gitignored; both Layer 2 trainers read it)")
 }
 
 run_roster_impact() {

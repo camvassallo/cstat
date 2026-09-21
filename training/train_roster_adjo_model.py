@@ -127,6 +127,7 @@ def main() -> None:
         # as roster_impact_model, so the same gate).
         "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
         "cam_v3_source": "oof_only",
+        "frame_source": "ex_ante_backtest_composition",
         "cam_v3_coverage": coverage,
         # Full input fingerprint, the superset `check_provenance.py` reads
         # (issue #223). Declared identical to roster_impact's — the two share

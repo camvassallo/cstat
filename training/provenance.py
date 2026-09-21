@@ -221,6 +221,40 @@ SOURCES: dict[str, Source] = {
         season_column="year",
         notes="247 recruit ratings; the freshman model's entire feature block.",
     ),
+    # ---- Roster composition (Layer 2 input since v4, 2026-09) ---------
+    # The calibrator frame is the SERVED ex-ante composition — returners less
+    # the departure channels, plus portal arrivals and recruits — cut by
+    # `projections-backtest --frame-out`. These are the tables that decide who
+    # is on a composed roster; a curated edit to any of them moves the frame.
+    # `recruits` above already covers the freshman channel (committed_team_id).
+    "transfers": Source(
+        table="transfers",
+        keys=("year", "tfs_key"),
+        text_values=("status", "destination_institution_key", "cstat_player_id"),
+        season_column="year",
+        notes="Portal moves: the arrival and outbound channels of the composed roster.",
+    ),
+    "draft_entrants": Source(
+        table="draft_entrants",
+        keys=("year", "player_name", "current_team"),
+        text_values=("status",),
+        season_column="year",
+        notes="Firm draft departures (Ceiling scenario) — the composed roster's draft channel.",
+    ),
+    "player_departures": Source(
+        table="player_departures",
+        keys=("year", "player_name", "current_team"),
+        text_values=("reason",),
+        season_column="year",
+        notes="Curated non-portal, non-draft exits.",
+    ),
+    "player_returns": Source(
+        table="player_returns",
+        keys=("year", "player_name", "current_team"),
+        text_values=("status",),
+        season_column="year",
+        notes="Curated 5-in-5 eligibility returns (granted stays, contested widens the band).",
+    ),
 }
 
 # ---- Per-node input declarations ---------------------------------------
@@ -243,12 +277,20 @@ NODE_INPUTS: dict[str, tuple[str, ...]] = {
         "team_season_stats.adj",
         "recruits",
     ),
+    # v4: the frame is the served composition, so its inputs are everything
+    # `compose_all_projections` reads — the OOF tables, the base-season value
+    # currency and classes, the targets, and the composition tables.
     "roster_impact": (
         "trajectory_oof_predictions",
         "freshman_oof_predictions",
         "torvik_player_stats.cam_v3",
         "player_archetypes",
         "team_season_stats.adj",
+        "recruits",
+        "transfers",
+        "draft_entrants",
+        "player_departures",
+        "player_returns",
     ),
     "roster_adjo": (
         "trajectory_oof_predictions",
@@ -256,6 +298,11 @@ NODE_INPUTS: dict[str, tuple[str, ...]] = {
         "torvik_player_stats.cam_v3",
         "player_archetypes",
         "team_season_stats.adj",
+        "recruits",
+        "transfers",
+        "draft_entrants",
+        "player_departures",
+        "player_returns",
     ),
 }
 
