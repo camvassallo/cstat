@@ -578,6 +578,7 @@ impl Predictor {
             .commit_from_file(model_dir.join("roster_adjo_model.onnx"))?;
 
         validate_roster_impact_meta(&model_dir.join("roster_adjo_model_meta.json"))?;
+        validate_roster_adjo_target(&model_dir.join("roster_adjo_model_meta.json"))?;
 
         // Both metas parse and match the compiled contract individually; the
         // remaining question is whether they agree with each OTHER about which
@@ -869,10 +870,12 @@ impl Predictor {
         roster_impact_infer(&mut session, features)
     }
 
-    /// Score a projected roster's next-season `adj_offense` (absolute ~105)
-    /// with the AdjO half of the NET+SPLIT decomposition. Same feature
-    /// vector as [`predict_roster_impact`]; the caller derives AdjD as
-    /// `AdjO − AdjEM` so the split reconciles exactly to the served net.
+    /// Score a projected roster's next-season `adj_offense` RELATIVE to the
+    /// base season's league mean ([`ROSTER_ADJO_TARGET`]) with the AdjO half
+    /// of the NET+SPLIT decomposition. Same feature vector as
+    /// [`predict_roster_impact`]; the caller adds the base season's league
+    /// mean back (`fetch_league_mean_adj_o`) and derives AdjD as `AdjO −
+    /// AdjEM` so the split reconciles exactly to the served net.
     /// Display-only — never part of the projected-AdjEM forecast.
     pub fn predict_roster_adjo(
         &self,
@@ -1426,6 +1429,34 @@ fn validate_roster_impact_meta(path: &Path) -> Result<(), LoadError> {
         LoadError::RosterImpactMetaMismatch,
     )?;
     Ok(())
+}
+
+/// The target the AdjO half is trained on, wire-locked to
+/// `training/train_roster_adjo_model.py::TARGET`. The model predicts AdjO
+/// RELATIVE to the base season's league mean (#368: absolute AdjO drifts
+/// with the scoring environment — the D-I mean rose 100.3 → 107.5 over
+/// 2021–2026 — and the roster-CAM features carry no signal about it), and
+/// the serve path adds that mean back. A model trained on absolute AdjO
+/// would then be served ~100 points high, and one trained relative but
+/// served by a binary that does not add the mean back ~100 low, so the two
+/// sides agree on this string or the API does not boot.
+pub const ROSTER_ADJO_TARGET: &str = "adj_offense_relative_to_base_league_mean";
+
+/// Refuse an AdjO meta whose `target` is not [`ROSTER_ADJO_TARGET`].
+fn validate_roster_adjo_target(path: &Path) -> Result<(), LoadError> {
+    let err = LoadError::RosterImpactMetaMismatch;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| err(format!("read {}: {e}", path.display())))?;
+    let meta: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| err(format!("parse: {e}")))?;
+    match meta["target"].as_str() {
+        Some(t) if t == ROSTER_ADJO_TARGET => Ok(()),
+        other => Err(err(format!(
+            "roster_adjo_model_meta.json target {other:?} ≠ {ROSTER_ADJO_TARGET:?}: the serve \
+             path adds the base season's league mean AdjO to this model's output, so it must \
+             be trained relative to it (train_roster_adjo_model.py, #368)"
+        ))),
+    }
 }
 
 /// Pull the `oof_provenance` stamp out of a roster-frame model meta.
@@ -2278,6 +2309,45 @@ mod tests {
             &dir.join("roster_adjo_model_meta.json"),
         )
         .expect("roster_impact and roster_adjo disagree on their OOF snapshot");
+    }
+
+    /// The shipped AdjO meta names the relative target the serve path adds
+    /// the league mean back onto (#368), and a meta naming the old absolute
+    /// target — or none — is refused at boot rather than served ~100 off.
+    #[test]
+    fn shipped_roster_adjo_is_trained_relative_to_the_league_mean() {
+        validate_roster_adjo_target(&model_dir().join("roster_adjo_model_meta.json"))
+            .expect("roster_adjo_model_meta.json target is not ROSTER_ADJO_TARGET");
+    }
+
+    #[test]
+    fn absolute_adjo_target_is_rejected() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join("cstat_adjo_target_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let write = |name: &str, body: &str| {
+            let p = tmp.join(name);
+            std::fs::File::create(&p)
+                .unwrap()
+                .write_all(body.as_bytes())
+                .unwrap();
+            p
+        };
+        let absolute = write("absolute.json", r#"{"target":"adj_offense"}"#);
+        let missing = write("missing.json", r#"{"model":"roster_adjo_model"}"#);
+        let relative = write(
+            "relative.json",
+            r#"{"target":"adj_offense_relative_to_base_league_mean"}"#,
+        );
+        assert!(matches!(
+            validate_roster_adjo_target(&absolute),
+            Err(LoadError::RosterImpactMetaMismatch(_))
+        ));
+        assert!(matches!(
+            validate_roster_adjo_target(&missing),
+            Err(LoadError::RosterImpactMetaMismatch(_))
+        ));
+        validate_roster_adjo_target(&relative).expect("the relative target is the contract");
     }
 
     #[test]

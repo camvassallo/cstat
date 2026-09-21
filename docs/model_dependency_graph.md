@@ -482,16 +482,19 @@ train-on-everything-else):
 | 1 | trajectory (player CamPom) | 2.030 | 2.026 | 0.004 |
 | 1 | freshman | 2.120 | 2.091 | 0.029 |
 | 2 | roster_impact raw | 5.586 | 5.533 | 0.054 |
+| 2 | roster_adjo raw (era-relative target, #368) | 3.959 | 3.871 | −0.088 |
 | 2+4 | served projection | **5.467** | 5.458 | 0.009 |
 
 The look-ahead everyone was right to worry about is worth almost nothing at
 every layer: the tree does not lean on the future. That is now a measured
 fact rather than a hope, and it holds only as long as the scorecard keeps
 saying so — a Layer 2 change that opens a gap between the two columns has
-started fitting to later seasons. `roster_adjo` is the one model with a real
-forward gap (walk-forward 4.48 against LOSO 4.10, 2026 alone 5.75): `adj_offense`
-trends across eras and LOSO interpolates that trend while walk-forward has to
-extrapolate it. Display-only, but the honest number is the larger one.
+started fitting to later seasons. The first thing the scorecard caught was
+`roster_adjo`: walk-forward 4.48 against LOSO 4.10 (2026 alone 5.75), because
+`adj_offense` trends across eras and LOSO interpolates that trend while
+walk-forward has to extrapolate it. Retraining it relative to the base
+season's league mean (#368) closed the gap (3.96 / 3.87) — the table above is
+the post-#368 tree.
 
 ## 4. Artifact policy for `training/eval_history/`
 
