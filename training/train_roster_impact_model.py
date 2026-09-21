@@ -703,16 +703,6 @@ def lgb_params() -> dict:
 # comparisons; it is not the served model.
 MODEL_FAMILY = "linear"
 LINEAR_FEATURES = ("cam_wmean", "cam_top3_mean", "cam_top1")
-# The wire order, for widening a linear model to the 27-slot contract when a
-# caller does not pass the frame's own `feature_cols`.
-ROSTER_IMPACT_FEATURE_NAMES_FROM_META = (
-    "roster_size", "cam_wmean", "cam_sum", "cam_top1", "cam_top3_mean", "cam_top7_mean",
-    "cam_count_gt5", "cam_count_gt10", "cam_count_gt15",
-    "exp_fr_share", "exp_so_share", "exp_jr_share", "exp_sr_share",
-    "arch_wizard", "arch_sorcerer", "arch_warlock", "arch_bard", "arch_ranger", "arch_barbarian",
-    "arch_paladin", "arch_monk", "arch_cleric", "arch_druid", "arch_rogue", "arch_fighter",
-    "outbound_cam_v3_sum", "inbound_cam_v3_sum",
-)
 
 
 def fit_calibrator(x: pd.DataFrame, y: pd.Series, family: str = MODEL_FAMILY, n_estimators: int | None = None):
@@ -930,7 +920,8 @@ def walk_forward_block(df: pd.DataFrame, feature_cols: list[str], n_estimators: 
 def export_to_onnx(model, n_features: int, onnx_path: Path, feature_cols: list[str] | None = None) -> None:
     """Write `model` as a 27-input ONNX regressor. A LightGBM goes through
     onnxmltools; a `LinearRegression` on `LINEAR_FEATURES` is widened to the
-    full feature contract (zero coefficients on the unused slots) and goes
+    full feature contract (zero coefficients on the unused slots, placed by
+    the frame's own `feature_cols` — the wire order the meta stamps) and goes
     through skl2onnx, so the serving side sees the same `input[None, 27]` →
     `variable` graph either way."""
     import onnxmltools
@@ -941,7 +932,9 @@ def export_to_onnx(model, n_features: int, onnx_path: Path, feature_cols: list[s
         from skl2onnx import convert_sklearn
         from skl2onnx.common.data_types import FloatTensorType as SklFloatTensorType
 
-        cols = feature_cols or list(ROSTER_IMPACT_FEATURE_NAMES_FROM_META)
+        if feature_cols is None:
+            raise ValueError("export_to_onnx needs the frame's feature_cols to widen a linear model")
+        cols = feature_cols
         wide = LinearRegression()
         wide.coef_ = np.zeros(n_features)
         wide.intercept_ = float(model.intercept_)
@@ -964,6 +957,21 @@ def export_to_onnx(model, n_features: int, onnx_path: Path, feature_cols: list[s
     onnx_model.graph.name = onnx_path.stem
     canonical_opset_order(onnx_model)
     onnxmltools.utils.save_model(onnx_model, str(onnx_path))
+
+
+def verify_onnx_parity(model, onnx_path: Path, x: pd.DataFrame, tol: float = 1e-3) -> float:
+    """Run the written ONNX on `x` and compare with the fitted model — the
+    converter is a third party and the widened linear model is hand-built,
+    so the file is checked before it can ship. Returns the max |diff|."""
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(str(onnx_path))
+    got = sess.run(None, {"input": x.to_numpy(np.float32)})[0].ravel()
+    want = np.asarray(predict_calibrator(model, x), dtype=np.float64)
+    diff = float(np.abs(got - want).max())
+    if diff > tol:
+        raise SystemExit(f"{onnx_path.name} disagrees with the fitted model by {diff:.4f} (> {tol})")
+    return diff
 
 
 def export_loso_models(
@@ -1057,7 +1065,8 @@ def main() -> None:
 
     onnx_path = OUT_DIR / "roster_impact_model.onnx"
     export_to_onnx(final, len(feature_cols), onnx_path, feature_cols)
-    print(f"\nExported ONNX → {onnx_path}")
+    parity = verify_onnx_parity(final, onnx_path, X)
+    print(f"\nExported ONNX → {onnx_path}  (parity with the fitted model: max |diff| {parity:.2e} over {len(X):,} rows)")
 
     print("\n" + "=" * 60)
     print("Leave-one-season-out models for projections-backtest (v2 Part 2)")
