@@ -122,7 +122,15 @@ FROM tss cur
 JOIN teams tgt ON tgt.natstat_id = cur.natstat_id AND tgt.season = cur.season
 JOIN tss base ON base.natstat_id = cur.natstat_id AND base.season = cur.season - 1
 JOIN league lb ON lb.season = cur.season - 1
-LEFT JOIN coach_seasons cs ON cs.team_natstat_id = cur.natstat_id AND cs.season = cur.season
+-- `coach_seasons` is not unique on (team, season): a mid-season change or a
+-- duplicated row (UALR 2017, PSU 2021, UT Martin 2025-2027) gives two rows,
+-- and a bare join would fan the team-season out into two test rows. One row
+-- per team-season; "new HC" if any of its rows says so.
+LEFT JOIN (
+    SELECT team_natstat_id, season, bool_or(is_new_hc) AS is_new_hc
+    FROM coach_seasons WHERE team_natstat_id IS NOT NULL
+    GROUP BY team_natstat_id, season
+) cs ON cs.team_natstat_id = cur.natstat_id AND cs.season = cur.season
 """
 
 
@@ -138,6 +146,7 @@ def load_frame() -> tuple[pd.DataFrame, list[str]]:
     od.loc[od["level_n"] < 2, ["level_o", "level_d"]] = np.nan
     df["team_id"] = df["team_id"].astype(str)
     out = df.merge(od, on=["team_id", "season"], how="inner").reset_index(drop=True)
+    assert len(out) <= len(df), "the O/D join fanned the frame out — a team-season has two rows"
     print(f"frame {len(df)} rows; with O/D targets, anchors and coach flag: {len(out)}; "
           f"new-HC rows {int((out['is_new_hc'] == True).sum())}")
     return out, cols
