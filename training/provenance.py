@@ -217,7 +217,10 @@ SOURCES: dict[str, Source] = {
             "previous_rank",
             "weight",
         ),
-        text_values=("height", "position", "cstat_player_id", "committed_team_id"),
+        # `commit_status` since #259: the `peer_class_strength` subqueries
+        # filter on it, so a status flip moves a served feature even when the
+        # FK has not (yet) been cleared. Match consumption.
+        text_values=("height", "position", "cstat_player_id", "committed_team_id", "commit_status"),
         season_column="year",
         notes="247 recruit ratings; the freshman model's entire feature block.",
     ),

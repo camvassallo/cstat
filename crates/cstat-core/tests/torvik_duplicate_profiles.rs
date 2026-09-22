@@ -531,6 +531,9 @@ async fn recruit_rows(pool: &PgPool, torvik_join: &str, stats_join: &str, year: 
             SELECT year, committed_team_id, AVG(composite_rating) AS mean_rating
             FROM recruits
             WHERE composite_rating IS NOT NULL AND committed_team_id IS NOT NULL
+              -- #259: a decommit keeps its school text and (until the resolver
+              -- clears it) its team FK; it is not part of this class at this school.
+              AND COALESCE(commit_status, '') <> 'Uncommitted'
             GROUP BY year, committed_team_id
         ) peer
             ON peer.year = r.year AND peer.committed_team_id = r.committed_team_id
