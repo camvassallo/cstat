@@ -408,10 +408,11 @@ pub async fn run(
         // lies is worse than none, because the staleness report would then
         // vouch for rows it should be flagging.
         //
-        // `roster_adjo` is included even though this command never runs it:
-        // `/api/projections` derives the served AdjO/AdjD split live from that
-        // model against these very rows, so the pair is what a reader needs to
-        // reproduce what the site showed.
+        // `roster_adjo` and `roster_adjd` are included even though this
+        // command runs neither: `/api/projections` serves the O/D split live
+        // from those two models against these very rows, reconciled to the net
+        // (#378), so all three are what a reader needs to reproduce what the
+        // site showed.
         record_provenance(&mut tx, year, model_dir).await?;
 
         tx.commit().await?;
@@ -441,6 +442,7 @@ async fn record_provenance(
         &[
             cstat_core::provenance::ROSTER_IMPACT,
             cstat_core::provenance::ROSTER_ADJO,
+            cstat_core::provenance::ROSTER_ADJD,
         ],
         // The LOSO set is a backtest input; it has no bearing on the served
         // projection, which scores with the all-seasons model.

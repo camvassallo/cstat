@@ -333,6 +333,9 @@ struct CoachCae {
 /// offset) stays valid.
 const PROJECTION_OFFSET: f32 = cstat_core::roster_projection::PROJECTION_OFFSET;
 
+/// One scored, shrunk and reconciled scenario headline: `(net, adjo, adjd)`.
+type SplitHeadline = (f32, f32, f32);
+
 /// Blend the raw model output with the baseline AdjEM at an explicit baseline
 /// `weight` and apply the calibration offset. With no baseline (e.g. a
 /// brand-new D-I program) the blend collapses to the offset-corrected raw
@@ -341,9 +344,6 @@ const PROJECTION_OFFSET: f32 = cstat_core::roster_projection::PROJECTION_OFFSET;
 /// [`cstat_core::roster_projection::transition_shrink_weight`]) — the shared
 /// `score_projection_adj_em` derives the same weight from the same roster, so
 /// this route and `compute-projections` never diverge.
-/// One scored, shrunk and reconciled scenario headline: `(net, adjo, adjd)`.
-type SplitHeadline = (f32, f32, f32);
-
 fn shrink(raw: f32, baseline: Option<f32>, weight: f32) -> f32 {
     match baseline {
         Some(b) => weight * b + (1.0 - weight) * raw + PROJECTION_OFFSET,

@@ -38,6 +38,7 @@ use sha2::{Digest, Sha256};
 /// `models/<stem>.onnx` and `models/<stem>_meta.json` both resolve from it.
 pub const ROSTER_IMPACT: &str = "roster_impact_model";
 pub const ROSTER_ADJO: &str = "roster_adjo_model";
+pub const ROSTER_ADJD: &str = "roster_adjd_model";
 pub const TRAJECTORY_MEAN: &str = "trajectory_mean_model";
 pub const FRESHMAN_MEAN: &str = "freshman_mean_model";
 
