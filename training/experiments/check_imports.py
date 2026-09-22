@@ -32,7 +32,10 @@ def main() -> int:
         try:
             importlib.import_module(script.stem)
             print(f"  ✓ {script.name}")
-        except Exception:  # noqa: BLE001 - report every failure, then exit non-zero
+        # SystemExit too: a script that `sys.exit()`s at import (the shape
+        # `experiment_game_value_features.py` had before its main() guard)
+        # must read as ONE failed script, not kill the loop un-attributed.
+        except (Exception, SystemExit):  # noqa: BLE001 - report every failure, then exit non-zero
             failures += 1
             print(f"  ✗ {script.name}")
             traceback.print_exc()

@@ -40,10 +40,10 @@ re-run.
 
 ## Index
 
-Judge column: **WF** = walk-forward (train strictly earlier than the test
-season, the canonical judge since #361); **LOSO/LOPO/LOCO** = leave one
-season / pair / class out (trains on later seasons too; optimistic). Shipped
-verdicts name the PR.
+Each question names its judge: **WF** = walk-forward (train strictly earlier
+than the test season, the canonical judge since #361); **LOSO/LOPO/LOCO** =
+leave one season / pair / class out (trains on later seasons too;
+optimistic). Shipped verdicts name the PR.
 
 ### Layer 2 calibrator and the Layer 4 blend (team AdjEM)
 

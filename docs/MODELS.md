@@ -133,7 +133,7 @@ MAE by prior-season CamPom bucket (LOPO; where the regression toward the mean li
 - The destination block carries the destination program's strength, not the role the player will fill there: a mid-major star who becomes the go-to option at an elite program (Lendeborg 2026, Knecht 2024, Boyd 2025) is still under-projected. It closes about half the elite-team gap.
 - Selection bias on returners: the training rows are players who came back for N+1; the leave-for-the-draft cohort is not modelled.
 - Portal-era sign flip: elite-destination returners were over-projected 2021–23 and under-projected 2024+, and an era feature is a tie walk-forward — three seasons of the new regime are not enough to learn it (`training/experiments/experiment_elite_gap.py`).
-- Every trainer stamps held-out predictions to `trajectory_oof_predictions`; a retrain that skipped that write would serve in-sample projections, which is why the boot validator requires `oof_persisted`.
+- The trainer writes its held-out predictions to `trajectory_oof_predictions` (TRUNCATE + reload); a retrain that skipped that write would serve in-sample projections, which is why the boot validator requires `oof_persisted`.
 
 ### Freshman model (recruit first-season CamPom)
 
