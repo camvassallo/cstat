@@ -1,7 +1,7 @@
 """Print the tree's walk-forward scorecard from the model metas (#361).
 
 Every trainer stamps a `walk_forward` block into its meta beside the LOSO /
-LOPO / LOCO block it always carried. This reads the four metas and prints
+LOPO / LOCO block it always carried. This reads the five metas and prints
 them as one table — the number `retrain_downstream.sh` ends on, and the one
 the methodology docs quote — so "what does the tree score, forward-chained?"
 is a single command rather than four files.
@@ -53,6 +53,7 @@ def main() -> int:
 
     ri = _load("roster_impact_model_meta.json")["walk_forward"]
     adjo = _load("roster_adjo_model_meta.json")["walk_forward"]
+    adjd = _load("roster_adjd_model_meta.json")["walk_forward"]
     print("\nLayer 2 (per team; raw calibrator, fixed-iteration export protocol)")
     print(f"  {'model':<12}{'walk-forward':>14}{'same rows, LOSO':>22}{'optimism':>10}{'n':>8}")
     # ri["raw"] starts at raw_walk_from; the reported raw number is the
@@ -63,6 +64,7 @@ def main() -> int:
     wf_raw_reported = served["cohorts"]["all"]["wf raw"]["mae"]
     print(f"  {'roster_impact':<12}{wf_raw_reported:>14.3f}{raw_loso:>22.3f}{wf_raw_reported - raw_loso:>+10.3f}{served['n']:>8}")
     print(f"  {'roster_adjo':<12}{adjo['pooled']['mae']:>14.3f}{'—':>22}{'—':>10}{adjo['pooled']['n']:>8}")
+    print(f"  {'roster_adjd':<12}{adjd['pooled']['mae']:>14.3f}{'—':>22}{'—':>10}{adjd['pooled']['n']:>8}")
 
     print(f"\nServed projection (Layer 2 + Layer 4 blend), test {ri['walk_from']}+, n={served['n']}")
     names = served["variants"]

@@ -46,6 +46,8 @@
 #                      can run on a fresh clone.
 #     roster_impact  served net AdjEM + the gitignored LOSO export set
 #     roster_adjo    display-only AdjO half (the step that kept getting missed)
+#     roster_adjd    display-only AdjD half (#378) — reconciled with the AdjO
+#                      half to the net at serve time; same frame, same stamp
 #   Layer 3 — derived products, no training
 #     backtest       projections-backtest, using the LOSO models
 #     cae            compute_cae.py, scoring against the backtest dump
@@ -112,7 +114,7 @@ EVAL_DIR="$TRAINING_DIR/eval_history"
 # below is what covers that gap rather than this line (#263).
 YEARS="2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026"
 
-ALL_STAGES=(guard trajectory freshman frame roster_impact roster_adjo backtest cae projections)
+ALL_STAGES=(guard trajectory freshman frame roster_impact roster_adjo roster_adjd backtest cae projections)
 LAYER1=(trajectory freshman)
 
 WITH_LAYER1=0
@@ -314,6 +316,12 @@ run_roster_adjo() {
   WROTE+=("training/models/roster_adjo_model.onnx + meta")
 }
 
+run_roster_adjd() {
+  stage_banner "roster_adjd — AdjD half (#378; reconciled to the net at serve time)"
+  ( cd "$TRAINING_DIR" && "$VENV_PY" train_roster_adjd_model.py )
+  WROTE+=("training/models/roster_adjd_model.onnx + meta")
+}
+
 run_backtest() {
   stage_banner "backtest — projections-backtest -> per-team dump"
   ( cd "$REPO_ROOT" && cargo run --release --bin cstat-ingest -- \
@@ -365,20 +373,20 @@ for s in "${PLAN[@]}"; do
 done
 
 # ── Provenance check ────────────────────────────────────
-# Only meaningful once both Layer 2 halves have been rebuilt in this run; a
-# partial run legitimately leaves them mismatched mid-flight.
-if is_in roster_impact "${PLAN[@]}" && is_in roster_adjo "${PLAN[@]}"; then
+# Only meaningful once all three Layer 2 halves have been rebuilt in this run;
+# a partial run legitimately leaves them mismatched mid-flight.
+if is_in roster_impact "${PLAN[@]}" && is_in roster_adjo "${PLAN[@]}" && is_in roster_adjd "${PLAN[@]}"; then
   stage_banner "verify — roster-frame provenance stamps agree"
   ( cd "$REPO_ROOT" && cargo test -p cstat-core --lib \
       shipped_roster_models_share_an_oof_snapshot -- --exact --nocapture ) \
-    || die "roster_impact and roster_adjo disagree on their OOF snapshot — the API will refuse to boot"
+    || die "roster_impact, roster_adjo and roster_adjd disagree on their OOF snapshot — the API will refuse to boot"
   echo "✓ stamps match"
-elif is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}"; then
+elif is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}" || is_in roster_adjd "${PLAN[@]}"; then
   echo
-  echo "→ NOTE: only one roster-frame half was rebuilt. Their provenance stamps"
+  echo "→ NOTE: not every roster-frame half was rebuilt. Their provenance stamps"
   echo "        now disagree and \`Predictor::load\` will refuse to boot until the"
-  echo "        other half is retrained. That refusal is the #218 guardrail doing"
-  echo "        its job — rerun with both stages."
+  echo "        other halves are retrained. That refusal is the #218 guardrail doing"
+  echo "        its job — rerun with all three stages."
 fi
 
 # ── Walk-forward scorecard (#361) ───────────────────────
@@ -386,7 +394,7 @@ fi
 # block into its meta; this prints the four as one table. Report-only here —
 # the trainers are what write it — so a partial run still shows the whole
 # tree, with whichever metas the run did not touch as they were.
-if is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}" || is_in trajectory "${PLAN[@]}" || is_in freshman "${PLAN[@]}"; then
+if is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}" || is_in roster_adjd "${PLAN[@]}" || is_in trajectory "${PLAN[@]}" || is_in freshman "${PLAN[@]}"; then
   stage_banner "scorecard — walk-forward, every layer"
   ( cd "$TRAINING_DIR" && "$VENV_PY" walk_forward_report.py ) \
     || echo "→ NOTE: a meta has no walk_forward block; retrain that model so its headline is comparable"

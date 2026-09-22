@@ -1,49 +1,48 @@
-"""Roster-impact AdjO model — the offensive half of the NET + O + D team-rating
-decomposition on the Future page. Layer 2, display-only.
+"""Roster-impact AdjD model — the defensive half of the NET + O + D team-rating
+decomposition on the Future page. Layer 2, display-only (#378).
 
 CURRENT BEHAVIOUR
 -----------------
 - Same 27-feature frame as the net calibrator (imports `build_dataset` from
   `train_roster_impact_model`); LightGBM with the net trainer's `lgb_params`.
-- Target: next-season `adj_offense` RELATIVE to the base season's league mean
-  (`TARGET`, wire-locked against `cstat_core::inference::ROSTER_ADJO_TARGET`;
-  #368). The serve path adds the base season's mean back — ex-ante, since the
-  base season is complete in August — so the served number is on the absolute
-  ~105 scale. The meta records the mean per season (`league_mean_adjo_by_season`).
-- NET + O + D, reconciled (#378): `routes/projections.rs` runs the net model
-  (headline, untouched by this one), this model and the AdjD half
-  (`train_roster_adjd_model.py`), then nudges the two halves by half the net
-  residual — `O' = O + r/2`, `D' = D − r/2`, `r = net − (O − D)` — so
-  `O' − D'` equals the served net exactly (AdjEM = AdjO − AdjD holds to
-  ~0.025 in the data). Until #378 AdjD was derived as AdjO − AdjEM.
-- Judged walk-forward through the served blend for the AdjO half (#361);
-  LOSO kept for continuity. Stamps `input_provenance`, `oof_provenance` (must
-  equal the net and AdjD models' — the API refuses to boot otherwise, #218),
-  `walk_forward`, `trained_at`.
-- Exports `models/roster_adjo_model.onnx` + meta only — no per-season LOSO
-  set. Reaches prod by git deploy alone: `team_preseason_projection` has no
-  AdjO column, so no data sync moves it.
-- Needs its own invocation. Importing `build_dataset` from the net trainer
-  reads as "the AdjO half retrains with the net model"; it does not (#218).
-  `retrain_downstream.sh` runs all three halves.
+  Mirror of `train_roster_adjo_model.py` with the target swapped.
+- Target: next-season `adj_defense` RELATIVE to the base season's league mean
+  (`TARGET`, wire-locked against `cstat_core::inference::ROSTER_ADJD_TARGET`).
+  Lower AdjD is better; the relative form is `adj_defense − mean(adj_defense,
+  base season)`, so a negative value is a better-than-average defence. The
+  serve path adds the base season's mean back, ex-ante. The meta records the
+  mean per season (`league_mean_adjd_by_season`).
+- NET + O + D, reconciled: `routes/projections.rs` runs the net model, the
+  AdjO half and this one, then nudges the two halves by half the net residual
+  (`O' = O + r/2`, `D' = D − r/2`, `r = net − (O − D)`) so `O' − D'` equals the
+  served net exactly. Neither half ever moves the net headline. This replaces
+  deriving AdjD as `AdjO − AdjEM`, which handed the whole program premium to
+  whichever half history said (Saint Mary's 2027: #76 raw roster, new head
+  coach, #10 projected defence) — see HISTORY.
+- Judged walk-forward on the raw relative target (#361); LOSO kept for
+  continuity. The served-blend, cohort-level judgement is
+  `experiments/experiment_od_anchor.py`. Stamps `input_provenance`,
+  `oof_provenance` (must equal the net and AdjO models' — the API refuses to
+  boot otherwise, #218), `walk_forward`, `trained_at`.
+- Exports `models/roster_adjd_model.onnx` + meta only — no per-season LOSO
+  set. Reaches prod by git deploy alone, like the AdjO half.
+- Needs its own invocation; `retrain_downstream.sh` runs all three Layer 2
+  halves in order.
 
 HISTORY
 -------
-- Why NET + SPLIT and not two independent O and D models: measured LOSO in
-  `validation/exp_team_adjod_projection.py` (4,255 team-seasons) — decomposing
-  barely touches the net (+0.008 MAE worse), because team-level O/D errors
-  are positively correlated and cancel in EM = O − D. Re-asked walk-forward in
-  `experiments/experiment_od_decomposition.py` (2026-09-21) with the same
-  answer for the net.
-- The target was absolute AdjO until #368. Absolute AdjO drifts with the
-  scoring environment (D-I mean 100.3 → 107.5 over 2021–2026) and the 27
-  roster-CAM features carry no signal about it, so the model sat on the
-  11-season mean and ran ~5 low in 2026 before the blend (walk-forward bias
-  −4.8; MAE 4.48 vs 4.10 LOSO, because LOSO interpolates the drift and
-  walk-forward has to extrapolate it). The relative target closed it: through
-  the served blend, walk-forward AdjO 4.304 → 3.917 and derived AdjD 3.940 →
-  3.650. The Rust boot validator refuses any other `target` value, so an old
-  binary cannot serve this model as absolute or the reverse.
+- Until #378 there was no D model: AdjD was derived as AdjO − AdjEM, and the
+  27 features carry no offence/defence information, so the O-vs-D allocation
+  of a projection came entirely from the two program anchors. Re-weighting the
+  AdjO anchor cannot fix that — with the net fixed, `err_D = err_O − err_net`,
+  so every O-half gain lands on the derived D. A direct relative-AdjD model on
+  its own anchor (`baseline_d`, 3-year `level_d`), reconciled with AdjO to the
+  net, measured walk-forward through the served blend on the served ex-ante
+  frame: AdjD 3.666 → 3.553 (−0.113, z=−6.2, better in all six seasons), AdjO
+  3.931 → 3.865 (−0.066, z=−3.6), largest on prior-season top-25 defences
+  (AdjD −0.222 / AdjO −0.191), new head coaches and overhauls, net untouched.
+  Direct D unreconciled was −0.076 but left a mean 1.28-point AdjO − AdjD −
+  AdjEM gap on the page (`eval_history/od_anchor_20260922_summary.json`).
 """
 from __future__ import annotations
 
@@ -68,34 +67,34 @@ from train_roster_impact_model import (
 )
 
 # The column the model is fit on. Wire-locked: `cstat_core::inference`
-# refuses to boot on any other value (`ROSTER_ADJO_TARGET`), because the serve
+# refuses to boot on any other value (`ROSTER_ADJD_TARGET`), because the serve
 # path adds the base season's league mean to the model's output and a model
-# trained on absolute AdjO would then be served ~100 points high.
-TARGET = "adj_offense_relative_to_base_league_mean"
-ABSOLUTE = "adj_offense"
+# trained on absolute AdjD would then be served ~100 points high.
+TARGET = "adj_defense_relative_to_base_league_mean"
+ABSOLUTE = "adj_defense"
 
 
 def load_target(seasons) -> tuple[pd.DataFrame, dict[int, float]]:
-    """Per (target-season team, season): absolute AdjO, the base season's
+    """Per (target-season team, season): absolute AdjD, the base season's
     league mean, and the relative target. Also returns the league means by
     season, stamped into the meta so the training-time definition is on
     record next to the one the serve path computes."""
     eng = get_engine()
     od = pd.read_sql(
-        "SELECT team_id, season, adj_offense FROM team_season_stats "
-        "WHERE adj_offense IS NOT NULL AND season = ANY(%(seasons)s)",
+        "SELECT team_id, season, adj_defense FROM team_season_stats "
+        "WHERE adj_defense IS NOT NULL AND season = ANY(%(seasons)s)",
         eng, params={"seasons": list(seasons)},
     )
     od["team_id"] = od["team_id"].astype(str)
-    # The D-I mean over every team with an AdjO that season — the same
-    # population `fetch_league_mean_adj_o` averages on the Rust side.
+    # The D-I mean over every team with an AdjD that season — the same
+    # population `fetch_league_mean_adj_d` averages on the Rust side.
     league = pd.read_sql(
-        "SELECT season, avg(adj_offense) AS league_mean_adjo FROM team_season_stats "
-        "WHERE adj_offense IS NOT NULL GROUP BY season", eng,
+        "SELECT season, avg(adj_defense) AS league_mean_adjd FROM team_season_stats "
+        "WHERE adj_defense IS NOT NULL GROUP BY season", eng,
     )
-    means = {int(r.season): float(r.league_mean_adjo) for r in league.itertuples()}
-    od["league_mean_adjo_base"] = od["season"].map(lambda s: means.get(int(s) - 1))
-    od[TARGET] = od[ABSOLUTE] - od["league_mean_adjo_base"]
+    means = {int(r.season): float(r.league_mean_adjd) for r in league.itertuples()}
+    od["league_mean_adjd_base"] = od["season"].map(lambda s: means.get(int(s) - 1))
+    od[TARGET] = od[ABSOLUTE] - od["league_mean_adjd_base"]
     return od, means
 
 
@@ -106,8 +105,8 @@ def main() -> None:
     df, feature_cols, coverage = build_dataset()
     # Adjacent to the read it describes, not at meta-write time — see the note
     # in train_trajectory_model.main().
-    stamp = input_provenance("roster_adjo")
-    # feature_cols is fixed BEFORE this merge, so adj_offense can never leak
+    stamp = input_provenance("roster_adjd")
+    # feature_cols is fixed BEFORE this merge, so adj_defense can never leak
     # in as a feature (same discipline as the validation experiment).
     df["team_id"] = df["team_id"].astype(str)
     targets, league_means = load_target(SEASONS)
@@ -115,7 +114,7 @@ def main() -> None:
     df = df.dropna(subset=[TARGET]).reset_index(drop=True)
     assert TARGET not in feature_cols and ABSOLUTE not in feature_cols, "target leaked into features"
     print(f"Features: {len(feature_cols)} | rows with {TARGET}: {len(df)}")
-    print("  league mean AdjO by season: " + ", ".join(f"{s}: {m:.2f}" for s, m in sorted(league_means.items())))
+    print("  league mean AdjD by season: " + ", ".join(f"{s}: {m:.2f}" for s, m in sorted(league_means.items())))
 
     # LOSO: honest per-season MAE + the early-stopping iteration budget for
     # the final fit (mirrors train_roster_impact_model.leave_one_season_out).
@@ -167,22 +166,22 @@ def main() -> None:
     def fit_predict(x_tr, y_tr, x_te):
         return lgb.LGBMRegressor(**wf_params).fit(x_tr, y_tr).predict(x_te)
 
-    walk, _ = regression_walk_forward(df[feature_cols], df["season"], df[TARGET], fit_predict, WALK_FROM, "adjo")
+    walk, _ = regression_walk_forward(df[feature_cols], df["season"], df[TARGET], fit_predict, WALK_FROM, "adjd")
 
-    onnx_path = OUT_DIR / "roster_adjo_model.onnx"
+    onnx_path = OUT_DIR / "roster_adjd_model.onnx"
     export_to_onnx(final, len(feature_cols), onnx_path)
     print(f"Exported ONNX → {onnx_path}")
 
     meta = {
-        "model": "roster_adjo_model",
+        "model": "roster_adjd_model",
         # Date of this fit (UTC). `docs/MODELS.md` reads it as the "last
         # retrain" column (#364); date-level so a same-day rerun of a
         # reproducible trainer (#222) still writes an identical meta.
         "trained_at": _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
-        # Wire-locked against `cstat_core::inference::ROSTER_ADJO_TARGET`.
+        # Wire-locked against `cstat_core::inference::ROSTER_ADJD_TARGET`.
         "target": TARGET,
-        "serve_add_back": "league mean adj_offense of the base season (team_season_stats, every team with an AdjO)",
-        "league_mean_adjo_by_season": {str(k): v for k, v in sorted(league_means.items())},
+        "serve_add_back": "league mean adj_defense of the base season (team_season_stats, every team with an AdjD)",
+        "league_mean_adjd_by_season": {str(k): v for k, v in sorted(league_means.items())},
         "decomposition": "NET+O+D reconciled: O' = O + r/2, D' = D - r/2, r = net - (O - D) at serve time (#378)",
         "seasons": list(SEASONS),
         "n_rows": int(len(df)),
@@ -198,7 +197,7 @@ def main() -> None:
         # (issue #223). Declared identical to roster_impact's — the two share
         # one frame via `build_dataset`, so they cannot honestly differ.
         "input_provenance": stamp,
-        # Must equal roster_impact_model_meta.json's and the AdjD meta's stamp
+        # Must equal roster_impact_model_meta.json's and the AdjO meta's stamp
         # — the boot validator compares all three and refuses to serve a
         # mismatched set (issue #218). Retrain ALL whenever the OOF is regenerated;
         # `training/retrain_downstream.sh` does this in the right order.
@@ -210,7 +209,7 @@ def main() -> None:
         "backtest_loso": {"pooled_mae": loso_mae, "naive_mae": naive,
                           "per_season": per_season},
     }
-    meta_path = OUT_DIR / "roster_adjo_model_meta.json"
+    meta_path = OUT_DIR / "roster_adjd_model_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))
     print(f"Wrote meta → {meta_path}")
 

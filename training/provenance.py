@@ -206,6 +206,18 @@ SOURCES: dict[str, Source] = {
         nightly=True,
         notes="Layer 2 targets; also the freshman model's signing-team prior.",
     ),
+    # The D half's target (#378), split from `.adj` above for the same reason
+    # `cam_v3` is split from `gbpm`: only `roster_adjd` consumes it, and adding
+    # a column to a shared source changes every consumer's digest — a
+    # wire-format change that would read as tree-wide drift with no data moved.
+    "team_season_stats.adj_d": Source(
+        table="team_season_stats",
+        keys=("team_id", "season"),
+        values=("adj_defense",),
+        season_column="season",
+        nightly=True,
+        notes="The AdjD half's target.",
+    ),
     "recruits": Source(
         table="recruits",
         keys=("year", "recruit_key"),
@@ -307,6 +319,21 @@ NODE_INPUTS: dict[str, tuple[str, ...]] = {
         "player_departures",
         "player_returns",
     ),
+    # The D half (#378): same frame as the other two halves plus its own
+    # target column.
+    "roster_adjd": (
+        "trajectory_oof_predictions",
+        "freshman_oof_predictions",
+        "torvik_player_stats.cam_v3",
+        "player_archetypes",
+        "team_season_stats.adj",
+        "team_season_stats.adj_d",
+        "recruits",
+        "transfers",
+        "draft_entrants",
+        "player_departures",
+        "player_returns",
+    ),
 }
 
 #: Which model meta on disk carries each node's stamp.
@@ -315,6 +342,7 @@ NODE_META_FILES: dict[str, str] = {
     "freshman": "freshman_model_meta.json",
     "roster_impact": "roster_impact_model_meta.json",
     "roster_adjo": "roster_adjo_model_meta.json",
+    "roster_adjd": "roster_adjd_model_meta.json",
 }
 
 #: Layer 1 writes the OOF tables Layer 2 trains on. Used to explain a Layer 2
@@ -324,6 +352,7 @@ NODE_UPSTREAM: dict[str, tuple[str, ...]] = {
     "freshman": (),
     "roster_impact": ("trajectory", "freshman"),
     "roster_adjo": ("trajectory", "freshman"),
+    "roster_adjd": ("trajectory", "freshman"),
 }
 
 _OOF_SOURCES = ("trajectory_oof_predictions", "freshman_oof_predictions")
@@ -436,7 +465,7 @@ def oof_provenance_from(stamp: dict) -> dict:
 
 #: artifact name -> the Layer 2 nodes whose staleness propagates into it.
 LAYER3_UPSTREAM: dict[str, tuple[str, ...]] = {
-    "team_preseason_projection": ("roster_impact", "roster_adjo"),
+    "team_preseason_projection": ("roster_impact", "roster_adjo", "roster_adjd"),
     "coach_season_cae": ("roster_impact",),
 }
 

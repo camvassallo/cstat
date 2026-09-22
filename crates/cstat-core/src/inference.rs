@@ -501,6 +501,11 @@ pub struct Predictor {
     /// derived as AdjO − AdjEM. Display-only (the Future page's projected
     /// O/D bands), never feeds the net forecast.
     roster_adjo_session: Mutex<Session>,
+    /// Defensive half (#378): same feature shape, target `adj_defense`
+    /// relative to the base season's league mean. Served reconciled with the
+    /// AdjO half to the net (`roster_projection::reconcile_split`) so
+    /// `AdjO − AdjD` equals the served AdjEM exactly. Display-only.
+    roster_adjd_session: Mutex<Session>,
     trajectory_mean_session: Mutex<Session>,
     trajectory_q10_session: Mutex<Session>,
     trajectory_q90_session: Mutex<Session>,
@@ -580,14 +585,25 @@ impl Predictor {
         validate_roster_impact_meta(&model_dir.join("roster_adjo_model_meta.json"))?;
         validate_roster_adjo_target(&model_dir.join("roster_adjo_model_meta.json"))?;
 
-        // Both metas parse and match the compiled contract individually; the
-        // remaining question is whether they agree with each OTHER about which
-        // OOF generation they were trained on. Nothing above can answer that —
-        // a stale half has an identical feature contract, which is precisely
-        // why #218 went unnoticed for three regenerations.
+        // AdjD half (#378) — the same contract again, with its own wire-locked
+        // target string so a binary and a model cannot disagree about which
+        // league mean is added back.
+        let roster_adjd_session = Session::builder()?
+            .with_intra_threads(1)?
+            .commit_from_file(model_dir.join("roster_adjd_model.onnx"))?;
+
+        validate_roster_impact_meta(&model_dir.join("roster_adjd_model_meta.json"))?;
+        validate_roster_adjd_target(&model_dir.join("roster_adjd_model_meta.json"))?;
+
+        // All three metas parse and match the compiled contract individually;
+        // the remaining question is whether they agree with each OTHER about
+        // which OOF generation they were trained on. Nothing above can answer
+        // that — a stale half has an identical feature contract, which is
+        // precisely why #218 went unnoticed for three regenerations.
         validate_roster_frame_provenance(
             &model_dir.join("roster_impact_model_meta.json"),
             &model_dir.join("roster_adjo_model_meta.json"),
+            &model_dir.join("roster_adjd_model_meta.json"),
         )?;
 
         // Phase 5c trajectory: mean + q=0.1 + q=0.9 LightGBMs share one
@@ -661,6 +677,7 @@ impl Predictor {
             model_dir: model_dir.to_path_buf(),
             roster_impact_session: Mutex::new(roster_impact_session),
             roster_adjo_session: Mutex::new(roster_adjo_session),
+            roster_adjd_session: Mutex::new(roster_adjd_session),
             trajectory_mean_session: Mutex::new(trajectory_mean_session),
             trajectory_q10_session: Mutex::new(trajectory_q10_session),
             trajectory_q90_session: Mutex::new(trajectory_q90_session),
@@ -874,14 +891,29 @@ impl Predictor {
     /// base season's league mean ([`ROSTER_ADJO_TARGET`]) with the AdjO half
     /// of the NET+SPLIT decomposition. Same feature vector as
     /// [`predict_roster_impact`]; the caller adds the base season's league
-    /// mean back (`fetch_league_mean_adj_o`) and derives AdjD as `AdjO −
-    /// AdjEM` so the split reconciles exactly to the served net.
+    /// mean back (`fetch_league_mean_adj_o`) and reconciles it with the AdjD
+    /// half to the served net (`reconcile_split`, #378) so `AdjO − AdjD`
+    /// equals the served AdjEM exactly.
     /// Display-only — never part of the projected-AdjEM forecast.
     pub fn predict_roster_adjo(
         &self,
         features: &[f32; ROSTER_IMPACT_NUM_FEATURES],
     ) -> Result<f32, ort::Error> {
         let mut session = self.roster_adjo_session.lock().unwrap();
+        roster_impact_infer(&mut session, features)
+    }
+
+    /// Score a projected roster's next-season `adj_defense` RELATIVE to the
+    /// base season's league mean ([`ROSTER_ADJD_TARGET`]) with the AdjD half
+    /// (#378). Same feature vector as [`predict_roster_impact`]; the caller
+    /// adds the base season's league mean back (`fetch_league_mean_adj_d`),
+    /// anchors it on the program's own defensive history, and reconciles it
+    /// with the AdjO half to the served net (`reconcile_split`). Display-only.
+    pub fn predict_roster_adjd(
+        &self,
+        features: &[f32; ROSTER_IMPACT_NUM_FEATURES],
+    ) -> Result<f32, ort::Error> {
+        let mut session = self.roster_adjd_session.lock().unwrap();
         roster_impact_infer(&mut session, features)
     }
 
@@ -1459,6 +1491,29 @@ fn validate_roster_adjo_target(path: &Path) -> Result<(), LoadError> {
     }
 }
 
+/// The target the AdjD half is trained on, wire-locked to
+/// `training/train_roster_adjd_model.py::TARGET` (#378). Same construction as
+/// [`ROSTER_ADJO_TARGET`]: the model predicts AdjD relative to the base
+/// season's league mean and the serve path adds that mean back.
+pub const ROSTER_ADJD_TARGET: &str = "adj_defense_relative_to_base_league_mean";
+
+/// Refuse an AdjD meta whose `target` is not [`ROSTER_ADJD_TARGET`].
+fn validate_roster_adjd_target(path: &Path) -> Result<(), LoadError> {
+    let err = LoadError::RosterImpactMetaMismatch;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| err(format!("read {}: {e}", path.display())))?;
+    let meta: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| err(format!("parse: {e}")))?;
+    match meta["target"].as_str() {
+        Some(t) if t == ROSTER_ADJD_TARGET => Ok(()),
+        other => Err(err(format!(
+            "roster_adjd_model_meta.json target {other:?} ≠ {ROSTER_ADJD_TARGET:?}: the serve \
+             path adds the base season's league mean AdjD to this model's output, so it must \
+             be trained relative to it (train_roster_adjd_model.py, #378)"
+        ))),
+    }
+}
+
 /// Pull the `oof_provenance` stamp out of a roster-frame model meta.
 ///
 /// Written by `training/oof_provenance.py`: per OOF table, a row count plus
@@ -1486,21 +1541,30 @@ fn read_oof_provenance(path: &Path) -> Result<serde_json::Value, LoadError> {
     }
 }
 
-/// Refuse to boot when the two roster-frame models were trained against
+/// Refuse to boot when the roster-frame models were trained against
 /// different OOF snapshots.
 ///
-/// `roster_impact` (served net AdjEM) and `roster_adjo` (the display-only
-/// AdjO half) share one training frame via `build_dataset`, so they are only
-/// coherent when built from the same `trajectory_oof_predictions` /
+/// `roster_impact` (served net AdjEM), `roster_adjo` and `roster_adjd` (the
+/// display-only halves) share one training frame via `build_dataset`, so they
+/// are only coherent when built from the same `trajectory_oof_predictions` /
 /// `freshman_oof_predictions` generation. Nothing about their feature
 /// contract encodes that, which is why the drift in #218 was invisible for
 /// three regenerations.
-fn validate_roster_frame_provenance(impact: &Path, adjo: &Path) -> Result<(), LoadError> {
-    let (a, b) = (read_oof_provenance(impact)?, read_oof_provenance(adjo)?);
-    if a != b {
+fn validate_roster_frame_provenance(
+    impact: &Path,
+    adjo: &Path,
+    adjd: &Path,
+) -> Result<(), LoadError> {
+    let (a, b, c) = (
+        read_oof_provenance(impact)?,
+        read_oof_provenance(adjo)?,
+        read_oof_provenance(adjd)?,
+    );
+    if a != b || a != c {
         return Err(LoadError::RosterProvenanceMismatch(format!(
-            "roster_impact and roster_adjo were trained on different OOF snapshots — \
-             retrain both.\n  roster_impact: {a}\n  roster_adjo:   {b}",
+            "roster_impact, roster_adjo and roster_adjd were not all trained on the same OOF \
+             snapshot — retrain all three.\n  roster_impact: {a}\n  roster_adjo:   {b}\n  \
+             roster_adjd:   {c}",
         )));
     }
     Ok(())
@@ -2297,7 +2361,7 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    /// The shipped invariant: the two roster-frame models must have been
+    /// The shipped invariant: the three roster-frame models must have been
     /// trained on the same OOF snapshot. This is the check that would have
     /// failed the moment `roster_adjo` fell a generation behind in #218,
     /// and it reads the real committed artifacts rather than fixtures.
@@ -2307,8 +2371,52 @@ mod tests {
         validate_roster_frame_provenance(
             &dir.join("roster_impact_model_meta.json"),
             &dir.join("roster_adjo_model_meta.json"),
+            &dir.join("roster_adjd_model_meta.json"),
         )
-        .expect("roster_impact and roster_adjo disagree on their OOF snapshot");
+        .expect("roster_impact, roster_adjo and roster_adjd disagree on their OOF snapshot");
+    }
+
+    /// The shipped AdjD meta names the relative target the serve path adds
+    /// the league mean back onto (#378).
+    #[test]
+    fn shipped_roster_adjd_is_trained_relative_to_the_league_mean() {
+        validate_roster_adjd_target(&model_dir().join("roster_adjd_model_meta.json"))
+            .expect("roster_adjd_model_meta.json target is not ROSTER_ADJD_TARGET");
+    }
+
+    #[test]
+    fn absolute_adjd_target_is_rejected() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join("cstat_adjd_target_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let write = |name: &str, body: &str| {
+            let p = tmp.join(name);
+            std::fs::File::create(&p)
+                .unwrap()
+                .write_all(body.as_bytes())
+                .unwrap();
+            p
+        };
+        let absolute = write("absolute.json", r#"{"target":"adj_defense"}"#);
+        // The O half's string is the wrong contract for the D half: a D model
+        // served through the O path would add the wrong league mean back.
+        let wrong_half = write(
+            "wrong_half.json",
+            r#"{"target":"adj_offense_relative_to_base_league_mean"}"#,
+        );
+        let relative = write(
+            "relative.json",
+            r#"{"target":"adj_defense_relative_to_base_league_mean"}"#,
+        );
+        assert!(matches!(
+            validate_roster_adjd_target(&absolute),
+            Err(LoadError::RosterImpactMetaMismatch(_))
+        ));
+        assert!(matches!(
+            validate_roster_adjd_target(&wrong_half),
+            Err(LoadError::RosterImpactMetaMismatch(_))
+        ));
+        validate_roster_adjd_target(&relative).expect("the relative target is the contract");
     }
 
     /// The shipped AdjO meta names the relative target the serve path adds
@@ -2372,17 +2480,22 @@ mod tests {
         // Same snapshot → accepted.
         let a = write("impact_ok.json", "aaa");
         let b = write("adjo_ok.json", "aaa");
-        assert!(validate_roster_frame_provenance(&a, &b).is_ok());
+        let d = write("adjd_ok.json", "aaa");
+        assert!(validate_roster_frame_provenance(&a, &b, &d).is_ok());
 
         // Different snapshot → rejected. This is the #218 condition: same
-        // feature contract, different training generation.
+        // feature contract, different training generation — and it must fire
+        // whichever half is the stale one, including the third (#378).
         let c = write("adjo_stale.json", "bbb");
-        let err = validate_roster_frame_provenance(&a, &c)
+        let err = validate_roster_frame_provenance(&a, &c, &d)
             .expect_err("differing OOF digests must fail boot");
         assert!(
             matches!(err, LoadError::RosterProvenanceMismatch(_)),
             "wrong error variant: {err}"
         );
+        let err = validate_roster_frame_provenance(&a, &b, &c)
+            .expect_err("a stale AdjD half must fail boot too");
+        assert!(matches!(err, LoadError::RosterProvenanceMismatch(_)));
     }
 
     #[test]
@@ -2399,7 +2512,7 @@ mod tests {
         // Fail-closed. An unstamped meta means a trainer that predates the
         // guardrail — exactly the state #218 was produced in — so treating
         // it as "can't tell, carry on" would reproduce the original bug.
-        let err = validate_roster_frame_provenance(&p, &p)
+        let err = validate_roster_frame_provenance(&p, &p, &p)
             .expect_err("a missing oof_provenance stamp must fail boot");
         assert!(
             matches!(err, LoadError::RosterProvenanceMismatch(_)),

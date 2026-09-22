@@ -1,0 +1,742 @@
+{
+  "model": "roster_adjd_model",
+  "trained_at": "2026-09-22",
+  "target": "adj_defense_relative_to_base_league_mean",
+  "serve_add_back": "league mean adj_defense of the base season (team_season_stats, every team with an AdjD)",
+  "league_mean_adjd_by_season": {
+    "2015": 101.6720797720798,
+    "2016": 103.48689458689456,
+    "2017": 103.41310541310537,
+    "2018": 104.0096866096866,
+    "2019": 103.02974504249293,
+    "2020": 100.61444759206789,
+    "2021": 101.86657060518726,
+    "2022": 102.08407821229052,
+    "2023": 103.29752066115701,
+    "2024": 105.26436464088393,
+    "2025": 106.33379120879113,
+    "2026": 108.60769230769226
+  },
+  "decomposition": "NET+O+D reconciled: O' = O + r/2, D' = D - r/2, r = net - (O - D) at serve time (#378)",
+  "seasons": [
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025,
+    2026
+  ],
+  "n_rows": 3625,
+  "n_features": 27,
+  "features": [
+    "roster_size",
+    "cam_wmean",
+    "cam_sum",
+    "cam_top1",
+    "cam_top3_mean",
+    "cam_top7_mean",
+    "cam_count_gt5",
+    "cam_count_gt10",
+    "cam_count_gt15",
+    "exp_fr_share",
+    "exp_so_share",
+    "exp_jr_share",
+    "exp_sr_share",
+    "arch_wizard",
+    "arch_sorcerer",
+    "arch_warlock",
+    "arch_bard",
+    "arch_ranger",
+    "arch_barbarian",
+    "arch_paladin",
+    "arch_monk",
+    "arch_cleric",
+    "arch_druid",
+    "arch_rogue",
+    "arch_fighter",
+    "outbound_cam_v3_sum",
+    "inbound_cam_v3_sum"
+  ],
+  "player_filter": "games_played >= 5 AND minutes_per_game >= 5",
+  "cam_v3_source": "oof_only",
+  "frame_source": "ex_ante_backtest_composition",
+  "cam_v3_coverage": {
+    "frame": "roster_impact_ex_ante.json",
+    "frame_sha256": "3474323d51c6445cd3dc4badad1206f5fa8600278ee791d595af9845853b3985",
+    "frame_provenance": {
+      "composition": "ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3",
+      "generated_at": "2026-09-22T04:02:59.036939+00:00",
+      "oof_snapshot": {
+        "freshman_oof_predictions": {
+          "max_created_at": "2026-09-22 04:02:50.797591+00",
+          "n_rows": 5986
+        },
+        "trajectory_oof_predictions": {
+          "max_created_at": "2026-09-22 04:02:22.59085+00",
+          "n_rows": 25325
+        }
+      },
+      "produced_by": "cstat-ingest projections-backtest --frame-out",
+      "seasons": [
+        2016,
+        2017,
+        2018,
+        2019,
+        2020,
+        2021,
+        2022,
+        2023,
+        2024,
+        2025,
+        2026
+      ]
+    },
+    "n_rows": 3625,
+    "seasons": [
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ]
+  },
+  "input_provenance": {
+    "trajectory_oof_predictions": {
+      "n_rows": 25325,
+      "digest": "73240ca03c1b2cba131dc5a468060d5c",
+      "by_season": {
+        "2016": {
+          "n_rows": 2080,
+          "digest": "03c400f28a802f5f2f721ef2fae2d705"
+        },
+        "2017": {
+          "n_rows": 2139,
+          "digest": "3ee977d66c797e8514810bf83bd7c085"
+        },
+        "2018": {
+          "n_rows": 2114,
+          "digest": "bbaa4cd2d38694d97b931e2ec7a78295"
+        },
+        "2019": {
+          "n_rows": 2080,
+          "digest": "a49961cabe3d1c56ef3803bed0459d62"
+        },
+        "2020": {
+          "n_rows": 2140,
+          "digest": "137bd96fea1a65bc6954274157706f6a"
+        },
+        "2021": {
+          "n_rows": 2213,
+          "digest": "d8411aeda22bf33a6442ab27004cd6a1"
+        },
+        "2022": {
+          "n_rows": 2671,
+          "digest": "c9808f1f14bee1d08c85cd7f5215210b"
+        },
+        "2023": {
+          "n_rows": 2477,
+          "digest": "ff65a70a526307c90b42048517aad16f"
+        },
+        "2024": {
+          "n_rows": 2551,
+          "digest": "c8668109fc47a56c5f6929bf2bc1c52d"
+        },
+        "2025": {
+          "n_rows": 2541,
+          "digest": "699a8344350da003c528509a397985f4"
+        },
+        "2026": {
+          "n_rows": 2319,
+          "digest": "fffcc9575f91e8177af7925b8052bd13"
+        }
+      }
+    },
+    "freshman_oof_predictions": {
+      "n_rows": 5986,
+      "digest": "9a74e6da0507d7b12b5a9219aafc8a8a",
+      "by_season": {
+        "2015": {
+          "n_rows": 545,
+          "digest": "377b737d34a7ca67935b313a06c6196a"
+        },
+        "2016": {
+          "n_rows": 431,
+          "digest": "659de01135201f85dcd81977be528d16"
+        },
+        "2017": {
+          "n_rows": 441,
+          "digest": "9a64bd0bd723d105b9c2c011473cd2c2"
+        },
+        "2018": {
+          "n_rows": 528,
+          "digest": "fc9b3d3931c6d3b92752c6f2a57c2c1f"
+        },
+        "2019": {
+          "n_rows": 507,
+          "digest": "9c5b369013a576739ab330cde335d7fc"
+        },
+        "2020": {
+          "n_rows": 549,
+          "digest": "5b104149dc5ddbaac1b0741264a67412"
+        },
+        "2021": {
+          "n_rows": 514,
+          "digest": "8f148c3592be7ad5a3746d67a278dcb0"
+        },
+        "2022": {
+          "n_rows": 398,
+          "digest": "16de273f844b6ec394d5122aee4b0d16"
+        },
+        "2023": {
+          "n_rows": 521,
+          "digest": "83d6c54c88707397f590920835791752"
+        },
+        "2024": {
+          "n_rows": 556,
+          "digest": "d4762a07757d28ec10e183a134dbdeca"
+        },
+        "2025": {
+          "n_rows": 507,
+          "digest": "4c32b315ae385c8cd2153e11e70aa662"
+        },
+        "2026": {
+          "n_rows": 489,
+          "digest": "c11be364a80bb399d71f0d93878ee426"
+        }
+      }
+    },
+    "torvik_player_stats.cam_v3": {
+      "n_rows": 58400,
+      "digest": "d464b895dbd71048febab267bc6e91dd",
+      "by_season": {
+        "2015": {
+          "n_rows": 4723,
+          "digest": "c260eb37d4ecae574f90a88503016e69"
+        },
+        "2016": {
+          "n_rows": 4696,
+          "digest": "14fc45793c31b0374cafab011e6f6379"
+        },
+        "2017": {
+          "n_rows": 4742,
+          "digest": "3beb81354bfa8ade9724f76718844e8e"
+        },
+        "2018": {
+          "n_rows": 4703,
+          "digest": "b0d76b79c8337ec67a866d0731aec979"
+        },
+        "2019": {
+          "n_rows": 4739,
+          "digest": "09763ca153feaf489c1e01841a7686e6"
+        },
+        "2020": {
+          "n_rows": 4733,
+          "digest": "254a04557ec3332f5842a58a7cae6a8e"
+        },
+        "2021": {
+          "n_rows": 4970,
+          "digest": "da134402417c1dac39458f06eb7c49d4"
+        },
+        "2022": {
+          "n_rows": 5011,
+          "digest": "0f82df6a428a25fc74ba32bf654cb33c"
+        },
+        "2023": {
+          "n_rows": 5043,
+          "digest": "5becdc8aefab942d88a8c41300b1db5a"
+        },
+        "2024": {
+          "n_rows": 5002,
+          "digest": "4e1bc4807d42e6642eafd806e25893ba"
+        },
+        "2025": {
+          "n_rows": 5060,
+          "digest": "24022ff3cf25933665dba7a6abef8024"
+        },
+        "2026": {
+          "n_rows": 4978,
+          "digest": "3488bea01132321fab1971bcc4e1c584"
+        }
+      }
+    },
+    "player_archetypes": {
+      "n_rows": 40814,
+      "digest": "7c6a5d8e3da18222dbcc2762f05f6956",
+      "by_season": {
+        "2015": {
+          "n_rows": 3078,
+          "digest": "f3ac491735f4564cfa772fc985701b61"
+        },
+        "2016": {
+          "n_rows": 3270,
+          "digest": "d6282faff1aeae6e81df5dcc2956efd3"
+        },
+        "2017": {
+          "n_rows": 3351,
+          "digest": "bc91ef605431cc33c419984f5c3f5c73"
+        },
+        "2018": {
+          "n_rows": 3321,
+          "digest": "3cb0f8f86fe0e940f018b2959be071b6"
+        },
+        "2019": {
+          "n_rows": 3378,
+          "digest": "fa7e96f5711b48b4c43b4013570566f8"
+        },
+        "2020": {
+          "n_rows": 3378,
+          "digest": "f4d2ec47a4f4b339ee1715b77cb2ba95"
+        },
+        "2021": {
+          "n_rows": 3269,
+          "digest": "a42c0e5aa328229283b6dd78068ea065"
+        },
+        "2022": {
+          "n_rows": 3524,
+          "digest": "d877b06dd4ace155e9074bea765b764c"
+        },
+        "2023": {
+          "n_rows": 3496,
+          "digest": "2fb9687faa690deb62cd7985b73fee00"
+        },
+        "2024": {
+          "n_rows": 3546,
+          "digest": "81ddaaba3a849014df152c0410c5a8f5"
+        },
+        "2025": {
+          "n_rows": 3584,
+          "digest": "c48fbb53d26cae974623072d1b15b03c"
+        },
+        "2026": {
+          "n_rows": 3619,
+          "digest": "cd86400d384cc5265e0be9b2d707375d"
+        }
+      }
+    },
+    "team_season_stats.adj": {
+      "n_rows": 4268,
+      "digest": "ad4a9438ef447c055cb240b110550210",
+      "by_season": {
+        "2015": {
+          "n_rows": 351,
+          "digest": "d6e0e9d3f40365addff40015e6738f1b"
+        },
+        "2016": {
+          "n_rows": 351,
+          "digest": "53959b753a184a54dd96bf7f48c9045a"
+        },
+        "2017": {
+          "n_rows": 351,
+          "digest": "2c5d1c09505b9ef6416f021a393952fd"
+        },
+        "2018": {
+          "n_rows": 351,
+          "digest": "810880a1013a6d185b4605fc96d7dd3e"
+        },
+        "2019": {
+          "n_rows": 353,
+          "digest": "522acdae9e164a648e6886be74e2f348"
+        },
+        "2020": {
+          "n_rows": 353,
+          "digest": "efe419b79fc2cfdd274fbc3f86d81040"
+        },
+        "2021": {
+          "n_rows": 347,
+          "digest": "54f58e7f4d88ea66a6697d7a61235a03"
+        },
+        "2022": {
+          "n_rows": 358,
+          "digest": "fdcc60eb5b796e74e36e507dbf5c25f1"
+        },
+        "2023": {
+          "n_rows": 363,
+          "digest": "d97d3c8c20474e49d0fea3614300784b"
+        },
+        "2024": {
+          "n_rows": 362,
+          "digest": "b060b5092952830e046a0147e1e5434c"
+        },
+        "2025": {
+          "n_rows": 364,
+          "digest": "51b130ecf717945471a2f0e960ad0302"
+        },
+        "2026": {
+          "n_rows": 364,
+          "digest": "bb02df280458941e95193eea0f2fdb03"
+        }
+      }
+    },
+    "team_season_stats.adj_d": {
+      "n_rows": 4268,
+      "digest": "c6f02a08b6559367ecd1db35786f9a08",
+      "by_season": {
+        "2015": {
+          "n_rows": 351,
+          "digest": "9f0c68a6d169c39d37c6da4ce713cf55"
+        },
+        "2016": {
+          "n_rows": 351,
+          "digest": "66b6a5f51fc4cc7e27bfc18acf7094d8"
+        },
+        "2017": {
+          "n_rows": 351,
+          "digest": "8e73d37b4f81d349e7fbb56b517a3024"
+        },
+        "2018": {
+          "n_rows": 351,
+          "digest": "17ae0773e8dd00e06a94c46de96f4966"
+        },
+        "2019": {
+          "n_rows": 353,
+          "digest": "f6d65f26a6c235efaae4b02ce8f60b08"
+        },
+        "2020": {
+          "n_rows": 353,
+          "digest": "7767c577c1c69228c7e15ee55324856c"
+        },
+        "2021": {
+          "n_rows": 347,
+          "digest": "0d58d4c659fcad108eb9c5db85878edd"
+        },
+        "2022": {
+          "n_rows": 358,
+          "digest": "145180e8429170e62e5cfa21c2248729"
+        },
+        "2023": {
+          "n_rows": 363,
+          "digest": "194d79f8fc34c271265690d3b0fa0e39"
+        },
+        "2024": {
+          "n_rows": 362,
+          "digest": "51eb4908d94eacd4da8d7a3d194e5277"
+        },
+        "2025": {
+          "n_rows": 364,
+          "digest": "8aedfc59cbecfb3740bafe77af39397d"
+        },
+        "2026": {
+          "n_rows": 364,
+          "digest": "b75edd844ae176c2280887a9765ee66d"
+        }
+      }
+    },
+    "recruits": {
+      "n_rows": 12615,
+      "digest": "c4288159440b33f3d694ddcdfba104ef",
+      "by_season": {
+        "2014": {
+          "n_rows": 1005,
+          "digest": "004252939e75a0560506696220b7441c"
+        },
+        "2015": {
+          "n_rows": 849,
+          "digest": "35cff713a103188727e9326a8ed110a5"
+        },
+        "2016": {
+          "n_rows": 814,
+          "digest": "469130dc80a844135010e1d9bb164d0a"
+        },
+        "2017": {
+          "n_rows": 1013,
+          "digest": "9d10adafbc1d54c27c1138c87bc32e5e"
+        },
+        "2018": {
+          "n_rows": 974,
+          "digest": "65840f6c87fa136314ac66ecef0db76c"
+        },
+        "2019": {
+          "n_rows": 1070,
+          "digest": "7039bda745c0699e361e70481d12cac2"
+        },
+        "2020": {
+          "n_rows": 972,
+          "digest": "5acd5a904cffbecd70d3d184a9a7abbd"
+        },
+        "2021": {
+          "n_rows": 895,
+          "digest": "c863b88a6e0593c607208ceab691f225"
+        },
+        "2022": {
+          "n_rows": 1022,
+          "digest": "70659dc5d8d122e4dc1e4e35e7e9f4af"
+        },
+        "2023": {
+          "n_rows": 1046,
+          "digest": "a4254788c5fccecce71c6503d0997699"
+        },
+        "2024": {
+          "n_rows": 917,
+          "digest": "7530a28df00a275b779b0cc598cc9054"
+        },
+        "2025": {
+          "n_rows": 883,
+          "digest": "a4d1e91a7a9089e7868234d86fb9c170"
+        },
+        "2026": {
+          "n_rows": 729,
+          "digest": "d0997665eb235a9ca806725e0fad1663"
+        },
+        "2027": {
+          "n_rows": 426,
+          "digest": "959df6e38add79bcab73fe9122abd827"
+        }
+      }
+    },
+    "transfers": {
+      "n_rows": 7208,
+      "digest": "ff4df21b998b1cb2cf7c95ea50226f53",
+      "by_season": {
+        "2015": {
+          "n_rows": 2,
+          "digest": "ea34d64d76fc3c974ac2d36e131cefec"
+        },
+        "2016": {
+          "n_rows": 2,
+          "digest": "4c48cca35f81e807ee24c1690e4e8da6"
+        },
+        "2017": {
+          "n_rows": 7,
+          "digest": "b3e42ad251f657396faa72e79d5bcb35"
+        },
+        "2018": {
+          "n_rows": 19,
+          "digest": "ae4fc5a72771d905b6e2406cf2f3a9b3"
+        },
+        "2019": {
+          "n_rows": 59,
+          "digest": "79883517a5d743c6d7b9b1e3b2952c06"
+        },
+        "2020": {
+          "n_rows": 371,
+          "digest": "572409aa32c2083c1209ea6c5d4c0a83"
+        },
+        "2021": {
+          "n_rows": 621,
+          "digest": "a48dd596471276576532b6d17dc8aff9"
+        },
+        "2022": {
+          "n_rows": 734,
+          "digest": "69d5bb9691b806ca57bef16bd6f8dc44"
+        },
+        "2023": {
+          "n_rows": 943,
+          "digest": "2a1bc842435e61f317f2b5896d6183ec"
+        },
+        "2024": {
+          "n_rows": 1224,
+          "digest": "1415e5c923590e130658eb63322dbab4"
+        },
+        "2025": {
+          "n_rows": 1641,
+          "digest": "d9edb1a700b3aa45cdabca593ab2d4f9"
+        },
+        "2026": {
+          "n_rows": 1585,
+          "digest": "a19ac05b577ae7d93ebef26f2aae24bd"
+        }
+      }
+    },
+    "draft_entrants": {
+      "n_rows": 545,
+      "digest": "4389876ad4bfc6c7738cdd40f25c9ca9",
+      "by_season": {
+        "2015": {
+          "n_rows": 46,
+          "digest": "3c2f200fadd85f197a7da1d2607ca41b"
+        },
+        "2016": {
+          "n_rows": 44,
+          "digest": "a9adcd40947701f6b448b76b4c4acbe5"
+        },
+        "2017": {
+          "n_rows": 50,
+          "digest": "c8acaac52b75023c89299cf88e326e1b"
+        },
+        "2018": {
+          "n_rows": 51,
+          "digest": "bc301e95fce83aff1d97fab4720325d1"
+        },
+        "2019": {
+          "n_rows": 52,
+          "digest": "a297cc6f1d23ef98aaed8aee8cc40a60"
+        },
+        "2020": {
+          "n_rows": 48,
+          "digest": "e13c65d1393bf804d3698b35a02dcce4"
+        },
+        "2021": {
+          "n_rows": 50,
+          "digest": "5a1505f224245ac4278031e247c69610"
+        },
+        "2022": {
+          "n_rows": 44,
+          "digest": "38fc021dfb4c04b571fbfda5f9a7cae3"
+        },
+        "2023": {
+          "n_rows": 46,
+          "digest": "e36aa01edd776021d706f315e1c33a64"
+        },
+        "2024": {
+          "n_rows": 43,
+          "digest": "94f59d57da4d7f927ed2cf4830c6f209"
+        },
+        "2025": {
+          "n_rows": 46,
+          "digest": "30157140f18e4af75b42909092f3ce06"
+        },
+        "2026": {
+          "n_rows": 25,
+          "digest": "496f80ef62c5f7402332c5e2e3ddda77"
+        }
+      }
+    },
+    "player_departures": {
+      "n_rows": 1,
+      "digest": "d2c73486cde8e33352522936e54234c1",
+      "by_season": {
+        "2026": {
+          "n_rows": 1,
+          "digest": "d2c73486cde8e33352522936e54234c1"
+        }
+      }
+    },
+    "player_returns": {
+      "n_rows": 236,
+      "digest": "392799f17c28b2a89a92e191e7453ceb",
+      "by_season": {
+        "2026": {
+          "n_rows": 236,
+          "digest": "392799f17c28b2a89a92e191e7453ceb"
+        }
+      }
+    }
+  },
+  "oof_provenance": {
+    "trajectory_oof_predictions": {
+      "n_rows": 25325,
+      "digest": "73240ca03c1b2cba131dc5a468060d5c"
+    },
+    "freshman_oof_predictions": {
+      "n_rows": 5986,
+      "digest": "9a74e6da0507d7b12b5a9219aafc8a8a"
+    }
+  },
+  "final_n_estimators": 160,
+  "walk_forward": {
+    "walk_from": 2021,
+    "per_season": {
+      "2021": {
+        "mae": 4.079745900312392,
+        "rmse": 5.065352298918096,
+        "r2": 0.5579644243960586,
+        "bias": -2.07597420620547,
+        "n": 334
+      },
+      "2022": {
+        "mae": 3.585994461902542,
+        "rmse": 4.495622381318723,
+        "r2": 0.6450040013874486,
+        "bias": -0.01024787403468781,
+        "n": 326
+      },
+      "2023": {
+        "mae": 3.6359150586826656,
+        "rmse": 4.577956404204657,
+        "r2": 0.6304340583404044,
+        "bias": -1.1296554899689402,
+        "n": 328
+      },
+      "2024": {
+        "mae": 3.6832324093301847,
+        "rmse": 4.612213081049046,
+        "r2": 0.6106164808997555,
+        "bias": -1.793407210292536,
+        "n": 337
+      },
+      "2025": {
+        "mae": 3.268481604688027,
+        "rmse": 4.187117075034354,
+        "r2": 0.7193961367626733,
+        "bias": 0.1687208807920786,
+        "n": 324
+      },
+      "2026": {
+        "mae": 3.6910620154509153,
+        "rmse": 4.641867764974507,
+        "r2": 0.6763370087853204,
+        "bias": -0.8217248618359428,
+        "n": 312
+      }
+    },
+    "pooled": {
+      "mae": 3.659407534531545,
+      "rmse": 4.6060686283016405,
+      "r2": 0.643618498502021,
+      "bias": -0.9552952646111743,
+      "n": 1961
+    }
+  },
+  "backtest_loso": {
+    "pooled_mae": 3.6369644862137833,
+    "naive_mae": 6.400249387297654,
+    "per_season": {
+      "2016": {
+        "mae": 3.5931806928081578,
+        "n": 331
+      },
+      "2017": {
+        "mae": 3.5758561112941747,
+        "n": 332
+      },
+      "2018": {
+        "mae": 3.5878905927643454,
+        "n": 336
+      },
+      "2019": {
+        "mae": 3.56985101460258,
+        "n": 327
+      },
+      "2020": {
+        "mae": 4.217227635603092,
+        "n": 338
+      },
+      "2021": {
+        "mae": 3.7234713523475604,
+        "n": 334
+      },
+      "2022": {
+        "mae": 3.623602831342184,
+        "n": 326
+      },
+      "2023": {
+        "mae": 3.5370445854362824,
+        "n": 328
+      },
+      "2024": {
+        "mae": 3.560646624316239,
+        "n": 337
+      },
+      "2025": {
+        "mae": 3.3118659852396757,
+        "n": 324
+      },
+      "2026": {
+        "mae": 3.6894445260933506,
+        "n": 312
+      }
+    }
+  }
+}

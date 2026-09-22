@@ -75,15 +75,19 @@ struct ProjectedTeam {
     /// `None` for too-thin rosters.
     midpoint_adj_em: Option<f32>,
     /// Projected next-season offensive efficiency (absolute ~105), from the
-    /// AdjO half of the NET+SPLIT decomposition — blended over the same
-    /// floor/ceiling scenarios and baseline-shrunk like `midpoint_adj_em`.
-    /// Display-only descriptive band; the served net (`midpoint_adj_em`) is
-    /// untouched. `None` for too-thin rosters.
+    /// AdjO half of the NET + O + D decomposition — blended over the same
+    /// floor/ceiling scenarios and baseline-shrunk like `midpoint_adj_em`,
+    /// then reconciled with the AdjD half to the served net
+    /// (`reconcile_split`, #378). Display-only descriptive band; the served
+    /// net (`midpoint_adj_em`) is untouched. `None` for too-thin rosters.
     projected_adj_o: Option<f32>,
-    /// Projected next-season defensive efficiency (absolute ~105), DERIVED
-    /// as `projected_adj_o − midpoint_adj_em` so the split reconciles
-    /// exactly to the served net (lower = better defense, KenPom
-    /// convention). `None` for too-thin rosters.
+    /// Projected next-season defensive efficiency (absolute ~105, lower =
+    /// better defense, KenPom convention), from the AdjD half — its own
+    /// model, anchored on the program's own defensive history — reconciled
+    /// with the AdjO half so `projected_adj_o − projected_adj_d` equals
+    /// `midpoint_adj_em` exactly (#378). Until #378 this was derived as
+    /// `AdjO − AdjEM`, which gave the split no defensive information at all.
+    /// `None` for too-thin rosters.
     projected_adj_d: Option<f32>,
     /// The Future page's eligibility toggle (#346): the headline with the
     /// team's 5-in-5 eligibility cases treated as ALL cleared (`_in`) or ALL
@@ -337,6 +341,9 @@ const PROJECTION_OFFSET: f32 = cstat_core::roster_projection::PROJECTION_OFFSET;
 /// [`cstat_core::roster_projection::transition_shrink_weight`]) — the shared
 /// `score_projection_adj_em` derives the same weight from the same roster, so
 /// this route and `compute-projections` never diverge.
+/// One scored, shrunk and reconciled scenario headline: `(net, adjo, adjd)`.
+type SplitHeadline = (f32, f32, f32);
+
 fn shrink(raw: f32, baseline: Option<f32>, weight: f32) -> f32 {
     match baseline {
         Some(b) => weight * b + (1.0 - weight) * raw + PROJECTION_OFFSET,
@@ -549,6 +556,23 @@ async fn projection_list(
                 Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
             )
         })?;
+    // The AdjD half's anchor and add-back (#378), same shape as the O half's.
+    let baseline_d_map = fetch_baseline_adj_d(&state.db.pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("baseline AdjD fetch failed: {e}") })),
+            )
+        })?;
+    let league_mean_d = fetch_league_mean_adj_d(&state.db.pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("league mean AdjD fetch failed: {e}") })),
+            )
+        })?;
 
     // Actual target-season AdjEM, keyed by base-season team_id. Empty
     // for the live forecast year (target season not played yet) — those
@@ -632,6 +656,7 @@ async fn projection_list(
     for p in &projections {
         let baseline = baseline_map.get(&p.team_id).copied();
         let baseline_o = baseline_o_map.get(&p.team_id).copied();
+        let baseline_d = baseline_d_map.get(&p.team_id).copied();
         let actual = actual_map.get(&p.team_id).copied();
         let p_return = mean_return_probability(p, &mock_by_name);
         let p_draft = mean_draft_return_probability(p, &mock_by_name);
@@ -646,6 +671,8 @@ async fn projection_list(
             &cam_od_map,
             baseline_o,
             league_mean_o,
+            baseline_d,
+            league_mean_d,
         ) else {
             continue;
         };
@@ -705,6 +732,8 @@ fn predict_team(
     cam_od: &std::collections::HashMap<Uuid, (f32, f32)>,
     baseline_o: Option<f32>,
     league_mean_o: f32,
+    baseline_d: Option<f32>,
+    league_mean_d: f32,
 ) -> Option<ProjectedTeam> {
     // Recruits count toward the qualifying-size gate: a returners-thin
     // team with a strong freshman class (e.g. Duke with 4 incoming
@@ -844,18 +873,22 @@ fn predict_team(
     // Every team produces a row — too-thin rosters get null predictions
     // and a `too_thin = true` flag instead of being silently dropped.
     // This keeps "what happened to X?" auditable from the response.
-    // `adjo_floor`/`adjo_ceiling` are the already-shrunk AdjO bounds (or
-    // None for too-thin); blended on the same `p_return` weight as the net,
-    // then AdjD derived as AdjO − AdjEM so the split reconciles exactly.
-    // `eligibility` carries the two toggle headlines as already-shrunk
-    // `(net, adjo)` pairs — `(in, out)` — or `None` for a team with no
-    // eligibility case, where both collapse onto the midpoint.
+    // `adjo_*` / `adjd_*` are the already-shrunk AND already-reconciled O/D
+    // bounds (or None for too-thin): `reconcile_split` is linear, so
+    // reconciling each bound and then blending on the same `p_return` as the
+    // net leaves `projected_adj_o − projected_adj_d == midpoint_adj_em`
+    // exactly. `eligibility` carries the two toggle headlines as
+    // already-shrunk, already-reconciled `(net, adjo, adjd)` triples —
+    // `(in, out)` — or `None` for a team with no eligibility case, where
+    // both collapse onto the midpoint.
     let base = |floor: Option<f32>,
                 ceiling: Option<f32>,
                 too_thin: bool,
                 adjo_floor: Option<f32>,
                 adjo_ceiling: Option<f32>,
-                eligibility: Option<((f32, f32), (f32, f32))>,
+                adjd_floor: Option<f32>,
+                adjd_ceiling: Option<f32>,
+                eligibility: Option<(SplitHeadline, SplitHeadline)>,
                 talent: Option<(f32, f32)>,
                 roster_raw: Option<f32>|
      -> ProjectedTeam {
@@ -864,13 +897,16 @@ fn predict_team(
         };
         let midpoint_adj_em = blend(floor, ceiling);
         let projected_adj_o = blend(adjo_floor, adjo_ceiling);
-        let projected_adj_d = projected_adj_o.zip(midpoint_adj_em).map(|(o, em)| o - em);
+        let projected_adj_d = blend(adjd_floor, adjd_ceiling);
         let (elig_in, elig_out) = match eligibility {
             Some((i, o)) => (Some(i), Some(o)),
-            None => (
-                midpoint_adj_em.zip(projected_adj_o),
-                midpoint_adj_em.zip(projected_adj_o),
-            ),
+            None => {
+                let mid = midpoint_adj_em
+                    .zip(projected_adj_o)
+                    .zip(projected_adj_d)
+                    .map(|((em, o), d)| (em, o, d));
+                (mid, mid)
+            }
         };
         ProjectedTeam {
             team_id: p.team_id,
@@ -881,12 +917,12 @@ fn predict_team(
             midpoint_adj_em,
             projected_adj_o,
             projected_adj_d,
-            adj_em_eligibility_in: elig_in.map(|(em, _)| em),
-            adj_em_eligibility_out: elig_out.map(|(em, _)| em),
-            adj_o_eligibility_in: elig_in.map(|(_, o)| o),
-            adj_o_eligibility_out: elig_out.map(|(_, o)| o),
-            adj_d_eligibility_in: elig_in.map(|(em, o)| o - em),
-            adj_d_eligibility_out: elig_out.map(|(em, o)| o - em),
+            adj_em_eligibility_in: elig_in.map(|(em, _, _)| em),
+            adj_em_eligibility_out: elig_out.map(|(em, _, _)| em),
+            adj_o_eligibility_in: elig_in.map(|(_, o, _)| o),
+            adj_o_eligibility_out: elig_out.map(|(_, o, _)| o),
+            adj_d_eligibility_in: elig_in.map(|(_, _, d)| d),
+            adj_d_eligibility_out: elig_out.map(|(_, _, d)| d),
             returning_count: p.returning.len(),
             returning_cam_v3_sum,
             returning_projected_cam_v3_sum,
@@ -945,54 +981,67 @@ fn predict_team(
         // qualifying-player roster (no freshmen / recruits modeled, so
         // the rate-stat aggregates over-weight the few starters). Surface
         // the row with metadata so the UI can show "—" and a tooltip.
-        return Some(base(None, None, true, None, None, None, None, None));
+        return Some(base(
+            None, None, true, None, None, None, None, None, None, None,
+        ));
     }
 
-    // Score each scenario with the roster-impact model, AND the AdjO half
-    // on the identical feature vector (one build, two model runs). Returns
-    // (net AdjEM, AdjO); AdjD is derived downstream as AdjO − AdjEM.
+    // Score each scenario with the roster-impact model, AND the AdjO and
+    // AdjD halves on the identical feature vector (one build, three model
+    // runs). Returns (net AdjEM, AdjO, AdjD); the halves are reconciled to
+    // the net downstream (`reconcile_split`, #378).
     // Overwrite each returner / arrival's `cam_v3` with the trajectory
     // model's projection (recruits already carry the freshman model's
     // value from `freshman_row`); `build_roster_impact_features`
     // then does its own cam_v3-ranked canonical-MPG rotation
     // normalization — no separate `project_rotation` pass needed.
-    // Returns (net AdjEM, AdjO) for the scenario, or None on an ONNX error
+    // Returns (net AdjEM, AdjO, AdjD) for the scenario, or None on an ONNX error
     // (logged) so the caller bails the whole team — matches the prior
     // per-scenario error handling without naming `ort::Error` (not a direct
     // dep of this crate).
     // The third element is the rotation talent `(cam_wmean, cam_sum)` read off
     // the same vector, so the displayed number cannot drift from the scored one.
-    let score = |eligibility: bool, draft: bool, label: &str| -> Option<(f32, f32, (f32, f32))> {
-        let mut roster = p.materialize(eligibility, draft);
-        apply_projected_cam_v3(&mut roster, projected_cam);
-        let feats =
-            build_roster_impact_features(&roster, p.outbound_cam_v3_sum, p.inbound_cam_v3_sum);
-        let net = match predictor.predict_roster_impact(&feats) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(team = %p.team_name, error = ?e, "{label} net predict failed");
-                return None;
-            }
+    let score =
+        |eligibility: bool, draft: bool, label: &str| -> Option<(SplitHeadline, (f32, f32))> {
+            let mut roster = p.materialize(eligibility, draft);
+            apply_projected_cam_v3(&mut roster, projected_cam);
+            let feats =
+                build_roster_impact_features(&roster, p.outbound_cam_v3_sum, p.inbound_cam_v3_sum);
+            let net = match predictor.predict_roster_impact(&feats) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(team = %p.team_name, error = ?e, "{label} net predict failed");
+                    return None;
+                }
+            };
+            // The AdjO model predicts the offset from the base season's league
+            // mean (`ROSTER_ADJO_TARGET`, #368); the mean is added back here so
+            // everything downstream — the anchor, the blend, the derived AdjD —
+            // stays on the absolute scale it always used.
+            let adjo = match predictor.predict_roster_adjo(&feats) {
+                Ok(v) => v + league_mean_o,
+                Err(e) => {
+                    tracing::warn!(team = %p.team_name, error = ?e, "{label} adjo predict failed");
+                    return None;
+                }
+            };
+            // Same construction for the D half (`ROSTER_ADJD_TARGET`, #378).
+            let adjd = match predictor.predict_roster_adjd(&feats) {
+                Ok(v) => v + league_mean_d,
+                Err(e) => {
+                    tracing::warn!(team = %p.team_name, error = ?e, "{label} adjd predict failed");
+                    return None;
+                }
+            };
+            let talent = (
+                feats[ROSTER_IMPACT_CAM_WMEAN_SLOT],
+                feats[ROSTER_IMPACT_CAM_SUM_SLOT],
+            );
+            Some(((net, adjo, adjd), talent))
         };
-        // The AdjO model predicts the offset from the base season's league
-        // mean (`ROSTER_ADJO_TARGET`, #368); the mean is added back here so
-        // everything downstream — the anchor, the blend, the derived AdjD —
-        // stays on the absolute scale it always used.
-        let adjo = match predictor.predict_roster_adjo(&feats) {
-            Ok(v) => v + league_mean_o,
-            Err(e) => {
-                tracing::warn!(team = %p.team_name, error = ?e, "{label} adjo predict failed");
-                return None;
-            }
-        };
-        let talent = (
-            feats[ROSTER_IMPACT_CAM_WMEAN_SLOT],
-            feats[ROSTER_IMPACT_CAM_SUM_SLOT],
-        );
-        Some((net, adjo, talent))
-    };
-    let (floor_raw, floor_o_raw, floor_talent) = score(false, false, "floor")?;
-    let (ceiling_raw, ceiling_o_raw, ceiling_talent) = score(true, true, "ceiling")?;
+    let ((floor_raw, floor_o_raw, floor_d_raw), floor_talent) = score(false, false, "floor")?;
+    let ((ceiling_raw, ceiling_o_raw, ceiling_d_raw), ceiling_talent) =
+        score(true, true, "ceiling")?;
     // Expected rotation talent at the same `p_return` the midpoint blends on.
     let talent = (
         p_return * ceiling_talent.0 + (1.0 - p_return) * floor_talent.0,
@@ -1008,10 +1057,29 @@ fn predict_team(
     // materializer must not drift.
     let blended_raw = p_return * ceiling_raw + (1.0 - p_return) * floor_raw;
     let blended_o_raw = p_return * ceiling_o_raw + (1.0 - p_return) * floor_o_raw;
+    let blended_d_raw = p_return * ceiling_d_raw + (1.0 - p_return) * floor_d_raw;
     let anchor =
         cstat_core::roster_projection::program_anchor(baseline, p.program_level, blended_raw);
     let anchor_o =
         cstat_core::roster_projection::program_anchor(baseline_o, p.program_level_o, blended_o_raw);
+    // The D half anchors on the program's own defensive history (#378). Lower
+    // is better on this scale, and `program_anchor` is sign-agnostic: it
+    // shrinks `baseline_d` toward `program_level_d` by whatever the roster's
+    // raw D does not corroborate, exactly as the other two halves.
+    let anchor_d =
+        cstat_core::roster_projection::program_anchor(baseline_d, p.program_level_d, blended_d_raw);
+    // Shrink all three halves of a scenario at the served weight, then
+    // reconcile the O and D halves to the net so the identity holds per bound
+    // (and, since the blend is linear, on the served midpoint too).
+    let shrink_split = |net_raw: f32, o_raw: f32, d_raw: f32| -> SplitHeadline {
+        let net = shrink(net_raw, anchor, baseline_weight);
+        let (o, d) = cstat_core::roster_projection::reconcile_split(
+            net,
+            shrink(o_raw, anchor_o, baseline_weight),
+            shrink(d_raw, anchor_d, baseline_weight),
+        );
+        (net, o, d)
+    };
 
     // Baseline-shrink both bounds at the turnover-aware weight. The band
     // shrinks in width by `(1 - baseline_weight)` but stays internally
@@ -1028,36 +1096,37 @@ fn predict_team(
     //   out: eligibility denied  = p̄_draft·(roster+draft) + (1−p̄_draft)·floor
     //   in:  eligibility cleared = p̄_draft·ceiling        + (1−p̄_draft)·(roster+elig)
     let eligibility = if p.has_eligibility_case() {
-        let (draft_only_raw, draft_only_o_raw, _) = score(false, true, "eligibility-out")?;
-        let (elig_only_raw, elig_only_o_raw, _) = score(true, false, "eligibility-in")?;
+        let ((draft_only_raw, draft_only_o_raw, draft_only_d_raw), _) =
+            score(false, true, "eligibility-out")?;
+        let ((elig_only_raw, elig_only_o_raw, elig_only_d_raw), _) =
+            score(true, false, "eligibility-in")?;
         let mix = |c: f32, f: f32| p_draft * c + (1.0 - p_draft) * f;
-        let out = (
-            shrink(mix(draft_only_raw, floor_raw), anchor, baseline_weight),
-            shrink(
-                mix(draft_only_o_raw, floor_o_raw),
-                anchor_o,
-                baseline_weight,
-            ),
+        let out = shrink_split(
+            mix(draft_only_raw, floor_raw),
+            mix(draft_only_o_raw, floor_o_raw),
+            mix(draft_only_d_raw, floor_d_raw),
         );
-        let inn = (
-            shrink(mix(ceiling_raw, elig_only_raw), anchor, baseline_weight),
-            shrink(
-                mix(ceiling_o_raw, elig_only_o_raw),
-                anchor_o,
-                baseline_weight,
-            ),
+        let inn = shrink_split(
+            mix(ceiling_raw, elig_only_raw),
+            mix(ceiling_o_raw, elig_only_o_raw),
+            mix(ceiling_d_raw, elig_only_d_raw),
         );
         Some((inn, out))
     } else {
         None
     };
 
+    let (floor_net, floor_o, floor_d) = shrink_split(floor_raw, floor_o_raw, floor_d_raw);
+    let (ceiling_net, ceiling_o, ceiling_d) =
+        shrink_split(ceiling_raw, ceiling_o_raw, ceiling_d_raw);
     Some(base(
-        Some(shrink(floor_raw, anchor, baseline_weight)),
-        Some(shrink(ceiling_raw, anchor, baseline_weight)),
+        Some(floor_net),
+        Some(ceiling_net),
         false,
-        Some(shrink(floor_o_raw, anchor_o, baseline_weight)),
-        Some(shrink(ceiling_o_raw, anchor_o, baseline_weight)),
+        Some(floor_o),
+        Some(ceiling_o),
+        Some(floor_d),
+        Some(ceiling_d),
         eligibility,
         Some(talent),
         Some(blended_raw),
@@ -1203,6 +1272,24 @@ async fn projection_team_detail(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
+            )
+        })?;
+    let baseline_d = fetch_baseline_adj_d(pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("baseline AdjD fetch failed: {e}") })),
+            )
+        })?
+        .get(&resolved_id)
+        .copied();
+    let league_mean_d = fetch_league_mean_adj_d(pool, base_season)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("league mean AdjD fetch failed: {e}") })),
             )
         })?;
 
@@ -1460,6 +1547,8 @@ async fn projection_team_detail(
         &cam_od_map,
         baseline_o,
         league_mean_o,
+        baseline_d,
+        league_mean_d,
     ) else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1853,6 +1942,50 @@ async fn fetch_baseline_adj_o(
         .into_iter()
         .map(|r| (r.team_id, r.adj_offense as f32))
         .collect())
+}
+
+/// Base-season AdjD per team — the shrink anchor for the projected AdjD
+/// half (#378). Same shape as `fetch_baseline_adj_o`.
+async fn fetch_baseline_adj_d(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+) -> Result<std::collections::HashMap<Uuid, f32>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        team_id: Uuid,
+        adj_defense: f64,
+    }
+    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT team_id, adj_defense
+        FROM team_season_stats
+        WHERE season = $1 AND adj_defense IS NOT NULL
+        "#,
+    )
+    .bind(base_season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.team_id, r.adj_defense as f32))
+        .collect())
+}
+
+/// The base season's D-I mean `adj_defense` — what the AdjD model's output
+/// is relative to (`cstat_core::inference::ROSTER_ADJD_TARGET`, #378). Same
+/// population and same NULL-as-error contract as `fetch_league_mean_adj_o`;
+/// the trainer stamps its per-season values as `league_mean_adjd_by_season`.
+async fn fetch_league_mean_adj_d(
+    pool: &sqlx::PgPool,
+    base_season: i32,
+) -> Result<f32, sqlx::Error> {
+    let mean: Option<f64> = sqlx::query_scalar(
+        "SELECT avg(adj_defense) FROM team_season_stats WHERE season = $1 AND adj_defense IS NOT NULL",
+    )
+    .bind(base_season)
+    .fetch_one(pool)
+    .await?;
+    mean.map(|m| m as f32).ok_or(sqlx::Error::RowNotFound)
 }
 
 /// The base season's D-I mean `adj_offense` — what the AdjO model's output
@@ -2404,6 +2537,7 @@ mod tests {
             departures_abs_cam_v3_sum: 0.0,
             program_level: None,
             program_level_o: None,
+            program_level_d: None,
         };
         // Lottery-projected declarant (0.05) next to an eligibility case (0.5).
         let mut mock = std::collections::HashMap::new();

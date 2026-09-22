@@ -88,6 +88,7 @@ NODES = (
     "freshman",
     "roster_impact",
     "roster_adjo",
+    "roster_adjd",
     "team_preseason_projection",
     "coach_season_cae",
 )
@@ -96,6 +97,7 @@ LAYER = {
     "freshman": 1,
     "roster_impact": 2,
     "roster_adjo": 2,
+    "roster_adjd": 2,
     "team_preseason_projection": 3,
     "coach_season_cae": 3,
 }
@@ -338,22 +340,29 @@ def check(
 
 
 def _boot_guard() -> dict:
-    """Would `Predictor::load` accept the two Layer 2 halves as they sit?"""
+    """Would `Predictor::load` accept the Layer 2 halves as they sit?
+
+    Three since #378: the net, the AdjO half and the AdjD half all read one
+    frame, and the Rust validator refuses a set whose `oof_provenance` stamps
+    disagree — or any half that carries none.
+    """
+    halves = ("roster_impact", "roster_adjo", "roster_adjd")
     blocks = {}
-    for node in ("roster_impact", "roster_adjo"):
+    for node in halves:
         path = provenance.MODEL_DIR / NODE_META_FILES[node]
         if not path.exists():
             return {"status": "missing", "detail": f"{path.name} not found"}
         blocks[node] = json.loads(path.read_text()).get("oof_provenance")
-    if blocks["roster_impact"] is None or blocks["roster_adjo"] is None:
+    missing = [n for n in halves if blocks[n] is None]
+    if missing:
         # The Rust validator treats absence as a hard failure, not a skip.
-        return {"status": "mismatch", "detail": "a half carries no oof_provenance stamp"}
-    if blocks["roster_impact"] != blocks["roster_adjo"]:
+        return {"status": "mismatch", "detail": f"{', '.join(missing)}: no oof_provenance stamp"}
+    if len({json.dumps(b, sort_keys=True) for b in blocks.values()}) > 1:
         return {
             "status": "mismatch",
-            "detail": "roster_impact and roster_adjo carry different OOF stamps",
+            "detail": "roster_impact, roster_adjo and roster_adjd do not all carry the same OOF stamp",
         }
-    return {"status": "ok", "detail": "both halves share one OOF snapshot"}
+    return {"status": "ok", "detail": "all three halves share one OOF snapshot"}
 
 
 _MARK = {CURRENT: "✓", CHURN: "~", STALE: "✗", UNSTAMPED: "?"}

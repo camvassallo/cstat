@@ -579,7 +579,7 @@ async fn transfer_list(
                     prior_adj_em: dest_baseline.get(&team_id).map(|v| f64::from(*v)),
                     program_level: dest_levels
                         .get(&team_id)
-                        .and_then(|(net, _)| net.map(f64::from)),
+                        .and_then(|(net, _, _)| net.map(f64::from)),
                 })
             };
             match fetch_player_trajectory_rows(&state.db.pool, &need_live).await {

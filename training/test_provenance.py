@@ -105,15 +105,21 @@ def test_every_node_input_resolves() -> None:
 
 
 def test_layer2_halves_declare_identical_inputs() -> None:
-    """`roster_impact` and `roster_adjo` share one frame via `build_dataset`.
+    """`roster_impact`, `roster_adjo` and `roster_adjd` share one frame via
+    `build_dataset`.
 
     They differ only in target column, so any divergence in their declared
     inputs is a bug in this table — and would make the report claim one half is
-    stale while the other is current, for two models that cannot disagree.
+    stale while another is current, for models that cannot disagree.
     """
     assert P.NODE_INPUTS["roster_impact"] == P.NODE_INPUTS["roster_adjo"], (
-        "the two Layer 2 halves share build_dataset; their declared inputs "
-        "must match or the staleness report contradicts itself"
+        "the Layer 2 halves share build_dataset; roster_adjo's declared inputs "
+        "must match roster_impact's or the staleness report contradicts itself"
+    )
+    # The D half reads the same frame plus its own target column, split into
+    # its own source so the shared `.adj` digest did not change for everyone.
+    assert set(P.NODE_INPUTS["roster_adjd"]) == set(P.NODE_INPUTS["roster_impact"]) | {"team_season_stats.adj_d"}, (
+        "roster_adjd must declare exactly roster_impact's inputs plus team_season_stats.adj_d"
     )
 
 
@@ -378,7 +384,7 @@ def test_staleness_propagates_to_layer2() -> None:
         "freshman does not consume the changed source and must stay current — "
         "over-propagating would make the report recommend needless retrains"
     )
-    for half in ("roster_impact", "roster_adjo"):
+    for half in ("roster_impact", "roster_adjo", "roster_adjd"):
         assert nodes[half]["verdict"] == C.STALE, (
             f"{half}'s own inputs match, but Layer 1 above it moved; without "
             f"propagation this is the #218 blind spot"
@@ -393,7 +399,7 @@ def test_staleness_propagates_to_layer2() -> None:
         "upstream" in r for r in nodes["team_preseason_projection"]["reasons"]
     )
     assert report["boot_guard"]["status"] == "ok", (
-        "the two halves genuinely share one OOF snapshot — the boot guard is "
+        "the halves genuinely share one OOF snapshot — the boot guard is "
         "right to pass, which is exactly why it cannot catch this case"
     )
     assert report["exit_code"] == 1

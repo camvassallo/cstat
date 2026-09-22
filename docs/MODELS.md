@@ -12,6 +12,7 @@ For the shape of the tree — why Layer 2 trains on Layer 1's predictions, what 
 | [Freshman model (recruit first-season CamPom)](#freshman-model-recruit-first-season-campom) | 1 | `cam_gbpm_v3_psos` | 5,995 | 13 | walk-forward MAE 2.119 | 2026-09-22 |
 | [Roster-impact calibrator (team AdjEM, served net)](#roster-impact-calibrator-team-adjem-served-net) | 2 | `adj_efficiency_margin` | 3,625 | 27 | walk-forward served MAE 5.409 (raw 5.487) | 2026-09-22 |
 | [Roster-impact AdjO half (display split)](#roster-impact-adjo-half-display-split) | 2 | `adj_offense_relative_to_base_league_mean` | 3,625 | 27 | walk-forward MAE 3.976 | 2026-09-22 |
+| [Roster-impact AdjD half (display split)](#roster-impact-adjd-half-display-split) | 2 | `adj_defense_relative_to_base_league_mean` | 3,625 | 27 | walk-forward MAE 3.659 | 2026-09-22 |
 | [Game models (margin / win / total)](#game-models-margin--win--total) | game | `home − away margin; P(home win); home + away total` | 47,502 | 49 | margin MAE 8.25, win acc 0.746 | not stamped |
 | [Point-in-time game models (pit_margin / pit_win / pit_total)](#point-in-time-game-models-pit_margin--pit_win--pit_total) | game | `home − away margin; P(home win); home + away total` | 44,338 | 49 | margin MAE 8.69, win acc 0.722 | not stamped |
 | [Legacy box-score roster model (dead)](#legacy-box-score-roster-model-dead) | legacy | `adj_efficiency_margin` | 4,248 | 36 | LOSO MAE 5.887 | not stamped |
@@ -225,7 +226,7 @@ Rank-tier mean baseline (tiers at ranks 30, 100, 250): MAE 2.563, RMSE 3.583, R�
 
 ## Layer 2 — team calibrators
 
-Trained on Layer 1's held-out PREDICTIONS, not on actual player value, so they absorb the upstream bias rather than compounding it. The failure mode is desynchronization: a Layer 1 retrain with no Layer 2 retrain.
+Trained on Layer 1's held-out PREDICTIONS, not on actual player value, so they absorb the upstream bias rather than compounding it. The failure mode is desynchronization: a Layer 1 retrain with no Layer 2 retrain. Three halves share one frame — net (served headline), AdjO and AdjD (display, reconciled to the net at serve time).
 
 ### Roster-impact calibrator (team AdjEM, served net)
 
@@ -262,7 +263,7 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 | `player_departures` | Curated non-portal, non-draft exits. | 1 | `d2c73486cde8` | no |
 | `player_returns` | Curated 5-in-5 eligibility returns (granted stays, contested widens the band). | 236 | `392799f17c28` | no |
 
-OOF snapshot the frame was cut from (the #218 boot stamp; both Layer 2 halves must agree):
+OOF snapshot the frame was cut from (the #218 boot stamp; all Layer 2 halves must agree):
 
 - `trajectory_oof_predictions`: 25,325 rows, `73240ca03c1b`
 - `freshman_oof_predictions`: 5,986 rows, `9a74e6da0507`
@@ -364,17 +365,17 @@ Pooled: MAE 5.412, RMSE 6.837, R² 0.796.
 
 - The remaining elite gap is upstream: ex-ante top-10 programs in 2024+ are still under-projected by about 4 AdjEM, and it decomposes to −0.4 per player at elite destinations plus a handful of generational recruits (`training/experiments/experiment_elite_gap.py`). Nothing on the calibrator moves it walk-forward.
 - The frame is a file (`training/frames/roster_impact_ex_ante.json`, gitignored). A Layer 1 retrain that skips the `frame` stage trains the calibrators on stale projections; the trainer compares the frame's OOF snapshot to the live tables and refuses, but only if it is run.
-- Both Layer 2 halves must carry the same `oof_provenance` stamp or the API refuses to boot (#218). Retraining this without `roster_adjo` is a hard failure, not a silent one.
+- All three Layer 2 halves must carry the same `oof_provenance` stamp or the API refuses to boot (#218). Retraining this without `roster_adjo` and `roster_adjd` is a hard failure, not a silent one.
 - The served Layer 4 constants (`PROJECTION_SHRINK_WEIGHT`, `_OVERHAUL`, `PROGRAM_ANCHOR_SHRINK`) are re-searched inside each walk-forward fold and stamped as `walk_forward.constants_refit`; the three `predict.rs` blend constants are not (#236).
 
 ### Roster-impact AdjO half (display split)
 
-Same 27-feature frame as the net calibrator, target = next-season `adj_offense` RELATIVE to the base season's league mean (#368); the serve path adds the base season's mean back. NET + SPLIT: the net headline is never touched by this model. Display-only.
+Same 27-feature frame as the net calibrator, target = next-season `adj_offense` RELATIVE to the base season's league mean (#368); the serve path adds the base season's mean back. NET + O + D: this half and the AdjD half are each nudged by half the net residual at serve time so `AdjO − AdjD` equals the served net exactly; the net headline is never touched by either. Display-only.
 
 - **Trainer:** `training/train_roster_adjo_model.py`
 - **Artifacts:** `roster_adjo_model.onnx`
 - **Meta:** `training/models/roster_adjo_model_meta.json`
-- **Served by:** `routes/projections.rs` — projected AdjO on the Future page, run live per request; AdjD is derived as AdjO − AdjEM
+- **Served by:** `routes/projections.rs` — projected AdjO on the Future page, run live per request and reconciled with the AdjD half to the net (#378)
 - **Methodology:** `docs/projections_methodology.md`
 - **Last retrain:** 2026-09-22
 
@@ -403,7 +404,7 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 | `player_departures` | Curated non-portal, non-draft exits. | 1 | `d2c73486cde8` | no |
 | `player_returns` | Curated 5-in-5 eligibility returns (granted stays, contested widens the band). | 236 | `392799f17c28` | no |
 
-OOF snapshot the frame was cut from (the #218 boot stamp; both Layer 2 halves must agree):
+OOF snapshot the frame was cut from (the #218 boot stamp; all Layer 2 halves must agree):
 
 - `trajectory_oof_predictions`: 25,325 rows, `73240ca03c1b`
 - `freshman_oof_predictions`: 5,986 rows, `9a74e6da0507`
@@ -448,6 +449,89 @@ Pooled: MAE 3.897, naive (last season) MAE 6.981.
 - Reaches prod by git deploy only — `team_preseason_projection` has no AdjO column, so no data sync can move it. That is how a stale copy survived months of routine syncs (#218).
 - Needs its own invocation. It imports `build_dataset` from the net trainer, which reads as 'the AdjO half updates itself'; it does not.
 - Exports no per-season LOSO ONNX, so running it alone leaves `projections-backtest` reading the previous net models.
+
+### Roster-impact AdjD half (display split)
+
+Mirror of the AdjO half with the target swapped: next-season `adj_defense` RELATIVE to the base season's league mean (lower is better), anchored on the program's own defensive baseline and 3-year level. Replaces deriving AdjD as `AdjO − AdjEM`, which gave the model no defensive information at all and handed the whole program premium to whichever half history said. Display-only.
+
+- **Trainer:** `training/train_roster_adjd_model.py`
+- **Artifacts:** `roster_adjd_model.onnx`
+- **Meta:** `training/models/roster_adjd_model_meta.json`
+- **Served by:** `routes/projections.rs` — projected AdjD on the Future page, run live per request and reconciled with the AdjO half to the net (#378)
+- **Methodology:** `docs/projections_methodology.md`
+- **Last retrain:** 2026-09-22
+
+#### Target and rows
+
+- **Target:** `adj_defense_relative_to_base_league_mean`; add-back at serve: league mean adj_defense of the base season (team_season_stats, every team with an AdjD)
+- **Training span:** 12 seasons, 2015–2026
+- **Rows:** 3,625
+- **Qualification gate:** `games_played >= 5 AND minutes_per_game >= 5`
+- **Decomposition:** NET+O+D reconciled: O' = O + r/2, D' = D - r/2, r = net - (O - D) at serve time (#378)
+
+#### Inputs
+
+Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` recomputes these against the live database.
+
+| source | what it is | rows | digest | nightly-rewritten |
+|---|---|---:|---|---|
+| `trajectory_oof_predictions` | Layer 1 held-out returner projections; the roster frame's returner channel. | 25,325 | `73240ca03c1b` | no |
+| `freshman_oof_predictions` | Layer 1 held-out recruit projections; the roster frame's newcomer channel. | 5,986 | `9a74e6da0507` | no |
+| `torvik_player_stats.cam_v3` | CamPom — the value currency every model downstream is denominated in. | 58,400 | `d464b895dbd7` | yes |
+| `player_archetypes` | ASSIGN half. Class labels only — the trainers read the mixture, not the scores. | 40,814 | `7c6a5d8e3da1` | yes |
+| `team_season_stats.adj` | Layer 2 targets; also the freshman model's signing-team prior. | 4,268 | `ad4a9438ef44` | yes |
+| `team_season_stats.adj_d` | The AdjD half's target. | 4,268 | `c6f02a08b655` | yes |
+| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `c4288159440b` | no |
+| `transfers` | Portal moves: the arrival and outbound channels of the composed roster. | 7,208 | `ff4df21b998b` | no |
+| `draft_entrants` | Firm draft departures (Ceiling scenario) — the composed roster's draft channel. | 545 | `4389876ad4bf` | no |
+| `player_departures` | Curated non-portal, non-draft exits. | 1 | `d2c73486cde8` | no |
+| `player_returns` | Curated 5-in-5 eligibility returns (granted stays, contested widens the band). | 236 | `392799f17c28` | no |
+
+OOF snapshot the frame was cut from (the #218 boot stamp; all Layer 2 halves must agree):
+
+- `trajectory_oof_predictions`: 25,325 rows, `73240ca03c1b`
+- `freshman_oof_predictions`: 5,986 rows, `9a74e6da0507`
+
+Training frame: `training/frames/roster_impact_ex_ante.json` (sha256 `3474323d51c6…`, 3,625 team-seasons, produced by `cstat-ingest projections-backtest --frame-out`). Composition: ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3.
+
+#### Features
+
+27 features.
+
+<details><summary>Full feature list (serve-order contract)</summary>
+
+`roster_size`, `cam_wmean`, `cam_sum`, `cam_top1`, `cam_top3_mean`, `cam_top7_mean`, `cam_count_gt5`, `cam_count_gt10`, `cam_count_gt15`, `exp_fr_share`, `exp_so_share`, `exp_jr_share`, `exp_sr_share`, `arch_wizard`, `arch_sorcerer`, `arch_warlock`, `arch_bard`, `arch_ranger`, `arch_barbarian`, `arch_paladin`, `arch_monk`, `arch_cleric`, `arch_druid`, `arch_rogue`, `arch_fighter`, `outbound_cam_v3_sum`, `inbound_cam_v3_sum`
+
+</details>
+
+#### Evaluation
+
+Walk-forward (train < S, test S) on the raw relative target; leave-one-season-out kept for continuity. Team AdjD MAE; the naive baseline is last season's AdjD. The served-blend, cohort-level judgement is `training/experiments/experiment_od_anchor.py`.
+
+**Walk-forward** (test seasons from 2021; the canonical judge, #361).
+
+| pooled | MAE | RMSE | R² | bias | n |
+|---|---:|---:|---:|---:|---:|
+| walk-forward | 3.659 | 4.606 | 0.644 | -0.96 | 1,961 |
+
+| season | MAE | RMSE | R² | bias | n |
+|---|---:|---:|---:|---:|---:|
+| 2021 | 4.080 | 5.065 | 0.558 | -2.08 | 334 |
+| 2022 | 3.586 | 4.496 | 0.645 | -0.01 | 326 |
+| 2023 | 3.636 | 4.578 | 0.630 | -1.13 | 328 |
+| 2024 | 3.683 | 4.612 | 0.611 | -1.79 | 337 |
+| 2025 | 3.268 | 4.187 | 0.719 | +0.17 | 324 |
+| 2026 | 3.691 | 4.642 | 0.676 | -0.82 | 312 |
+
+**Leave-one-season-out** (trains on later seasons too; optimistic, kept for continuity with older numbers).
+
+Pooled: MAE 3.637, naive (last season) MAE 6.400.
+
+#### Known limits
+
+- Reaches prod by git deploy only, like the AdjO half; no data sync moves it.
+- Needs its own invocation — a third half to forget. All three Layer 2 stamps must agree or the API refuses to boot.
+- Both halves still run ~1.2 low walk-forward (net unaffected): the relative target removes the level of the scoring-environment drift, not its slope.
 
 ## Game-outcome branch
 
