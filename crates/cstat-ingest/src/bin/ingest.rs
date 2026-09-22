@@ -1546,7 +1546,9 @@ async fn main() -> Result<()> {
                 if !no_resolve_teams {
                     let n =
                         cstat_ingest::ingest::recruits::resolve_team_joins(&db.pool, year).await?;
-                    println!("recruits {year}: committed_team_id resolved on {n} row(s)");
+                    println!(
+                        "recruits {year}: committed_team_id resolved or cleared on {n} row(s)"
+                    );
                 }
                 if !no_resolve_players {
                     let n = cstat_ingest::ingest::recruits::resolve_player_joins(&db.pool, year)
@@ -1624,7 +1626,9 @@ async fn main() -> Result<()> {
                 if !no_resolve_teams {
                     let n =
                         cstat_ingest::ingest::recruits::resolve_team_joins(&db.pool, year).await?;
-                    println!("recruits {year}: committed_team_id resolved on {n} row(s)");
+                    println!(
+                        "recruits {year}: committed_team_id resolved or cleared on {n} row(s)"
+                    );
                 }
                 if !no_resolve_players {
                     let n = cstat_ingest::ingest::recruits::resolve_player_joins(&db.pool, year)

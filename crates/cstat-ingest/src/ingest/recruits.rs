@@ -664,6 +664,45 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
         full_name: String,
     }
 
+    // Decommits (#259), cleared before anything else so the early return
+    // below cannot skip it: a class whose every remaining row is
+    // `Uncommitted` has an empty `needs` and still has ghosts. The recommit
+    // path only re-points rows that still carry a `committed_school`, and
+    // 247 leaves that text in place when a recruit decommits — the signal is
+    // `commit_status` flipping to `Uncommitted`. Such a row keeps its
+    // resolved `committed_team_id` forever unless something clears it, and
+    // it then goes on contributing its rating to the class-strength average
+    // of a school it is not attending. Clear both FKs, mirroring the
+    // recommit handling: `cstat_player_id` was resolved against the old
+    // team's roster and Pass 2 only writes rows where it is NULL. A row
+    // whose school text was cleared outright is the same shape (it never
+    // enters `needs`) and is caught by the same predicate. Year-scoped like
+    // everything here, so the nightly clears the live classes; the `peer`
+    // subqueries also filter on `commit_status`, which is what covers the
+    // historical classes this pass never revisits.
+    let cleared = sqlx::query(
+        r#"
+        UPDATE recruits
+        SET committed_team_id = NULL,
+            cstat_player_id = NULL
+        WHERE year = $1
+          AND committed_team_id IS NOT NULL
+          AND (committed_school IS NULL
+               OR COALESCE(commit_status, '') = 'Uncommitted')
+        "#,
+    )
+    .bind(year)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if cleared > 0 {
+        info!(
+            year,
+            cleared_decommits = cleared,
+            "cleared team FKs on decommitted recruits"
+        );
+    }
+
     // Re-score EVERY committed recruit each run — not just unresolved ones —
     // so a decommit-and-recommit to a different school re-points
     // `committed_team_id` instead of freezing it at the first school forever
@@ -673,7 +712,7 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
     // recommit while transfers didn't. Bounded work: a few thousand recruits ×
     // ~360 candidate teams, scored in Rust.
     //
-    // Decommits are excluded here as well as cleared below (#259): 247 keeps
+    // Decommits are excluded here as well as cleared above (#259): 247 keeps
     // the school text on an `Uncommitted` row, so without this gate the row
     // would be re-resolved to the old school on every run and then nulled
     // again — a write pair per decommit per night, and an `updated` count
@@ -693,7 +732,7 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
 
     if needs.is_empty() {
         info!(year, "no recruits need team resolution");
-        return Ok(0);
+        return Ok(cleared);
     }
 
     // Pick the most recent season we have teams for, capped at year+1 (the
@@ -777,36 +816,6 @@ pub async fn resolve_team_joins(pool: &PgPool, year: i32) -> Result<u64, Recruit
     .execute(pool)
     .await?;
     let n = result.rows_affected();
-
-    // Decommits (#259). The recommit path above only re-points rows that
-    // still carry a `committed_school`, and 247 leaves that text in place
-    // when a recruit decommits — the signal is `commit_status` flipping to
-    // `Uncommitted`. Such a row keeps its resolved `committed_team_id`
-    // forever unless something clears it, and it then goes on contributing
-    // its rating to the class-strength average of a school it is not
-    // attending. Clear both FKs, mirroring the recommit handling:
-    // `cstat_player_id` was resolved against the old team's roster and Pass
-    // 2 only writes rows where it is NULL. A row whose school text was
-    // cleared outright is the same shape (it never enters `needs`) and is
-    // caught by the same predicate. Year-scoped like everything here, so
-    // the nightly clears the two live classes; the `peer` subqueries also
-    // filter on `commit_status`, which is what covers historical classes
-    // this pass never revisits.
-    let cleared = sqlx::query(
-        r#"
-        UPDATE recruits
-        SET committed_team_id = NULL,
-            cstat_player_id = NULL
-        WHERE year = $1
-          AND committed_team_id IS NOT NULL
-          AND (committed_school IS NULL
-               OR COALESCE(commit_status, '') = 'Uncommitted')
-        "#,
-    )
-    .bind(year)
-    .execute(pool)
-    .await?
-    .rows_affected();
 
     info!(
         year,
