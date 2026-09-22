@@ -239,6 +239,18 @@ struct ProjectedTeam {
     /// +5.3" instead of a weight that (since #325) can be 70% on paper and
     /// 0% in effect. `None` when the roster is too thin to score.
     roster_raw_adj_em: Option<f32>,
+    /// The same raw for the two eligibility what-ifs (#381). `roster_raw_adj_em`
+    /// is the p̄-weighted roster; in the Included / Excluded views the headline
+    /// is a DIFFERENT roster, so pairing it with the weighted raw would fold
+    /// the eligibility swing into history's share and make "recent form added
+    /// X" wrong. The frontend used to drop the column rather than say that —
+    /// blanking it for 53% of the board and 31 of the top 50, since a pending
+    /// 5-in-5 case is the norm among good teams. These are the raws for those
+    /// exact rosters, so the column is correct in all three modes instead of
+    /// absent in two. `None` for a team with no pending case, where the
+    /// headline does not move and the weighted raw already applies.
+    roster_raw_eligibility_in: Option<f32>,
+    roster_raw_eligibility_out: Option<f32>,
 
     // --- Conference for the season being projected. Display + search only. ---
     // `teams.conference` is season-scoped, but the live forecast projects a
@@ -889,6 +901,7 @@ fn predict_team(
                 adjd_floor: Option<f32>,
                 adjd_ceiling: Option<f32>,
                 eligibility: Option<(SplitHeadline, SplitHeadline)>,
+                eligibility_raw: Option<(f32, f32)>,
                 talent: Option<(f32, f32)>,
                 roster_raw: Option<f32>|
      -> ProjectedTeam {
@@ -961,6 +974,8 @@ fn predict_team(
             roster_cam_wmean: talent.map(|(wmean, _)| wmean),
             roster_cam_sum: talent.map(|(_, sum)| sum),
             roster_raw_adj_em: roster_raw,
+            roster_raw_eligibility_in: eligibility_raw.map(|(i, _)| i),
+            roster_raw_eligibility_out: eligibility_raw.map(|(_, o)| o),
             // Coach fields are decorative and filled by the handler after this
             // returns (predict_team has no DB access); default to absent here.
             conference: None,
@@ -982,7 +997,7 @@ fn predict_team(
         // the rate-stat aggregates over-weight the few starters). Surface
         // the row with metadata so the UI can show "—" and a tooltip.
         return Some(base(
-            None, None, true, None, None, None, None, None, None, None,
+            None, None, true, None, None, None, None, None, None, None, None,
         ));
     }
 
@@ -1095,25 +1110,33 @@ fn predict_team(
     // thing that differs between them and the midpoint is the roster.
     //   out: eligibility denied  = p̄_draft·(roster+draft) + (1−p̄_draft)·floor
     //   in:  eligibility cleared = p̄_draft·ceiling        + (1−p̄_draft)·(roster+elig)
-    let eligibility = if p.has_eligibility_case() {
+    let (eligibility, eligibility_raw) = if p.has_eligibility_case() {
         let ((draft_only_raw, draft_only_o_raw, draft_only_d_raw), _) =
             score(false, true, "eligibility-out")?;
         let ((elig_only_raw, elig_only_o_raw, elig_only_d_raw), _) =
             score(true, false, "eligibility-in")?;
         let mix = |c: f32, f: f32| p_draft * c + (1.0 - p_draft) * f;
+        // The net raw of each what-if roster, BEFORE the anchor and shrink —
+        // the same quantity `blended_raw` is for the p̄ roster. Served so the
+        // Roster AdjEM column can follow the toggle instead of blanking
+        // (#381): pairing the p̄ raw with a swapped headline would attribute
+        // the eligibility swing to history, which is why the frontend dropped
+        // it. These are the raws for the rosters actually being shown.
+        let out_raw = mix(draft_only_raw, floor_raw);
+        let in_raw = mix(ceiling_raw, elig_only_raw);
         let out = shrink_split(
-            mix(draft_only_raw, floor_raw),
+            out_raw,
             mix(draft_only_o_raw, floor_o_raw),
             mix(draft_only_d_raw, floor_d_raw),
         );
         let inn = shrink_split(
-            mix(ceiling_raw, elig_only_raw),
+            in_raw,
             mix(ceiling_o_raw, elig_only_o_raw),
             mix(ceiling_d_raw, elig_only_d_raw),
         );
-        Some((inn, out))
+        (Some((inn, out)), Some((in_raw, out_raw)))
     } else {
-        None
+        (None, None)
     };
 
     let (floor_net, floor_o, floor_d) = shrink_split(floor_raw, floor_o_raw, floor_d_raw);
@@ -1128,6 +1151,7 @@ fn predict_team(
         Some(floor_d),
         Some(ceiling_d),
         eligibility,
+        eligibility_raw,
         Some(talent),
         Some(blended_raw),
     ))
