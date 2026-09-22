@@ -16,9 +16,11 @@ This script measures what is left, walk-forward through the served blend
          selected on the outcome, and teams that ended great are, by
          construction, the ones whose players beat their projections;
        - conditioned on the DESTINATION's prior-season AdjEM (ex-ante, the
-         cohort the projection is judged on): returners/transfers at a
-         >= 20 program run −0.4 per player in 2024+ (−0.5 at >= 25), ranked
-         freshmen −1.4, top-10 recruits −4.4 each (n=15).
+         cohort the projection is judged on): returners at a >= 20 program
+         run −0.4 per player in 2024+ (transfers −0.2; −0.4/−0.5 at >= 25),
+         ranked freshmen −0.5 (−1.3 at >= 25), top-10 recruits −2.1 (n=21)
+         — and the same cohorts were OVER-projected by +0.1..+0.5 in
+         2021–23. The sign flipped with the portal era.
      Over a 13-man rotation the ex-ante number is the −4 that remains.
 
   2. Calibrator: curvature and era terms on the linear form. Convex terms
