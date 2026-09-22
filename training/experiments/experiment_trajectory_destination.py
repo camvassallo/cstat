@@ -39,10 +39,17 @@ the team-level implication (sum of per-player bias over each destination
 team-season's rotation, by destination tier), and the paired z of each set
 against base.
 
-Run:  cd training && ./.venv/bin/python experiment_trajectory_destination.py
+Run:  cd training && ./.venv/bin/python experiments/experiment_trajectory_destination.py
 """
 
 from __future__ import annotations
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import datetime as dt
 import json

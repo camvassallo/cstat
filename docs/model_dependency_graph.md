@@ -24,6 +24,13 @@ ordering of durability is:
 Use the script to do the work. Read this to understand what the script is doing
 and why skipping a stage is not free.
 
+**What each model currently is** — inputs, target, rows, features, headline
+numbers, last retrain — is `docs/MODELS.md`, generated from the metas by
+`training/generate_models_doc.py` at the end of every chain run (#364), so it
+cannot drift from the artifacts. **What was tried and rejected** is indexed
+with its verdicts in `training/experiments/README.md`. This doc is the *why*;
+those two are the *what*.
+
 ---
 
 ## 1. The layer map
@@ -72,7 +79,7 @@ LAYER 3  derived products                         [no training]
       actuals to backtest but are the ones actually served (§3, #263)
 
 LAYER 4  hand-tuned serving constants             [NOT in the chain runner]
-  transition_blend_diagnostic.py  reads the Layer 3 dump
+  experiments/transition_blend_diagnostic.py  reads the Layer 3 dump
       -> PROJECTION_SHRINK_WEIGHT / _OVERHAUL   (roster_projection.rs, Rust const)
   cstat-ingest measure-blend-accuracy  reads team_preseason_projection
       -> PRESEASON_PEAK_WEIGHT / _DECAY_DAYS / _HOME_COURT_ADVANTAGE
@@ -260,9 +267,9 @@ and are now Rust `const`s:
 
 | Constant | Where | Tuned by |
 |---|---|---|
-| `PROJECTION_SHRINK_WEIGHT` (0.70 anchored / 0.30 unanchored) | `roster_projection.rs` | `transition_blend_diagnostic.py`, off the backtest dump |
+| `PROJECTION_SHRINK_WEIGHT` (0.70 anchored / 0.30 unanchored) | `roster_projection.rs` | `experiments/transition_blend_diagnostic.py`, off the backtest dump |
 | `PROJECTION_SHRINK_WEIGHT_OVERHAUL` (0.55 / 0.20) | `roster_projection.rs` | same |
-| `PROGRAM_ANCHOR_SHRINK` (1.0) | `roster_projection.rs` | `program_anchor_era_diagnostic.py` |
+| `PROGRAM_ANCHOR_SHRINK` (1.0) | `roster_projection.rs` | `experiments/program_anchor_era_diagnostic.py` |
 | `PRESEASON_PEAK_WEIGHT` (0.70) | `predict.rs` | `cstat-ingest measure-blend-accuracy` |
 | `PRESEASON_DECAY_DAYS` (42) | `predict.rs` | same |
 | `PRESEASON_HOME_COURT_ADVANTAGE` (3.5) | `predict.rs` | same |
@@ -296,7 +303,7 @@ materially, run both (the current values were last confirmed 2026-07-27, below):
 
 ```bash
 # From training/ — pass the dump the retrain just produced, by name.
-./.venv/bin/python transition_blend_diagnostic.py \
+./.venv/bin/python experiments/transition_blend_diagnostic.py \
     --dump eval_history/projections_backtest_per_team_full_11season_run<TAG>.json
 
 # From the REPO ROOT — MODEL_DIR defaults to the relative `training/models`,
@@ -309,7 +316,7 @@ Pass `--dump` explicitly. `load_backtest()`'s fallback picks the newest dump by
 (`…_traj60honest211_20260725`) that sort *after* a plain `run…` name — so the
 fallback can silently hand a freshly-retrained tuner a superseded dump. Tuning
 a served constant against the wrong projection generation is the #218 failure
-mode one layer over. `compute_cae.py`, `transition_blend_diagnostic.py`,
+mode one layer over. `compute_cae.py`, `experiments/transition_blend_diagnostic.py`,
 `pit_cae_backtest.py`, and `pit_program_calibration.py` all take `--dump`;
 `load_backtest` warns when name-order and mtime-order disagree.
 
@@ -611,6 +618,13 @@ healthy while serving in-sample projections — elite 2024 transfers projecting
   look-ahead guard (§3c): every training frame's features are invariant to
   the target season's data. Database-backed; the `guard` stage of
   `retrain_downstream.sh`, and an audible skip in CI.
+- `training/generate_models_doc.py --check` — `docs/MODELS.md` is
+  byte-identical to what the committed metas generate (#364). A meta
+  committed without its regenerated page fails the `Training Guards` job.
+  Database-free.
+- `training/experiments/check_imports.py` — every experiment script still
+  imports against the current trainers (#364), so a renamed trainer symbol
+  breaks the reproduction in CI rather than at the next re-run.
 
 
 ### Still convention (nothing will stop you)

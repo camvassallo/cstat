@@ -29,7 +29,7 @@ the vector as `diff_rv_*`:
 
 ## Method
 
-`training/experiment_game_value_features.py`. Build the feature matrix once with the
+`training/experiments/experiment_game_value_features.py`. Build the feature matrix once with the
 `rv` columns present, then train margin (+win) LightGBM on the **identical rows**
 (rv excluded from the completeness dropna) with vs without the 4 features,
 leave-one-season-out over 2021–2026, **5-seed-averaged**, same params as
@@ -79,7 +79,7 @@ features — CamPom absorbs the value.
 ## Reproduction
 
 ```
-cd training && ROSTER_VALUE_FEATURES=1 .venv/bin/python experiment_game_value_features.py
+cd training && ROSTER_VALUE_FEATURES=1 .venv/bin/python experiments/experiment_game_value_features.py
 ```
 
 The built matrix is cached (pickle, `CACHE_DIR`/`cstat_value_feature_matrix.pkl`), so

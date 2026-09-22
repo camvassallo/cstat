@@ -246,7 +246,7 @@ Tier-1/Tier-2 pattern). Failing only 3 means revisiting the leverage weight
 
 ## 8. Spike verdict (2026-06-12) — REJECTED as a standalone value metric
 
-The step-2 spike ran (`training/experiment_rapm_spike.py`; summaries
+The step-2 spike ran (`training/experiments/experiment_rapm_spike.py`; summaries
 `rapm_spike_2026_20260612` and `rapm_spike_stability_20260612` in
 `training/eval_history/`). Both kill-gates failed as written:
 
@@ -324,7 +324,7 @@ What shipped:
 
 The natural follow-on question — the shipped trajectory on/off block is raw
 on/off, and RAPM is 2–5× more stable year-over-year; is it the better
-*feature*? No (`training/experiment_trajectory_rapm.py`, RAPM coverage 91%
+*feature*? No (`training/experiments/experiment_trajectory_rapm.py`, RAPM coverage 91%
 of paired rows vs 89% on/off): **swapping** the on/off block for RAPM is
 decisively worse (pooled LOPO MAE 2.1282 → 2.1382, −0.0100, 1/11 pairs) —
 raw on/off's team-context "contamination" is *signal* for projecting
@@ -338,7 +338,7 @@ the second one.
 ## 9. PR plan (as executed)
 
 1. **This design doc** + ROADMAP pointer. *(Done.)*
-2. **Solver spike** — `training/experiment_rapm_spike.py`: 2026-only fit
+2. **Solver spike** — `training/experiments/experiment_rapm_spike.py`: 2026-only fit
    (onfloor corpus, zero prior), λ sweep with game-blocked CV, acceptance
    metrics 2–4 on the single season, Zuby test. *(Done — the §8 verdict;
    plus a `stability` mode for gate 1 across 2024–2026.)*
@@ -457,7 +457,7 @@ information. The pooled acceptance suite replaces it with:
 
 ### 10.6 PR plan
 
-1. **Spike** — `training/experiment_rapm_pooled.py`: career chains, shape
+1. **Spike** — `training/experiments/experiment_rapm_pooled.py`: career chains, shape
    (c) at 2–3 windows × decay grid, the §10.3 suite on 2024→2025→2026 (and
    one replay-era pair for era robustness). Go/no-go.
 2. **Shape (b)** *(conditional on 1 showing lift)* — joint fused solve,
@@ -472,7 +472,7 @@ exist. The lineups backfill remains irrelevant to this corpus (§3.2).
 
 ### 10.7 Pooled spike verdict (2026-06-12): method VALIDATED; display swap is an open product decision; model trials not pursued
 
-The spike ran (`training/experiment_rapm_pooled.py`; summary
+The spike ran (`training/experiments/experiment_rapm_pooled.py`; summary
 `rapm_pooled_spike_20260612` in eval_history). Career chains: 44,471
 player-seasons → 22,077 careers over 8 fitted seasons.
 

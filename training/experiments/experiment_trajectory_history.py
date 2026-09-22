@@ -33,6 +33,13 @@ Comparison script only; does not touch production models or the meta.
 
 from __future__ import annotations
 
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,7 +50,7 @@ from sklearn.metrics import mean_absolute_error
 
 import train_trajectory_model as base
 
-EVAL_DIR = Path(__file__).parent / "eval_history"
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval_history"  # training/eval_history
 
 # --- Extend the production query with the prior-prior (N-1) season. ---------
 # Anchored on stable landmarks so an upstream contract change fails loudly here

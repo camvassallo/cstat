@@ -42,10 +42,17 @@ half's own baseline and 3-season level), so "served" means served. Reported:
 the net cohort table + rank metrics with paired z against the direct net;
 per-season MAE and bias for AdjO and AdjD.
 
-Run:  cd training && ./.venv/bin/python experiment_od_decomposition.py
+Run:  cd training && ./.venv/bin/python experiments/experiment_od_decomposition.py
 """
 
 from __future__ import annotations
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import datetime as dt
 import json

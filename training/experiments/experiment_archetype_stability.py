@@ -33,13 +33,20 @@ against a 93% control means 86% of the achievable signal, not 80%.
 
 Usage (summary artifacts are tracked under eval_history/ by convention -- do not
 write them to the repo root, which is not gitignored for this name):
-  cd training && ./.venv/bin/python experiment_archetype_stability.py \
+  cd training && ./.venv/bin/python experiments/experiment_archetype_stability.py \
       --seasons 2022,2023,2024,2025,2026 \
       --out eval_history/archetype_stability_YYYYMMDD_summary.json
 
 Re-run after any retrain: the curve is a property of the fitted model, not a
 constant. ~30s for five seasons.
 """
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import argparse
 import json

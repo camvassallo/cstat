@@ -90,10 +90,17 @@ Result (2026-09-20, walk-forward 2021-2026, n=1958):
   test-set optimism on ex-post rows, not a training advantage — it did not
   bank. Pass `--sql-frame` to reproduce the v3 (ex-post) numbers above.
 
-Run:  cd training && ./.venv/bin/python top_band_experiment.py --dump <dump>.json
+Run:  cd training && ./.venv/bin/python experiments/top_band_experiment.py --dump <dump>.json
 """
 
 from __future__ import annotations
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import argparse
 import datetime as dt

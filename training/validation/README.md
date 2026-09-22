@@ -2,6 +2,8 @@
 
 One-off **validation / de-risk / audit** scripts — analyses that answered a
 "should we build X?" question, not part of the production training pipeline.
+(The model-feature accept/reject experiments and the blend diagnostics are in
+`training/experiments/`, indexed with their verdicts.)
 Nothing here is imported by prod code or run by CI. Prod trainers, shared libs
 (`db.py`, `features.py`, `recruit_features.py`), re-runnable acceptance gates
 (`decompose_projection_error.py`, `attribute_q1_overprojection.py`), and the
@@ -46,7 +48,12 @@ gates): `derisk_coach_quality.py`, `derisk_coaching_change.py`,
 `campom_sensitivity_sweep.py`, `compare_train_windows.py`,
 `honest_predict_via_subtraction.py`, `measure_pit_drift.py`,
 `pit_cae_backtest.py`, `pit_program_calibration.py`, `post_audit_validate.py`,
-`quantify_leakage.py`, `spike_247_baseline.py`,
-`transition_blend_diagnostic.py`, `benchmark_natstat.py`, `dump_shap_baseline.py`.
-Moving these is a larger tracked-file rename — left for a follow-up so this PR's
-diff stays reviewable. (Each would need the same path shim.)
+`quantify_leakage.py`, `spike_247_baseline.py`, `benchmark_natstat.py`,
+`dump_shap_baseline.py`. Moving these is a larger tracked-file rename — left
+for a follow-up so this PR's diff stays reviewable. (Each would need the same
+path shim.)
+
+The accept/reject experiments (`experiment_*.py`), the blend experiments and
+the two Layer 4 tuners (`transition_blend_diagnostic.py`,
+`program_anchor_era_diagnostic.py`) moved to `training/experiments/` in #364,
+which has its own index with every verdict.

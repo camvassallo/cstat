@@ -107,6 +107,13 @@ jobs:
       # The look-ahead guard (#362) needs a database and the release binary;
       # here it reports its skip so a silent pass is visible in the log.
       - run: python test_lookahead_guard.py
+      # docs/MODELS.md is generated from the model metas (#364). A meta
+      # committed without regenerating the page is the drift the page exists
+      # to prevent, so it fails here. Database-free: it reads the metas only.
+      - run: python generate_models_doc.py --check
+      # Every experiment script must still import after the move to
+      # training/experiments/ (#364). Imports only — no database, no run.
+      - run: python experiments/check_imports.py
 
   # ── Frontend ────────────────────────────────────────────
 
