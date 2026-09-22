@@ -29,7 +29,13 @@ def canonical_opset_order(onnx_model) -> None:
     retrain changed nothing, and that proof was flaky. A sorted list is a
     function of the model alone.
     """
-    entries = sorted(onnx_model.opset_import, key=lambda o: (o.domain, o.version))
+    # De-duplicated too: skl2onnx can emit the default domain twice.
+    seen: set[tuple[str, int]] = set()
+    entries = []
+    for o in sorted(onnx_model.opset_import, key=lambda o: (o.domain, o.version)):
+        if (o.domain, o.version) not in seen:
+            seen.add((o.domain, o.version))
+            entries.append(o)
     del onnx_model.opset_import[:]
     onnx_model.opset_import.extend(entries)
 

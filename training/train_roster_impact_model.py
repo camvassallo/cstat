@@ -101,6 +101,7 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
@@ -681,6 +682,48 @@ def lgb_params() -> dict:
     }
 
 
+# ---------------------------------------------------------------- calibrator
+# v5 (#363): the served calibrator is ORDINARY LEAST SQUARES on three CAM
+# aggregates. The 27-feature LightGBM it replaces had a leaf ceiling — its
+# output could not exceed ~30-32 whatever the roster, against actuals of
+# 44-47 — and, judged walk-forward through the served blend on the ex-ante
+# frame, the linear model beats it everywhere: pooled -0.084 (z=-3.1),
+# top-25 -0.44 (z=-3.0), top-10 2024+ 7.05 -> 5.69, every rank metric equal
+# or better, level-changers and overhauls better. Nothing else in the frame
+# adds to the three (experience mix, archetype shares, roster size: noise;
+# portal sums: worse, z=+4). The coefficients are the same in every fold —
+# AdjEM ~ -1.4 + 6.2*cam_wmean - 1.1*cam_top3_mean - 0.13*cam_top1 — so the
+# concentration terms are signal: a star-heavy roster under-delivers
+# relative to a deep one with the same weighted mean. `cam_sum` is collinear
+# with the weighted mean (its coefficient ~0) and is left out.
+#
+# The ONNX keeps the 27-feature contract (zero coefficients on the 24 unused
+# slots), so the Rust serve path, the boot validator and the LOSO export set
+# are untouched. `MODEL_FAMILY = "tree"` reproduces the LightGBM for
+# comparisons; it is not the served model.
+MODEL_FAMILY = "linear"
+LINEAR_FEATURES = ("cam_wmean", "cam_top3_mean", "cam_top1")
+
+
+def fit_calibrator(x: pd.DataFrame, y: pd.Series, family: str = MODEL_FAMILY, n_estimators: int | None = None):
+    """Fit one calibrator on the FULL 27-column feature frame. The linear
+    family reads only `LINEAR_FEATURES`; the tree family takes the LightGBM
+    params (fixed `n_estimators` when given, else early-stopping params)."""
+    if family == "linear":
+        return LinearRegression().fit(x[list(LINEAR_FEATURES)], y)
+    params = lgb_params()
+    if n_estimators is not None:
+        params.pop("early_stopping_rounds", None)
+        params["n_estimators"] = n_estimators
+    return lgb.LGBMRegressor(**params)
+
+
+def predict_calibrator(model, x: pd.DataFrame) -> np.ndarray:
+    if isinstance(model, LinearRegression):
+        return model.predict(x[list(LINEAR_FEATURES)])
+    return model.predict(x)
+
+
 def leave_one_season_out(df: pd.DataFrame, feature_cols: list[str]) -> dict:
     """Honest backtest: predict each season from a model trained on the
     other N-1. Same harness as `train_roster_model.py`.
@@ -698,17 +741,20 @@ def leave_one_season_out(df: pd.DataFrame, feature_cols: list[str]) -> dict:
         test = df[df["season"] == season]
         if len(test) == 0:
             continue
-        model = lgb.LGBMRegressor(**lgb_params())
-        model.fit(
-            train[feature_cols], train["adj_efficiency_margin"],
-            eval_set=[(test[feature_cols], test["adj_efficiency_margin"])],
-            eval_metric="mae",
-        )
-        # Where early stopping settled on this fold — averaged across
-        # folds to set the final-fit iteration budget (see `main`).
-        bi = model.best_iteration_
-        best_iters.append(bi if bi and bi > 0 else lgb_params()["n_estimators"])
-        preds = model.predict(test[feature_cols])
+        if MODEL_FAMILY == "linear":
+            model = fit_calibrator(train[feature_cols], train["adj_efficiency_margin"])
+        else:
+            model = fit_calibrator(train[feature_cols], train["adj_efficiency_margin"], "tree")
+            model.fit(
+                train[feature_cols], train["adj_efficiency_margin"],
+                eval_set=[(test[feature_cols], test["adj_efficiency_margin"])],
+                eval_metric="mae",
+            )
+            # Where early stopping settled on this fold — averaged across
+            # folds to set the final-fit iteration budget (see `main`).
+            bi = model.best_iteration_
+            best_iters.append(bi if bi and bi > 0 else lgb_params()["n_estimators"])
+        preds = predict_calibrator(model, test[feature_cols])
         y = test["adj_efficiency_margin"]
         mae = mean_absolute_error(y, preds)
         rmse = float(np.sqrt(mean_squared_error(y, preds)))
@@ -728,16 +774,20 @@ def leave_one_season_out(df: pd.DataFrame, feature_cols: list[str]) -> dict:
 
 def random_kfold(df: pd.DataFrame, feature_cols: list[str], n_splits: int = 5) -> dict:
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-    X = df[feature_cols].values
-    y = df["adj_efficiency_margin"].values
+    X = df[feature_cols].reset_index(drop=True)
+    y = df["adj_efficiency_margin"].reset_index(drop=True)
     maes, rmses, r2s = [], [], []
     for fold, (tr, te) in enumerate(kf.split(X), 1):
-        model = lgb.LGBMRegressor(**lgb_params())
-        model.fit(X[tr], y[tr], eval_set=[(X[te], y[te])], eval_metric="mae")
-        p = model.predict(X[te])
-        maes.append(mean_absolute_error(y[te], p))
-        rmses.append(float(np.sqrt(mean_squared_error(y[te], p))))
-        r2s.append(r2_score(y[te], p))
+        if MODEL_FAMILY == "linear":
+            model = fit_calibrator(X.iloc[tr], y.iloc[tr])
+        else:
+            model = fit_calibrator(X.iloc[tr], y.iloc[tr], "tree")
+            model.fit(X.iloc[tr], y.iloc[tr], eval_set=[(X.iloc[te], y.iloc[te])], eval_metric="mae")
+        p = predict_calibrator(model, X.iloc[te])
+        y_te = y.iloc[te]
+        maes.append(mean_absolute_error(y_te, p))
+        rmses.append(float(np.sqrt(mean_squared_error(y_te, p))))
+        r2s.append(r2_score(y_te, p))
         print(f"  fold {fold}: MAE {maes[-1]:.2f}  RMSE {rmses[-1]:.2f}  R² {r2s[-1]:.3f}")
     out = {"mae": float(np.mean(maes)), "rmse": float(np.mean(rmses)), "r2": float(np.mean(r2s))}
     print(f"  mean:    MAE {out['mae']:.2f}  RMSE {out['rmse']:.2f}  R² {out['r2']:.3f}")
@@ -772,7 +822,7 @@ def _rows(df: pd.DataFrame) -> list[dict]:
     ]
 
 
-def walk_forward_block(df: pd.DataFrame, feature_cols: list[str], n_estimators: int) -> dict:
+def walk_forward_block(df: pd.DataFrame, feature_cols: list[str], n_estimators: int | None) -> dict:
     """The canonical judge (#361): the calibrator refit walk-forward with the
     export protocol (fixed `n_estimators`, no early stopping — exactly what
     the LOSO export set and therefore the Rust backtest use), then the SERVED
@@ -794,14 +844,13 @@ def walk_forward_block(df: pd.DataFrame, feature_cols: list[str], n_estimators: 
                        disagrees with the served constants, the served
                        constants were fit to the test set
     """
-    params = lgb_params()
-    params.pop("early_stopping_rounds", None)
-    params["n_estimators"] = n_estimators
-
     def fit_predict(x_tr, y_tr, x_te):
-        return lgb.LGBMRegressor(**params).fit(x_tr, y_tr).predict(x_te)
+        m = fit_calibrator(x_tr, y_tr, MODEL_FAMILY, n_estimators)
+        if MODEL_FAMILY != "linear":
+            m.fit(x_tr, y_tr)
+        return predict_calibrator(m, x_te)
 
-    print("\n  raw calibrator, walk-forward (fixed n_estimators, the export protocol):")
+    print(f"\n  raw calibrator ({MODEL_FAMILY}), walk-forward (the export protocol):")
     raw_block, raw = regression_walk_forward(
         df[feature_cols], df["season"], df["adj_efficiency_margin"], fit_predict, RAW_WALK_FROM, "raw"
     )
@@ -868,14 +917,37 @@ def walk_forward_block(df: pd.DataFrame, feature_cols: list[str], n_estimators: 
     }
 
 
-def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -> None:
+def export_to_onnx(model, n_features: int, onnx_path: Path, feature_cols: list[str] | None = None) -> None:
+    """Write `model` as a 27-input ONNX regressor. A LightGBM goes through
+    onnxmltools; a `LinearRegression` on `LINEAR_FEATURES` is widened to the
+    full feature contract (zero coefficients on the unused slots, placed by
+    the frame's own `feature_cols` — the wire order the meta stamps) and goes
+    through skl2onnx, so the serving side sees the same `input[None, 27]` →
+    `variable` graph either way."""
     import onnxmltools
     from onnxmltools.convert.common.data_types import FloatTensorType
 
     initial_types = [("input", FloatTensorType([None, n_features]))]
-    onnx_model = onnxmltools.convert_lightgbm(
-        model.booster_, initial_types=initial_types, target_opset=15
-    )
+    if isinstance(model, LinearRegression):
+        from skl2onnx import convert_sklearn
+        from skl2onnx.common.data_types import FloatTensorType as SklFloatTensorType
+
+        if feature_cols is None:
+            raise ValueError("export_to_onnx needs the frame's feature_cols to widen a linear model")
+        cols = feature_cols
+        wide = LinearRegression()
+        wide.coef_ = np.zeros(n_features)
+        wide.intercept_ = float(model.intercept_)
+        wide.n_features_in_ = n_features
+        for name, coef in zip(LINEAR_FEATURES, model.coef_):
+            wide.coef_[cols.index(name)] = float(coef)
+        onnx_model = convert_sklearn(
+            wide, initial_types=[("input", SklFloatTensorType([None, n_features]))], target_opset=15
+        )
+    else:
+        onnx_model = onnxmltools.convert_lightgbm(
+            model.booster_, initial_types=initial_types, target_opset=15
+        )
     # Deterministic graph name (issue #222). onnxmltools defaults to a random
     # UUID here, which is the ONLY thing that differs between two exports of
     # an identical model — predictions come out bit-identical, but the file
@@ -887,8 +959,23 @@ def export_to_onnx(model: lgb.LGBMRegressor, n_features: int, onnx_path: Path) -
     onnxmltools.utils.save_model(onnx_model, str(onnx_path))
 
 
+def verify_onnx_parity(model, onnx_path: Path, x: pd.DataFrame, tol: float = 1e-3) -> float:
+    """Run the written ONNX on `x` and compare with the fitted model — the
+    converter is a third party and the widened linear model is hand-built,
+    so the file is checked before it can ship. Returns the max |diff|."""
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(str(onnx_path))
+    got = sess.run(None, {"input": x.to_numpy(np.float32)})[0].ravel()
+    want = np.asarray(predict_calibrator(model, x), dtype=np.float64)
+    diff = float(np.abs(got - want).max())
+    if diff > tol:
+        raise SystemExit(f"{onnx_path.name} disagrees with the fitted model by {diff:.4f} (> {tol})")
+    return diff
+
+
 def export_loso_models(
-    df: pd.DataFrame, feature_cols: list[str], final_n: int
+    df: pd.DataFrame, feature_cols: list[str], final_n: int | None
 ) -> list[int]:
     """Export per-target-season leave-one-season-out models for the
     end-to-end `cstat-ingest projections-backtest` (ROADMAP §5b v2 Part 2).
@@ -906,17 +993,15 @@ def export_loso_models(
     row counts for the meta JSON."""
     loso_dir = OUT_DIR / "roster_impact_loso"
     loso_dir.mkdir(parents=True, exist_ok=True)
-    params = lgb_params()
-    params.pop("early_stopping_rounds", None)
-    params["n_estimators"] = final_n
     train_ns: list[int] = []
     for season in LOSO_EXPORT_SEASONS:
         train = df[df["season"] != season]
         train_ns.append(int(len(train)))
-        model = lgb.LGBMRegressor(**params)
-        model.fit(train[feature_cols], train["adj_efficiency_margin"])
+        model = fit_calibrator(train[feature_cols], train["adj_efficiency_margin"], MODEL_FAMILY, final_n)
+        if MODEL_FAMILY != "linear":
+            model.fit(train[feature_cols], train["adj_efficiency_margin"])
         path = loso_dir / f"roster_impact_model_{season}.onnx"
-        export_to_onnx(model, len(feature_cols), path)
+        export_to_onnx(model, len(feature_cols), path, feature_cols)
         print(f"  LOSO model (excl. {season}, train n={len(train):,}) → {path}")
     return train_ns
 
@@ -949,32 +1034,39 @@ def main() -> None:
     print("Final fit on all data")
     print("=" * 60)
     X, y = df[feature_cols], df["adj_efficiency_margin"]
-    final_params = lgb_params()
-    # No held-out set on the final fit — set the iteration budget to the
-    # mean of where the LOSO folds early-stopped. Calibrated for THIS
-    # model rather than copied from train_roster_model.py; floored at 50
-    # to guard against a degenerate fold.
-    final_params.pop("early_stopping_rounds", None)
-    best_iters = loso["best_iterations"]
-    final_n = max(50, round(sum(best_iters) / len(best_iters)))
-    final_params["n_estimators"] = final_n
-    print(f"Final-fit n_estimators = {final_n}  (LOSO best-iterations: {best_iters})")
-    final = lgb.LGBMRegressor(**final_params)
-    final.fit(X, y)
+    if MODEL_FAMILY == "linear":
+        final_n = None
+        final = fit_calibrator(X, y)
+        coefficients = {"intercept": float(final.intercept_),
+                        **{f: float(c) for f, c in zip(LINEAR_FEATURES, final.coef_)}}
+        print("Final fit (OLS): " + "  ".join(f"{k} {v:+.4f}" for k, v in coefficients.items()))
+    else:
+        # No held-out set on the final fit — set the iteration budget to the
+        # mean of where the LOSO folds early-stopped; floored at 50 to guard
+        # against a degenerate fold.
+        best_iters = loso["best_iterations"]
+        final_n = max(50, round(sum(best_iters) / len(best_iters)))
+        print(f"Final-fit n_estimators = {final_n}  (LOSO best-iterations: {best_iters})")
+        final = fit_calibrator(X, y, "tree", final_n).fit(X, y)
+        coefficients = None
 
     print("\n" + "=" * 60)
     print(f"Walk-forward (the canonical judge, #361): test {WALK_FROM}+, train strictly earlier")
     print("=" * 60)
     walk = walk_forward_block(df, feature_cols, final_n)
 
-    print("\nFeature importances:")
-    importance = sorted(zip(feature_cols, final.feature_importances_), key=lambda x: -x[1])
-    for name, imp in importance:
-        print(f"  {name:<22} {imp}")
+    if coefficients is None:
+        print("\nFeature importances:")
+        importance = sorted(zip(feature_cols, final.feature_importances_), key=lambda x: -x[1])
+        for name, imp in importance:
+            print(f"  {name:<22} {imp}")
+    else:
+        importance = []
 
     onnx_path = OUT_DIR / "roster_impact_model.onnx"
-    export_to_onnx(final, len(feature_cols), onnx_path)
-    print(f"\nExported ONNX → {onnx_path}")
+    export_to_onnx(final, len(feature_cols), onnx_path, feature_cols)
+    parity = verify_onnx_parity(final, onnx_path, X)
+    print(f"\nExported ONNX → {onnx_path}  (parity with the fitted model: max |diff| {parity:.2e} over {len(X):,} rows)")
 
     print("\n" + "=" * 60)
     print("Leave-one-season-out models for projections-backtest (v2 Part 2)")
@@ -984,6 +1076,11 @@ def main() -> None:
     meta = {
         "model": "roster_impact_model",
         "target": "adj_efficiency_margin",
+        # v5 (#363): OLS on three CAM aggregates, exported on the 27-slot
+        # contract. `coefficients` IS the model; the ONNX is its wire form.
+        "model_family": MODEL_FAMILY,
+        "linear_features": list(LINEAR_FEATURES) if MODEL_FAMILY == "linear" else None,
+        "coefficients": coefficients,
         "seasons": list(SEASONS),
         "n_rows": int(len(df)),
         "n_features": len(feature_cols),
