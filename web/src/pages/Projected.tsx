@@ -854,7 +854,7 @@ function ProjectionView({ year }: { year: number }) {
           <span className="ml-auto flex items-center gap-2">
             <span
               className="text-xs text-gray-500"
-              title={`${pendingTeams} teams have players whose eligibility for next season is before a court or waiver desk (the Pending column). 50/50: each case counted at even odds — the site's forecast, and the number the team pages and the game predictor use. Included: every case clears. Excluded: none do. Declared draft entrants stay at their own probability in all three; the rank and the O/D split follow the choice.`}
+              title={`${pendingTeams} teams have players whose eligibility for next season is before a court or waiver desk (the Pending column). 50/50: each case counted at even odds — the site's forecast, and the number the team pages and the game predictor use. Included: every case clears. Excluded: none do. Declared draft entrants stay at their own probability in all three; the rank, the O/D split and Roster AdjEM follow the choice.`}
             >
               Pending eligibility
             </span>
