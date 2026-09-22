@@ -147,3 +147,5 @@ deploy.log
 # to keep on disk. See ROADMAP "CSV bulk-bootstrap for historical seasons"
 # and "Play-by-play ingestion".
 /data/natstat_csv/
+# a symlinked training/.venv (worktrees point at the main checkout) — the dir pattern above does not match a symlink
+training/.venv

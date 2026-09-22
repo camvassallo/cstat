@@ -1,5 +1,6 @@
 {
   "model": "trajectory_model",
+  "trained_at": "2026-09-22",
   "target": "cam_gbpm_v3_psos (season N+1)",
   "join_key": "torvik_pid (cross-season stable)",
   "seasons_trained_on": [
@@ -368,63 +369,63 @@
     },
     "recruits": {
       "n_rows": 12615,
-      "digest": "ee70cb219afa591e7fa8f3dbd807a770",
+      "digest": "c4288159440b33f3d694ddcdfba104ef",
       "by_season": {
         "2014": {
           "n_rows": 1005,
-          "digest": "adef7141ae5c17cb288fa11c2a2592de"
+          "digest": "004252939e75a0560506696220b7441c"
         },
         "2015": {
           "n_rows": 849,
-          "digest": "d680c0e173dad856506bf14fe7a57ad7"
+          "digest": "35cff713a103188727e9326a8ed110a5"
         },
         "2016": {
           "n_rows": 814,
-          "digest": "fb8720da4c17186aaa9c2ad5fe70bc6b"
+          "digest": "469130dc80a844135010e1d9bb164d0a"
         },
         "2017": {
           "n_rows": 1013,
-          "digest": "04f42773426804b1f7c2500a2c889ac1"
+          "digest": "9d10adafbc1d54c27c1138c87bc32e5e"
         },
         "2018": {
           "n_rows": 974,
-          "digest": "c994933cf35f8619796659f159dbe4e3"
+          "digest": "65840f6c87fa136314ac66ecef0db76c"
         },
         "2019": {
           "n_rows": 1070,
-          "digest": "83916e2ddaf392ce366368d778d0a6c6"
+          "digest": "7039bda745c0699e361e70481d12cac2"
         },
         "2020": {
           "n_rows": 972,
-          "digest": "7ac9040e064b5963f2938d8e0ee1421f"
+          "digest": "5acd5a904cffbecd70d3d184a9a7abbd"
         },
         "2021": {
           "n_rows": 895,
-          "digest": "b557e61c51891366245f3c44d822ca3a"
+          "digest": "c863b88a6e0593c607208ceab691f225"
         },
         "2022": {
           "n_rows": 1022,
-          "digest": "7ebe2355b16a53e38bdc368afff5dbc6"
+          "digest": "70659dc5d8d122e4dc1e4e35e7e9f4af"
         },
         "2023": {
           "n_rows": 1046,
-          "digest": "eaef191c3a2af78dab27e871e98376e9"
+          "digest": "a4254788c5fccecce71c6503d0997699"
         },
         "2024": {
           "n_rows": 917,
-          "digest": "58b7f63dba46721be1717f479a345261"
+          "digest": "7530a28df00a275b779b0cc598cc9054"
         },
         "2025": {
           "n_rows": 883,
-          "digest": "4502225779a514e278b194ccbc38e8db"
+          "digest": "a4d1e91a7a9089e7868234d86fb9c170"
         },
         "2026": {
           "n_rows": 729,
-          "digest": "31cce3da5a07bba38b917e84ccab9fbf"
+          "digest": "d0997665eb235a9ca806725e0fad1663"
         },
         "2027": {
           "n_rows": 426,
-          "digest": "02c703587ebcb0f96bdac4a0c21ef5ba"
+          "digest": "959df6e38add79bcab73fe9122abd827"
         }
       }
     }
@@ -792,7 +793,7 @@
   ],
   "known_limitations": [
     "Destination block carries the destination PROGRAM's strength, not the role the player will fill in it: a mid-major star who becomes the go-to option at an elite program (Lendeborg 2026, Knecht 2024) is still under-projected.",
-    "Recruit-rank deferred: ablation experiment runs after historical recruit ingest (class-of-2021\u20132025 backfill).",
+    "Recruit-rank block covers only players with a 247 recruit row (ranked recruits, classes 2014+); everyone else is the `recruit_is_ranked=0` bucket, which LightGBM splits on explicitly.",
     "Selection bias on returners: only includes players who returned for N+1; doesn't model the leave-for-draft cohort."
   ]
 }
