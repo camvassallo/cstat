@@ -48,12 +48,20 @@ COPY --from=rust-build /artifacts/lib/ /usr/local/lib/onnxruntime/
 RUN echo /usr/local/lib/onnxruntime > /etc/ld.so.conf.d/onnxruntime.conf && ldconfig
 
 COPY --from=web-build  /web/dist /app/web/dist
+# Models are copied BY NAME, so a new artifact that is committed, allowlisted in
+# .gitignore and loaded by `Predictor::load` still has to be added here or the
+# API fails to boot on deploy with "File at training/models/X.onnx does not
+# exist" — the image simply does not contain it. That is exactly what shipping
+# `roster_adjd_model.onnx` (#378/#379) did, with all six CI jobs green.
+# `crates/cstat-core/tests/dockerfile_ships_every_loaded_model.rs` now fails
+# the build instead.
 COPY training/models/margin_model.onnx \
      training/models/win_model.onnx \
      training/models/total_model.onnx \
      training/models/roster_model.onnx \
      training/models/roster_impact_model.onnx \
      training/models/roster_adjo_model.onnx \
+     training/models/roster_adjd_model.onnx \
      training/models/trajectory_mean_model.onnx \
      training/models/trajectory_q10_model.onnx \
      training/models/trajectory_q90_model.onnx \
@@ -65,6 +73,7 @@ COPY training/models/margin_model.onnx \
      training/models/roster_model_meta.json \
      training/models/roster_impact_model_meta.json \
      training/models/roster_adjo_model_meta.json \
+     training/models/roster_adjd_model_meta.json \
      training/models/trajectory_model_meta.json \
      training/models/freshman_model_meta.json \
      training/models/pit_margin_model.onnx \
