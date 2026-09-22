@@ -67,8 +67,11 @@ LAYER 2  team calibrators                         [TRAIN ON Layer 1's OOF]
                                                                    OLS on 3 CAM aggregates since #363)
                                -> roster_impact_loso/*.onnx       (gitignored, feeds backtest)
   train_roster_adjo_model.py   -> roster_adjo_model.onnx          (served, AdjO half)
-      both share that one frame via build_dataset;
-      both stamp oof_provenance; the API refuses to boot if they disagree
+  train_roster_adjd_model.py   -> roster_adjd_model.onnx          (served, AdjD half, #378)
+      all three share that one frame via build_dataset;
+      all three stamp oof_provenance; the API refuses to boot if they disagree.
+      The two halves are reconciled to the net at serve time
+      (roster_projection::reconcile_split) so AdjO − AdjD == AdjEM exactly
 
 LAYER 3  derived products                         [no training]
   cstat-ingest projections-backtest  -> per-team dump (gitignored)
@@ -211,7 +214,7 @@ Use the script. It runs the chain in dependency order and cannot skip a step:
 ```
 
 Stages, in order: `guard trajectory freshman frame roster_impact roster_adjo
-backtest cae projections`. `guard` is the look-ahead check (§3c) and is put
+roster_adjd backtest cae projections`. `guard` is the look-ahead check (§3c) and is put
 back into any `--from` plan that contains a frame-building stage. Layer 1 is opt-in; `--from` into a Layer 1 stage implies
 `--with-layer1`, because "start here and run everything after" must not
 silently drop the stage immediately following.
@@ -246,13 +249,14 @@ prod/local archetype mismatch into a committed model.
   honest, and `compute_cae.py` scores against that backtest's dump — so a stale
   LOSO set means CAE grades computed against a projection generation that no
   longer ships. Two things make it easy to miss: the files are gitignored, so
-  they never appear in `git status`, and `roster_adjo` computes LOSO metrics
-  but exports **no** per-season ONNX. Running the AdjO half alone therefore
-  leaves the backtest reading the old models.
-- **`roster_adjo` needs its own invocation.** It `import`s `build_dataset` from
-  the net trainer, which reliably creates the intuition that retraining the net
-  model updates the AdjO half. It does not. This is the single specific
-  omission that caused #218.
+  they never appear in `git status`, and `roster_adjo` / `roster_adjd` compute
+  LOSO metrics but export **no** per-season ONNX. Running a display half alone
+  therefore leaves the backtest reading the old models.
+- **`roster_adjo` and `roster_adjd` each need their own invocation.** Both
+  `import` `build_dataset` from the net trainer, which reliably creates the
+  intuition that retraining the net model updates the halves too. It does not.
+  This is the single specific omission that caused #218, and #378 added a
+  third half to forget.
 - **`cae` needs the dump `backtest` just produced,** passed explicitly with
   `--dump`. The fallback picks the newest match by *filename*, and the
   historical dumps carry descriptive tags that sort after a plain date.
@@ -440,7 +444,7 @@ about because the two halves of Layer 2 land differently.
 
 | Artifact | Layer | Reaches prod by |
 |---|---|---|
-| `*_model.onnx` + meta (committed) | 1, 2 | **git deploy** |
+| `*_model.onnx` + meta (committed) | 1, 2 | **git deploy** (the AdjO and AdjD halves reach prod by *nothing else*) |
 | `roster_impact_loso/*.onnx` | 2 | neither — gitignored, local-only, backtest input |
 | `team_preseason_projection` | 3 | **data sync** |
 | `player_season_projection` | 3 | **data sync**, whenever the `projections` stage ran. Its *values* come from the trajectory/freshman models, so a Layer 2-only retrain leaves them byte-identical — but the *season set* is not fixed, and a run that materializes a new forward season writes rows prod has never held. Gating on Layer 1 would print a push that omits exactly those rows |
@@ -457,12 +461,12 @@ about because the two halves of Layer 2 land differently.
 than leaving that to be remembered.
 
 The subtlety: **the served AdjO/AdjD split is never materialized.**
-`routes/projections.rs:641` runs `roster_adjo_model.onnx` live at request time
-and derives `projected_adj_d = projected_adj_o - midpoint_adj_em`.
-`team_preseason_projection` has no AdjO column (`migrations/023`). So the AdjO
-half reaches production **purely by git deploy** — pushing every table in the
-database would not have moved it one point. That is why a stale `roster_adjo`
-could survive months of routine syncs.
+`routes/projections.rs` runs `roster_adjo_model.onnx` and `roster_adjd_model.onnx`
+live at request time and reconciles the pair to the served net
+(`reconcile_split`, #378). `team_preseason_projection` has no AdjO or AdjD
+column (`migrations/023`). So both halves reach production **purely by git
+deploy** — pushing every table in the database would not have moved them one
+point. That is why a stale `roster_adjo` could survive months of routine syncs.
 
 The net AdjEM headline is the mirror image: served from the materialized table,
 so it moves on sync and not on deploy.
@@ -583,8 +587,9 @@ invariant will stop you; a convention will not.
 
 | Check | Catches |
 |---|---|
-| `validate_roster_impact_meta` on **both** roster metas | Feature name/order/count drift against `ROSTER_IMPACT_FEATURE_NAMES` (27 features) |
-| `validate_roster_frame_provenance` | The two Layer 2 halves trained on **different OOF snapshots** — the #218 failure. Compares the `oof_provenance` stamp; a **missing** stamp is a hard failure, not a skip, because "can't tell, carry on" is the state that produced #218 |
+| `validate_roster_impact_meta` on **all three** roster metas | Feature name/order/count drift against `ROSTER_IMPACT_FEATURE_NAMES` (27 features) |
+| `validate_roster_frame_provenance` | The three Layer 2 halves (net, AdjO, AdjD) trained on **different OOF snapshots** — the #218 failure. Compares the `oof_provenance` stamps; a **missing** stamp is a hard failure, not a skip, because "can't tell, carry on" is the state that produced #218 |
+| `validate_roster_adjo_target` / `validate_roster_adjd_target` | A display half whose meta names a target other than the relative-to-league-mean one the serve path adds back onto (`ROSTER_ADJO_TARGET` / `ROSTER_ADJD_TARGET`) |
 | `validate_trajectory_meta` / `validate_freshman_meta` | Feature contract, qualification gate, quantile-alpha labeling, and `oof_persisted == true` — a retrain that skipped `persist_*_oof()` would silently serve in-sample predictions for every historical row |
 | `FeatureCountMismatch` on `margin_model.lgb` / `pit_margin_model.lgb` | Game feature-vector width drift against `NUM_FEATURES`. Note this checks the `.lgb` TreeSHAP mirrors, not the served ONNX sessions — the game branch has no meta-drift gate as thorough as the roster branch's |
 

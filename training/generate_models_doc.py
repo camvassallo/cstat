@@ -166,7 +166,7 @@ SPECS: tuple[Spec, ...] = (
         known_limits=(
             "The remaining elite gap is upstream: ex-ante top-10 programs in 2024+ are still under-projected by about 4 AdjEM, and it decomposes to −0.4 per player at elite destinations plus a handful of generational recruits (`training/experiments/experiment_elite_gap.py`). Nothing on the calibrator moves it walk-forward.",
             "The frame is a file (`training/frames/roster_impact_ex_ante.json`, gitignored). A Layer 1 retrain that skips the `frame` stage trains the calibrators on stale projections; the trainer compares the frame's OOF snapshot to the live tables and refuses, but only if it is run.",
-            "Both Layer 2 halves must carry the same `oof_provenance` stamp or the API refuses to boot (#218). Retraining this without `roster_adjo` is a hard failure, not a silent one.",
+            "All three Layer 2 halves must carry the same `oof_provenance` stamp or the API refuses to boot (#218). Retraining this without `roster_adjo` and `roster_adjd` is a hard failure, not a silent one.",
             "The served Layer 4 constants (`PROJECTION_SHRINK_WEIGHT`, `_OVERHAUL`, `PROGRAM_ANCHOR_SHRINK`) are re-searched inside each walk-forward fold and stamped as `walk_forward.constants_refit`; the three `predict.rs` blend constants are not (#236).",
         ),
     ),
@@ -177,13 +177,15 @@ SPECS: tuple[Spec, ...] = (
         meta_file="roster_adjo_model_meta.json",
         trainer="`training/train_roster_adjo_model.py`",
         artifacts=("roster_adjo_model.onnx",),
-        served_by="`routes/projections.rs` — projected AdjO on the Future page, run live per request; AdjD is derived as AdjO − AdjEM",
+        served_by="`routes/projections.rs` — projected AdjO on the Future page, run live per request and reconciled with the AdjD half to the net (#378)",
         doc="docs/projections_methodology.md",
         description=(
             "Same 27-feature frame as the net calibrator, target = next-season "
             "`adj_offense` RELATIVE to the base season's league mean (#368); the "
-            "serve path adds the base season's mean back. NET + SPLIT: the net "
-            "headline is never touched by this model. Display-only."
+            "serve path adds the base season's mean back. NET + O + D: this half "
+            "and the AdjD half are each nudged by half the net residual at serve "
+            "time so `AdjO − AdjD` equals the served net exactly; the net headline "
+            "is never touched by either. Display-only."
         ),
         protocol=(
             "Walk-forward (train < S, test S) through the served blend for the AdjO "
@@ -194,6 +196,35 @@ SPECS: tuple[Spec, ...] = (
             "Reaches prod by git deploy only — `team_preseason_projection` has no AdjO column, so no data sync can move it. That is how a stale copy survived months of routine syncs (#218).",
             "Needs its own invocation. It imports `build_dataset` from the net trainer, which reads as 'the AdjO half updates itself'; it does not.",
             "Exports no per-season LOSO ONNX, so running it alone leaves `projections-backtest` reading the previous net models.",
+        ),
+    ),
+    Spec(
+        key="roster_adjd",
+        title="Roster-impact AdjD half (display split)",
+        layer="2",
+        meta_file="roster_adjd_model_meta.json",
+        trainer="`training/train_roster_adjd_model.py`",
+        artifacts=("roster_adjd_model.onnx",),
+        served_by="`routes/projections.rs` — projected AdjD on the Future page, run live per request and reconciled with the AdjO half to the net (#378)",
+        doc="docs/projections_methodology.md",
+        description=(
+            "Mirror of the AdjO half with the target swapped: next-season "
+            "`adj_defense` RELATIVE to the base season's league mean (lower is "
+            "better), anchored on the program's own defensive baseline and 3-year "
+            "level. Replaces deriving AdjD as `AdjO − AdjEM`, which gave the model "
+            "no defensive information at all and handed the whole program premium "
+            "to whichever half history said. Display-only."
+        ),
+        protocol=(
+            "Walk-forward (train < S, test S) on the raw relative target; "
+            "leave-one-season-out kept for continuity. Team AdjD MAE; the naive "
+            "baseline is last season's AdjD. The served-blend, cohort-level "
+            "judgement is `training/experiments/experiment_od_anchor.py`."
+        ),
+        known_limits=(
+            "Reaches prod by git deploy only, like the AdjO half; no data sync moves it.",
+            "Needs its own invocation — a third half to forget. All three Layer 2 stamps must agree or the API refuses to boot.",
+            "Both halves still run ~1.2 low walk-forward (net unaffected): the relative target removes the level of the scoring-environment drift, not its slope.",
         ),
     ),
     Spec(
@@ -270,7 +301,7 @@ SPECS: tuple[Spec, ...] = (
 #: Layer headings, in the order the page lists them.
 LAYERS: tuple[tuple[str, str, str], ...] = (
     ("1", "Layer 1 — player projection models", "These WRITE the OOF tables Layer 2 trains on. Retraining one TRUNCATEs its OOF table and invalidates every Layer 2 model beneath it."),
-    ("2", "Layer 2 — team calibrators", "Trained on Layer 1's held-out PREDICTIONS, not on actual player value, so they absorb the upstream bias rather than compounding it. The failure mode is desynchronization: a Layer 1 retrain with no Layer 2 retrain."),
+    ("2", "Layer 2 — team calibrators", "Trained on Layer 1's held-out PREDICTIONS, not on actual player value, so they absorb the upstream bias rather than compounding it. The failure mode is desynchronization: a Layer 1 retrain with no Layer 2 retrain. Three halves share one frame — net (served headline), AdjO and AdjD (display, reconciled to the net at serve time)."),
     ("game", "Game-outcome branch", "Hangs off Layer 0 directly — no edge into the roster tree. A roster-tree retrain never requires retraining these."),
     ("legacy", "Legacy", ""),
 )
@@ -366,7 +397,7 @@ def _render_inputs(meta: dict) -> list[str]:
         out.append(f"| `{name}` | {note} | {_int(entry.get('n_rows'))} | `{str(entry.get('digest', ''))[:12]}` | {nightly} |")
     oof = meta.get("oof_provenance")
     if oof:
-        out += ["", "OOF snapshot the frame was cut from (the #218 boot stamp; both Layer 2 halves must agree):", ""]
+        out += ["", "OOF snapshot the frame was cut from (the #218 boot stamp; all Layer 2 halves must agree):", ""]
         for name, entry in oof.items():
             out.append(f"- `{name}`: {_int(entry.get('n_rows'))} rows, `{str(entry.get('digest', ''))[:12]}`")
     cov = meta.get("cam_v3_coverage") or {}

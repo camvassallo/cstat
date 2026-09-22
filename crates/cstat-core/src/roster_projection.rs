@@ -400,6 +400,12 @@ pub struct ProjectedRoster {
     /// whole correction into a defense number nobody adjusted. Only the net
     /// half is backtest-validated; this one rides along for coherence.
     pub program_level_o: Option<f32>,
+    /// Same window, for `adj_defense` — the AdjD half's anchor (#378). Lower
+    /// is better, so the shrink pulls a projected defence toward the
+    /// program's own defensive level rather than toward "AdjO minus net",
+    /// which is what handed the whole program premium to the defence on an
+    /// overhaul roster at a defence-first program.
+    pub program_level_d: Option<f32>,
 }
 
 impl ProjectedRoster {
@@ -837,7 +843,7 @@ pub async fn fetch_team_rows(pool: &PgPool, base_season: i32) -> Result<Vec<Team
 }
 
 /// Each program's own level over the 3 seasons BEFORE `base_season` —
-/// `(net, offense)` means — keyed by base-season team UUID. Season-scoped
+/// `(net, offense, defense)` means — keyed by base-season team UUID. Season-scoped
 /// UUIDs mean this hops through `natstat_id` to reach the same program's
 /// older rows. The `HAVING count(*) >= 2` gate mirrors the backtest: one
 /// prior season is not a level estimate, it is another single sample, and a
@@ -850,18 +856,20 @@ pub async fn fetch_team_rows(pool: &PgPool, base_season: i32) -> Result<Vec<Team
 pub async fn fetch_program_levels(
     pool: &PgPool,
     base_season: i32,
-) -> Result<HashMap<Uuid, (Option<f32>, Option<f32>)>, sqlx::Error> {
+) -> Result<HashMap<Uuid, (Option<f32>, Option<f32>, Option<f32>)>, sqlx::Error> {
     #[derive(sqlx::FromRow)]
     struct ProgramLevelRow {
         team_id: Uuid,
         level: Option<f64>,
         level_o: Option<f64>,
+        level_d: Option<f64>,
     }
     let rows: Vec<ProgramLevelRow> = sqlx::query_as::<_, ProgramLevelRow>(
         r#"
         SELECT t_base.id AS team_id,
                AVG(tss.adj_efficiency_margin)    AS level,
-               AVG(tss.adj_offense)              AS level_o
+               AVG(tss.adj_offense)              AS level_o,
+               AVG(tss.adj_defense)              AS level_d
         FROM teams t_base
         JOIN teams t_hist ON t_hist.natstat_id = t_base.natstat_id
         JOIN team_season_stats tss ON tss.team_id = t_hist.id
@@ -880,7 +888,11 @@ pub async fn fetch_program_levels(
         .map(|r| {
             (
                 r.team_id,
-                (r.level.map(|v| v as f32), r.level_o.map(|v| v as f32)),
+                (
+                    r.level.map(|v| v as f32),
+                    r.level_o.map(|v| v as f32),
+                    r.level_d.map(|v| v as f32),
+                ),
             )
         })
         .collect())
@@ -1953,8 +1965,9 @@ pub async fn compose_all_projections(
             inbound_cam_v3_sum,
             departures_cam_v3_sum: departure_cam.signed,
             departures_abs_cam_v3_sum: departure_cam.magnitude,
-            program_level: program_level.get(&team.id).and_then(|(net, _)| *net),
-            program_level_o: program_level.get(&team.id).and_then(|(_, o)| *o),
+            program_level: program_level.get(&team.id).and_then(|(net, _, _)| *net),
+            program_level_o: program_level.get(&team.id).and_then(|(_, o, _)| *o),
+            program_level_d: program_level.get(&team.id).and_then(|(_, _, d)| *d),
         });
     }
 
@@ -2366,6 +2379,27 @@ pub const PROGRAM_ANCHOR_SHRINK: f32 = 1.0;
 /// deviation actively hurts (t=−2.73); it is already partly inside the
 /// 3-season mean, so crediting it again double-counts.
 ///
+/// Reconcile the two served halves to the served net (#378).
+///
+/// The net headline is the calibrated, backtest-validated number and is never
+/// moved by the split. The AdjO and AdjD halves are each projected and
+/// anchored on their own history, so `adj_o − adj_d` does not equal `net` on
+/// its own (mean gap 1.28 points walk-forward). Both halves take half the
+/// residual — `O' = O + r/2`, `D' = D − r/2`, `r = net − (O − D)` — which
+/// makes the identity exact and, measured walk-forward through the served
+/// blend, is better than either half alone: AdjD 3.666 → 3.553, AdjO 3.931 →
+/// 3.865 (`training/experiments/experiment_od_anchor.py`). Deriving D as
+/// `O − net` instead gave the model no defensive information at all and
+/// handed the whole program premium to whichever half history said.
+///
+/// Linear, so it commutes with the floor/ceiling blend: reconciling each
+/// bound and then blending gives the same pair as blending and then
+/// reconciling, and the blended `O' − D'` still equals the blended net.
+pub fn reconcile_split(net: f32, adj_o: f32, adj_d: f32) -> (f32, f32) {
+    let r = net - (adj_o - adj_d);
+    (adj_o + r / 2.0, adj_d - r / 2.0)
+}
+
 /// `None` program level (a young program, fewer than 2 prior seasons) returns
 /// `baseline` untouched.
 pub fn program_anchor(
@@ -2552,6 +2586,7 @@ mod tests {
             departures_abs_cam_v3_sum: 0.0,
             program_level: None,
             program_level_o: None,
+            program_level_d: None,
         };
         let ids = |rows: Vec<PlayerRow>| rows.iter().map(|r| r.player_id).collect::<Vec<_>>();
         assert_eq!(
@@ -2598,6 +2633,7 @@ mod tests {
             departures_abs_cam_v3_sum: 0.0,
             program_level: None,
             program_level_o: None,
+            program_level_d: None,
         };
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 2);
         assert_eq!(r.for_scenario(DraftScenario::Ceiling).len(), 3);
@@ -2626,6 +2662,7 @@ mod tests {
             // the un-anchored regime set this back to `None` explicitly.
             program_level: Some(0.0),
             program_level_o: Some(0.0),
+            program_level_d: Some(0.0),
         }
     }
 
@@ -2797,6 +2834,36 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_split_makes_the_identity_exact_and_moves_both_halves_equally() {
+        // Saint Mary's-shaped: net anchored high, O modest, D drifting.
+        let (o, d) = reconcile_split(20.46, 114.8, 96.0);
+        assert!((o - d - 20.46).abs() < 1e-5, "O' − D' must equal the net");
+        // r = 20.46 − 18.8 = 1.66, split evenly.
+        assert!((o - 115.63).abs() < 1e-4);
+        assert!((d - 95.17).abs() < 1e-4);
+        // Already consistent halves are untouched.
+        let (o2, d2) = reconcile_split(10.0, 110.0, 100.0);
+        assert!((o2 - 110.0).abs() < 1e-6 && (d2 - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reconcile_split_commutes_with_the_floor_ceiling_blend() {
+        // Reconcile each bound then blend == blend then reconcile, and the
+        // blended identity holds — which is what lets the route reconcile
+        // per scenario and still serve one consistent midpoint.
+        let p = 0.6_f32;
+        let (nf, of, df) = (8.0, 108.0, 101.5);
+        let (nc, oc, dc) = (12.0, 111.0, 98.0);
+        let (of2, df2) = reconcile_split(nf, of, df);
+        let (oc2, dc2) = reconcile_split(nc, oc, dc);
+        let blend = |a: f32, b: f32| p * b + (1.0 - p) * a;
+        let (o_a, d_a) = (blend(of2, oc2), blend(df2, dc2));
+        let (o_b, d_b) = reconcile_split(blend(nf, nc), blend(of, oc), blend(df, dc));
+        assert!((o_a - o_b).abs() < 1e-5 && (d_a - d_b).abs() < 1e-5);
+        assert!((o_a - d_a - blend(nf, nc)).abs() < 1e-5);
+    }
+
+    #[test]
     fn shrink_weighted_matches_default_at_stable_weight() {
         assert!(
             (shrink_adj_em_weighted(10.0, Some(20.0), PROJECTION_SHRINK_WEIGHT)
@@ -2869,6 +2936,7 @@ mod tests {
             departures_abs_cam_v3_sum: 0.0,
             program_level: None,
             program_level_o: None,
+            program_level_d: None,
         };
         // Floor: 1 returning + 1 arrival + 2 recruits = 4
         assert_eq!(r.for_scenario(DraftScenario::Floor).len(), 4);
@@ -2918,6 +2986,7 @@ mod tests {
             departures_abs_cam_v3_sum: 0.0,
             program_level: None,
             program_level_o: None,
+            program_level_d: None,
         };
         // Both recruits are present for display.
         assert_eq!(r.recruits.len(), 2);
@@ -2969,6 +3038,7 @@ mod tests {
             departures_abs_cam_v3_sum: 0.0,
             program_level: None,
             program_level_o: None,
+            program_level_d: None,
         };
         // Both recruits are present for display.
         assert_eq!(r.recruits.len(), 2);

@@ -748,10 +748,10 @@ export interface ProjectedTeam {
   departures_cam_o_sum: number;
   departures_cam_d_sum: number;
   /// Projected next-season offensive / defensive efficiency (absolute ~105,
-  /// KenPom convention — lower AdjD is better). NET+SPLIT decomposition of
-  /// the headline: AdjEM = AdjO − AdjD, so these reconcile to
-  /// `midpoint_adj_em` exactly. Display-only; the served net is untouched.
-  /// `null` for too-thin rosters.
+  /// KenPom convention — lower AdjD is better). Each is its own model,
+  /// anchored on the program's own history for that half and reconciled to
+  /// the headline, so AdjEM = AdjO − AdjD holds exactly. Display-only; the
+  /// served net is untouched. `null` for too-thin rosters.
   projected_adj_o: number | null;
   projected_adj_d: number | null;
   /// True when (returning + arrivals + recruits) is below the projection
