@@ -8,10 +8,10 @@ For the shape of the tree — why Layer 2 trains on Layer 1's predictions, what 
 
 | model | layer | target | rows | features | headline | last retrain |
 |---|---|---|---:|---:|---|---|
-| [Trajectory model (returner CamPom, season N+1)](#trajectory-model-returner-campom-season-n1) | 1 | `cam_gbpm_v3_psos` | 25,325 | 65 | walk-forward MAE 2.030 | not stamped |
-| [Freshman model (recruit first-season CamPom)](#freshman-model-recruit-first-season-campom) | 1 | `cam_gbpm_v3_psos` | 5,996 | 13 | walk-forward MAE 2.120 | not stamped |
-| [Roster-impact calibrator (team AdjEM, served net)](#roster-impact-calibrator-team-adjem-served-net) | 2 | `adj_efficiency_margin` | 3,624 | 27 | walk-forward served MAE 5.410 (raw 5.490) | 2026-09-21 |
-| [Roster-impact AdjO half (display split)](#roster-impact-adjo-half-display-split) | 2 | `adj_offense_relative_to_base_league_mean` | 3,624 | 27 | walk-forward MAE 3.985 | 2026-09-21 |
+| [Trajectory model (returner CamPom, season N+1)](#trajectory-model-returner-campom-season-n1) | 1 | `cam_gbpm_v3_psos` | 25,325 | 65 | walk-forward MAE 2.030 | 2026-09-22 |
+| [Freshman model (recruit first-season CamPom)](#freshman-model-recruit-first-season-campom) | 1 | `cam_gbpm_v3_psos` | 5,995 | 13 | walk-forward MAE 2.119 | 2026-09-22 |
+| [Roster-impact calibrator (team AdjEM, served net)](#roster-impact-calibrator-team-adjem-served-net) | 2 | `adj_efficiency_margin` | 3,625 | 27 | walk-forward served MAE 5.409 (raw 5.487) | 2026-09-22 |
+| [Roster-impact AdjO half (display split)](#roster-impact-adjo-half-display-split) | 2 | `adj_offense_relative_to_base_league_mean` | 3,625 | 27 | walk-forward MAE 3.976 | 2026-09-22 |
 | [Game models (margin / win / total)](#game-models-margin--win--total) | game | `home − away margin; P(home win); home + away total` | 47,502 | 49 | margin MAE 8.25, win acc 0.746 | not stamped |
 | [Point-in-time game models (pit_margin / pit_win / pit_total)](#point-in-time-game-models-pit_margin--pit_win--pit_total) | game | `home − away margin; P(home win); home + away total` | 44,338 | 49 | margin MAE 8.69, win acc 0.722 | not stamped |
 | [Legacy box-score roster model (dead)](#legacy-box-score-roster-model-dead) | legacy | `adj_efficiency_margin` | 4,248 | 36 | LOSO MAE 5.887 | not stamped |
@@ -37,7 +37,7 @@ Three LightGBMs (mean, q10, q90) mapping a player's season-N features to his sea
 - **Meta:** `training/models/trajectory_model_meta.json`
 - **Served by:** `cstat_core::trajectory` — PlayerDetail projection band, the roster projection's returner and arrival channel, the transfers page
 - **Methodology:** `docs/trajectory_methodology.md`
-- **Last retrain:** not stamped — predates the `trained_at` stamp (#364); the next retrain records it
+- **Last retrain:** 2026-09-22
 
 #### Target and rows
 
@@ -60,7 +60,7 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 | `player_season_stats` | Trajectory box/rate features, and the gate that decides the row set. | 58,798 | `717fdb394980` | yes |
 | `player_archetypes` | ASSIGN half. Class labels only — the trainers read the mixture, not the scores. | 40,814 | `7c6a5d8e3da1` | yes |
 | `player_on_off` | Tier-2 membership features (3 of the trajectory model's features). | 46,047 | `c89e3d918f61` | yes |
-| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `ee70cb219afa` | no |
+| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `c4288159440b` | no |
 
 #### Features
 
@@ -144,14 +144,14 @@ Per-recruit LightGBM (mean, q10, q90) from the shared 11-feature `recruit_featur
 - **Meta:** `training/models/freshman_model_meta.json`
 - **Served by:** `roster_projection::freshman_row` — the only freshman signal in the roster projection; the recruits page
 - **Methodology:** `docs/projections_methodology.md`
-- **Last retrain:** not stamped — predates the `trained_at` stamp (#364); the next retrain records it
+- **Last retrain:** 2026-09-22
 
 #### Target and rows
 
 - **Target:** `cam_gbpm_v3_psos (freshman season = recruit.year + 1)`
 - **Join key:** `recruits.cstat_player_id → torvik_player_stats.player_id`
 - **Training span:** 12 classes, 2014–2025
-- **Rows:** 5,996
+- **Rows:** 5,995
 - **Qualification gate:** `games_played >= 5 AND minutes_per_game >= 5`
 - **Band models:** quantiles q10=0.1, q90=0.9
 - **Held-out predictions persisted:** yes
@@ -165,7 +165,7 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 | `torvik_player_stats.cam_v3` | CamPom — the value currency every model downstream is denominated in. | 58,400 | `d464b895dbd7` | yes |
 | `player_season_stats` | Trajectory box/rate features, and the gate that decides the row set. | 58,798 | `717fdb394980` | yes |
 | `team_season_stats.adj` | Layer 2 targets; also the freshman model's signing-team prior. | 4,268 | `ad4a9438ef44` | yes |
-| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `ee70cb219afa` | no |
+| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `c4288159440b` | no |
 
 #### Features
 
@@ -173,14 +173,14 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 
 Top gain importance (from the fit):
 
-- `committed_team_prior_adjem` (729)
-- `peer_class_strength` (566)
-- `recruit_bmi_proxy` (447)
-- `recruit_composite_rank` (356)
-- `recruit_rank_movement` (351)
-- `recruit_composite_rating` (268)
-- `recruit_position_rank` (248)
-- `recruit_weight_lb` (233)
+- `committed_team_prior_adjem` (745)
+- `peer_class_strength` (639)
+- `recruit_bmi_proxy` (471)
+- `recruit_composite_rank` (339)
+- `recruit_rank_movement` (327)
+- `recruit_position_rank` (301)
+- `recruit_composite_rating` (277)
+- `recruit_height_in` (230)
 
 <details><summary>Full feature list (serve-order contract)</summary>
 
@@ -196,26 +196,26 @@ Walk-forward by class (train on classes strictly earlier than the test season) i
 
 | pooled | MAE | RMSE | R² | bias | n |
 |---|---:|---:|---:|---:|---:|
-| walk-forward | 2.120 | 2.855 | 0.417 | +0.15 | 2,988 |
-| LOCO, same rows | 2.091 | 2.822 | 0.431 | +0.12 | 2,988 |
-| optimism (walk-forward − same rows) | +0.029 | | | | |
+| walk-forward | 2.119 | 2.856 | 0.417 | +0.15 | 2,987 |
+| LOCO, same rows | 2.089 | 2.819 | 0.432 | +0.12 | 2,987 |
+| optimism (walk-forward − same rows) | +0.030 | | | | |
 
 | season | MAE | RMSE | R² | bias | n |
 |---|---:|---:|---:|---:|---:|
-| 2021 | 2.113 | 2.768 | 0.358 | +0.45 | 514 |
-| 2022 | 2.165 | 2.770 | 0.381 | +0.40 | 398 |
-| 2023 | 2.044 | 2.740 | 0.382 | +0.41 | 522 |
-| 2024 | 2.041 | 2.655 | 0.311 | +0.28 | 556 |
-| 2025 | 2.132 | 2.906 | 0.479 | -0.09 | 508 |
-| 2026 | 2.250 | 3.270 | 0.473 | -0.56 | 490 |
+| 2021 | 2.118 | 2.781 | 0.352 | +0.46 | 514 |
+| 2022 | 2.162 | 2.762 | 0.385 | +0.39 | 398 |
+| 2023 | 2.046 | 2.744 | 0.380 | +0.42 | 522 |
+| 2024 | 2.044 | 2.663 | 0.306 | +0.28 | 556 |
+| 2025 | 2.119 | 2.896 | 0.483 | -0.08 | 508 |
+| 2026 | 2.249 | 3.265 | 0.475 | -0.56 | 489 |
 
 **Leave-one-class-out** (trains on later seasons too; optimistic, kept for continuity with older numbers).
 
-Pooled: MAE 2.150, RMSE 2.884, R² 0.408, n 5,996.
+Pooled: MAE 2.149, RMSE 2.883, R² 0.408, n 5,995.
 
 Rank-tier mean baseline (tiers at ranks 30, 100, 250): MAE 2.563, RMSE 3.583, R² 0.086.
 
-5-fold CV (random folds, in-sample seasons): MAE 2.129, RMSE 2.860, R² 0.416.
+5-fold CV (random folds, in-sample seasons): MAE 2.127, RMSE 2.848, R² 0.419.
 
 #### Known limits
 
@@ -236,13 +236,13 @@ Ordinary least squares on three CAM aggregates of the projected roster (`cam_wme
 - **Meta:** `training/models/roster_impact_model_meta.json`
 - **Served by:** `routes/projections.rs` and `cstat-ingest compute-projections` — the Future page's projected AdjEM, the opening-week preseason anchor in `/api/predict`, the denominator of the coach grades
 - **Methodology:** `docs/projections_methodology.md`
-- **Last retrain:** 2026-09-21 (frame cut; `trained_at` not stamped)
+- **Last retrain:** 2026-09-22
 
 #### Target and rows
 
 - **Target:** `adj_efficiency_margin`
 - **Training span:** 12 seasons, 2015–2026
-- **Rows:** 3,624
+- **Rows:** 3,625
 - **Qualification gate:** `games_played >= 5 AND minutes_per_game >= 5`
 
 #### Inputs
@@ -252,12 +252,12 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 | source | what it is | rows | digest | nightly-rewritten |
 |---|---|---:|---|---|
 | `trajectory_oof_predictions` | Layer 1 held-out returner projections; the roster frame's returner channel. | 25,325 | `73240ca03c1b` | no |
-| `freshman_oof_predictions` | Layer 1 held-out recruit projections; the roster frame's newcomer channel. | 5,987 | `686969bf329d` | no |
+| `freshman_oof_predictions` | Layer 1 held-out recruit projections; the roster frame's newcomer channel. | 5,986 | `9a74e6da0507` | no |
 | `torvik_player_stats.cam_v3` | CamPom — the value currency every model downstream is denominated in. | 58,400 | `d464b895dbd7` | yes |
 | `player_archetypes` | ASSIGN half. Class labels only — the trainers read the mixture, not the scores. | 40,814 | `7c6a5d8e3da1` | yes |
 | `team_season_stats.adj` | Layer 2 targets; also the freshman model's signing-team prior. | 4,268 | `ad4a9438ef44` | yes |
-| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `ee70cb219afa` | no |
-| `transfers` | Portal moves: the arrival and outbound channels of the composed roster. | 7,208 | `f9c1f9814235` | no |
+| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `c4288159440b` | no |
+| `transfers` | Portal moves: the arrival and outbound channels of the composed roster. | 7,208 | `ff4df21b998b` | no |
 | `draft_entrants` | Firm draft departures (Ceiling scenario) — the composed roster's draft channel. | 545 | `4389876ad4bf` | no |
 | `player_departures` | Curated non-portal, non-draft exits. | 1 | `d2c73486cde8` | no |
 | `player_returns` | Curated 5-in-5 eligibility returns (granted stays, contested widens the band). | 236 | `392799f17c28` | no |
@@ -265,9 +265,9 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 OOF snapshot the frame was cut from (the #218 boot stamp; both Layer 2 halves must agree):
 
 - `trajectory_oof_predictions`: 25,325 rows, `73240ca03c1b`
-- `freshman_oof_predictions`: 5,987 rows, `686969bf329d`
+- `freshman_oof_predictions`: 5,986 rows, `9a74e6da0507`
 
-Training frame: `training/frames/roster_impact_ex_ante.json` (sha256 `5ad680997c31…`, 3,624 team-seasons, produced by `cstat-ingest projections-backtest --frame-out`). Composition: ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3.
+Training frame: `training/frames/roster_impact_ex_ante.json` (sha256 `3474323d51c6…`, 3,625 team-seasons, produced by `cstat-ingest projections-backtest --frame-out`). Composition: ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3.
 
 #### Features
 
@@ -277,10 +277,10 @@ Linear: only 3 carry weight; the other 24 slots are exported with zero coefficie
 
 | term | coefficient |
 |---|---:|
-| intercept | -1.4380 |
-| `cam_wmean` | 6.2024 |
-| `cam_top3_mean` | -1.1423 |
-| `cam_top1` | -0.1339 |
+| intercept | -1.4915 |
+| `cam_wmean` | 6.1473 |
+| `cam_top3_mean` | -1.0880 |
+| `cam_top1` | -0.1443 |
 
 <details><summary>Full feature list (serve-order contract)</summary>
 
@@ -299,66 +299,66 @@ Raw calibrator (before the blend), walk-forward from 2019:
 
 | pooled | MAE | RMSE | R² | bias | n |
 |---|---:|---:|---:|---:|---:|
-| walk-forward raw | 5.433 | 6.872 | 0.794 | +0.01 | 2,625 |
-| LOSO raw, same rows (2021+) | 5.492 | 6.959 | 0.793 | +0.08 | 1,960 |
+| walk-forward raw | 5.433 | 6.869 | 0.794 | +0.02 | 2,626 |
+| LOSO raw, same rows (2021+) | 5.489 | 6.952 | 0.794 | +0.08 | 1,961 |
 
 | season | MAE | RMSE | R² | bias | n |
 |---|---:|---:|---:|---:|---:|
-| 2019 | 5.536 | 6.810 | 0.790 | +0.34 | 327 |
-| 2020 | 5.004 | 6.415 | 0.806 | -0.15 | 338 |
-| 2021 | 5.614 | 7.162 | 0.774 | +1.33 | 334 |
-| 2022 | 5.425 | 6.752 | 0.783 | -0.14 | 326 |
-| 2023 | 5.367 | 6.852 | 0.769 | -0.12 | 328 |
-| 2024 | 5.513 | 7.109 | 0.779 | +0.09 | 337 |
-| 2025 | 5.307 | 6.632 | 0.829 | -0.52 | 324 |
-| 2026 | 5.723 | 7.222 | 0.815 | -0.81 | 311 |
+| 2019 | 5.546 | 6.817 | 0.789 | +0.34 | 327 |
+| 2020 | 5.010 | 6.423 | 0.806 | -0.11 | 338 |
+| 2021 | 5.614 | 7.151 | 0.774 | +1.33 | 334 |
+| 2022 | 5.424 | 6.749 | 0.783 | -0.13 | 326 |
+| 2023 | 5.365 | 6.850 | 0.769 | -0.11 | 328 |
+| 2024 | 5.526 | 7.116 | 0.779 | +0.07 | 337 |
+| 2025 | 5.293 | 6.624 | 0.829 | -0.54 | 324 |
+| 2026 | 5.703 | 7.199 | 0.815 | -0.78 | 312 |
 
-**Served projection** (raw + the Layer 4 blend), test 2021+, n=1,960. Cell: MAE / bias. `wf served` is the number the site is judged on.
+**Served projection** (raw + the Layer 4 blend), test 2021+, n=1,961. Cell: MAE / bias. `wf served` is the number the site is judged on.
 
 | cohort | n | loso served | wf raw | wf served | wf refit |
 |---|---:|---:|---:|---:|---:|
-| all | 1,960 | 5.409 / +0.05 | 5.490 / -0.02 | 5.410 / -0.01 | 5.412 / -0.09 |
-| era>=2024 | 972 | 5.430 / -0.27 | 5.512 / -0.40 | 5.440 / -0.32 | 5.437 / -0.41 |
-| top50 (ex-ante) | 300 | 4.925 / +0.32 | 5.078 / +0.03 | 4.894 / +0.08 | 4.905 / -0.06 |
-| top25 (ex-ante) | 150 | 5.267 / +0.06 | 5.449 / -0.31 | 5.233 / -0.20 | 5.222 / -0.32 |
-| top10 (ex-ante) | 60 | 5.653 / -0.45 | 5.621 / -1.15 | 5.577 / -0.76 | 5.575 / -0.87 |
-| top10 era>=2024 | 30 | 5.642 / -3.85 | 5.822 / -4.45 | 5.700 / -4.07 | 5.712 / -4.23 |
-| overhaul (<0.2) | 197 | 5.567 / -0.26 | 5.443 / -1.23 | 5.552 / -0.37 | 5.421 / -0.92 |
-| level-changers \|dev\|>=15 | 100 | 5.246 / +0.31 | 5.396 / +0.48 | 5.248 / +0.23 | 5.266 / +0.19 |
+| all | 1,961 | 5.408 / +0.05 | 5.487 / -0.02 | 5.409 / -0.01 | 5.411 / -0.09 |
+| era>=2024 | 973 | 5.426 / -0.27 | 5.505 / -0.40 | 5.436 / -0.32 | 5.435 / -0.41 |
+| top50 (ex-ante) | 300 | 4.919 / +0.31 | 5.078 / +0.02 | 4.887 / +0.08 | 4.899 / -0.07 |
+| top25 (ex-ante) | 150 | 5.269 / +0.04 | 5.478 / -0.32 | 5.230 / -0.21 | 5.236 / -0.33 |
+| top10 (ex-ante) | 60 | 5.651 / -0.47 | 5.643 / -1.17 | 5.573 / -0.78 | 5.588 / -0.89 |
+| top10 era>=2024 | 30 | 5.679 / -3.87 | 5.883 / -4.48 | 5.734 / -4.08 | 5.761 / -4.24 |
+| overhaul (<0.2) | 197 | 5.575 / -0.26 | 5.457 / -1.22 | 5.559 / -0.37 | 5.430 / -0.91 |
+| level-changers \|dev\|>=15 | 100 | 5.215 / +0.27 | 5.367 / +0.45 | 5.221 / +0.20 | 5.244 / +0.16 |
 
 | ordering metric (per-season mean) | loso served | wf raw | wf served | wf refit |
 |---|---:|---:|---:|---:|
-| membership@25 | 0.720 | 0.700 | 0.713 | 0.713 |
-| rho(actual T25) | 0.516 | 0.475 | 0.523 | 0.513 |
-| rho(pred T25) | 0.474 | 0.473 | 0.483 | 0.469 |
-| concordance T50 | 0.734 | 0.728 | 0.734 | 0.736 |
-| worst miss T10 | 11.071 | 12.610 | 10.995 | 10.196 |
-| rho(field) | 0.884 | 0.883 | 0.884 | 0.884 |
+| membership@25 | 0.720 | 0.693 | 0.720 | 0.713 |
+| rho(actual T25) | 0.523 | 0.473 | 0.527 | 0.507 |
+| rho(pred T25) | 0.468 | 0.485 | 0.477 | 0.475 |
+| concordance T50 | 0.733 | 0.728 | 0.734 | 0.734 |
+| worst miss T10 | 11.188 | 12.651 | 11.082 | 10.353 |
+| rho(field) | 0.883 | 0.883 | 0.883 | 0.884 |
 
 Paired |error| against `wf served` (delta, z; negative = the variant is better):
 
 | variant | pooled | top-25 | top-10 | level-changers |
 |---|---:|---:|---:|---:|
-| loso served | -0.001 (z -0.3) | +0.035 (z +1.3) | +0.076 (z +1.5) | -0.001 (z -0.1) |
-| wf raw | +0.080 (z +2.2) | +0.216 (z +1.6) | +0.044 (z +0.2) | +0.148 (z +0.9) |
-| wf refit | +0.002 (z +0.1) | -0.010 (z -0.2) | -0.002 (z -0.0) | +0.018 (z +0.4) |
+| loso served | -0.002 (z -0.5) | +0.038 (z +1.5) | +0.078 (z +1.6) | -0.006 (z -0.3) |
+| wf raw | +0.078 (z +2.1) | +0.247 (z +1.8) | +0.070 (z +0.4) | +0.145 (z +0.9) |
+| wf refit | +0.002 (z +0.2) | +0.005 (z +0.1) | +0.015 (z +0.2) | +0.023 (z +0.5) |
 
 Layer 4 constants re-searched inside each fold on earlier walk-forward rows, against the served `w_stable` 0.70 / `w_overhaul` 0.55 / `shrink` 1.00. A refit that beats the served values out of sample is the signal to change them; one that merely differs is not.
 
 | test season | refit w_stable | refit w_overhaul | refit shrink | test MAE refit | test MAE served |
 |---|---:|---:|---:|---:|---:|
-| 2021 | 0.50 | 0.20 | 1.00 | 5.501 | 5.515 |
-| 2022 | 0.50 | 0.20 | 0.75 | 5.345 | 5.288 |
+| 2021 | 0.50 | 0.20 | 1.00 | 5.506 | 5.521 |
+| 2022 | 0.50 | 0.20 | 0.75 | 5.346 | 5.287 |
 | 2023 | 0.65 | 0.20 | 1.00 | 5.311 | 5.337 |
-| 2024 | 0.60 | 0.20 | 1.00 | 5.447 | 5.456 |
-| 2025 | 0.60 | 0.20 | 1.00 | 5.260 | 5.287 |
-| 2026 | 0.60 | 0.20 | 1.00 | 5.612 | 5.582 |
+| 2024 | 0.60 | 0.20 | 1.00 | 5.459 | 5.465 |
+| 2025 | 0.60 | 0.20 | 1.00 | 5.253 | 5.277 |
+| 2026 | 0.55 | 0.20 | 1.00 | 5.598 | 5.570 |
 
 **Leave-one-season-out** (trains on later seasons too; optimistic, kept for continuity with older numbers).
 
-Pooled: MAE 5.413, RMSE 6.840, R² 0.796.
+Pooled: MAE 5.412, RMSE 6.837, R² 0.796.
 
-5-fold CV (random folds, in-sample seasons): MAE 5.413, RMSE 6.838, R² 0.795.
+5-fold CV (random folds, in-sample seasons): MAE 5.412, RMSE 6.831, R² 0.795.
 
 #### Known limits
 
@@ -376,13 +376,13 @@ Same 27-feature frame as the net calibrator, target = next-season `adj_offense` 
 - **Meta:** `training/models/roster_adjo_model_meta.json`
 - **Served by:** `routes/projections.rs` — projected AdjO on the Future page, run live per request; AdjD is derived as AdjO − AdjEM
 - **Methodology:** `docs/projections_methodology.md`
-- **Last retrain:** 2026-09-21 (frame cut; `trained_at` not stamped)
+- **Last retrain:** 2026-09-22
 
 #### Target and rows
 
 - **Target:** `adj_offense_relative_to_base_league_mean`; add-back at serve: league mean adj_offense of the base season (team_season_stats, every team with an AdjO)
 - **Training span:** 12 seasons, 2015–2026
-- **Rows:** 3,624
+- **Rows:** 3,625
 - **Qualification gate:** `games_played >= 5 AND minutes_per_game >= 5`
 - **Decomposition:** NET+SPLIT: AdjD derived as AdjO - AdjEM at serve time
 
@@ -393,12 +393,12 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 | source | what it is | rows | digest | nightly-rewritten |
 |---|---|---:|---|---|
 | `trajectory_oof_predictions` | Layer 1 held-out returner projections; the roster frame's returner channel. | 25,325 | `73240ca03c1b` | no |
-| `freshman_oof_predictions` | Layer 1 held-out recruit projections; the roster frame's newcomer channel. | 5,987 | `686969bf329d` | no |
+| `freshman_oof_predictions` | Layer 1 held-out recruit projections; the roster frame's newcomer channel. | 5,986 | `9a74e6da0507` | no |
 | `torvik_player_stats.cam_v3` | CamPom — the value currency every model downstream is denominated in. | 58,400 | `d464b895dbd7` | yes |
 | `player_archetypes` | ASSIGN half. Class labels only — the trainers read the mixture, not the scores. | 40,814 | `7c6a5d8e3da1` | yes |
 | `team_season_stats.adj` | Layer 2 targets; also the freshman model's signing-team prior. | 4,268 | `ad4a9438ef44` | yes |
-| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `ee70cb219afa` | no |
-| `transfers` | Portal moves: the arrival and outbound channels of the composed roster. | 7,208 | `f9c1f9814235` | no |
+| `recruits` | 247 recruit ratings; the freshman model's entire feature block. | 12,615 | `c4288159440b` | no |
+| `transfers` | Portal moves: the arrival and outbound channels of the composed roster. | 7,208 | `ff4df21b998b` | no |
 | `draft_entrants` | Firm draft departures (Ceiling scenario) — the composed roster's draft channel. | 545 | `4389876ad4bf` | no |
 | `player_departures` | Curated non-portal, non-draft exits. | 1 | `d2c73486cde8` | no |
 | `player_returns` | Curated 5-in-5 eligibility returns (granted stays, contested widens the band). | 236 | `392799f17c28` | no |
@@ -406,9 +406,9 @@ Fingerprinted at fit time (`training/provenance.py`); `check_provenance.py` reco
 OOF snapshot the frame was cut from (the #218 boot stamp; both Layer 2 halves must agree):
 
 - `trajectory_oof_predictions`: 25,325 rows, `73240ca03c1b`
-- `freshman_oof_predictions`: 5,987 rows, `686969bf329d`
+- `freshman_oof_predictions`: 5,986 rows, `9a74e6da0507`
 
-Training frame: `training/frames/roster_impact_ex_ante.json` (sha256 `5ad680997c31…`, 3,624 team-seasons, produced by `cstat-ingest projections-backtest --frame-out`). Composition: ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3.
+Training frame: `training/frames/roster_impact_ex_ante.json` (sha256 `3474323d51c6…`, 3,625 team-seasons, produced by `cstat-ingest projections-backtest --frame-out`). Composition: ex-ante: returners - departures + portal arrivals + recruits, Ceiling draft scenario, OOF cam_v3.
 
 #### Features
 
@@ -428,20 +428,20 @@ Walk-forward (train < S, test S) through the served blend for the AdjO half; lea
 
 | pooled | MAE | RMSE | R² | bias | n |
 |---|---:|---:|---:|---:|---:|
-| walk-forward | 3.985 | 4.982 | 0.680 | -1.21 | 1,960 |
+| walk-forward | 3.976 | 4.966 | 0.682 | -1.20 | 1,961 |
 
 | season | MAE | RMSE | R² | bias | n |
 |---|---:|---:|---:|---:|---:|
-| 2021 | 3.881 | 4.897 | 0.682 | -0.12 | 334 |
-| 2022 | 4.056 | 4.969 | 0.627 | -1.71 | 326 |
-| 2023 | 4.000 | 4.886 | 0.616 | -1.45 | 328 |
-| 2024 | 4.007 | 5.114 | 0.663 | -1.50 | 337 |
-| 2025 | 3.758 | 4.714 | 0.737 | -0.74 | 324 |
-| 2026 | 4.221 | 5.302 | 0.706 | -1.77 | 311 |
+| 2021 | 3.850 | 4.854 | 0.688 | -0.06 | 334 |
+| 2022 | 4.035 | 4.932 | 0.633 | -1.67 | 326 |
+| 2023 | 4.020 | 4.896 | 0.615 | -1.45 | 328 |
+| 2024 | 4.008 | 5.101 | 0.665 | -1.52 | 337 |
+| 2025 | 3.739 | 4.707 | 0.738 | -0.77 | 324 |
+| 2026 | 4.214 | 5.294 | 0.704 | -1.80 | 312 |
 
 **Leave-one-season-out** (trains on later seasons too; optimistic, kept for continuity with older numbers).
 
-Pooled: MAE 3.895, naive (last season) MAE 6.984.
+Pooled: MAE 3.897, naive (last season) MAE 6.981.
 
 #### Known limits
 
