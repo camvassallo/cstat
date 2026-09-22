@@ -70,6 +70,7 @@ pub async fn check_season(
         pbp_present_but_lineups_empty(pool, season).await?,
         pbp_date_coverage_gap(pool, season).await?,
         torvik_rows_unlinked(pool, season).await?,
+        decommitted_recruit_keeps_team(pool, season).await?,
     ]
     .into_iter()
     .flatten()
@@ -761,6 +762,43 @@ pub async fn torvik_rows_unlinked(
 /// Minutes per game at or above which a Torvik row counts as a rotation
 /// player. Mirrors `cstat_ingest::ingest::torvik`'s own threshold.
 const ROTATION_MPG: f64 = 10.0;
+
+/// A recruit 247 marks `Uncommitted` must not still carry a
+/// `committed_team_id` (issue #259). The resolver clears both FKs on a
+/// decommit; a row that keeps one goes on contributing its rating to the
+/// class-strength average of a school it is not attending — a served
+/// freshman-model feature, not a display field. Scoped to the three classes
+/// the nightly's resolution pass revisits (`season - 1 ..= season + 1`,
+/// mirroring `cstat_ingest::ingest::recruits::nightly_resolve_class_years`);
+/// older classes are never revisited by the resolver and are covered by the
+/// `commit_status` filter on the `peer` subqueries instead.
+///
+/// `Warning`: the served path is already filtered, so this is the
+/// population accruing again, not a wrong number on the board.
+pub async fn decommitted_recruit_keeps_team(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<InvariantViolation>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT full_name || ' (' || year || ')' AS who
+        FROM recruits
+        WHERE year BETWEEN $1 - 1 AND $1 + 1
+          AND committed_team_id IS NOT NULL
+          AND COALESCE(commit_status, '') = 'Uncommitted'
+        ORDER BY composite_rank NULLS LAST, full_name
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(violation(
+        "decommitted_recruit_keeps_team",
+        Severity::Warning,
+        rows.iter().map(|r| r.get::<String, _>("who")),
+    ))
+}
 
 /// Fold a list of offending ids into a violation (None when clean),
 /// keeping the first few as samples.
