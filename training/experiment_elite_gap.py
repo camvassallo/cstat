@@ -58,7 +58,7 @@ from compute_cae import EVAL_DIR
 from db import get_engine
 from served_blend import served_prediction
 from train_roster_impact_model import LINEAR_FEATURES, _rows, build_dataset
-from walk_forward import WALK_FROM, folds, mae_bias, paired_z, team_table, top_n_ex_ante
+from walk_forward import WALK_FROM, folds, team_table
 
 PLAYER_QUERY = """
 WITH rot AS (
