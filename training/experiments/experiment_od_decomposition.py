@@ -3,9 +3,11 @@ And should the AdjO split be trained relative to the league's scoring
 environment? Judged walk-forward (#361), through the served blend for BOTH
 halves, so the answer is about what ships.
 
-The served design is NET + SPLIT: one calibrator predicts next-season AdjEM
-directly (load-bearing), a second predicts AdjO on the same 27 features
-(display), and AdjD is derived as AdjO − AdjEM. Each half is program-anchored
+The served design when this ran (2026-09-21) was NET + SPLIT: one calibrator
+predicts next-season AdjEM directly (load-bearing), a second predicts AdjO on
+the same 27 features (display), and AdjD is derived as AdjO − AdjEM. #378
+later replaced the derived half with its own model reconciled to the net;
+the net verdict below is unaffected and still the reason the net stays direct. Each half is program-anchored
 and blended at the same turnover-aware weight toward its own base-season
 value (`projections.rs`: `anchor` / `anchor_o`). The alternative — two
 independent O and D models summed — was measured LOSO in

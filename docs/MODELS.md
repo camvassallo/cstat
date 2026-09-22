@@ -385,7 +385,7 @@ Same 27-feature frame as the net calibrator, target = next-season `adj_offense` 
 - **Training span:** 12 seasons, 2015–2026
 - **Rows:** 3,625
 - **Qualification gate:** `games_played >= 5 AND minutes_per_game >= 5`
-- **Decomposition:** NET+SPLIT: AdjD derived as AdjO - AdjEM at serve time
+- **Decomposition:** NET+O+D reconciled: O' = O + r/2, D' = D - r/2, r = net - (O - D) at serve time (#378)
 
 #### Inputs
 

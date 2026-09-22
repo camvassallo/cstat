@@ -193,9 +193,11 @@ function buildColumns(
   const divider = { cellStyle: { borderLeft: '1px solid #4b5563' } };
 
   // Projected offensive / defensive efficiency (absolute ~105, KenPom
-  // convention). The NET+SPLIT halves of the headline: AdjEM = AdjO − AdjD,
-  // so they reconcile exactly. AdjO sorts high-first (better offense); AdjD
-  // sorts low-first (better defense). Descriptive, never a coach grade.
+  // convention). Each half is its own model, anchored on the program's own
+  // offensive / defensive history, then reconciled to the net so
+  // AdjEM = AdjO − AdjD holds exactly (#378). AdjO sorts high-first (better
+  // offense); AdjD sorts low-first (better defense). Descriptive, never a
+  // coach grade.
   const projEffCol = (side: 'o' | 'd'): ColDef<ProjectedTeam> => {
     const field = side === 'o' ? 'projected_adj_o' : 'projected_adj_d';
     return {
@@ -205,7 +207,7 @@ function buildColumns(
       headerTooltip:
         side === 'o'
           ? 'Projected offensive efficiency (points scored per 100 possessions, ~105 scale; higher is better). The offensive half of the net projection — AdjEM = AdjO − AdjD. Descriptive, not a coach grade.'
-          : 'Projected defensive efficiency (points allowed per 100 possessions, ~105 scale; LOWER is better). Derived as AdjO − AdjEM so the split reconciles exactly to the Proj AdjEM headline.',
+          : 'Projected defensive efficiency (points allowed per 100 possessions, ~105 scale; LOWER is better). The defensive half of the net projection — AdjEM = AdjO − AdjD. Descriptive, not a coach grade.',
       sortingOrder: side === 'o' ? ['desc', 'asc', null] : ['asc', 'desc', null],
       valueGetter: (p) => (p.data as ProjectedTeam | undefined)?.[field] ?? null,
       comparator: nullsLast,

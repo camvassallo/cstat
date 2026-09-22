@@ -495,11 +495,12 @@ pub struct Predictor {
     /// `validate_box_score_model_meta` can find `roster_model*.json/onnx`.
     model_dir: PathBuf,
     roster_impact_session: Mutex<Session>,
-    /// Offensive half of the NET+SPLIT team-rating decomposition: same
+    /// Offensive half of the NET + O + D team-rating decomposition: same
     /// feature shape as `roster_impact_session`, target `adj_offense`
-    /// (absolute ~105). The served AdjEM stays the headline; AdjD is
-    /// derived as AdjO − AdjEM. Display-only (the Future page's projected
-    /// O/D bands), never feeds the net forecast.
+    /// relative to the base season's league mean. The served AdjEM stays the
+    /// headline; this half and `roster_adjd_session` are reconciled to it at
+    /// serve time (`roster_projection::reconcile_split`, #378). Display-only
+    /// (the Future page's projected O/D bands), never feeds the net forecast.
     roster_adjo_session: Mutex<Session>,
     /// Defensive half (#378): same feature shape, target `adj_defense`
     /// relative to the base season's league mean. Served reconciled with the

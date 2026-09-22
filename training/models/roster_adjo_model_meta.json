@@ -17,7 +17,7 @@
     "2025": 105.33269230769238,
     "2026": 107.44917582417584
   },
-  "decomposition": "NET+SPLIT: AdjD derived as AdjO - AdjEM at serve time",
+  "decomposition": "NET+O+D reconciled: O' = O + r/2, D' = D - r/2, r = net - (O - D) at serve time (#378)",
   "seasons": [
     2015,
     2016,
