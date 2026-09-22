@@ -10,11 +10,24 @@
 //! That is what shipping `roster_adjd_model.onnx` (#378/#379) did: the PR was
 //! green on all six CI jobs and took prod's API down on deploy.
 //!
-//! This closes the gap by reading both sides of the contract from source:
-//! every `model_dir.join("…")` in `inference.rs`, checked against the
-//! Dockerfile's COPY list. It needs no database, no model files and no
-//! network — it is a grep with an opinion, which is the point: it has to run
-//! in the same CI job that was green while the image was broken.
+//! This closes the gap by reading the contract from source, from two
+//! directions:
+//!
+//!   * every `model_dir.join("…")` in `inference.rs` must be in the COPY list
+//!     — what the serve path opens, the image must contain;
+//!   * every model artifact `.gitignore` allowlists (i.e. every one we commit
+//!     *in order to* ship it) must be in the COPY list or explicitly declared
+//!     as not needed at runtime.
+//!
+//! The second is the more robust of the two and is not redundant: the first
+//! only sees a literal `model_dir.join("name")`, so a model loaded through a
+//! constant, a helper or a differently-named variable would slip past it —
+//! the same shape of miss all over again. Committing the artifact, by
+//! contrast, is unavoidable for anything that has to reach the image.
+//!
+//! Both need no database, no model files and no network — they are greps with
+//! an opinion, which is the point: they run in the same CI job that was green
+//! while the image was broken.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -54,6 +67,21 @@ fn shipped_artifacts(dockerfile: &str) -> BTreeSet<String> {
         })
         .filter_map(|p| p.strip_prefix("training/models/").map(str::to_string))
         .filter(|p| !p.is_empty() && p != "/")
+        .collect()
+}
+
+/// Model artifacts `.gitignore` re-includes under `training/models/`.
+///
+/// Those `!` lines are the declared set of committed model artifacts — the
+/// only reason to commit one is to put it in the image, so each must either
+/// be copied there or be named below as deliberately runtime-free.
+fn committed_artifacts(gitignore: &str) -> BTreeSet<String> {
+    gitignore
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("!/training/models/"))
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
         .collect()
 }
 
@@ -131,5 +159,47 @@ fn image_carries_no_unexplained_model() {
         "the image copies model artifacts nothing in inference.rs loads: {extras:?}. \
          If that is deliberate, add them to EXPECTED_EXTRAS with the reason; if it is \
          leftover, drop them from the Dockerfile."
+    );
+}
+
+/// Every committed model artifact is either in the image or declared here as
+/// not needed at runtime.
+///
+/// Keyed on what we commit rather than on what `inference.rs` names, so it
+/// holds for a model loaded through a constant or a helper — the case the
+/// literal-`join` parse above cannot see.
+#[test]
+fn every_committed_model_artifact_is_shipped_or_declared_test_only() {
+    let root = repo_root();
+    let gitignore = std::fs::read_to_string(root.join(".gitignore")).expect("read .gitignore");
+    let dockerfile = std::fs::read_to_string(root.join("Dockerfile")).expect("read Dockerfile");
+
+    // Committed for a reason other than reaching the running image. Each is
+    // read only by a test or an offline tool, so its absence cannot break a
+    // boot — state the reason when adding one.
+    //   * `shap_baseline.json`: the TreeSHAP-vs-LightGBM parity gate in
+    //     `treeshap.rs`, `#[cfg(test)]` only.
+    //   * `loso/loso_summary.json`: a committed eval summary, read by nothing
+    //     at runtime.
+    const NOT_NEEDED_AT_RUNTIME: &[&str] = &["shap_baseline.json", "loso/loso_summary.json"];
+
+    let committed = committed_artifacts(&gitignore);
+    let shipped = shipped_artifacts(&dockerfile);
+    assert!(
+        committed.len() >= 10,
+        "parsed only {} `!/training/models/…` allowlist entries from .gitignore — the parse \
+         broke, not the Dockerfile",
+        committed.len()
+    );
+
+    let unshipped: Vec<&String> = committed
+        .iter()
+        .filter(|p| !shipped.contains(*p) && !NOT_NEEDED_AT_RUNTIME.contains(&p.as_str()))
+        .collect();
+    assert!(
+        unshipped.is_empty(),
+        "these model artifacts are committed (so something expects them to ship) but are NOT \
+         copied into the image: {unshipped:?}\n\nAdd them to the `COPY training/models/...` \
+         block in the Dockerfile, or to NOT_NEEDED_AT_RUNTIME here with the reason."
     );
 }
