@@ -1,60 +1,66 @@
-"""
-Phase 5c growth model: project a returning player's next-season CamPom v3.
+"""Trajectory model: project a returning player's next-season CamPom v3.
+Layer 1 — writes `trajectory_oof_predictions`, which Layer 2 trains on.
 
-One row per (torvik_pid, season_N, season_N+1) pair. Trained on every
-consecutive-season player in DB (currently the 11 pairs 2015→2016 ..
-2025→2026, ~24,600 rows after the qualification gate).
+CURRENT BEHAVIOUR
+-----------------
+- One row per (torvik_pid, season N, season N+1) pair, every consecutive-season
+  player in the database (11 pairs, 2015→2016 .. 2025→2026) after the
+  qualification gate (≥5 GP / ≥5 MPG). Transfers ARE included; the pairing key
+  is `torvik_pid`, the cross-season-stable id (`natstat_id` changes per team).
+- Target: next-season `torvik_player_stats.cam_gbpm_v3_psos`.
+- Features (`FEATURE_COLS`, the serve-order contract the Rust boot validator
+  checks), all anchored on season N:
+    * box/rate stats + GBPM components + volume + class year + height;
+    * a two-season history block — prior-PRIOR-season CamPom/mpg/gp/usg/ppg
+      levels, year-over-year slope deltas, `has_prior2` (2026-06-27);
+    * prior-season on/off splits from `player_on_off` — on-court net rating,
+      on/off swing, possession share (2026-06-11);
+    * archetype mixture, primary 1.0× / secondary 0.5×, from the PRIOR season;
+    * the shared recruit-rank block (`recruit_features.py`, also used by the
+      freshman model), LEFT JOINed on `recruits.cstat_player_id`; players with
+      no recruit row are the `recruit_is_ranked=0` bucket;
+    * a five-feature destination block — the N+1 program's prior-season AdjEM
+      and 3-year level, the source program's, their difference, and a transfer
+      flag (`DEST_FEATURE_COLS`, 2026-09). All known before the season starts;
+      the serve side feeds the team being projected (`trajectory::Destination`).
+- Missing values are SENTINELS, never NaN (`ONOFF_MISSING_SENTINEL`,
+  `LAG2_LEVEL_SENTINEL`, `SLOPE_DELTA_FILL`) — the ONNX serve path has no NaN
+  plumbing, and `trajectory.rs::build_trajectory_features` fills the same
+  values. Keep the two in lockstep.
+- Three LightGBMs per run: mean + q=0.1 + q=0.9, exported as three ONNX files
+  so the Rust path returns (predicted, lower, upper) as one band.
+- Judged walk-forward (train on pairs whose target season is strictly earlier
+  than S, test S; #361); leave-one-pair-out kept for continuity. Stamps
+  `walk_forward`, `backtest_lopo`, `input_provenance` (#223), `trained_at`, and
+  `oof_persisted` — the held-out predictions are written to
+  `trajectory_oof_predictions` (TRUNCATE + reload) and the boot validator
+  refuses a meta that did not.
+- Honest framing: per-player projections are directional — pooled MAE ≈2.0
+  CamPom against a ≈2.3 naive (`cam(N+1) = cam(N)`) baseline. The UI shows the
+  band, not a point.
 
-Target: next-season `torvik_player_stats.cam_gbpm_v3_psos`.
-
-Features are anchored on the prior season — rate stats + impact metrics
-(CamPom + GBPM components) + a multi-season history block (prior-PRIOR-season
-CamPom/mpg/gp/usg/ppg levels + year-over-year slope deltas + a has_prior2
-indicator, so the model sees a player's progression trajectory rather than a
-single snapshot; validated 2026-06-18, ~53% coverage, biggest lift on
-upperclassmen) + prior-season on/off splits (on-court net
-rating, on/off swing, possession share; `player_on_off` rollup, -999
-sentinel where the rollup has no row — accepted by the Tier-2 membership
-backtest 2026-06-11, see eval_history) + archetype mixture (primary 1.0× /
-secondary 0.5×) + volume + class_year + height + recruit-rank block
-(composite rank, rating, star, position rank, rank movement, height/weight,
-BMI proxy, position code, years_since_recruit). Recruit features come via LEFT JOIN
-on `recruits.cstat_player_id`; only class-of-2024/2025 are ingested, so
-~7% of training rows have a recruit row and the rest fall into the
-`recruit_is_ranked=0` bucket. LightGBM fits a separate split on the
-majority-unranked cohort. Shared feature derivation lives in
-`training/recruit_features.py` so the freshman-impact prior model can
-reuse it without divergence.
-
-Cross-season pairing is via `torvik_pid` (per memory: stable cross-season
-key; `natstat_id` breaks on transfers — different code per team).
-Transfers ARE included. The model was destination-agnostic through v1;
-since 2026-09 it carries a five-feature destination block (where the player
-plays in season N+1 — the program's prior-season AdjEM and 3-year level,
-the source program's, their difference, and a transfer flag). All five are
-known before the season starts, and the serve side feeds the team being
-projected as the destination (`trajectory::Destination`). Validated
-leave-one-pair-out: MAE 2.083 → 2.008, better in all 11 folds (z=−16), and
-the destination-tier bias — returners at a ≥25 program −0.95, transfers
-into one −1.13 on 2024+ targets — goes to ≈0. The ablation proves it is the
-destination's strength that matters, not a transfer flag: prior-team
-strength alone leaves transfers-into-elite at −1.33
-(`experiment_trajectory_destination.py`,
-eval_history/trajectory_destination_20260919_summary.json).
-
-Three LightGBMs trained per run: mean + q=0.1 + q=0.9. Three ONNX files
-shipped so the Rust inference path can return (predicted, lower, upper)
-as a single floor/ceiling band on PlayerDetail.
-
-Honest framing: the corpus is deep (11 pairs) but per-player projections
-remain directional — pooled LOPO MAE ~2.1 CamPom points vs a ~2.3 naive
-baseline. Document MAE per bucket in the meta JSON; surface the headline
-MAE in the UI so users understand the projection is directional, not a
-point estimate.
+HISTORY
+-------
+- Single prior season through 2026-06; the history block (LOPO full 2.121 →
+  2.088, covered subset 2.206 → 2.141, 10/11 pairs) fixed the progression-slope
+  blindness (`experiments/experiment_trajectory_history.py`); a third season
+  was tested and rejected (`experiment_trajectory_lag3.py`).
+- The on/off block was the first positive PBP-feature verdict
+  (`experiment_trajectory_onoff.py`, covered −0.011, 9/11 pairs); RAPM in its
+  place was rejected (`experiment_trajectory_rapm.py`).
+- Destination-agnostic through v1 ("documented limitation"). The #351 audit
+  traced the elite-team under-projection to projected roster CAM conditioned
+  on the destination — returners at a ≥25 program −0.95, transfers in −1.13 on
+  2024+ targets — and the destination block took LOPO MAE 2.083 → 2.008, better
+  in all 11 folds (z=−16), bias → ≈0 (`experiment_trajectory_destination.py`,
+  #354). The ablation shows it is the destination's strength that matters, not
+  a transfer flag. It closes about half the elite gap: the block carries the
+  program's strength, not the role the player will fill in it.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from pathlib import Path
 from typing import Optional
@@ -836,6 +842,10 @@ def main() -> None:
 
     meta = {
         "model": "trajectory_model",
+        # Date of this fit (UTC). `docs/MODELS.md` reads it as the "last
+        # retrain" column (#364); date-level so a same-day rerun of a
+        # reproducible trainer (#222) still writes an identical meta.
+        "trained_at": _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
         "target": "cam_gbpm_v3_psos (season N+1)",
         "join_key": "torvik_pid (cross-season stable)",
         "seasons_trained_on": list(SEASONS),
@@ -890,7 +900,7 @@ def main() -> None:
         "top_features": [{"name": n, "importance": int(i)} for n, i in importance[:25]],
         "known_limitations": [
             "Destination block carries the destination PROGRAM's strength, not the role the player will fill in it: a mid-major star who becomes the go-to option at an elite program (Lendeborg 2026, Knecht 2024) is still under-projected.",
-            "Recruit-rank deferred: ablation experiment runs after historical recruit ingest (class-of-2021–2025 backfill).",
+            "Recruit-rank block covers only players with a 247 recruit row (ranked recruits, classes 2014+); everyone else is the `recruit_is_ranked=0` bucket, which LightGBM splits on explicitly.",
             "Selection bias on returners: only includes players who returned for N+1; doesn't model the leave-for-draft cohort.",
         ],
     }

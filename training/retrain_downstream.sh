@@ -51,6 +51,9 @@
 #     cae            compute_cae.py, scoring against the backtest dump
 #     projections    compute-projections -> team_preseason_projection
 #                      (over $YEARS *plus the forward seasons* — see below)
+#   After every run: docs/MODELS.md is regenerated from the metas (#364),
+#   the walk-forward scorecard is printed, and check_provenance.py reports
+#   which nodes are still stale.
 #
 # Layer 1 is opt-in because regenerating the OOF invalidates every Layer 2
 # model beneath it. Run it when Layer 0 data changed or a Layer 1 model was
@@ -389,6 +392,15 @@ if is_in roster_impact "${PLAN[@]}" || is_in roster_adjo "${PLAN[@]}" || is_in t
     || echo "→ NOTE: a meta has no walk_forward block; retrain that model so its headline is comparable"
 fi
 
+# ── docs/MODELS.md (#364) ───────────────────────────────
+# The tree's description, generated from the metas the stages above just
+# wrote, so it cannot drift from the artifacts. Always regenerated — a partial
+# run still moved some meta, and CI fails on a page that disagrees with the
+# metas (`generate_models_doc.py --check`). Commit it with the model change.
+stage_banner "docs — regenerate docs/MODELS.md from the metas"
+( cd "$TRAINING_DIR" && "$VENV_PY" generate_models_doc.py )
+WROTE+=("docs/MODELS.md (generated; commit with the metas)")
+
 # ── Cross-layer staleness (#223) ────────────────────────
 # The stamp check above compares the two Layer 2 halves against EACH OTHER; it
 # cannot see a Layer 1 retrain that was never followed by a Layer 2 one, since
@@ -449,7 +461,7 @@ into source. Their optimum can move when the raw projector does, and the shrink
 weights are applied by the `projections` stage above, so they sit INSIDE the loop.
 Both tools only report a recommendation, so automating the edit would be dishonest.
 If this retrain moved the projector materially, re-check them:
-  cd training && ./.venv/bin/python transition_blend_diagnostic.py --dump DUMP
+  cd training && ./.venv/bin/python experiments/transition_blend_diagnostic.py --dump DUMP
   cargo run --bin cstat-ingest -- measure-blend-accuracy --years 2024,2025,2026
 Pass --dump. The fallback picks the newest dump by FILENAME, and descriptive tags
 sort after a plain run-name, so it can hand you a superseded generation.

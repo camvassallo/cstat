@@ -32,13 +32,20 @@ cohort's own IN-SAMPLE optimal flat weight. Then an honest leave-one-season-out
 test: does a cohort-conditional weight (fit on the other years) beat the flat
 0.5 out-of-sample?
 
-Run:  ./.venv/bin/python transition_blend_diagnostic.py --dump eval_history/<dump>.json
+Run:  cd training && ./.venv/bin/python experiments/transition_blend_diagnostic.py --dump eval_history/<dump>.json
 
 Always pass `--dump`. This tool re-tunes PROJECTION_SHRINK_WEIGHT{,_OVERHAUL},
 which are SERVED constants, and the no-flag fallback picks the newest dump by
 FILENAME rather than by mtime — so it can quietly hand you a superseded
 projection generation to tune against.
 """
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import argparse
 import datetime as dt

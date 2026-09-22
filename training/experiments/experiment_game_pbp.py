@@ -1,30 +1,33 @@
 """
-Tier-2 lineup-quality features → margin/win/total game models: accept/reject.
+Tier-1 PBP features → margin/win/total game models: accept/reject experiment.
 
 Head-to-head on a shared holdout (chronological last 20% of 2026, the
 compare_train_windows.py convention): the production 49-diff feature set vs
-the same set + 3 leak-free cumulative lineup continuity/concentration diffs
-(features.py::compute_cumulative_team_lineups, LINEUP_FEATURES=1):
+the same set + 7 leak-free cumulative team PBP tag-rate diffs
+(features.py::compute_cumulative_team_pbp, PBP_FEATURES=1).
 
-  diff_lu_hhi        — rotation concentration (possession HHI over lineups)
-  diff_lu_top_share  — most-used lineup's possession share to date
-  diff_lu_top_net    — that lineup's net rating per 100 to date
-
-The feature matrix is built ONCE with lineup features on; the baseline is
-the same matrix restricted to the production columns — the only variable is
-the feature list. The completeness dropna uses BASELINE columns only (lineup
-features are NaN for 2019 / early-season games; LightGBM routes NaN
-natively).
+The feature matrix is built ONCE with PBP on; the baseline is the same
+matrix restricted to the production columns — so the only variable is the
+feature list. The completeness dropna uses BASELINE columns only (PBP rates
+are NaN for pre-2020 seasons by coverage; dropping those rows would nuke
+7 seasons from the corpus — LightGBM routes NaN natively instead).
 
 Comparison script only; production train.py and the Rust NUM_FEATURES
-contract are untouched. Acceptance bar mirrors Tier-1: anything not clearly
-positive on the holdout is a reject given the Rust features.rs + pit-twin +
-SHAP-baseline blast radius.
+contract are untouched. Acceptance bar per ROADMAP: ≥0.5 MAE would be a
+slam-dunk accept; anything not clearly positive on the holdout is a reject
+given the Rust features.rs + pit-twin + SHAP-baseline blast radius.
 """
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
 
-os.environ["LINEUP_FEATURES"] = "1"
+os.environ["PBP_FEATURES"] = "1"
 
 import numpy as np
 import lightgbm as lgb
@@ -39,7 +42,11 @@ from db import get_engine
 ALL_SEASONS = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
 features_mod.SEASONS = ALL_SEASONS
 
-LU_DIFFS = ["diff_lu_hhi", "diff_lu_top_share", "diff_lu_top_net"]
+PBP_DIFFS = [
+    "diff_pbp_paint_rate", "diff_pbp_paint_fg_pct", "diff_pbp_perimeter_fg_pct",
+    "diff_pbp_transition_rate", "diff_pbp_second_chance_rate",
+    "diff_pbp_off_to_rate", "diff_pbp_fouls_drawn_per100",
+]
 
 
 def _common_params(objective: str) -> dict:
@@ -103,13 +110,13 @@ def fit_and_eval(name, train_df, test_df, feature_cols, total_feature_cols):
     print(f"  Win:     acc {win['accuracy']:.3f}  AUC {win['auc']:.3f}  logloss {win['log_loss']:.4f}")
     print(f"  Total:   MAE {total['mae']:.3f}  R² {total['r2']:.3f}")
 
-    # Lineup feature importances when present (margin model)
+    # PBP feature importances when present (margin model)
     imp = sorted(zip(feature_cols, m.feature_importances_), key=lambda x: -x[1])
-    lu_imp = [(n, i) for n, i in imp if n.startswith("diff_lu_")]
-    if lu_imp:
+    pbp_imp = [(n, i) for n, i in imp if n.startswith("diff_pbp_")]
+    if pbp_imp:
         ranks = {n: r for r, (n, _) in enumerate(imp, 1)}
-        print("  Lineup importances (margin model):")
-        for n, i in lu_imp:
+        print("  PBP importances (margin model):")
+        for n, i in pbp_imp:
             print(f"    {n:<32} imp={i:<5} rank {ranks[n]}/{len(feature_cols)}")
 
     return {"margin": margin, "win": win, "total": total}
@@ -117,22 +124,22 @@ def fit_and_eval(name, train_df, test_df, feature_cols, total_feature_cols):
 
 def main():
     engine = get_engine()
-    print("Building 12-season feature matrix WITH lineup features (heavy step)...")
+    print("Building 12-season feature matrix WITH PBP features (heavy step)...")
     df, feature_cols, sum_cols = features_mod.build_feature_matrix(engine, seasons=ALL_SEASONS)
 
-    base_cols = [c for c in feature_cols if c not in LU_DIFFS]
-    lu_cols = base_cols + LU_DIFFS
+    base_cols = [c for c in feature_cols if c not in PBP_DIFFS]
+    pbp_cols = base_cols + PBP_DIFFS
     base_total = base_cols + sum_cols
-    lu_total = lu_cols + sum_cols
-    assert len(lu_cols) - len(base_cols) == 3, feature_cols
+    pbp_total = pbp_cols + sum_cols
+    assert len(pbp_cols) - len(base_cols) == 7, feature_cols
 
-    # Completeness filter over BASELINE columns only — lineup NaN is coverage,
+    # Completeness filter over BASELINE columns only — PBP NaN is coverage,
     # not row incompleteness.
     before = len(df)
     df = df.dropna(subset=base_total).reset_index(drop=True)
     print(f"\nGames with complete baseline features: {len(df)} / {before}")
-    cov = df[LU_DIFFS[0]].notna().groupby(df["season"]).mean()
-    print("Lineup diff coverage by season (of kept rows):")
+    cov = df[PBP_DIFFS[0]].notna().groupby(df["season"]).mean()
+    print("PBP diff coverage by season (of kept rows):")
     print((cov * 100).round(1).to_string())
 
     s2026 = df[df["season"] == 2026].sort_values("game_date").reset_index(drop=True)
@@ -143,18 +150,18 @@ def main():
     print(f"\nHoldout: 2026 games on/after {s2026.iloc[cutoff]['game_date']} → {len(test_df)}; train {len(train_df)}")
 
     base = fit_and_eval("baseline (production 49)", train_df, test_df, base_cols, base_total)
-    lu = fit_and_eval("baseline + 3 lineup diffs", train_df, test_df, lu_cols, lu_total)
+    pbp = fit_and_eval("baseline + 7 PBP diffs", train_df, test_df, pbp_cols, pbp_total)
 
     print(f"\n{'=' * 64}\nSHARED-HOLDOUT COMPARISON (n_test={len(test_df)})\n{'=' * 64}")
-    print(f"{'metric':<20} {'baseline':>10} {'+lineup':>10} {'Δ':>9}")
+    print(f"{'metric':<20} {'baseline':>10} {'+PBP':>10} {'Δ':>9}")
     rows = [
-        ("margin.mae", base["margin"]["mae"], lu["margin"]["mae"], True),
-        ("margin.win_acc", base["margin"]["win_acc"], lu["margin"]["win_acc"], False),
-        ("win.accuracy", base["win"]["accuracy"], lu["win"]["accuracy"], False),
-        ("win.auc", base["win"]["auc"], lu["win"]["auc"], False),
-        ("win.log_loss", base["win"]["log_loss"], lu["win"]["log_loss"], True),
-        ("total.mae", base["total"]["mae"], lu["total"]["mae"], True),
-        ("total.r2", base["total"]["r2"], lu["total"]["r2"], False),
+        ("margin.mae", base["margin"]["mae"], pbp["margin"]["mae"], True),
+        ("margin.win_acc", base["margin"]["win_acc"], pbp["margin"]["win_acc"], False),
+        ("win.accuracy", base["win"]["accuracy"], pbp["win"]["accuracy"], False),
+        ("win.auc", base["win"]["auc"], pbp["win"]["auc"], False),
+        ("win.log_loss", base["win"]["log_loss"], pbp["win"]["log_loss"], True),
+        ("total.mae", base["total"]["mae"], pbp["total"]["mae"], True),
+        ("total.r2", base["total"]["r2"], pbp["total"]["r2"], False),
     ]
     for label, a, b, lower_better in rows:
         d = b - a

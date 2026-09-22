@@ -36,10 +36,17 @@ cam), not the end-to-end served composition, so the MAEs read lower than
 `projections-backtest`. It tests the mechanism; a win here is the licence
 to retrain the LOSO set and rerun the end-to-end backtest, not the result.
 
-Run:  cd training && ./.venv/bin/python roster_impact_target_experiment.py
+Run:  cd training && ./.venv/bin/python experiments/roster_impact_target_experiment.py
 """
 
 from __future__ import annotations
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import datetime as dt
 import json

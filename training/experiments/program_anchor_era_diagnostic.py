@@ -39,7 +39,7 @@ Variants
                     falls back to the program level when the coach is newer
   coach_level_strict  as above, but a new-coach team is un-anchored instead
 
-Run:  cd training && ./.venv/bin/python program_anchor_era_diagnostic.py --dump <dump>.json
+Run:  cd training && ./.venv/bin/python experiments/program_anchor_era_diagnostic.py --dump <dump>.json
 
 Needs a post-#326 dump (carries `program_level` / `retained`); the 2016-2017
 targets are un-anchored by construction (their 3-season window predates the
@@ -47,6 +47,13 @@ ingested data) and take the un-anchored pair in every variant.
 """
 
 from __future__ import annotations
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import argparse
 import datetime as dt

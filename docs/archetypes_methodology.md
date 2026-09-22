@@ -217,7 +217,7 @@ If you must add a class (because a true new cluster appeared and no existing cla
 
 ## In-season stability: how many games until a label is trustworthy?
 
-**Measured 2026-07-17.** Harness `training/experiment_archetype_stability.py`; summary artifact `training/eval_history/archetype_stability_20260717_summary.json`. Re-run after any retrain (~30s) — the curve is a property of the fitted model, not a constant.
+**Measured 2026-07-17.** Harness `training/experiments/experiment_archetype_stability.py`; summary artifact `training/eval_history/archetype_stability_20260717_summary.json`. Re-run after any retrain (~30s) — the curve is a property of the fitted model, not a constant.
 
 **Three different things are called "stability" in this doc. Do not conflate them:**
 

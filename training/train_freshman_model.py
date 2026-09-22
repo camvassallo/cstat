@@ -1,63 +1,49 @@
-"""
-Phase 6 / 5b plug-in: per-recruit freshman-impact projection.
+"""Freshman model: per-recruit first-season CamPom projection. Layer 1 —
+writes `freshman_oof_predictions`, which Layer 2 trains on.
 
-Per-recruit LightGBM regression — the sole freshman signal in
-`crates/cstat-core/src/roster_projection.rs::freshman_row`. (Historically
-this replaced a 4-tier mean heuristic; those tiers were since deprecated
-and deleted, see the *baseline* note below.) Same modeling shape as the
-trajectory model (mean + q=0.1 + q=0.9 quantile bands), same export/meta
-contract, same Rust drift validator.
+CURRENT BEHAVIOUR
+-----------------
+- Per-recruit LightGBM regression, the sole freshman signal in
+  `crates/cstat-core/src/roster_projection.rs::freshman_row`. Same modeling
+  shape as the trajectory model (mean + q=0.1 + q=0.9 bands), same export/meta
+  contract, same Rust drift validator.
+- Target: `torvik_player_stats.cam_gbpm_v3_psos` for the recruit's first
+  college season (`season = recruit.year + 1`).
+- Qualification gate: ≥5 GP / ≥5 MPG in that season — matches the trajectory
+  model so no projection is calibrated on rows it would not include.
+- Features (13): the shared 11-feature `recruit_features` block (locked names
+  mirror the Rust side; `years_since_recruit` is constant 0 here and kept for
+  shape parity) plus two signing-time context features —
+  `committed_team_prior_adjem`, the committed team's AdjEM the season BEFORE
+  the recruit arrived (using the freshman-season team AdjEM would be partly
+  determined by the recruit being projected), and `peer_class_strength`, the
+  mean composite rating of that team's class, the focal recruit included.
+- The mean model carries sentinel-safe `monotone_constraints` (non-decreasing
+  in composite rating and star rating) so a better-rated recruit never
+  projects lower with everything else fixed; the band models stay
+  unconstrained (LightGBM forbids monotone + quantile).
+- Trained on every ingested class (currently 2014–2025); the row count is
+  recomputed each run and recorded in the meta.
+- Judged walk-forward by class (#361); leave-one-class-out kept for continuity.
+  The rank-tier mean is printed as a yardstick baseline. Stamps
+  `walk_forward`, `loco_cv`, `input_provenance`, `trained_at`, `oof_persisted`.
 
-Target: `torvik_player_stats.cam_gbpm_v3_psos` for the recruit's first
-college season (`season = recruit.year + 1`).
-
-Qualification gate: ≥5 GP / ≥5 MPG in the freshman season — matches the
-trajectory model so we never serve a projection calibrated on rows the
-trajectory model wouldn't have included.
-
-Features (13 total):
-  - 11 from the shared `recruit_features` block (locked names mirror the
-    Rust side). `years_since_recruit` is constant 0 for freshmen and
-    LightGBM ignores it; kept in the block for shape parity with the
-    trajectory model.
-  - 2 freshman-specific:
-    * `committed_team_prior_adjem` — committed team's AdjEM the season
-      BEFORE the recruit arrived (= recruit.year). Captures program
-      quality at signing time. Avoids the dog-fooding trap of using
-      the recruit's actual freshman-season team AdjEM, which would be
-      partly determined by the very recruit we're projecting.
-    * `peer_class_strength` — mean composite_rating across the committed
-      team's full class for that year, INCLUDING the focal recruit.
-      Captures whether they're the only signing or part of a wave.
-
-Trained on the full **class-of-2014 through class-of-2025** paired
-history (n ≈ 3253 qualified freshmen — exact figure recomputed every run
-and recorded in the meta JSON). LOCO pooled MAE ≈ 2.25, beating the
-rank-bucket mean baseline (≈2.42) by ~6.6%. The rank-bucket-mean baseline
-is kept only as a dumb-yardstick comparison in the training output; the
-4-tier scaffold it mirrored was deprecated in serving once the roster-
-impact model proved it keys only on `cam_v3` / class / archetype (see
-`roster_projection.rs::freshman_row`).
-
-The mean (regression) model carries a sentinel-safe `monotone_constraints`
-(non-decreasing in `recruit_composite_rating` + `recruit_star_rating`) so
-that — holding the other inputs fixed — a better-rated recruit never
-projects lower (a narrow guarantee; `composite_rank` stays unconstrained).
-The q10/q90 band models stay unconstrained (LightGBM forbids monotone +
-quantile).
-
-Honest framing constants (mirror trajectory model):
-  - Selection bias on top recruits is even sharper here: the elite
-    cohort leaves for the draft, so the model is calibrated on
-    returners-who-played-meaningful-minutes, not the full draft-eligible
-    cohort. Future-Boozer top-30 freshmen are projected from a
-    population thinner and more variable than headline MAE suggests.
-  - Bands matter as much as the mean. Frame the surface as
-    `mean (low–high)`, not a point estimate.
+HISTORY
+-------
+- Replaced a 4-tier mean heuristic. The tier scaffold was later deprecated
+  and deleted from serving once the roster-impact model proved it keys only on
+  `cam_v3` / class / archetype off a recruit row; the baseline printed here is
+  the last trace of it.
+- Honest framing that has not changed: selection bias on top recruits is
+  sharper than for returners — the elite cohort leaves for the draft, so the
+  model is calibrated on freshmen who stayed and played meaningful minutes.
+  Top-30 projections come from a thinner, more variable population than the
+  headline MAE suggests; surface `mean (low–high)`, never a point.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from pathlib import Path
 from typing import Optional
@@ -597,6 +583,10 @@ def main() -> None:
 
     meta = {
         "model": "freshman_model",
+        # Date of this fit (UTC). `docs/MODELS.md` reads it as the "last
+        # retrain" column (#364); date-level so a same-day rerun of a
+        # reproducible trainer (#222) still writes an identical meta.
+        "trained_at": _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
         "target": "cam_gbpm_v3_psos (freshman season = recruit.year + 1)",
         "join_key": "recruits.cstat_player_id → torvik_player_stats.player_id",
         "training_classes": sorted(df["recruit_year"].unique().tolist()),

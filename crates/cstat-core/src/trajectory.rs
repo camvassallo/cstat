@@ -174,7 +174,7 @@ pub const TRAJECTORY_FEATURE_NAMES: [&str; TRAJECTORY_NUM_FEATURES] = [
 /// a 13-man rotation that was the size of the elite-team gap no calibrator
 /// or blend change closed (#351). Adding the destination cut the
 /// leave-one-pair-out MAE 2.083 → 2.008 in every fold and removed the
-/// destination-tier bias (`training/experiment_trajectory_destination.py`).
+/// destination-tier bias (`training/experiments/experiment_trajectory_destination.py`).
 ///
 /// All three fields are known before the season starts: for the roster
 /// projection a returner's and an arrival's destination is the team being

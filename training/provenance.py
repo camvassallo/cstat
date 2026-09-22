@@ -196,7 +196,7 @@ SOURCES: dict[str, Source] = {
         ),
         season_column="season",
         nightly=True,
-        notes="Tier-2 membership features (3 of the trajectory model's 60).",
+        notes="Tier-2 membership features (3 of the trajectory model's features).",
     ),
     "team_season_stats.adj": Source(
         table="team_season_stats",

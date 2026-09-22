@@ -102,6 +102,17 @@ cd training && ./.venv/bin/python check_provenance.py    # exit 1 on drift
 # player_season_projection. The wide season range is right for the former (the
 # preseason blend reads history) but materializes historical rows in the latter
 # that nothing serves — narrow with --years if you only meant the team table.
+# "What is each model, right now?" — `docs/MODELS.md` is GENERATED from the
+# metas (inputs, target, rows, features, headline numbers, last retrain, known
+# limits). The chain runner rewrites it after every run; CI fails when a meta
+# is committed without it. The hand-maintained part (descriptions, known
+# limits) is the `SPECS` table in the generator, not the page — edit there.
+cd training && ./.venv/bin/python generate_models_doc.py           # rewrite docs/MODELS.md
+cd training && ./.venv/bin/python generate_models_doc.py --check   # exit 1 if stale
+# "Was X already tried?" — `training/experiments/README.md` indexes every
+# accept/reject experiment, diagnostic and spike with its date, verdict and
+# summary file. Read it before re-running one; the scripts live in
+# `training/experiments/` (path shim onto `training/`) and CI imports them all.
 
 # Push local data to prod (no schema migrations needed if migrations/ is unchanged).
 # A FULL sync is now REFUSED (exit 3) while prod looks live — a served-critical step
@@ -165,7 +176,7 @@ cargo run --bin cstat-ingest -- game-projections --years 2024,2025
 
 # Archetype in-season stability sweep — how many games until a label matches the
 # full-season label. Re-run after any retrain; the curve is a property of the fit.
-cd training && ./.venv/bin/python experiment_archetype_stability.py \
+cd training && ./.venv/bin/python experiments/experiment_archetype_stability.py \
   --seasons 2022,2023,2024,2025,2026 --out eval_history/archetype_stability_YYYYMMDD_summary.json
 ```
 

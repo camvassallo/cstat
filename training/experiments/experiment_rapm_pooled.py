@@ -39,6 +39,13 @@ Comparison/spike script only; writes nothing to the database.
 
 from __future__ import annotations
 
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import json
 import sys
 from datetime import datetime, timezone
@@ -53,7 +60,7 @@ from sklearn.linear_model import Ridge
 import experiment_rapm_spike as sp
 from db import get_engine
 
-EVAL_DIR = Path(__file__).parent / "eval_history"
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval_history"  # training/eval_history
 
 # Sweep target: windows ending at 2025 predicting 2026. Validation targets
 # fit only the winning config.

@@ -383,7 +383,7 @@ pub struct ProjectedRoster {
     /// weight was written for — 239 of 364 teams on the live 2027 board,
     /// Cincinnati among them (2 of 12 back, returners worth −0.3 against
     /// +46.0 walking out, served at the full continuity weight). Magnitude is
-    /// also how `training/transition_blend_diagnostic.py` defines its cohorts,
+    /// also how `training/experiments/transition_blend_diagnostic.py` defines its cohorts,
     /// so the tuned constants and the served key now measure the same thing.
     pub departures_abs_cam_v3_sum: f32,
     /// The program's own recent level: mean `adj_efficiency_margin` over the
@@ -2196,7 +2196,7 @@ pub const MIN_QUALIFYING_FOR_PROJECTION: usize = 7;
 /// roster turns over wholesale, so trusting it less cuts both the error and
 /// the systematic over-projection of overhaul teams.
 ///
-/// Validated on the LOSO backtest (`training/transition_blend_diagnostic.py`,
+/// Validated on the LOSO backtest (`training/experiments/transition_blend_diagnostic.py`,
 /// targets 2019–2026): a turnover-conditional weight beats the flat served
 /// weight — concentrated on overhaul teams — and corrects their ≈+0.7 AdjEM
 /// over-projection bias. Deliberately keyed on roster turnover ALONE, not
@@ -2267,7 +2267,7 @@ const STABLE_RETAINED_FULL: f32 = 0.40;
 /// −0.3 cam against +46.0 departing, baseline +18.9), California (1 of 11),
 /// Pittsburgh (2 of 10) — all anchored to last season at w = 0.45, which is
 /// the opposite of what the ramp exists to do. Signed sums also disagreed
-/// with `training/transition_blend_diagnostic.py`, which has always defined
+/// with `training/experiments/transition_blend_diagnostic.py`, which has always defined
 /// its cohorts on `abs(cam)`: the served constants were fit against one
 /// definition of "overhaul" and applied through another.
 ///

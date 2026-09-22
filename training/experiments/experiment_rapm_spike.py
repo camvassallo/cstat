@@ -43,7 +43,7 @@ possession-weighted — identical weighted solution, smaller solve.
 Year-over-year stability (acceptance gate 1) — the decisive gate, since the
 single-season prediction result lands where the literature says it will
 (team strength wins at stint prediction; RAPM's value is allocation +
-stability) — runs via `python experiment_rapm_spike.py stability`: fits
+stability) — runs via `python experiments/experiment_rapm_spike.py stability`: fits
 2024/2025/2026 at the 2026-tuned lambdas, joins returners by the dual key
 (natstat_id OR torvik_pid — natstat_id alone drops transfers), and compares
 YoY Spearman of net RAPM (both prior variants) against raw on/off swing and
@@ -55,6 +55,13 @@ Comparison/spike script only; writes nothing to the database.
 """
 
 from __future__ import annotations
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import json
 import sys
@@ -75,7 +82,7 @@ LAMBDA_GRID = [50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0]
 CV_FOLDS = 5
 ROTATION_POSS_FLOOR = 250.0  # display/report floor (doc section 5)
 STABILITY_POSS_FLOOR = 500.0  # gate-1 floor, used here for correlations
-EVAL_DIR = Path(__file__).parent / "eval_history"
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval_history"  # training/eval_history
 
 STINT_QUERY = """
 SELECT ls.game_id::text         AS game_id,

@@ -33,6 +33,13 @@ Comparison script only; does not touch production models or the meta.
 
 from __future__ import annotations
 
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,11 +53,14 @@ import train_trajectory_model as base
 RAPM_COLS = ["prior_o_rapm", "prior_d_rapm", "prior_net_rapm"]
 ONOFF_COLS = list(base.ONOFF_FEATURE_COLS)
 SENTINEL = base.ONOFF_MISSING_SENTINEL
-EVAL_DIR = Path(__file__).parent / "eval_history"
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval_history"  # training/eval_history
 
 # Extend the production query with the prior-season player_rapm join —
 # anchored on stable landmarks so a contract change upstream fails loudly
-# here rather than silently dropping the block.
+# here rather than silently dropping the block. (It did: the recruit join
+# became a LATERAL in the #222 determinism collapse and the old
+# `LEFT JOIN recruits rec` anchor stopped matching — re-anchored 2026-09.)
+_RECRUIT_JOIN = "LEFT JOIN LATERAL (\n    SELECT * FROM recruits r"
 EXT_QUERY = base.PAIRED_QUERY.replace(
     "    -- Archetype mixture (primary + secondary)",
     "    prN.o_rapm AS prior_o_rapm,\n"
@@ -58,12 +68,14 @@ EXT_QUERY = base.PAIRED_QUERY.replace(
     "    prN.net_rapm AS prior_net_rapm,\n"
     "    -- Archetype mixture (primary + secondary)",
 ).replace(
-    "LEFT JOIN recruits rec",
+    _RECRUIT_JOIN,
     "LEFT JOIN player_rapm prN\n"
     "    ON prN.player_id = base.pid_n AND prN.season = base.s_n\n"
-    "LEFT JOIN recruits rec",
+    + _RECRUIT_JOIN,
 )
-assert "prior_net_rapm" in EXT_QUERY and "player_rapm prN" in EXT_QUERY
+assert "prior_net_rapm" in EXT_QUERY and "player_rapm prN" in EXT_QUERY, (
+    "train_trajectory_model.PAIRED_QUERY moved its landmarks; re-anchor the RAPM join"
+)
 
 
 def run_variant(name: str, df: pd.DataFrame, feature_cols: list[str]) -> dict:

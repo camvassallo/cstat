@@ -1,43 +1,50 @@
-"""
-Roster-impact AdjO model — the offensive half of a NET+SPLIT team-rating
-decomposition for the Future page.
+"""Roster-impact AdjO model — the offensive half of the NET + SPLIT team-rating
+decomposition on the Future page. Layer 2, display-only.
 
-The served `roster_impact_model.onnx` maps projected-roster aggregates ->
-next-season team AdjEM (net). This trains an identical-shape model on the
-SAME feature frame whose target is next-season `adj_offense` relative to
-the base season's league mean (see below; the serve path adds the mean
-back, so the served number is on the absolute ~105 scale). At serve time
-the Rust route runs both, keeps the net headline untouched, and derives
-AdjD = AdjO - AdjEM (exact reconciliation, since AdjEM = AdjO - AdjD holds
-to ~0.025 in the data).
+CURRENT BEHAVIOUR
+-----------------
+- Same 27-feature frame as the net calibrator (imports `build_dataset` from
+  `train_roster_impact_model`); LightGBM with the net trainer's `lgb_params`.
+- Target: next-season `adj_offense` RELATIVE to the base season's league mean
+  (`TARGET`, wire-locked against `cstat_core::inference::ROSTER_ADJO_TARGET`;
+  #368). The serve path adds the base season's mean back — ex-ante, since the
+  base season is complete in August — so the served number is on the absolute
+  ~105 scale. The meta records the mean per season (`league_mean_adjo_by_season`).
+- NET + SPLIT: `routes/projections.rs` runs the net model (headline, untouched
+  by this one) and this model, then derives AdjD = AdjO − AdjEM. Exact
+  reconciliation, since AdjEM = AdjO − AdjD holds to ~0.025 in the data.
+- Judged walk-forward through the served blend for the AdjO half (#361);
+  LOSO kept for continuity. Stamps `input_provenance`, `oof_provenance` (must
+  equal the net model's — the API refuses to boot otherwise, #218),
+  `walk_forward`, `trained_at`.
+- Exports `models/roster_adjo_model.onnx` + meta only — no per-season LOSO
+  set. Reaches prod by git deploy alone: `team_preseason_projection` has no
+  AdjO column, so no data sync moves it.
+- Needs its own invocation. Importing `build_dataset` from the net trainer
+  reads as "the AdjO half retrains with the net model"; it does not (#218).
+  `retrain_downstream.sh` runs both.
 
-Why NET+SPLIT and not two independent models: validated in
-`validation/exp_team_adjod_projection.py` (LOSO, 4,255 team-seasons) —
-decomposing barely touches the net (DIRECT-both net only +0.008 MAE worse
-than served), because team-level O/D errors are positively correlated and
-cancel in EM = O - D. AdjO is projectable at ~51% skill (MAE 3.42).
-
-Reuses `build_dataset` / `lgb_params` / `export_to_onnx` from the net
-trainer so the feature contract is byte-identical (the Rust boot validator
-reuses ROSTER_IMPACT_FEATURE_NAMES for this model). Display-only — NOT a
-coach grade, and it never moves the served net forecast.
-
-**The target is relative to the base season's league mean (#368).** Absolute
-AdjO drifts with the scoring environment — the D-I mean rose 100.3 → 107.5
-over 2021–2026 — and the 27 roster-CAM features carry no signal about it, so
-an absolute-target model is centred on the 11-season mean and runs ~5 low
-in 2026 before the blend (walk-forward bias −4.8; MAE 4.48 vs 4.10 LOSO,
-because LOSO interpolates the drift and walk-forward has to extrapolate
-it). The model now predicts `adj_offense − mean(adj_offense, base season)`
-and the serve path adds the base season's mean back — ex-ante, since the
-base season is complete in August. Measured through the served blend,
-walk-forward: AdjO 4.304 → 3.917, derived AdjD 3.940 → 3.650
-(`experiment_od_decomposition.py`). The meta's `target` names the relative
-form and the Rust boot validator refuses any other value, so an old binary
-cannot serve this model as absolute or the reverse.
+HISTORY
+-------
+- Why NET + SPLIT and not two independent O and D models: measured LOSO in
+  `validation/exp_team_adjod_projection.py` (4,255 team-seasons) — decomposing
+  barely touches the net (+0.008 MAE worse), because team-level O/D errors
+  are positively correlated and cancel in EM = O − D. Re-asked walk-forward in
+  `experiments/experiment_od_decomposition.py` (2026-09-21) with the same
+  answer for the net.
+- The target was absolute AdjO until #368. Absolute AdjO drifts with the
+  scoring environment (D-I mean 100.3 → 107.5 over 2021–2026) and the 27
+  roster-CAM features carry no signal about it, so the model sat on the
+  11-season mean and ran ~5 low in 2026 before the blend (walk-forward bias
+  −4.8; MAE 4.48 vs 4.10 LOSO, because LOSO interpolates the drift and
+  walk-forward has to extrapolate it). The relative target closed it: through
+  the served blend, walk-forward AdjO 4.304 → 3.917 and derived AdjD 3.940 →
+  3.650. The Rust boot validator refuses any other `target` value, so an old
+  binary cannot serve this model as absolute or the reverse.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from pathlib import Path
 
@@ -165,6 +172,10 @@ def main() -> None:
 
     meta = {
         "model": "roster_adjo_model",
+        # Date of this fit (UTC). `docs/MODELS.md` reads it as the "last
+        # retrain" column (#364); date-level so a same-day rerun of a
+        # reproducible trainer (#222) still writes an identical meta.
+        "trained_at": _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
         # Wire-locked against `cstat_core::inference::ROSTER_ADJO_TARGET`.
         "target": TARGET,
         "serve_add_back": "league mean adj_offense of the base season (team_season_stats, every team with an AdjO)",

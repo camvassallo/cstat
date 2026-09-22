@@ -1,99 +1,87 @@
-"""
-Train the Phase B impact-aggregation projection model (v2 — OOF-trained).
+"""Train the roster-impact calibrator: projected-roster CAM aggregates ->
+next-season team AdjEM. Layer 2, the served net projection.
 
-Phase B vs. the box-score roster model (`train_roster_model.py`):
-the box-score model deliberately EXCLUDES cam_v3 / GBPM because
-`Σ(cam_v3 × minute_share) ≈ team AdjEM` by construction — feeding it
-those features collapses the model to the player-impact identity and
-kills the swap-Δ signal it exists to produce.
+CURRENT BEHAVIOUR
+-----------------
+- Model: ordinary least squares on three CAM aggregates (`LINEAR_FEATURES`:
+  cam_wmean, cam_top3_mean, cam_top1), exported on the 27-slot ONNX contract
+  with zero coefficients on the 24 unused slots, so the Rust feature contract
+  and the boot validator are untouched (#363, `MODEL_FAMILY = "linear"`).
+- Frame: the SERVED ex-ante composition of every historical team-season —
+  returners less the four departure channels, plus portal arrivals and ranked
+  recruits — with every player carrying his Layer 1 HELD-OUT projection
+  (`trajectory_oof_predictions` / `freshman_oof_predictions`; "train on what
+  you serve"). Cut by `cstat-ingest projections-backtest --frame-out
+  --frame-only` to `frames/roster_impact_ex_ante.json` (gitignored);
+  `build_dataset` reads that file and refuses one cut from a different OOF
+  snapshot than the live tables. Players neither OOF table covers are not in
+  the frame, and `roster_size` reads as it does at serve. The archetype join
+  is the PRIOR season, which is what the serve side feeds.
+- Rotation normalization: rank the roster by cam_v3, take the top 13, assign
+  canonical MPG by rank (`CANONICAL_ROTATION_MPG`, mirrored from
+  `crates/cstat-core/src/roster_features.rs`) — the same projected-rotation
+  weighting in training and at serve, so no out-of-distribution minutes.
+- Judged walk-forward (train < S, test S; #361) on the raw calibrator and
+  through the served blend (`served_blend.py`), with the three Layer 4 blend
+  constants re-searched inside each fold; leave-one-season-out is kept for
+  continuity. All of it is stamped into the meta (`walk_forward`,
+  `backtest_loso`, `input_provenance`, `oof_provenance`, `trained_at`).
+- Outputs: `models/roster_impact_model.onnx` + meta, and the per-target-season
+  LOSO set in `models/roster_impact_loso/` (gitignored) that
+  `projections-backtest` loads so the end-to-end backtest is honest.
+- `roster_adjo` (`train_roster_adjo_model.py`) imports `build_dataset` /
+  `lgb_params` / `export_to_onnx` from here. It does NOT retrain when this
+  script runs — it needs its own invocation (#218); use
+  `retrain_downstream.sh`.
+- `build_sql_dataset` (the Python aggregation over the actual-season roster,
+  `aggregate_team_season` / `PLAYER_QUERY`) is kept for diagnostics that reuse
+  it. No served model trains on it.
 
-Phase B is the opposite use case. We *want* that identity: a roster
-projection is exactly `AdjEM ≈ f(Σ projected cam_v3)`. This model is a
-clean calibrator from a roster's cam_v3 distribution (plus archetype /
-experience structure) to team AdjEM. At serve time the projections
-route feeds *projected* cam_v3 (the trajectory model for returners /
-arrivals, the freshman model for recruits); all projection error then
-lives in those upstream models — honest and decomposable. The
-box-score `roster_model.onnx` is untouched and still serves swap-Δ.
+Why a calibrator that WANTS the CAM identity: the box-score roster model
+(`train_roster_model.py`) excludes cam_v3 because Σ(cam_v3 × minute_share) ≈
+AdjEM collapses it to the player-impact identity and kills the swap-Δ signal
+it existed for. A roster *projection* is exactly `AdjEM ≈ f(Σ projected
+cam_v3)`, so here the identity is the goal and all projection error lives in
+the upstream Layer 1 models — honest and decomposable.
 
-"Train on what you serve" (v2, this script). At serve time the
-projections route never sees a player's actual cam_v3 — it sees a
-*projected* one (the trajectory model for returners / arrivals, the
-freshman model for recruits), and those projections are regression-
-biased: the trajectory model under-projects elite returners by ≈3.4
-CamPom. v1 trained on actual same-season `cam_gbpm_v3_psos`, so it
-learned a calibration slope for *unbiased* inputs and then inherited
-the upstream bias raw at serve. v2 trains on the held-out OOF cam_v3
-the upstream models actually emit — `trajectory_oof_predictions` for
-returners, `freshman_oof_predictions` for recruits — so this calibrator
-absorbs that bias directly.
-
-The cohort neither OOF table covers (walk-ons, unranked freshmen, JUCO
-and international arrivals, pre-2015 priors) is **dropped from the frame**
-(v3, 2026-09). Through v2 those rows fell back to the player's actual
-target-season `cam_gbpm_v3_psos`, on the reasoning that they were
-low-minute bench slots of little weight. Measured, they were not: 27–30%
-of the rotation's |CAM| magnitude, ~3 rows per roster and ~1.6 inside its
-top seven, 60 rows over 11 seasons above +10. Since Σ cam_v3 ≈ AdjEM by
-construction that was a slice of the target sitting in the features — and
-a train/serve mismatch on top, because a served roster never contains
-these players at all: the projection composes returners, arrivals and
-ranked recruits, each of which carries a model projection, and nothing
-else. A calibrator trained on rosters that always include the realized
-value of three extra bodies learns a different slope from the one it is
-asked to apply. "Train on what you serve" therefore means the frame holds
-ONLY projected rows, and `roster_size` reads as it does at serve. The same
-change moves the archetype join to the PRIOR season, which is what the
-serve side feeds (a returner's or arrival's base-season class; none for a
-recruit) — v2 read the target season's assignment, computed from the very
-stats it was predicting. `build_sql_dataset` prints the per-source coverage
-and the dropped count.
-
-**v4 (2026-09): the frame is the served composition itself.** v3 removed
-the unprojected bodies but still composed each rotation from the players
-who ACTUALLY played the target season — their CAM was held out, their
-presence was not. The serve path composes ex-ante: returners less the four
-departure channels, plus portal arrivals and ranked recruits, before anyone
-has played. Those are different rosters: the ex-post one already knows who
-transferred in June, who never got eligible, who was hurt in October — and
-the in-frame LOSO number it produced (5.61) did not agree with the
-end-to-end backtest (5.49) that scores the ex-ante rosters the site
-serves. So the frame is now cut by the Rust side that composes the served
-rosters: `cstat-ingest projections-backtest --frame-out --frame-only`
-writes every composed team-season's `build_roster_impact_features` vector
-plus its actual AdjEM to `frames/roster_impact_ex_ante.json`, and
-`build_dataset` reads that. Judged end to end against the v3 model on the
-same 2,961 team-seasons: in-frame LOSO 5.39 vs backtest 5.42 (they agree
-now), raw bias +0.24 -> +0.09, served pooled a tie (5.410 -> 5.412), 2024+
-and high-turnover rosters slightly better, the pre-portal-era top 10
-slightly worse (+0.19). A consistency fix, not an accuracy win: it makes
-the in-frame number mean what it says, which is what lets a calibrator
-experiment be judged here without the Rust round trip. The Python
-aggregation (`aggregate_team_season`, `PLAYER_QUERY`) is kept as
-`build_sql_dataset` for the diagnostics that reuse it; no served model
-trains on it.
-
-Rotation normalization — train/serve parity. Both this script and the
-Rust `roster_impact::build_roster_impact_features` rank each roster by
-cam_v3, take the top 13, and assign canonical MPG by rank
-(`CANONICAL_ROTATION_MPG`, sourced from
-`crates/cstat-core/src/roster_features.rs::CANONICAL_ROTATION_MPG`).
-Every minutes-weighted aggregate therefore uses the SAME
-projected-rotation weighting in training and at serve — no
-out-of-distribution minutes, which was the Phase A failure mode.
-
-Deliberate deviation from the ROADMAP feature list: literal "minutes
-concentration" features (top-1/top-5 minute share, minutes stddev,
-total_minutes) are dropped. After rotation normalization every team's
-minute vector IS `CANONICAL_ROTATION_MPG[..roster_size]`, so those
-features are a deterministic function of `roster_size` and carry no
-extra cross-team signal at serve. Talent concentration is instead
-captured by the cam_v3 distribution shape (cam_top1 / top3 / top7 /
-sum). `roster_size` is kept as the depth feature.
+HISTORY
+-------
+- v1 trained on actual same-season cam_v3 — unbiased inputs — so it learned a
+  slope it was never fed at serve and inherited the trajectory model's
+  regression bias raw (elite returners under-projected by ≈3.4 CamPom).
+- v2 ("train on what you serve") trains on the OOF projections instead, so
+  the calibrator absorbs that bias. The failure mode becomes
+  desynchronization between layers, not bad data (#218,
+  `docs/model_dependency_graph.md` §2).
+- v3 (2026-09-20) dropped the cohort neither OOF table covers (walk-ons,
+  unranked freshmen, JUCO and internationals). Through v2 they entered with
+  their target-season actual — 27–30% of the rotation's |CAM|, a slice of the
+  target in the features, and a roster shape the serve path never composes.
+  Served MAE 5.526 → 5.410; the in-frame LOSO went 3.61 → 5.61, which is the
+  leak leaving. The archetype join moved to the prior season in the same
+  change.
+- v4 (2026-09-20) made the frame the served composition itself, cut by the
+  Rust backtest, instead of the players who actually played the target season
+  (CAM held out, presence not). In-frame LOSO 5.39 and end-to-end backtest
+  5.42 now agree (v3: 5.61 / 5.49); raw bias +0.24 → +0.09; served a tie. A
+  consistency fix, not an accuracy win: it lets a calibrator experiment be
+  judged here without the Rust round trip.
+- v5 (#363) replaced the 27-feature LightGBM with the OLS above. The tree's
+  leaf ceiling (maximum output 32–36 while actual maxima reached 46) was the
+  calibrator half of the elite gap; walk-forward through the served blend the
+  linear model beats it everywhere (pooled 5.494 → 5.410, top-10 6.30 → 5.58)
+  and the ceiling is gone. What remains at the top is upstream
+  (`experiments/experiment_elite_gap.py`).
+- Deliberate deviation from the ROADMAP feature list: the literal
+  minutes-concentration features (top-1/top-5 minute share, minutes stddev,
+  total minutes) are dropped — after rotation normalization they are a
+  deterministic function of `roster_size`. Talent concentration is carried by
+  the cam_v3 distribution shape instead.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
 from pathlib import Path
@@ -1075,6 +1063,10 @@ def main() -> None:
 
     meta = {
         "model": "roster_impact_model",
+        # Date of this fit (UTC). `docs/MODELS.md` reads it as the "last
+        # retrain" column (#364); date-level so a same-day rerun of a
+        # reproducible trainer (#222) still writes an identical meta.
+        "trained_at": _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
         "target": "adj_efficiency_margin",
         # v5 (#363): OLS on three CAM aggregates, exported on the 27-slot
         # contract. `coefficients` IS the model; the ONNX is its wire form.

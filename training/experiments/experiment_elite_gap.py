@@ -43,10 +43,17 @@ a per-player −0.4 at elite destinations in the portal era plus a handful of
 generational recruits, neither learnable from the seasons available. Re-run
 this when 2027 lands.
 
-Run:  cd training && ./.venv/bin/python experiment_elite_gap.py
+Run:  cd training && ./.venv/bin/python experiments/experiment_elite_gap.py
 """
 
 from __future__ import annotations
+
+# Path shim: this lives in training/experiments/ and imports the trainers and
+# shared libs from training/ (#364). Same convention as training/validation/.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import datetime as dt
 import json
