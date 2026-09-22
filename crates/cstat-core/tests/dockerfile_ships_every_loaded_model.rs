@@ -70,19 +70,37 @@ fn shipped_artifacts(dockerfile: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Model artifacts `.gitignore` re-includes under `training/models/`.
+/// Every file git tracks under `training/models/`.
 ///
-/// Those `!` lines are the declared set of committed model artifacts — the
-/// only reason to commit one is to put it in the image, so each must either
-/// be copied there or be named below as deliberately runtime-free.
-fn committed_artifacts(gitignore: &str) -> BTreeSet<String> {
-    gitignore
+/// Read from git rather than from the `.gitignore` allowlist: those `!` lines
+/// only re-include the types the `*.onnx` rule ignores, so a `_meta.json` —
+/// tracked by default, and just as fatal to a boot when absent from the image
+/// — never appears in them. `git ls-files` is the actual answer to "what do we
+/// commit", which is the property this check wants.
+///
+/// `None` when git is unavailable or the command fails; the caller skips
+/// audibly rather than passing vacuously.
+fn tracked_artifacts(root: &Path) -> Option<BTreeSet<String>> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "training/models/"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let listed: BTreeSet<String> = String::from_utf8(out.stdout)
+        .ok()?
         .lines()
-        .map(str::trim)
-        .filter_map(|l| l.strip_prefix("!/training/models/"))
+        .filter_map(|l| l.trim().strip_prefix("training/models/"))
         .filter(|p| !p.is_empty())
         .map(str::to_string)
-        .collect()
+        .collect();
+    // An empty listing means the path matched nothing — a moved directory or
+    // a checkout without it. Treat it as "cannot answer", not as "nothing to
+    // ship": passing on an empty set is the vacuous-pass failure mode.
+    (!listed.is_empty()).then_some(listed)
 }
 
 #[test]
@@ -171,8 +189,14 @@ fn image_carries_no_unexplained_model() {
 #[test]
 fn every_committed_model_artifact_is_shipped_or_declared_test_only() {
     let root = repo_root();
-    let gitignore = std::fs::read_to_string(root.join(".gitignore")).expect("read .gitignore");
     let dockerfile = std::fs::read_to_string(root.join("Dockerfile")).expect("read Dockerfile");
+    let Some(committed) = tracked_artifacts(&root) else {
+        eprintln!(
+            "skipping: `git ls-files training/models/` returned nothing usable \
+             (no git, or a checkout without that path)"
+        );
+        return;
+    };
 
     // Committed for a reason other than reaching the running image. Each is
     // read only by a test or an offline tool, so its absence cannot break a
@@ -183,12 +207,11 @@ fn every_committed_model_artifact_is_shipped_or_declared_test_only() {
     //     at runtime.
     const NOT_NEEDED_AT_RUNTIME: &[&str] = &["shap_baseline.json", "loso/loso_summary.json"];
 
-    let committed = committed_artifacts(&gitignore);
     let shipped = shipped_artifacts(&dockerfile);
     assert!(
         committed.len() >= 10,
-        "parsed only {} `!/training/models/…` allowlist entries from .gitignore — the parse \
-         broke, not the Dockerfile",
+        "git lists only {} files under training/models/ — that is not a populated checkout, \
+         and passing on it would be vacuous",
         committed.len()
     );
 
