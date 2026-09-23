@@ -19,47 +19,7 @@ import { BAND_CHIP_CLASS, BAND_CHIP_TOP_STRONG } from '../components/scale';
 import { recruitTooltipLine } from '../lib/recruitDisplay';
 import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import ModeToggle from '../components/ModeToggle';
-
-// How the eligibility-pending cohort enters the projected columns (#346).
-// `weighted` ("50/50" on screen) is the served midpoint — every case at
-// its 50/50 — and the default: it is the site's forecast, the number the team
-// page headline and the game predictor's preseason anchor use, so the grid
-// must agree with them until the reader asks a what-if. `in` / `out`
-// swap in the server's "every case clears" / "none do" headlines; the draft
-// declarants stay blended at their own probability in all three, which is why
-// this cannot simply be the ceiling or the floor.
-type EligibilityMode = 'weighted' | 'in' | 'out';
-
-// Rewrite the three projected columns for the chosen mode so every consumer
-// downstream — the sort, the rank columns, the O/D percentile colors, the
-// chips — reads the swapped value without knowing a toggle exists.
-function applyEligibilityMode(t: ProjectedTeam, mode: EligibilityMode): ProjectedTeam {
-  if (mode === 'weighted') return t;
-  // `roster_raw_adj_em` is the roster model's number for the 50/50 roster
-  // only — the server derives one anchor per team from it and does not
-  // re-score the raw per headline. For a team with a pending case the
-  // swapped headline is a different roster, so "recent form adds X"
-  // computed against the weighted raw would fold the eligibility swing into
-  // history's share. Drop it rather than say something wrong; the tooltip
-  // simply omits the line in a what-if mode. Teams with no case keep it —
-  // their headline does not move.
-  const raw = t.eligibility_pending_count > 0 ? null : t.roster_raw_adj_em;
-  return mode === 'in'
-    ? {
-        ...t,
-        midpoint_adj_em: t.adj_em_eligibility_in,
-        projected_adj_o: t.adj_o_eligibility_in,
-        projected_adj_d: t.adj_d_eligibility_in,
-        roster_raw_adj_em: raw,
-      }
-    : {
-        ...t,
-        midpoint_adj_em: t.adj_em_eligibility_out,
-        projected_adj_o: t.adj_o_eligibility_out,
-        projected_adj_d: t.adj_d_eligibility_out,
-        roster_raw_adj_em: raw,
-      };
-}
+import { applyEligibilityMode, type EligibilityMode } from '../lib/eligibilityMode';
 
 // Projectable-year definitions are shared with the team projection ledger via
 // `season.ts` so both surfaces publish the same list (incl. the upcoming
@@ -458,7 +418,7 @@ function buildColumns(
       field: 'roster_raw_adj_em',
       ...flexCol(1, 100),
       headerTooltip:
-        "What this roster projects to on its own — the roster model's AdjEM from the projected players, with no weight on last season or the program's history. Compare with Proj AdjEM: the difference is what recent form added or took away. A team whose Roster AdjEM sits well below its Proj AdjEM is being held up by its history; one where they match is being ranked purely on its players. Computed on the 50/50 roster, so it is blank in a what-if view for a team with a pending eligibility case.",
+        "What this roster projects to on its own — the roster model's AdjEM from the projected players, with no weight on last season or the program's history. Compare with Proj AdjEM: the difference is what recent form added or took away. A team whose Roster AdjEM sits well below its Proj AdjEM is being held up by its history; one where they match is being ranked purely on its players. Follows the eligibility toggle: in a what-if view this is the roster model on that same what-if roster, so the gap to Proj AdjEM always describes the roster being shown.",
       comparator: nullsLast,
       cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
         const chip = adjEmChip(p.value);
@@ -894,7 +854,7 @@ function ProjectionView({ year }: { year: number }) {
           <span className="ml-auto flex items-center gap-2">
             <span
               className="text-xs text-gray-500"
-              title={`${pendingTeams} teams have players whose eligibility for next season is before a court or waiver desk (the Pending column). 50/50: each case counted at even odds — the site's forecast, and the number the team pages and the game predictor use. Included: every case clears. Excluded: none do. Declared draft entrants stay at their own probability in all three; the rank and the O/D split follow the choice.`}
+              title={`${pendingTeams} teams have players whose eligibility for next season is before a court or waiver desk (the Pending column). 50/50: each case counted at even odds — the site's forecast, and the number the team pages and the game predictor use. Included: every case clears. Excluded: none do. Declared draft entrants stay at their own probability in all three; the rank, the O/D split and Roster AdjEM follow the choice.`}
             >
               Pending eligibility
             </span>

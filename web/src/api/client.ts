@@ -794,6 +794,12 @@ export interface ProjectedTeam {
   /// toward the program's recent form. `midpoint_adj_em − roster_raw_adj_em`
   /// is exactly what history contributed. Null when too thin to score.
   roster_raw_adj_em: number | null;
+  /// The same raw for the two eligibility what-ifs. `roster_raw_adj_em` is the
+  /// 50/50 roster; in the Included / Excluded views the headline is a different
+  /// roster, so these are the raws for those. `null` for a team with no pending
+  /// case, where the headline does not move.
+  roster_raw_eligibility_in: number | null;
+  roster_raw_eligibility_out: number | null;
 
   // --- Conference for the season being projected. Display + search only. ---
   /// The conference this team plays in during the *projected* season — not the
