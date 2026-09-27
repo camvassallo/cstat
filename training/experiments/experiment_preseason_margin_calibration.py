@@ -327,14 +327,55 @@ def cohorts(df: pd.DataFrame) -> dict[str, pd.Series]:
     non-conference games, and an over-extreme slope costs most there)."""
     opens = pd.to_datetime(df["season"].map(lambda s: f"{int(s) - 1}-11-01"))
     day = (pd.to_datetime(df["game_date"]) - opens).dt.days
+    neutral = df["is_neutral_site"].astype(bool)
     return {
         "pooled": pd.Series(True, index=df.index),
         "first14d": day < 14,
-        "neutral": df["is_neutral_site"].astype(bool),
-        "home": ~df["is_neutral_site"].astype(bool),
+        "neutral": neutral,
+        # Split because the label is not equally trustworthy across the
+        # calendar — see `neutral_label_diagnostic`. The early bucket is the
+        # multi-team exempt tournaments, and it is also the population a
+        # PRESEASON forecast is actually asked about.
+        "neutral_early": neutral & (day < 44),
+        "neutral_late": neutral & (day >= 44),
+        "home": ~neutral,
         "gap_ge_15": df["emdiff"].abs() >= 15.0,
         "gap_lt_15": df["emdiff"].abs() < 15.0,
     }
+
+
+def neutral_label_diagnostic(df: pd.DataFrame) -> dict:
+    """Is `games.is_neutral_site` telling the truth, and does it matter here?
+
+    Shipping `h_neutral = 0` is a claim that a neutral floor is worth nothing,
+    and the pooled fit disagrees with it (a stable +0.6..+0.9 residual toward
+    the nominal home team). This splits that residual by date to find out
+    whether it is a venue effect or a labelling artifact, because the two call
+    for opposite decisions: a venue effect should be served, an artifact must
+    not be.
+
+    Regresses actual margin on the AdjEM difference within each bucket; the
+    intercept is the residual home advantage the label failed to remove.
+    """
+    opens = pd.to_datetime(df["season"].map(lambda s: f"{int(s) - 1}-11-01"))
+    day = (pd.to_datetime(df["game_date"]) - opens).dt.days
+    sub = df[df["is_neutral_site"].astype(bool)]
+    day = day[df["is_neutral_site"].astype(bool)]
+    out = {}
+    for name, mask in (("early_pre_dec_15", day < 44), ("mid_season", day >= 44)):
+        rows = sub[mask.to_numpy()]
+        if len(rows) < 50:
+            continue
+        x = np.column_stack(
+            [rows["emdiff"].to_numpy(dtype=float), np.ones(len(rows))]
+        )
+        beta = _ols(x, rows["actual"].to_numpy(dtype=float))
+        out[name] = {
+            "n": int(len(rows)),
+            "slope": round(float(beta[0]), 3),
+            "residual_home_advantage": round(float(beta[1]), 3),
+        }
+    return out
 
 
 def run(df: pd.DataFrame, label: str) -> dict:
@@ -362,6 +403,7 @@ def run(df: pd.DataFrame, label: str) -> dict:
 
     out: dict = {"label": label, "n_scored": int(len(scored)),
                  "seasons_scored": sorted(int(s) for s in scored["season"].unique()),
+                 "neutral_label_diagnostic": neutral_label_diagnostic(scored),
                  "params_by_fold": params_by_fold, "candidates": {}}
 
     base_err = np.abs(preds["raw"][idx] - actual)
@@ -483,6 +525,9 @@ def main() -> None:
 
     for r in result["runs"]:
         print(f"\n=== {r['label']} (n={r['n_scored']}, seasons {r['seasons_scored']})")
+        for bucket, d in r["neutral_label_diagnostic"].items():
+            print(f"    neutral label, {bucket:16s} n={d['n']:5d} slope {d['slope']:.3f} "
+                  f"residual home advantage {d['residual_home_advantage']:+.2f}")
         print(f"{'candidate':12s} {'slope':>7s} {'hca':>6s} {'sigma':>6s} "
               f"{'rmse':>7s} {'mae':>7s} {'bias':>7s} {'z':>7s} {'logloss':>8s} {'ece':>6s}")
         for name, e in r["candidates"].items():

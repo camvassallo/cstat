@@ -885,6 +885,22 @@ const PRESEASON_ONLY_SLOPE: f32 = 0.59;
 /// result: refitting the intercept *alone*, with the scale left at 1.0, drags
 /// it down to 1.67 and still loses (MAE 10.33, z −9.4). The shipped HCA was
 /// never the problem; it was absorbing the scale error.
+///
+/// **A neutral floor is worth zero here, and that is a measurement rather
+/// than an assumption.** Fit pooled, neutral games want a residual home
+/// advantage of +0.6 to +0.9 — stable across all six folds, so not noise.
+/// Split by date it resolves: early-season multi-team tournaments, the
+/// genuinely neutral ones, sit at **+0.25**, while mid-season "neutral" games
+/// sit at **+2.42**. The latter are conference games moved to a city arena
+/// and in-state rivalries at a shared venue — a home game for one side that
+/// `games.is_neutral_site` has labelled neutral. So the pooled figure
+/// measures label noise in a population this regime never serves: a
+/// pre-tipoff forecast is asked about November tournaments, not February.
+/// Scored on early-season neutral games alone, serving 0 beats the per-venue
+/// fit on both counts (MAE 9.564 vs 9.609, bias −0.26 vs +0.68); the
+/// per-venue variant's pooled edge comes entirely from mid-season games, by
+/// fitting the artifact. `neutral_label_diagnostic` in the experiment
+/// re-derives this.
 const PRESEASON_ONLY_HCA: f32 = 3.2;
 
 /// Residual stddev for the preseason-only margin, feeding
