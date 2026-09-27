@@ -34,11 +34,11 @@ import { pctileTextColor } from '../components/pctile';
 import { fracPct, pointPct } from '../components/format';
 import { SeasonLink } from '../components/SeasonLink';
 import {
-  AVAILABLE_SEASONS_FALLBACK,
   EARLIEST_PROJECTABLE_YEAR,
   projectableSeasons,
   seasonHref,
   setPageSeasons,
+  useAvailableSeasons,
   useSeason,
 } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
@@ -184,7 +184,11 @@ export default function TeamDetail() {
   const { id } = useParams<{ id: string }>();
   const { season } = useSeason();
   const [searchParams, setSearchParams] = useSearchParams();
-  const maxPlayed = AVAILABLE_SEASONS_FALLBACK[0];
+  // Newest PLAYED season, from `/api/seasons` (#386) rather than the
+  // hardcoded fallback array. The array only moves when someone edits it, so
+  // reading it here meant a team page kept calling the in-progress season
+  // "upcoming" — and hiding its Actual view — until that edit happened.
+  const { defaultSeason: maxPlayed } = useAvailableSeasons();
 
   const isUpcoming = season > maxPlayed;
   const projectablePlayed =
@@ -1490,6 +1494,9 @@ interface ProjectedTeamViewProps {
 }
 
 function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
+  // Same reason as the wrapper above: "has this season been played" is the
+  // API's answer, not a constant's.
+  const { defaultSeason: maxPlayed } = useAvailableSeasons();
   const [data, setData] = useState<{
     team: { id: string; name: string | null; short_name: string | null };
     projection: ProjectedTeam;
@@ -1545,7 +1552,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
     // toggle (rendered above by the wrapper) rather than a bare error. The
     // raw message stays for genuine network/5xx failures. Upcoming-year
     // projections have no Actual view, so skip the hint there.
-    const hasActualView = year <= AVAILABLE_SEASONS_FALLBACK[0];
+    const hasActualView = year <= maxPlayed;
     return (
       <div className="p-4 text-amber-300/90 text-sm">
         No projection available for this team{hasActualView ? '' : ' yet'} — likely a too-thin or
@@ -1624,7 +1631,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   // projection for (the route serves OOF predictions + the actual
   // result). `hasActual` drives the Actual / Miss stat boxes + the
   // backtest honesty copy.
-  const isPlayedSeason = year <= AVAILABLE_SEASONS_FALLBACK[0];
+  const isPlayedSeason = year <= maxPlayed;
   const hasActual = p.actual_adj_em != null;
   const miss =
     hasActual && p.midpoint_adj_em != null

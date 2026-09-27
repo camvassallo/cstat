@@ -8,8 +8,8 @@ import { SeasonLink } from '../components/SeasonLink';
 import {
   projectableSeasons,
   setPageSeasons,
-  upcomingProjectionSeason,
   useSeason,
+  useUpcomingProjectionSeason,
 } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
@@ -24,8 +24,11 @@ import { applyEligibilityMode, type EligibilityMode } from '../lib/eligibilityMo
 // Projectable-year definitions are shared with the team projection ledger via
 // `season.ts` so both surfaces publish the same list (incl. the upcoming
 // forecast year) to the navbar picker.
-const UPCOMING_YEAR = upcomingProjectionSeason();
-const PROJECTABLE_YEARS = projectableSeasons();
+// Deliberately NOT module-scope constants. `upcomingProjectionSeason()` now
+// reads a cache that `/api/seasons` fills, and module scope is evaluated once
+// at import — before any fetch — so a `const` here would capture the
+// arithmetic fallback permanently and the API's answer would never be seen.
+// Both are derived per-render from the hook instead.
 
 // cstat-season year → "2026-27"-style college-season label.
 const seasonLabel = (year: number) => `${year - 1}-${String(year).slice(2)}`;
@@ -678,8 +681,10 @@ function buildColumns(
 /// elsewhere) redirects to the forecast instead of 400-ing the API.
 export default function Projected() {
   const { season: year } = useSeason();
-  if (!PROJECTABLE_YEARS.includes(year)) {
-    return <Navigate to={`/projected?season=${UPCOMING_YEAR}`} replace />;
+  const upcomingYear = useUpcomingProjectionSeason();
+  const projectableYears = projectableSeasons(upcomingYear);
+  if (!projectableYears.includes(year)) {
+    return <Navigate to={`/projected?season=${upcomingYear}`} replace />;
   }
   // `key={year}` remounts the view on a year switch, so its state
   // (teams / error) resets to the loading state without an in-effect
@@ -691,7 +696,8 @@ export default function Projected() {
 /// the navbar picker took over via `?season=`. Redirects to the new form.
 export function ProjectedYearRedirect() {
   const { year } = useParams<{ year: string }>();
-  return <Navigate to={`/projected?season=${year ?? UPCOMING_YEAR}`} replace />;
+  const upcomingYear = useUpcomingProjectionSeason();
+  return <Navigate to={`/projected?season=${year ?? upcomingYear}`} replace />;
 }
 
 function ProjectionView({ year }: { year: number }) {
@@ -702,15 +708,20 @@ function ProjectionView({ year }: { year: number }) {
   const [search, setSearch] = useState('');
   const [eligibilityMode, setEligibilityMode] = useState<EligibilityMode>('weighted');
   const isMobile = useIsMobile();
+  const upcomingYear = useUpcomingProjectionSeason();
 
   // Publish the projectable years to the site-wide season picker in the
   // navbar (the same mechanism the team/player detail pages use). The
   // navbar dropdown then lists the forecast + backtest years and its
   // selection flows back in through `?season=`. Released on unmount.
+  // Re-published when the upcoming year resolves: the first paint uses the
+  // arithmetic fallback, and the API's answer can differ (the nightly writes
+  // `current_natstat_season() + 1`, which moves a season ahead of the
+  // constant every November).
   useEffect(() => {
-    setPageSeasons(PROJECTABLE_YEARS);
+    setPageSeasons(projectableSeasons(upcomingYear));
     return () => setPageSeasons(null);
-  }, []);
+  }, [upcomingYear]);
 
   useEffect(() => {
     let canceled = false;

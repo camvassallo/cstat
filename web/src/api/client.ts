@@ -1610,8 +1610,17 @@ export function fetchPrediction(req: PredictRequest) {
 
 // Seasons
 export interface SeasonsResponse {
+  /// Seasons with at least one PLAYED game, newest first — the list the
+  /// navbar picker offers on the results-driven pages. A season whose
+  /// schedule has been ingested but not played is deliberately absent; it
+  /// arrives as `upcoming` instead.
   seasons: number[];
+  /// Where to land with no `?season=`: the newest played season.
   default: number | null;
+  /// The next season that is projected but not yet played — the Future tab's
+  /// target. Null when there is none. Read this rather than computing
+  /// `newest + 1`, which asserts the season exists instead of checking.
+  upcoming: number | null;
 }
 
 export function fetchSeasons() {
