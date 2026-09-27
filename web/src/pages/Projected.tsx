@@ -700,7 +700,21 @@ export function ProjectedYearRedirect() {
   return <Navigate to={`/projected?season=${year ?? upcomingYear}`} replace />;
 }
 
-function ProjectionView({ year }: { year: number }) {
+/// The projected board itself, separated from the `/projected` route so the
+/// Rankings page can render it for a season that has projections but no
+/// played games (#394) — the landing view from the end of a season until the
+/// next one tips off.
+///
+/// `publishSeasons` is false when embedded: the host page owns the navbar
+/// picker and publishes a list of its own, and two components writing
+/// `setPageSeasons` would race to decide what the dropdown says.
+export function ProjectionView({
+  year,
+  publishSeasons = true,
+}: {
+  year: number;
+  publishSeasons?: boolean;
+}) {
   // Rows exactly as served; `teams` below is the mode-adjusted view.
   const [served, setServed] = useState<ProjectedTeam[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -719,9 +733,10 @@ function ProjectionView({ year }: { year: number }) {
   // `current_natstat_season() + 1`, which moves a season ahead of the
   // constant every November).
   useEffect(() => {
+    if (!publishSeasons) return;
     setPageSeasons(projectableSeasons(upcomingYear));
     return () => setPageSeasons(null);
-  }, [upcomingYear]);
+  }, [upcomingYear, publishSeasons]);
 
   useEffect(() => {
     let canceled = false;

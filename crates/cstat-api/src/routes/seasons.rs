@@ -1,4 +1,5 @@
 use axum::{Router, extract::State, http::StatusCode, response::Json, routing::get};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -17,7 +18,10 @@ pub fn router() -> Router<Arc<AppState>> {
 ///
 /// - **`seasons`** — every season with a **played** game, newest first. The
 ///   list the navbar picker offers on Rankings, Players and Teams.
-/// - **`default`** — where to land with no `?season=`: the newest of those.
+/// - **`default`** — where to land with no `?season=`. Normally the newest
+///   played season, but the **upcoming** one once the previous season is over
+///   and a projection exists for the next: in September, the interesting board
+///   is next season's projection, not last season's final table (#394).
 /// - **`upcoming`** — the next season that is *projected* but not yet played,
 ///   for the Future tab and the team projection ledger. `null` when there is
 ///   none.
@@ -36,14 +40,15 @@ pub fn router() -> Router<Arc<AppState>> {
 async fn list_seasons(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let seasons = played_seasons(&state.db.pool).await.map_err(|e| {
+    let pool = &state.db.pool;
+    let seasons = played_seasons(pool).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("seasons query failed: {e}") })),
         )
     })?;
-    let default = seasons.first().copied();
-    let upcoming = next_projected_season(&state.db.pool, default)
+    let newest_played = seasons.first().copied();
+    let upcoming = next_projected_season(pool, newest_played)
         .await
         .map_err(|e| {
             (
@@ -51,6 +56,24 @@ async fn list_seasons(
                 Json(json!({ "error": format!("upcoming-season query failed: {e}") })),
             )
         })?;
+    let last_game = match newest_played {
+        Some(s) => last_played_game(pool, s).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("last-game query failed: {e}") })),
+            )
+        })?,
+        None => None,
+    };
+
+    // The clock is read at the edge, as in `routes/predict.rs`: `today_utc()`
+    // is where the replay harness's `CSTAT_SIMULATED_DATE` override lives, and
+    // `CURRENT_DATE` in the SQL would not see it.
+    let default = if prefer_upcoming(last_game, cstat_ingest::today_utc(), upcoming) {
+        upcoming
+    } else {
+        newest_played
+    };
 
     Ok(Json(json!({
         "seasons": seasons,
@@ -106,6 +129,70 @@ async fn next_projected_season(
     // every projected season is "upcoming", so compare against a floor no
     // real season reaches rather than skipping the lookup.
     .bind(newest_played.unwrap_or(i32::MIN))
+    .fetch_one(pool)
+    .await
+}
+
+/// Days of silence after which the newest played season is treated as over.
+///
+/// Measured rather than guessed, on eleven seasons of prod data: the longest
+/// gap between consecutive game DATES *within* a season is **4 days**, while
+/// the off-season runs about **220**. Thirty days sits an order of magnitude
+/// clear of the first and well inside the second, so no in-season lull can
+/// reach it and no off-season can fail to.
+const SEASON_DORMANT_AFTER_DAYS: i64 = 30;
+
+// The threshold has to clear both populations it separates, and those are
+// measurements, not preferences — so assert it at compile time rather than in
+// a test someone can skip. Shrinking it below an in-season lull would make the
+// site jump to next year's projections mid-season; growing it past an
+// off-season would mean it never leads with the projection at all.
+const _: () = {
+    /// Longest gap between consecutive game dates within a season, 2024-2026.
+    const LONGEST_IN_SEASON_GAP: i64 = 4;
+    /// Roughly April to November.
+    const SHORTEST_OFF_SEASON: i64 = 180;
+    assert!(SEASON_DORMANT_AFTER_DAYS > LONGEST_IN_SEASON_GAP * 2);
+    assert!(SEASON_DORMANT_AFTER_DAYS < SHORTEST_OFF_SEASON / 2);
+};
+
+/// Should the site lead with the upcoming projection rather than the newest
+/// played season?
+///
+/// Pure, and separately tested, because the obvious version of this rule is
+/// wrong in a way that would not show up for six weeks. "Prefer the upcoming
+/// season whenever it has projections" **breaks on Nov 1**: the nightly's
+/// `projections` step writes `current_natstat_season() + 1`, that function
+/// rolls over on Nov 1, and so from that night a projection for the season
+/// *after* the one about to tip off exists. Once the new season plays a game
+/// it becomes the newest played and `upcoming` correctly advances a year — at
+/// which point the naive rule would land every visitor on **next year's
+/// projections for the whole season**.
+///
+/// What separates the two cases is not whether a projection exists, it is
+/// whether the season in hand is still being played. Hence the gate is
+/// recency of the last completed game, which needs no calendar constant and
+/// cannot rot the way a hardcoded Nov-1 test would.
+///
+/// `None` for `last_game` means nothing has ever been played — a fresh
+/// bootstrap — and the projection is then the only thing there is to show.
+fn prefer_upcoming(last_game: Option<NaiveDate>, today: NaiveDate, upcoming: Option<i32>) -> bool {
+    if upcoming.is_none() {
+        return false;
+    }
+    match last_game {
+        Some(d) => (today - d).num_days() > SEASON_DORMANT_AFTER_DAYS,
+        None => true,
+    }
+}
+
+/// Date of the most recent completed game in a season.
+async fn last_played_game(pool: &PgPool, season: i32) -> Result<Option<NaiveDate>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<NaiveDate>>(
+        "SELECT max(game_date) FROM games \
+         WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL",
+    )
+    .bind(season)
     .fetch_one(pool)
     .await
 }
@@ -189,6 +276,62 @@ mod tests {
             .execute(pool)
             .await
             .expect("insert projection");
+    }
+
+    fn date(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn leads_with_the_projection_once_the_previous_season_is_over() {
+        // Late September: 2026 ended in April, 2027 is projected. The whole
+        // point of #394 — the interesting board is next season's.
+        assert!(prefer_upcoming(
+            Some(date("2026-04-06")),
+            date("2026-09-27"),
+            Some(2027)
+        ));
+
+        // A fresh bootstrap with nothing ever played: the projection is the
+        // only thing there is to show.
+        assert!(prefer_upcoming(None, date("2026-09-27"), Some(2027)));
+
+        // Nothing projected ahead — there is nowhere else to go.
+        assert!(!prefer_upcoming(
+            Some(date("2026-04-06")),
+            date("2026-09-27"),
+            None
+        ));
+    }
+
+    #[test]
+    fn never_leads_with_next_year_while_a_season_is_being_played() {
+        // THE REGRESSION THIS GATE EXISTS FOR. From Nov 1 the nightly writes
+        // `current_natstat_season() + 1`, so once 2027 tips off, `upcoming`
+        // is 2028 and a projection for it genuinely exists. Keying on "is
+        // something projected" alone would land every visitor on the 2028
+        // forecast for the whole 2026-27 season.
+        let mid_season = date("2027-01-15");
+        assert!(!prefer_upcoming(
+            Some(date("2027-01-14")),
+            mid_season,
+            Some(2028)
+        ));
+
+        // Not just the day after a game: the longest gap between game dates
+        // WITHIN a season measured over 2024-2026 is four days, so a lull
+        // must not read as an off-season either.
+        for gap in [1, 4, 10, 30] {
+            let last = mid_season - chrono::Duration::days(gap);
+            assert!(
+                !prefer_upcoming(Some(last), mid_season, Some(2028)),
+                "a {gap}-day gap is an in-season lull, not an off-season"
+            );
+        }
+
+        // And the boundary is a boundary: past the threshold it flips.
+        let last = mid_season - chrono::Duration::days(SEASON_DORMANT_AFTER_DAYS + 1);
+        assert!(prefer_upcoming(Some(last), mid_season, Some(2028)));
     }
 
     #[tokio::test]

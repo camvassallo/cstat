@@ -233,12 +233,22 @@ export function useAvailableSeasons(): {
   seasons: readonly number[];
   defaultSeason: number;
   upcoming: number;
+  /** Has `/api/seasons` answered (either way) in this session?
+   *
+   *  `false` means the values above are the hardcoded first-paint fallback
+   *  and may be about to change. A page whose *layout* depends on which
+   *  season it is — Rankings picks between the real table and the projected
+   *  board (#394) — should wait for this rather than commit to the guess and
+   *  swap under the reader. It flips on failure too, so an unreachable API
+   *  degrades to the fallback instead of hanging. */
+  settled: boolean;
 } {
   const [seasons, setSeasons] = useState<readonly number[]>(
     cachedSeasons ?? AVAILABLE_SEASONS_FALLBACK,
   );
   const [def, setDef] = useState<number>(cachedDefault ?? DEFAULT_SEASON);
   const [upcoming, setUpcoming] = useState<number>(upcomingProjectionSeason());
+  const [settled, setSettled] = useState<boolean>(cachedSeasons != null);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,13 +273,18 @@ export function useAvailableSeasons(): {
       .catch(() => {
         // Stay on the fallback — the dropdown still works, just with an older
         // hardcoded list. No need to surface the error to users.
+      })
+      .finally(() => {
+        // Settled either way: a caller waiting on this must not hang because
+        // the API is down.
+        if (!cancelled) setSettled(true);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  return { seasons, defaultSeason: def, upcoming };
+  return { seasons, defaultSeason: def, upcoming, settled };
 }
 
 /** The upcoming projection season, tracking `/api/seasons`.
