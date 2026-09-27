@@ -71,14 +71,42 @@ async fn upsert_team(team: &Value, pool: &PgPool, season: i32) -> Result<bool, N
         .and_then(|c| c.as_str());
     let division = team.get("division").and_then(|d| d.as_str());
 
+    // **Fill-only on the three nullable columns** (#384). This is the
+    // `teamcodes` path, and a `teamcodes` row carries only `code` / `name` /
+    // `active` — no conference, no division, and a `short_name` only for the
+    // teams the bundled alias map covers. So all three reads above are
+    // routinely `None`, and writing `EXCLUDED` unconditionally does not
+    // "refresh" them, it blanks them.
+    //
+    // That is harmless on a first bootstrap, where the columns are NULL
+    // anyway, and destructive on every run after. It matters because
+    // `teams.conference` is written from NatStat here and then **corrected by
+    // Torvik** in `compute_all` (`TORVIK_CONF_TO_CSTAT`) — the corrected value
+    // is the authoritative one, and an unconditional write silently discards
+    // it, taking the Conf column, the conference filter and conference search
+    // with it until the next `compute_all` repairs it. #245's checklist says
+    // to re-run `teams --year 2027` weekly on the strength of this command
+    // being idempotent; with an unconditional write it is not.
+    //
+    // `COALESCE` keeps a real incoming value winning — an alias-map fix or a
+    // genuine conference from a richer payload still lands — and only
+    // preserves the stored value when the incoming one is NULL. Clearing a
+    // conference deliberately is not this path's job: `ingest_single_team_details`
+    // writes one when the `/teams` detail payload has it, and `compute_all`'s
+    // Torvik pass is what moves a realigned team.
+    //
+    // `name` is deliberately NOT guarded: `pick_team_name` never returns NULL
+    // (it falls through to the raw code), so there is nothing for COALESCE to
+    // catch, and no team in twelve ingested seasons has `name = natstat_id`,
+    // so the degraded fallback has never actually fired.
     sqlx::query(
         "INSERT INTO teams (id, natstat_id, name, short_name, conference, division, season)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (natstat_id, season) DO UPDATE
          SET name = EXCLUDED.name,
-             short_name = EXCLUDED.short_name,
-             conference = EXCLUDED.conference,
-             division = EXCLUDED.division,
+             short_name = COALESCE(EXCLUDED.short_name, teams.short_name),
+             conference = COALESCE(EXCLUDED.conference, teams.conference),
+             division = COALESCE(EXCLUDED.division, teams.division),
              updated_at = now()",
     )
     .bind(Uuid::new_v4())
@@ -256,6 +284,150 @@ pub async fn ingest_single_team_details(
 mod tests {
     use super::*;
     use serde_json::json;
+    use sqlx::postgres::PgPoolOptions;
+
+    /// A TEMP `teams` that shadows the real table through `search_path`
+    /// (`pg_temp` precedes `public`), on a pinned single-connection pool so
+    /// the temp table survives for the whole test and dies with it.
+    ///
+    /// Same isolation discipline as `tests/ledger_write_failures.rs`, and for
+    /// the same reason: the thing under test is an `UPDATE` against a table a
+    /// developer's `DATABASE_URL` really has, and getting the shadowing wrong
+    /// would not fail — it would quietly blank conferences in their database,
+    /// which is precisely the bug. So the promise is asserted rather than
+    /// assumed: resolve `teams` and refuse to run unless it is a temp schema.
+    ///
+    /// Only the columns `upsert_team` binds; no foreign keys, so nothing else
+    /// in the schema is involved.
+    const TEMP_TEAMS_DDL: &str = "
+        CREATE TEMP TABLE teams (
+            id          uuid PRIMARY KEY,
+            natstat_id  text        NOT NULL,
+            name        text        NOT NULL,
+            short_name  text,
+            conference  text,
+            division    text,
+            season      integer     NOT NULL,
+            created_at  timestamp   NOT NULL DEFAULT now(),
+            updated_at  timestamp   NOT NULL DEFAULT now(),
+            UNIQUE (natstat_id, season)
+        )";
+
+    async fn temp_teams_pool() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .min_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect(&url)
+            .await
+            .expect("connect");
+        sqlx::query(TEMP_TEAMS_DDL)
+            .execute(&pool)
+            .await
+            .expect("create temp teams");
+
+        let schema: String = sqlx::query_scalar(
+            "SELECT n.nspname FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.oid = 'teams'::regclass",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("resolve teams");
+        assert!(
+            schema.starts_with("pg_temp"),
+            "refusing to run: `teams` resolved to schema `{schema}`, not a temp schema — \
+             this test would blank conferences in the REAL database in DATABASE_URL"
+        );
+
+        Some(pool)
+    }
+
+    async fn stored(pool: &PgPool, code: &str) -> (String, Option<String>, Option<String>) {
+        sqlx::query_as("SELECT name, conference, division FROM teams WHERE natstat_id = $1")
+            .bind(code)
+            .fetch_one(pool)
+            .await
+            .expect("read back")
+    }
+
+    #[tokio::test]
+    async fn re_ingest_does_not_blank_a_stored_conference() {
+        let Some(pool) = temp_teams_pool().await else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+
+        // A `teamcodes` row, which is all this path ever sees: code, name,
+        // active. No conference, no division, no short_name.
+        let teamcode_row = json!({"code": "DUKE", "name": "Duke Blue Devils", "active": "Y"});
+
+        // First bootstrap: nothing to preserve, the columns land NULL.
+        upsert_team(&teamcode_row, &pool, 2027)
+            .await
+            .expect("insert");
+        let (_, conf, div) = stored(&pool, "DUKE").await;
+        assert_eq!(
+            (conf, div),
+            (None, None),
+            "teamcodes carries neither column"
+        );
+
+        // What `compute_all`'s Torvik pass then writes — the authoritative
+        // value, and the one #384 was discarding.
+        sqlx::query(
+            "UPDATE teams SET conference = 'ACC', division = 'D1' WHERE natstat_id = 'DUKE'",
+        )
+        .execute(&pool)
+        .await
+        .expect("torvik correction");
+
+        // The weekly re-run #245's checklist asks for.
+        upsert_team(&teamcode_row, &pool, 2027)
+            .await
+            .expect("re-ingest");
+
+        let (name, conf, div) = stored(&pool, "DUKE").await;
+        assert_eq!(
+            conf.as_deref(),
+            Some("ACC"),
+            "a re-run must not blank the Torvik-corrected conference"
+        );
+        assert_eq!(div.as_deref(), Some("D1"), "same for division");
+        assert_eq!(name, "Duke Blue Devils", "name still refreshes");
+    }
+
+    #[tokio::test]
+    async fn a_real_incoming_value_still_wins_over_the_stored_one() {
+        let Some(pool) = temp_teams_pool().await else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+
+        // The other half of COALESCE, and the reason it is the right tool
+        // rather than "never update these columns": a payload that DOES carry
+        // a conference must still be able to move a realigned team. Only a
+        // NULL is treated as "no opinion".
+        sqlx::query(
+            "INSERT INTO teams (id, natstat_id, name, conference, season) \
+             VALUES (gen_random_uuid(), 'SDST', 'San Diego State', 'MWC', 2027)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed");
+
+        let richer = json!({"code": "SDST", "name": "San Diego State", "conference": "Pac-12"});
+        upsert_team(&richer, &pool, 2027).await.expect("upsert");
+
+        let (_, conf, _) = stored(&pool, "SDST").await;
+        assert_eq!(
+            conf.as_deref(),
+            Some("Pac-12"),
+            "a real value must still land"
+        );
+    }
 
     #[test]
     fn pick_team_name_uses_string_name_when_present() {
