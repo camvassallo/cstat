@@ -266,7 +266,7 @@ prod/local archetype mismatch into a committed model.
 
 ### Layer 4: the constants the chain runner does not touch
 
-Five numbers in the serving path were tuned by hand against a Layer 3 output
+Nine numbers in the serving path were tuned by hand against a Layer 3 output
 and are now Rust `const`s:
 
 | Constant | Where | Tuned by |
@@ -274,9 +274,36 @@ and are now Rust `const`s:
 | `PROJECTION_SHRINK_WEIGHT` (0.70 anchored / 0.30 unanchored) | `roster_projection.rs` | `experiments/transition_blend_diagnostic.py`, off the backtest dump |
 | `PROJECTION_SHRINK_WEIGHT_OVERHAUL` (0.55 / 0.20) | `roster_projection.rs` | same |
 | `PROGRAM_ANCHOR_SHRINK` (1.0) | `roster_projection.rs` | `experiments/program_anchor_era_diagnostic.py` |
-| `PRESEASON_PEAK_WEIGHT` (0.70) | `predict.rs` | `cstat-ingest measure-blend-accuracy` |
-| `PRESEASON_DECAY_DAYS` (42) | `predict.rs` | same |
-| `PRESEASON_HOME_COURT_ADVANTAGE` (3.5) | `predict.rs` | same |
+| `PRESEASON_PEAK_WEIGHT` (0.70) | `projection.rs` | `cstat-ingest measure-blend-accuracy` |
+| `PRESEASON_DECAY_DAYS` (42) | `projection.rs` | same |
+| `PRESEASON_HOME_COURT_ADVANTAGE` (3.5) | `projection.rs` | same |
+| `PRESEASON_ONLY_SLOPE` (0.59) | `projection.rs` | `experiments/experiment_preseason_margin_calibration.py` |
+| `PRESEASON_ONLY_HCA` (3.2) | `projection.rs` | same |
+| `PRESEASON_ONLY_SIGMA` (11.1) | `projection.rs` | same |
+
+The last three are the **preseason-only** regime (#387): the map from a
+projected AdjEM difference to a game margin when the season has not started and
+the projection is the whole forecast, with no model leg to blend. They are
+separate from the three above them on purpose, and the reason is the finding
+that produced them. `fetch_preseason_margin` serves the AdjEM *difference* at
+unit scale — no possession conversion, no attenuation for forecast error — and
+measured walk-forward over 25,501 games that over-predicts the home side by
+**+1.73 points pooled and +6.56 on games with a 15-point projected gap**.
+`measure-blend-accuracy` never saw it because its grid searches `hca × w_max ×
+end_day` and never a slope, so the blend's 0.70 weight and the pit leg absorbed
+part of the error. Re-scaling the shared leg would move every served
+early-season prediction and every `game_projections` row and require
+re-deriving the schedule against a changed leg, so the preseason-only regime
+carries its own constants and the blend leg is unchanged — tracked as its own
+change in #390.
+
+`PRESEASON_ONLY_SIGMA` is the one Layer 4 constant that is not a margin
+parameter: it is the residual stddev feeding `margin_to_win_prob`, fit by
+minimising log loss rather than set to the residual RMSE (12.18), because the
+function's 1.6 gaussian-matching constant makes the best-calibrating scale a
+different quantity from the RMSE. Both model bundles read their σ from a
+meta's `backtest_margin.rmse`; this regime has no meta, which is why it is
+here.
 
 The shrink weights sit **inside** the loop, not after it: `compute-projections`
 and the `/api/projections` route both apply them, so the `projections` stage
@@ -295,8 +322,11 @@ refit is fold-stable at 0.55 / 0.20 / 0.75 and scores a tie with the served
 0.70 / 0.55 / 1.0 (pooled +0.016, z=+0.9, 2021–2026), which is what "the served
 constants were not fit to the test set" looks like as a number. A refit that
 beats the served constants out of sample is the signal to change them; a refit
-that merely differs is not. The three `predict.rs` constants are still not
-re-checked by the chain (#236).
+that merely differs is not. The six `projection.rs` constants are still not
+re-checked by the chain (#236); the three `PRESEASON_ONLY_*` ones are re-checked
+by re-running their experiment, which needs only the games table and the
+projection rows (no model refit), so it is cheap to repeat after a Layer 2
+retrain moves the projections.
 
 **`retrain_downstream.sh` does not run either tuner** (#236). That is deliberate rather than an oversight: both tools *report* a
 recommended value, they do not write code, so there is no honest way to
