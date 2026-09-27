@@ -303,7 +303,7 @@ function buildColumns(
 
 export default function Rankings() {
   const { season } = useSeason();
-  const { seasons: playedSeasons, upcoming } = useAvailableSeasons();
+  const { seasons: playedSeasons, upcoming, settled } = useAvailableSeasons();
 
   // Own the navbar picker for this route, offering the upcoming projected
   // year alongside the played ones — the same shape `/players` publishes, and
@@ -342,11 +342,25 @@ export default function Rankings() {
     // subsequent season changes the previous data stays visible until
     // the new fetch resolves, which is mild stale-flicker but no worse
     // than what frameworks like Next.js do by default.
-    if (isProjectedSeason) return; // nothing to fetch; the board below serves itself
+    // Nothing to fetch when the board below serves itself — and nothing worth
+    // fetching before `/api/seasons` has said which season this is, or a slow
+    // response would cost a whole rankings payload for a year we are about to
+    // navigate away from.
+    if (!settled || isProjectedSeason) return;
     fetchTeamRankings(season)
       .then((r) => setTeams(r.teams))
       .finally(() => setLoading(false));
-  }, [season, isProjectedSeason]);
+  }, [season, isProjectedSeason, settled]);
+
+  // Which of the two boards this route shows depends on a value the API owns,
+  // so wait for it rather than commit to the hardcoded fallback and swap under
+  // the reader. Today the lazy route chunk means `/api/seasons` (fetched from
+  // the non-lazy layout) has almost always answered by the time this mounts —
+  // but that is load-order luck, not a guarantee, and this is the landing
+  // page. `settled` flips on failure too, so this cannot hang.
+  if (!settled) {
+    return <div className="text-gray-400 p-4">Loading…</div>;
+  }
 
   if (isProjectedSeason) {
     // `key` remounts on a year switch so the view resets to loading rather
