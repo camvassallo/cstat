@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { fetchSeasons } from '../api/client';
+import { fetchSeasons, type SeasonsResponse } from '../api/client';
+import { resolveUpcomingSeason } from '../lib/upcomingSeason';
 
 // Static fallback for the seasons dropdown. Used for the first paint and if
 // `/api/seasons` is unreachable. The API is the source of truth once it
@@ -26,19 +27,47 @@ export type Season = number;
  *  `trajectory_oof_predictions`, which start at target-season 2016. */
 export const EARLIEST_PROJECTABLE_YEAR = 2016;
 
-/** The upcoming (not-yet-played) projection target = newest-played + 1
- *  (e.g. 2027 in 2026). Uses the static fallback's newest year so every surface
- *  agrees without waiting on a `/api/seasons` fetch. */
+/** Module-level cache of the last `/api/seasons` response, so a season
+ *  selector and a SeasonLink in the same render don't each fire a fetch.
+ *  Populated by {@link useAvailableSeasons}; read by the sync accessors below,
+ *  which is why these are declared ahead of them. */
+let cachedSeasons: number[] | null = null;
+let cachedDefault: number | null = null;
+let cachedUpcoming: number | null = null;
+
+/** The upcoming (not-yet-played) projection target, e.g. 2027 during 2026.
+ *
+ *  Served by `/api/seasons` as `upcoming`, which reads
+ *  `team_preseason_projection` — the table that decides whether the Future
+ *  page and `/api/predict`'s preseason regime can answer at all.
+ *
+ *  Falls back to `newest-played + 1`, the same discipline `seasons`/`default`
+ *  already use. Note the fallback prefers the API's *default* season over the
+ *  hardcoded array: `upcoming` is legitimately null whenever nothing is
+ *  projected past the current season, and in that state `FALLBACK[0] + 1`
+ *  would name a season that has already started, pointing the Future tab at
+ *  the season being played. Chaining through `cachedDefault` keeps the
+ *  fallback tracking reality even when the hardcoded array has gone stale,
+ *  which it does every November.
+ *
+ *  Prefer {@link useUpcomingProjectionSeason} in a component so the value
+ *  tracks the API; this sync accessor exists for the non-hook call sites. */
 export function upcomingProjectionSeason(): Season {
-  return AVAILABLE_SEASONS_FALLBACK[0] + 1;
+  return resolveUpcomingSeason(cachedUpcoming, cachedDefault, AVAILABLE_SEASONS_FALLBACK[0]);
 }
 
 /** Every projectable cstat-season, newest first: the upcoming forecast down to
  *  {@link EARLIEST_PROJECTABLE_YEAR}. The list the projection surfaces hand to
- *  the navbar season picker. */
-export function projectableSeasons(): Season[] {
+ *  the navbar season picker.
+ *
+ *  Takes the upcoming year as an argument so a component can pass the live
+ *  value from {@link useUpcomingProjectionSeason}. Called bare, it reads the
+ *  cache — correct for a non-hook caller, but note it is only as current as
+ *  the last `/api/seasons` response, which is why the projection pages pass
+ *  it explicitly rather than evaluating this at module scope. */
+export function projectableSeasons(upcoming: Season = upcomingProjectionSeason()): Season[] {
   const ys: Season[] = [];
-  for (let y = upcomingProjectionSeason(); y >= EARLIEST_PROJECTABLE_YEAR; y--) {
+  for (let y = upcoming; y >= EARLIEST_PROJECTABLE_YEAR; y--) {
     ys.push(y);
   }
   return ys;
@@ -46,11 +75,46 @@ export function projectableSeasons(): Season[] {
 
 export const DEFAULT_SEASON: Season = AVAILABLE_SEASONS_FALLBACK[0];
 
-/** Module-level cache so a season selector and a SeasonLink in the same render
- *  don't each fire a /seasons fetch. Populated by `useAvailableSeasons` after
- *  its first successful response. */
-let cachedSeasons: number[] | null = null;
-let cachedDefault: number | null = null;
+/** One `/api/seasons` request per page load, shared by every hook instance.
+ *
+ *  The effect below deliberately refetches on mount — the module cache seeds
+ *  the first render, it does not replace the request — but several components
+ *  on one page legitimately want this data. A team page reads it three times
+ *  (the layout's picker plus two "is this season played" checks) and the
+ *  Future tab three, so without sharing, one navigation fires three requests.
+ *
+ *  Two mechanisms, because they cover different shapes and measurement showed
+ *  the first alone was not enough: components mount at different moments (a
+ *  nested view appears only after its parent has data), by which point an
+ *  in-flight slot has already cleared.
+ *
+ *    - **in-flight sharing** collapses hooks that mount in the same pass;
+ *    - **a short TTL** collapses the staggered ones.
+ *
+ *  60s is chosen against how fast the answer can actually change: `seasons`
+ *  and `default` move when a nightly records the first game of a new season,
+ *  i.e. at most once a day. A minute of staleness is invisible, and a
+ *  navigation a minute later still refetches.
+ */
+const SEASONS_TTL_MS = 60_000;
+
+let inFlightSeasons: Promise<SeasonsResponse> | null = null;
+let lastSeasons: { at: number; res: SeasonsResponse } | null = null;
+
+function loadSeasonsOnce(): Promise<SeasonsResponse> {
+  if (lastSeasons && Date.now() - lastSeasons.at < SEASONS_TTL_MS) {
+    return Promise.resolve(lastSeasons.res);
+  }
+  inFlightSeasons ??= fetchSeasons()
+    .then((res) => {
+      lastSeasons = { at: Date.now(), res };
+      return res;
+    })
+    .finally(() => {
+      inFlightSeasons = null;
+    });
+  return inFlightSeasons;
+}
 
 /** Read-only accessor for the current default season. Prefers the API's
  *  default once it's been fetched; falls back to the static constant during
@@ -165,15 +229,20 @@ export function usePageSeasons(): readonly number[] | null {
 /** Fetch the list of seasons present in the DB. Returns the cached list
  *  immediately and refreshes from the API on first mount. The fallback array
  *  is used until the API responds (or forever, if it doesn't). */
-export function useAvailableSeasons(): { seasons: readonly number[]; defaultSeason: number } {
+export function useAvailableSeasons(): {
+  seasons: readonly number[];
+  defaultSeason: number;
+  upcoming: number;
+} {
   const [seasons, setSeasons] = useState<readonly number[]>(
     cachedSeasons ?? AVAILABLE_SEASONS_FALLBACK,
   );
   const [def, setDef] = useState<number>(cachedDefault ?? DEFAULT_SEASON);
+  const [upcoming, setUpcoming] = useState<number>(upcomingProjectionSeason());
 
   useEffect(() => {
     let cancelled = false;
-    fetchSeasons()
+    loadSeasonsOnce()
       .then((res) => {
         if (cancelled) return;
         if (res.seasons.length === 0) return; // empty DB, keep fallback
@@ -181,6 +250,15 @@ export function useAvailableSeasons(): { seasons: readonly number[]; defaultSeas
         cachedDefault = res.default ?? res.seasons[0];
         setSeasons(res.seasons);
         setDef(cachedDefault);
+        // `upcoming` is legitimately null — nothing projected beyond the
+        // newest played season — so fall back to `default + 1` rather than
+        // blanking the Future tab. Recomputed from the response's own default
+        // rather than left at the first-paint value, which was derived from
+        // the hardcoded array and can be a season behind.
+        cachedUpcoming = res.upcoming;
+        setUpcoming(
+          resolveUpcomingSeason(res.upcoming, cachedDefault, AVAILABLE_SEASONS_FALLBACK[0]),
+        );
       })
       .catch(() => {
         // Stay on the fallback — the dropdown still works, just with an older
@@ -191,5 +269,15 @@ export function useAvailableSeasons(): { seasons: readonly number[]; defaultSeas
     };
   }, []);
 
-  return { seasons, defaultSeason: def };
+  return { seasons, defaultSeason: def, upcoming };
+}
+
+/** The upcoming projection season, tracking `/api/seasons`.
+ *
+ *  Prefer this over the bare {@link upcomingProjectionSeason} in a component:
+ *  the sync accessor can only return whatever the cache held when it was
+ *  called, so a module-scope `const` built from it captures the fallback
+ *  forever and never sees the API's answer. */
+export function useUpcomingProjectionSeason(): Season {
+  return useAvailableSeasons().upcoming;
 }

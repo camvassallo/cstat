@@ -20,7 +20,6 @@ import ProjectedPlayers from '../components/ProjectedPlayers';
 import { SeasonLink } from '../components/SeasonLink';
 import {
   setPageSeasons,
-  upcomingProjectionSeason,
   useAvailableSeasons,
   useSeason,
 } from '../components/season';
@@ -311,16 +310,19 @@ function buildColumns(
 export default function Players() {
   const { season } = useSeason();
   usePageTitle('Players');
-  const { seasons: availableSeasons } = useAvailableSeasons();
   // The upcoming (not-yet-played) projection year — its own view (projected
-  // CAM) rather than the observed-stat grid.
-  const upcoming = upcomingProjectionSeason();
+  // CAM) rather than the observed-stat grid. Off the same hook, so it tracks
+  // `/api/seasons`'s `upcoming` instead of arithmetic on a hand-edited
+  // constant.
+  const { seasons: availableSeasons, upcoming } = useAvailableSeasons();
   const isProjected = season === upcoming;
 
   // Publish the season list to the navbar picker WITH the upcoming projected
-  // year prepended, so `/players` surfaces it (the games-only `/api/seasons`
-  // never carries a not-yet-played year). Same mechanism the `/projected` page
-  // uses. Released on unmount.
+  // year prepended, so `/players` surfaces it. `/api/seasons` deliberately
+  // keeps it out of `seasons` — that list is the played seasons, and a page
+  // that only has observed stats should not offer a year with none — so the
+  // pages that CAN show a projected year prepend it themselves. Same
+  // mechanism the `/projected` page uses. Released on unmount.
   useEffect(() => {
     setPageSeasons([upcoming, ...availableSeasons.filter((s) => s !== upcoming)]);
     return () => setPageSeasons(null);
