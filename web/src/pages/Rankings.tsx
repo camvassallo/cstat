@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
 import { fetchTeamRankings, type TeamRanking } from '../api/client';
@@ -7,7 +8,12 @@ import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import { ScoreTicker } from '../components/ScoreTicker';
 import { pctileTextColor } from '../components/pctile';
-import { setPageSeasons, useAvailableSeasons, useSeason } from '../components/season';
+import {
+  projectableSeasons,
+  setPageSeasons,
+  useAvailableSeasons,
+  useSeason,
+} from '../components/season';
 import { ProjectionView } from './Projected';
 import { SeasonLink } from '../components/SeasonLink';
 import { usePageTitle } from '../components/usePageTitle';
@@ -363,6 +369,16 @@ export default function Rankings() {
   }
 
   if (isProjectedSeason) {
+    // Neither played nor projectable — a hand-edited `?season=`, or a year
+    // older than the projection pipeline can compose from. Send it to the
+    // default rather than down the projections path, which answers a season
+    // it has no base for by surfacing a raw database error. `/projected`
+    // already redirects for the same reason; this is the same rule on the
+    // route that now shares its board. No loop: the default is always either
+    // played or the projectable upcoming season.
+    if (!projectableSeasons(upcoming).includes(season)) {
+      return <Navigate to="/" replace />;
+    }
     // `key` remounts on a year switch so the view resets to loading rather
     // than showing the previous year's rows, matching `/projected`.
     return <ProjectionView key={season} year={season} publishSeasons={false} />;
