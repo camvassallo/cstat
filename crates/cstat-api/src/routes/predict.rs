@@ -336,21 +336,20 @@ async fn predict(
     // Each side's season is bound to its team id, which is what keeps the
     // venue swap inside `predict_with_venue` from pairing each team with the
     // other's year.
-    // A season with no played games has no `team_season_stats` row for either
-    // side, so the 49-feature diff vector cannot be built and the model path
-    // can only 404 — while the quantity a reader is asking for (both teams'
-    // projected AdjEM, which `compute-projections` has already written) is
-    // sitting in the database. #387: serve that instead, at weight 1.0.
+    // Two teams that have not played have no `team_season_stats` row, so the
+    // 49-feature diff vector cannot be built and the model path can only 404 —
+    // while the quantity a reader is asking for (both teams' projected AdjEM,
+    // which `compute-projections` has already written) is sitting in the
+    // database. #387: serve that instead, at weight 1.0.
     //
     // Resolved BEFORE feature extraction rather than as a fallback on its
-    // error, on purpose. "The season has not started" is a fact about the
-    // season; "feature extraction found no row" also covers a team that played
-    // and then lost its stats rows, which is a data gap the pipeline needs to
-    // surface, not something to paper over with a confident preseason forecast.
+    // error, on purpose, and asked per team rather than per season — see
+    // [`projection::team_has_played`] for both, including the blank-row case
+    // that does not fail extraction at all.
     //
-    // Cross-era is excluded: two seasons have no single "has it started"
-    // answer, and a what-if against an unstarted season is a question for
-    // whichever regime the *started* side is in.
+    // Cross-era is excluded: the two sides are in different calendars, so a
+    // what-if against an unstarted season is a question for whichever regime
+    // the *started* side is in.
     let preseason_only = if cross_era {
         PreseasonOnlyRegime::NotApplicable
     } else {

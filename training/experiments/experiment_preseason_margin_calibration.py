@@ -284,7 +284,13 @@ def fit_sigma(margin: np.ndarray, actual: np.ndarray) -> float:
     scale, and the preseason regime has no model meta to read one from."""
     grid = np.arange(8.0, 22.01, 0.05)
     scores = [logloss(margin, actual, s) for s in grid]
-    return float(grid[int(np.argmin(scores))])
+    best = int(np.argmin(scores))
+    if best in (0, len(grid) - 1):
+        raise SystemExit(
+            f"sigma optimum landed on the grid edge ({grid[best]}) — the grid is wrong, "
+            "and returning the edge would report a bound as a fit"
+        )
+    return float(grid[best])
 
 
 # ------------------------------------------------------------------- scoring
@@ -319,9 +325,7 @@ def cohorts(df: pd.DataFrame) -> dict[str, pd.Series]:
     today; `neutral` is where the HCA leg is off; `blowout_gap` is the shape
     #387 unlocks most of (a projected schedule is mostly lopsided
     non-conference games, and an over-extreme slope costs most there)."""
-    opens = pd.to_datetime(
-        df["season"].astype(int).astype(str).radd("").map(lambda s: f"{int(s) - 1}-11-01")
-    )
+    opens = pd.to_datetime(df["season"].map(lambda s: f"{int(s) - 1}-11-01"))
     day = (pd.to_datetime(df["game_date"]) - opens).dt.days
     return {
         "pooled": pd.Series(True, index=df.index),

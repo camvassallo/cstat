@@ -894,9 +894,9 @@ const PRESEASON_ONLY_HCA: f32 = 3.2;
 /// the same walk-forward folds by minimising log loss under the served
 /// logistic — not set to the residual RMSE (12.18), because
 /// `margin_to_win_prob`'s 1.6 gaussian-matching constant makes the
-/// best-calibrating scale a different quantity. Per-fold 11.00 → 11.15, so
-/// 11.1; expected calibration error 0.0095 across ten deciles, against 0.0241
-/// for the unit-scale form. Its closeness to
+/// best-calibrating scale a different quantity. Per-fold 11.05 → 11.20, so
+/// 11.1; at the shipped slope and HCA that gives an expected calibration error
+/// of 0.0097 across ten deciles, against 0.0241 for the unit-scale form. Its closeness to
 /// [`PREDICT_SIGMA_PIT`] (11.03) is a coincidence of two unrelated fits and
 /// not a reason to share a constant.
 const PRESEASON_ONLY_SIGMA: f64 = 11.1;
@@ -941,15 +941,16 @@ pub struct PreseasonOnlyPrediction {
 /// model prediction built from an empty cohort.
 #[derive(Clone, Copy, Debug)]
 pub enum PreseasonOnlyRegime {
-    /// The season has played games. The ordinary feature/model path applies
-    /// and this regime must not engage — a played season's stats are the
-    /// better evidence, and the blend already handles the early weeks.
+    /// At least one of the two teams has played. The ordinary feature/model
+    /// path applies and this regime must not engage — a played team's stats
+    /// are the better evidence, and the blend already handles the weeks after
+    /// that, weighting the same projection at 0.70 and decaying it out.
     NotApplicable,
-    /// No games played, and both teams carry a projection row.
+    /// Neither team has played, and both carry a projection row.
     Serve(PreseasonOnlyPrediction),
-    /// No games played, and at least one side has no projection row (a
-    /// too-thin roster, or a season `compute-projections` has not run for).
-    /// 74 of 364 teams on the 2027 board are in this state.
+    /// Neither team has played, and at least one side has no projection row
+    /// (a too-thin roster, or a season `compute-projections` has not run
+    /// for). 74 of 364 teams on the 2027 board are in this state.
     NoProjection,
 }
 
@@ -973,31 +974,47 @@ pub fn preseason_only_win_prob(margin: f32) -> f64 {
     win_prob_at_sigma(margin, PRESEASON_ONLY_SIGMA)
 }
 
-/// Has any game in this season been played to a final score?
+/// Has this team played a game to a final score in this season?
 ///
-/// The precondition for the preseason-only regime, and deliberately a property
-/// of the SEASON rather than of a feature lookup failing. Falling back to
-/// preseason whenever feature extraction returns `RowNotFound` would also
-/// swallow the case the pipeline needs to shout about — a team that played and
-/// then lost its stats rows — and serve a confident forecast over a genuine
-/// data gap.
+/// The precondition for the preseason-only regime, asked **per team rather
+/// than per season**, and that distinction is the whole behaviour of the
+/// regime through opening week. A season-level "has anything been played"
+/// test collapses the moment the first game ends: on the night of the opener
+/// one result would send the other ~360 teams' matchups back to a path that
+/// has nothing to build a feature vector from, for another week. Asked per
+/// team, each side leaves the regime when it has actually played, which is
+/// when there is finally something better to answer with.
+///
+/// Deliberately a positive fact about the team rather than a fallback on
+/// feature extraction failing. Those are not the same set: a team that played
+/// and then lost its `team_season_stats` row is a data gap the pipeline needs
+/// to surface, and — worse — a team that has a *blank* row (the `/teams`
+/// ingest step writes one before any box score exists) does not fail
+/// extraction at all. It yields an all-default feature vector and a confident
+/// garbage margin. Keying on games played catches that case; keying on the
+/// error could not see it.
 ///
 /// Errs toward `true` on a query failure: that routes to the ordinary path,
-/// which reports its own error honestly, rather than answering a live season's
+/// which reports its own error honestly, rather than answering a live team's
 /// matchup from a preseason prior.
 ///
-/// One `EXISTS` on `idx_games_season_date`, measured at 0.03–0.04 ms in either
-/// direction (a started season stops at the first row; an unstarted one walks
-/// only that season's index entries). It is on the hot path for every
-/// same-season `/api/predict` call, ahead of 49-feature extraction and three
-/// ONNX sessions, so the serial round-trip is worth the simplicity of deciding
-/// the regime before doing any of that work.
-pub async fn season_has_played_games(pool: &PgPool, season: i32) -> bool {
+/// Two `EXISTS` probes against `idx_games_home_team` / `idx_games_away_team`,
+/// short-circuiting on the first match, at 0.035–0.037 ms whichever way the
+/// answer goes; the two teams' probes run concurrently. They sit on the hot
+/// path for every same-season `/api/predict` call, ahead of
+/// 49-feature extraction and three ONNX sessions, so the round-trip is worth
+/// deciding the regime before doing any of that work.
+pub async fn team_has_played(pool: &PgPool, season: i32, team_id: Uuid) -> bool {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM games \
-         WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL)",
+           WHERE season = $1 AND home_team_id = $2 \
+             AND home_score IS NOT NULL AND away_score IS NOT NULL) \
+             OR EXISTS (SELECT 1 FROM games \
+           WHERE season = $1 AND away_team_id = $2 \
+             AND home_score IS NOT NULL AND away_score IS NOT NULL)",
     )
     .bind(season)
+    .bind(team_id)
     .fetch_one(pool)
     .await
     .unwrap_or(true)
@@ -1005,8 +1022,9 @@ pub async fn season_has_played_games(pool: &PgPool, season: i32) -> bool {
 
 /// Resolve [`PreseasonOnlyRegime`] for one matchup.
 ///
-/// Single-season by construction: a cross-era what-if has two seasons and no
-/// single "has it started" answer, so callers must not reach this with one.
+/// Single-season by construction: a cross-era what-if has two seasons, so the
+/// two sides' "has it played" answers are not about the same calendar and
+/// callers must not reach this with one.
 pub async fn preseason_only_regime(
     pool: &PgPool,
     season: i32,
@@ -1014,7 +1032,11 @@ pub async fn preseason_only_regime(
     away_id: Uuid,
     venue: Venue,
 ) -> PreseasonOnlyRegime {
-    if season_has_played_games(pool, season).await {
+    let (home_played, away_played) = tokio::join!(
+        team_has_played(pool, season, home_id),
+        team_has_played(pool, season, away_id)
+    );
+    if home_played || away_played {
         return PreseasonOnlyRegime::NotApplicable;
     }
     match fetch_preseason_adj_em_diff(pool, season, home_id, away_id).await {
