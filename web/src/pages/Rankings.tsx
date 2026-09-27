@@ -7,7 +7,8 @@ import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
 import { ScoreTicker } from '../components/ScoreTicker';
 import { pctileTextColor } from '../components/pctile';
-import { useSeason } from '../components/season';
+import { setPageSeasons, useAvailableSeasons, useSeason } from '../components/season';
+import { ProjectionView } from './Projected';
 import { SeasonLink } from '../components/SeasonLink';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
@@ -302,7 +303,29 @@ function buildColumns(
 
 export default function Rankings() {
   const { season } = useSeason();
-  usePageTitle('Team Rankings');
+  const { seasons: playedSeasons, upcoming } = useAvailableSeasons();
+
+  // Own the navbar picker for this route, offering the upcoming projected
+  // year alongside the played ones — the same shape `/players` publishes, and
+  // the reason the embedded board below is told not to publish its own. A
+  // reader who lands on the projection has to be able to step back to last
+  // season's real table, and a reader on a played season has to be able to
+  // step forward.
+  useEffect(() => {
+    setPageSeasons([upcoming, ...playedSeasons.filter((s) => s !== upcoming)]);
+    return () => setPageSeasons(null);
+  }, [playedSeasons, upcoming]);
+
+  // A season the site has never seen a completed game in has no
+  // `team_season_stats`, so the rankings grid below would render empty
+  // (#386). From the end of one season until the next one tips off, the board
+  // worth showing is the projection — so show it, here, rather than making
+  // the reader find the Forecast tab (#394). `/api/seasons` decides when that
+  // is: `default` follows the projection while the last season is over and
+  // snaps back to real rankings on the night of the first result.
+  const isProjectedSeason = !playedSeasons.includes(season);
+
+  usePageTitle(isProjectedSeason ? 'Projected Rankings' : 'Team Rankings');
   const isMobile = useIsMobile();
   const [teams, setTeams] = useState<TeamRanking[]>([]);
   const [loading, setLoading] = useState(true);
@@ -319,10 +342,17 @@ export default function Rankings() {
     // subsequent season changes the previous data stays visible until
     // the new fetch resolves, which is mild stale-flicker but no worse
     // than what frameworks like Next.js do by default.
+    if (isProjectedSeason) return; // nothing to fetch; the board below serves itself
     fetchTeamRankings(season)
       .then((r) => setTeams(r.teams))
       .finally(() => setLoading(false));
-  }, [season]);
+  }, [season, isProjectedSeason]);
+
+  if (isProjectedSeason) {
+    // `key` remounts on a year switch so the view resets to loading rather
+    // than showing the previous year's rows, matching `/projected`.
+    return <ProjectionView key={season} year={season} publishSeasons={false} />;
+  }
 
   return (
     <div>
