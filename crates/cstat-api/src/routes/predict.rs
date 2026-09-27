@@ -17,7 +17,7 @@ use cstat_core::features::TeamSeason;
 use cstat_core::inference::{FEATURE_META, FEATURE_NAMES, NUM_FEATURES};
 use cstat_core::projection::{
     self, Attribution, BlendClock, INVALID_MATCHUP_PREFIX, NO_PREDICTION_DATA_PREFIX,
-    ProjectionSummary, Venue,
+    PreseasonOnlyPrediction, PreseasonOnlyRegime, ProjectionSummary, Venue,
 };
 use cstat_core::queries;
 
@@ -93,6 +93,62 @@ fn predict_error_status(e: &str) -> StatusCode {
         StatusCode::BAD_REQUEST
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+/// Which regime produced the numbers in a `/api/predict` response.
+///
+/// An enum rather than bare `&str` literals because this value is a **contract
+/// with the frontend**: `PredictionResult.prediction_basis` in
+/// `web/src/api/client.ts` is a closed union, and `Predict.tsx` keys its chip
+/// off it. A basis the server can emit but the client's union does not list is
+/// a silent hole — the chip simply does not render, and the honesty claim the
+/// chip exists to make goes missing on exactly the surface that needs it.
+/// `every_basis_the_server_can_emit_is_in_the_frontend_union` below walks
+/// `Self::ALL` against that union, which only works because this list cannot be
+/// silently forgotten.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PredictionBasis {
+    /// The requested season has played no games: the preseason roster
+    /// projection is the whole forecast, at weight 1.0 (#387). The only basis
+    /// with a null `predicted_total` and null scores.
+    PreseasonOnly,
+    /// The early-season blend, with the preseason leg holding the majority
+    /// weight (the first ~12 days). Never pure preseason — peak weight is 0.70.
+    Preseason,
+    /// The early-season blend through its decay tail.
+    Blended,
+    /// Pure point-in-time: an `as_of_date` request past the decay window, or
+    /// one where a team has no projection row.
+    Pit,
+    /// End-of-season state, no `as_of_date`. The legacy path.
+    Leaky,
+    /// The two slots named different seasons — a what-if that never happened.
+    CrossEra,
+}
+
+impl PredictionBasis {
+    /// Every variant, for the contract test. Must stay exhaustive; the `match`
+    /// in [`Self::as_str`] is what forces a new variant to be considered here.
+    #[cfg(test)]
+    const ALL: &'static [Self] = &[
+        Self::PreseasonOnly,
+        Self::Preseason,
+        Self::Blended,
+        Self::Pit,
+        Self::Leaky,
+        Self::CrossEra,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PreseasonOnly => "preseason_only",
+            Self::Preseason => "preseason",
+            Self::Blended => "blended",
+            Self::Pit => "pit",
+            Self::Leaky => "leaky",
+            Self::CrossEra => "cross_era",
+        }
     }
 }
 
@@ -280,88 +336,183 @@ async fn predict(
     // Each side's season is bound to its team id, which is what keeps the
     // venue swap inside `predict_with_venue` from pairing each team with the
     // other's year.
-    let home_ts = TeamSeason::new(home_team.id, home_season);
-    let away_ts = TeamSeason::new(away_team.id, away_season);
-    let explained = projection::predict_with_venue(
-        &state.db.pool,
-        &state.predictor,
-        home_ts,
-        away_ts,
-        venue,
-        is_conference,
-        params.as_of_date,
-        // The Keys panel renders these — the one surface that does.
-        Attribution::Shap,
-    )
-    .await
-    .map_err(|e| {
-        let status = predict_error_status(&e);
-        if status != StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::warn!(
-                home = %params.home, away = %params.away,
-                home_season, away_season, %status,
-                "predict: client-side prediction failure — {e}"
-            );
-        }
-        (status, Json(json!({ "error": e })))
-    })?;
-
-    // Early-season preseason × pit blend (ROADMAP §6) — see
-    // [`apply_preseason_blend`] for the full semantics (weight schedule,
-    // live-path gating, σ choice).
+    // Two teams that have not played have no `team_season_stats` row, so the
+    // 49-feature diff vector cannot be built and the model path can only 404 —
+    // while the quantity a reader is asking for (both teams' projected AdjEM,
+    // which `compute-projections` has already written) is sitting in the
+    // database. #387: serve that instead, at weight 1.0.
     //
-    // Cross-era skips it outright. `apply_preseason_blend` takes a single
-    // season and `blend_weight` already decays to 0 for any past one, so for
-    // most cross-era pairs this is a guard rather than new math. It is load-
-    // bearing for the pair it isn't: when one slot is the in-progress season,
-    // the weight is non-zero and the helper would look up BOTH teams'
-    // `team_preseason_projection` rows in that one season — silently pulling
-    // the other side's current-year forecast in place of the past-year team
-    // the user actually asked for.
-    let pit_margin = explained.prediction.predicted_margin;
-    let mut prediction_basis = if cross_era {
-        // Its own label. The existing four all describe *how much of the
-        // season the number saw*, which is not the axis a cross-year what-if
-        // varies on; reusing "leaky" in particular would read as an accuracy
-        // warning on a surface where the whole point is that the matchup is
-        // hypothetical.
-        "cross_era"
-    } else if params.as_of_date.is_some() {
-        "pit"
+    // Resolved BEFORE feature extraction rather than as a fallback on its
+    // error, on purpose, and asked per team rather than per season — see
+    // [`projection::team_has_played`] for both, including the blank-row case
+    // that does not fail extraction at all.
+    //
+    // Cross-era is excluded: the two sides are in different calendars, so a
+    // what-if against an unstarted season is a question for whichever regime
+    // the *started* side is in.
+    let preseason_only = if cross_era {
+        PreseasonOnlyRegime::NotApplicable
     } else {
-        "leaky"
-    };
-    let blend = if cross_era {
-        None
-    } else {
-        projection::apply_preseason_blend(
+        projection::preseason_only_regime(
             &state.db.pool,
             home_season,
             home_team.id,
             away_team.id,
             venue,
-            blend_clock(params.as_of_date),
-            pit_margin,
         )
         .await
     };
-    let blended_margin = blend.map(|b| b.margin).unwrap_or(pit_margin);
-    if let Some(b) = blend {
-        // Peak weight is 0.70 (never pure preseason), so the chip labels the
-        // *dominant* leg: "preseason" while the preseason weight is the majority
-        // (the first ~12 days), "blended" through the decay tail to pure pit.
-        prediction_basis = if b.weight >= 0.5 {
-            "preseason"
-        } else {
-            "blended"
-        };
+    if matches!(preseason_only, PreseasonOnlyRegime::NoProjection) {
+        // Tagged with the missing-data prefix so it lands as a 404 alongside
+        // every other "we looked and hold nothing" outcome. The wording names
+        // the cause the user can act on: this is the routine too-thin-roster
+        // case (74 of 364 teams on the 2027 board), not a typo.
+        let error = format!(
+            "{NO_PREDICTION_DATA_PREFIX}: season {home_season} has not started and at least one \
+             of {} / {} has no preseason projection — a roster too thin to project, or a season \
+             the projection has not been computed for",
+            home_team.name, away_team.name
+        );
+        tracing::warn!(
+            home = %params.home, away = %params.away, season = home_season,
+            "predict: preseason-only regime has no projection for one side"
+        );
+        return Err((StatusCode::NOT_FOUND, Json(json!({ "error": error }))));
     }
-    let blended_win_prob = match blend {
-        Some(b) => b.win_prob,
-        None => explained.prediction.home_win_probability,
+    let serving_preseason_only = matches!(preseason_only, PreseasonOnlyRegime::Serve(_));
+
+    let home_ts = TeamSeason::new(home_team.id, home_season);
+    let away_ts = TeamSeason::new(away_team.id, away_season);
+    let explained = if serving_preseason_only {
+        // No model leg exists to run; skip it rather than call it and discard
+        // a guaranteed error.
+        None
+    } else {
+        Some(
+            projection::predict_with_venue(
+                &state.db.pool,
+                &state.predictor,
+                home_ts,
+                away_ts,
+                venue,
+                is_conference,
+                params.as_of_date,
+                // The Keys panel renders these — the one surface that does.
+                Attribution::Shap,
+            )
+            .await
+            .map_err(|e| {
+                let status = predict_error_status(&e);
+                if status != StatusCode::INTERNAL_SERVER_ERROR {
+                    tracing::warn!(
+                        home = %params.home, away = %params.away,
+                        home_season, away_season, %status,
+                        "predict: client-side prediction failure — {e}"
+                    );
+                }
+                (status, Json(json!({ "error": e })))
+            })?,
+        )
     };
 
-    let predicted_winner = if blended_margin > 0.0 {
+    // The headline pair, from whichever of the two disjoint regimes applies.
+    //
+    // Preseason-only (#387): the margin IS the calibrated preseason
+    // projection, at weight 1.0, with its own σ — see
+    // `projection::PRESEASON_ONLY_SLOPE`. Nothing to blend, nothing to
+    // attribute, and no total (the preseason projection is a strength delta;
+    // `team_preseason_projection` carries no tempo, and there is no preseason
+    // totals model to invent one from).
+    //
+    // Otherwise: the model, optionally mixed with the preseason leg by the
+    // early-season blend (ROADMAP §6) — see [`apply_preseason_blend`] for the
+    // full semantics (weight schedule, live-path gating, σ choice).
+    //
+    // Cross-era skips the blend outright. `apply_preseason_blend` takes a
+    // single season and `blend_weight` already decays to 0 for any past one, so
+    // for most cross-era pairs this is a guard rather than new math. It is
+    // load-bearing for the pair it isn't: when one slot is the in-progress
+    // season, the weight is non-zero and the helper would look up BOTH teams'
+    // `team_preseason_projection` rows in that one season — silently pulling
+    // the other side's current-year forecast in place of the past-year team the
+    // user actually asked for.
+    let (headline_margin, headline_win_prob, prediction_basis, predicted_total) =
+        match (&preseason_only, &explained) {
+            (PreseasonOnlyRegime::Serve(p), _) => {
+                let PreseasonOnlyPrediction {
+                    margin,
+                    home_win_prob,
+                    ..
+                } = *p;
+                // Its own basis label rather than reusing "preseason". That one
+                // means the 0.70-weight blend, whose chip tells the reader the
+                // number is ~70/30 preseason/form — a claim this regime cannot
+                // make, since there is no form leg and no total. Same reasoning
+                // that gave "cross_era" its own label: a basis value is a
+                // promise about what produced the number.
+                (margin, home_win_prob, PredictionBasis::PreseasonOnly, None)
+            }
+            (_, Some(explained)) => {
+                let pit_margin = explained.prediction.predicted_margin;
+                let blend = if cross_era {
+                    None
+                } else {
+                    projection::apply_preseason_blend(
+                        &state.db.pool,
+                        home_season,
+                        home_team.id,
+                        away_team.id,
+                        venue,
+                        blend_clock(params.as_of_date),
+                        pit_margin,
+                    )
+                    .await
+                };
+                let basis = match blend {
+                    // Peak weight is 0.70 (never pure preseason), so the chip
+                    // labels the *dominant* leg: "preseason" while the
+                    // preseason weight is the majority (the first ~12 days),
+                    // "blended" through the decay tail to pure pit.
+                    Some(b) if b.weight >= 0.5 => PredictionBasis::Preseason,
+                    Some(_) => PredictionBasis::Blended,
+                    // Its own label. The others all describe *how much of the
+                    // season the number saw*, which is not the axis a
+                    // cross-year what-if varies on; reusing "leaky" in
+                    // particular would read as an accuracy warning on a surface
+                    // where the whole point is that the matchup is
+                    // hypothetical.
+                    None if cross_era => PredictionBasis::CrossEra,
+                    None if params.as_of_date.is_some() => PredictionBasis::Pit,
+                    None => PredictionBasis::Leaky,
+                };
+                (
+                    blend.map(|b| b.margin).unwrap_or(pit_margin),
+                    blend
+                        .map(|b| b.win_prob)
+                        .unwrap_or(explained.prediction.home_win_probability),
+                    basis,
+                    Some(explained.prediction.predicted_total as f64),
+                )
+            }
+            // Unreachable: `explained` is `None` only when the regime is
+            // `Serve` (matched above) or `NoProjection` (returned as a 404
+            // before either binding existed). Spelled out rather than
+            // `unreachable!()` so a future edit that breaks the pairing
+            // degrades to a 500 instead of panicking the handler into
+            // #errors-api.
+            (_, None) => {
+                tracing::error!(
+                    season = home_season,
+                    "predict: no model output and no preseason-only prediction"
+                );
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "prediction unavailable" })),
+                ));
+            }
+        };
+
+    let predicted_winner = if headline_margin > 0.0 {
         &home_team.name
     } else {
         &away_team.name
@@ -373,8 +524,13 @@ async fn predict(
         Venue::Neutral => "neutral",
     };
 
-    let (feature_contributions, contributions_by_group) =
-        build_contribution_payload(&explained.feature_values, &explained.contributions);
+    // Empty in the preseason-only regime: there is no model output to
+    // attribute, and a panel of zeros reads as "nothing mattered" rather than
+    // "nothing was run".
+    let (feature_contributions, contributions_by_group) = match &explained {
+        Some(e) => build_contribution_payload(&e.feature_values, &e.contributions),
+        None => (Vec::new(), Vec::new()),
+    };
 
     // Roster summaries + prior meetings travel in the same response so the
     // Predict page stays a one-round-trip view. Both run in parallel with
@@ -452,18 +608,28 @@ async fn predict(
     // 1-decimal `predicted_margin` are. If the totals number ever
     // gets surfaced alongside the score pair, switch to
     // `away_score = round(total) - home_score` for sum reconciliation.
-    // Scores derive from the *blended* margin so they stay consistent with
-    // the headline (total stays pit — preseason has no totals model).
-    let total = explained.prediction.predicted_total as f64;
-    let margin = blended_margin as f64;
-    let predicted_home_score = ((total + margin) / 2.0).round() as i32;
-    let predicted_away_score = ((total - margin) / 2.0).round() as i32;
+    // Scores derive from the *headline* margin so they stay consistent with it
+    // (the total stays pit — the blend's preseason leg has no totals model).
+    // Both are `None` in the preseason-only regime, which has no total at all:
+    // a score pair needs a level as well as a difference, and inventing one
+    // from a league-average tempo would put two fabricated numbers in the
+    // largest type on the page.
+    let margin = headline_margin as f64;
+    let (predicted_home_score, predicted_away_score) = match predicted_total {
+        Some(total) => (
+            Some(((total + margin) / 2.0).round() as i32),
+            Some(((total - margin) / 2.0).round() as i32),
+        ),
+        None => (None, None),
+    };
 
-    // `prediction_basis` ("preseason" | "blended" | "pit" | "leaky" |
-    // "cross_era") is set above alongside the blend so the frontend chip reads
-    // which regime is active rather than inferring from its own state — a
-    // request that drops `as_of_date` in transit can't paint a leaky
-    // prediction as honest.
+    // `prediction_basis` ("preseason_only" | "preseason" | "blended" | "pit" |
+    // "leaky" | "cross_era") is set above alongside the blend so the frontend
+    // chip reads which regime is active rather than inferring from its own
+    // state — a request that drops `as_of_date` in transit can't paint a leaky
+    // prediction as honest. "preseason_only" additionally tells a consumer
+    // that `predicted_total` and the two scores are null, which no other basis
+    // implies.
 
     Ok(Json(json!({
         "home_team": home_team.name,
@@ -478,10 +644,10 @@ async fn predict(
         "season": home_season,
         "venue": venue_str,
         "as_of_date": params.as_of_date,
-        "prediction_basis": prediction_basis,
-        "predicted_margin": (blended_margin as f64 * 10.0).round() / 10.0,
-        "home_win_probability": (blended_win_prob * 1000.0).round() / 1000.0,
-        "predicted_total": (total * 10.0).round() / 10.0,
+        "prediction_basis": prediction_basis.as_str(),
+        "predicted_margin": (margin * 10.0).round() / 10.0,
+        "home_win_probability": (headline_win_prob * 1000.0).round() / 1000.0,
+        "predicted_total": predicted_total.map(|t| (t * 10.0).round() / 10.0),
         "predicted_home_score": predicted_home_score,
         "predicted_away_score": predicted_away_score,
         "predicted_winner": predicted_winner,
@@ -878,5 +1044,50 @@ mod tests {
         // When venue is absent, fall back to the legacy boolean.
         assert_eq!(params(None, false).resolved_venue(), Venue::Home);
         assert_eq!(params(None, true).resolved_venue(), Venue::Neutral);
+    }
+
+    #[test]
+    fn every_basis_the_server_can_emit_is_in_the_frontend_union() {
+        // `prediction_basis` is a closed union on the TypeScript side and the
+        // key for the honesty chip. A basis the server emits but the client
+        // does not list type-checks fine (the response is `any` at the wire)
+        // and renders no chip — so an honest-prediction label goes missing on
+        // the one surface built to show it, with nothing failing anywhere.
+        // #387 added `preseason_only`; this is what makes the next one loud.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("crates/cstat-api has a grandparent");
+        let client = std::fs::read_to_string(root.join("web/src/api/client.ts"))
+            .expect("read web/src/api/client.ts");
+
+        // Narrow to the union itself. Matching the whole file would pass on a
+        // basis that merely appears in a comment somewhere — a vacuous pass is
+        // the failure mode this kind of grep-with-an-opinion has to rule out.
+        let start = client
+            .find("prediction_basis:")
+            .expect("client.ts declares prediction_basis");
+        let union = &client[start..start + client[start..].find(';').expect("union terminates")];
+        // Sanity-check the slice itself, so a moved field or a stray earlier
+        // mention of the name can't make the loop below pass on nothing. Keyed
+        // on a member rather than on a count: a count equal to `ALL.len()`
+        // would fire here instead of at the actionable assertion, hiding the
+        // message that says what to do.
+        assert!(
+            union.contains("'leaky'") && union.contains('|'),
+            "did not parse the prediction_basis union out of client.ts — the field moved, \
+             so this check would be vacuous: {union}"
+        );
+
+        for basis in PredictionBasis::ALL {
+            assert!(
+                union.contains(&format!("'{}'", basis.as_str())),
+                "the server can emit prediction_basis {:?} but web/src/api/client.ts does not \
+                 list it. Add it to the union, and give it an entry in `basisMeta` in \
+                 web/src/pages/Predict.tsx unless it should deliberately render no chip \
+                 (\"leaky\" is the one that should).\n\nunion: {union}",
+                basis.as_str()
+            );
+        }
     }
 }

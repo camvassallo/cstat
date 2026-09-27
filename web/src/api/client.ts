@@ -1462,15 +1462,29 @@ export interface PredictionResult {
   /// "cross_era" = the two slots named different seasons — a what-if matchup,
   /// always served from whole-season state (no point-in-time, no preseason
   /// blend), with no prior meetings and the conference flag forced off.
-  prediction_basis: 'preseason' | 'blended' | 'pit' | 'leaky' | 'cross_era';
+  /// "preseason_only" = the requested season has not played a game, so the
+  /// preseason roster projection is the WHOLE forecast (weight 1.0) rather
+  /// than a leg of a blend — distinct from "preseason" for that reason, and
+  /// the only basis on which `predicted_total` and the two scores are null.
+  prediction_basis:
+    | 'preseason_only'
+    | 'preseason'
+    | 'blended'
+    | 'pit'
+    | 'leaky'
+    | 'cross_era';
   predicted_margin: number;
   home_win_probability: number;
   /// Total points (home + away). Materially less precise than margin
   /// (backtest MAE ~13.6 vs ~8.2) — frame as KenPom-style approximation.
-  predicted_total: number;
-  /// Integer projected scores. Rounded so home + away == round(total).
-  predicted_home_score: number;
-  predicted_away_score: number;
+  /// **Null when `prediction_basis` is "preseason_only"**: the preseason
+  /// projection is a strength difference and carries no tempo, so there is no
+  /// level to put a score pair on.
+  predicted_total: number | null;
+  /// Integer projected scores. Rounded so home + away == round(total). Null
+  /// together with `predicted_total` — see above.
+  predicted_home_score: number | null;
+  predicted_away_score: number | null;
   predicted_winner: string;
   /// Every feature, sorted by |contribution| desc. **No current consumer**
   /// — the Keys panel that used to render these was removed (see the

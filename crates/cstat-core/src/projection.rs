@@ -631,12 +631,26 @@ const PREDICT_SIGMA_PIT: f64 = 11.03;
 /// the prod σ (or vice versa) is the same flavor of train/serve skew the
 /// audit caught for features, just on the calibration side.
 pub fn margin_to_win_prob(margin: f32, is_pit: bool) -> f64 {
+    win_prob_at_sigma(
+        margin,
+        if is_pit {
+            PREDICT_SIGMA_PIT
+        } else {
+            PREDICT_SIGMA_PROD
+        },
+    )
+}
+
+/// [`margin_to_win_prob`] with the residual stddev supplied directly, for the
+/// one regime whose margin comes from no model bundle at all — the
+/// preseason-only path, whose σ is measured against actual game margins
+/// rather than read from a model meta (see [`PRESEASON_ONLY_SIGMA`]).
+///
+/// Everything else should go through `margin_to_win_prob`: picking a σ that
+/// does not belong to the thing that produced the margin is the calibration
+/// half of the train/serve skew the feature audit caught.
+fn win_prob_at_sigma(margin: f32, sigma: f64) -> f64 {
     const LOGISTIC_GAUSSIAN_SCALE: f64 = 1.6;
-    let sigma = if is_pit {
-        PREDICT_SIGMA_PIT
-    } else {
-        PREDICT_SIGMA_PROD
-    };
     let z = LOGISTIC_GAUSSIAN_SCALE * (margin as f64) / sigma;
     1.0 / (1.0 + (-z).exp())
 }
@@ -789,6 +803,25 @@ async fn fetch_preseason_margin(
     away_id: Uuid,
     venue: Venue,
 ) -> Option<f32> {
+    let diff = fetch_preseason_adj_em_diff(pool, season, home_id, away_id).await?;
+    Some(diff + preseason_venue_hca(venue))
+}
+
+/// `projected_adj_em(home) − projected_adj_em(away)`, before any venue or
+/// scale adjustment. `None` when either team has no row.
+///
+/// Split out from [`fetch_preseason_margin`] because the two regimes that read
+/// it disagree about what to do with it, on purpose: the blend leg adds a bare
+/// HCA and leaves the scale alone (the shipped, calibrated-as-a-pair form),
+/// while [`preseason_only_prediction`] applies its own slope. Sharing the
+/// *query* and not the arithmetic is what keeps a change to one from silently
+/// moving the other.
+async fn fetch_preseason_adj_em_diff(
+    pool: &PgPool,
+    season: i32,
+    home_id: Uuid,
+    away_id: Uuid,
+) -> Option<f32> {
     async fn adjem(pool: &PgPool, season: i32, id: Uuid) -> Option<f32> {
         sqlx::query_scalar::<_, f32>(
             "SELECT projected_adj_em FROM team_preseason_projection \
@@ -803,7 +836,236 @@ async fn fetch_preseason_margin(
     }
     let (home_adjem, away_adjem) =
         tokio::join!(adjem(pool, season, home_id), adjem(pool, season, away_id));
-    Some(home_adjem? - away_adjem? + preseason_venue_hca(venue))
+    Some(home_adjem? - away_adjem?)
+}
+
+// ---------------------------------------------------------------------------
+// The preseason-only regime (#387)
+// ---------------------------------------------------------------------------
+
+/// Scale factor on the preseason AdjEM difference when it is the WHOLE
+/// prediction, converting an efficiency edge per 100 possessions into points
+/// on a scoreboard.
+///
+/// Two effects push the same way, and neither is in the blend leg's form:
+///
+///   * **possessions.** AdjEM is per 100; a game is ~68, so a 10-point
+///     efficiency edge is worth ~6.8 points of margin;
+///   * **attenuation.** The projection is a forecast with error, and the
+///     minimum-MSE linear map from a noisy predictor onto the truth shrinks it
+///     by `var(signal) / var(predictor)`.
+///
+/// Measured walk-forward (fit on seasons < S, score S, S = 2021..2026) over
+/// 25,501 completed games by
+/// `training/experiments/experiment_preseason_margin_calibration.py`. Serving
+/// the difference at unit scale — which is what
+/// [`fetch_preseason_margin`] does — over-predicts the home side by **+1.73
+/// points on average and +6.56 on games with a 15-point projected gap**, which
+/// is most of a projected non-conference schedule. Calibrated: pooled MAE
+/// 10.43 → 9.61, bias +1.73 → −0.03, 6/6 seasons, paired z −27.3.
+///
+/// The per-fold fit lands 0.574 → 0.595 with no trend worth chasing; 0.59 is
+/// the rounded value, and scoring the rounded pair as its own candidate costs
+/// nothing (MAE 9.610 vs 9.613 for the per-fold refit).
+///
+/// **Deliberately not applied to the blend leg.** The blend's 0.70 peak weight
+/// and 42-day decay were calibrated *with* the unit-scale leg in place
+/// (`measure-blend-accuracy` grid-searches `hca × w_max × end_day`, never a
+/// slope), so the two constants absorbed part of this error. Fixing the leg
+/// means re-deriving the schedule against a changed leg and moving every
+/// served early-season prediction and every `game_projections` row — a
+/// separate change, tracked in #390.
+const PRESEASON_ONLY_SLOPE: f32 = 0.59;
+
+/// Home-court advantage for the preseason-only regime, in points.
+///
+/// Fit alongside the slope on the same folds (3.14 → 3.36 per fold, 3.2
+/// rounded). Notably close to the blend leg's
+/// [`PRESEASON_HOME_COURT_ADVANTAGE`] of 3.5 — which is the useful part of the
+/// result: refitting the intercept *alone*, with the scale left at 1.0, drags
+/// it down to 1.67 and still loses (MAE 10.33, z −9.4). The shipped HCA was
+/// never the problem; it was absorbing the scale error.
+///
+/// **A neutral floor is worth zero here, and that is a measurement rather
+/// than an assumption.** Fit pooled, neutral games want a residual home
+/// advantage of +0.6 to +0.9 — stable across all six folds, so not noise.
+/// Split by date it resolves: early-season multi-team tournaments, the
+/// genuinely neutral ones, sit at **+0.25**, while mid-season "neutral" games
+/// sit at **+2.42**. The latter are conference games moved to a city arena
+/// and in-state rivalries at a shared venue — a home game for one side that
+/// `games.is_neutral_site` has labelled neutral. So the pooled figure
+/// measures label noise in a population this regime never serves: a
+/// pre-tipoff forecast is asked about November tournaments, not February.
+/// Scored on early-season neutral games alone, serving 0 beats the per-venue
+/// fit on both counts (MAE 9.564 vs 9.609, bias −0.26 vs +0.68); the
+/// per-venue variant's pooled edge comes entirely from mid-season games, by
+/// fitting the artifact. `neutral_label_diagnostic` in the experiment
+/// re-derives this.
+const PRESEASON_ONLY_HCA: f32 = 3.2;
+
+/// Residual stddev for the preseason-only margin, feeding
+/// [`win_prob_at_sigma`].
+///
+/// Neither model bundle's σ applies: this margin comes from no bundle. Fit on
+/// the same walk-forward folds by minimising log loss under the served
+/// logistic — not set to the residual RMSE (12.18), because
+/// `margin_to_win_prob`'s 1.6 gaussian-matching constant makes the
+/// best-calibrating scale a different quantity. Per-fold 11.05 → 11.20, so
+/// 11.1; at the shipped slope and HCA that gives an expected calibration error
+/// of 0.0097 across ten deciles, against 0.0241 for the unit-scale form. Its closeness to
+/// [`PREDICT_SIGMA_PIT`] (11.03) is a coincidence of two unrelated fits and
+/// not a reason to share a constant.
+const PRESEASON_ONLY_SIGMA: f64 = 11.1;
+
+// The three properties the measurement established, independent of the exact
+// fitted values — a const block rather than a test, so an edit that breaks one
+// fails to compile instead of failing a suite someone can skip.
+const _: () = {
+    // The slope is a SHRINK. A value at or above 1.0 would mean the AdjEM
+    // difference under-states the game margin, which is the opposite of both
+    // effects it corrects for.
+    assert!(PRESEASON_ONLY_SLOPE > 0.0 && PRESEASON_ONLY_SLOPE < 1.0);
+    // A forecast made before a ball is tipped must be less certain than one
+    // from a model that has watched games, so its σ has to be wider than
+    // either bundle's. Sharing a bundle's σ here — the tempting shortcut — is
+    // exactly what this forbids.
+    assert!(PRESEASON_ONLY_SIGMA > PREDICT_SIGMA_PROD);
+    assert!(PRESEASON_ONLY_SIGMA > PREDICT_SIGMA_PIT);
+};
+
+/// A margin and win probability derived entirely from the two teams'
+/// `team_preseason_projection` rows — no ONNX inference, no season stats, no
+/// Torvik.
+#[derive(Clone, Copy, Debug)]
+pub struct PreseasonOnlyPrediction {
+    /// Projected home margin, calibrated. Home perspective.
+    pub margin: f32,
+    pub home_win_prob: f64,
+    /// The raw `projected_adj_em` difference behind it, before scale and
+    /// venue. Carried so a caller can show the strength gap it came from
+    /// rather than re-querying.
+    pub adj_em_diff: f32,
+}
+
+/// Whether the preseason-only regime applies to this matchup, and if so what
+/// it says.
+///
+/// Three outcomes rather than an `Option`, because "the season has started, so
+/// run the model" and "the season has not started and we hold nothing for this
+/// team" are different answers that need different HTTP statuses, and
+/// collapsing them is how a too-thin team ends up served a 500 or, worse, a
+/// model prediction built from an empty cohort.
+#[derive(Clone, Copy, Debug)]
+pub enum PreseasonOnlyRegime {
+    /// At least one of the two teams has played. The ordinary feature/model
+    /// path applies and this regime must not engage — a played team's stats
+    /// are the better evidence, and the blend already handles the weeks after
+    /// that, weighting the same projection at 0.70 and decaying it out.
+    NotApplicable,
+    /// Neither team has played, and both carry a projection row.
+    Serve(PreseasonOnlyPrediction),
+    /// Neither team has played, and at least one side has no projection row
+    /// (a too-thin roster, or a season `compute-projections` has not run
+    /// for). 74 of 364 teams on the 2027 board are in this state.
+    NoProjection,
+}
+
+/// Calibrated preseason margin from an AdjEM difference and a venue.
+///
+/// Public and pure so the identity `margin(diff, Home) − margin(diff, Away) ==
+/// 2 × HCA` and the scale itself are testable without a database, and so the
+/// per-game writer #388 will need can reuse the exact arithmetic instead of
+/// re-deriving it.
+pub fn preseason_only_margin(adj_em_diff: f32, venue: Venue) -> f32 {
+    let hca = match venue {
+        Venue::Home => PRESEASON_ONLY_HCA,
+        Venue::Away => -PRESEASON_ONLY_HCA,
+        Venue::Neutral => 0.0,
+    };
+    PRESEASON_ONLY_SLOPE * adj_em_diff + hca
+}
+
+/// Win probability for a preseason-only margin, at that regime's own σ.
+pub fn preseason_only_win_prob(margin: f32) -> f64 {
+    win_prob_at_sigma(margin, PRESEASON_ONLY_SIGMA)
+}
+
+/// Has this team played a game to a final score in this season?
+///
+/// The precondition for the preseason-only regime, asked **per team rather
+/// than per season**, and that distinction is the whole behaviour of the
+/// regime through opening week. A season-level "has anything been played"
+/// test collapses the moment the first game ends: on the night of the opener
+/// one result would send the other ~360 teams' matchups back to a path that
+/// has nothing to build a feature vector from, for another week. Asked per
+/// team, each side leaves the regime when it has actually played, which is
+/// when there is finally something better to answer with.
+///
+/// Deliberately a positive fact about the team rather than a fallback on
+/// feature extraction failing. Those are not the same set: a team that played
+/// and then lost its `team_season_stats` row is a data gap the pipeline needs
+/// to surface, and — worse — a team that has a *blank* row (the `/teams`
+/// ingest step writes one before any box score exists) does not fail
+/// extraction at all. It yields an all-default feature vector and a confident
+/// garbage margin. Keying on games played catches that case; keying on the
+/// error could not see it.
+///
+/// Errs toward `true` on a query failure: that routes to the ordinary path,
+/// which reports its own error honestly, rather than answering a live team's
+/// matchup from a preseason prior.
+///
+/// Two `EXISTS` probes against `idx_games_home_team` / `idx_games_away_team`,
+/// short-circuiting on the first match, at 0.035–0.037 ms whichever way the
+/// answer goes; the two teams' probes run concurrently. They sit on the hot
+/// path for every same-season `/api/predict` call, ahead of
+/// 49-feature extraction and three ONNX sessions, so the round-trip is worth
+/// deciding the regime before doing any of that work.
+pub async fn team_has_played(pool: &PgPool, season: i32, team_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM games \
+           WHERE season = $1 AND home_team_id = $2 \
+             AND home_score IS NOT NULL AND away_score IS NOT NULL) \
+             OR EXISTS (SELECT 1 FROM games \
+           WHERE season = $1 AND away_team_id = $2 \
+             AND home_score IS NOT NULL AND away_score IS NOT NULL)",
+    )
+    .bind(season)
+    .bind(team_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(true)
+}
+
+/// Resolve [`PreseasonOnlyRegime`] for one matchup.
+///
+/// Single-season by construction: a cross-era what-if has two seasons, so the
+/// two sides' "has it played" answers are not about the same calendar and
+/// callers must not reach this with one.
+pub async fn preseason_only_regime(
+    pool: &PgPool,
+    season: i32,
+    home_id: Uuid,
+    away_id: Uuid,
+    venue: Venue,
+) -> PreseasonOnlyRegime {
+    let (home_played, away_played) = tokio::join!(
+        team_has_played(pool, season, home_id),
+        team_has_played(pool, season, away_id)
+    );
+    if home_played || away_played {
+        return PreseasonOnlyRegime::NotApplicable;
+    }
+    match fetch_preseason_adj_em_diff(pool, season, home_id, away_id).await {
+        Some(adj_em_diff) => {
+            let margin = preseason_only_margin(adj_em_diff, venue);
+            PreseasonOnlyRegime::Serve(PreseasonOnlyPrediction {
+                margin,
+                home_win_prob: preseason_only_win_prob(margin),
+                adj_em_diff,
+            })
+        }
+        None => PreseasonOnlyRegime::NoProjection,
+    }
 }
 
 #[cfg(test)]
@@ -1043,5 +1305,107 @@ mod tests {
             preseason_venue_hca(Venue::Home),
             -preseason_venue_hca(Venue::Away)
         );
+    }
+
+    // ------------------------------------------------- preseason-only (#387)
+
+    #[test]
+    fn preseason_only_margin_applies_the_slope_and_an_antisymmetric_hca() {
+        // The scale is the whole point of the regime, so pin it numerically
+        // rather than only asserting it is "less than 1": a 10-point
+        // efficiency edge is 5.9 points on a neutral floor.
+        assert!((preseason_only_margin(10.0, Venue::Neutral) - 5.9).abs() < 1e-5);
+        assert_eq!(preseason_only_margin(0.0, Venue::Neutral), 0.0);
+
+        // Venue is additive and antisymmetric, so swapping the two teams and
+        // the venue together returns the same game from the other side.
+        for d in [-24.0_f32, -7.5, 0.0, 3.0, 31.0] {
+            let home = preseason_only_margin(d, Venue::Home);
+            let away = preseason_only_margin(d, Venue::Away);
+            assert!(
+                (home - away - 2.0 * PRESEASON_ONLY_HCA).abs() < 1e-4,
+                "diff {d}: home {home} away {away}"
+            );
+            assert!((preseason_only_margin(-d, Venue::Away) + home).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn preseason_only_shrinks_the_adj_em_diff_that_the_blend_leg_serves_whole() {
+        // The bug this regime exists not to have: `fetch_preseason_margin`
+        // serves the AdjEM difference at unit scale, which over-predicts by
+        // +6.6 points on a 15-point projected gap. Calibrated, the strength
+        // term must be strictly smaller in magnitude at every gap — and the
+        // wider the gap, the bigger the correction, which is why the error the
+        // measurement found is concentrated in blowouts.
+        let mut last = 0.0_f32;
+        for d in [1.0_f32, 5.0, 10.0, 20.0, 40.0] {
+            let calibrated = preseason_only_margin(d, Venue::Neutral);
+            let blend_leg = d + preseason_venue_hca(Venue::Neutral);
+            assert!(
+                calibrated.abs() < blend_leg.abs(),
+                "gap {d}: calibrated {calibrated} must shrink the {blend_leg} the blend leg serves"
+            );
+            let correction = blend_leg - calibrated;
+            assert!(
+                correction > last,
+                "gap {d}: correction {correction} should grow with the gap (was {last})"
+            );
+            last = correction;
+        }
+    }
+
+    #[test]
+    fn preseason_only_win_prob_is_calibrated_and_less_confident_than_a_model_bundle() {
+        assert!((preseason_only_win_prob(0.0) - 0.5).abs() < 1e-12);
+        for m in [0.5_f32, 4.0, 12.0, 30.0] {
+            let p = preseason_only_win_prob(m);
+            // Symmetric about a pick'em, and strictly monotone.
+            assert!((p + preseason_only_win_prob(-m) - 1.0).abs() < 1e-12);
+            assert!(p > preseason_only_win_prob(m - 0.5), "not monotone at {m}");
+            assert!((0.5..1.0).contains(&p), "{m} → {p}");
+            // A forecast made before a ball is tipped must be less confident
+            // than the same margin from a model that has watched games. This
+            // is what a shared σ would have quietly given up: σ 11.1 against
+            // the prod bundle's 10.46.
+            assert!(
+                p < margin_to_win_prob(m, false),
+                "{m}: preseason-only {p} must not out-confidence the prod bundle"
+            );
+        }
+    }
+
+    #[test]
+    fn a_preseason_only_prediction_is_self_consistent() {
+        // The struct a caller reads must agree with the two public helpers —
+        // #388 will build a whole schedule from `preseason_only_margin`
+        // directly, and a page that disagrees with `/api/predict` on the same
+        // game is the failure this pins down.
+        for (d, venue) in [(9.0_f32, Venue::Home), (-3.0, Venue::Neutral)] {
+            let margin = preseason_only_margin(d, venue);
+            let p = PreseasonOnlyPrediction {
+                margin,
+                home_win_prob: preseason_only_win_prob(margin),
+                adj_em_diff: d,
+            };
+            assert!((p.margin - preseason_only_margin(p.adj_em_diff, venue)).abs() < 1e-6);
+            assert!((p.home_win_prob - preseason_only_win_prob(p.margin)).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn the_calibration_constants_are_the_measured_ones() {
+        // Guards the three constants against a drive-by edit: each is a
+        // walk-forward fit recorded in
+        // `eval_history/preseason_margin_calibration_20260927_summary.json`,
+        // and changing one without re-running
+        // `experiments/experiment_preseason_margin_calibration.py` is the
+        // Layer-4 drift `docs/model_dependency_graph.md` §3 warns about.
+        // The structural invariants (slope is a shrink, σ is wider than either
+        // bundle's) are asserted at compile time beside the constants; these
+        // are the exact fitted values, which only a re-run can change.
+        assert_eq!(PRESEASON_ONLY_SLOPE, 0.59);
+        assert_eq!(PRESEASON_ONLY_HCA, 3.2);
+        assert_eq!(PRESEASON_ONLY_SIGMA, 11.1);
     }
 }

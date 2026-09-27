@@ -1579,6 +1579,12 @@ function ResultHeadline({
   );
   const winnerId = winnerIsHome ? result.home_team_id : result.away_team_id;
   const loserId = winnerIsHome ? result.away_team_id : result.home_team_id;
+  // Null in the preseason-only regime: the preseason projection is a strength
+  // difference with no tempo behind it, so there is no level to put a score
+  // pair on. The headline shows the matchup and the spread instead of
+  // fabricating two numbers in the largest type on the page.
+  const hasScores =
+    result.predicted_home_score != null && result.predicted_away_score != null;
   const winnerScore = winnerIsHome
     ? result.predicted_home_score
     : result.predicted_away_score;
@@ -1610,6 +1616,16 @@ function ResultHeadline({
     string,
     { label: string; cls: string; title: string } | undefined
   > = {
+    // Its own entry, not a variant of "Preseason": that chip promises a ~70/30
+    // mix with current form, and this regime has no form leg at all. The
+    // season has not been played, so the roster projection is the entire
+    // forecast — which is also why there is no projected score here.
+    preseason_only: {
+      label: 'Preseason projection',
+      cls: 'bg-indigo-900/60 text-indigo-300',
+      title:
+        'No games have been played in this season yet, so this is the roster projection on its own — the two teams\u2019 projected efficiency gap, scaled to a game margin and adjusted for the venue. It carries no in-season form and no projected score, and it is less certain than an in-season forecast.',
+    },
     preseason: {
       label: 'Preseason',
       cls: 'bg-sky-900/60 text-sky-300',
@@ -1662,22 +1678,29 @@ function ResultHeadline({
             (totals model backtest MAE ~13.6 vs margin ~8.2). Team names
             link to detail pages so the headline acts as a navigation
             entry point — matches the affordance in Roster Compare and
-            Previous Matchups. */}
+            Previous Matchups.
+
+            Without a total (the preseason-only regime) the same headline
+            renders the matchup alone and the spread below carries the
+            prediction — the two teams stay in the same places, the same type
+            and the same links, so only the digits are missing. */}
         <div className="text-3xl font-bold leading-tight">
           <Link
             to={seasonHref(`/teams/${winnerId}`, winnerSeason)}
             style={{ color: winnerColor }}
             className="hover:underline"
           >
-            {winnerName} {winnerScore}
+            {winnerName}
+            {hasScores ? ` ${winnerScore}` : ''}
           </Link>
-          <span className="text-gray-500 mx-3">—</span>
+          <span className="text-gray-500 mx-3">{hasScores ? '—' : 'vs'}</span>
           <Link
             to={seasonHref(`/teams/${loserId}`, loserSeason)}
             style={{ color: loserColor }}
             className="hover:underline"
           >
-            {loserName} {loserScore}
+            {loserName}
+            {hasScores ? ` ${loserScore}` : ''}
           </Link>
         </div>
         <div className="text-sm text-gray-400 mt-2">
