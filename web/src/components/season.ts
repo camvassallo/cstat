@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { fetchSeasons } from '../api/client';
+import { fetchSeasons, type SeasonsResponse } from '../api/client';
 import { resolveUpcomingSeason } from '../lib/upcomingSeason';
 
 // Static fallback for the seasons dropdown. Used for the first paint and if
@@ -74,6 +74,47 @@ export function projectableSeasons(upcoming: Season = upcomingProjectionSeason()
 }
 
 export const DEFAULT_SEASON: Season = AVAILABLE_SEASONS_FALLBACK[0];
+
+/** One `/api/seasons` request per page load, shared by every hook instance.
+ *
+ *  The effect below deliberately refetches on mount — the module cache seeds
+ *  the first render, it does not replace the request — but several components
+ *  on one page legitimately want this data. A team page reads it three times
+ *  (the layout's picker plus two "is this season played" checks) and the
+ *  Future tab three, so without sharing, one navigation fires three requests.
+ *
+ *  Two mechanisms, because they cover different shapes and measurement showed
+ *  the first alone was not enough: components mount at different moments (a
+ *  nested view appears only after its parent has data), by which point an
+ *  in-flight slot has already cleared.
+ *
+ *    - **in-flight sharing** collapses hooks that mount in the same pass;
+ *    - **a short TTL** collapses the staggered ones.
+ *
+ *  60s is chosen against how fast the answer can actually change: `seasons`
+ *  and `default` move when a nightly records the first game of a new season,
+ *  i.e. at most once a day. A minute of staleness is invisible, and a
+ *  navigation a minute later still refetches.
+ */
+const SEASONS_TTL_MS = 60_000;
+
+let inFlightSeasons: Promise<SeasonsResponse> | null = null;
+let lastSeasons: { at: number; res: SeasonsResponse } | null = null;
+
+function loadSeasonsOnce(): Promise<SeasonsResponse> {
+  if (lastSeasons && Date.now() - lastSeasons.at < SEASONS_TTL_MS) {
+    return Promise.resolve(lastSeasons.res);
+  }
+  inFlightSeasons ??= fetchSeasons()
+    .then((res) => {
+      lastSeasons = { at: Date.now(), res };
+      return res;
+    })
+    .finally(() => {
+      inFlightSeasons = null;
+    });
+  return inFlightSeasons;
+}
 
 /** Read-only accessor for the current default season. Prefers the API's
  *  default once it's been fetched; falls back to the static constant during
@@ -201,7 +242,7 @@ export function useAvailableSeasons(): {
 
   useEffect(() => {
     let cancelled = false;
-    fetchSeasons()
+    loadSeasonsOnce()
       .then((res) => {
         if (cancelled) return;
         if (res.seasons.length === 0) return; // empty DB, keep fallback
