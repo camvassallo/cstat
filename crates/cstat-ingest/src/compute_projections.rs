@@ -194,6 +194,31 @@ async fn insert_player_projection(
 /// **Replaces** each season's rows in one transaction (delete-then-insert), so a
 /// re-run is authoritative: rows for teams the current logic no longer produces
 /// (newly too-thin / unresolvable) are pruned, not left stale.
+/// Does this season have any `team_preseason_projection` rows at all?
+///
+/// The nightly asks before deciding whether to materialize the CURRENT season
+/// alongside the forecast one (#382). Presence, not freshness: a current
+/// season that already has an anchor is deliberately left alone, because that
+/// anchor is a preseason artifact the predict blend decays away from and it
+/// should stop moving once games are played.
+///
+/// **Errs toward `true` — "it exists, leave it alone" — on a query failure**,
+/// and the asymmetry is the point. Reporting a present anchor as missing
+/// would make the nightly re-run [`run`] for that season, and `run` is a
+/// delete-then-insert per season: a transient database blip would silently
+/// rewrite a settled preseason projection with a fresh one computed from a
+/// mid-season roster. Reporting a missing anchor as present merely skips one
+/// night's backfill, and the next nightly tries again.
+pub async fn has_projection(pool: &PgPool, season: i32) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM team_preseason_projection WHERE season = $1)",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(true)
+}
+
 pub async fn run(
     pool: &PgPool,
     predictor: &Predictor,
@@ -462,4 +487,106 @@ async fn record_provenance(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    /// TEMP `team_preseason_projection` shadowing the real table through
+    /// `search_path`, on a pinned single-connection pool — the same isolation
+    /// discipline as `tests/ledger_write_failures.rs`, asserted rather than
+    /// assumed.
+    ///
+    /// Worth the ceremony for a one-line `EXISTS`: what this predicate decides
+    /// is whether the nightly re-runs a delete-then-insert over a season, so a
+    /// test that accidentally read a developer's real table would be answering
+    /// a different question every time they ingest.
+    async fn temp_pool() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .min_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect(&url)
+            .await
+            .expect("connect");
+        sqlx::query(
+            "CREATE TEMP TABLE team_preseason_projection (
+                 season           integer NOT NULL,
+                 team_id          uuid    NOT NULL DEFAULT gen_random_uuid(),
+                 projected_adj_em real    NOT NULL DEFAULT 0
+             )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create temp table");
+
+        let schema: String = sqlx::query_scalar(
+            "SELECT n.nspname FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.oid = 'team_preseason_projection'::regclass",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("resolve table");
+        assert!(
+            schema.starts_with("pg_temp"),
+            "refusing to run: `team_preseason_projection` resolved to `{schema}`, not a temp \
+             schema — this test would read the REAL database in DATABASE_URL"
+        );
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn has_projection_distinguishes_an_absent_season_from_a_present_one() {
+        let Some(pool) = temp_pool().await else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+
+        // The #382 state: the season about to be played has no anchor, so the
+        // nightly must backfill it.
+        assert!(!has_projection(&pool, 2027).await);
+
+        sqlx::query("INSERT INTO team_preseason_projection (season) VALUES (2027)")
+            .execute(&pool)
+            .await
+            .expect("insert");
+
+        // And once it exists it is left alone — the anchor is a preseason
+        // artifact that must stop moving once games are played, so a present
+        // season must never re-enter the delete-then-insert.
+        assert!(has_projection(&pool, 2027).await);
+
+        // Another season's rows are not this season's answer. The table
+        // carries historical seasons too (`compute-projections` writes them),
+        // so a bare "is the table non-empty" check would report every season
+        // as present and the backfill would never fire.
+        assert!(!has_projection(&pool, 2028).await);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_table_reports_present_so_a_blip_cannot_rewrite_an_anchor() {
+        let Some(pool) = temp_pool().await else {
+            eprintln!("DATABASE_URL unset — skipping");
+            return;
+        };
+        // Force the query to fail the way a transient fault would, by closing
+        // the pool out from under it.
+        //
+        // NOT by dropping the temp table, which was the first attempt and was
+        // unsound: dropping it merely unshadows `public.team_preseason_projection`,
+        // so the query SUCCEEDS against the developer's real table and the
+        // test passes whichever way the fallback points. It only looked
+        // correct because the real table happened to have rows.
+        pool.close().await;
+
+        assert!(
+            has_projection(&pool, 2027).await,
+            "a failed lookup must report the anchor as PRESENT, never as missing"
+        );
+    }
 }
