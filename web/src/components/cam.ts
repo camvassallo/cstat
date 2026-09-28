@@ -168,7 +168,12 @@ export function projectionBasisNote(
 ): string {
   switch (basis) {
     case 'destination_aware':
-      return ' Accounts for the program he is projected to play for next season.';
+      // Says schedule strength explicitly rather than just "accounts for the
+      // program". CAM is schedule-adjusted, and that term is most of what moves
+      // when a player changes tiers — roughly +2.4 for a top-tier program
+      // against -1.0 for a bottom-tier one. Without this the chip reads as a
+      // claim that he will play better, which is not what the number says.
+      return ' Includes the schedule strength of the program he is projected to play for, so moving between conference tiers shifts this number on schedule alone.';
     case 'held_out':
       return ' Held out: this projection was made without letting the model see how the season actually went.';
     case 'same_program_assumed':
