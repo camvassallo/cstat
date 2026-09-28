@@ -1608,6 +1608,59 @@ export function fetchPrediction(req: PredictRequest) {
   });
 }
 
+// Conferences
+export interface ConferenceStandingsRow {
+  team_id: string;
+  team_name: string;
+  /// Record against the rest of this league, derived from
+  /// `games.is_conference`. Zero-filled before the league slate starts —
+  /// "0-0" is the true answer in November, not missing data.
+  conference_wins: number;
+  conference_losses: number;
+  wins: number;
+  losses: number;
+  /// Projected seasons only. The sum of this team's per-game win
+  /// probabilities — an EXPECTATION, not a simulation: it cannot express
+  /// "wins the league" and must not be shown as if it could.
+  expected_conference_wins?: number | null;
+  expected_wins?: number | null;
+  /// Denominators. NatStat publishes the slate in pieces, so an expected
+  /// record is over the games listed so far; showing the count is what keeps
+  /// it from reading as a whole-season claim.
+  expected_conference_games?: number | null;
+  projected_games?: number | null;
+  adj_em: number | null;
+  /// NATIONAL rank, not within-conference: the table already shows the
+  /// league order, so the useful extra fact is placement in the country.
+  adj_em_rank: number | null;
+  adj_o: number | null;
+  adj_d: number | null;
+  sos: number | null;
+  sos_rank: number | null;
+}
+
+export interface ConferenceDetail {
+  conference: string;
+  season: number;
+  /// True when the season has not been played and the table is a forecast.
+  /// `strength_rank` and the non-conference record are null in that case —
+  /// both are facts about games played.
+  projected?: boolean;
+  teams: ConferenceStandingsRow[];
+  /// Mean AdjEM across the league's whole membership, and where that places
+  /// it among all leagues.
+  mean_adj_em: number | null;
+  strength_rank: number | null;
+  conference_count: number | null;
+  non_conference_wins: number | null;
+  non_conference_losses: number | null;
+}
+
+export function fetchConference(code: string, season?: number) {
+  const q = season ? `?season=${season}` : '';
+  return fetchJson<ConferenceDetail>(`/conferences/${encodeURIComponent(code)}${q}`);
+}
+
 // Seasons
 export interface SeasonsResponse {
   /// Seasons with at least one PLAYED game, newest first — the list the

@@ -308,12 +308,12 @@ struct ProjectedTeam {
 
 /// Target-season conference attached to a projected team (see
 /// `ProjectedTeam`'s conference fields). Display + search only.
-struct TeamConference {
-    conference: Option<String>,
+pub(crate) struct TeamConference {
+    pub(crate) conference: Option<String>,
     /// Set only when the team changed leagues between the base and target
     /// seasons — so its presence *is* the "realigned" signal.
-    prev_conference: Option<String>,
-    left_division_i: bool,
+    pub(crate) prev_conference: Option<String>,
+    pub(crate) left_division_i: bool,
 }
 
 /// Display-only coach CAE attached to a projected team (see `ProjectedTeam`'s
@@ -2124,7 +2124,7 @@ async fn fetch_actual_adj_em(
 ///
 /// Display and search only. The projection is roster-based and never reads a
 /// conference.
-async fn fetch_conferences(
+pub(crate) async fn fetch_conferences(
     pool: &sqlx::PgPool,
     base_season: i32,
     target_season: i32,

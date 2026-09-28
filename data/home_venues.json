@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Venues that are a genuine HOME court for a team even though the upstream",
+    "feed flags games there neutral. Keyed by teams.short_name, values are",
+    "games.venue_code (text, as stored).",
+    "",
+    "Why this is curated rather than derived: the same building can be a real",
+    "home floor and a neutral tournament site. Madison Square Garden is St.",
+    "John's home court for regular-season games AND the Big East tournament",
+    "venue, where it is neutral for everyone. No rule over venue frequency",
+    "separates those -- the candidates a frequency rule surfaces are almost",
+    "all conference tournament sites (Bridgestone for the SEC schools,",
+    "CenturyLink Boise for the Big Sky, Boardwalk Hall for the MAAC), and",
+    "Connecticut's own 11 MSG games across five seasons are the Big East",
+    "tournament, correctly neutral.",
+    "",
+    "Postseason games at these venues stay neutral where `games.is_postseason`",
+    "says so. That flag is only partly populated (2025 has none at all), so",
+    "the exclusion is best-effort; the cost of it missing is one tournament",
+    "game a season counted as home.",
+    "",
+    "Only add a venue a team genuinely hosts at. This overrides the source."
+  ],
+  "St. John's": ["384"]
+}

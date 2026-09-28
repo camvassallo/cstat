@@ -1257,7 +1257,17 @@ function ScheduleRow({
     if (g.is_pre_game_projection && g.game_date) {
       const d = new Date(`${g.game_date}T00:00:00Z`);
       d.setUTCDate(d.getUTCDate() - 1);
-      asOfParam = `&as_of_date=${d.toISOString().slice(0, 10)}`;
+      const asOf = d.toISOString().slice(0, 10);
+      // Never link to a future cutoff. `/predict` rejects one with a 400 —
+      // "honest predictions can only reflect data through today" — which is
+      // the right answer from the API and a dead link from here. The server
+      // flag should already preclude this (a completed game cannot be
+      // tomorrow), so this is a backstop rather than the fix: it makes the
+      // whole class of bug unreachable from this link, whatever the flag
+      // comes to mean later.
+      if (asOf <= new Date().toISOString().slice(0, 10)) {
+        asOfParam = `&as_of_date=${asOf}`;
+      }
     }
     // Append `season` whenever it differs from the default — without it,
     // a cross-season as_of_date (e.g. Feb 14 2025 from a Duke 2025 page)

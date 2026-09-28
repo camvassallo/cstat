@@ -2,6 +2,7 @@ pub mod alert_selftest;
 pub mod archetypes;
 pub mod client_error;
 pub mod coaches;
+pub mod conferences;
 pub mod draft;
 pub mod games;
 pub mod health;
@@ -34,6 +35,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(predict::router())
         .merge(archetypes::router())
         .merge(coaches::router())
+        .merge(conferences::router())
         .merge(seasons::router())
         .merge(ticker::router())
         .merge(transfers::router())

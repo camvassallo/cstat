@@ -321,9 +321,21 @@ async fn team_detail(
                 // whose `predicted_total` is null in this regime.
                 entry.projected_score_team = None;
                 entry.projected_score_opp = None;
-                // It is a pre-game projection by construction — the game has
-                // not been played and no result informed it.
-                entry.is_pre_game_projection = true;
+                // FALSE, despite this being a projection made before the
+                // game — because that is not what the flag means to its
+                // consumers. It marks "a COMPLETED game re-projected from
+                // point-in-time state as of the day before", and everything
+                // reading it acts on that: the schedule row greys the cell as
+                // historical, titles it "point-in-time CAM as of <date>", and
+                // links to `/predict` carrying `as_of_date = game_date - 1`.
+                //
+                // Setting it true here made all three wrong at once — a
+                // future `as_of_date` that `/predict` correctly rejects with
+                // a 400, a live forecast rendered as if it were settled, and
+                // a tooltip claiming point-in-time CAM for a projection that
+                // uses none. An unplayed game is an upcoming projection, and
+                // `false` is what says so.
+                entry.is_pre_game_projection = false;
             }
         }
     }

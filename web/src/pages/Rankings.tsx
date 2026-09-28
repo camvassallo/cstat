@@ -166,7 +166,22 @@ function buildColumns(
       // Full conference names; the longest ("Missouri Valley") wraps onto a
       // second line at the 48px row height rather than widening the column.
       wrapText: true,
-      valueFormatter: (p: { value: string | null }) => conferenceLabel(p.value),
+      // Links into the league's standings — conference record, league rating
+      // and non-conference record, none of which this board can show. A
+      // renderer rather than a formatter so the cell is a real anchor
+      // (middle-click, open-in-new-tab); `getQuickFilterText` still returns
+      // the plain text so search behaves exactly as before.
+      cellRenderer: (p: { value: string | null }) =>
+        p.value ? (
+          <SeasonLink
+            to={`/conferences/${encodeURIComponent(p.value)}`}
+            className="hover:underline"
+          >
+            {conferenceLabel(p.value)}
+          </SeasonLink>
+        ) : (
+          conferenceLabel(p.value)
+        ),
       getQuickFilterText: (p: { value: string | null }) => conferenceSearchText(p.value),
     },
     {

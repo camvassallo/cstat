@@ -3,6 +3,7 @@ pub mod db;
 pub mod display_names;
 pub mod features;
 pub mod freshman_model;
+pub mod home_venues;
 pub mod inference;
 pub mod invariants;
 pub mod models;

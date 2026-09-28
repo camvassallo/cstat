@@ -2216,6 +2216,140 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
     .execute(pool)
     .await?;
 
+    // is_neutral_site: promote a game the source calls a home game but that is
+    // being played somewhere other than the host's own building (#400).
+    //
+    // NatStat flags neutral sites accurately for a season it has played, and
+    // not at all for one it has only scheduled: `is_neutral_site` is false for
+    // every one of the 1,827 ingested 2026-27 games. The games that acquire
+    // the flag later are the November multi-team events, so until it does,
+    // every marquee early-season game is projected with a home edge nobody
+    // has. Duke at Connecticut is at T-Mobile Arena in Las Vegas and projects
+    // Duke −0.5 on Connecticut's phantom 3.2 points; neutral, it is Duke +2.7.
+    // The favourite flips.
+    //
+    // A team's real homes are recoverable: EVERY venue at which it hosted a
+    // game that was not flagged neutral, in the baseline season below. A set rather than the modal one, because a team can have
+    // more than one genuine home — Boise St. and Alabama St. each hosted
+    // non-neutral games at two venues in 2025-26, and taking only the modal
+    // one would promote the other to neutral.
+    //
+    // The related case resolves itself: St. John's at Madison Square Garden
+    // and Connecticut likewise are the "semi-home" games KenPom models
+    // separately, and NatStat already flags every one of them neutral (3 of
+    // 3 and 4 of 4 in 2026). They are therefore absent from the baseline by
+    // construction, so this promotes a 2027 game there — agreeing with the
+    // source's own convention rather than inventing a third category.
+    //
+    // Baselining on the target season instead would invert the rule: with a
+    // third of 2026-27 published, Duke's modal venue is Capital One Arena,
+    // which would mark Cameron as the neutral one.
+    //
+    // **PROMOTE ONLY.** Measured across 2022-2026, games flagged home but
+    // played elsewhere number 2-10 a season out of ~6,200 — which is why the
+    // historical labelling can be trusted and the game models' venue feature
+    // is unaffected. The reverse, flagged neutral while at the nominal host's
+    // arena, runs to 188 in a bad season and is mostly CORRECT: a conference
+    // tournament or an early-season event hosted on a campus site is
+    // designated neutral while being in some participant's building. Demoting
+    // those would overwrite ~190 right answers to fix 10 wrong ones.
+    //
+    // Self-retiring: once NatStat flags the season itself, the rows it flags
+    // are already neutral and this promotes nothing.
+    // Curated overrides: venues the feed calls neutral that are a team's real
+    // home. They cannot come from the baseline, because the baseline is built
+    // from games the feed did NOT flag neutral — a venue it is wrong about is
+    // absent by construction, which is exactly when this rule would otherwise
+    // promote games there with confidence. See `data/home_venues.json`.
+    let home_venue_values = crate::home_venues::pairs()
+        .iter()
+        .map(|(team, code)| format!("('{}','{}')", sql_lit(team), sql_lit(code)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let curated_cte = if home_venue_values.is_empty() {
+        // An empty VALUES list is a syntax error; a never-matching row keeps
+        // the statement one shape whether or not the capture has entries.
+        "SELECT NULL::text AS short_name, NULL::text AS venue_code WHERE false".to_string()
+    } else {
+        format!("SELECT * FROM (VALUES {home_venue_values}) AS v(short_name, venue_code)")
+    };
+
+    let r_neutral = sqlx::query(&format!(
+        "WITH curated AS ({curated_cte}),
+              baseline AS (
+             -- The season whose venues define \"home\": THIS one when it has
+             -- been played, otherwise the most recent that has.
+             --
+             -- Self-baselining a played season is not a degenerate case, it
+             -- is the point. Every venue where a non-neutral home game was
+             -- played is then in the set by construction, so the promotion
+             -- can match nothing and the statement is a guaranteed no-op —
+             -- which is what we want, because for a season that has happened
+             -- the source's own flags are authoritative and measurably sound
+             -- (2-10 disagreements a season out of ~6,200).
+             --
+             -- Without it, re-running `compute --year 2019` would compare
+             -- 2019 against 2026's venues and promote 373 real home games,
+             -- because arenas get renamed, replaced and renumbered across
+             -- seven years. That is a documented operation, and it would
+             -- have silently corrupted the historical venue labelling the
+             -- game models train on.
+             SELECT CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM games
+                             WHERE season = $1
+                               AND home_score IS NOT NULL AND away_score IS NOT NULL)
+                        THEN $1
+                        ELSE (SELECT max(season) FROM games
+                               WHERE home_score IS NOT NULL AND away_score IS NOT NULL)
+                    END AS season
+         ),
+              homes AS (
+             SELECT DISTINCT t.natstat_id, g.venue_code
+               FROM games g
+               JOIN teams t ON t.id = g.home_team_id
+              WHERE g.season = (SELECT season FROM baseline)
+                AND NOT g.is_neutral_site
+                AND g.venue_code IS NOT NULL
+         )
+         UPDATE games g
+            SET is_neutral_site = true
+           FROM teams h
+          WHERE h.id = g.home_team_id
+            AND g.season = $1
+            AND NOT g.is_neutral_site
+            AND g.venue_code IS NOT NULL
+            -- Only for a host we have a baseline for: a team with no prior
+            -- season (a new Division I program) has no known home, and an
+            -- unknown home must not be read as \"every venue is neutral\".
+            AND EXISTS (SELECT 1 FROM homes hb WHERE hb.natstat_id = h.natstat_id)
+            AND NOT EXISTS (
+                    SELECT 1 FROM homes hb
+                     WHERE hb.natstat_id = h.natstat_id
+                       AND hb.venue_code = g.venue_code)
+            -- ...and not a curated home. Postseason is excluded so the Big
+            -- East tournament at MSG stays neutral for St. John's like it is
+            -- for everyone else. `IS NOT TRUE` rather than `= false` because
+            -- the column is only partly populated (2025 has none at all), and
+            -- an unknown postseason flag should not suppress the override --
+            -- the cost of that is one tournament game a season read as home.
+            AND NOT EXISTS (
+                    SELECT 1 FROM curated c
+                     WHERE c.short_name = h.short_name
+                       AND c.venue_code = g.venue_code
+                       AND g.is_postseason IS NOT TRUE)"
+    ))
+    .bind(season)
+    .execute(pool)
+    .await?;
+    if r_neutral.rows_affected() > 0 {
+        tracing::info!(
+            season,
+            promoted = r_neutral.rows_affected(),
+            "promoted games at a venue that is not the host's own to neutral-site"
+        );
+    }
+
     // point_diff: fill from team_game_stats averages
     let r2 = sqlx::query(
         "UPDATE team_season_stats tss SET
