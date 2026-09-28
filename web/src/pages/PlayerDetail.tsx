@@ -20,7 +20,7 @@ import {
 } from '../api/client';
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { ArchetypeBadge, SimilarPlayers, type SimilarMode } from '../components/Archetype';
-import { camTier, camTierColor, camSplit } from '../components/cam';
+import { camTier, camTierColor, camSplit, projectionBasisNote } from '../components/cam';
 import { bandBarClass } from '../components/scale';
 import { RAPM_DISPLAY_FLOOR } from '../components/onoff';
 import { conferenceLabel } from '../lib/conferences';
@@ -334,6 +334,12 @@ export default function PlayerDetail() {
                   : trajectory.prior_campom != null && trajectory.prior_campom >= 10
                     ? ' Mild regression expected on this tier (projections sit ≈0.3 below current on +10..+15 inputs).'
                     : '';
+              // What the number assumed. Load-bearing for the
+              // `same_program_assumed` case: the player is on no projected
+              // roster, so the chip is a counterfactual and would otherwise
+              // read as a flat contradiction of the team's projected roster
+              // (#401).
+              const basisNote = projectionBasisNote(trajectory.projection_basis);
               // The chip itself links to the cross-season progression
               // page — the projection sits naturally as the right-most
               // point in the time-series there. Hover affordance is the
@@ -343,7 +349,7 @@ export default function PlayerDetail() {
                 <SeasonLink
                   to={`/players/${player.id}/progression`}
                   className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${camTierColor(tier)} hover:bg-gray-700/40 transition-colors`}
-                  title={`Projected next-season CAM. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.1 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).${regressionNote} Click for full career progression.`}
+                  title={`Projected next-season CAM. Mean ${trajectory.projected_mean.toFixed(2)}, 80% band ${band}.${basisNote} Pooled backtest MAE ≈ 2.1 — read this as directional, not a point estimate. Wide bands flag thin signal (e.g. freshmen, low-minute returners).${regressionNote} Click for full career progression.`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {targetLabel}

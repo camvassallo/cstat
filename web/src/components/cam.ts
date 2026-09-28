@@ -13,6 +13,10 @@ import {
   BAND_EMPTY_CHIP_CLASS,
   signedBandTextColor,
 } from './scale';
+// Type-only: the `projection_basis` union is declared once, on the wire
+// contract in `api/client.ts`, which is also what the server's contract test
+// greps. `import type` is erased at build time, so this adds no runtime edge.
+import type { PlayerTrajectory } from '../api/client';
 
 export type CamTier =
   | 'Elite'
@@ -147,4 +151,29 @@ export function camHalfPctile(
   const { mean, sigma } = HALF_DIST[side];
   const z = (v - mean) / sigma;
   return Math.max(0, Math.min(1, 0.5 * (1 + erf(z / Math.SQRT2))));
+}
+
+// One sentence saying what a projected-CAM number assumed, keyed off the
+// server's `projection_basis`. Shared by the player page's chip and the
+// progression chart so the two cannot describe the same number differently —
+// which is how a destination-blind projection came to be presented as the
+// plain answer while the team page said otherwise.
+//
+// `destination_aware` is the normal forward-season case and the one that needs
+// no caveat, only a statement of what it accounts for. `same_program_assumed`
+// is the one that must not render silently: it means the player is on nobody's
+// projected roster, so the number answers a question the user did not ask.
+export function projectionBasisNote(
+  basis: PlayerTrajectory['projection_basis'] | undefined,
+): string {
+  switch (basis) {
+    case 'destination_aware':
+      return ' Accounts for the program he is projected to play for next season.';
+    case 'held_out':
+      return ' Held out: this projection was made without letting the model see how the season actually went.';
+    case 'same_program_assumed':
+      return ' He is not on a projected roster for next season, so this assumes he stays at his current program — read it as "if he had stayed".';
+    default:
+      return '';
+  }
 }

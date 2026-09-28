@@ -812,17 +812,32 @@ pub fn build_trajectory_features(
     // and a returner's destination is his source program.
     let src_prior = row.src_prior_adj_em.unwrap_or(DEST_LEVEL_FILL);
     let (dest_prior, dest_level, is_transfer) = match dest {
-        Some(d) => {
+        // A real move: take the destination's own strength and level.
+        Some(d) if d.team_id != row.src_team_id => {
             let prior = d.prior_adj_em.unwrap_or(DEST_LEVEL_FILL);
             let level = d.program_level.unwrap_or(prior);
-            let moved = if d.team_id != row.src_team_id {
-                1.0
-            } else {
-                0.0
-            };
-            (prior, level, moved)
+            (prior, level, 1.0)
         }
-        None => (src_prior, row.src_program_level.unwrap_or(src_prior), 0.0),
+        // Not a move — either `None` or a `Destination` naming the source
+        // program. Both read the destination off the ROW rather than off the
+        // `Destination`, and that is load-bearing, not tidiness:
+        //
+        // `Destination` carries `f32` (it is built from
+        // `fetch_baseline_adj_em` / `fetch_program_levels`, which cast on the
+        // way out), while the row's columns are `f64`. Widening the `f32` back
+        // lands ~4e-7 from the row's value, so `dest_prior - src_prior` came
+        // out at -3.8e-7 for a player who has not moved, where the trainer has
+        // EXACTLY 0.0 — its two columns are the same database row for a
+        // non-mover, so the subtraction is exact. LightGBM splits
+        // `dest_minus_src` at zero, a tiny negative lands on the far side of
+        // that split, and the sign of the epsilon is deterministic, so this was
+        // a systematic one-directional error rather than noise: 6 of 188
+        // sampled returners moved up to 0.29 CAM, all downward.
+        //
+        // Only the zero case needs this. For a genuine transfer the difference
+        // averages ~14 AdjEM, and no split sits close enough to that for a
+        // 4e-7 rounding to matter.
+        Some(_) | None => (src_prior, row.src_program_level.unwrap_or(src_prior), 0.0),
     };
     let dest_block: [f64; TRAJECTORY_DEST_FEATURES] = [
         dest_prior,
@@ -892,6 +907,62 @@ pub async fn fetch_trajectory_oof(
         JOIN trajectory_oof_predictions oof ON oof.torvik_pid = tps.torvik_pid
         WHERE tps.player_id = ANY($1)
           AND oof.target_season = $2
+        "#,
+    )
+    .bind(player_ids)
+    .bind(target_season)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(pid, mean, lower, upper)| (pid, TrajectoryPrediction { mean, lower, upper }))
+        .collect())
+}
+
+/// Fetch the materialized destination-aware projection from
+/// `player_season_projection` for the given source-season `players.id`s,
+/// targeting `target_season`.
+///
+/// This is the same row the team projections page and the projected `/players`
+/// board serve, so reading it is what keeps a player's own page from
+/// contradicting them (#401). The roster pipeline that writes it passes each
+/// player's real [`Destination`] — his portal commitment, or the program he
+/// returns to — where a caller projecting a player in isolation can only pass
+/// `None` and get "assume he stays put".
+///
+/// Why read the table instead of composing a destination here: [`Destination`]
+/// needs the composed roster (the team's baseline AdjEM and 3-year program
+/// level), and composing all ~360 rosters to render one player page is the
+/// wrong shape. The table is a single primary-key lookup, and it cannot drift
+/// from the two surfaces that already read it.
+///
+/// **The band is required, not optional.** `projected_cam_lower/upper` are NULL
+/// exactly when per-player inference was unavailable and the mean fell back to
+/// the player's frozen base-season cam_v3 (migration 045). Those rows are not
+/// model output, so serving one as a projection would launder a passthrough
+/// into a forecast — and the caller's own live inference is a better answer.
+/// Such a row is simply absent from the result and falls through.
+pub async fn fetch_player_season_projection(
+    pool: &PgPool,
+    player_ids: &[Uuid],
+    target_season: i32,
+) -> Result<std::collections::HashMap<Uuid, TrajectoryPrediction>, sqlx::Error> {
+    if player_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(Uuid, f32, f32, f32)> = sqlx::query_as(
+        r#"
+        SELECT
+            player_id,
+            projected_cam_mean,
+            projected_cam_lower,
+            projected_cam_upper
+        FROM player_season_projection
+        WHERE player_id = ANY($1)
+          AND target_season = $2
+          AND projected_cam_lower IS NOT NULL
+          AND projected_cam_upper IS NOT NULL
         "#,
     )
     .bind(player_ids)
@@ -1096,7 +1167,9 @@ mod tests {
         let v = build_trajectory_features(&row, 2026, Some(&elite));
         assert_eq!(&v[base..], &[30.0, 26.5, 12.0, 18.0, 1.0], "transfer up");
 
-        // Same team id as the source → not a transfer even when passed.
+        // Same team id as the source → not a transfer even when passed, and
+        // the block is read off the ROW, so a `Destination` that omits the
+        // level does not discard the level the row already carries.
         let same = Destination {
             team_id: row.src_team_id,
             prior_adj_em: Some(12.0),
@@ -1105,8 +1178,54 @@ mod tests {
         let v = build_trajectory_features(&row, 2026, Some(&same));
         assert_eq!(
             &v[base..],
+            &[12.0, 9.0, 12.0, 0.0, 0.0],
+            "same program → the row's own prior and level"
+        );
+
+        // A source with no level takes the prior, as the trainer's
+        // `fillna(dest_prior_adj_em)` does.
+        let mut no_level = make_row();
+        no_level.src_program_level = None;
+        let v = build_trajectory_features(&no_level, 2026, Some(&same));
+        assert_eq!(
+            &v[base..],
             &[12.0, 12.0, 12.0, 0.0, 0.0],
             "missing level → prior"
+        );
+
+        // A non-mover's `dest_minus_src` must be EXACTLY zero, and a
+        // same-program `Destination` must be byte-identical to `None`.
+        //
+        // The two inputs are deliberately of different precision, because that
+        // is the real bug this guards. `Destination` is built from `f32`
+        // (`fetch_baseline_adj_em` casts) while the row's columns are `f64`, so
+        // subtracting one from the other gave -3.8e-7 for a player who had not
+        // moved — the far side of a split at zero, worth up to 0.29 CAM, and
+        // one-directional because the sign of the epsilon is deterministic.
+        // Asserting equality of the whole vector rather than just the feature
+        // keeps the "`None` means he stays put" contract in the docs honest.
+        let rounded = Destination {
+            team_id: row.src_team_id,
+            prior_adj_em: Some(f64::from(12.1_f32)),
+            program_level: Some(f64::from(9.3_f32)),
+        };
+        let mut r = make_row();
+        r.src_prior_adj_em = Some(12.1);
+        r.src_program_level = Some(9.3);
+        let with_dest = build_trajectory_features(&r, 2026, Some(&rounded));
+        let without = build_trajectory_features(&r, 2026, None);
+        assert_eq!(
+            with_dest, without,
+            "a Destination naming the source program must match `None` exactly"
+        );
+        assert_eq!(
+            with_dest[base + 3],
+            0.0,
+            "a non-mover's dest_minus_src must be exactly 0.0, not an epsilon"
+        );
+        assert!(
+            with_dest[base + 3].is_sign_positive(),
+            "and not negative zero either — the split at 0 is what this protects"
         );
 
         // A source with no history at all takes the D-I mean for both.
