@@ -81,11 +81,18 @@ export default function Conference() {
   }
   if (!data) return <div className="text-gray-400 p-4">Loading…</div>;
 
-  const nonConf = `${data.non_conference_wins}-${data.non_conference_losses}`;
+  const projected = data.projected === true;
 
   return (
     <div>
-      <h1 className="text-2xl font-bold">{label}</h1>
+      <h1 className="text-2xl font-bold">
+        {label}
+        {projected && (
+          <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wide bg-indigo-900/60 text-indigo-300 px-1.5 py-0.5 rounded">
+            Projected
+          </span>
+        )}
+      </h1>
       <div className="text-sm text-gray-400 mt-1 mb-4">
         {data.season - 1}-{(data.season % 100).toString().padStart(2, '0')} · {data.teams.length}{' '}
         teams
@@ -101,11 +108,26 @@ export default function Conference() {
             </span>
           </>
         )}
-        {' · '}
-        <span title="Combined record for the league's teams against everyone outside it.">
-          non-conference {nonConf}
-        </span>
+        {!projected && data.non_conference_wins != null && (
+          <>
+            {' · '}
+            <span title="Combined record for the league's teams against everyone outside it.">
+              non-conference {data.non_conference_wins}-{data.non_conference_losses}
+            </span>
+          </>
+        )}
       </div>
+
+      {projected && (
+        <p className="text-xs text-gray-500 mb-3">
+          Expected records from each game&rsquo;s projected win probability — no games have been
+          played. This is an <strong>expectation, not a simulation</strong>: it is the average
+          number of wins, and cannot say who takes the league. The schedule is still being
+          published, so each row covers the games listed so far — the &ldquo;of&rdquo; column is
+          that count, and the table is ordered by expected win rate rather than raw wins so a
+          team with more games listed does not simply rank higher.
+        </p>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -113,12 +135,16 @@ export default function Conference() {
             <tr className="text-gray-400 border-b border-gray-700">
               <th className="py-2 px-2 text-left font-medium">#</th>
               <th className="py-2 px-2 text-left font-medium">Team</th>
-              <th className="py-2 px-2 text-center font-medium">Conf</th>
-              <th className="py-2 px-2 text-center font-medium">Overall</th>
+              <th className="py-2 px-2 text-center font-medium">{projected ? 'xConf' : 'Conf'}</th>
+              {projected && <th className="py-2 px-2 text-center font-medium">of</th>}
+              <th className="py-2 px-2 text-center font-medium">
+                {projected ? 'xOverall' : 'Overall'}
+              </th>
+              {projected && <th className="py-2 px-2 text-center font-medium">of</th>}
               <th className="py-2 px-2 text-right font-medium">AdjEM</th>
-              <th className="py-2 px-2 text-right font-medium">AdjO</th>
-              <th className="py-2 px-2 text-right font-medium">AdjD</th>
-              <th className="py-2 px-2 text-right font-medium">SOS</th>
+              {!projected && <th className="py-2 px-2 text-right font-medium">AdjO</th>}
+              {!projected && <th className="py-2 px-2 text-right font-medium">AdjD</th>}
+              {!projected && <th className="py-2 px-2 text-right font-medium">SOS</th>}
             </tr>
           </thead>
           <tbody>
@@ -131,25 +157,43 @@ export default function Conference() {
                   </SeasonLink>
                 </td>
                 <td className="py-2 px-2 text-center font-medium">
-                  {t.conference_wins}-{t.conference_losses}
+                  {projected
+                    ? fmt1(t.expected_conference_wins)
+                    : `${t.conference_wins}-${t.conference_losses}`}
                 </td>
+                {projected && (
+                  <td className="py-2 px-2 text-center text-gray-500">
+                    {t.expected_conference_games ?? '—'}
+                  </td>
+                )}
                 <td className="py-2 px-2 text-center text-gray-300">
-                  {t.wins}-{t.losses}
+                  {projected ? fmt1(t.expected_wins) : `${t.wins}-${t.losses}`}
                 </td>
+                {projected && (
+                  <td className="py-2 px-2 text-center text-gray-500">
+                    {t.projected_games ?? '—'}
+                  </td>
+                )}
                 <td className="py-2 px-2 text-right">
                   {fmt(t.adj_em, true)}
                   {t.adj_em_rank != null && (
                     <span className="text-gray-500 text-xs ml-1">#{t.adj_em_rank}</span>
                   )}
                 </td>
-                <td className="py-2 px-2 text-right text-gray-300">{fmt(t.adj_o)}</td>
-                <td className="py-2 px-2 text-right text-gray-300">{fmt(t.adj_d)}</td>
-                <td className="py-2 px-2 text-right text-gray-300">
-                  {fmt(t.sos, true)}
-                  {t.sos_rank != null && (
-                    <span className="text-gray-500 text-xs ml-1">#{t.sos_rank}</span>
-                  )}
-                </td>
+                {!projected && (
+                  <td className="py-2 px-2 text-right text-gray-300">{fmt(t.adj_o)}</td>
+                )}
+                {!projected && (
+                  <td className="py-2 px-2 text-right text-gray-300">{fmt(t.adj_d)}</td>
+                )}
+                {!projected && (
+                  <td className="py-2 px-2 text-right text-gray-300">
+                    {fmt(t.sos, true)}
+                    {t.sos_rank != null && (
+                      <span className="text-gray-500 text-xs ml-1">#{t.sos_rank}</span>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -157,6 +201,12 @@ export default function Conference() {
       </div>
     </div>
   );
+}
+
+/// One decimal, for an expected-wins figure that is a mean rather than a
+/// count. "10.9" says "this is a projection" in a way "11" does not.
+function fmt1(v: number | null | undefined): string {
+  return v == null ? '—' : v.toFixed(1);
 }
 
 function fmt(v: number | null, signed = false): string {

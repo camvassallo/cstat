@@ -31,10 +31,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use cstat_core::projection::{self, Venue};
+
 use crate::AppState;
+use crate::routes::projections::fetch_conferences;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/conferences/{code}", get(conference_detail))
@@ -60,6 +64,25 @@ struct StandingsRow {
     /// `compute_derived_game_fields` keeps authoritative.
     wins: i32,
     losses: i32,
+    /// Expected record for a season not yet played: the sum of this team's
+    /// per-game win probabilities over the games the schedule currently
+    /// carries. Null on a played season, where the real record is the answer.
+    ///
+    /// An **expectation, not a simulation**. Summing independent win
+    /// probabilities gives the mean number of wins; it cannot express "wins
+    /// the league", and must not be presented as if it could.
+    #[sqlx(default)]
+    expected_conference_wins: Option<f64>,
+    #[sqlx(default)]
+    expected_conference_games: Option<i64>,
+    #[sqlx(default)]
+    expected_wins: Option<f64>,
+    /// How many of this team's scheduled games carry a projection. Shown
+    /// because NatStat publishes the slate in pieces — an expected record
+    /// over a third of a season is a real number about a partial schedule,
+    /// and reads as a whole-season claim if the denominator is hidden.
+    #[sqlx(default)]
+    projected_games: Option<i64>,
     adj_em: Option<f64>,
     /// NATIONAL rank, computed here rather than read: `team_season_stats`
     /// stores `sos_rank` and `elo_rank` but no AdjEM rank, and the rankings
@@ -80,6 +103,16 @@ async fn conference_detail(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let pool = &state.db.pool;
     let season = params.season.unwrap_or_else(crate::default_season);
+
+    // A season nobody has played has no standings to report, but it does have
+    // a projection — and between April and tip-off that is the only table
+    // there is. Served from the same per-game arithmetic `/api/predict` and
+    // the team page use, with no second model: each game's win probability is
+    // `preseason_only_win_prob` over the two anchors, and a team's expected
+    // record is their sum.
+    if !season_has_played_games(pool, season).await {
+        return projected_standings(pool, &code, season).await;
+    }
 
     let (teams, strength, non_conference) = tokio::try_join!(
         standings(pool, &code, season),
@@ -115,6 +148,231 @@ async fn conference_detail(
         "non_conference_wins": non_conference.0,
         "non_conference_losses": non_conference.1,
     })))
+}
+
+/// One row of the target season's schedule, in the shape the expected-record
+/// loop needs: who, against whom, and where.
+#[derive(sqlx::FromRow)]
+struct ScheduleSlot {
+    team_id: Uuid,
+    opponent_id: Option<Uuid>,
+    is_home: Option<bool>,
+    is_neutral: Option<bool>,
+}
+
+/// Has any game in this season been played to a final score?
+///
+/// Season-level rather than per-team, unlike the team page's gate: a league
+/// table is a statement about a whole season, so a single played game means
+/// the real standings have started and are the better answer for everyone in
+/// it. Errs toward `true` on a query failure, which routes to the played
+/// path and its own honest errors.
+async fn season_has_played_games(pool: &PgPool, season: i32) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM games \
+         WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL)",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(true)
+}
+
+/// The league table for a season that has not been played.
+///
+/// Three things have to come from somewhere other than the played path:
+///
+/// * **Membership.** The target season's `teams.conference` is NULL until
+///   Torvik publishes, so the league is resolved from the base season plus
+///   `data/conference_realignment.json` — reusing `fetch_conferences`, whose
+///   precedence rule is subtle enough (an ingested value that still reports
+///   the league a team *left* loses to the capture) that a second copy would
+///   drift.
+/// * **The conference slate.** `games.is_conference` is useless here: it is
+///   `false` for all 1,709 ingested 2027 games, because it is computed as
+///   "both teams carry the same non-null conference" and both are NULL. Using
+///   it would give every team a zero-game league schedule. Membership from
+///   the resolved map decides which games are league games instead.
+/// * **The record.** The sum of per-game win probabilities. No new model —
+///   `preseason_only_margin` is the same function the Predict page and the
+///   team-page schedule serve, so a game cannot read differently here.
+async fn projected_standings(
+    pool: &PgPool,
+    code: &str,
+    season: i32,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let base_season = season - 1;
+    let err = |e: sqlx::Error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("projected standings query failed: {e}") })),
+        )
+    };
+
+    // `fetch_conferences` keys on BASE-season team ids, and everything else
+    // here is keyed on the target season's, so the two are bridged through
+    // `natstat_id` — `teams.id` is season-scoped and cannot join across.
+    let conferences = fetch_conferences(pool, base_season, season)
+        .await
+        .map_err(err)?;
+    let links: Vec<(Uuid, Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT t.id, tgt.id, COALESCE(tgt.short_name, tgt.name, t.short_name, t.name) \
+         FROM teams t \
+         LEFT JOIN teams tgt ON tgt.natstat_id = t.natstat_id AND tgt.season = $2 \
+         WHERE t.season = $1",
+    )
+    .bind(base_season)
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .map_err(err)?;
+
+    // Target-season team id -> (name, resolved conference), for every team we
+    // can place. A base team with no target row has not been ingested for the
+    // new season and simply is not on the board.
+    let mut league: Vec<(Uuid, String)> = Vec::new();
+    let mut conf_of: HashMap<Uuid, String> = HashMap::new();
+    for (base_id, target_id, name) in links {
+        let Some(target_id) = target_id else { continue };
+        let Some(c) = conferences.get(&base_id).and_then(|t| t.conference.clone()) else {
+            continue;
+        };
+        if c == code {
+            league.push((target_id, name));
+        }
+        conf_of.insert(target_id, c);
+    }
+    if league.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!("no teams in conference {code} for season {season}"),
+            })),
+        ));
+    }
+
+    let anchors = projection::fetch_preseason_adj_em_map(pool, season)
+        .await
+        .map_err(err)?;
+    let games: Vec<ScheduleSlot> = sqlx::query_as(
+        "SELECT team_id, opponent_id, is_home, is_neutral FROM schedules WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .map_err(err)?;
+
+    let mut rows: Vec<Value> = Vec::new();
+    for (team_id, name) in &league {
+        let Some(&team_em) = anchors.get(team_id) else {
+            // Too thin to project (74 of 364 on the 2027 board). The row
+            // still belongs in the league; it simply has no numbers.
+            rows.push(json!({
+                "team_id": team_id, "team_name": name,
+                "expected_wins": null, "expected_conference_wins": null,
+                "expected_conference_games": null, "projected_games": null,
+                "adj_em": null,
+            }));
+            continue;
+        };
+        let (mut x_all, mut x_conf) = (0.0_f64, 0.0_f64);
+        let (mut n_all, mut n_conf) = (0_i64, 0_i64);
+        for g in &games {
+            if g.team_id != *team_id {
+                continue;
+            }
+            let Some(opp_id) = &g.opponent_id else {
+                continue;
+            };
+            let Some(&opp_em) = anchors.get(opp_id) else {
+                continue;
+            };
+            let venue = if g.is_neutral.unwrap_or(false) {
+                Venue::Neutral
+            } else if g.is_home.unwrap_or(false) {
+                Venue::Home
+            } else {
+                Venue::Away
+            };
+            let p = projection::preseason_only_win_prob(projection::preseason_only_margin(
+                team_em - opp_em,
+                venue,
+            ));
+            x_all += p;
+            n_all += 1;
+            if conf_of.get(opp_id).map(String::as_str) == Some(code) {
+                x_conf += p;
+                n_conf += 1;
+            }
+        }
+        rows.push(json!({
+            "team_id": team_id,
+            "team_name": name,
+            "expected_wins": round1(x_all),
+            "expected_conference_wins": round1(x_conf),
+            "expected_conference_games": n_conf,
+            "projected_games": n_all,
+            "adj_em": round1(team_em as f64),
+        }));
+    }
+
+    // Ordered by expected conference win RATE, not expected wins.
+    //
+    // Raw expected wins is the natural mirror of the played table and is
+    // wrong here, because NatStat publishes the slate in pieces: with about a
+    // third of 2026-27 out, sorting by the sum ranks teams by how much of
+    // their schedule has been published. Measured on the real board it put
+    // BYU (18 league games listed) first and Houston seventh — on the best
+    // projection in the conference, with two games listed. That is a table
+    // about NatStat's publishing order wearing the clothes of a standings
+    // projection.
+    //
+    // The rate normalises it, and it is self-correcting rather than a
+    // stopgap: once every slate is complete the denominators are equal and
+    // ordering by rate is ordering by wins.
+    rows.sort_by(|a, b| {
+        // `None` = no league games listed yet. Not "worst" — unknown — so it
+        // falls through to the projection rather than being sunk to the
+        // bottom of a table it has no evidence in.
+        let key = |v: &Value| {
+            let n = v["expected_conference_games"].as_f64().unwrap_or(0.0);
+            let rate = (n > 0.0).then(|| v["expected_conference_wins"].as_f64().unwrap_or(0.0) / n);
+            (rate, v["adj_em"].as_f64().unwrap_or(f64::MIN))
+        };
+        let (ka, kb) = (key(a), key(b));
+        match (ka.0, kb.0) {
+            (Some(ra), Some(rb)) => (rb, kb.1)
+                .partial_cmp(&(ra, ka.1))
+                .unwrap_or(std::cmp::Ordering::Equal),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => kb.1.partial_cmp(&ka.1).unwrap_or(std::cmp::Ordering::Equal),
+        }
+    });
+
+    let rated: Vec<f64> = league
+        .iter()
+        .filter_map(|(id, _)| anchors.get(id).map(|&e| e as f64))
+        .collect();
+    let mean_adj_em = (!rated.is_empty()).then(|| rated.iter().sum::<f64>() / rated.len() as f64);
+
+    Ok(Json(json!({
+        "conference": code,
+        "season": season,
+        "projected": true,
+        "teams": rows,
+        "mean_adj_em": mean_adj_em.map(round1),
+        // Deliberately absent for a projected season: a league's rank among
+        // leagues and its non-conference record are facts about games played.
+        "strength_rank": null,
+        "conference_count": null,
+        "non_conference_wins": null,
+        "non_conference_losses": null,
+    })))
+}
+
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
 }
 
 /// The standings table, ordered the way a league table is read: conference
