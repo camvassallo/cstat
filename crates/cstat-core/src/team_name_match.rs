@@ -21,7 +21,16 @@
 /// Add entries here as we spot misses.
 pub const TEAM_ALIASES: &[(&str, &str)] = &[
     ("uconn", "connecticut"),
-    ("ole miss", "mississippi"),
+    // Exact full name, NOT the bare "mississippi" prefix. Three programs begin
+    // with it — Mississippi Rebels, Mississippi State Bulldogs, Mississippi
+    // Valley State Delta Devils — so the prefix branch scored all three at 1
+    // and the caller took whichever came first. It took Mississippi Valley
+    // State, which moved every one of Ole Miss's eight 2026-27 transfer
+    // commitments into the SWAC, dropped Ole Miss below the roster-thinness
+    // gate, and left an SEC program with no projection at all (#403). Same
+    // shape as the Penn / Penn State note below, which is where this rule was
+    // already written down.
+    ("ole miss", "mississippi rebels"),
     ("usc", "southern california"),
     ("nc state", "north carolina state"),
     // Bare "Miami" prefix-matches both Florida and Ohio — anchor it to FL.
@@ -71,8 +80,18 @@ pub fn team_match_score(db_short: Option<&str>, db_full: &str, short: &str) -> O
         return Some(0);
     }
     // 1 = alias hit against the full name. Kept for 247-side aliases
-    // that don't equal the short_name (e.g. "miami" → "Miami FL";
-    // "ole miss" → "Mississippi"; ambiguous bare names like "Miami").
+    // that don't equal the short_name (e.g. "miami" → "Miami FL"; ambiguous
+    // bare names like "Miami").
+    //
+    // The `starts_with` half is a HAZARD worth reading before adding an entry:
+    // a target that is a bare program name also prefix-matches every SIBLING
+    // program, all of them score 1, and the caller's tiebreak then picks one
+    // with nothing reporting the ambiguity. That is #403 — "ole miss" →
+    // "mississippi" swept in Mississippi State and Mississippi Valley State,
+    // and won by tiebreak. Target the exact full name, mascot included,
+    // whenever a sibling could share the prefix. `no_alias_matches_two_programs`
+    // enforces it, and `tests/team_alias_ambiguity.rs` does so against the
+    // whole `teams` table.
     for (k, v) in TEAM_ALIASES {
         if short_lc == *k && (db_lc == *v || db_lc.starts_with(&format!("{v} "))) {
             return Some(1);
@@ -177,6 +196,115 @@ mod tests {
             ),
             Some(1),
         );
+    }
+
+    #[test]
+    fn ole_miss_alias_excludes_the_other_two_mississippis() {
+        // 247 sends "Ole Miss"; cstat carries "Mississippi Rebels".
+        assert_eq!(
+            team_match_score(Some("Mississippi"), "Mississippi Rebels", "Ole Miss"),
+            Some(1),
+        );
+        // The two programs the old bare-"mississippi" prefix swept in. Both
+        // scored 1 alongside the Rebels, and the caller's tiebreak took Valley
+        // State — eight Ole Miss transfers into the SWAC, and Ole Miss itself
+        // off the projected board entirely (#403).
+        for (short, full) in [
+            ("Mississippi St.", "Mississippi State Bulldogs"),
+            (
+                "Mississippi Valley St.",
+                "Mississippi Valley State Delta Devils",
+            ),
+        ] {
+            assert_eq!(
+                team_match_score(Some(short), full, "Ole Miss"),
+                None,
+                "{full} must not answer to Ole Miss",
+            );
+        }
+    }
+
+    /// Every alias must name exactly ONE program, checked against the real
+    /// NatStat full names of every family an alias target could sweep in.
+    ///
+    /// This is the class the #403 fix closes, not just the instance. The bug was
+    /// never a missing alias — it was an alias that matched three schools, tied
+    /// at the best score, and let the caller pick. That fails silently and
+    /// produces a roster that looks entirely plausible, so the guard has to be a
+    /// test rather than a convention.
+    ///
+    /// The fixture is real names taken from the `teams` table, covering each
+    /// alias target's prefix siblings. A DB-wide sweep over every season lives
+    /// in `tests/team_alias_ambiguity.rs`; this one is the always-on half,
+    /// because that one needs a database and is `#[ignore]`d.
+    #[test]
+    fn no_alias_matches_two_programs() {
+        // (short_name, full NatStat name) for every program sharing a prefix
+        // with some alias target, plus the intended target of each alias.
+        const TEAMS: &[(&str, &str)] = &[
+            ("Connecticut", "Connecticut Huskies"),
+            ("Mississippi", "Mississippi Rebels"),
+            ("Mississippi St.", "Mississippi State Bulldogs"),
+            (
+                "Mississippi Valley St.",
+                "Mississippi Valley State Delta Devils",
+            ),
+            ("Southern Miss", "Southern Mississippi Golden Eagles"),
+            ("Southern California", "Southern California Trojans"),
+            ("USC Upstate", "South Carolina Upstate Spartans"),
+            ("N.C. State", "North Carolina State Wolfpack"),
+            ("North Carolina", "North Carolina Tar Heels"),
+            ("Miami FL", "Miami (Fla.) Hurricanes"),
+            ("Miami OH", "Miami (Ohio) Redhawks"),
+            ("UMKC", "Missouri-Kansas City Kangaroos"),
+            ("Missouri", "Missouri Tigers"),
+            ("Penn", "Penn Quakers"),
+            ("Penn St.", "Penn State Nittany Lions"),
+            ("Texas A&M", "Texas A&M Aggies"),
+            (
+                "Texas A&M Corpus Chris",
+                "Texas A&M-Corpus Christi Islanders",
+            ),
+            ("Tennessee Martin", "Tennessee-Martin Skyhawks"),
+            ("Tennessee", "Tennessee Volunteers"),
+            ("Little Rock", "Arkansas-Little Rock Trojans"),
+            ("Arkansas", "Arkansas Razorbacks"),
+            ("Houston Christian", "Houston Baptist Huskies"),
+            ("Houston", "Houston Cougars"),
+        ];
+
+        let mut keys: Vec<&str> = TEAM_ALIASES.iter().map(|(k, _)| *k).collect();
+        keys.sort_unstable();
+        keys.dedup();
+
+        for key in keys {
+            // Best (lowest) score wins in every caller, so ambiguity means two
+            // programs TIED at the best score — a lower-scoring also-ran is
+            // fine and expected.
+            let mut scored: Vec<(u32, &str)> = TEAMS
+                .iter()
+                .filter_map(|(short, full)| {
+                    team_match_score(Some(short), full, key).map(|s| (s, *full))
+                })
+                .collect();
+            if scored.is_empty() {
+                continue;
+            }
+            scored.sort_unstable();
+            let best = scored[0].0;
+            let tied: Vec<&str> = scored
+                .iter()
+                .filter(|(s, _)| *s == best)
+                .map(|(_, f)| *f)
+                .collect();
+            assert_eq!(
+                tied.len(),
+                1,
+                "alias {key:?} ties at score {best} across {tied:?} — the caller \
+                 would pick one arbitrarily. Target the exact full name instead \
+                 of a prefix, as the Ole Miss and Penn entries do.",
+            );
+        }
     }
 
     #[test]

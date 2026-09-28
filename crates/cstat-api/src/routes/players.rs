@@ -164,6 +164,170 @@ struct PlayerDetailParams {
     season: Option<i32>,
 }
 
+/// Which regime produced a player page's projected next-season CAM.
+///
+/// An enum rather than bare `&str` literals for the same reason
+/// `predict::PredictionBasis` is one: the value is a **contract with the
+/// frontend**. `PlayerTrajectory.projection_basis` in `web/src/api/client.ts` is
+/// a closed union and the chip's tooltip keys off it, so a basis the server can
+/// emit but the client does not list renders a caveat-free tooltip — which is
+/// the exact failure #401 was filed for, one layer down.
+/// `every_trajectory_basis_is_in_the_frontend_union` below walks `Self::ALL`
+/// against that union.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TrajectoryBasis {
+    /// A persisted leave-one-pair-out prediction from
+    /// `trajectory_oof_predictions`. Honest held-out output, and the only basis
+    /// that is not in-sample for a historical target season. Preferred whenever
+    /// it exists, which is every season the trajectory model trained on.
+    HeldOut,
+    /// The materialized `player_season_projection` row — the destination-aware
+    /// projection. Identical to what the projected `/players` board serves (it
+    /// reads the same row), and equal to the team projections page's live
+    /// number to the `REAL` column's precision, which is ~1e-5 CAM against a
+    /// surface that displays one decimal.
+    DestinationAware,
+    /// Live inference with no destination, which the feature builder fills as
+    /// "returns to the same program". The honest fallback for a player no
+    /// composed roster carries — a departing senior, whose number is explicitly
+    /// the "had he stayed" counterfactual — and the one basis whose tooltip has
+    /// to say so.
+    SameProgramAssumed,
+}
+
+impl TrajectoryBasis {
+    /// Every variant, for the contract test. Must stay exhaustive; the `match`
+    /// in [`Self::as_str`] is what forces a new variant to be considered here.
+    #[cfg(test)]
+    const ALL: &'static [Self] = &[
+        Self::HeldOut,
+        Self::DestinationAware,
+        Self::SameProgramAssumed,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::HeldOut => "held_out",
+            Self::DestinationAware => "destination_aware",
+            Self::SameProgramAssumed => "same_program_assumed",
+        }
+    }
+}
+
+/// Resolve the projected next-season CAM band for one player, and say which
+/// regime produced it.
+///
+/// Both player-facing surfaces call this — the single-season detail page and the
+/// career-progression page. They each had their own copy of this precedence,
+/// which is why #401 was a bug in two places at once and got fixed in one and
+/// not the other; there is now one copy.
+///
+/// Precedence, and why it is this order:
+///
+/// 1. **`trajectory_oof_predictions`** — the held-out prediction, for any
+///    (torvik_pid, target_season) pair the model trained on. First because it
+///    is the only basis that is not in-sample for a historical season, and
+///    because keeping it first leaves those players' numbers untouched by this
+///    change. That is most of them but not all: 19-27% of a historical
+///    season's players have no OOF row (no `torvik_pid` mapping, or a
+///    transition the model did not train on), and their answer moves from
+///    destination-blind inference to step 2, which is what the team page has
+///    shown them all along.
+/// 2. **`player_season_projection`** — the destination-aware row the roster
+///    pipeline materializes. This is the fix: for the forward season it replaces
+///    a destination-blind guess with the same number the team page serves.
+/// 3. **live inference with `Destination = None`** — a player no composed roster
+///    carries. Retained deliberately rather than dropped: a departing senior's
+///    chip is a counterfactual, and a counterfactual is worth rendering as long
+///    as it is labelled as one.
+///
+/// `row` is the caller's already-fetched [`TrajectoryPlayerRow`] (the detail
+/// route gets it inside its `try_join!`), so this adds no round trip beyond the
+/// lookups it actually needs.
+async fn resolve_trajectory(
+    state: &AppState,
+    player_id: Uuid,
+    base_season: i32,
+    row: Option<cstat_core::trajectory::TrajectoryPlayerRow>,
+) -> Option<Value> {
+    let row = row?;
+    // Gate: the model's most load-bearing feature. No prior CamPom, no
+    // projection — for every basis, including the table read.
+    row.campom?;
+    let target_season = base_season + 1;
+    let pool = &state.db.pool;
+
+    // Both lookups fire together, and the concurrency is deliberate rather than
+    // reflexive. The table read is wasted work whenever OOF hits — but OOF is
+    // empty for the forward season by construction, and the forward season is
+    // the DEFAULT here: `default_season()` is the in-progress season, so the
+    // page's own default target has no OOF row and would always pay for a
+    // second sequential round trip. Against a remote DB that is the more
+    // expensive side of the trade; one extra primary-key read is the cheaper
+    // one. The page's existing `try_join!` already holds more connections than
+    // this adds.
+    let ids = [player_id];
+    let (oof, materialized) = tokio::join!(
+        cstat_core::trajectory::fetch_trajectory_oof(pool, &ids, target_season),
+        cstat_core::trajectory::fetch_player_season_projection(pool, &ids, target_season),
+    );
+    // Either lookup failing degrades the basis rather than the page: the
+    // projection is one chip among a page of actuals, and a fallback still
+    // produces a number. It is logged because the fallback is silent in the
+    // payload apart from `projection_basis`, and a DB error that quietly
+    // downgrades every player to the destination-blind number is exactly the
+    // kind of degradation that otherwise reads as normal.
+    // `lookup` is a FIELD, not part of the message: a constant message is what
+    // lets these group in the log sink instead of splitting into one bucket per
+    // table name.
+    let warn = |lookup: &'static str, e: sqlx::Error| {
+        tracing::warn!(
+            error = ?e,
+            lookup,
+            player_id = %player_id,
+            target_season,
+            "player-page projection lookup failed; falling back to a weaker basis",
+        );
+    };
+    let oof = oof
+        .map_err(|e| warn("trajectory_oof_predictions", e))
+        .ok()
+        .and_then(|m| m.get(&player_id).cloned());
+    let materialized = materialized
+        .map_err(|e| warn("player_season_projection", e))
+        .ok()
+        .and_then(|m| m.get(&player_id).cloned());
+
+    let (pred, basis) = if let Some(p) = oof {
+        (p, TrajectoryBasis::HeldOut)
+    } else {
+        match materialized {
+            Some(p) => (p, TrajectoryBasis::DestinationAware),
+            None => {
+                let features =
+                    cstat_core::trajectory::build_trajectory_features(&row, base_season, None);
+                match state.predictor.predict_trajectory(&features) {
+                    Ok(p) => (p, TrajectoryBasis::SameProgramAssumed),
+                    Err(e) => {
+                        tracing::warn!(error = ?e, player_id = %player_id, "trajectory predict failed");
+                        return None;
+                    }
+                }
+            }
+        }
+    };
+
+    Some(json!({
+        "base_season": base_season,
+        "target_season": target_season,
+        "projected_mean": pred.mean,
+        "projected_lower": pred.lower,
+        "projected_upper": pred.upper,
+        "prior_campom": row.campom,
+        "projection_basis": basis.as_str(),
+    }))
+}
+
 async fn player_detail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
@@ -235,46 +399,9 @@ async fn player_detail(
     })?;
 
     // Phase 5c trajectory: project next-season CamPom from the qualified
-    // prior-season row. Gated on the player passing the QUAL filter AND
-    // having a non-null CamPom (the model's most-load-bearing feature).
-    //
-    // Precedence: OOF (LOPO held-out) prediction first if persisted for
-    // (torvik_pid, target_season = season + 1); live inference only when
-    // no OOF row exists (= forward year + the ~4% missing torvik_pid
-    // mapping). For historical seasons this serves the honest held-out
-    // projection instead of in-sample inference.
-    let target_season = season + 1;
-    let oof_pred =
-        cstat_core::trajectory::fetch_trajectory_oof(pool, &[resolved_id], target_season)
-            .await
-            .ok()
-            .and_then(|map| map.get(&resolved_id).cloned());
-    let trajectory = trajectory_row.and_then(|row| {
-        row.campom?;
-        let pred = match oof_pred {
-            Some(p) => p,
-            None => {
-                // `None`: the player page projects him back at his current
-                // program. The roster projection passes a `Destination`.
-                let features = cstat_core::trajectory::build_trajectory_features(&row, season, None);
-                match state.predictor.predict_trajectory(&features) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::warn!(error = ?e, player_id = %resolved_id, "trajectory predict failed");
-                        return None;
-                    }
-                }
-            }
-        };
-        Some(json!({
-            "base_season": season,
-            "target_season": target_season,
-            "projected_mean": pred.mean,
-            "projected_lower": pred.lower,
-            "projected_upper": pred.upper,
-            "prior_campom": row.campom,
-        }))
-    });
+    // prior-season row. Precedence and the `projection_basis` contract live in
+    // `resolve_trajectory`, shared with the progression route below.
+    let trajectory = resolve_trajectory(&state, resolved_id, season, trajectory_row).await;
 
     Ok(Json(json!({
         "player": player,
@@ -395,39 +522,10 @@ async fn player_progression(
                     Json(json!({ "error": format!("trajectory query failed: {e}") })),
                 )
             })?;
-        // Same OOF-first precedence as `player_detail`. Historical
-        // seasons that match a persisted (torvik_pid, target_season)
-        // pair get the held-out prediction; everything else falls
-        // through to live inference.
-        let target_season = latest_season + 1;
-        let oof_pred = cstat_core::trajectory::fetch_trajectory_oof(pool, &[rid], target_season)
-            .await
-            .ok()
-            .and_then(|map| map.get(&rid).cloned());
-        row.and_then(|row| {
-            row.campom?;
-            let pred = match oof_pred {
-                Some(p) => p,
-                None => {
-                    let features = cstat_core::trajectory::build_trajectory_features(&row, latest_season, None);
-                    match state.predictor.predict_trajectory(&features) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            tracing::warn!(error = ?e, player_id = %rid, "trajectory predict failed");
-                            return None;
-                        }
-                    }
-                }
-            };
-            Some(json!({
-                "base_season": latest_season,
-                "target_season": target_season,
-                "projected_mean": pred.mean,
-                "projected_lower": pred.lower,
-                "projected_upper": pred.upper,
-                "prior_campom": row.campom,
-            }))
-        })
+        // Identical precedence to `player_detail` — one shared resolver, because
+        // two copies of it is how this page kept projecting a transfer at the
+        // program he left after the detail page stopped (#401).
+        resolve_trajectory(&state, rid, latest_season, row).await
     } else {
         None
     };
@@ -832,6 +930,53 @@ mod tests {
         for ids in [format!("{A},not-a-uuid"), format!("{A}@nineteen")] {
             let (status, _) = parse_compare_slots(&ids, 2026).expect_err("should reject");
             assert_eq!(status, StatusCode::BAD_REQUEST, "for ids {ids:?}");
+        }
+    }
+
+    #[test]
+    fn every_trajectory_basis_is_in_the_frontend_union() {
+        // `projection_basis` is a closed union on the TypeScript side and the
+        // key for the projection chip's caveat. A basis the server emits but the
+        // client does not list type-checks fine (the response is `any` at the
+        // wire) and renders the unqualified tooltip — which is precisely the
+        // #401 failure: a destination-blind number presented as "projected
+        // next-season CAM" with nothing saying what it assumed. Sibling of
+        // `predict::every_basis_the_server_can_emit_is_in_the_frontend_union`.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("crates/cstat-api has a grandparent");
+        let client = std::fs::read_to_string(root.join("web/src/api/client.ts"))
+            .expect("read web/src/api/client.ts");
+
+        // Narrow to the union itself. Matching the whole file would pass on a
+        // basis that merely appears in a comment somewhere — a vacuous pass is
+        // the failure mode this kind of grep-with-an-opinion has to rule out.
+        let start = client
+            .find("projection_basis:")
+            .expect("client.ts declares projection_basis");
+        let union = &client[start..start + client[start..].find(';').expect("union terminates")];
+        // Sanity-check the slice, so a moved field or a stray earlier mention of
+        // the name cannot make the loop below pass on nothing. Keyed on a member
+        // rather than on a count: a count equal to `ALL.len()` would fire here
+        // instead of at the actionable assertion, hiding the message that says
+        // what to do.
+        assert!(
+            union.contains("'held_out'") && union.contains('|'),
+            "did not parse the projection_basis union out of client.ts — the field moved, \
+             so this check would be vacuous: {union}"
+        );
+
+        for basis in TrajectoryBasis::ALL {
+            assert!(
+                union.contains(&format!("'{}'", basis.as_str())),
+                "the server can emit projection_basis {:?} but web/src/api/client.ts does not \
+                 list it. Add it to the union, and decide what the chip tooltip in \
+                 web/src/pages/PlayerDetail.tsx and web/src/pages/PlayerProgression.tsx should \
+                 say about it — a basis that assumes something the user cannot see needs to \
+                 say so.\n\nunion: {union}",
+                basis.as_str()
+            );
         }
     }
 }

@@ -24,7 +24,7 @@ import {
 import { ShotDietCourt, ShotDistributionBar } from '../components/ShotDiet';
 import { classColor, provisionalMeta } from '../components/archetypeColors';
 import { ClassTooltip } from '../components/Archetype';
-import { camTier, camTierColor, camHalfColor } from '../components/cam';
+import { camTier, camTierColor, camHalfColor, projectionBasisNote } from '../components/cam';
 import { pctileTextColor } from '../components/pctile';
 import { SeasonLink } from '../components/SeasonLink';
 import { useIsMobile } from '../components/useIsMobile';
@@ -210,10 +210,14 @@ export default function PlayerProgression() {
                   : t.prior_campom != null && t.prior_campom >= 10
                     ? ' Mild regression expected on this tier (projections sit ≈0.3 below current on +10..+15 inputs).'
                     : '';
+              // What the number assumed — same copy as the detail page's chip,
+              // from one helper, so the two surfaces cannot describe the same
+              // projection differently (#401).
+              const basisNote = projectionBasisNote(t.projection_basis);
               return (
                 <span
                   className={`inline-flex items-baseline gap-2 px-2.5 py-0.5 rounded border border-dashed ${camTierColor(tier)}`}
-                  title={`Projected next-season CAM. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}. Pooled backtest MAE ≈ 2.1 — directional, not a point estimate.${regressionNote}`}
+                  title={`Projected next-season CAM. Mean ${t.projected_mean.toFixed(2)}, 80% band ${band}.${basisNote} Pooled backtest MAE ≈ 2.1 — directional, not a point estimate.${regressionNote}`}
                 >
                   <span className="text-xs uppercase tracking-wide opacity-70">
                     Proj {seasonLabel(t.target_season)}
@@ -340,6 +344,17 @@ export default function PlayerProgression() {
               )}
             </ComposedChart>
           </ResponsiveContainer>
+          {/* Visible, not hover-only, for the one basis that answers a
+              different question than the chart's axis implies: the player is on
+              no projected roster, so the dashed point is where he would land
+              had he stayed put. Every other basis already reads correctly as
+              "next season", so a caption there would be noise. */}
+          {data.trajectory?.projection_basis === 'same_program_assumed' && (
+            <p className="text-xs text-gray-500 mt-2">
+              The projected point assumes he stays at his current program — he is not
+              on a projected roster for next season.
+            </p>
+          )}
         </div>
       )}
 

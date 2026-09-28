@@ -1117,6 +1117,19 @@ export interface PlayerTrajectory {
   projected_lower: number;
   projected_upper: number;
   prior_campom: number | null;
+  /// Which regime produced the band. A CLOSED union — the Rust side walks it
+  /// (`players::every_trajectory_basis_is_in_the_frontend_union`), because a
+  /// basis missing here renders the unqualified tooltip:
+  ///   * `held_out` — the persisted leave-one-pair-out prediction. Honest
+  ///     held-out output; every season the model trained on.
+  ///   * `destination_aware` — the materialized `player_season_projection` row,
+  ///     the same number the team projections page and the projected players
+  ///     board serve. The forward season's normal basis.
+  ///   * `same_program_assumed` — live inference with no destination, which the
+  ///     model reads as "returns to the same program". Only for a player no
+  ///     projected roster carries, so his number is a counterfactual and the
+  ///     tooltip has to say so.
+  projection_basis: 'held_out' | 'destination_aware' | 'same_program_assumed';
 }
 
 /// A player's play-by-play season profile (from the `player_game_stats`
