@@ -269,6 +269,22 @@ async fn team_detail(
     // rather than reimplemented: `preseason_only_margin` is the same function
     // `/api/predict` serves, so a game on this page and the same game on the
     // Predict page cannot disagree.
+    // Keyed on the REQUESTED team alone, where `/api/predict`'s
+    // `preseason_only_regime` requires BOTH sides unplayed. The two therefore
+    // disagree for about a week each November: on a matchup where this team
+    // has not opened but the opponent has, this page projects from the
+    // anchors and `/api/predict` returns 404.
+    //
+    // Deliberate, and this is the better side of the disagreement. The model
+    // cannot serve that matchup either way — the unplayed team has no
+    // `team_season_stats` — so the real choice is a preseason number or
+    // nothing, and a schedule row that silently blanks for a fortnight is
+    // worse than one labelled as a preseason projection. Widening
+    // `/api/predict` to match is the asymmetric case #387 left open on
+    // purpose; until then the divergence lives here, named.
+    //
+    // Outside that window the two agree exactly, because both reduce to the
+    // same `preseason_only_margin` on the same anchors.
     let preseason_only = !projection::team_has_played(pool, season, resolved_id).await;
     if preseason_only {
         let anchors = projection::fetch_preseason_adj_em_map(pool, season)
