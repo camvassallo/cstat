@@ -232,6 +232,16 @@ export function usePageSeasons(): readonly number[] | null {
 export function useAvailableSeasons(): {
   seasons: readonly number[];
   defaultSeason: number;
+  /** Newest season with a completed game.
+   *
+   *  **Not the same as `defaultSeason`.** Since #394 the default follows the
+   *  upcoming projection while the previous season is over, so between April
+   *  and tip-off `defaultSeason` names a season nobody has played. Anything
+   *  asking "has this season happened" — the team page choosing between its
+   *  actual and projected views, say — needs this one. Reading `defaultSeason`
+   *  for it makes `season > newestPlayed` false for the upcoming season and
+   *  silently renders the empty actual view (#388). */
+  newestPlayed: number;
   upcoming: number;
   /** Has `/api/seasons` answered (either way) in this session?
    *
@@ -284,7 +294,13 @@ export function useAvailableSeasons(): {
     };
   }, []);
 
-  return { seasons, defaultSeason: def, upcoming, settled };
+  return {
+    seasons,
+    defaultSeason: def,
+    newestPlayed: seasons[0] ?? DEFAULT_SEASON,
+    upcoming,
+    settled,
+  };
 }
 
 /** The upcoming projection season, tracking `/api/seasons`.
