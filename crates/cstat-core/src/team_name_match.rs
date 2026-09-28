@@ -80,8 +80,18 @@ pub fn team_match_score(db_short: Option<&str>, db_full: &str, short: &str) -> O
         return Some(0);
     }
     // 1 = alias hit against the full name. Kept for 247-side aliases
-    // that don't equal the short_name (e.g. "miami" → "Miami FL";
-    // "ole miss" → "Mississippi"; ambiguous bare names like "Miami").
+    // that don't equal the short_name (e.g. "miami" → "Miami FL"; ambiguous
+    // bare names like "Miami").
+    //
+    // The `starts_with` half is a HAZARD worth reading before adding an entry:
+    // a target that is a bare program name also prefix-matches every SIBLING
+    // program, all of them score 1, and the caller's tiebreak then picks one
+    // with nothing reporting the ambiguity. That is #403 — "ole miss" →
+    // "mississippi" swept in Mississippi State and Mississippi Valley State,
+    // and won by tiebreak. Target the exact full name, mascot included,
+    // whenever a sibling could share the prefix. `no_alias_matches_two_programs`
+    // enforces it, and `tests/team_alias_ambiguity.rs` does so against the
+    // whole `teams` table.
     for (k, v) in TEAM_ALIASES {
         if short_lc == *k && (db_lc == *v || db_lc.starts_with(&format!("{v} "))) {
             return Some(1);
