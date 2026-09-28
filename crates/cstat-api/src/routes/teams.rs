@@ -14,9 +14,38 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::AppState;
-use cstat_core::projection::ProjectionSummary;
+use cstat_core::projection::{self, ProjectionSummary, Venue};
 
 use crate::routes::predict::predict_projection;
+
+/// The venue a schedule row represents, **from the requested team's side**.
+///
+/// Pure and separately tested because the branch order is load-bearing and
+/// real data cannot currently exercise it: `compute_schedules` writes
+/// `is_home = NOT is_neutral_site` for the host, so a neutral game has
+/// `is_home = false` on BOTH rows. Testing `is_home` first would therefore
+/// send every neutral game down the Away arm — scoring both teams as the
+/// visitor and moving each margin by a full home-court advantage in opposite
+/// directions. Neutral has to be asked first.
+///
+/// That is not hypothetical-but-unlikely: the 2027 feed currently contains
+/// **zero** neutral-site games, so nothing on the site would catch it, and the
+/// games that acquire the flag are the November multi-team tournaments — the
+/// marquee ones.
+///
+/// The requested team's side matters for the same reason:
+/// `preseason_only_margin` adds the home term for `Home` and subtracts it for
+/// `Away`, so passing the host's venue for an away game swings the margin by
+/// twice the HCA the wrong way.
+fn schedule_venue(is_home: Option<bool>, is_neutral: Option<bool>) -> Venue {
+    if is_neutral.unwrap_or(false) {
+        Venue::Neutral
+    } else if is_home.unwrap_or(false) {
+        Venue::Home
+    } else {
+        Venue::Away
+    }
+}
 
 /// Max LIVE schedule-game projections in flight at once inside `team_detail`.
 ///
@@ -226,6 +255,63 @@ async fn team_detail(
             )
         })?;
 
+    // A season this team has not played a game in cannot be projected by the
+    // model at all — no `team_season_stats`, so feature extraction fails and
+    // every row below would come back blank (#388). The preseason regime
+    // shipped in #387 can answer it: each game is a subtraction on the two
+    // teams' projected AdjEM plus a venue term.
+    //
+    // Done as a BATCH here rather than by calling `preseason_only_regime` per
+    // game. That helper resolves one matchup and costs four round-trips — two
+    // "has this team played" probes and two anchor lookups — so a 31-game
+    // schedule would run 124 queries to compute 31 subtractions. One query for
+    // the season's anchors replaces all of it, and the arithmetic is shared
+    // rather than reimplemented: `preseason_only_margin` is the same function
+    // `/api/predict` serves, so a game on this page and the same game on the
+    // Predict page cannot disagree.
+    let preseason_only = !projection::team_has_played(pool, season, resolved_id).await;
+    if preseason_only {
+        let anchors = projection::fetch_preseason_adj_em_map(pool, season)
+            .await
+            .unwrap_or_else(|e| {
+                // Non-fatal, like the stored-projection read below: the
+                // schedule still renders, just without the projection column.
+                tracing::warn!(
+                    team_id = %resolved_id, season, error = %e,
+                    "preseason anchors unavailable; schedule will render unprojected"
+                );
+                Default::default()
+            });
+        // `None` here is a team too thin to project (74 of 364 on the 2027
+        // board). Every row is then left unprojected and renders as unknown —
+        // the alternative is inventing a number for a roster we declined to
+        // score.
+        if let Some(&team_em) = anchors.get(&resolved_id) {
+            for entry in schedule.iter_mut() {
+                let Some(opp_id) = entry.opponent_id else {
+                    continue;
+                };
+                let Some(&opp_em) = anchors.get(&opp_id) else {
+                    continue;
+                };
+                let venue = schedule_venue(entry.is_home, entry.is_neutral);
+                let margin = projection::preseason_only_margin(team_em - opp_em, venue);
+                entry.projected_margin = Some(((margin as f64) * 10.0).round() / 10.0);
+                entry.projected_win_prob =
+                    Some((projection::preseason_only_win_prob(margin) * 1000.0).round() / 1000.0);
+                // Deliberately no projected score: the preseason projection is
+                // a strength difference and carries no tempo, so there is no
+                // level to put a score pair on. Same call as `/api/predict`,
+                // whose `predicted_total` is null in this regime.
+                entry.projected_score_team = None;
+                entry.projected_score_opp = None;
+                // It is a pre-game projection by construction — the game has
+                // not been played and no result informed it.
+                entry.is_pre_game_projection = true;
+            }
+        }
+    }
+
     // Completed games are served from `game_projections`, the table the
     // nightly materializes (#266). Projecting them live is what made this the
     // slowest route on the site: each one routes through the point-in-time
@@ -238,17 +324,25 @@ async fn team_detail(
     // A completed game that ISN'T in the table (played since the last sweep,
     // or skipped because a team had no stats row) falls through to the live
     // path below, so the column never silently empties.
-    let stored = queries::get_team_game_projections(pool, resolved_id, season)
-        .await
-        .unwrap_or_else(|e| {
-            // Non-fatal: a failed read costs latency, not correctness — every
-            // game falls back to the live projection it used to get.
-            tracing::warn!(
-                team_id = %resolved_id, season, error = %e,
-                "precomputed game projections unavailable; projecting the schedule live"
-            );
-            Default::default()
-        });
+    let stored = if preseason_only {
+        // Nothing to look up: the season has no completed games, so the
+        // nightly's sweep has nothing to have stored, and the live fan-out
+        // below would only rediscover that the model cannot serve this
+        // season. Both are skipped rather than run and discarded.
+        Default::default()
+    } else {
+        queries::get_team_game_projections(pool, resolved_id, season)
+            .await
+            .unwrap_or_else(|e| {
+                // Non-fatal: a failed read costs latency, not correctness — every
+                // game falls back to the live projection it used to get.
+                tracing::warn!(
+                    team_id = %resolved_id, season, error = %e,
+                    "precomputed game projections unavailable; projecting the schedule live"
+                );
+                Default::default()
+            })
+    };
     for entry in schedule.iter_mut() {
         let Some(p) = stored.get(&entry.game_id) else {
             continue;
@@ -305,8 +399,10 @@ async fn team_detail(
         Option<ProjectionSummary>,
     )> = JoinSet::new();
     for (idx, entry) in schedule.iter().enumerate() {
-        // Already served from `game_projections`.
-        if entry.projected_margin.is_some() {
+        // Already served from `game_projections`, or from the preseason
+        // anchors above — and in preseason mode a row left unprojected is a
+        // too-thin team, which the model cannot rescue either.
+        if preseason_only || entry.projected_margin.is_some() {
             continue;
         }
         let Some(opp_id) = entry.opponent_id else {
@@ -400,6 +496,42 @@ async fn team_detail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_neutral_game_is_neutral_for_both_teams() {
+        // `compute_schedules` writes `is_home = NOT is_neutral_site` for the
+        // host, so a neutral game carries `is_home = false` on both rows and
+        // `is_neutral = true` on both. Asking `is_home` first would drop both
+        // teams into the Away arm.
+        assert_eq!(schedule_venue(Some(false), Some(true)), Venue::Neutral);
+        // And if a writer ever set both — belt and braces, since the two
+        // columns are independent in the schema — neutral still wins rather
+        // than the row being scored as a home game.
+        assert_eq!(schedule_venue(Some(true), Some(true)), Venue::Neutral);
+    }
+
+    #[test]
+    fn home_and_away_rows_map_to_opposite_venues() {
+        assert_eq!(schedule_venue(Some(true), Some(false)), Venue::Home);
+        assert_eq!(schedule_venue(Some(false), Some(false)), Venue::Away);
+        // The margin consequence, which is what the mapping is for: getting
+        // these two the wrong way round is a full two HCAs of error.
+        let (h, a) = (
+            projection::preseason_only_margin(0.0, schedule_venue(Some(true), Some(false))),
+            projection::preseason_only_margin(0.0, schedule_venue(Some(false), Some(false))),
+        );
+        assert!(h > 0.0 && a < 0.0, "home {h} away {a}");
+        assert!((h + a).abs() < 1e-6, "venues must be symmetric: {h} vs {a}");
+    }
+
+    #[test]
+    fn a_null_venue_column_degrades_to_away_not_home() {
+        // Both columns are nullable. An unknown venue must not award a home
+        // advantage the row never claimed; away is the conservative read for
+        // the requested team.
+        assert_eq!(schedule_venue(None, None), Venue::Away);
+        assert_eq!(schedule_venue(None, Some(false)), Venue::Away);
+    }
 
     fn row(margin: f64, win: f64, home: i32, away: i32) -> queries::StoredGameProjection {
         queries::StoredGameProjection {

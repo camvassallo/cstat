@@ -188,7 +188,12 @@ export default function TeamDetail() {
   // hardcoded fallback array. The array only moves when someone edits it, so
   // reading it here meant a team page kept calling the in-progress season
   // "upcoming" — and hiding its Actual view — until that edit happened.
-  const { defaultSeason: maxPlayed } = useAvailableSeasons();
+  //
+  // `newestPlayed`, NOT `defaultSeason`: since #394 the default follows the
+  // upcoming projection between seasons, so reading it here made
+  // `season > maxPlayed` false for the upcoming season and rendered the empty
+  // actual view instead of the projection ledger (#388).
+  const { newestPlayed: maxPlayed } = useAvailableSeasons();
 
   const isUpcoming = season > maxPlayed;
   const projectablePlayed =
@@ -1150,33 +1155,55 @@ function ScheduleTable({
   schedule,
   teamName,
   season,
+  resultsPending = false,
 }: {
   schedule: ScheduleEntry[];
   teamName: string;
   season: number;
+  /// True when the season has not been played at all (#388). Drops the
+  /// Result and Score columns, which would be empty on every row, and says
+  /// what the Projected column is instead of leaving the reader to infer it
+  /// from a table that looks half-broken.
+  resultsPending?: boolean;
 }) {
   return (
     <div>
       <h2 className="text-xl font-bold mb-3">Schedule</h2>
+      {resultsPending && (
+        <p className="text-xs text-gray-500 mb-3">
+          Projected from each team&rsquo;s roster before a ball is tipped — no games have been
+          played, so these carry no in-season form. Opponents too thin to project show
+          &ldquo;&mdash;&rdquo;. The slate fills in as the schedule is published.
+        </p>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-gray-400 border-b border-gray-700">
               <StickyHeader>Date</StickyHeader>
               <StickyHeader>Opponent</StickyHeader>
-              <StickyHeader align="center">Result</StickyHeader>
-              <StickyHeader align="center">Score</StickyHeader>
+              {!resultsPending && <StickyHeader align="center">Result</StickyHeader>}
+              {!resultsPending && <StickyHeader align="center">Score</StickyHeader>}
               <StickyHeader align="center">Projected</StickyHeader>
             </tr>
           </thead>
           <tbody>
             {schedule.map((g) => (
-              <ScheduleRow key={g.game_id} g={g} teamName={teamName} season={season} />
+              <ScheduleRow
+                key={g.game_id}
+                g={g}
+                teamName={teamName}
+                season={season}
+                resultsPending={resultsPending}
+              />
             ))}
             {schedule.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-6 text-center text-gray-500 text-sm">
-                  No games scheduled.
+                <td
+                  colSpan={resultsPending ? 3 : 5}
+                  className="py-6 text-center text-gray-500 text-sm"
+                >
+                  No games scheduled yet.
                 </td>
               </tr>
             )}
@@ -1191,10 +1218,12 @@ function ScheduleRow({
   g,
   teamName,
   season,
+  resultsPending = false,
 }: {
   g: ScheduleEntry;
   teamName: string;
   season: number;
+  resultsPending?: boolean;
 }) {
   const won =
     g.team_score != null && g.opponent_score != null && g.team_score > g.opponent_score;
@@ -1306,26 +1335,33 @@ function ScheduleRow({
         {g.is_neutral && ' (N)'}
         {g.is_conference && <span className="text-gray-500 ml-1">*</span>}
       </td>
-      <td
-        className={`py-2 px-2 text-center font-semibold ${
-          won ? 'text-green-400' : lost ? 'text-red-400' : ''
-        }`}
-      >
-        {g.team_score != null ? (won ? 'W' : 'L') : '—'}
-      </td>
-      <td className="py-2 px-2 text-center">
-        {g.team_score != null ? (
-          predictTo ? (
-            <SeasonLink to={predictTo} className="hover:underline">
-              {g.team_score}-{g.opponent_score}
-            </SeasonLink>
+      {/* Result and Score are dropped entirely for a season with nothing
+          played (#388) — two columns of em-dashes on every row read as
+          missing data rather than as a season that has not started. */}
+      {!resultsPending && (
+        <td
+          className={`py-2 px-2 text-center font-semibold ${
+            won ? 'text-green-400' : lost ? 'text-red-400' : ''
+          }`}
+        >
+          {g.team_score != null ? (won ? 'W' : 'L') : '—'}
+        </td>
+      )}
+      {!resultsPending && (
+        <td className="py-2 px-2 text-center">
+          {g.team_score != null ? (
+            predictTo ? (
+              <SeasonLink to={predictTo} className="hover:underline">
+                {g.team_score}-{g.opponent_score}
+              </SeasonLink>
+            ) : (
+              `${g.team_score}-${g.opponent_score}`
+            )
           ) : (
-            `${g.team_score}-${g.opponent_score}`
-          )
-        ) : (
-          '—'
-        )}
-      </td>
+            '—'
+          )}
+        </td>
+      )}
       <td className="py-2 px-2 text-center">
         {predictTo ? (
           <SeasonLink to={predictTo} className="hover:underline">
@@ -1495,8 +1531,9 @@ interface ProjectedTeamViewProps {
 
 function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   // Same reason as the wrapper above: "has this season been played" is the
-  // API's answer, not a constant's.
-  const { defaultSeason: maxPlayed } = useAvailableSeasons();
+  // API's answer, not a constant's — and it is `newestPlayed`, not the
+  // default, which now follows the upcoming projection.
+  const { newestPlayed: maxPlayed } = useAvailableSeasons();
   const [data, setData] = useState<{
     team: { id: string; name: string | null; short_name: string | null };
     projection: ProjectedTeam;
@@ -1509,6 +1546,12 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // The projected schedule (#388). A second request rather than a field on
+  // the projection payload: it comes from the team-detail route, which owns
+  // the schedule and now projects every game from the two teams' anchors
+  // when the season has not been played. Best-effort — a failure costs the
+  // schedule section, not the projection ledger above it.
+  const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   // YYYY-YY label, e.g. "2026-27" for year=2027. Mirrors the
   // ProjectedRecruit chip on PlayerDetail / the Projected page.
   const seasonLabel = `${year - 1}-${(year % 100).toString().padStart(2, '0')}`;
@@ -1527,6 +1570,21 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         if (cancelled) return;
         setError(String(e));
         setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, year]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    fetchTeamDetail(id, year)
+      .then((r) => {
+        if (!cancelled) setSchedule(r.schedule);
+      })
+      .catch(() => {
+        // Leave it empty; the section renders "No games scheduled yet."
       });
     return () => {
       cancelled = true;
@@ -1987,6 +2045,18 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
         </RosterCard>
       </div>
 
+      {/* The projected schedule, below the roster cards (#388) — who they
+          play, where, and what the roster projection implies for each game.
+          Every margin here is the same `preseason_only_margin` the Predict
+          page serves, so a game cannot read differently on the two surfaces. */}
+      <div className="mt-6">
+        <ScheduleTable
+          schedule={schedule}
+          teamName={data.team.short_name ?? data.team.name ?? 'Team'}
+          season={year}
+          resultsPending
+        />
+      </div>
     </div>
   );
 }

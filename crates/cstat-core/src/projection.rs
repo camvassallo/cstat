@@ -15,6 +15,7 @@
 
 use chrono::NaiveDate;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::features::{self, GameFeatures, TeamSeason};
@@ -1034,6 +1035,31 @@ pub async fn team_has_played(pool: &PgPool, season: i32, team_id: Uuid) -> bool 
     .fetch_one(pool)
     .await
     .unwrap_or(true)
+}
+
+/// Every team's projected AdjEM for a season, in one query.
+///
+/// The batch counterpart to [`preseason_only_regime`], for a caller
+/// projecting a whole schedule (#388). Resolving the regime per game would
+/// cost four round-trips a game — two "has this team played" probes and two
+/// anchor lookups — so a 31-game schedule would run 124 queries to compute 31
+/// subtractions. This is the same split `blend_margins` exists for on the
+/// blend side: share the query, not the arithmetic.
+///
+/// A team missing from the map has no projection (a roster too thin to
+/// project — 74 of 364 on the 2027 board), and a caller must render that as
+/// unknown rather than substituting a number.
+pub async fn fetch_preseason_adj_em_map(
+    pool: &PgPool,
+    season: i32,
+) -> Result<HashMap<Uuid, f32>, sqlx::Error> {
+    let rows: Vec<(Uuid, f32)> = sqlx::query_as(
+        "SELECT team_id, projected_adj_em FROM team_preseason_projection WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
 }
 
 /// Resolve [`PreseasonOnlyRegime`] for one matchup.
