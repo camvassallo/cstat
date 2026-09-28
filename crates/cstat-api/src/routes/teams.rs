@@ -18,6 +18,35 @@ use cstat_core::projection::{self, ProjectionSummary, Venue};
 
 use crate::routes::predict::predict_projection;
 
+/// The venue a schedule row represents, **from the requested team's side**.
+///
+/// Pure and separately tested because the branch order is load-bearing and
+/// real data cannot currently exercise it: `compute_schedules` writes
+/// `is_home = NOT is_neutral_site` for the host, so a neutral game has
+/// `is_home = false` on BOTH rows. Testing `is_home` first would therefore
+/// send every neutral game down the Away arm — scoring both teams as the
+/// visitor and moving each margin by a full home-court advantage in opposite
+/// directions. Neutral has to be asked first.
+///
+/// That is not hypothetical-but-unlikely: the 2027 feed currently contains
+/// **zero** neutral-site games, so nothing on the site would catch it, and the
+/// games that acquire the flag are the November multi-team tournaments — the
+/// marquee ones.
+///
+/// The requested team's side matters for the same reason:
+/// `preseason_only_margin` adds the home term for `Home` and subtracts it for
+/// `Away`, so passing the host's venue for an away game swings the margin by
+/// twice the HCA the wrong way.
+fn schedule_venue(is_home: Option<bool>, is_neutral: Option<bool>) -> Venue {
+    if is_neutral.unwrap_or(false) {
+        Venue::Neutral
+    } else if is_home.unwrap_or(false) {
+        Venue::Home
+    } else {
+        Venue::Away
+    }
+}
+
 /// Max LIVE schedule-game projections in flight at once inside `team_detail`.
 ///
 /// Since #266 this bounds only the games `game_projections` doesn't cover —
@@ -265,18 +294,7 @@ async fn team_detail(
                 let Some(&opp_em) = anchors.get(&opp_id) else {
                     continue;
                 };
-                // Venue from the REQUESTED team's side, because the margin is
-                // in that team's frame: `preseason_only_margin` adds the home
-                // term for Home and subtracts it for Away, so passing the
-                // host's venue for an away game would swing it by twice the
-                // HCA in the wrong direction.
-                let venue = if entry.is_neutral.unwrap_or(false) {
-                    Venue::Neutral
-                } else if entry.is_home.unwrap_or(false) {
-                    Venue::Home
-                } else {
-                    Venue::Away
-                };
+                let venue = schedule_venue(entry.is_home, entry.is_neutral);
                 let margin = projection::preseason_only_margin(team_em - opp_em, venue);
                 entry.projected_margin = Some(((margin as f64) * 10.0).round() / 10.0);
                 entry.projected_win_prob =
@@ -478,6 +496,42 @@ async fn team_detail(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_neutral_game_is_neutral_for_both_teams() {
+        // `compute_schedules` writes `is_home = NOT is_neutral_site` for the
+        // host, so a neutral game carries `is_home = false` on both rows and
+        // `is_neutral = true` on both. Asking `is_home` first would drop both
+        // teams into the Away arm.
+        assert_eq!(schedule_venue(Some(false), Some(true)), Venue::Neutral);
+        // And if a writer ever set both — belt and braces, since the two
+        // columns are independent in the schema — neutral still wins rather
+        // than the row being scored as a home game.
+        assert_eq!(schedule_venue(Some(true), Some(true)), Venue::Neutral);
+    }
+
+    #[test]
+    fn home_and_away_rows_map_to_opposite_venues() {
+        assert_eq!(schedule_venue(Some(true), Some(false)), Venue::Home);
+        assert_eq!(schedule_venue(Some(false), Some(false)), Venue::Away);
+        // The margin consequence, which is what the mapping is for: getting
+        // these two the wrong way round is a full two HCAs of error.
+        let (h, a) = (
+            projection::preseason_only_margin(0.0, schedule_venue(Some(true), Some(false))),
+            projection::preseason_only_margin(0.0, schedule_venue(Some(false), Some(false))),
+        );
+        assert!(h > 0.0 && a < 0.0, "home {h} away {a}");
+        assert!((h + a).abs() < 1e-6, "venues must be symmetric: {h} vs {a}");
+    }
+
+    #[test]
+    fn a_null_venue_column_degrades_to_away_not_home() {
+        // Both columns are nullable. An unknown venue must not award a home
+        // advantage the row never claimed; away is the conservative read for
+        // the requested team.
+        assert_eq!(schedule_venue(None, None), Venue::Away);
+        assert_eq!(schedule_venue(None, Some(false)), Venue::Away);
+    }
 
     fn row(margin: f64, win: f64, home: i32, away: i32) -> queries::StoredGameProjection {
         queries::StoredGameProjection {
