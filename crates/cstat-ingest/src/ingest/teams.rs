@@ -19,17 +19,51 @@ pub async fn ingest_teams(
         .await?;
 
     let mut count = 0u64;
+    let mut skipped_departed = 0u64;
     for page in &pages {
         let teams = extract_results(page);
         for team in teams {
+            if skip_departed_program(team, season) {
+                skipped_departed += 1;
+                continue;
+            }
             if upsert_team(team, pool, season).await? {
                 count += 1;
             }
         }
     }
 
-    info!(count, season, "teams ingested");
+    info!(count, skipped_departed, season, "teams ingested");
     Ok(count)
+}
+
+/// Should this `teamcodes` row be skipped for this season because the program
+/// has left Division I?
+///
+/// `teamcodes` publishes an `active` flag that `ingest_teams` used to ignore,
+/// so every bootstrap of a not-yet-played season minted rows for programs that
+/// no longer exist. Three today: Hartford and Saint Francis (NY), gone after
+/// 2022-23, and Saint Francis (PA), whose last Division I season was 2025-26.
+/// They have no games, so the projection skips them as too-thin and they never
+/// reach the Future board — but they do reach team lists, search, and any
+/// `teams`-keyed join, as programs that do not play.
+///
+/// **Gated on the season, and that gate is the whole correctness of this.**
+/// `active` is a statement about *now* with no season dimension, while
+/// `teamcodes` itself is season-agnostic — `--year` selects nothing, so the
+/// same current flag is served whatever season is asked for. Skipping on the
+/// flag alone would therefore erase history: `ingest_teams` is the ONLY
+/// production writer of `teams` rows (`team_id_by_code_and_season` is a pure
+/// lookup, and `games.rs` SKIPS a game whose team does not resolve, counting
+/// it as `unresolved_team`). So a from-scratch `season --year 2023` would
+/// create no Hartford row and then silently drop all 31 of its games.
+///
+/// A departed program cannot be entering a season that has not happened, but
+/// its past seasons are real. Comparing against the current season is what
+/// separates those two, and it needs no per-team departure date.
+fn skip_departed_program(team: &Value, season: i32) -> bool {
+    let inactive = team.get("active").and_then(|a| a.as_str()) == Some("N");
+    inactive && season >= crate::current_natstat_season()
 }
 
 /// Pick the best human-readable name for a team JSON blob from NatStat.
@@ -65,6 +99,24 @@ async fn upsert_team(team: &Value, pool: &PgPool, season: i32) -> Result<bool, N
     // returns. Re-ingest is therefore idempotent and won't clobber the mapping.
     let short_name = team_aliases::short_name(natstat_id)
         .or_else(|| team.get("short_name").and_then(|n| n.as_str()));
+    if short_name.is_none() {
+        // Not merely cosmetic, which is why this is louder than a debug line.
+        // `data/conference_realignment.json` is keyed by `short_name`, so a
+        // NULL cannot be matched by the realignment capture at all — the
+        // lookup does not fail, it silently finds nothing, and the team keeps
+        // last season's conference with no signal that a verdict was missed.
+        // The site also renders `COALESCE(short_name, name)`, so the row shows
+        // its full NatStat name where every neighbour shows a short one.
+        //
+        // The map is bundled (`include_str!`), so the fix is an entry in
+        // `data/team_short_names.json` plus a REDEPLOY — a sync will not carry
+        // it. West Florida hit this as the first genuinely new Division I
+        // program since the map was built (#385).
+        warn!(
+            natstat_id,
+            season, "team has no short_name; realignment lookups key on it and will not match"
+        );
+    }
     let conference = team
         .get("conference")
         .or_else(|| team.get("league"))
@@ -427,6 +479,62 @@ mod tests {
             Some("Pac-12"),
             "a real value must still land"
         );
+    }
+
+    #[test]
+    fn a_departed_program_is_skipped_only_for_seasons_that_have_not_happened() {
+        let current = crate::current_natstat_season();
+        let hartford = json!({"code": "HART", "name": "Hartford Hawks", "active": "N"});
+
+        // The bug: a bootstrap of a not-yet-played season mints a row for a
+        // program that left Division I.
+        assert!(skip_departed_program(&hartford, current));
+        assert!(skip_departed_program(&hartford, current + 1));
+
+        // THE REGRESSION THIS GATE PREVENTS, and it would be severe.
+        // `ingest_teams` is the only production writer of `teams` rows —
+        // `team_id_by_code_and_season` is a pure lookup and `games.rs` skips a
+        // game whose team does not resolve. Skipping on the flag alone would
+        // make `season --year 2023` create no Hartford row and then silently
+        // drop all 31 of its games as `unresolved_team`.
+        for past in [2015, 2020, current - 1] {
+            assert!(
+                !skip_departed_program(&hartford, past),
+                "season {past} is history and must still be ingestable"
+            );
+        }
+    }
+
+    #[test]
+    fn an_active_program_is_never_skipped() {
+        let duke = json!({"code": "DUKE", "name": "Duke Blue Devils", "active": "Y"});
+        for season in [2015, crate::current_natstat_season(), 2027, 2030] {
+            assert!(!skip_departed_program(&duke, season));
+        }
+        // A row with no `active` key at all must not be treated as departed:
+        // the flag is NatStat's to send, and absence is not a claim.
+        let no_flag = json!({"code": "DUKE", "name": "Duke Blue Devils"});
+        assert!(!skip_departed_program(&no_flag, 2027));
+    }
+
+    #[test]
+    fn every_active_program_in_the_current_feed_has_a_short_name() {
+        // A NULL `short_name` is a silent key miss for
+        // `data/conference_realignment.json`, which is keyed on it — the
+        // lookup finds nothing rather than failing. West Florida was the
+        // first genuinely new Division I program since the map was built and
+        // slipped through exactly that way (#385).
+        //
+        // Asserted against the bundled alias map rather than a live fetch, so
+        // it runs offline: the codes below are the ones the 2027 feed
+        // carries. A new member added to `teamcodes` still needs the warning
+        // in `upsert_team` to surface it — this pins the ones we know about.
+        for code in ["WFLA", "LEMN", "DUKE", "SFPA"] {
+            assert!(
+                team_aliases::short_name(code).is_some(),
+                "{code} has no short_name; realignment lookups key on it"
+            );
+        }
     }
 
     #[test]
