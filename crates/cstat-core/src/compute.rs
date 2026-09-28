@@ -2229,8 +2229,7 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
     // The favourite flips.
     //
     // A team's real homes are recoverable: EVERY venue at which it hosted a
-    // game that was not flagged neutral, in the most recent season that has
-    // been PLAYED. A set rather than the modal one, because a team can have
+    // game that was not flagged neutral, in the baseline season below. A set rather than the modal one, because a team can have
     // more than one genuine home — Boise St. and Alabama St. each hosted
     // non-neutral games at two venues in 2025-26, and taking only the modal
     // one would promote the other to neutral.
@@ -2277,14 +2276,39 @@ pub async fn compute_derived_game_fields(pool: &PgPool, season: i32) -> Result<u
 
     let r_neutral = sqlx::query(&format!(
         "WITH curated AS ({curated_cte}),
+              baseline AS (
+             -- The season whose venues define \"home\": THIS one when it has
+             -- been played, otherwise the most recent that has.
+             --
+             -- Self-baselining a played season is not a degenerate case, it
+             -- is the point. Every venue where a non-neutral home game was
+             -- played is then in the set by construction, so the promotion
+             -- can match nothing and the statement is a guaranteed no-op —
+             -- which is what we want, because for a season that has happened
+             -- the source's own flags are authoritative and measurably sound
+             -- (2-10 disagreements a season out of ~6,200).
+             --
+             -- Without it, re-running `compute --year 2019` would compare
+             -- 2019 against 2026's venues and promote 373 real home games,
+             -- because arenas get renamed, replaced and renumbered across
+             -- seven years. That is a documented operation, and it would
+             -- have silently corrupted the historical venue labelling the
+             -- game models train on.
+             SELECT CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM games
+                             WHERE season = $1
+                               AND home_score IS NOT NULL AND away_score IS NOT NULL)
+                        THEN $1
+                        ELSE (SELECT max(season) FROM games
+                               WHERE home_score IS NOT NULL AND away_score IS NOT NULL)
+                    END AS season
+         ),
               homes AS (
              SELECT DISTINCT t.natstat_id, g.venue_code
                FROM games g
                JOIN teams t ON t.id = g.home_team_id
-              WHERE g.season = (
-                        SELECT max(season) FROM games
-                         WHERE home_score IS NOT NULL AND away_score IS NOT NULL
-                    )
+              WHERE g.season = (SELECT season FROM baseline)
                 AND NOT g.is_neutral_site
                 AND g.venue_code IS NOT NULL
          )
