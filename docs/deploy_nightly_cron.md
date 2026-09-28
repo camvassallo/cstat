@@ -21,7 +21,8 @@ transfers_{year}                    (247 portal, 2 class years — best-effort)
 recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
 recruit_resolve                     (recruit → team / player joins, 3 class years)
 compute_all   (load-bearing)
-projections   (forecast-season roster projections — best-effort, needs the ONNX models)
+projections   (forecast-season roster projections, plus the current season when it has
+               no anchor at all — best-effort, needs the ONNX models)
 game_projections   (completed-game projections for the current season — best-effort, same models)
 invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
@@ -215,6 +216,19 @@ cron service reuses it — no separate build.
      symptom is a stale projected-players page plus a DEGRADED summary rather
      than an outage. Step 8c (`game_projections`) shares the same loaded
      `Predictor`, so an unreadable model directory fails both together.
+
+     Step 8b normally covers **only** `season + 1`, because the current
+     season's preseason anchor is a preseason artifact that should stop moving
+     once games are played. It additionally covers the **current** season on
+     any night that season has no `team_preseason_projection` rows *at all*
+     (#382). `current_natstat_season()` rolls over on Nov 1 while NatStat's own
+     rollover is theirs to schedule, so a season can reach tip-off having never
+     been the forecast season on a night its teams existed — and nothing
+     automated would ever write its anchor. That anchor is what
+     `/api/predict`'s preseason regime and the site's landing board read, so
+     the gap is not cosmetic. Fill-if-missing is a no-op on an ordinary night;
+     when it fires, the ledger's `notes` for the step names both seasons and
+     the summary reads `Projections: 2027 and 2028 materialized`.
    - `CF_ZONE_ID` + `CF_CACHE_PURGE_TOKEN` — optional, for instant edge purge.
      `CF_ZONE_ID` names ONE zone, and the site answers on two hosts: point it at the
      `camalytics.org` zone, where real traffic lands. The still-open `campom.org` zone

@@ -948,7 +948,7 @@ impl<'a> SeasonIngester<'a> {
             lineups_fetched: 0,
             torvik_rebounds_updated: 0,
             compute: None,
-            projections_year: None,
+            projections_years: Vec::new(),
             game_projections: None,
             game_projection_fetch_failures: 0,
             run_id: ledger.run_id(),
@@ -1769,11 +1769,33 @@ impl<'a> SeasonIngester<'a> {
         // arrival inputs), and before the invariant/row-count gates so they see
         // the fresh rows.
         //
-        // Only the forecast season, `self.season + 1`. `run` is delete-then-
-        // insert per season, so passing a wider range would rewrite settled
-        // seasons nightly for no gain — and the current season's preseason
-        // projection is a preseason artifact that should stop moving once games
-        // are played (it is what the predict blend decays away from).
+        // Normally only the forecast season, `self.season + 1`. `run` is
+        // delete-then-insert per season, so passing a wider range would rewrite
+        // settled seasons nightly for no gain — and the current season's
+        // preseason projection is a preseason artifact that should stop moving
+        // once games are played (it is what the predict blend decays away
+        // from).
+        //
+        // **Plus the current season when it has no anchor at all** (#382).
+        // That reasoning above is right once the row exists; it does not cover
+        // the row never having been written. `current_natstat_season()` rolls
+        // over on Nov 1, so from that night this step targets `self.season + 1`
+        // and never writes `self.season` again. If NatStat's own rollover
+        // lands after Nov 1 — the gap #245 says "could be short", and the date
+        // is theirs — then the season about to be played never got an anchor
+        // while it was the forecast season, and nothing automated ever writes
+        // one. The only repair was a hand-run `compute-projections` during the
+        // busiest week of the year.
+        //
+        // That anchor is not a nicety: `/api/predict`'s preseason-only regime
+        // (#387) 404s every matchup without it, and since #394 the site's
+        // LANDING PAGE is the projected board it feeds.
+        //
+        // Fill-if-missing rather than always-write is the whole design. It is
+        // a no-op on every ordinary night, it preserves the "stops moving once
+        // games are played" property the paragraph above protects, and it
+        // makes the gap self-heal on the next nightly instead of depending on
+        // someone remembering a runbook.
         //
         // Best-effort, like every other non-served-critical step: this is the
         // first thing in the nightly that needs the ONNX models, so an
@@ -1787,29 +1809,55 @@ impl<'a> SeasonIngester<'a> {
             let t0 = Utc::now();
             let step = "projections";
             let forecast_year = self.season + 1;
+            let mut years = vec![forecast_year];
+            if !crate::compute_projections::has_projection(self.pool, self.season).await {
+                // Oldest first, so a log or ledger note reads chronologically.
+                years.insert(0, self.season);
+                warn!(
+                    season = self.season,
+                    "current season has no preseason projection; backfilling it alongside \
+                     the forecast season"
+                );
+            }
             let model_dir = crate::model_dir_from_env();
             let model_path = std::path::Path::new(&model_dir);
             match cstat_core::inference::Predictor::load(model_path) {
                 Ok(predictor) => {
-                    match crate::compute_projections::run(
-                        self.pool,
-                        &predictor,
-                        model_path,
-                        &[forecast_year],
-                    )
-                    .await
+                    match crate::compute_projections::run(self.pool, &predictor, model_path, &years)
+                        .await
                     {
                         Ok(()) => {
+                            let covered = years
+                                .iter()
+                                .map(|y| y.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
                             info!(
                                 season = self.season,
-                                forecast_year, "materialized forecast-season projections"
+                                covered = %covered,
+                                "materialized projections"
                             );
-                            ledger.record(step, StepStatus::Ok, None, t0, None).await;
-                            report.projections_year = Some(forecast_year);
+                            // The seasons go in the ledger's notes, not just
+                            // the tracing log: a backfill is the one outcome
+                            // of this step that differs from every other
+                            // night, Railway rotates the logs, and the ledger
+                            // is what survives to answer "when did 2027's
+                            // anchor actually get written".
+                            ledger
+                                .record_with_notes(
+                                    step,
+                                    StepStatus::Ok,
+                                    None,
+                                    t0,
+                                    None,
+                                    Some(&format!("materialized {covered}")),
+                                )
+                                .await;
+                            report.projections_years = years.clone();
                         }
                         Err(e) => {
                             let msg = e.to_string();
-                            warn!(season = self.season, forecast_year, error = %msg,
+                            warn!(season = self.season, ?years, error = %msg,
                                   "projection materialization failed; the projected-players \
                                    page may be stale");
                             ledger
@@ -2397,9 +2445,10 @@ impl<'a> SeasonIngester<'a> {
             // `None` covers both the skipped (`--no-compute`) and failed cases;
             // a failure additionally lands in the issue list, so the summary
             // never reports a stale projection table as if it were fresh.
-            projections_line = match report.projections_year {
-                Some(y) => format!("{y} materialized"),
-                None => "not run".to_string(),
+            projections_line = if report.projections_years.is_empty() {
+                "not run".to_string()
+            } else {
+                format!("{} materialized", join_years(&report.projections_years))
             },
             // A zero here is the interesting case, not a boring one: it means
             // the sweep ran and produced nothing, which on a night with played
@@ -2625,6 +2674,23 @@ impl std::fmt::Display for UpdateReport {
 
 /// Aggregate report for the `nightly` command — the full served-critical
 /// refresh (box scores + forecasts + Torvik) plus the compute pass.
+/// `[2028] -> "2028"`, `[2027, 2028] -> "2027 and 2028"`. Shared by the Slack
+/// line and the Display impl so the two cannot describe the same run
+/// differently.
+fn join_years(years: &[i32]) -> String {
+    match years {
+        [] => String::new(),
+        [y] => y.to_string(),
+        [rest @ .., last] => format!(
+            "{} and {last}",
+            rest.iter()
+                .map(|y| y.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 #[derive(Debug)]
 pub struct NightlyReport {
     pub ingest: IngestReport,
@@ -2640,7 +2706,12 @@ pub struct NightlyReport {
     pub compute: Option<ComputeReport>,
     /// The forecast season whose projections this run materialized, or `None`
     /// when the step was skipped (`--no-compute`) or failed.
-    pub projections_year: Option<i32>,
+    /// Seasons this run materialized preseason projections for. Normally the
+    /// one forecast season; two when the current season's anchor was missing
+    /// and got backfilled (#382), which is the case the summary has to make
+    /// visible rather than rendering as an ordinary night. Empty when the
+    /// step was skipped or failed.
+    pub projections_years: Vec<i32>,
     /// Completed-game projection rows written this run, or `None` when the
     /// sweep was skipped (`--no-compute`) or failed.
     pub game_projections: Option<usize>,
@@ -2685,9 +2756,14 @@ impl std::fmt::Display for NightlyReport {
             "PBP/lineups: {} play-by-play rows, {} lineup games captured",
             self.pbp_rows, self.lineups_fetched
         )?;
-        match self.projections_year {
-            Some(y) => writeln!(f, "Projections: {y} materialized")?,
-            None => writeln!(f, "Projections: not run")?,
+        if self.projections_years.is_empty() {
+            writeln!(f, "Projections: not run")?;
+        } else {
+            writeln!(
+                f,
+                "Projections: {} materialized",
+                join_years(&self.projections_years)
+            )?;
         }
         match self.game_projections {
             Some(n) => {
@@ -2737,9 +2813,55 @@ impl std::fmt::Display for TeamReport {
 #[cfg(test)]
 mod tests {
     use super::{
-        StepStatus, claimable_window, classify_torvik_games_outcome, is_core_season_date,
-        plan_pbp_heal,
+        NightlyReport, StepStatus, claimable_window, classify_torvik_games_outcome,
+        is_core_season_date, join_years, plan_pbp_heal,
     };
+
+    #[test]
+    fn the_summary_names_every_season_it_materialized() {
+        // A backfill night is the one time this step does something different
+        // from every other night (#382), and the summary is where a human
+        // sees it. The old `Option<i32>` could only name one season, so a run
+        // that repaired the current season's anchor read exactly like an
+        // ordinary one.
+        assert_eq!(join_years(&[2028]), "2028");
+        assert_eq!(join_years(&[2027, 2028]), "2027 and 2028");
+        assert_eq!(join_years(&[2026, 2027, 2028]), "2026, 2027 and 2028");
+        assert_eq!(join_years(&[]), "");
+    }
+
+    #[test]
+    fn a_skipped_or_failed_projections_step_still_reports_not_run() {
+        // `projections_years` empty must never render as if something was
+        // materialized — the summary would otherwise call a stale projection
+        // table fresh, which is the failure #246 documents.
+        // Built explicitly rather than via a `Default` derive: this struct
+        // reports what a run actually did, and a field that could silently
+        // default is a field that could silently under-report.
+        let mut report = NightlyReport {
+            ingest: crate::ingest::IngestReport::default(),
+            torvik: None,
+            torvik_games_persisted: 0,
+            pbp_rows: 0,
+            lineups_fetched: 0,
+            torvik_rebounds_updated: 0,
+            compute: None,
+            projections_years: Vec::new(),
+            game_projections: None,
+            game_projection_fetch_failures: 0,
+            run_id: uuid::Uuid::nil(),
+        };
+        assert!(report.projections_years.is_empty());
+        assert!(report.to_string().contains("Projections: not run"));
+
+        report.projections_years = vec![2027, 2028];
+        assert!(
+            report
+                .to_string()
+                .contains("Projections: 2027 and 2028 materialized"),
+            "{report}"
+        );
+    }
 
     fn nd(s: &str) -> chrono::NaiveDate {
         chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
