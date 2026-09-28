@@ -257,35 +257,50 @@ async fn resolve_trajectory(
     let target_season = base_season + 1;
     let pool = &state.db.pool;
 
-    let oof = cstat_core::trajectory::fetch_trajectory_oof(pool, &[player_id], target_season)
-        .await
+    // Both lookups fire together, and the concurrency is deliberate rather than
+    // reflexive. The table read is wasted work whenever OOF hits — but OOF is
+    // empty for the forward season by construction, and the forward season is
+    // the DEFAULT here: `default_season()` is the in-progress season, so the
+    // page's own default target has no OOF row and would always pay for a
+    // second sequential round trip. Against a remote DB that is the more
+    // expensive side of the trade; one extra primary-key read is the cheaper
+    // one. The page's existing `try_join!` already holds more connections than
+    // this adds.
+    let ids = [player_id];
+    let (oof, materialized) = tokio::join!(
+        cstat_core::trajectory::fetch_trajectory_oof(pool, &ids, target_season),
+        cstat_core::trajectory::fetch_player_season_projection(pool, &ids, target_season),
+    );
+    // Either lookup failing degrades the basis rather than the page: the
+    // projection is one chip among a page of actuals, and a fallback still
+    // produces a number. It is logged because the fallback is silent in the
+    // payload apart from `projection_basis`, and a DB error that quietly
+    // downgrades every player to the destination-blind number is exactly the
+    // kind of degradation that otherwise reads as normal.
+    // `lookup` is a FIELD, not part of the message: a constant message is what
+    // lets these group in the log sink instead of splitting into one bucket per
+    // table name.
+    let warn = |lookup: &'static str, e: sqlx::Error| {
+        tracing::warn!(
+            error = ?e,
+            lookup,
+            player_id = %player_id,
+            target_season,
+            "player-page projection lookup failed; falling back to a weaker basis",
+        );
+    };
+    let oof = oof
+        .map_err(|e| warn("trajectory_oof_predictions", e))
+        .ok()
+        .and_then(|m| m.get(&player_id).cloned());
+    let materialized = materialized
+        .map_err(|e| warn("player_season_projection", e))
         .ok()
         .and_then(|m| m.get(&player_id).cloned());
 
     let (pred, basis) = if let Some(p) = oof {
         (p, TrajectoryBasis::HeldOut)
     } else {
-        let materialized = cstat_core::trajectory::fetch_player_season_projection(
-            pool,
-            &[player_id],
-            target_season,
-        )
-        .await
-        .map_err(|e| {
-            // Warn rather than fail the page: the projection is one chip on a
-            // page full of actuals, and falling through still produces a
-            // number — one that is now labelled as destination-blind, so a
-            // silent degradation is visible rather than merely quieter.
-            tracing::warn!(
-                error = ?e,
-                player_id = %player_id,
-                target_season,
-                "player_season_projection lookup failed; falling through to destination-blind inference",
-            );
-        })
-        .ok()
-        .and_then(|m| m.get(&player_id).cloned());
-
         match materialized {
             Some(p) => (p, TrajectoryBasis::DestinationAware),
             None => {
