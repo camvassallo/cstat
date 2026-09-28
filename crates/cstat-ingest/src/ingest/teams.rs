@@ -3,6 +3,7 @@ use super::utils::get_f64_from;
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::extract_results;
+use chrono::NaiveDate;
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -18,12 +19,15 @@ pub async fn ingest_teams(
         .get_all_pages("teamcodes", Some(&season.to_string()), None)
         .await?;
 
+    // Read once at the top rather than per row, so a run cannot straddle
+    // midnight and classify two teams by different days.
+    let today = crate::today_utc();
     let mut count = 0u64;
     let mut skipped_departed = 0u64;
     for page in &pages {
         let teams = extract_results(page);
         for team in teams {
-            if skip_departed_program(team, season) {
+            if skip_departed_program(team, season, today) {
                 skipped_departed += 1;
                 continue;
             }
@@ -48,22 +52,47 @@ pub async fn ingest_teams(
 /// reach the Future board — but they do reach team lists, search, and any
 /// `teams`-keyed join, as programs that do not play.
 ///
-/// **Gated on the season, and that gate is the whole correctness of this.**
-/// `active` is a statement about *now* with no season dimension, while
-/// `teamcodes` itself is season-agnostic — `--year` selects nothing, so the
-/// same current flag is served whatever season is asked for. Skipping on the
-/// flag alone would therefore erase history: `ingest_teams` is the ONLY
-/// production writer of `teams` rows (`team_id_by_code_and_season` is a pure
-/// lookup, and `games.rs` SKIPS a game whose team does not resolve, counting
-/// it as `unresolved_team`). So a from-scratch `season --year 2023` would
-/// create no Hartford row and then silently drop all 31 of its games.
+/// **Gated on the season having not started, and that gate is the whole
+/// correctness of this.** `active` is a statement about *now* with no season
+/// dimension, while `teamcodes` itself is season-agnostic — `--year` selects
+/// nothing, so the same current flag is served whatever season is asked for.
+/// Skipping on the flag alone would therefore erase history: `ingest_teams`
+/// is the ONLY production writer of `teams` rows (`team_id_by_code_and_season`
+/// is a pure lookup, and `games.rs` SKIPS a game whose team does not resolve,
+/// counting it as `unresolved_team`). A from-scratch `season --year 2023`
+/// would create no Hartford row and then silently drop all 31 of its games.
 ///
-/// A departed program cannot be entering a season that has not happened, but
-/// its past seasons are real. Comparing against the current season is what
-/// separates those two, and it needs no per-team departure date.
-fn skip_departed_program(team: &Value, season: i32) -> bool {
+/// A departed program cannot be *entering* a season that has not begun, but
+/// every season it already played is real. So the gate is the season's own
+/// start date, not `current_natstat_season()`: that function returns
+/// `year + 1` only from November, so between April and October it names a
+/// season that is already **over** — today it returns 2026, and Saint Francis
+/// (PA) played all 31 of its 2026 games. Gating on it would re-open exactly
+/// the hole this is built to avoid, one season closer in.
+///
+/// Season S runs Nov (S−1) → Apr S, the same opening date the preseason blend
+/// uses, so "has not started" is `today < Nov 1 of S−1` and needs no database
+/// read and no per-team departure date.
+///
+/// Residual, stated rather than hidden: once a season has begun this returns
+/// false, so a re-run after tip-off would recreate a departed program's row.
+/// That is the cosmetic half of the bug rather than the data-losing half, it
+/// is cleanable with a scoped `DELETE`, and #245's weekly re-run is a
+/// pre-tipoff routine. Erring this way is deliberate — a spurious row can be
+/// removed, a dropped season cannot.
+fn skip_departed_program(team: &Value, season: i32, today: NaiveDate) -> bool {
     let inactive = team.get("active").and_then(|a| a.as_str()) == Some("N");
-    inactive && season >= crate::current_natstat_season()
+    inactive && !season_has_started(season, today)
+}
+
+/// Has season `S` begun by `today`? Season S runs Nov (S−1) → Apr S.
+fn season_has_started(season: i32, today: NaiveDate) -> bool {
+    match NaiveDate::from_ymd_opt(season - 1, 11, 1) {
+        Some(open) => today >= open,
+        // A season number outside chrono's range is not one we ingest; treat
+        // it as started so nothing is skipped on the strength of it.
+        None => true,
+    }
 }
 
 /// Pick the best human-readable name for a team JSON blob from NatStat.
@@ -481,40 +510,66 @@ mod tests {
         );
     }
 
+    fn day(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
     #[test]
-    fn a_departed_program_is_skipped_only_for_seasons_that_have_not_happened() {
-        let current = crate::current_natstat_season();
+    fn a_departed_program_is_skipped_only_for_seasons_that_have_not_begun() {
         let hartford = json!({"code": "HART", "name": "Hartford Hawks", "active": "N"});
+        let today = day("2026-09-28");
 
-        // The bug: a bootstrap of a not-yet-played season mints a row for a
-        // program that left Division I.
-        assert!(skip_departed_program(&hartford, current));
-        assert!(skip_departed_program(&hartford, current + 1));
+        // The bug: bootstrapping a season that has not begun mints a row for
+        // a program that left Division I. 2027 opens 2026-11-01.
+        assert!(skip_departed_program(&hartford, 2027, today));
+        assert!(skip_departed_program(&hartford, 2028, today));
 
-        // THE REGRESSION THIS GATE PREVENTS, and it would be severe.
+        // THE REGRESSION THE GATE PREVENTS, and it would be severe.
         // `ingest_teams` is the only production writer of `teams` rows —
         // `team_id_by_code_and_season` is a pure lookup and `games.rs` skips a
         // game whose team does not resolve. Skipping on the flag alone would
         // make `season --year 2023` create no Hartford row and then silently
         // drop all 31 of its games as `unresolved_team`.
-        for past in [2015, 2020, current - 1] {
+        for past in [2015, 2020, 2023] {
             assert!(
-                !skip_departed_program(&hartford, past),
+                !skip_departed_program(&hartford, past, today),
                 "season {past} is history and must still be ingestable"
             );
         }
     }
 
     #[test]
+    fn the_season_just_finished_is_history_not_a_future_season() {
+        // Why the gate is the season's start date and NOT
+        // `current_natstat_season()`. That function returns `year + 1` only
+        // from November, so on this date it returns 2026 — a season that
+        // ENDED in April. Saint Francis (PA) is flagged inactive today and
+        // played all 31 of its 2026 games, so gating on it would drop them
+        // from a from-scratch bootstrap.
+        let sfpa = json!({"code": "SFPA", "name": "Saint Francis (PA)", "active": "N"});
+        let sept = day("2026-09-28");
+        assert_eq!(crate::current_natstat_season(), 2026);
+        assert!(
+            !skip_departed_program(&sfpa, 2026, sept),
+            "2026 opened in Nov 2025 and has been played; it is history"
+        );
+
+        // The boundary itself: 2027 flips on its opening day.
+        assert!(skip_departed_program(&sfpa, 2027, day("2026-10-31")));
+        assert!(!skip_departed_program(&sfpa, 2027, day("2026-11-01")));
+    }
+
+    #[test]
     fn an_active_program_is_never_skipped() {
         let duke = json!({"code": "DUKE", "name": "Duke Blue Devils", "active": "Y"});
-        for season in [2015, crate::current_natstat_season(), 2027, 2030] {
-            assert!(!skip_departed_program(&duke, season));
+        let today = day("2026-09-28");
+        for season in [2015, 2026, 2027, 2030] {
+            assert!(!skip_departed_program(&duke, season, today));
         }
         // A row with no `active` key at all must not be treated as departed:
         // the flag is NatStat's to send, and absence is not a claim.
         let no_flag = json!({"code": "DUKE", "name": "Duke Blue Devils"});
-        assert!(!skip_departed_program(&no_flag, 2027));
+        assert!(!skip_departed_program(&no_flag, 2027, today));
     }
 
     #[test]
