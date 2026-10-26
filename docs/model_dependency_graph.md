@@ -475,6 +475,7 @@ about because the two halves of Layer 2 land differently.
 | Artifact | Layer | Reaches prod by |
 |---|---|---|
 | `*_model.onnx` + meta (committed) | 1, 2 | **git deploy** (the AdjO and AdjD halves reach prod by *nothing else*) |
+| `trajectory_oof_predictions`, `freshman_oof_predictions` | 1 | **data sync**, whenever that Layer 1 stage ran. Prod serves them directly — the player page reads the trajectory table before any live inference — so leaving them behind pairs each player's previous-retrain projection with team projections built from the new one |
 | `roster_impact_loso/*.onnx` | 2 | neither — gitignored, local-only, backtest input |
 | `team_preseason_projection` | 3 | **data sync** |
 | `player_season_projection` | 3 | **data sync**, whenever the `projections` stage ran. Its *values* come from the trajectory/freshman models, so a Layer 2-only retrain leaves them byte-identical — but the *season set* is not fixed, and a run that materializes a new forward season writes rows prod has never held. Gating on Layer 1 would print a push that omits exactly those rows |
@@ -484,7 +485,8 @@ about because the two halves of Layer 2 land differently.
 
 ```bash
 ./scripts/sync_to_prod.sh --tables team_preseason_projection,coach_season_cae,coach_ratings,artifact_provenance
-# ...plus player_season_projection when the run included the projections stage
+# ...plus player_season_projection when the run included the projections stage,
+# and trajectory_oof_predictions / freshman_oof_predictions when Layer 1 retrained
 ```
 
 `retrain_downstream.sh` prints the right list for the run it just did, rather
