@@ -1574,12 +1574,9 @@ fn link_players(
 /// One fallback pass: pair off `unmatched` Torvik rows against unclaimed cstat
 /// players by `key`, within the same team, accepting only when the pairing is
 /// unambiguous in *both* directions and `guard` agrees. Returns the rows still
-/// unmatched.
-///
-/// Requiring uniqueness on the Torvik side as well as the cstat side is what
-/// makes the pass order-independent: with at most one candidate and at most
-/// one claimant per (team, key), no two groups can ever contend for the same
-/// player, so the result doesn't depend on which row is visited first.
+/// unmatched. The pairing rule itself is
+/// [`pair_unambiguous`](crate::name_match::pair_unambiguous), shared with the
+/// portal linker.
 #[allow(clippy::too_many_arguments)]
 fn fallback_pass(
     roster: &SeasonRoster,
@@ -1592,43 +1589,54 @@ fn fallback_pass(
     guard: fn(&str, &str) -> bool,
     counter: &mut u64,
 ) -> Vec<usize> {
-    // Group the unmatched Torvik rows by (team, key).
-    let mut groups: HashMap<(Uuid, String), Vec<usize>> = HashMap::new();
-    let mut skipped: Vec<usize> = Vec::new();
+    // Key the unmatched Torvik rows by (team, key); a row with no resolved team
+    // cannot take part.
+    let mut row_idx: Vec<usize> = Vec::new();
+    let mut row_keys: Vec<(Uuid, String)> = Vec::new();
+    let mut still: Vec<usize> = Vec::new();
     for i in unmatched {
         match team_ids[rows[i].team.as_str()] {
-            Some(team) => groups
-                .entry((team, key(&rows[i].player_name)))
-                .or_default()
-                .push(i),
-            None => skipped.push(i),
+            Some(team) => {
+                row_idx.push(i);
+                row_keys.push((team, key(&rows[i].player_name)));
+            }
+            None => still.push(i),
         }
     }
 
-    // Index the still-unclaimed cstat players the same way.
-    let mut pool: HashMap<(Uuid, String), Vec<usize>> = HashMap::new();
+    // Key the still-unclaimed cstat players the same way.
+    let mut cand_idx: Vec<usize> = Vec::new();
+    let mut cand_keys: Vec<(Uuid, String)> = Vec::new();
     for (i, p) in roster.players.iter().enumerate() {
         if let Some(team) = p.team_id
             && !claimed.contains(&p.id)
         {
-            pool.entry((team, key(&p.name))).or_default().push(i);
+            cand_idx.push(i);
+            cand_keys.push((team, key(&p.name)));
         }
     }
 
-    let mut still = skipped;
-    for (group_key, group) in groups {
-        let candidates = pool.get(&group_key).map(Vec::as_slice).unwrap_or_default();
-        match (group.as_slice(), candidates) {
-            ([row], [candidate])
-                if guard(&rows[*row].player_name, &roster.players[*candidate].name) =>
-            {
-                claimed.insert(roster.players[*candidate].id);
-                player_ids[*row] = Some(roster.players[*candidate].id);
-                *counter += 1;
-            }
-            _ => still.extend(group),
-        }
+    let pairs = crate::name_match::pair_unambiguous(&row_keys, &cand_keys, |r, c| {
+        guard(
+            &rows[row_idx[r]].player_name,
+            &roster.players[cand_idx[c]].name,
+        )
+    });
+    let mut paired = vec![false; row_idx.len()];
+    for (r, c) in pairs {
+        let id = roster.players[cand_idx[c]].id;
+        claimed.insert(id);
+        player_ids[row_idx[r]] = Some(id);
+        *counter += 1;
+        paired[r] = true;
     }
+    still.extend(
+        row_idx
+            .iter()
+            .zip(&paired)
+            .filter(|(_, p)| !**p)
+            .map(|(i, _)| *i),
+    );
     still.sort_unstable();
     still
 }

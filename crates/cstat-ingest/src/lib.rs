@@ -6,6 +6,7 @@ pub mod departures_audit;
 pub mod game_projections;
 pub mod ingest;
 pub mod measure_blend_accuracy;
+pub mod name_match;
 pub mod notify;
 pub mod preflight;
 pub mod projections_backtest;

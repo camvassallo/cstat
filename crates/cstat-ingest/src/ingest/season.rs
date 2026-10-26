@@ -1535,52 +1535,8 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
-        // Portal row → `players.id`. The `transfers` CLI has always run this
-        // after an ingest; the nightly did not, so every move it picked up
-        // landed with `cstat_player_id` NULL — and the roster projection skips a
-        // transfer it cannot place, falling the player back to his source team
-        // (Trey Kaufman-Renn projected at Purdue for a week after committing to
-        // Kansas). Same shape as `recruit_resolve` below and for the same
-        // reason: no 247 call, so it runs even when the refresh failed, and it
-        // is the only writer of the column the projection selects on, so a
-        // failure degrades the run rather than logging a warning.
-        let t0 = Utc::now();
-        let mut resolved_total: i64 = 0;
-        let mut resolve_err: Option<String> = None;
-        for portal_year in [self.season - 1, self.season] {
-            match super::transfers::resolve_cstat_joins(self.pool, portal_year).await {
-                Ok(n) => resolved_total += n as i64,
-                Err(e) => {
-                    warn!(portal_year, error = %e, "transfer player-join resolution failed");
-                    resolve_err.get_or_insert_with(|| format!("player joins ({portal_year}): {e}"));
-                }
-            }
-        }
-        match &resolve_err {
-            None => {
-                ledger
-                    .record(
-                        "transfer_resolve",
-                        StepStatus::Ok,
-                        Some(resolved_total),
-                        t0,
-                        None,
-                    )
-                    .await;
-            }
-            Some(msg) => {
-                ledger
-                    .record(
-                        "transfer_resolve",
-                        StepStatus::Failed,
-                        Some(resolved_total),
-                        t0,
-                        Some(msg),
-                    )
-                    .await;
-                failures.push(format!("transfer_resolve: {msg}"));
-            }
-        }
+        // Portal row → `players.id`; see `transfer_resolve_step`.
+        transfer_resolve_step(self.pool, self.season, &ledger, &mut failures).await;
 
         // --- 7e. 247 recruit rankings + commits (best-effort) ---
         // Joins the nightly for the same reason 7d did: the feeds stopped
@@ -2854,6 +2810,57 @@ impl std::fmt::Display for TeamReport {
             self.player_performances,
             self.team_performances,
         )
+    }
+}
+
+/// The nightly's `transfer_resolve` step: link portal rows to `players.id` for
+/// both portal years the nightly refreshes, and record one ledger row.
+///
+/// The `transfers` CLI has always run this after an ingest; the nightly did
+/// not, so every move it picked up landed with `cstat_player_id` NULL, and the
+/// roster projection skips a transfer it cannot place, falling the player back
+/// to his source team (Trey Kaufman-Renn projected at Purdue for a week after
+/// committing to Kansas). Same shape as `recruit_resolve` and for the same
+/// reason: no 247 call, so it runs even when the refresh failed, and it is the
+/// only writer of the column the projection selects on, so a failure degrades
+/// the run (a `failures` entry) rather than logging a warning.
+///
+/// A free function rather than inline in `nightly` so a test can drive the
+/// exact code the nightly runs without a NatStat client.
+pub async fn transfer_resolve_step(
+    pool: &PgPool,
+    season: i32,
+    ledger: &RunLedger<'_>,
+    failures: &mut Vec<String>,
+) {
+    let t0 = Utc::now();
+    let mut resolved_total: i64 = 0;
+    let mut resolve_err: Option<String> = None;
+    for portal_year in [season - 1, season] {
+        match super::transfers::resolve_cstat_joins(pool, portal_year).await {
+            Ok(n) => resolved_total += n as i64,
+            Err(e) => {
+                warn!(portal_year, error = %e, "transfer player-join resolution failed");
+                resolve_err.get_or_insert_with(|| format!("player joins ({portal_year}): {e}"));
+            }
+        }
+    }
+    let status = if resolve_err.is_some() {
+        StepStatus::Failed
+    } else {
+        StepStatus::Ok
+    };
+    ledger
+        .record(
+            "transfer_resolve",
+            status,
+            Some(resolved_total),
+            t0,
+            resolve_err.as_deref(),
+        )
+        .await;
+    if let Some(msg) = resolve_err {
+        failures.push(format!("transfer_resolve: {msg}"));
     }
 }
 

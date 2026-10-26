@@ -567,9 +567,8 @@
     "current_team": "N.C. State",
     "status": "granted",
     "reason": "injunction",
-    "case": "Williams v. NCAA",
     "source": "https://www.kcbd.com/2026/09/01/judge-grants-restraining-order-against-ncaa-atwell-case/",
-    "note": "Named plaintiff in Atwell v. NCAA (Lubbock County District Court, Tex.). TRO granted 2026-08-31 (Judge John Grace); temporary-injunction hearing moved from 2026-09-11 to 2026-10-15. Not covered by the Tenth Circuit's stay. Also named in: Okpara v. NCAA. Committed to Texas Tech 2026-08-07 out of NC State under the (since stayed) Wisne injunction; reported to hold a Texas TRO of his own. Projects as a ? at Texas Tech, not a firm arrival. Update 2026-10-25: He is not an Atwell plaintiff; he is one of 31 plaintiffs holding a temporary injunction in McLennan County (414th District, Tex.), granted in September and appealed by the NCAA with no stay reported; trial 2026-12-14. Projects at Texas Tech. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Plaintiff in a 31-player suit in McLennan County District Court (414th District, Tex.); the formal caption is unconfirmed, so this row carries no `case` and a case-scoped `returns --resolve-reason` sweep will not reach him: resolve it by hand. Previously tagged to Atwell v. NCAA (Lubbock County) and to the dismissed Okpara v. NCAA (N.C.); he is in neither any longer. Committed to Texas Tech 2026-08-07 out of NC State. Update 2026-10-25: temporary injunction granted in September; the NCAA has appealed to the Seventh Court of Appeals (Amarillo) with no stay reported; jury trial set for 2026-12-14. Granted: an in-force order, so he projects as a Texas Tech arrival."
   },
   {
     "name": "David Dixon",
@@ -613,7 +612,7 @@
     "reason": "injunction",
     "case": "Aberdeen v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Aberdeen v. NCAA (Eighth Circuit Court for Alachua County, Fla.). Filed 2026-09-11 with a motion for a temporary injunction; no order yet and no hearing date. Florida's waiver request for his 40-minute freshman season was denied in May 2026. Played 2025-26 at Kentucky; committed back to Florida 2026-04-10, where he has a roster spot. Projects as a ? at Florida. Update 2026-10-25: Preliminary injunction granted 2026-09-29 (written order 2026-10-06); NCAA appealed to the Florida 1st DCA, trial court denied a stay 2026-10-20. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Aberdeen v. NCAA (Eighth Circuit Court for Alachua County, Fla.). Filed 2026-09-11 with a motion for a temporary injunction; no order yet and no hearing date. Florida's waiver request for his 40-minute freshman season was denied in May 2026. Played 2025-26 at Kentucky; committed back to Florida 2026-04-10, where he has a roster spot. Update 2026-10-25: Preliminary injunction granted 2026-09-29 (written order 2026-10-06); NCAA appealed to the Florida 1st DCA, trial court denied a stay 2026-10-20. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Derek Simpson",
@@ -676,7 +675,7 @@
     "reason": "injunction",
     "case": "Atwell v. NCAA",
     "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
-    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question. Atwell is additionally a named plaintiff in a North Carolina state suit for the same class; players holding their own state-court injunctions were carved out of the Tenth Circuit stay, so his individual outcome may diverge from the cohort's. Also a named plaintiff in Atwell v. NCAA (and Okpara v. NCAA); status for that suit as of 2026-09-18 is on its other rows. Refiled in Lubbock County after the North Carolina suit was dismissed and holds the TRO there (2026-08-31; hearing 2026-10-15), so unlike the rest of the roster-evidence cohort he is not waiting on the Tenth Circuit. Update 2026-10-25: Temporary injunction granted 2026-10-15 (Judge Grace); NCAA seeking an expedited appeal, trial 2027-06-14. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Atwell is additionally a named plaintiff in a North Carolina state suit for the same class; players holding their own state-court injunctions were carved out of the Tenth Circuit stay, so his individual outcome may diverge from the cohort's. Also a named plaintiff in Atwell v. NCAA (and Okpara v. NCAA); status for that suit as of 2026-09-18 is on its other rows. Refiled in Lubbock County after the North Carolina suit was dismissed and holds the TRO there (2026-08-31; hearing 2026-10-15), so unlike the rest of the roster-evidence cohort he is not waiting on the Tenth Circuit. Update 2026-10-25: Temporary injunction granted 2026-10-15 (Judge Grace); NCAA seeking an expedited appeal, trial 2027-06-14. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Donovan Brown",
@@ -712,7 +711,7 @@
     "reason": "injunction",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Committed to Oklahoma 2026-08-19. Projects as a ? at Oklahoma. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Committed to Oklahoma 2026-08-19. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Elijah Fisher",
@@ -1058,7 +1057,7 @@
     "reason": "injunction",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Committed to BYU 2026-08-21. Projects as a ? at BYU. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Committed to BYU 2026-08-21. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Jayden Brewer",
@@ -1536,7 +1535,7 @@
     "reason": "injunction",
     "case": "Wells v. NCAA",
     "source": "https://sports.yahoo.com/articles/judge-grants-tro-mark-mitchell-160721204.html",
-    "note": "Named plaintiff in Wells v. NCAA (Jefferson Circuit Court, Ky.). TRO granted 2026-08-21 (Judge Brian Edwards) to all 13 plaintiffs, reopening the portal to them for one week; the NCAA has appealed nothing yet. Not covered by the Tenth Circuit's stay of the Wisne class injunction. Entered the portal 2026-08-01, committed to Kentucky under the Kentucky TRO, then returned to Missouri (Sept. 2026). Signed with Denver and played Summer League; the TRO covers that. Projects as a ? at Missouri. Update 2026-10-25: Kentucky Court of Appeals dissolved the 2026-08-21 order 2026-10-02; Judge Edwards granted a NEW temporary injunction around 2026-10-16. He is press-confirmed under the new order. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Wells v. NCAA (Jefferson Circuit Court, Ky.). TRO granted 2026-08-21 (Judge Brian Edwards) to all 13 plaintiffs, reopening the portal to them for one week; the NCAA has appealed nothing yet. Not covered by the Tenth Circuit's stay of the Wisne class injunction. Entered the portal 2026-08-01, committed to Kentucky under the Kentucky TRO, then returned to Missouri (Sept. 2026). Signed with Denver and played Summer League; the TRO covers that. Update 2026-10-25: Kentucky Court of Appeals dissolved the 2026-08-21 order 2026-10-02; Judge Edwards granted a NEW temporary injunction around 2026-10-16. He is press-confirmed under the new order. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Marvin McGhee",
@@ -1732,7 +1731,7 @@
     "reason": "injunction",
     "case": "Glancey v. NCAA",
     "source": "https://frontofficesports.com/class-of-2022-eligibility-paused/",
-    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question. Also a named plaintiff in Glancey v. NCAA; status for that suit as of 2026-09-18 is on its other rows. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"5th\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Also a named plaintiff in Glancey v. NCAA; status for that suit as of 2026-09-18 is on its other rows. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Perry Smith",
@@ -1891,7 +1890,7 @@
     "reason": "injunction",
     "case": "Wells v. NCAA",
     "source": "https://www.cardchronicle.com/basketball/103895/seth-trimble-successfully-added-to-ky-eligibility-lawsuit",
-    "note": "Added to the Kentucky TRO by Judge Brian Edwards on 2026-09-01 (filed to join 2026-08-28 with 26 others, Mark Mitchell among them); eligible for now, with the NCAA free to seek a stay as it did in Ohio and Georgia. Four seasons at North Carolina, committed to Louisville 2026-08-12 under the Wisne injunction. Committed mover, so before this row he projected as a firm arrival at Louisville. Contested, not granted: in the ceiling, out of the floor, shown as ? at the destination. Update 2026-10-25: Kentucky Court of Appeals dissolved the 2026-08-21 order 2026-10-02; Judge Edwards granted a NEW temporary injunction around 2026-10-16. He is press-confirmed under the new order. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Added to the Kentucky TRO by Judge Brian Edwards on 2026-09-01 (filed to join 2026-08-28 with 26 others, Mark Mitchell among them); eligible for now, with the NCAA free to seek a stay as it did in Ohio and Georgia. Four seasons at North Carolina, committed to Louisville 2026-08-12 under the Wisne injunction. Committed mover, so before this row he projected as a firm arrival at Louisville. Update 2026-10-25: Kentucky Court of Appeals dissolved the 2026-08-21 order 2026-10-02; Judge Edwards granted a NEW temporary injunction around 2026-10-16. He is press-confirmed under the new order. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Shawn Phillips",
@@ -2070,7 +2069,7 @@
     "reason": "injunction",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Committed to Gonzaga 2026-08-26, eight days after the California TRO. Projects as a ? at Gonzaga. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Committed to Gonzaga 2026-08-26, eight days after the California TRO. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Yohan Traore",
