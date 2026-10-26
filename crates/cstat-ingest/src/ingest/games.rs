@@ -47,7 +47,7 @@ pub struct SkipCounts {
 }
 
 impl SkipCounts {
-    fn record(&mut self, reason: SkipReason) {
+    pub(crate) fn record(&mut self, reason: SkipReason) {
         match reason {
             SkipReason::MissingIdentifier => self.missing_identifier += 1,
             SkipReason::MissingDate => self.missing_date += 1,
@@ -273,14 +273,41 @@ pub async fn ingest_player_performances_by_date_range(
     Ok(outcome)
 }
 
-async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
+/// One `games` feed record, parsed but not yet resolved against `teams`.
+///
+/// Shared by the per-row [`upsert_game`] and the batched season refresh in
+/// `ingest::schedule`, so the two cannot read the same payload differently.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GameRow {
+    pub natstat_id: String,
+    pub game_date: NaiveDate,
+    pub home_code: Option<String>,
+    pub away_code: Option<String>,
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
+    pub is_neutral: bool,
+    pub is_conference: Option<bool>,
+    pub is_postseason: Option<bool>,
+    pub venue: Option<String>,
+    pub venue_code: Option<String>,
+    pub overtime: Option<String>,
+    pub attendance: Option<i32>,
+    pub status: Option<String>,
+    pub home_half1: Option<i32>,
+    pub home_half2: Option<i32>,
+    pub away_half1: Option<i32>,
+    pub away_half2: Option<i32>,
+}
+
+/// Parse one `games` record, or name why it cannot be stored.
+pub fn parse_game(game: &Value) -> Result<GameRow, SkipReason> {
     let natstat_id = match game
         .get("id")
         .or_else(|| game.get("code"))
         .and_then(|c| c.as_str().map(String::from).or_else(|| Some(c.to_string())))
     {
         Some(id) => id.trim_matches('"').to_string(),
-        None => return Ok(Upsert::Skipped(SkipReason::MissingIdentifier)),
+        None => return Err(SkipReason::MissingIdentifier),
     };
 
     let game_date = match game
@@ -293,7 +320,7 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
         Some(d) => d,
         None => {
             warn!(natstat_id, "game missing date, skipping");
-            return Ok(Upsert::Skipped(SkipReason::MissingDate));
+            return Err(SkipReason::MissingDate);
         }
     };
 
@@ -307,9 +334,6 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
         .or_else(|| game.get("away-code"))
         .or_else(|| game.get("away_code"))
         .and_then(|c| c.as_str());
-
-    let home_team_id = team_id_by_code_and_season(pool, home_code, season).await?;
-    let away_team_id = team_id_by_code_and_season(pool, away_code, season).await?;
 
     let home_score = game
         .get("score-home")
@@ -381,10 +405,13 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
         })
         .map(|a| a as i32);
 
+    // Blank on every scheduled game. Treated as absent, so a refresh carrying
+    // "" cannot blank a stored status through the `COALESCE` below.
     let status = game
         .get("gamestatus")
         .or_else(|| game.get("status"))
-        .and_then(|s| s.as_str());
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.trim().is_empty());
 
     // Half scores: line-home/line-vis contain {p1: "32", p2: "35"}
     let home_half1 = game
@@ -403,6 +430,36 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
         .get("line-vis")
         .and_then(|l| l.get("p2"))
         .and_then(parse_i32);
+
+    Ok(GameRow {
+        natstat_id,
+        game_date,
+        home_code: home_code.map(String::from),
+        away_code: away_code.map(String::from),
+        home_score,
+        away_score,
+        is_neutral,
+        is_conference,
+        is_postseason,
+        venue: venue.map(String::from),
+        venue_code: venue_code.map(String::from),
+        overtime: overtime.map(String::from),
+        attendance,
+        status: status.map(String::from),
+        home_half1,
+        home_half2,
+        away_half1,
+        away_half2,
+    })
+}
+
+async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
+    let g = match parse_game(game) {
+        Ok(g) => g,
+        Err(reason) => return Ok(Upsert::Skipped(reason)),
+    };
+    let home_team_id = team_id_by_code_and_season(pool, g.home_code.as_deref(), season).await?;
+    let away_team_id = team_id_by_code_and_season(pool, g.away_code.as_deref(), season).await?;
 
     sqlx::query(
         "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id,
@@ -429,25 +486,25 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
              updated_at = now()",
     )
     .bind(Uuid::new_v4())
-    .bind(&natstat_id)
+    .bind(&g.natstat_id)
     .bind(season)
-    .bind(game_date)
+    .bind(g.game_date)
     .bind(home_team_id)
     .bind(away_team_id)
-    .bind(home_score)
-    .bind(away_score)
-    .bind(is_neutral)
-    .bind(is_conference)
-    .bind(is_postseason)
-    .bind(venue)
-    .bind(venue_code)
-    .bind(overtime)
-    .bind(attendance)
-    .bind(status)
-    .bind(home_half1)
-    .bind(home_half2)
-    .bind(away_half1)
-    .bind(away_half2)
+    .bind(g.home_score)
+    .bind(g.away_score)
+    .bind(g.is_neutral)
+    .bind(g.is_conference)
+    .bind(g.is_postseason)
+    .bind(&g.venue)
+    .bind(&g.venue_code)
+    .bind(&g.overtime)
+    .bind(g.attendance)
+    .bind(&g.status)
+    .bind(g.home_half1)
+    .bind(g.home_half2)
+    .bind(g.away_half1)
+    .bind(g.away_half2)
     .execute(pool)
     .await?;
 

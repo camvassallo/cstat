@@ -291,6 +291,16 @@ two databases what they actually hold is right on both sides of the flip with no
 rule, and it needs no maintenance when a new table joins the hazard: carrying a season
 column is enough. `--force-tables` overrides.
 
+A second preflight (exit 5) covers what season coverage cannot see: rows that cover the
+right season but point at entities prod does not have. `teams` / `players` / `games` /
+`recruits` UUIDs are minted per database, and the forecast season is ingested on each side
+independently, so its two id sets are unrelated. The October 2026 retrain push replaced
+prod's 2027 `team_preseason_projection` rows with ones keyed on local team ids and blanked
+every 2027 schedule projection while reporting success. The check sends local's distinct ids
+for each `*team_id` / `*player_id` / `*game_id` / `*coach_id` column to prod and refuses on
+any that are absent, naming the local seasons they belong to. Those rows belong to prod:
+produce them there with `compute-projections`.
+
 This also closes the *other* row of §3 that was waiting to bite. Once prod computes 2027
 (B2), a `--tables team_preseason_projection` push from the laptop would have deleted prod's
 opening-week anchors — the same failure, a different table, and one the retrain script now

@@ -276,6 +276,15 @@ enum Commands {
         year: i32,
     },
 
+    /// Refresh a season's full schedule from NatStat: batched, writes only
+    /// changed games, prunes unplayed games the feed dropped. The nightly runs
+    /// this as `schedule_refresh`; standalone it does not rebuild `schedules`
+    /// (run `compute` after, as with `games`).
+    Schedule {
+        #[arg(short, long, default_value_t = default_season())]
+        year: i32,
+    },
+
     /// Show rate limit status.
     Status,
 
@@ -852,6 +861,32 @@ async fn main() -> Result<()> {
             // #202: the count alone reads as success even when the feed handed
             // us rows we threw away, so say what was dropped and why.
             if let Some(s) = outcome.skipped.summary() {
+                println!("  {s}");
+            }
+        }
+
+        Commands::Schedule { year } => {
+            let fetch = cstat_ingest::ingest::schedule::fetch_season(&client, year).await?;
+            let r = cstat_ingest::ingest::schedule::apply_season_schedule(
+                &db.pool,
+                year,
+                &fetch.rows,
+                fetch.complete,
+                cstat_ingest::today_utc(),
+            )
+            .await?;
+            println!(
+                "Schedule {year}: {} fetched, +{} new, {} changed, {} pruned, {} double-booked team-days",
+                fetch.rows.len(),
+                r.inserted,
+                r.updated,
+                r.pruned,
+                r.double_booked
+            );
+            if let Some(n) = r.prune_note {
+                println!("  {n}");
+            }
+            if let Some(s) = fetch.skipped.summary() {
                 println!("  {s}");
             }
         }

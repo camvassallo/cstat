@@ -265,6 +265,21 @@ pub async fn team_id_by_code_and_season(
     Ok(row.map(|(id,)| id))
 }
 
+/// [`team_id_by_code_and_season`] for a whole season at once: every team code
+/// to its `teams.id`. For a caller resolving thousands of rows (the schedule
+/// refresh), where one query per code is the N+1 over the prod link.
+pub async fn team_ids_by_code_for_season(
+    pool: &PgPool,
+    season: i32,
+) -> Result<std::collections::HashMap<String, Uuid>, sqlx::Error> {
+    let rows: Vec<(String, Uuid)> =
+        sqlx::query_as("SELECT natstat_id, id FROM teams WHERE season = $1")
+            .bind(season)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// Extract the data payload from a NatStat API response.
 ///
 /// NatStat v4 puts results under endpoint-specific keys (e.g., "teamcodes", "games", "players")
