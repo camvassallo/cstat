@@ -208,14 +208,29 @@ async fn a_completed_game_keeps_its_result_date_and_derived_flags() {
     .await
     .unwrap();
 
-    // The refresh sees a bare row with a different date and no flags.
+    // The feed still carries the game the way NatStat labelled it before
+    // `correct_swapped_games` fixed it: teams and scores crossed, plus a
+    // different date and none of the derived flags.
     let mut row = scheduled("g1", d(11, 12));
+    row.home_code = Some("UNC".into());
+    row.away_code = Some("DUKE".into());
+    row.home_score = Some(70);
+    row.away_score = Some(80);
     row.is_conference = Some(true);
+    row.status = Some("Final".into());
     let r = apply(&pool, &[row], true).await;
     assert_eq!(r.written(), 0, "{r:?}");
 
-    let got: (NaiveDate, Option<i32>, bool, Option<bool>, Option<String>) = sqlx::query_as(
-        "SELECT game_date, home_score, is_neutral_site, is_conference, status
+    let got: (
+        NaiveDate,
+        Option<i32>,
+        bool,
+        Option<bool>,
+        Option<String>,
+        bool,
+    ) = sqlx::query_as(
+        "SELECT game_date, home_score, is_neutral_site, is_conference, status,
+                home_team_id = (SELECT id FROM teams WHERE natstat_id = 'DUKE')
            FROM games WHERE natstat_id = 'g1'",
     )
     .fetch_one(&pool)
@@ -223,8 +238,34 @@ async fn a_completed_game_keeps_its_result_date_and_derived_flags() {
     .unwrap();
     assert_eq!(
         got,
-        (d(11, 10), Some(80), true, Some(false), Some("Final".into()))
+        (
+            d(11, 10),
+            Some(80),
+            true,
+            Some(false),
+            Some("Final".into()),
+            true
+        )
     );
+}
+
+#[tokio::test]
+async fn a_stored_unplayed_game_takes_its_result_from_the_feed() {
+    let Some(pool) = isolated_pool().await else {
+        return;
+    };
+    insert_game(&pool, "g1", d(11, 10), None).await;
+    let mut row = scheduled("g1", d(11, 10));
+    row.home_score = Some(80);
+    row.away_score = Some(70);
+    let r = apply(&pool, &[row], true).await;
+    assert_eq!(r.updated, 1);
+    let score: Option<i32> =
+        sqlx::query_scalar("SELECT home_score FROM games WHERE natstat_id = 'g1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(score, Some(80));
 }
 
 #[tokio::test]

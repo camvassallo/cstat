@@ -114,13 +114,19 @@ pub async fn fetch_season(
 /// Write a season's schedule: insert new games, update changed ones, and prune
 /// unplayed games the feed no longer lists.
 ///
-/// Update rules differ from the per-row `upsert_game` because this touches
-/// every game of the season every night, including ones `compute_all` has
-/// since corrected:
-/// - Scores, status, venue and the rest only ever fill in (`COALESCE`), so a
-///   schedule row carrying none cannot blank a completed game.
-/// - `game_date` moves only while the game is unplayed — a reschedule under
-///   the same id.
+/// Update rules differ from the per-row `upsert_game` because this sees every
+/// game of the season every night, including ones `compute_all` has since
+/// corrected:
+/// - **A game already stored with a result is never updated.** Played games
+///   belong to the date-window `games` step and to compute, which rewrites
+///   some of them: `correct_swapped_games` / `repair_phantom_swapped_games`
+///   swap the teams and scores of games NatStat labelled backwards, and
+///   relabel the box rows to match. Re-applying the feed here would restore
+///   the swap every night, and with the box rows already relabelled the
+///   detector would find nothing to undo it. A stored game still awaiting a
+///   result can take one from the feed, exactly as the window step would.
+/// - Everything else only fills in (`COALESCE`), so a schedule row carrying
+///   no venue or status cannot blank one.
 /// - `is_neutral_site` is promote-only and `is_conference` fills only when
 ///   unknown: `compute_all` derives both, and resetting them would rewrite
 ///   thousands of rows a night for compute to flip back.
@@ -173,8 +179,7 @@ pub async fn apply_season_schedule(
                        is_neutral, is_conference, is_postseason, venue, venue_code, overtime,
                        attendance, status, home_half1, home_half2, away_half1, away_half2)
              ON CONFLICT (natstat_id) DO UPDATE SET
-                 game_date = CASE WHEN g.home_score IS NULL AND g.away_score IS NULL
-                                  THEN EXCLUDED.game_date ELSE g.game_date END,
+                 game_date = EXCLUDED.game_date,
                  home_team_id = COALESCE(EXCLUDED.home_team_id, g.home_team_id),
                  away_team_id = COALESCE(EXCLUDED.away_team_id, g.away_team_id),
                  home_score = COALESCE(EXCLUDED.home_score, g.home_score),
@@ -193,8 +198,8 @@ pub async fn apply_season_schedule(
                  away_half2 = COALESCE(EXCLUDED.away_half2, g.away_half2),
                  updated_at = now()
              WHERE g.season = EXCLUDED.season
-               AND (CASE WHEN g.home_score IS NULL AND g.away_score IS NULL
-                         THEN EXCLUDED.game_date ELSE g.game_date END,
+               AND g.home_score IS NULL AND g.away_score IS NULL
+               AND (EXCLUDED.game_date,
                     COALESCE(EXCLUDED.home_team_id, g.home_team_id),
                     COALESCE(EXCLUDED.away_team_id, g.away_team_id),
                     COALESCE(EXCLUDED.home_score, g.home_score),

@@ -48,9 +48,11 @@ first appeared on the day it tipped. It covers the current season, plus the
 forecast season while that season's `teams` rows exist (the offseason before the
 Nov 1 flip), and rebuilds the forecast season's `schedules` itself because
 `compute_all` never touches it. Writes are one batched, diff-only statement, so
-an unchanged feed writes zero rows. It never blanks a completed game, never
-resets the `is_neutral_site` / `is_conference` values `compute_all` derives,
-and only moves `game_date` on an unplayed game. It also prunes unplayed future
+an unchanged feed writes zero rows. It never updates a game that already has a
+result — played games belong to the `games` step and to `compute_all`, whose
+swapped-game repairs relabel teams and scores the feed still has backwards —
+and never resets the `is_neutral_site` / `is_conference` values `compute_all`
+derives. A reschedule of an unplayed game moves its date. It also prunes unplayed future
 games the feed no longer lists (cancellations, reschedules under a new id), but
 only on a complete fetch, only games with no box score / forecast / play-by-play
 / lineup rows, and never more than 10% of the remaining schedule (floor 25); a
