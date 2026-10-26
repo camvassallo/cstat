@@ -436,6 +436,16 @@ SYNC_TABLES="team_preseason_projection,coach_season_cae,coach_ratings,artifact_p
 if is_in projections "${PLAN[@]}"; then
   SYNC_TABLES="$SYNC_TABLES,player_season_projection"
 fi
+# A Layer 1 stage rewrote its held-out table, and prod serves it directly: the
+# player page reads `trajectory_oof_predictions` before any live inference
+# (`routes/players.rs`). Leaving it behind would show each player's
+# previous-retrain projection next to team projections built from the new one.
+if is_in trajectory "${PLAN[@]}"; then
+  SYNC_TABLES="$SYNC_TABLES,trajectory_oof_predictions"
+fi
+if is_in freshman "${PLAN[@]}"; then
+  SYNC_TABLES="$SYNC_TABLES,freshman_oof_predictions"
+fi
 
 echo
 echo "══ done ═══════════════════════════════════════"
