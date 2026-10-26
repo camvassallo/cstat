@@ -1949,6 +1949,14 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
     // (`player_season_stats.player_sos`, minutes-weighted opponent
     // adj-efficiency-margin) instead of conference-level. Only populated for
     // players with a `player_sos` row; others stay NULL.
+    //
+    // `player_sos` is per (player, TEAM), so a player with stints at two teams
+    // has two rows, and an `UPDATE … FROM` keyed on (player, season) alone
+    // applied whichever one Postgres reached first. The same inputs then gave
+    // different CAM in different databases and runs — up to 3.6 points, on the
+    // value every projection model trains on (#410). The stints are collapsed
+    // to one minutes-weighted SOS first; a single-team player's value is his
+    // one row, unchanged.
     let r_psos = sqlx::query(
         "UPDATE torvik_player_stats t SET
              psos_adj      = pss.player_sos * $2,
@@ -1981,12 +1989,23 @@ pub async fn compute_campom(pool: &PgPool, season: i32) -> Result<u64, sqlx::Err
                      ELSE 0.5
                    END
                ) * t.mp_factor * t.gp_weight
-           FROM player_season_stats pss
+           FROM (
+               SELECT player_id, season,
+                      -- Minutes-weighted across stints; a player whose rows
+                      -- carry no minutes falls back to the plain mean.
+                      COALESCE(
+                          SUM(player_sos * COALESCE(games_played * minutes_per_game, 0))
+                              / NULLIF(SUM(COALESCE(games_played * minutes_per_game, 0)), 0),
+                          AVG(player_sos)
+                      ) AS player_sos
+                 FROM player_season_stats
+                WHERE season = $1 AND player_sos IS NOT NULL
+                GROUP BY player_id, season
+           ) pss
           WHERE pss.player_id = t.player_id
             AND pss.season = t.season
             AND t.season = $1
-            AND t.adj_gbpm IS NOT NULL
-            AND pss.player_sos IS NOT NULL",
+            AND t.adj_gbpm IS NOT NULL",
     )
     .bind(season) // $1
     .bind(CAMPOM_PLAYER_SOS_TRANSFER_RATE) // $2

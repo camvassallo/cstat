@@ -32,6 +32,14 @@
 //! flagging it would be noise rather than signal. Collapsing subqueries there
 //! is a review question, not a mechanical one.
 //!
+//! **One exception it does cover: `UPDATE … FROM player_season_stats`.** An
+//! aggregate absorbs duplicate rows; an UPDATE cannot. Postgres applies one of
+//! the matching rows and which one is unspecified, so a player with two stints
+//! got a different `cam_gbpm_v3_psos` in each database (#410). An UPDATE whose
+//! FROM names the table directly and keys it on `player_id` without `team_id`
+//! fails; collapse the stints in a subquery first (`FROM (SELECT player_id, …
+//! GROUP BY player_id, season) pss`), as `compute_campom` now does.
+//!
 //! Not DB-gated: it reads files, so it runs in CI like an ordinary test.
 
 use std::path::{Path, PathBuf};
@@ -136,6 +144,55 @@ fn bare_joins_in(text: &str) -> Vec<(usize, String)> {
     hits
 }
 
+/// How far back from a `FROM player_season_stats` line to look for the
+/// statement's verb. `compute_campom`'s CAM update carries ~35 lines of SET
+/// clauses between its `UPDATE` and its `FROM`.
+const UPDATE_LOOKBEHIND: usize = 60;
+
+/// `UPDATE … FROM player_season_stats <alias> WHERE <alias>.player_id = …`
+/// without `team_id` in the WHERE: the shape behind #410.
+fn bare_update_froms_in(text: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut hits = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        // The table itself, not `FROM (SELECT … FROM player_season_stats …)`,
+        // whose collapsing subquery is the fix.
+        if !trimmed.starts_with("FROM player_season_stats") {
+            continue;
+        }
+        // Is the nearest statement verb above this FROM an UPDATE? A SELECT or
+        // WITH in between means the FROM belongs to a read.
+        let is_update = lines[i.saturating_sub(UPDATE_LOOKBEHIND)..i]
+            .iter()
+            .rev()
+            .map(|l| l.trim_start().trim_start_matches('"'))
+            .find(|l| l.starts_with("UPDATE ") || l.starts_with("SELECT") || l.starts_with("WITH "))
+            .is_some_and(|l| l.starts_with("UPDATE "));
+        if !is_update {
+            continue;
+        }
+        let preceding = lines[i.saturating_sub(MARKER_LOOKBEHIND)..i].join("\n");
+        let mut window = String::from(trimmed);
+        for next in lines.iter().skip(i + 1).take(8) {
+            let next = next.trim_start();
+            if next.starts_with(')') || next.starts_with("RETURNING") {
+                break;
+            }
+            window.push('\n');
+            window.push_str(next);
+        }
+        if window.contains(ALLOW_MARKER) || preceding.contains(ALLOW_MARKER) {
+            continue;
+        }
+        let keys_on_player = window.contains(".player_id =") || window.contains(".player_id=");
+        if keys_on_player && !window.contains("team_id") {
+            hits.push((i + 1, trimmed.to_string()));
+        }
+    }
+    hits
+}
+
 fn bare_player_id_joins(root: &Path) -> Vec<(PathBuf, usize, String)> {
     let mut files = Vec::new();
     for crate_dir in std::fs::read_dir(root.join("crates"))
@@ -152,7 +209,10 @@ fn bare_player_id_joins(root: &Path) -> Vec<(PathBuf, usize, String)> {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        for (line_no, line) in bare_joins_in(&text) {
+        for (line_no, line) in bare_joins_in(&text)
+            .into_iter()
+            .chain(bare_update_froms_in(&text))
+        {
             hits.push((path.clone(), line_no, line));
         }
     }
@@ -229,4 +289,45 @@ fn allow_marker_is_honoured_from_the_comment_above() {
         bare_joins_in(marked).is_empty(),
         "allow marker in the preceding comment block must suppress the finding"
     );
+}
+
+/// The UPDATE arm must fire on the pre-#410 `compute_campom` spelling...
+#[test]
+fn guard_fires_on_the_pre_410_update_spelling() {
+    let bare = "        \"UPDATE torvik_player_stats t SET\n             \
+                cam_gbpm_v3_psos = (t.adj_gbpm + pss.player_sos * $2)\n           \
+                FROM player_season_stats pss\n          \
+                WHERE pss.player_id = t.player_id\n            \
+                AND pss.season = t.season\n            \
+                AND t.season = $1\",";
+    assert_eq!(
+        bare_update_froms_in(bare).len(),
+        1,
+        "guard no longer detects the UPDATE … FROM shape behind #410"
+    );
+}
+
+/// ...and pass the collapsing subquery that replaced it, a key closed with
+/// `team_id`, and a plain season-wide read.
+#[test]
+fn update_guard_accepts_the_collapsed_and_read_spellings() {
+    let collapsed = "        \"UPDATE torvik_player_stats t SET\n             \
+                     cam_gbpm_v3_psos = (t.adj_gbpm + pss.player_sos * $2)\n           \
+                     FROM (\n               \
+                     SELECT player_id, season, AVG(player_sos) AS player_sos\n                 \
+                     FROM player_season_stats\n                \
+                     WHERE season = $1 GROUP BY player_id, season\n           \
+                     ) pss\n          \
+                     WHERE pss.player_id = t.player_id\",";
+    assert!(bare_update_froms_in(collapsed).is_empty());
+
+    let with_team = "        \"UPDATE player_game_stats g SET x = pss.x\n           \
+                     FROM player_season_stats pss\n          \
+                     WHERE pss.player_id = g.player_id AND pss.team_id = g.team_id\",";
+    assert!(bare_update_froms_in(with_team).is_empty());
+
+    let read = "        \"SELECT AVG(ppg)\n           \
+                FROM player_season_stats pss\n          \
+                WHERE pss.player_id = $1\",";
+    assert!(bare_update_froms_in(read).is_empty());
 }
