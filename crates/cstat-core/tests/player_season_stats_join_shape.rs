@@ -149,6 +149,20 @@ fn bare_joins_in(text: &str) -> Vec<(usize, String)> {
 /// clauses between its `UPDATE` and its `FROM`.
 const UPDATE_LOOKBEHIND: usize = 60;
 
+/// The SQL on a source line: what follows a string opener when the statement
+/// starts on the call's own line (`sqlx::query("UPDATE …`, `query(r#"UPDATE …`
+/// — eight UPDATEs in this repo are written that way), else the trimmed line.
+fn sql_text(line: &str) -> &str {
+    let line = line.trim_start();
+    let after_opener = ["(r#\"", "(\""]
+        .iter()
+        .find_map(|o| line.split_once(o).map(|(_, rest)| rest));
+    after_opener
+        .unwrap_or(line)
+        .trim_start()
+        .trim_start_matches('"')
+}
+
 /// `UPDATE … FROM player_season_stats <alias> WHERE <alias>.player_id = …`
 /// without `team_id` in the WHERE: the shape behind #410.
 fn bare_update_froms_in(text: &str) -> Vec<(usize, String)> {
@@ -166,7 +180,7 @@ fn bare_update_froms_in(text: &str) -> Vec<(usize, String)> {
         let is_update = lines[i.saturating_sub(UPDATE_LOOKBEHIND)..i]
             .iter()
             .rev()
-            .map(|l| l.trim_start().trim_start_matches('"'))
+            .map(|l| sql_text(l))
             .find(|l| l.starts_with("UPDATE ") || l.starts_with("SELECT") || l.starts_with("WITH "))
             .is_some_and(|l| l.starts_with("UPDATE "));
         if !is_update {
@@ -330,4 +344,20 @@ fn update_guard_accepts_the_collapsed_and_read_spellings() {
                 FROM player_season_stats pss\n          \
                 WHERE pss.player_id = $1\",";
     assert!(bare_update_froms_in(read).is_empty());
+}
+
+/// The statement may open on the call's own line; the guard must still see
+/// the UPDATE there rather than read past it to an older statement.
+#[test]
+fn guard_finds_an_update_that_opens_on_the_query_line() {
+    let inline = "    let r = sqlx::query(\"UPDATE torvik_player_stats t SET\n             \
+                  cam_gbpm_v3_psos = (t.adj_gbpm + pss.player_sos * $2)\n           \
+                  FROM player_season_stats pss\n          \
+                  WHERE pss.player_id = t.player_id AND pss.season = t.season\")";
+    assert_eq!(bare_update_froms_in(inline).len(), 1);
+
+    let raw = "    let r = sqlx::query(r#\"UPDATE torvik_player_stats t SET x = pss.x\n           \
+               FROM player_season_stats pss\n          \
+               WHERE pss.player_id = t.player_id\"#)";
+    assert_eq!(bare_update_froms_in(raw).len(), 1);
 }
