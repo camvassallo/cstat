@@ -67,6 +67,13 @@
 # coverage is what actually changes, and it is right on both sides of the flip
 # with no calendar rule. --force-tables overrides; it accepts the deletion.
 #
+# A second --tables preflight (exit 5) refuses rows that point at ids prod does
+# not have. `teams` / `players` / `games` / `recruits` UUIDs are minted per
+# database, so a season ingested on both sides independently — the forecast
+# season, every year from here on — has two unrelated id sets, and local's
+# derived rows for it reference nothing on prod. Produce those rows on prod
+# (`compute-projections` against PROD_DATABASE_URL). Same --force-tables override.
+#
 # --columns table.col[,col…] is the third mode, for the case --tables cannot
 # serve: a derived column on a table that is REFERENCED by foreign keys.
 # `players.display_name` is the motivating one — `players` has 10 dependents, so
@@ -585,6 +592,136 @@ if [[ -n "$REQUESTED_TABLES" ]]; then
     else
       echo "  Override with --force-tables only if you know why prod's rows are wrong."
       exit 4
+    fi
+  fi
+fi
+
+# ── --tables referenced-id preflight ───────────────────
+# The staleness check compares SEASONS, so it passes a push whose rows cover the
+# right seasons but point at entities prod does not have. That is not
+# hypothetical: `teams` / `players` / `games` UUIDs are minted per database, and
+# a season ingested separately on each side (as 2027 was — `teams --year 2027`
+# run against local and against prod) gets two unrelated sets. Pushing
+# `team_preseason_projection` after the October retrain replaced prod's 2027
+# rows with ones keyed on LOCAL team ids; every 2027 schedule on the site went
+# unprojected, and the push reported success.
+#
+# Nothing below the push catches it either. Most derived tables carry no
+# foreign key, and the restore runs under `session_replication_role = replica`,
+# which skips the ones that exist. So this asks prod directly: for each
+# requested table, every distinct id in a reference column must already exist
+# in prod's table for that entity.
+#
+# The columns are found by NAME (`team_id`, `home_team_id`, `cstat_player_id`,
+# …), not by catalog FK, precisely because the tables that need this have no
+# FK to read. A uuid column ending in one of the suffixes in REF_SUFFIXES is
+# checked against the table it maps to. REF_OVERRIDES names the columns whose
+# namespace is mixed — `player_season_projection.player_id` is a `players.id`
+# for returners and transfers but a `recruits.id` for freshmen (migration 045),
+# so an id passes if it exists in ANY of the listed tables.
+#
+# Fails OPEN (warn) when prod cannot answer for a column, like the staleness
+# check, and shares its --force-tables override.
+if [[ -n "$REQUESTED_TABLES" ]]; then
+  REF_SUFFIXES=("team_id:teams" "player_id:players" "game_id:games" "coach_id:coaches")
+  REF_OVERRIDES=("player_season_projection.player_id:players,recruits")
+  DANGLING=""
+  REF_UNVERIFIED=""
+  for t in ${TABLE_LIST//,/ }; do
+    for pair in "${REF_SUFFIXES[@]}"; do
+      suffix="${pair%%:*}"
+      ref="${pair##*:}"
+      COLS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = '$t'
+          AND data_type = 'uuid'
+          AND (column_name = '$suffix' OR column_name LIKE '%\\_$suffix')
+        ORDER BY column_name" 2>/dev/null || true)
+      for col in $COLS; do
+        refs="$ref"
+        for o in "${REF_OVERRIDES[@]}"; do
+          if [[ "${o%%:*}" == "$t.$col" ]]; then refs="${o##*:}"; fi
+        done
+        # Local's distinct ids, shipped to prod as COPY data on stdin and
+        # anti-joined there: one round-trip per column, however many ids.
+        IDS=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+          SELECT DISTINCT \"$col\"::text FROM \"$t\" WHERE \"$col\" IS NOT NULL" 2>/dev/null) || {
+          REF_UNVERIFIED="${REF_UNVERIFIED:+$REF_UNVERIFIED }$t.$col"
+          continue
+        }
+        [[ -n "$IDS" ]] || continue
+        ABSENT=""
+        for r in ${refs//,/ }; do
+          ABSENT="$ABSENT AND NOT EXISTS (SELECT 1 FROM \"$r\" r WHERE r.id = i.id)"
+        done
+        if ! MISSING_IDS=$(printf '%s\n%s\n%s\n%s\n' \
+            "CREATE TEMP TABLE _sync_ids (id uuid); COPY _sync_ids FROM STDIN;" \
+            "$IDS" \
+            '\.' \
+            "SELECT i.id FROM _sync_ids i WHERE TRUE$ABSENT;" \
+          | "${PSQL[@]}" "$PROD_URL" -q -t -A -v ON_ERROR_STOP=1 2>/dev/null); then
+          REF_UNVERIFIED="${REF_UNVERIFIED:+$REF_UNVERIFIED }$t.$col"
+          continue
+        fi
+        MISSING_IDS=$(printf '%s\n' "$MISSING_IDS" | grep -E '^[0-9a-f-]{36}$' || true)
+        [[ -n "$MISSING_IDS" ]] || continue
+        n_ids=$(printf '%s\n' "$MISSING_IDS" | wc -l | tr -d ' ')
+        # Rows affected, and which seasons the dangling ids belong to LOCALLY —
+        # that is the diagnosis: a season whose ids were minted separately on
+        # each side. The ids go back over stdin too; an IN list of thousands of
+        # literals on the command line is what this replaced.
+        # Each entity table names its season differently (`recruits.year`), and
+        # `coaches` has none — those simply contribute no season breakdown.
+        SEASON_SQL=""
+        for r in ${refs//,/ }; do
+          scol=$("${PSQL[@]}" "$LOCAL_URL" -t -A -c "
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = '$r'
+              AND column_name IN ('season', 'year')
+            ORDER BY column_name DESC LIMIT 1" 2>/dev/null | tr -d '[:space:]' || true)
+          [[ -n "$scol" ]] || continue
+          SEASON_SQL="${SEASON_SQL:+$SEASON_SQL UNION ALL }SELECT x.\"$scol\" AS season FROM \"$r\" x JOIN _m ON _m.id = x.id"
+        done
+        [[ -n "$SEASON_SQL" ]] || SEASON_SQL="SELECT NULL::int AS season WHERE FALSE"
+        DETAIL=$(printf '%s\n%s\n%s\n%s\n' \
+            "CREATE TEMP TABLE _m (id uuid); COPY _m FROM STDIN;" \
+            "$MISSING_IDS" \
+            '\.' \
+            "SELECT (SELECT count(*) FROM \"$t\" JOIN _m ON _m.id = \"$t\".\"$col\") || '|' ||
+                    COALESCE((SELECT string_agg(season::text || ' (' || n || ')', ', ' ORDER BY season)
+                              FROM (SELECT season, count(*) AS n FROM ($SEASON_SQL) s GROUP BY 1) g), '');" \
+          | "${PSQL[@]}" "$LOCAL_URL" -q -t -A 2>/dev/null | tail -1 || true)
+        n_rows="${DETAIL%%|*}"
+        where="${DETAIL#*|}"
+        [[ "$DETAIL" == *"|"* ]] || { n_rows="?"; where=""; }
+        DANGLING="${DANGLING}    $(printf '%-34s' "$t.$col") ${n_rows:-?} rows → $n_ids ids absent from prod ${refs//,/ / }${where:+ — local seasons: $where}"$'\n'
+      done
+    done
+  done
+
+  if [[ -n "$REF_UNVERIFIED" ]]; then
+    echo "  ! Could not check referenced ids for: $REF_UNVERIFIED — UNVERIFIED for those."
+    echo
+  fi
+
+  if [[ -n "$DANGLING" ]]; then
+    echo "✗ This --tables push would write rows pointing at ids prod does not have:"
+    echo
+    printf '%s' "$DANGLING"
+    echo
+    echo "  UUIDs on teams / players / games are minted per database, so a season"
+    echo "  ingested separately on local and on prod has two unrelated id sets, and"
+    echo "  local's rows for it point at nothing on prod. The usual case is the"
+    echo "  forecast season. Produce those rows ON PROD instead, e.g."
+    echo "    DATABASE_URL=\"\$PROD_DATABASE_URL\" cargo run --release --bin cstat-ingest -- compute-projections --years <season>"
+    echo "  and push only seasons whose ids prod shares."
+    echo
+    if [[ "$FORCE_TABLES" -eq 1 ]]; then
+      echo "  ! --force-tables given — proceeding anyway, and accepting the dangling rows."
+      echo
+    else
+      echo "  Override with --force-tables only if you know why those ids are absent."
+      exit 5
     fi
   fi
 fi

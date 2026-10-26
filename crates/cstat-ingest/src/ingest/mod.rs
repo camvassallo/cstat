@@ -9,6 +9,7 @@ pub mod playbyplay;
 pub mod players;
 pub mod recruits;
 pub mod returns;
+pub mod schedule;
 pub mod season;
 pub mod team_aliases;
 pub mod teams;

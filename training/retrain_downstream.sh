@@ -470,6 +470,19 @@ if is_in player_season_projection ${SYNC_TABLES//,/ } && (( ${#FORWARD[@]} )); t
   echo "  board, and a run that widens the season set writes rows prod does not have"
   echo "  yet — so this is not conditional on Layer 1 having moved the values."
 fi
+if (( ${#FORWARD[@]} )); then
+  FORWARD_CSV=$(IFS=,; echo "${FORWARD[*]}")
+  echo
+  echo "  The push above REFUSES (exit 5) when a forward season's rows reference team,"
+  echo "  player or recruit ids prod does not share — always true once prod ingests that"
+  echo "  season itself, because UUIDs are minted per database. Those rows belong to"
+  echo "  prod. Until --tables can leave a season out, push with --force-tables and then"
+  echo "  rebuild the forward seasons on prod straight away (prod's ${FORWARD[*]} board is"
+  echo "  wrong between the two commands):"
+  echo
+  echo "  ./scripts/sync_to_prod.sh --tables $SYNC_TABLES --force-tables"
+  echo "  DATABASE_URL=\"\$PROD_DATABASE_URL\" cargo run --release --bin cstat-ingest -- compute-projections --years $FORWARD_CSV"
+fi
 cat <<'NOTE'
 
 NOT RUN BY THIS SCRIPT — the hand-tuned serving constants. PROJECTION_SHRINK_WEIGHT

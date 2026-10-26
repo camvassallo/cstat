@@ -21,6 +21,7 @@ transfers_{year}                    (247 portal, 2 class years — best-effort)
 transfer_resolve                    (portal row → player join, 2 class years)
 recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
 recruit_resolve                     (recruit → team / player joins, 3 class years)
+schedule_refresh                    (full-season games feed; + forecast season pre-flip)
 compute_all   (load-bearing)
 projections   (forecast-season roster projections, plus the current season when it has
                no anchor at all — best-effort, needs the ONNX models)
@@ -38,6 +39,24 @@ the portal's, because a recruiting class first plays in the season after it
 signs; `recruit_commits_*` records **skipped** rather than failed for a class
 nobody has committed to yet, which is the normal state of the far class for
 much of its cycle.
+
+`schedule_refresh` (#406) re-pulls the whole season's `games` feed (about 56
+NatStat calls) so games published after the initial load reach `games` before
+they are played. The `games` step only covers yesterday..today, and bracket
+events have no placeholder rows, so without it a conference-tournament semifinal
+first appeared on the day it tipped. It covers the current season, plus the
+forecast season while that season's `teams` rows exist (the offseason before the
+Nov 1 flip), and rebuilds the forecast season's `schedules` itself because
+`compute_all` never touches it. Writes are one batched, diff-only statement, so
+an unchanged feed writes zero rows. It never blanks a completed game, never
+resets the `is_neutral_site` / `is_conference` values `compute_all` derives,
+and only moves `game_date` on an unplayed game. It also prunes unplayed future
+games the feed no longer lists (cancellations, reschedules under a new id), but
+only on a complete fetch, only games with no box score / forecast / play-by-play
+/ lineup rows, and never more than 10% of the remaining schedule (floor 25); a
+skipped or partial prune is written to the step's `notes`, along with the count
+of team-days the feed lists twice. A failure degrades the run without aborting:
+the schedule is a day stale, not wrong.
 
 `transfer_resolve` is the portal's version of the same exception (described
 next for recruits): it fills `transfers.cstat_player_id`, without which the

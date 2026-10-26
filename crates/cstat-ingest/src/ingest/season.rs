@@ -1718,6 +1718,10 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // Full-season schedule; see `schedule_refresh_step`. Before compute,
+        // which rebuilds `schedules` from the games it adds.
+        schedule_refresh_step(self.client, self.pool, self.season, &ledger, &mut failures).await;
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -2861,6 +2865,106 @@ pub async fn transfer_resolve_step(
         .await;
     if let Some(msg) = resolve_err {
         failures.push(format!("transfer_resolve: {msg}"));
+    }
+}
+
+/// The nightly's `schedule_refresh` step (#406): re-pull the full season's
+/// `games` feed so games published after the initial load — later rounds of
+/// MTEs and conference tournaments, the NCAA bracket, late additions — reach
+/// `games` before they are played rather than on the day. The date-window
+/// `games` step still owns games as they are played; this one owns the future.
+///
+/// Covers the current season, plus the forecast season while its `teams` rows
+/// exist (the offseason, before the Nov 1 flip makes it current). `compute_all`
+/// rebuilds `schedules` for the current season later in the run; it never
+/// touches the forecast season, so that one is rebuilt here.
+///
+/// Not served-critical — a failure leaves yesterday's schedule, not a wrong
+/// one — but it degrades the run, because a refresh that silently stops is
+/// exactly how the schedule went three months stale before this existed.
+pub async fn schedule_refresh_step(
+    client: &crate::NatStatClient,
+    pool: &PgPool,
+    season: i32,
+    ledger: &RunLedger<'_>,
+    failures: &mut Vec<String>,
+) {
+    let t0 = Utc::now();
+    let today = crate::today_utc();
+    let mut seasons = vec![season];
+    let forecast_has_teams: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM teams WHERE season = $1)")
+            .bind(season + 1)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+    if forecast_has_teams {
+        seasons.push(season + 1);
+    }
+
+    let mut written: i64 = 0;
+    let mut notes: Vec<String> = Vec::new();
+    let mut error: Option<String> = None;
+    for s in seasons {
+        let result = async {
+            let fetch = super::schedule::fetch_season(client, s)
+                .await
+                .map_err(|e| format!("fetch {s}: {e}"))?;
+            let refresh =
+                super::schedule::apply_season_schedule(pool, s, &fetch.rows, fetch.complete, today)
+                    .await
+                    .map_err(|e| format!("write {s}: {e}"))?;
+            if s != season {
+                cstat_core::compute::compute_schedules(pool, s)
+                    .await
+                    .map_err(|e| format!("schedules {s}: {e}"))?;
+            }
+            Ok::<_, String>((fetch.skipped, refresh))
+        }
+        .await;
+        match result {
+            Ok((skipped, r)) => {
+                written += r.written() as i64;
+                let mut note = format!(
+                    "{s}: +{} new, {} changed, {} pruned",
+                    r.inserted, r.updated, r.pruned
+                );
+                if let Some(p) = &r.prune_note {
+                    note.push_str(&format!("; {p}"));
+                }
+                if r.double_booked > 0 {
+                    note.push_str(&format!("; {} double-booked team-days", r.double_booked));
+                }
+                if let Some(sk) = skipped.summary() {
+                    note.push_str(&format!("; {sk}"));
+                }
+                notes.push(note);
+            }
+            Err(msg) => {
+                warn!(season = s, error = %msg, "schedule refresh failed");
+                error.get_or_insert(msg);
+            }
+        }
+    }
+
+    let status = if error.is_some() {
+        StepStatus::Failed
+    } else {
+        StepStatus::Ok
+    };
+    let notes = (!notes.is_empty()).then(|| notes.join(" | "));
+    ledger
+        .record_with_notes(
+            "schedule_refresh",
+            status,
+            Some(written),
+            t0,
+            error.as_deref(),
+            notes.as_deref(),
+        )
+        .await;
+    if let Some(msg) = error {
+        failures.push(format!("schedule_refresh: {msg}"));
     }
 }
 

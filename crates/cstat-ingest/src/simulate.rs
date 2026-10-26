@@ -193,6 +193,10 @@ pub async fn run(opts: SimulateOptions) -> Result<()> {
     // Forecasts + ELO: well-formed EMPTY payloads — the run must survive them.
     seed_rows(&cache, "forecasts", &season_range, "forecasts", vec![]).await?;
     seed_rows(&cache, "elo", &season_range, "elo", vec![]).await?;
+    // `schedule_refresh`'s full-season pull, also empty: the replay owns its
+    // games through the per-window fixtures, and an empty fetch is treated as
+    // incomplete, so the step writes nothing and prunes nothing.
+    seed_rows(&cache, "games", &season_range, "games", vec![]).await?;
 
     // Bogus API key: a cache miss (fixture gap) surfaces as a loud auth
     // failure instead of a silent live call. The rate budget matches the env
