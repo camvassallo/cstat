@@ -9,13 +9,15 @@
 //! tables shadowing every real table the function touches, each asserted to
 //! resolve into `pg_temp*` before anything runs. Skips when `DATABASE_URL` is
 //! unset. The one exception is `prune_blockers_cover_every_foreign_key`, which
-//! only READS the real catalog.
+//! reads the catalog of its own throwaway, freshly migrated database.
 
 use chrono::NaiveDate;
+use cstat_core::Database;
 use cstat_ingest::ingest::games::GameRow;
 use cstat_ingest::ingest::schedule::{PRUNE_BLOCKERS, ScheduleRefresh, apply_season_schedule};
 use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use std::str::FromStr;
 use uuid::Uuid;
 
 const SEASON: i32 = 2027;
@@ -371,20 +373,45 @@ async fn double_booked_team_days_are_counted() {
 /// `PRUNE_BLOCKERS` plus `schedules` (cleared by the prune) and the cascading
 /// `game_projections` must be exactly the tables with a foreign key onto
 /// `games`. A new one would otherwise make the prune's DELETE fail every night
-/// — or, if it cascaded, silently delete its rows. Reads the real catalog.
+/// — or, if it cascaded, silently delete its rows.
+///
+/// Reads the catalog of a throwaway database migrated from `migrations/`
+/// (the `ingest_replay.rs` pattern): CI's database is empty, and a dev
+/// database may lag the branch, so neither is the schema this code ships with.
 #[tokio::test]
 async fn prune_blockers_cover_every_foreign_key() {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let pool = PgPool::connect(&url).await.expect("connect");
-    let mut referencing: Vec<String> = sqlx::query_scalar(
+    let base = PgConnectOptions::from_str(&url).expect("valid DATABASE_URL");
+    let admin = PgPool::connect_with(base.clone()).await.expect("connect");
+    let name = "cstat_test_prune_blockers";
+    let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+        .execute(&admin)
+        .await;
+    sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .expect("create throwaway database");
+    let pool = PgPool::connect_with(base.database(name))
+        .await
+        .expect("connect to throwaway database");
+    Database { pool: pool.clone() }
+        .migrate()
+        .await
+        .expect("migrate throwaway database");
+    let referencing: Result<Vec<String>, _> = sqlx::query_scalar(
         "SELECT DISTINCT c.conrelid::regclass::text FROM pg_constraint c
           WHERE c.contype = 'f' AND c.confrelid = 'public.games'::regclass",
     )
     .fetch_all(&pool)
-    .await
-    .unwrap();
+    .await;
+    // Drop before asserting, so a failure cannot leak the database.
+    pool.close().await;
+    let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+        .execute(&admin)
+        .await;
+    let mut referencing = referencing.expect("read catalog");
     referencing.sort();
     let mut expected: Vec<String> = PRUNE_BLOCKERS
         .iter()
