@@ -524,10 +524,24 @@ struct PortalRow {
     source_institution: Option<String>,
 }
 
+/// SQL for a player's cross-season identity, over a `players p` alias: his
+/// `torvik_pid` when Torvik linked him (stable across seasons AND transfers),
+/// else his `natstat_id` (stable across seasons at one school, which is the
+/// scope the surname pass works in), else the row's own UUID.
+const HUMAN_KEY_SQL: &str = "COALESCE(\
+     't:' || (SELECT MIN(tps.torvik_pid)::text FROM torvik_player_stats tps \
+              WHERE tps.player_id = p.id), \
+     'n:' || p.natstat_id, \
+     'p:' || p.id::text)";
+
 #[derive(sqlx::FromRow)]
 struct CandRow {
     player_id: Uuid,
     name: String,
+    season: i32,
+    /// Cross-season identity of the human behind this season row (see
+    /// [`HUMAN_KEY_SQL`]).
+    human: String,
     team_short: Option<String>,
     team_full: Option<String>,
 }
@@ -587,6 +601,218 @@ fn match_portal_to_candidates<'a>(
     (matches, leftover)
 }
 
+/// Last-resort match for portal rows whose 247 name differs from the box-score
+/// name by a nickname or a dropped middle name ("Mike" / "Michael", "Nic" /
+/// "Nicolas", "Sadiku Ayo" / "Sadiku Ibine Ayo").
+///
+/// Keys both sides on (source team, surname) and pairs them through
+/// [`pair_unambiguous`](crate::name_match::pair_unambiguous), the rule the
+/// Torvik linker's fallback passes use: a key must hold exactly one unmatched
+/// portal row AND exactly one unclaimed human, so two brothers on one roster,
+/// or two same-surname portal entrants from one school, are refused rather than
+/// guessed. A human appears once per team however many seasons he played there
+/// (his newest stint stands in for him), so one player's several season rows
+/// never read as rivals for the same key.
+///
+/// Unlike Torvik's family-name pass, this one also checks the given name
+/// ([`given_names_compatible`]). Torvik has a row for every rostered player, so
+/// a sibling is present on both sides and the two-sided rule sees him. The
+/// portal lists only the players who LEFT: a redshirt "Jamal Smith" entering
+/// beside a brother "Jalen Smith" who played and stayed would otherwise be the
+/// one portal row and the one candidate for (school, smith), and bind to the
+/// wrong man. A pure nickname with nothing in common ("Butta" / "Efrem") stays
+/// a miss; that is the price of not guessing.
+fn match_by_surname(
+    portal: &[&PortalRow],
+    cands: &[&CandRow],
+    claimed: &HashSet<String>,
+) -> Vec<(i64, Uuid)> {
+    // One candidate per (team, human): his newest stint.
+    let mut newest: HashMap<(String, &str), &CandRow> = HashMap::new();
+    for &c in cands {
+        let Some(team) = c.team_short.as_deref() else {
+            continue;
+        };
+        if claimed.contains(&c.human) {
+            continue;
+        }
+        newest
+            .entry((team.to_lowercase(), c.human.as_str()))
+            .and_modify(|cur| {
+                if c.season > cur.season {
+                    *cur = c;
+                }
+            })
+            .or_insert(c);
+    }
+    let mut pool: Vec<(&CandRow, (String, String), String)> = newest
+        .into_iter()
+        .filter_map(|((team, _), c)| {
+            let (surname, first) = surname_and_first(&c.name)?;
+            Some((c, (team, surname), first))
+        })
+        .collect();
+    pool.sort_by_key(|(c, _, _)| c.player_id);
+
+    // The teams the pool spans, for resolving each portal row's 247 source
+    // string to one of them.
+    let mut teams: Vec<(&str, &str)> = pool
+        .iter()
+        .filter_map(|(c, _, _)| Some((c.team_short.as_deref()?, c.team_full.as_deref()?)))
+        .collect();
+    teams.sort_unstable();
+    teams.dedup();
+
+    let mut rows: Vec<(&PortalRow, (String, String), String)> = Vec::new();
+    for &row in portal {
+        let source = row.source_institution.as_deref().unwrap_or_default();
+        let (Some(team), Some((surname, first))) = (
+            resolve_source_team(&teams, source),
+            surname_and_first(&row.full_name),
+        ) else {
+            continue;
+        };
+        rows.push((row, (team, surname), first));
+    }
+
+    let row_keys: Vec<&(String, String)> = rows.iter().map(|(_, k, _)| k).collect();
+    let cand_keys: Vec<&(String, String)> = pool.iter().map(|(_, k, _)| k).collect();
+    crate::name_match::pair_unambiguous(&row_keys, &cand_keys, |r, c| {
+        given_names_compatible(&rows[r].2, &pool[c].2)
+    })
+    .into_iter()
+    .map(|(r, c)| (rows[r].0.tfs_key, pool[c].0.player_id))
+    .collect()
+}
+
+/// The lowercased `short_name` of the one team that best matches a 247 source
+/// string, or `None` when nothing matches or the best score is shared ("Miami"
+/// resolves to Miami FL because its alias outranks Miami OH's bare prefix; a
+/// genuine tie is refused rather than broken by order).
+fn resolve_source_team(teams: &[(&str, &str)], source: &str) -> Option<String> {
+    let scored: Vec<(u32, &str)> = teams
+        .iter()
+        .filter_map(|(short, full)| {
+            team_match_score(Some(short), full, source).map(|s| (s, *short))
+        })
+        .collect();
+    let best = scored.iter().map(|(s, _)| *s).min()?;
+    match scored
+        .iter()
+        .filter(|(s, _)| *s == best)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [(_, short)] => Some(short.to_lowercase()),
+        _ => None,
+    }
+}
+
+/// `(last word, first word)` of a normalized name: the surname
+/// [`match_by_surname`] keys on and the given name it guards with.
+fn surname_and_first(name: &str) -> Option<(String, String)> {
+    let norm = normalize_name(name);
+    let mut words = norm.split_whitespace();
+    let first = words.next()?.to_string();
+    let surname = words.next_back().unwrap_or(&first).to_string();
+    Some((surname, first))
+}
+
+/// Could these two given names be one person's? Yes when they are equal, when
+/// the shorter (three letters or more) begins the longer ("nic" / "nicolas",
+/// "josh" / "joshua"), when they are one edit or transposition apart ("qadir" /
+/// "quadir", "anhtony" / "anthony"), when the shorter is a two-letter
+/// initialism sharing the first letter ("zz" / "zachiah", "kj" / "kiwane"), or
+/// when they are a listed diminutive ([`GIVEN_NAME_DIMINUTIVES`]: "mike" /
+/// "michael", "jake" / "jacob").
+///
+/// Deliberately NOT a shared opening: siblings share exactly that ("carson" /
+/// "cooper" Schwieger at Valparaiso, "jalen" / "jamal").
+fn given_names_compatible(a: &str, b: &str) -> bool {
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if short.len() <= 2 {
+        return short.chars().next() == long.chars().next();
+    }
+    long.starts_with(short)
+        || osa_distance(a, b) <= 1
+        || GIVEN_NAME_DIMINUTIVES
+            .iter()
+            .any(|(x, y)| (*x == a && *y == b) || (*x == b && *y == a))
+}
+
+/// Diminutives that are not prefixes of the formal name, as `(short, formal)`.
+/// Prefix forms ("nic", "chris", "rob", "matt") need no entry.
+const GIVEN_NAME_DIMINUTIVES: &[(&str, &str)] = &[
+    ("mike", "michael"),
+    ("mikey", "michael"),
+    ("jake", "jacob"),
+    ("nate", "nathan"),
+    ("nate", "nathaniel"),
+    ("paddy", "patrick"),
+    ("bernie", "bernard"),
+    ("nikos", "nikolaos"),
+    ("bill", "william"),
+    ("billy", "william"),
+    ("bob", "robert"),
+    ("bobby", "robert"),
+    ("rick", "richard"),
+    ("ricky", "richard"),
+    ("tony", "anthony"),
+    ("jim", "james"),
+    ("jimmy", "james"),
+    ("joey", "joseph"),
+    ("tommy", "thomas"),
+    ("zach", "zachary"),
+    ("zack", "zachary"),
+    ("danny", "daniel"),
+    ("dave", "david"),
+    ("steve", "steven"),
+    ("steve", "stephen"),
+    ("charlie", "charles"),
+    ("chuck", "charles"),
+    ("johnny", "jonathan"),
+    ("jack", "john"),
+    ("eddie", "edward"),
+    ("teddy", "theodore"),
+    ("kenny", "kenneth"),
+    ("larry", "lawrence"),
+    ("gabe", "gabriel"),
+    ("drew", "andrew"),
+    ("andy", "andrew"),
+    ("moe", "maurice"),
+];
+
+/// Optimal-string-alignment distance: Levenshtein plus adjacent
+/// transpositions, so "anhtony" / "anthony" is one edit rather than two.
+fn osa_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[a.len()][b.len()]
+}
+
 /// Resolve `cstat_player_id` on transfer rows by matching each 247 portal
 /// entry to the cstat `players` row that played the previous college season
 /// at the same source school.
@@ -622,19 +848,21 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
     // row per (player, team) stint; mid-season transfers appear twice (once per
     // team) via `player_season_stats`, which is what lets us disambiguate when
     // the 247 source names the *first* team.
-    let candidates: Vec<CandRow> = sqlx::query_as(
+    let candidates: Vec<CandRow> = sqlx::query_as(&format!(
         r#"
         SELECT
             p.id          AS player_id,
             p.name        AS name,
+            pss.season    AS season,
+            {HUMAN_KEY_SQL} AS human,
             t.short_name  AS team_short,
             t.name        AS team_full
         FROM player_season_stats pss
         JOIN players p ON p.id = pss.player_id AND p.season = pss.season
         LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
         WHERE pss.season = $1
-        "#,
-    )
+        "#
+    ))
     .bind(year)
     .fetch_all(pool)
     .await?;
@@ -655,14 +883,16 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
     // preferring the newest (the `season DESC` order makes `min_by_key` settle
     // ties on the most-recent stint). Pass 1 is left byte-identical so the
     // ~99% contiguous case is untouched.
-    let pass2_matched = if leftover.is_empty() {
-        0
+    let (pass2_matched, pass3_matched) = if leftover.is_empty() {
+        (0, 0)
     } else {
-        let prior: Vec<CandRow> = sqlx::query_as(
+        let prior: Vec<CandRow> = sqlx::query_as(&format!(
             r#"
             SELECT
                 p.id          AS player_id,
                 p.name        AS name,
+                pss.season    AS season,
+                {HUMAN_KEY_SQL} AS human,
                 t.short_name  AS team_short,
                 t.name        AS team_full
             FROM player_season_stats pss
@@ -670,8 +900,8 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
             LEFT JOIN teams t ON t.id = pss.team_id AND t.season = pss.season
             WHERE pss.season BETWEEN $1 AND $2
             ORDER BY pss.season DESC
-            "#,
-        )
+            "#
+        ))
         .bind(year - TRANSFER_SEASON_LOOKBACK)
         .bind(year - 1)
         .fetch_all(pool)
@@ -684,10 +914,49 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
                 .or_default()
                 .push(c);
         }
-        let (more, _) = match_portal_to_candidates(&leftover, &prior_by_name, false);
-        let n = more.len();
+        let (more, still_left) = match_portal_to_candidates(&leftover, &prior_by_name, false);
+        let n2 = more.len();
         matched.extend(more);
-        n
+
+        // Pass 3 — nickname and middle-name spellings, which no exact-name pass
+        // can see: 247 lists "Mike Nwoko" / "Chris Jeffrey" / "Marqus Mitrovic
+        // Marion" where the box score has "Michael Nwoko" / "Christian Jeffrey"
+        // / "Marqus Marion". About twenty D-I movers a class sat unlinked this
+        // way, and an unlinked transfer projects at his OLD school. Narrow on
+        // purpose — see `match_by_surname` for the rule.
+        //
+        // "Claimed" is keyed on the HUMAN, not the season-scoped UUID: one
+        // player has a different `players.id` every season, so a UUID set
+        // would leave his other stints free for a second portal row to bind.
+        // It also covers rows linked by an earlier run that this run did not
+        // re-match, which a set built from `matched` alone would miss.
+        let pool_cands: Vec<&CandRow> = candidates.iter().chain(prior.iter()).collect();
+        let human_of: HashMap<Uuid, &str> = pool_cands
+            .iter()
+            .map(|c| (c.player_id, c.human.as_str()))
+            .collect();
+        let mut claimed: HashSet<String> = matched
+            .iter()
+            .filter_map(|(_, p)| human_of.get(p).map(|h| h.to_string()))
+            .collect();
+        let pass3_keys: Vec<i64> = still_left.iter().map(|r| r.tfs_key).collect();
+        let already_linked: Vec<String> = sqlx::query_scalar(&format!(
+            r#"
+            SELECT DISTINCT {HUMAN_KEY_SQL}
+            FROM transfers tr
+            JOIN players p ON p.id = tr.cstat_player_id
+            WHERE tr.year = $1 AND NOT (tr.tfs_key = ANY($2))
+            "#
+        ))
+        .bind(year)
+        .bind(&pass3_keys)
+        .fetch_all(pool)
+        .await?;
+        claimed.extend(already_linked);
+        let more = match_by_surname(&still_left, &pool_cands, &claimed);
+        let n3 = more.len();
+        matched.extend(more);
+        (n2, n3)
     };
 
     let tfs_keys: Vec<i64> = matched.iter().map(|(k, _)| *k).collect();
@@ -718,6 +987,7 @@ pub async fn resolve_cstat_joins(pool: &PgPool, year: i32) -> Result<u64, Transf
         candidates = candidates.len(),
         matched = tfs_keys.len(),
         pass2_matched,
+        pass3_matched,
         updated = n,
         "cstat_player_id resolution complete"
     );
@@ -907,6 +1177,204 @@ mod tests {
         assert_eq!(normalize_name("José Álvarez"), "jose alvarez");
         assert_eq!(normalize_name("A'lahn Sumler"), "alahn sumler");
         assert_eq!(normalize_name("D'Angelo  Russell"), "dangelo russell");
+    }
+
+    fn portal(key: i64, name: &str, source: &str) -> PortalRow {
+        PortalRow {
+            tfs_key: key,
+            full_name: name.into(),
+            source_institution: Some(source.into()),
+        }
+    }
+
+    /// A candidate whose human key is derived from `id`, so each `id` is its
+    /// own person unless a test passes the same `human` explicitly.
+    fn cand(id: u128, name: &str, season: i32, short: &str, full: &str) -> CandRow {
+        cand_of(&format!("h{id}"), id, name, season, short, full)
+    }
+
+    fn cand_of(human: &str, id: u128, name: &str, season: i32, short: &str, full: &str) -> CandRow {
+        CandRow {
+            player_id: Uuid::from_u128(id),
+            name: name.into(),
+            season,
+            human: human.into(),
+            team_short: Some(short.into()),
+            team_full: Some(full.into()),
+        }
+    }
+
+    fn surname_pass(rows: &[PortalRow], cands: &[CandRow], claimed: &[&str]) -> Vec<(i64, Uuid)> {
+        let rrefs: Vec<&PortalRow> = rows.iter().collect();
+        let crefs: Vec<&CandRow> = cands.iter().collect();
+        let claimed: HashSet<String> = claimed.iter().map(|s| s.to_string()).collect();
+        match_by_surname(&rrefs, &crefs, &claimed)
+    }
+
+    #[test]
+    fn surname_pass_binds_nicknames_and_middle_names() {
+        let cands = [
+            cand(1, "Michael Nwoko", 2026, "LSU", "LSU Tigers"),
+            cand(
+                2,
+                "Marqus Marion",
+                2026,
+                "Wake Forest",
+                "Wake Forest Demon Deacons",
+            ),
+            cand(
+                3,
+                "Sadiku Ibine Ayo",
+                2026,
+                "St. John's",
+                "St. John's Red Storm",
+            ),
+            cand(
+                4,
+                "Anhtony Enoh",
+                2026,
+                "Georgia State",
+                "Georgia State Panthers",
+            ),
+        ];
+        let rows = [
+            portal(10, "Mike Nwoko", "LSU"),
+            portal(11, "Marqus Mitrovic Marion", "Wake Forest"),
+            portal(12, "Sadiku Ayo", "St. John's"),
+            portal(13, "Anthony Enoh", "Georgia State"),
+        ];
+        assert_eq!(
+            surname_pass(&rows, &cands, &[]),
+            vec![
+                (10, Uuid::from_u128(1)),
+                (11, Uuid::from_u128(2)),
+                (12, Uuid::from_u128(3)),
+                (13, Uuid::from_u128(4)),
+            ]
+        );
+    }
+
+    #[test]
+    fn surname_pass_refuses_to_guess() {
+        let cands = [
+            // Different given name on the same roster: a different person.
+            cand(
+                1,
+                "AJ Thomas",
+                2026,
+                "Loyola Marymount",
+                "Loyola Marymount Lions",
+            ),
+            // Right name, wrong school ("Oregon Tech" is not Oregon).
+            cand(2, "James Cooper", 2025, "Oregon", "Oregon Ducks"),
+            // Two same-surname teammates: ambiguous on the candidate side.
+            cand(3, "Ibi Traore", 2026, "Utah", "Utah Utes"),
+            cand(4, "Ibrahim Traore", 2026, "Utah", "Utah Utes"),
+            // Siblings share an opening, not a name.
+            cand(
+                6,
+                "Cooper Schwieger",
+                2024,
+                "Valparaiso",
+                "Valparaiso Beacons",
+            ),
+        ];
+        let rows = [
+            portal(10, "Tanner Thomas", "Loyola Marymount"),
+            portal(11, "Jackson Cooper", "Oregon Tech"),
+            portal(12, "Ibrahima Traore", "Utah"),
+            portal(14, "Carson Schwieger", "Valparaiso"),
+        ];
+        assert!(surname_pass(&rows, &cands, &[]).is_empty());
+    }
+
+    #[test]
+    fn surname_pass_refuses_a_redshirt_beside_his_brother() {
+        // Jamal never played, so he has no candidate row; Jalen played and
+        // stayed. One portal row and one candidate for (school, smith): only
+        // the given-name guard stands between them.
+        let cands = [cand(1, "Jalen Smith", 2026, "Rice", "Rice Owls")];
+        let rows = [portal(10, "Jamal Smith", "Rice")];
+        assert!(surname_pass(&rows, &cands, &[]).is_empty());
+    }
+
+    #[test]
+    fn surname_pass_refuses_two_entrants_from_one_school() {
+        let cands = [cand(1, "Michael Brown", 2026, "Rice", "Rice Owls")];
+        let rows = [
+            portal(10, "Mike Brown", "Rice"),
+            portal(11, "Mikey Brown", "Rice"),
+        ];
+        assert!(surname_pass(&rows, &cands, &[]).is_empty());
+    }
+
+    #[test]
+    fn surname_pass_claims_the_human_not_the_season_row() {
+        // McNair is claimed (through his 2026 row, by an earlier pass or run).
+        // His 2025 row is a different UUID for the same human and must not be
+        // handed to a second portal row.
+        let cands = [cand_of(
+            "t:42",
+            2,
+            "Michael McNair",
+            2025,
+            "Boston University",
+            "Boston University Terriers",
+        )];
+        let rows = [portal(10, "Mike McNair", "Boston University")];
+        assert!(surname_pass(&rows, &cands, &["t:42"]).is_empty());
+    }
+
+    #[test]
+    fn surname_pass_takes_one_human_across_his_stints() {
+        // One human, one UUID per season: his stints are one candidate (the
+        // newest), not rivals that make the key ambiguous.
+        let cands = [
+            cand_of(
+                "t:7",
+                1,
+                "Michael McNair",
+                2026,
+                "Boston University",
+                "Boston University Terriers",
+            ),
+            cand_of(
+                "t:7",
+                2,
+                "Michael McNair",
+                2025,
+                "Boston University",
+                "Boston University Terriers",
+            ),
+        ];
+        let rows = [portal(10, "Mike McNair", "Boston University")];
+        assert_eq!(
+            surname_pass(&rows, &cands, &[]),
+            vec![(10, Uuid::from_u128(1))]
+        );
+    }
+
+    #[test]
+    fn given_names_compatible_accepts_real_variants_only() {
+        for (a, b) in [
+            ("mike", "michael"),
+            ("nic", "nicolas"),
+            ("qadir", "quadir"),
+            ("anhtony", "anthony"),
+            ("zz", "zachiah"),
+            ("jake", "jacob"),
+            ("louthm", "louth"),
+        ] {
+            assert!(given_names_compatible(a, b), "{a} / {b}");
+        }
+        for (a, b) in [
+            ("carson", "cooper"),
+            ("jalen", "jamal"),
+            ("tanner", "aj"),
+            ("butta", "efrem"),
+        ] {
+            assert!(!given_names_compatible(a, b), "{a} / {b}");
+        }
     }
 
     #[test]
