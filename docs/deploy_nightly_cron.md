@@ -18,6 +18,7 @@ preflight   (connectivity probe — records a step, never gates control flow)
 games → player_perfs → team_perfs   (load-bearing — a failure aborts the run)
 forecasts → elo → torvik → torvik_games   (best-effort — logged, run continues)
 transfers_{year}                    (247 portal, 2 class years — best-effort)
+transfer_resolve                    (portal row → player join, 2 class years)
 recruits_{year} → recruit_commits_{year}   (247 recruits, 2 class years — best-effort)
 recruit_resolve                     (recruit → team / player joins, 3 class years)
 compute_all   (load-bearing)
@@ -37,6 +38,10 @@ the portal's, because a recruiting class first plays in the season after it
 signs; `recruit_commits_*` records **skipped** rather than failed for a class
 nobody has committed to yet, which is the normal state of the far class for
 much of its cycle.
+
+`transfer_resolve` is the portal's version of the same exception (described
+next for recruits): it fills `transfers.cstat_player_id`, without which the
+projection cannot place a committed transfer and leaves him at his old school.
 
 `recruit_resolve` is the exception to "best-effort" in that group: it makes no
 247 call, so it runs even when the token mint failed, and it is the only writer

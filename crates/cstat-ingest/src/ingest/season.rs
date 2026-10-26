@@ -1535,6 +1535,53 @@ impl<'a> SeasonIngester<'a> {
             }
         }
 
+        // Portal row → `players.id`. The `transfers` CLI has always run this
+        // after an ingest; the nightly did not, so every move it picked up
+        // landed with `cstat_player_id` NULL — and the roster projection skips a
+        // transfer it cannot place, falling the player back to his source team
+        // (Trey Kaufman-Renn projected at Purdue for a week after committing to
+        // Kansas). Same shape as `recruit_resolve` below and for the same
+        // reason: no 247 call, so it runs even when the refresh failed, and it
+        // is the only writer of the column the projection selects on, so a
+        // failure degrades the run rather than logging a warning.
+        let t0 = Utc::now();
+        let mut resolved_total: i64 = 0;
+        let mut resolve_err: Option<String> = None;
+        for portal_year in [self.season - 1, self.season] {
+            match super::transfers::resolve_cstat_joins(self.pool, portal_year).await {
+                Ok(n) => resolved_total += n as i64,
+                Err(e) => {
+                    warn!(portal_year, error = %e, "transfer player-join resolution failed");
+                    resolve_err.get_or_insert_with(|| format!("player joins ({portal_year}): {e}"));
+                }
+            }
+        }
+        match &resolve_err {
+            None => {
+                ledger
+                    .record(
+                        "transfer_resolve",
+                        StepStatus::Ok,
+                        Some(resolved_total),
+                        t0,
+                        None,
+                    )
+                    .await;
+            }
+            Some(msg) => {
+                ledger
+                    .record(
+                        "transfer_resolve",
+                        StepStatus::Failed,
+                        Some(resolved_total),
+                        t0,
+                        Some(msg),
+                    )
+                    .await;
+                failures.push(format!("transfer_resolve: {msg}"));
+            }
+        }
+
         // --- 7e. 247 recruit rankings + commits (best-effort) ---
         // Joins the nightly for the same reason 7d did: the feeds stopped
         // needing a hand-captured credential. `Recruit247Client::guest` mints a
