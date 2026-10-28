@@ -415,6 +415,11 @@ enum Commands {
         /// today. Pooling all three gives the schedule grid-search more signal.
         #[arg(long, value_delimiter = ',', default_values_t = [2024, 2025, 2026])]
         years: Vec<i32>,
+
+        /// Also write every scored game's two legs and actual margin to this
+        /// CSV, for offline analysis without re-running the model.
+        #[arg(long)]
+        dump: Option<std::path::PathBuf>,
     },
 
     /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
@@ -1271,12 +1276,18 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::MeasureBlendAccuracy { years } => {
+        Commands::MeasureBlendAccuracy { years, dump } => {
             let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
-            cstat_ingest::measure_blend_accuracy::run(&db.pool, &predictor, &years).await?;
+            cstat_ingest::measure_blend_accuracy::run(
+                &db.pool,
+                &predictor,
+                &years,
+                dump.as_deref(),
+            )
+            .await?;
         }
 
         Commands::Transfers {

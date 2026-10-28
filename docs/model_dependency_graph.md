@@ -276,7 +276,8 @@ and are now Rust `const`s:
 | `PROGRAM_ANCHOR_SHRINK` (1.0) | `roster_projection.rs` | `experiments/program_anchor_era_diagnostic.py` |
 | `PRESEASON_PEAK_WEIGHT` (0.70) | `projection.rs` | `cstat-ingest measure-blend-accuracy` |
 | `PRESEASON_DECAY_DAYS` (42) | `projection.rs` | same |
-| `PRESEASON_HOME_COURT_ADVANTAGE` (3.5) | `projection.rs` | same |
+| `PRESEASON_HCA` (3.5) | `projection.rs` | same |
+| `PRESEASON_SLOPE` (1.0) | `projection.rs` | same (slope axis since #390) |
 | `PRESEASON_ONLY_SLOPE` (0.59) | `projection.rs` | `experiments/experiment_preseason_margin_calibration.py` |
 | `PRESEASON_ONLY_HCA` (3.2) | `projection.rs` | same |
 | `PRESEASON_ONLY_SIGMA` (11.1) | `projection.rs` | same |
@@ -284,18 +285,23 @@ and are now Rust `const`s:
 The last three are the **preseason-only** regime (#387): the map from a
 projected AdjEM difference to a game margin when the season has not started and
 the projection is the whole forecast, with no model leg to blend. They are
-separate from the three above them on purpose, and the reason is the finding
-that produced them. `fetch_preseason_margin` serves the AdjEM *difference* at
-unit scale — no possession conversion, no attenuation for forecast error — and
-measured walk-forward over 25,501 games that over-predicts the home side by
-**+1.73 points pooled and +6.56 on games with a 15-point projected gap**.
-`measure-blend-accuracy` never saw it because its grid searches `hca × w_max ×
-end_day` and never a slope, so the blend's 0.70 weight and the pit leg absorbed
-part of the error. Re-scaling the shared leg would move every served
-early-season prediction and every `game_projections` row and require
-re-deriving the schedule against a changed leg, so the preseason-only regime
-carries its own constants and the blend leg is unchanged — tracked as its own
-change in #390.
+separate from the blend's constants on purpose. Served **alone**, the AdjEM
+difference at unit scale — no possession conversion, no attenuation for
+forecast error — over-predicts the home side by **+1.73 points pooled and
++6.56 on games with a 15-point projected gap** (walk-forward, 25,501 games), so
+this regime shrinks it to 0.59.
+
+**The blend leg keeps a slope of 1.0, and that is measured, not inherited.**
+#390 assumed the blend had the same scale error, hidden only because
+`measure-blend-accuracy` had no slope axis. The tool now has one, and the
+answer is no: in the first three weeks the *model* leg is compressed toward
+zero — the actual margin runs ~3.2× / 3.0× / 2.3× the model margin in weeks
+1 / 2 / 3, ~1.0× from week 5 — and the unit-scale leg's over-statement is what
+cancels it. The served blend is unbiased (−0.16 pooled, −0.5 on 15-point
+gaps); dropping the 0.59 leg in moves the wide-gap bias to −4.6. In a two-leg
+mix only `w·slope` and `1 − w` are identified, so "the right slope" is a
+property of the pair, and the two regimes legitimately disagree about it.
+Numbers in the blend schedule section below.
 
 `PRESEASON_ONLY_SIGMA` is the one Layer 4 constant that is not a margin
 parameter: it is the residual stddev feeding `margin_to_win_prob`, fit by
@@ -342,7 +348,7 @@ materially, run both (the current values were last confirmed 2026-07-27, below):
 
 # From the REPO ROOT — MODEL_DIR defaults to the relative `training/models`,
 # so this fails with "margin_model.onnx does not exist" from anywhere else.
-cargo run --release --bin cstat-ingest -- measure-blend-accuracy --years 2024,2025,2026
+cargo run --release --bin cstat-ingest -- measure-blend-accuracy --years 2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026
 ```
 
 Pass `--dump` explicitly. `load_backtest()`'s fallback picks the newest dump by
@@ -406,8 +412,29 @@ i.e. a deliberate rounding rather than a stale value.
 
 #### Preseason blend schedule
 
-`measure-blend-accuracy --years 2024,2025,2026`, 17,176 games scored, 11,107 in
-the shared subset where both legs exist:
+**Re-derived 2026-10-27 with the slope axis (#390)** —
+`measure-blend-accuracy --years 2016,…,2026`, 27,960 games in the first 84
+days with both legs (the window that decides every schedule on the grid;
+later games carry the model leg alone under all of them). Walk-forward is fit
+on seasons < S and scored on S, S = 2018..2026, 22,411 games:
+
+| blend | pooled MAE | walk-forward MAE | vs shipped (WF) |
+|---|---|---|---|
+| model leg only | 9.445 | | |
+| **shipped (slope 1.0, HCA 3.5, w 0.70, end 42)** | **8.938** | **9.023** | |
+| schedule refit, leg held at shipped | 8.932 (w 0.60, end 56) | 9.024 | +0.002, z +0.6 |
+| leg-alone calibration (0.59 / 3.2), shipped schedule | 9.083 | | +0.146 pooled, z +12.6 |
+| schedule refit around the 0.59 / 3.2 leg | 8.981 (w 1.00, end 63) | 9.073 | +0.050, z +5.3 |
+| free joint fit (slope × HCA × w × end) | 8.932 (slope 1.0) | 9.029 | +0.006, z +1.8 |
+
+Every constant stays. The free joint fit keeps slope 1.0 pooled; the 0.60/56
+schedule wins pooled by 0.006 (z −1.6) and loses walk-forward, so it is noise.
+A per-week regression with free coefficients on both legs, fit walk-forward,
+ties shipped too (−0.009, z −0.4), so this family has no headroom left. Run the
+tool with `--dump legs.csv` to ask a question the report does not.
+
+The earlier calibration, kept for the record — `--years 2024,2025,2026`,
+17,176 games scored, 11,107 in the shared subset where both legs exist:
 
 | schedule | pooled blended MAE |
 |---|---|
@@ -417,7 +444,7 @@ the shared subset where both legs exist:
 | grid optimum (w=0.70, end=49, HCA=3.5) | 8.82 |
 | per-week oracle (ceiling) | 8.78 |
 
-`PRESEASON_PEAK_WEIGHT = 0.70` and `PRESEASON_HOME_COURT_ADVANTAGE = 3.5` are
+`PRESEASON_PEAK_WEIGHT = 0.70` and `PRESEASON_HCA = 3.5` (then `PRESEASON_HOME_COURT_ADVANTAGE`) are
 both exactly optimal. `PRESEASON_DECAY_DAYS = 42` versus the grid's 49 is worth
 nothing pooled — the two tie at 8.82 — and per season the gap is 0.00 / 0.00 /
 0.01 (2024 / 2025 / 2026). Total remaining headroom to the per-week oracle is
