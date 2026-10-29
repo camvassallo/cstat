@@ -380,6 +380,9 @@ pub fn resolve_reason(
                 for v in rows.iter_mut().filter(|v| hits(v)) {
                     if let Some(obj) = v.as_object_mut() {
                         obj.insert("status".into(), serde_json::Value::from("granted"));
+                        // A contested player's weight means nothing once he is
+                        // granted, and the loader rejects it on a granted row.
+                        obj.remove("probability");
                         let note = obj
                             .get("note")
                             .and_then(|n| n.as_str())
@@ -496,6 +499,40 @@ mod tests {
             first_key.starts_with("\"name\""),
             "identity key must lead each row, got {first_key:?}"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn granting_drops_the_contested_weight() {
+        // Otherwise a ruling applied with `--as granted` leaves a file the
+        // loader refuses (a probability on a granted row).
+        let dir = scratch("weight");
+        let mut parsed: Vec<serde_json::Value> = serde_json::from_str(FILE).unwrap();
+        for v in parsed.iter_mut().filter(|v| v["status"] == "contested") {
+            v.as_object_mut()
+                .unwrap()
+                .insert("probability".into(), serde_json::Value::from(0.2));
+        }
+        // One contested row outside the cohort keeps its weight.
+        parsed.push(serde_json::json!({"name": "D Four", "current_team": "Yale",
+            "status": "contested", "reason": "5in5", "probability": 0.2}));
+        std::fs::write(
+            dir.join("2026_returns.json"),
+            render_returns(&parsed).unwrap(),
+        )
+        .unwrap();
+
+        resolve_reason(&dir, "injunction", None, Resolution::Granted, "R.").unwrap();
+        let out = rows(&dir);
+        assert!(out.iter().any(|v| v["name"] == "D Four"));
+        for v in out {
+            let granted = v["status"] == "granted";
+            assert_eq!(
+                v.get("probability").is_some(),
+                !granted,
+                "only rows left contested keep their weight: {v}"
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
