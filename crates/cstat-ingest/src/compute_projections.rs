@@ -28,27 +28,26 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Midpoint return-probability for an in-season projection. By the time a
-/// season is underway the draft-uncertain cohort is resolved (departed
-/// players are gone, returners are on the roster), so `compose_all_projections`
-/// leaves that half of the `uncertain` bucket empty → floor == ceiling and this
-/// weight cancels. 0.5 is the neutral default that matches the projections
-/// route's empty-cohort behavior.
-///
-/// The draft half is no longer the whole bucket (issue #220): unsettled 5-in-5
-/// eligibility also lands there, and unlike a draft declaration it does NOT
-/// reliably resolve before tipoff — an injunction is a mid-season state, and
-/// the nightly portal refresh can add a withdrawn senior on any night. So the
-/// "empties, therefore cancels" argument no longer covers the bucket, and this
-/// constant is load-bearing rather than vestigial.
-///
-/// It stays correct because `/api/projections` weights that cohort at
-/// `ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY`, which is also 0.5. The two
-/// values are coupled on purpose: the module doc above claims the persisted
-/// midpoint equals the served one by construction, and if either moves without
-/// the other, `team_preseason_projection` — which feeds the preseason × pit
-/// predict blend — silently stops matching the projections page.
-const IN_SEASON_P_RETURN: f32 = 0.5;
+/// Midpoint return-probability for one team: the mean, over its uncertain
+/// bucket, of each player's own weight — 0.5 for unsettled eligibility, the
+/// curated share for a partial-season absence (#219), and 0.5 for a draft
+/// declarant. That last one is where this can differ from `/api/projections`,
+/// which reads draft declarants off the mock board; the draft half of the
+/// bucket is empty once the withdrawal deadline passes, which is the only time
+/// this table is written for a forecast season. Every other weight comes from
+/// `intrinsic_return_probability`, the function the route also uses, so the
+/// materialized anchor equals the served midpoint by construction.
+fn team_p_return(p: &cstat_core::roster_projection::ProjectedRoster) -> f32 {
+    if p.uncertain.is_empty() {
+        return 0.5;
+    }
+    let sum: f32 = p
+        .uncertain
+        .iter()
+        .map(|(_, u)| cstat_core::roster_projection::intrinsic_return_probability(u).unwrap_or(0.5))
+        .sum();
+    sum / p.uncertain.len() as f32
+}
 
 /// Base-season AdjEM per team (the baseline the shrink blends toward),
 /// cast to f32 to match `score_projection_adj_em`'s signature.
@@ -311,7 +310,7 @@ pub async fn run(
         for p in &projections {
             let baseline = baseline_map.get(&p.team_id).copied();
             let Some((floor, ceiling, midpoint)) =
-                score_projection_adj_em(p, predictor, baseline, IN_SEASON_P_RETURN, &projected_cam)
+                score_projection_adj_em(p, predictor, baseline, team_p_return(p), &projected_cam)
             else {
                 skipped_thin += 1;
                 continue;

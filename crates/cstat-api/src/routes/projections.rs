@@ -376,22 +376,6 @@ fn return_probability_from_pick(pick: Option<i32>) -> f32 {
     }
 }
 
-/// Return probability for a player whose *eligibility* is unsettled rather
-/// than his draft status (issue #220). Deliberately the neutral 0.5: a waiver
-/// decision or an injunction is a genuine coin-flip we have no feed for, and
-/// inventing a tuned constant would assert precision we don't have.
-///
-/// It is also the value that keeps `compute_projections::IN_SEASON_P_RETURN`
-/// honest. That constant hard-codes 0.5 on the argument that the uncertain
-/// bucket empties once a season is underway — true of draft declarants, false
-/// of contested eligibility, which can stay open into the season (an
-/// injunction is a mid-season state by definition) and which the new in-season
-/// portal refresh can add to on any night. Weighting this cohort at 0.5 is
-/// what keeps the materialized `team_preseason_projection` equal to the served
-/// `/api/projections` midpoint, which the module doc there claims holds by
-/// construction.
-const ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY: f32 = 0.5;
-
 /// Mean return probability across a team's uncertain cohort. Used to
 /// probability-weight the floor/ceiling midpoint — a flat 50/50 average
 /// over-penalizes exactly the draft-talent-heavy (i.e. top) teams. Returns
@@ -421,9 +405,10 @@ fn mean_return_probability(
     sum / p.uncertain.len() as f32
 }
 
-/// Mean return probability over the DRAFT declarants only — the weight the
-/// eligibility toggle blends them at while the eligibility cohort is fixed
-/// one way (#346). `0.5` when there are none, where it cancels.
+/// Mean return probability over the NON-eligibility half of the bucket — draft
+/// declarants and partial-season absences (#219) — the weight the eligibility
+/// toggle blends them at while the eligibility cohort is fixed one way (#346).
+/// `0.5` when there are none, where it cancels.
 fn mean_draft_return_probability(
     p: &ProjectedRoster,
     mock_by_name: &std::collections::HashMap<String, (i32, String)>,
@@ -431,7 +416,7 @@ fn mean_draft_return_probability(
     let draft: Vec<f32> = p
         .uncertain
         .iter()
-        .filter(|(_, u)| u.cause == UncertainCause::DraftDeclared)
+        .filter(|(_, u)| u.cause != UncertainCause::EligibilityUnsettled)
         .map(|(_, u)| player_return_probability(u, mock_by_name))
         .collect();
     if draft.is_empty() {
@@ -447,15 +432,15 @@ fn player_return_probability(
     u: &cstat_core::roster_projection::UncertainPlayer,
     mock_by_name: &std::collections::HashMap<String, (i32, String)>,
 ) -> f32 {
-    match u.cause {
-        UncertainCause::DraftDeclared => {
-            let pick = mock_by_name
-                .get(&normalize_player_name(&u.name))
-                .map(|(pick, _)| *pick);
-            return_probability_from_pick(pick)
-        }
-        UncertainCause::EligibilityUnsettled => ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY,
-    }
+    // Eligibility and partial-availability weights live in core, shared with
+    // `compute-projections` so the served midpoint and the materialized
+    // anchor cannot drift; only the mock-board lookup is route-local.
+    cstat_core::roster_projection::intrinsic_return_probability(u).unwrap_or_else(|| {
+        let pick = mock_by_name
+            .get(&normalize_player_name(&u.name))
+            .map(|(pick, _)| *pick);
+        return_probability_from_pick(pick)
+    })
 }
 
 /// Load the Tankathon mock-draft snapshot for `base_season` into a
@@ -1901,7 +1886,7 @@ async fn projection_team_detail(
                 UncertainCause::DraftDeclared => {
                     mock_by_name.get(&normalize_player_name(&meta.name))
                 }
-                UncertainCause::EligibilityUnsettled => None,
+                UncertainCause::EligibilityUnsettled | UncertainCause::PartialAvailability => None,
             };
             let source = meta
                 .incoming_from
@@ -1921,6 +1906,7 @@ async fn projection_team_detail(
                 "projected_campom_upper": upper,
                 "mock_pick": mock_hit.map(|(p, _)| *p),
                 "mock_team": mock_hit.map(|(_, t)| t.clone()),
+                "availability": meta.availability,
             })
         })
         .collect();
@@ -2513,6 +2499,7 @@ mod tests {
             reason: "…".into(),
             cause,
             incoming_from: None,
+            availability: None,
         };
         // Same name, on the board as a projected top-5 pick.
         let mut mock = std::collections::HashMap::new();
@@ -2533,13 +2520,21 @@ mod tests {
         // rating a good senior — which is not evidence about a waiver desk.
         assert!(
             (player_return_probability(&uncertain(UncertainCause::EligibilityUnsettled), &mock)
-                - ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY)
+                - cstat_core::roster_projection::ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY)
                 .abs()
                 < 1e-6
         );
         // And it is the neutral 0.5, which is what keeps the materialized
         // `team_preseason_projection` equal to the served midpoint.
-        assert!((ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY - 0.5).abs() < 1e-6);
+        assert!(
+            (cstat_core::roster_projection::ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY - 0.5).abs()
+                < 1e-6
+        );
+        // A partial-season absence is weighted by his curated share, and the
+        // mock board never touches him either.
+        let mut partial = uncertain(UncertainCause::PartialAvailability);
+        partial.availability = Some(0.55);
+        assert!((player_return_probability(&partial, &mock) - 0.55).abs() < 1e-6);
     }
 
     #[test]
@@ -2552,6 +2547,7 @@ mod tests {
             reason: "…".into(),
             cause,
             incoming_from: None,
+            availability: None,
         };
         let row = cstat_core::roster_features::PlayerRow {
             player_id: Uuid::new_v4(),

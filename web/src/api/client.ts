@@ -948,7 +948,10 @@ export interface ProjectedDeparture {
 // (issue #220) is a senior whose fifth year is in front of a waiver desk or a
 // court; the draft board says nothing about him, so the API sends no mock
 // fields and the UI must not render a mock chip.
-export type UncertainCause = 'draft_declared' | 'eligibility_unsettled';
+// `partial_availability` (#219) is on the roster but out for part of the
+// season with a reported return; `availability` is the share he is expected
+// to play, which is also the weight his team's projection gives him.
+export type UncertainCause = 'draft_declared' | 'eligibility_unsettled' | 'partial_availability';
 
 export interface ProjectedUncertain {
   player_id: string;
@@ -981,6 +984,8 @@ export interface ProjectedUncertain {
   /// NBA team code from the same snapshot (e.g. "WAS"). Surfaces in the
   /// tooltip alongside mock_pick.
   mock_team?: string | null;
+  /// `partial_availability` only: expected share of the season played (0–1).
+  availability?: number | null;
 }
 
 export function fetchProjectedTeam(year: number, teamId: string) {

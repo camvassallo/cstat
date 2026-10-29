@@ -210,6 +210,10 @@ pub struct UncertainPlayer {
     /// "last season's value" nor under a Departures heading — the serving
     /// layer needs this to keep him out of both.
     pub incoming_from: Option<Uuid>,
+    /// [`UncertainCause::PartialAvailability`] only: the share of the target
+    /// season he is expected to play, which is also the weight his team's
+    /// with/without blend gives the "with" roster. `None` on every other cause.
+    pub availability: Option<f32>,
 }
 
 /// Why a player is in the `uncertain` bucket. Behaviour-bearing: it selects
@@ -236,7 +240,32 @@ pub enum UncertainCause {
     /// Resolution is a waiver desk or a court, about which a mock draft says
     /// nothing at all.
     EligibilityUnsettled,
+    /// On the roster but out for PART of the target season with a reported
+    /// return (#219: JT Toppin, ACL, targeting late December). Not a coin flip
+    /// about whether he is there — he will be, for a known share of the
+    /// season — so the team is the availability-weighted mix of its rosters
+    /// with and without him. Weighted by [`UncertainPlayer::availability`].
+    PartialAvailability,
 }
+
+/// Return probability for an uncertain player whose cause carries its own
+/// weight: `0.5` for unsettled eligibility (a genuine coin flip with no feed),
+/// the curated availability for a partial absence. `None` for a draft
+/// declarant, whose weight comes from the mock board the caller holds.
+///
+/// Shared by `/api/projections` and `compute-projections` so the served
+/// midpoint and the materialized `team_preseason_projection` cannot drift.
+pub fn intrinsic_return_probability(u: &UncertainPlayer) -> Option<f32> {
+    match u.cause {
+        UncertainCause::DraftDeclared => None,
+        UncertainCause::EligibilityUnsettled => Some(ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY),
+        UncertainCause::PartialAvailability => Some(u.availability.unwrap_or(0.5)),
+    }
+}
+
+/// See [`intrinsic_return_probability`]. Deliberately the neutral 0.5: a waiver
+/// decision or an injunction is a coin flip we have no feed for.
+pub const ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY: f32 = 0.5;
 
 /// Audit-trail metadata for one incoming HS recruit. The synthesized
 /// PlayerRow lives alongside in [`ProjectedRoster::recruits`]; this
@@ -506,7 +535,10 @@ impl ProjectedRoster {
                 .iter()
                 .filter(|(_, u)| match u.cause {
                     UncertainCause::EligibilityUnsettled => eligibility,
-                    UncertainCause::DraftDeclared => draft,
+                    // A partial absence is not an eligibility question, so it
+                    // rides with the non-eligibility half and the eligibility
+                    // toggle (#346) leaves it blended at its own weight.
+                    UncertainCause::DraftDeclared | UncertainCause::PartialAvailability => draft,
                 })
                 .map(|(p, _)| p.clone()),
         );
@@ -758,6 +790,13 @@ pub struct PlayerAbsence {
     pub current_team: String,
     /// Display-only ("torn ACL").
     pub injury: String,
+    /// Share of the target season he is expected to play, strictly between 0
+    /// and 1, when he is out for PART of it with a reported return (#219).
+    /// `None` = out for the whole season. A partial row keeps the player on
+    /// the roster as an uncertain [`UncertainCause::PartialAvailability`]
+    /// entry instead of removing him.
+    #[serde(default)]
+    pub availability: Option<f32>,
     /// Provenance — a URL (RotoWire player page preferred). Not served.
     #[serde(default)]
     pub source: Option<String>,
@@ -784,7 +823,7 @@ pub async fn fetch_player_absences(
     year: i32,
 ) -> Result<Vec<PlayerAbsence>, sqlx::Error> {
     sqlx::query_as::<_, PlayerAbsence>(
-        "SELECT player_name AS name, current_team, injury, source, note \
+        "SELECT player_name AS name, current_team, injury, availability, source, note \
          FROM player_absences WHERE year = $1",
     )
     .bind(year)
@@ -1204,6 +1243,29 @@ impl DepartureCam {
     }
 }
 
+/// The uncertain-bucket entry for a player out for part of the season (#219).
+fn partial_availability(
+    player_id: Uuid,
+    name: &str,
+    absence: &PlayerAbsence,
+    share: f32,
+    incoming_from: Option<Uuid>,
+) -> UncertainPlayer {
+    let share = share.clamp(0.0, 1.0);
+    UncertainPlayer {
+        player_id,
+        name: name.to_string(),
+        reason: format!(
+            "out for part of the season ({}), expected to play about {:.0}% of it",
+            absence.injury,
+            share * 100.0
+        ),
+        cause: UncertainCause::PartialAvailability,
+        incoming_from,
+        availability: Some(share),
+    }
+}
+
 /// `base_season` = N (the most recently completed season; for cstat's
 /// 2026 = 2025-26 college season, the 2026 portal class moves players
 /// from N=2026 into N+1=2027). `draft_entrants` is the optional
@@ -1442,6 +1504,10 @@ pub async fn compose_all_projections(
     // per-team loop (over base-season `teams`) never visits, so they only ever
     // surface as arrivals at their destination — never as a returning/outbound
     // member of some stale team.
+    // Names ride alongside so a curated absence (#219) can find a sat-out
+    // arrival at his new school: Ty Rodgers, Boise St., did not play in the
+    // base season, so no base-season roster row carries his name.
+    let mut satout_names: HashMap<Uuid, String> = HashMap::new();
     let satout_lookup: HashMap<Uuid, PlayerRow> = {
         let known: HashSet<Uuid> = player_team.keys().copied().collect();
         let satout_ids: Vec<Uuid> = transfers
@@ -1496,6 +1562,7 @@ pub async fn compose_all_projections(
             for row in satout_rows {
                 let pid = row.player_id;
                 player_team.insert(pid, row.team_id);
+                satout_names.insert(pid, row.player_name.clone());
                 lookup.insert(pid, row.into_player_row());
             }
         }
@@ -1841,12 +1908,14 @@ pub async fn compose_all_projections(
     // Fold in the sat-out transfers (issue #146) so their destination's
     // `arrivals` lookup resolves to the prior-season source PlayerRow.
     player_row_lookup.extend(satout_lookup);
-    // Display names for the contested-arrival split below. Base-season roster
-    // only — a curated return row can only ever match a base-season player, so
-    // a sat-out arrival never needs one.
+    // Display names for the arrival splits below. The base-season roster, plus
+    // the sat-out arrivals so an absence row can match one. A curated RETURN
+    // row still only ever matches a base-season player: `eligibility_returns`
+    // is keyed by base-season ids, so a sat-out name never meets it.
     let name_by_pid: HashMap<Uuid, &str> = roster_by_team
         .values()
         .flat_map(|rows| rows.iter().map(|(r, name)| (r.player_id, name.as_str())))
+        .chain(satout_names.iter().map(|(pid, name)| (*pid, name.as_str())))
         .collect();
 
     let mut out: Vec<ProjectedRoster> = Vec::with_capacity(teams.len());
@@ -1945,6 +2014,16 @@ pub async fn compose_all_projections(
             let absence_key = (team.id, normalize_player_name(name));
             if let Some(a) = absences.get(&absence_key) {
                 absences_matched.insert(absence_key);
+                // Out for PART of the season (#219): still on the roster, so not
+                // turnover, and blended in at his available share via the
+                // uncertain bucket rather than removed.
+                if let Some(share) = a.availability {
+                    uncertain.push((
+                        row.clone().into_player_row(),
+                        partial_availability(pid, name, a, share, None),
+                    ));
+                    continue;
+                }
                 departures.push(DepartureReason::OutForSeason {
                     player_id: pid,
                     name: name.clone(),
@@ -1980,6 +2059,7 @@ pub async fn compose_all_projections(
                                 reason: format!("eligibility contested ({reason})"),
                                 cause: UncertainCause::EligibilityUnsettled,
                                 incoming_from: None,
+                                availability: None,
                             },
                         ));
                     }
@@ -2036,6 +2116,7 @@ pub async fn compose_all_projections(
                             .into(),
                         cause: UncertainCause::EligibilityUnsettled,
                         incoming_from: None,
+                        availability: None,
                     },
                 ));
                 continue;
@@ -2060,6 +2141,7 @@ pub async fn compose_all_projections(
                         reason: "declared for NBA draft (status pending)".into(),
                         cause: UncertainCause::DraftDeclared,
                         incoming_from: None,
+                        availability: None,
                     },
                 ));
                 continue;
@@ -2103,6 +2185,19 @@ pub async fn compose_all_projections(
                 let absence_key = (team.id, normalize_player_name(name));
                 if let Some(a) = absences.get(&absence_key) {
                     absences_matched.insert(absence_key);
+                    if let Some(share) = a.availability {
+                        uncertain.push((
+                            row,
+                            partial_availability(
+                                *pid,
+                                name,
+                                a,
+                                share,
+                                player_team.get(pid).copied(),
+                            ),
+                        ));
+                        continue;
+                    }
                     departures.push(DepartureReason::OutForSeason {
                         player_id: *pid,
                         name: (*name).to_string(),
@@ -2122,6 +2217,7 @@ pub async fn compose_all_projections(
                             reason: format!("eligibility contested ({reason})"),
                             cause: UncertainCause::EligibilityUnsettled,
                             incoming_from: player_team.get(pid).copied(),
+                            availability: None,
                         },
                     ));
                 }
@@ -2141,6 +2237,16 @@ pub async fn compose_all_projections(
                 return true;
             };
             absences_matched.insert(absence_key);
+            // A partial absence needs a player row the uncertain bucket can
+            // link and project, which a recruit does not have. None is curated
+            // today; if one is, he scores at full value and says so.
+            if a.availability.is_some() {
+                tracing::warn!(
+                    player = %meta.name,
+                    "partial availability is not supported for an incoming recruit; counted in full"
+                );
+                return true;
+            }
             departures.push(DepartureReason::OutForSeason {
                 player_id: meta.recruit_id,
                 name: meta.name.clone(),
@@ -2810,6 +2916,7 @@ mod tests {
                     reason: "x".into(),
                     cause,
                     incoming_from: None,
+                    availability: None,
                 },
             )
         };
@@ -2850,6 +2957,49 @@ mod tests {
     }
 
     #[test]
+    fn partial_availability_rides_the_non_eligibility_half_at_its_own_weight() {
+        let part = pr(25.0, Some(12.0));
+        let mut u = UncertainPlayer {
+            player_id: part.player_id,
+            name: "x".into(),
+            reason: "x".into(),
+            cause: UncertainCause::PartialAvailability,
+            incoming_from: None,
+            availability: Some(0.55),
+        };
+        let p = ProjectedRoster {
+            team_id: Uuid::new_v4(),
+            team_name: "T".into(),
+            team_full_name: "T".into(),
+            returning: vec![pr(30.0, Some(5.0))],
+            arrivals: vec![],
+            recruits: vec![],
+            uncertain: vec![(part.clone(), u.clone())],
+            departures: vec![],
+            outbound_cam_v3_sum: 0.0,
+            inbound_cam_v3_sum: 0.0,
+            departures_cam_v3_sum: 0.0,
+            departures_abs_cam_v3_sum: 0.0,
+            program_level: None,
+            program_level_o: None,
+            program_level_d: None,
+        };
+        let has = |rows: Vec<PlayerRow>| rows.iter().any(|r| r.player_id == part.player_id);
+        // In the ceiling (he plays), out of the floor (he does not).
+        assert!(has(p.for_scenario(DraftScenario::Ceiling)));
+        assert!(!has(p.for_scenario(DraftScenario::Floor)));
+        // Not an eligibility case: the eligibility toggle must not switch him.
+        assert!(!p.has_eligibility_case());
+        assert!(has(p.materialize(false, true)) && !has(p.materialize(true, false)));
+        // Weighted by his availability, not the 0.5 coin flip.
+        assert!((intrinsic_return_probability(&u).unwrap() - 0.55).abs() < 1e-6);
+        u.cause = UncertainCause::EligibilityUnsettled;
+        assert!((intrinsic_return_probability(&u).unwrap() - 0.5).abs() < 1e-6);
+        u.cause = UncertainCause::DraftDeclared;
+        assert!(intrinsic_return_probability(&u).is_none());
+    }
+
+    #[test]
     fn for_scenario_includes_uncertain_only_in_ceiling() {
         let returning = vec![pr(30.0, Some(5.0))];
         let arrivals = vec![pr(25.0, Some(4.0))];
@@ -2861,6 +3011,7 @@ mod tests {
                 reason: "draft".into(),
                 cause: UncertainCause::DraftDeclared,
                 incoming_from: None,
+                availability: None,
             },
         )];
         let r = ProjectedRoster {
@@ -3164,6 +3315,7 @@ mod tests {
                 reason: "draft".into(),
                 cause: UncertainCause::DraftDeclared,
                 incoming_from: None,
+                availability: None,
             },
         )];
         let r = ProjectedRoster {

@@ -117,5 +117,69 @@
     "injury": "knee",
     "source": "https://www.rotowire.com/cbasketball/player/dj-stickman-26727",
     "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
+  },
+  {
+    "name": "JT Toppin",
+    "current_team": "Texas Tech",
+    "injury": "torn ACL (Feb 17)",
+    "availability": 0.59,
+    "source": "https://www.rotowire.com/cbasketball/player/jt-toppin-22578",
+    "note": "Return assumed at the Big 12 opener (Jan 6): 16 of Texas Tech's 27 scheduled regular-season games. Basis: Toppin told NBC Sports he is targeting a return by the end of December (via On3: https://www.on3.com/sites/red-raider-sports/news/when-will-jt-toppin-return-texas-tech-star-gives-an-update), which alone gives 17/27 = 0.63; Grant McCasland called him 'ahead of schedule' but on Oct 20 said he 'isn't close to practicing' with no timetable (Jon Rothstein), so the conference opener rather than Dec 22. Defensible range 0.44 (11 months post-surgery, Jan 17) to 0.63. Not modelled: rust on return. Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
+  },
+  {
+    "name": "David Mirkovic",
+    "current_team": "Illinois",
+    "injury": "foot surgery (Aug 4)",
+    "availability": 0.73,
+    "source": "https://sports.yahoo.com/articles/illinois-david-mirkovic-foot-walking-022520191.html",
+    "note": "Return assumed Dec 1: 22 of Illinois' 30 scheduled games. Back in a walking boot at the late-October exhibition; Brad Underwood expects him to miss regular-season games, 'out for a while', no timeframe. Nov 17 (Duke), floated as a target, would give 0.87. Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
+  },
+  {
+    "name": "Carter Welling",
+    "current_team": "Clemson",
+    "injury": "torn ACL (Mar 11)",
+    "availability": 0.61,
+    "source": "https://www.theclemsoninsider.com/2026/10/27/brownell-provides-update-on-carter-welling/",
+    "note": "Return assumed at the ACC opener (Dec 29): 17 of Clemson's 28 scheduled games. Brad Brownell (Oct 27): planning as if he is out for all of non-conference play; 'whether that's December or January'. Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
+  },
+  {
+    "name": "Killyan Toure",
+    "current_team": "Iowa St.",
+    "injury": "shoulder surgery (Aug 21)",
+    "availability": 0.59,
+    "source": "https://www.thegazette.com/sports/college/iowa-state-basketball/iowa-state-guard-killyan-toure-out-until-january-after-shoulder-surgery/article_4df257ea-346c-485a-82f1-9d5e7befdd6b.html",
+    "note": "Return assumed Jan 1: 16 of Iowa State's 27 scheduled games. Out until January, back for the second half of the season (Gazette/AP, Aug 21); no newer update. Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
+  },
+  {
+    "name": "Mikey Lewis",
+    "current_team": "Texas",
+    "injury": "fractured fifth metatarsal (surgery ~Oct 1)",
+    "availability": 0.77,
+    "source": "https://roundtable.io/sports/ncaa/texas-longhorns/news/texas-guard-mikey-lewis-to-miss-extended-time-with-foot-injury",
+    "note": "Return assumed Dec 1: 24 of Texas' 31 scheduled games. Fractured fifth metatarsal, surgery about Oct 1; out an 'extended period', not season-ending (Oct 5). About 8 weeks of recovery plus ramp-up. Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
+  },
+  {
+    "name": "Ty Rodgers",
+    "current_team": "Boise St.",
+    "injury": "torn patellar tendon (June)",
+    "availability": 0.23,
+    "source": "https://www.rotowire.com/cbasketball/player/ty-rodgers-20392",
+    "note": "Return assumed Feb 1: 7 of Boise State's 30 scheduled games. Torn patellar tendon in June, 'not expected back anytime soon', no timeline (Idaho Statesman via RotoWire, Oct 8); 6-9+ months reaches January to March. Low confidence; he may miss the season. Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
+  },
+  {
+    "name": "Parsa Fallah",
+    "current_team": "Oklahoma St.",
+    "injury": "torn ACL (Feb 24)",
+    "availability": 0.55,
+    "source": "https://www.rotowire.com/cbasketball/player/parsa-fallah-20097",
+    "note": "Return assumed Jan 1: 16 of Oklahoma State's 29 scheduled games. Working toward a return before the end of the calendar year; doctor release expected early November (Steve Lutz). His fifth year also rests on a TRO, which this row does not price in. Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
+  },
+  {
+    "name": "Tyler Harris",
+    "current_team": "UNLV",
+    "injury": "MCL (summer)",
+    "availability": 0.88,
+    "source": "https://www.rotowire.com/cbasketball/player/tyler-harris-22405",
+    "note": "Return assumed mid-November: 21 of UNLV's 24 scheduled games. Expected to miss the Nov 3 opener and needs more time than first expected (Athlon via RotoWire, Oct 23). Share = scheduled regular-season games on or after the return date / all scheduled. Researched 2026-10-29."
   }
 ]
