@@ -141,10 +141,40 @@ pub enum DepartureReason {
         name: String,
         /// Display-only ("torn ACL").
         injury: String,
-        /// `player_id` is a `recruits.id`, not a player — there is no player
-        /// page to link to.
-        is_recruit: bool,
+        /// Which roster channel he was removed from. Decides whether he is
+        /// turnover (only a returner is) and whether `player_id` has a player
+        /// page behind it (a recruit's does not).
+        origin: AbsenceOrigin,
     },
+}
+
+/// Where an [`DepartureReason::OutForSeason`] player would otherwise have been
+/// on the projected roster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbsenceOrigin {
+    /// On this team's base-season roster. Counts toward the departure sums.
+    Returner,
+    /// A portal arrival. `player_id` is his base-season id at his source team.
+    Arrival,
+    /// An incoming recruit. `player_id` is a `recruits.id`.
+    Recruit,
+}
+
+impl DepartureReason {
+    /// Whether this entry is a player the team's BASE roster loses — every
+    /// kind except an absent arrival or recruit, who were never on it. The
+    /// departure sums (`departures_cam_v3_sum` and its O/D splits) cover
+    /// exactly these.
+    pub fn is_base_roster_loss(&self) -> bool {
+        !matches!(
+            self,
+            Self::OutForSeason {
+                origin: AbsenceOrigin::Arrival | AbsenceOrigin::Recruit,
+                ..
+            }
+        )
+    }
 }
 
 impl DepartureReason {
@@ -1846,25 +1876,6 @@ pub async fn compose_all_projections(
 
         for (row, name) in rows {
             let pid = row.player_id;
-            // Out for the whole target season (issue #217)? Checked first: an
-            // absence row is keyed by THIS team, so it only ever matches a
-            // player who would otherwise be on this roster, and whatever bucket
-            // he would have landed in — returning, a granted or contested
-            // eligibility return, a declared draftee — he is not playing. Counts
-            // toward the departure sums like any other player the base roster
-            // loses for the season; the turnover weight should see it.
-            let absence_key = (team.id, normalize_player_name(name));
-            if let Some(a) = absences.get(&absence_key) {
-                absences_matched.insert(absence_key);
-                departures.push(DepartureReason::OutForSeason {
-                    player_id: pid,
-                    name: name.clone(),
-                    injury: a.injury.clone(),
-                    is_recruit: false,
-                });
-                departure_cam.add(row.cam_v3);
-                continue;
-            }
             // Left the program outside the portal and the draft? Checked FIRST,
             // ahead of all three inferred channels, so a hand-entered row always
             // wins: a portal commit who then signed pro is labelled by where he
@@ -1917,6 +1928,28 @@ pub async fn compose_all_projections(
                     name: name.clone(),
                     destination: dest,
                     destination_team_id: dest_team_id,
+                });
+                departure_cam.add(row.cam_v3);
+                continue;
+            }
+            // Out for the whole target season (issue #217)? Checked after the
+            // curated exit and the portal, both of which say he is not on this
+            // roster at all — a stale absence row keyed to a team he has left
+            // must not list him here while the portal delivers him elsewhere;
+            // it goes unmatched and is warned about instead. Ahead of every
+            // other channel: whatever bucket he would have reached — returning,
+            // a granted or contested eligibility return, a declared draftee —
+            // he is not playing. Counts toward the departure sums like any
+            // other player the base roster loses for the season; the turnover
+            // weight should see it.
+            let absence_key = (team.id, normalize_player_name(name));
+            if let Some(a) = absences.get(&absence_key) {
+                absences_matched.insert(absence_key);
+                departures.push(DepartureReason::OutForSeason {
+                    player_id: pid,
+                    name: name.clone(),
+                    injury: a.injury.clone(),
+                    origin: AbsenceOrigin::Returner,
                 });
                 departure_cam.add(row.cam_v3);
                 continue;
@@ -2074,7 +2107,7 @@ pub async fn compose_all_projections(
                         player_id: *pid,
                         name: (*name).to_string(),
                         injury: a.injury.clone(),
-                        is_recruit: false,
+                        origin: AbsenceOrigin::Arrival,
                     });
                     continue;
                 }
@@ -2112,7 +2145,7 @@ pub async fn compose_all_projections(
                 player_id: meta.recruit_id,
                 name: meta.name.clone(),
                 injury: a.injury.clone(),
-                is_recruit: true,
+                origin: AbsenceOrigin::Recruit,
             });
             false
         });

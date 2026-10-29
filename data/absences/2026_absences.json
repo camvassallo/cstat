@@ -40,5 +40,82 @@
     "injury": "torn ACL and meniscus",
     "source": "https://sports.yahoo.com/articles/bucs-basketball-mccullum-season-torn-203214484.html",
     "note": "RotoWire player page (https://www.rotowire.com/cbasketball/player/jordan-mccullum-24656) carries no injury entry yet; the report is from the local beat."
+  },
+  {
+    "name": "Marcus Allen",
+    "current_team": "Miami FL",
+    "injury": "knee",
+    "source": "https://www.rotowire.com/cbasketball/player/marcus-allen-23689",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
+  },
+  {
+    "name": "Annor Boateng",
+    "current_team": "Missouri",
+    "injury": "leg",
+    "source": "https://www.rotowire.com/cbasketball/player/annor-boateng-23687",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Leg), fetched 2026-10-28."
+  },
+  {
+    "name": "Lincoln Cosby",
+    "current_team": "Michigan",
+    "injury": "knee",
+    "source": "https://www.rotowire.com/cbasketball/player/lincoln-cosby-28120",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
+  },
+  {
+    "name": "AJ Dancler",
+    "current_team": "South Florida",
+    "injury": "knee",
+    "source": "https://www.rotowire.com/cbasketball/player/aj-dancler-25390",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
+  },
+  {
+    "name": "Jaxon Edwards",
+    "current_team": "Green Bay",
+    "injury": "knee",
+    "source": "https://www.rotowire.com/cbasketball/player/jaxon-edwards-21227",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
+  },
+  {
+    "name": "LaTrevion Fenderson",
+    "current_team": "Wisconsin",
+    "injury": "academically ineligible",
+    "source": "https://www.rotowire.com/cbasketball/player/latrevion-fenderson-28036",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Academics), fetched 2026-10-28."
+  },
+  {
+    "name": "Zac Foster",
+    "current_team": "Clemson",
+    "injury": "knee",
+    "source": "https://www.rotowire.com/cbasketball/player/zac-foster-25956",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
+  },
+  {
+    "name": "Josh Manchester",
+    "current_team": "Wisconsin",
+    "injury": "shoulder",
+    "source": "https://www.rotowire.com/cbasketball/player/josh-manchester-28035",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Shoulder), fetched 2026-10-28."
+  },
+  {
+    "name": "Grant Mordini",
+    "current_team": "Kansas",
+    "injury": "quadriceps",
+    "source": "https://www.rotowire.com/cbasketball/player/grant-mordini-28074",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Quadriceps), fetched 2026-10-28."
+  },
+  {
+    "name": "Ralph Scott",
+    "current_team": "Tennessee",
+    "injury": "knee",
+    "source": "https://www.rotowire.com/cbasketball/player/ralph-scott-28125",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
+  },
+  {
+    "name": "DJ Stickman",
+    "current_team": "Fresno St.",
+    "injury": "knee",
+    "source": "https://www.rotowire.com/cbasketball/player/dj-stickman-26727",
+    "note": "RotoWire CBB injury report, status \"Out For Season\" (Knee), fetched 2026-10-28."
   }
 ]

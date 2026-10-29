@@ -847,8 +847,16 @@ fn predict_team(
         od_sum(&mut p.returning.iter().map(|r| r.player_id));
     let (arrivals_cam_o_sum, arrivals_cam_d_sum) =
         od_sum(&mut p.arrivals.iter().map(|a| a.player_id));
-    let (departures_cam_o_sum, departures_cam_d_sum) =
-        od_sum(&mut p.departures.iter().map(|d| d.player_id()));
+    // Base-roster losses only, the same population as `departures_cam_v3_sum`:
+    // an absent arrival or recruit is listed under departures but was never
+    // on this roster, so his split must not land in these sums either.
+    let (departures_cam_o_sum, departures_cam_d_sum) = od_sum(
+        &mut p
+            .departures
+            .iter()
+            .filter(|d| d.is_base_roster_loss())
+            .map(|d| d.player_id()),
+    );
 
     // Top 5 recruits by composite_rank (NULL ranks last). Cloned so the
     // closure capture is move-friendly.
@@ -1803,7 +1811,7 @@ async fn projection_team_detail(
             let is_recruit = matches!(
                 d,
                 cstat_core::roster_projection::DepartureReason::OutForSeason {
-                    is_recruit: true,
+                    origin: cstat_core::roster_projection::AbsenceOrigin::Recruit,
                     ..
                 }
             );
