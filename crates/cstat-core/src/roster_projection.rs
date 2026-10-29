@@ -2662,9 +2662,18 @@ const STABLE_RETAINED_FULL: f32 = 0.40;
 /// all (e.g. a brand-new D-I program) — caller treats that as stable, since
 /// the stale-baseline problem doesn't apply without a baseline roster.
 pub fn retained_talent_fraction(p: &ProjectedRoster) -> Option<f32> {
+    // A returner out for part of the season (#219) is retained talent: he is
+    // on the roster, and the injury is already priced by the with/without
+    // blend. Leaving him out of this sum read an injury as roster turnover and
+    // cut the baseline weight (Texas Tech 0.70 -> 0.62 on JT Toppin alone).
+    // A partial ARRIVAL stays out, like any arrival.
+    let partial_returners = p.uncertain.iter().filter(|(_, u)| {
+        u.cause == UncertainCause::PartialAvailability && u.incoming_from.is_none()
+    });
     let returning: f32 = p
         .returning
         .iter()
+        .chain(partial_returners.map(|(row, _)| row))
         .map(|r| r.cam_v3.unwrap_or(0.0).abs() as f32)
         .sum();
     let total = returning + p.departures_abs_cam_v3_sum;
@@ -2997,6 +3006,40 @@ mod tests {
         assert!((intrinsic_return_probability(&u).unwrap() - 0.5).abs() < 1e-6);
         u.cause = UncertainCause::DraftDeclared;
         assert!(intrinsic_return_probability(&u).is_none());
+    }
+
+    #[test]
+    fn a_partial_absence_does_not_read_as_turnover() {
+        let star = pr(32.0, Some(12.0));
+        let mut p = roster_with(&[4.0, 3.0], 6.0);
+        let healthy = {
+            let mut q = p.clone();
+            q.returning.push(star.clone());
+            retained_talent_fraction(&q).unwrap()
+        };
+        p.uncertain.push((
+            star.clone(),
+            UncertainPlayer {
+                player_id: star.player_id,
+                name: "x".into(),
+                reason: "x".into(),
+                cause: UncertainCause::PartialAvailability,
+                incoming_from: None,
+                availability: Some(0.59),
+            },
+        ));
+        let hurt = retained_talent_fraction(&p).unwrap();
+        assert!((healthy - hurt).abs() < 1e-6, "{healthy} vs {hurt}");
+        assert!(
+            (transition_shrink_weight(&p) - {
+                let mut q = p.clone();
+                q.uncertain.clear();
+                q.returning.push(star);
+                transition_shrink_weight(&q)
+            })
+            .abs()
+                < 1e-6
+        );
     }
 
     #[test]
