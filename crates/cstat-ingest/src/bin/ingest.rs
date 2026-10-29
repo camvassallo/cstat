@@ -410,11 +410,18 @@ enum Commands {
     /// the currently-scheduled blend's MAE, the crossover week, and an HCA
     /// sweep. Needs `compute-projections --years YEAR` to have run first.
     MeasureBlendAccuracy {
-        /// Seasons to pool for the calibration (comma-separated). Each must be a
-        /// played season with preseason projections materialized — 2024–2026
-        /// today. Pooling all three gives the schedule grid-search more signal.
-        #[arg(long, value_delimiter = ',', default_values_t = [2024, 2025, 2026])]
+        /// Seasons to pool for the calibration (comma-separated, any order).
+        /// Each must be a played season with preseason projections
+        /// materialized. Default: every such season (2016–2026 today) — the
+        /// walk-forward trains on all earlier seasons, so a short list leaves
+        /// it with one or two folds.
+        #[arg(long, value_delimiter = ',')]
         years: Vec<i32>,
+
+        /// Also write every scored game's two legs and actual margin to this
+        /// CSV, for offline analysis without re-running the model.
+        #[arg(long)]
+        dump: Option<std::path::PathBuf>,
     },
 
     /// Compare CamPom composites in torvik_player_stats against an external reference CSV.
@@ -1271,12 +1278,18 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::MeasureBlendAccuracy { years } => {
+        Commands::MeasureBlendAccuracy { years, dump } => {
             let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
-            cstat_ingest::measure_blend_accuracy::run(&db.pool, &predictor, &years).await?;
+            cstat_ingest::measure_blend_accuracy::run(
+                &db.pool,
+                &predictor,
+                &years,
+                dump.as_deref(),
+            )
+            .await?;
         }
 
         Commands::Transfers {

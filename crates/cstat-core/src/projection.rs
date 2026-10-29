@@ -656,32 +656,71 @@ fn win_prob_at_sigma(margin: f32, sigma: f64) -> f64 {
     1.0 / (1.0 + (-z).exp())
 }
 
-/// Home-court advantage in points, added to the preseason AdjEM-diff margin
-/// for home games. The preseason projection is a *neutral* team-strength
-/// delta (the pit/predict model bakes HCA into its margin via the venue
-/// flag; the AdjEM diff does not), so the blend's preseason leg must add it
-/// explicitly. ~3.5 is the college-basketball consensus; the blend backtest
-/// (`measure-blend-accuracy`) can retune it.
-const PRESEASON_HOME_COURT_ADVANTAGE: f32 = 3.5;
+/// Home-court advantage in points, added to the blend's preseason leg for
+/// home games. The preseason projection is a *neutral* team-strength delta
+/// (the pit/predict model bakes HCA into its margin via the venue flag; the
+/// AdjEM diff does not), so the leg must add it explicitly. Fitted jointly
+/// with the slope and schedule by `measure-blend-accuracy` (#390).
+pub const PRESEASON_HCA: f32 = 3.5;
+
+/// Scale on the AdjEM difference in the blend's preseason leg. **1.0, and
+/// measured to be 1.0** — which looks like a bug and is not one.
+///
+/// On its own the unit-scale leg is badly calibrated: AdjEM is per 100
+/// possessions and the projection is a noisy forecast, so serving the
+/// difference whole over-predicts the favourite by ~10 points on games with a
+/// projected gap of 15 or more, and the leg-alone optimum is ~0.60 (the
+/// [`PRESEASON_ONLY_SLOPE`] regime, which has no second leg, uses 0.59). #390
+/// set out to apply that shrink here too, and the measurement refuted it.
+///
+/// The leg never serves alone. In the first three weeks the model leg is
+/// compressed toward zero — the actual margin runs ~3.2× / 3.0× / 2.3× the
+/// model margin in weeks 1 / 2 / 3, back to ~1.0× by week 5 — and the
+/// preseason leg's over-statement is what cancels it. The served blend is
+/// unbiased (−0.16 pooled, −0.5 on 15-point gaps). Shrinking the leg to 0.59
+/// takes the wide-gap bias to −4.6, and the best schedule around a 0.59 leg
+/// loses to this one walk-forward by +0.050 MAE (z +5.3, 8 of 9 seasons).
+/// With the slope free (searched to 1.30), the joint grid keeps 1.0, and a per-week regression
+/// with free coefficients on both legs only ties (−0.009, z −0.4). In a
+/// two-leg mix what is identified is `w·slope` and `1 − w`, not the slope
+/// alone. Measured over 27,960 games, seasons 2016–2026, first 84 days.
+///
+/// So the two regimes disagree about "the preseason margin" on purpose: the
+/// preseason-only path needs a margin that is right by itself, and the blend
+/// needs a leg that is right in combination.
+///
+/// **Scope: the completed-game leg only.** The measurement replays
+/// `BlendClock::AsOf` — the point-in-time model leg that the nightly
+/// `game_projections` sweep and `as_of_date` requests blend. Unplayed games
+/// (TeamDetail's upcoming rows, the ScoreTicker, the Predict page by default)
+/// blend on `BlendClock::Live`, over the prod bundle fed whatever the
+/// season-aggregate tables held that morning, and no replay can reconstruct
+/// that without per-day table snapshots. 1.0 there is an inference — its
+/// inputs are thinner still in November, so it is unlikely to want *less*
+/// stretch — not a measurement.
+pub const PRESEASON_SLOPE: f32 = 1.0;
 
 /// Peak weight on the PRESEASON leg, at the season open (Nov 1). Calibrated by
 /// `measure-blend-accuracy` pooled over 2024–2026: a 0.70/0.30 preseason/pit
 /// mix at tip-off beats pure preseason — the two imperfect, partly-uncorrelated
 /// legs ensemble (opening-week blended MAE 9.84 vs preseason-only 10.91).
-const PRESEASON_PEAK_WEIGHT: f32 = 0.70;
+/// Re-confirmed with the slope axis over 2016–2026 (#390): a walk-forward
+/// schedule refit ties it (+0.002, z +0.6).
+pub const PRESEASON_PEAK_WEIGHT: f32 = 0.70;
 
 /// Days after Nov 1 over which the preseason weight decays linearly to 0.
 /// Calibrated to 42 (≈ mid-December): pit overtakes preseason ~2 weeks into the
 /// season, so the old Jan-15 (75-day) endpoint kept weight on a stale prior for
 /// a month too long. The 0.70/42-day schedule lands pooled blended MAE 8.80 vs
 /// 9.01 for the old 1.0/75-day curve — within 0.03 of the per-week oracle.
-const PRESEASON_DECAY_DAYS: i64 = 42;
+pub const PRESEASON_DECAY_DAYS: i64 = 42;
 
 /// Weight on the PRESEASON projection in the early-season blend: `PEAK` at the
 /// Nov 1 open, linear decay to 0.0 over `DECAY_DAYS`, then 0.0 (pure pit).
 /// cstat-season `S` runs Nov (S−1) → Apr S, so the open is `(S−1)-11-01`.
-/// Calibrated v2 (ROADMAP §6) — see the two consts above; re-tune with
-/// `cstat-ingest measure-blend-accuracy --years 2024,2025,2026`.
+/// Calibrated v2 (ROADMAP §6), re-confirmed in #390 — see the consts above;
+/// re-tune with `cstat-ingest measure-blend-accuracy` (no `--years`: the
+/// default is every season with projections, which the walk-forward needs).
 pub fn preseason_blend_weight(as_of: NaiveDate, season: i32) -> f32 {
     let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
         return 0.0;
@@ -784,13 +823,17 @@ pub fn blend_margins(
     })
 }
 
-/// Venue adjustment applied to a preseason AdjEM difference, in points.
-pub fn preseason_venue_hca(venue: Venue) -> f32 {
-    match venue {
-        Venue::Home => PRESEASON_HOME_COURT_ADVANTAGE,
-        Venue::Away => -PRESEASON_HOME_COURT_ADVANTAGE,
+/// The blend's preseason leg (home perspective) from a projected AdjEM
+/// difference and a venue. The one place the leg's arithmetic lives: the live
+/// path and the nightly `game_projections` writer both call it, so a
+/// precomputed row and a live one cannot disagree about the leg.
+pub fn preseason_leg_margin(adj_em_diff: f32, venue: Venue) -> f32 {
+    let hca = match venue {
+        Venue::Home => PRESEASON_HCA,
+        Venue::Away => -PRESEASON_HCA,
         Venue::Neutral => 0.0,
-    }
+    };
+    PRESEASON_SLOPE * adj_em_diff + hca
 }
 
 /// Preseason game margin (home-team perspective) from the two teams'
@@ -805,16 +848,16 @@ async fn fetch_preseason_margin(
     venue: Venue,
 ) -> Option<f32> {
     let diff = fetch_preseason_adj_em_diff(pool, season, home_id, away_id).await?;
-    Some(diff + preseason_venue_hca(venue))
+    Some(preseason_leg_margin(diff, venue))
 }
 
 /// `projected_adj_em(home) − projected_adj_em(away)`, before any venue or
 /// scale adjustment. `None` when either team has no row.
 ///
 /// Split out from [`fetch_preseason_margin`] because the two regimes that read
-/// it disagree about what to do with it, on purpose: the blend leg adds a bare
-/// HCA and leaves the scale alone (the shipped, calibrated-as-a-pair form),
-/// while [`preseason_only_prediction`] applies its own slope. Sharing the
+/// it disagree about what to do with it, on purpose: the blend leg uses
+/// [`preseason_leg_margin`] (scale calibrated in combination with the model
+/// leg), while [`preseason_only_prediction`] applies its own slope. Sharing the
 /// *query* and not the arithmetic is what keeps a change to one from silently
 /// moving the other.
 async fn fetch_preseason_adj_em_diff(
@@ -848,7 +891,7 @@ async fn fetch_preseason_adj_em_diff(
 /// prediction, converting an efficiency edge per 100 possessions into points
 /// on a scoreboard.
 ///
-/// Two effects push the same way, and neither is in the blend leg's form:
+/// Two effects push the same way:
 ///
 ///   * **possessions.** AdjEM is per 100; a game is ~68, so a 10-point
 ///     efficiency edge is worth ~6.8 points of margin;
@@ -859,8 +902,7 @@ async fn fetch_preseason_adj_em_diff(
 /// Measured walk-forward (fit on seasons < S, score S, S = 2021..2026) over
 /// 25,501 completed games by
 /// `training/experiments/experiment_preseason_margin_calibration.py`. Serving
-/// the difference at unit scale — which is what
-/// [`fetch_preseason_margin`] does — over-predicts the home side by **+1.73
+/// the difference at unit scale — the blend leg's form — over-predicts the home side by **+1.73
 /// points on average and +6.56 on games with a 15-point projected gap**, which
 /// is most of a projected non-conference schedule. Calibrated: pooled MAE
 /// 10.43 → 9.61, bias +1.73 → −0.03, 6/6 seasons, paired z −27.3.
@@ -869,20 +911,17 @@ async fn fetch_preseason_adj_em_diff(
 /// the rounded value, and scoring the rounded pair as its own candidate costs
 /// nothing (MAE 9.610 vs 9.613 for the per-fold refit).
 ///
-/// **Deliberately not applied to the blend leg.** The blend's 0.70 peak weight
-/// and 42-day decay were calibrated *with* the unit-scale leg in place
-/// (`measure-blend-accuracy` grid-searches `hca × w_max × end_day`, never a
-/// slope), so the two constants absorbed part of this error. Fixing the leg
-/// means re-deriving the schedule against a changed leg and moving every
-/// served early-season prediction and every `game_projections` row — a
-/// separate change, tracked in #390.
+/// **Not applied to the blend leg, and measured not to belong there** (#390):
+/// in the blend the leg's over-statement cancels an early-season model leg
+/// that is compressed the other way, so the blend wants 1.0. See
+/// [`PRESEASON_SLOPE`].
 const PRESEASON_ONLY_SLOPE: f32 = 0.59;
 
 /// Home-court advantage for the preseason-only regime, in points.
 ///
 /// Fit alongside the slope on the same folds (3.14 → 3.36 per fold, 3.2
 /// rounded). Notably close to the blend leg's
-/// [`PRESEASON_HOME_COURT_ADVANTAGE`] of 3.5 — which is the useful part of the
+/// [`PRESEASON_HCA`] of 3.5 — which is the useful part of the
 /// result: refitting the intercept *alone*, with the scale left at 1.0, drags
 /// it down to 1.67 and still loses (MAE 10.33, z −9.4). The shipped HCA was
 /// never the problem; it was absorbing the scale error.
@@ -1325,12 +1364,26 @@ mod tests {
     }
 
     #[test]
-    fn preseason_venue_hca_is_antisymmetric() {
-        assert_eq!(preseason_venue_hca(Venue::Neutral), 0.0);
-        assert_eq!(
-            preseason_venue_hca(Venue::Home),
-            -preseason_venue_hca(Venue::Away)
-        );
+    fn preseason_leg_margin_is_antisymmetric() {
+        assert_eq!(preseason_leg_margin(0.0, Venue::Neutral), 0.0);
+        for d in [-12.0_f32, 0.0, 7.5] {
+            // Swapping home and away negates the difference and the venue, so
+            // it must negate the margin; and the venue is worth 2 × HCA.
+            let home = preseason_leg_margin(d, Venue::Home);
+            assert!((home + preseason_leg_margin(-d, Venue::Away)).abs() < 1e-4);
+            assert!(
+                (home - preseason_leg_margin(d, Venue::Away) - 2.0 * PRESEASON_HCA).abs() < 1e-4
+            );
+        }
+    }
+
+    #[test]
+    fn the_blend_leg_is_unit_scale() {
+        // Not a placeholder: #390 measured the slope and the blend wants 1.0
+        // (see `PRESEASON_SLOPE`). Changing it means re-running
+        // `measure-blend-accuracy`, whose report shows the slope that wins.
+        assert_eq!(PRESEASON_SLOPE, 1.0);
+        assert_eq!(preseason_leg_margin(10.0, Venue::Neutral), 10.0);
     }
 
     // ------------------------------------------------- preseason-only (#387)
@@ -1358,16 +1411,16 @@ mod tests {
 
     #[test]
     fn preseason_only_shrinks_the_adj_em_diff_that_the_blend_leg_serves_whole() {
-        // The bug this regime exists not to have: `fetch_preseason_margin`
-        // serves the AdjEM difference at unit scale, which over-predicts by
-        // +6.6 points on a 15-point projected gap. Calibrated, the strength
+        // Served ALONE, the blend leg's unit scale over-predicts by +6.6
+        // points on a 15-point projected gap — right inside the blend (#390),
+        // wrong as the whole forecast. Calibrated, the strength
         // term must be strictly smaller in magnitude at every gap — and the
         // wider the gap, the bigger the correction, which is why the error the
         // measurement found is concentrated in blowouts.
         let mut last = 0.0_f32;
         for d in [1.0_f32, 5.0, 10.0, 20.0, 40.0] {
             let calibrated = preseason_only_margin(d, Venue::Neutral);
-            let blend_leg = d + preseason_venue_hca(Venue::Neutral);
+            let blend_leg = preseason_leg_margin(d, Venue::Neutral);
             assert!(
                 calibrated.abs() < blend_leg.abs(),
                 "gap {d}: calibrated {calibrated} must shrink the {blend_leg} the blend leg serves"
