@@ -249,6 +249,7 @@ fn departure_name(d: &cstat_core::roster_projection::DepartureReason) -> &str {
         R::GraduatedSenior { name, .. }
         | R::Transferred { name, .. }
         | R::DraftGone { name, .. }
-        | R::LeftProgram { name, .. } => name,
+        | R::LeftProgram { name, .. }
+        | R::OutForSeason { name, .. } => name,
     }
 }

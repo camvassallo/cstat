@@ -81,15 +81,6 @@
     "note": "Named plaintiff in Steen v. NCAA (Second Judicial Circuit, Leon County, Fla.). Temporary and preliminary injunction DENIED 2026-09-11. Still a member of the Wisne class, so still contested rather than resolved. Update 2026-10-25: Renewed preliminary injunction GRANTED 2026-10-19 on an amended complaint, after the 2026-09-10 denial. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
-    "name": "Alexis Marmolejos",
-    "current_team": "Pacific",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Alonzo Dodd",
     "current_team": "Appalachian St.",
     "status": "contested",
@@ -166,9 +157,10 @@
     "current_team": "Stanford",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Illinois Chicago",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Illinois Chicago's official 2026-27 roster (listed previous school: Stanford) and absent from Stanford's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "BJ Edwards",
@@ -178,15 +170,6 @@
     "case": "Wisne v. NCAA",
     "source": "https://www.cbssports.com/college-basketball/news/top-college-basketball-players-seniors-lawsuit-ncaa-fifth-year/",
     "note": "Wisne class member (four seasons, first season 2023) who committed to a new school inside the 2026-07-31 to 2026-08-21 window the class-wide injunction was in force; the Tenth Circuit's stay makes him temporarily ineligible pending appeal, the same status as the roster-evidence cohort. Committed mover, so before this row he projected as a FIRM arrival. Committed to Oklahoma 2026-08-13; CBS listed him under the Colorado injunction on 2026-08-03. Contested, not granted: in the ceiling, out of the floor, shown as ? at the destination. Update 2026-10-25: Still stayed; Tenth Circuit argument held 2026-10-13, under advisement. Still contested."
-  },
-  {
-    "name": "Blair Thompson",
-    "current_team": "Columbia",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Bowen Hardman",
@@ -342,9 +325,10 @@
     "current_team": "UC Davis",
     "status": "granted",
     "reason": "injunction",
+    "destination": "UMKC",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on UMKC's official 2026-27 roster (listed previous school: UC Davis / Central Arkansas) and absent from UC Davis's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Cayden Charles",
@@ -410,15 +394,6 @@
     "note": "Named plaintiff in Borovicanin v. NCAA (Hamilton County Court of Common Pleas, Ohio). Preliminary injunction granted 2026-07-09, STAYED by the Ohio First District Court of Appeals 2026-08-17 pending appeal; appellate argument 2026-09-22; plaintiffs noticed an appeal to the Ohio Supreme Court 2026-09-17. Temporarily ineligible. Roster label is Jr; named Borovicanin plaintiff (Chevalier Emery Jr.). Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Ohio First District REVERSED the injunction 2026-10-02 (2026-Ohio-3885); the Ohio Supreme Court stayed that judgment 2026-10-14 and is weighing Gov. DeWine's EO 2026-04D. Whether the trial-court injunction is revived is disputed by the NCAA, so still contested. Still contested."
   },
   {
-    "name": "Chisom Okpara",
-    "current_team": "Stanford",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Also named in: Okpara v. NCAA. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Chris Howell",
     "current_team": "New Mexico",
     "status": "contested",
@@ -444,15 +419,6 @@
     "case": "Dalley v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
     "note": "Named plaintiff in Dalley v. NCAA (Pickens County Court of Common Pleas, S.C.). Preliminary injunction DENIED 2026-09-01; dismissed without prejudice 2026-09-15. These plaintiffs now ride the Wisne class appeal. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: No change; rides the Wisne appeal. Still contested."
-  },
-  {
-    "name": "Christian Richardson",
-    "current_team": "Nebraska Omaha",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Christian Winborne",
@@ -624,15 +590,6 @@
     "note": "Named plaintiff in the dismissed North Carolina suit (Okpara v. NCAA, Guilford County), whose counsel refiled its plaintiffs into the First Amended Complaint in Daley v. NCAA (Monroe Circuit Court, Ind.) on 2026-09-14 — Jayden Dawson and Malik Reneau are confirmed there by press; the full ninety-name list has not been published, so the Daley tag is an inference from counsel and confirmed names. NCAA (Monroe Circuit Court, Ind.) via the First Amended Complaint filed 2026-09-14, which added roughly ninety athletes to the original eight. TRO granted 2026-09-04 to the original plaintiffs and expired 2026-09-14; preliminary-injunction hearing held (five hours of testimony), proposed findings filed 2026-09-17, decision pending. Also named in: Koonin v. NCAA. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Preliminary injunction granted 2026-09-23 and the Court of Appeals denied a stay 2026-10-16, but the full plaintiff list is still unpublished, so the Daley tag on this row remains an inference and the row stays contested until he is confirmed as a plaintiff. Still contested."
   },
   {
-    "name": "Desmond Claude",
-    "current_team": "Washington",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Devin Ree",
     "current_team": "Jackson St.",
     "status": "contested",
@@ -649,15 +606,6 @@
     "case": "Godfrey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
     "note": "Named plaintiff in Godfrey v. NCAA (Superior Court of Cobb County, Ga.). Interlocutory injunction granted 2026-08-05, STAYED by the Georgia Court of Appeals 2026-09-09 pending appeal. Temporarily ineligible. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Still stayed by the Georgia Court of Appeals; no ruling since 2026-09-09. Still contested."
-  },
-  {
-    "name": "DJ Richards",
-    "current_team": "McNeese St.",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Dominick Nelson",
@@ -741,15 +689,6 @@
     "note": "Class-of-2022 fifth-year cohort: played 2023-2026 (four D-I seasons) and is listed on the school's published 2026-27 roster as \"Gr.\". Judge Charlotte Sweeney's 2026-07-31 class-wide injunction granted this cohort a fifth year; the Tenth Circuit STAYED that injunction on 2026-08-21, so as of 2026-08-23 they are temporarily INELIGIBLE pending appeal (weeks to months). Contested, not granted — the floor excludes him and the ceiling keeps him, which is exactly the open question. Update 2026-10-25: Still stayed; Tenth Circuit argument held 2026-10-13, under advisement. Still contested."
   },
   {
-    "name": "Elijah Saunders",
-    "current_team": "Maryland",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Elmore James",
     "current_team": "Ball St.",
     "status": "contested",
@@ -759,15 +698,6 @@
     "note": "Named plaintiff in Borovicanin v. NCAA (Hamilton County Court of Common Pleas, Ohio). Preliminary injunction granted 2026-07-09, STAYED by the Ohio First District Court of Appeals 2026-08-17 pending appeal; appellate argument 2026-09-22; plaintiffs noticed an appeal to the Ohio Supreme Court 2026-09-17. Temporarily ineligible. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Ohio First District REVERSED the injunction 2026-10-02 (2026-Ohio-3885); the Ohio Supreme Court stayed that judgment 2026-10-14 and is weighing Gov. DeWine's EO 2026-04D. Whether the trial-court injunction is revived is disputed by the NCAA, so still contested. Still contested."
   },
   {
-    "name": "Emmanuel Ogbole",
-    "current_team": "Rutgers",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Ogbole v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Ogbole v. NCAA (Westchester County Supreme Court, N.Y.). TRO granted 2026-09-17 through the hearing date. Five-year-clock dispute over part-time enrollment in Nigeria plus a COVID visa extension the NCAA itself granted. Update 2026-10-25: Preliminary injunction granted 2026-10-02. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Emmanuel Okorafor",
     "current_team": "Wichita St.",
     "status": "contested",
@@ -775,15 +705,6 @@
     "case": "Daley v. NCAA",
     "source": "https://sports.yahoo.com/articles/darrion-williams-reed-bailey-headline-172345260.html",
     "note": "Named plaintiff in the dismissed North Carolina suit (Okpara v. NCAA, Guilford County), whose counsel refiled its plaintiffs into the First Amended Complaint in Daley v. NCAA (Monroe Circuit Court, Ind.) on 2026-09-14 — Jayden Dawson and Malik Reneau are confirmed there by press; the full ninety-name list has not been published, so the Daley tag is an inference from counsel and confirmed names. NCAA (Monroe Circuit Court, Ind.) via the First Amended Complaint filed 2026-09-14, which added roughly ninety athletes to the original eight. TRO granted 2026-09-04 to the original plaintiffs and expired 2026-09-14; preliminary-injunction hearing held (five hours of testimony), proposed findings filed 2026-09-17, decision pending. Also named in: Koonin v. NCAA. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Preliminary injunction granted 2026-09-23 and the Court of Appeals denied a stay 2026-10-16, but the full plaintiff list is still unpublished, so the Daley tag on this row remains an inference and the row stays contested until he is confirmed as a plaintiff. Still contested."
-  },
-  {
-    "name": "Erik Pratt",
-    "current_team": "Stony Brook",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Pratt v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Pratt v. NCAA (New York). NCAA opposition to the preliminary injunction filed 2026-09-16, decision pending. JUCO-clock claim (COVID-era nonqualifier). Update 2026-10-25: Conditional preliminary injunction issued 2026-09-22, TRO extended through 2026-10-31; NCAA noticed an appeal 2026-10-14. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Ethan Potter",
@@ -864,15 +785,6 @@
     "note": "Named plaintiff in the dismissed North Carolina suit (Okpara v. NCAA, Guilford County), whose counsel refiled its plaintiffs into the First Amended Complaint in Daley v. NCAA (Monroe Circuit Court, Ind.) on 2026-09-14 — Jayden Dawson and Malik Reneau are confirmed there by press; the full ninety-name list has not been published, so the Daley tag is an inference from counsel and confirmed names. NCAA (Monroe Circuit Court, Ind.) via the First Amended Complaint filed 2026-09-14, which added roughly ninety athletes to the original eight. TRO granted 2026-09-04 to the original plaintiffs and expired 2026-09-14; preliminary-injunction hearing held (five hours of testimony), proposed findings filed 2026-09-17, decision pending. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Preliminary injunction granted 2026-09-23 and the Court of Appeals denied a stay 2026-10-16, but the full plaintiff list is still unpublished, so the Daley tag on this row remains an inference and the row stays contested until he is confirmed as a plaintiff. Still contested."
   },
   {
-    "name": "Guillermo Diaz Graham",
-    "current_team": "San Francisco",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Hamed Olayinka",
     "current_team": "FIU",
     "status": "granted",
@@ -898,15 +810,6 @@
     "case": "Hudson v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
     "note": "Named plaintiff in Hudson v. NCAA (Dallas County District Court, Tex.). TRO granted 2026-08-27, clarified and narrowed 2026-09-11 to plaintiffs who remain amateur-compliant; temporary-injunction hearing 2026-09-25. Not covered by the Tenth Circuit's stay. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Temporary injunction DENIED 2026-09-26; reconsideration motion pending. Still a Wisne class member. Still contested."
-  },
-  {
-    "name": "Isaiah Carr",
-    "current_team": "Drake",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Isaiah Jones",
@@ -1073,9 +976,10 @@
     "current_team": "Kansas",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Loyola Chicago",
     "case": "Daley v. NCAA",
     "source": "https://sports.yahoo.com/articles/darrion-williams-reed-bailey-headline-172345260.html",
-    "note": "Named plaintiff in the dismissed North Carolina suit (Okpara v. NCAA, Guilford County), whose counsel refiled its plaintiffs into the First Amended Complaint in Daley v. NCAA (Monroe Circuit Court, Ind.) on 2026-09-14 — Jayden Dawson and Malik Reneau are confirmed there by press; the full ninety-name list has not been published, so the Daley tag is an inference from counsel and confirmed names. NCAA (Monroe Circuit Court, Ind.) via the First Amended Complaint filed 2026-09-14, which added roughly ninety athletes to the original eight. TRO granted 2026-09-04 to the original plaintiffs and expired 2026-09-14; preliminary-injunction hearing held (five hours of testimony), proposed findings filed 2026-09-17, decision pending. Update 2026-10-25: Press-confirmed Daley plaintiff. Preliminary injunction granted 2026-09-23; Indiana Court of Appeals denied the NCAA's stay 2026-10-16. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in the dismissed North Carolina suit (Okpara v. NCAA, Guilford County), whose counsel refiled its plaintiffs into the First Amended Complaint in Daley v. NCAA (Monroe Circuit Court, Ind.) on 2026-09-14 — Jayden Dawson and Malik Reneau are confirmed there by press; the full ninety-name list has not been published, so the Daley tag is an inference from counsel and confirmed names. NCAA (Monroe Circuit Court, Ind.) via the First Amended Complaint filed 2026-09-14, which added roughly ninety athletes to the original eight. TRO granted 2026-09-04 to the original plaintiffs and expired 2026-09-14; preliminary-injunction hearing held (five hours of testimony), proposed findings filed 2026-09-17, decision pending. Update 2026-10-25: Press-confirmed Daley plaintiff. Preliminary injunction granted 2026-09-23; Indiana Court of Appeals denied the NCAA's stay 2026-10-16. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Loyola Chicago's official 2026-27 roster (listed previous school: Kansas) and absent from Kansas's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Jayden Pierre",
@@ -1118,9 +1022,10 @@
     "current_team": "Stanford",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Saint Mary's",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Saint Mary's's official 2026-27 roster (listed previous school: Stanford / Cal State Dominguez Hills) and absent from Stanford's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Jerome Brewer",
@@ -1139,35 +1044,18 @@
     "note": "Listed on the school's published 2026-27 roster as \"5th\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
   },
   {
-    "name": "Jevin Muniz",
-    "current_team": "Colorado St.",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Jevon Porter",
     "current_team": "Missouri",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Loyola Marymount",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Loyola Marymount's official 2026-27 roster (hometown matches) and absent from Missouri's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "JJ Starling",
     "current_team": "Syracuse",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
-    "name": "Jojo Murphy",
-    "current_team": "Seattle",
     "status": "granted",
     "reason": "injunction",
     "case": "Glancey v. NCAA",
@@ -1205,18 +1093,10 @@
     "current_team": "Texas",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Texas A&M",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
-    "name": "Jorge Diaz Graham",
-    "current_team": "Oregon St.",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Texas A&M's official 2026-27 roster (listed previous school: Texas) and absent from Texas's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Josh Reed",
@@ -1315,15 +1195,6 @@
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
     "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
-    "name": "Keba Keita",
-    "current_team": "BYU",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Tracker lists him as Mohamed Keba Keita. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
   },
   {
     "name": "Keegan Harvey",
@@ -1461,9 +1332,10 @@
     "current_team": "Northern Kentucky",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Louisville",
     "case": "Wells v. NCAA",
     "source": "https://sports.yahoo.com/articles/judge-grants-tro-mark-mitchell-160721204.html",
-    "note": "Named plaintiff in Wells v. NCAA (Jefferson Circuit Court, Ky.). TRO granted 2026-08-21 (Judge Brian Edwards) to all 13 plaintiffs, reopening the portal to them for one week; the NCAA has appealed nothing yet. Not covered by the Tenth Circuit's stay of the Wisne class injunction. Update 2026-10-25: Kentucky Court of Appeals dissolved the 2026-08-21 order 2026-10-02; Judge Edwards granted a NEW temporary injunction around 2026-10-16. He is press-confirmed under the new order. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Wells v. NCAA (Jefferson Circuit Court, Ky.). TRO granted 2026-08-21 (Judge Brian Edwards) to all 13 plaintiffs, reopening the portal to them for one week; the NCAA has appealed nothing yet. Not covered by the Tenth Circuit's stay of the Wisne class injunction. Update 2026-10-25: Kentucky Court of Appeals dissolved the 2026-08-21 order 2026-10-02; Judge Edwards granted a NEW temporary injunction around 2026-10-16. He is press-confirmed under the new order. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Louisville's official 2026-27 roster (listed previous school: NKU) and absent from Northern Kentucky's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Louie Jordan",
@@ -1568,9 +1440,10 @@
     "current_team": "Northern Iowa",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Northern Illinois",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Northern Illinois's official 2026-27 roster (listed previous school: Northern Iowa) and absent from Northern Iowa's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Melvin Council",
@@ -1778,15 +1651,6 @@
     "note": "Named plaintiff in the dismissed North Carolina suit (Okpara v. NCAA, Guilford County), whose counsel refiled its plaintiffs into the First Amended Complaint in Daley v. NCAA (Monroe Circuit Court, Ind.) on 2026-09-14 — Jayden Dawson and Malik Reneau are confirmed there by press; the full ninety-name list has not been published, so the Daley tag is an inference from counsel and confirmed names. NCAA (Monroe Circuit Court, Ind.) via the First Amended Complaint filed 2026-09-14, which added roughly ninety athletes to the original eight. TRO granted 2026-09-04 to the original plaintiffs and expired 2026-09-14; preliminary-injunction hearing held (five hours of testimony), proposed findings filed 2026-09-17, decision pending. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Preliminary injunction granted 2026-09-23 and the Court of Appeals denied a stay 2026-10-16, but the full plaintiff list is still unpublished, so the Daley tag on this row remains an inference and the row stays contested until he is confirmed as a plaintiff. Still contested."
   },
   {
-    "name": "Prophet Johnson",
-    "current_team": "Sacramento St.",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Rahmir Moore",
     "current_team": "Delaware St.",
     "status": "granted",
@@ -1875,15 +1739,6 @@
     "note": "Listed on the school's published 2026-27 roster as \"6th\"; captured 2026-08-23 by `cstat-ingest rosters`. NOT in the class-of-2022 cohort stayed by the Tenth Circuit on 2026-08-21 — he has a gap season in his history, so his extra year predates that ruling. Roster evidence rather than a news report; upgrade the source if one appears."
   },
   {
-    "name": "Scotty Washington",
-    "current_team": "High Point",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Also named in: Okpara v. NCAA. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Seth Trimble",
     "current_team": "North Carolina",
     "status": "granted",
@@ -1920,22 +1775,14 @@
     "note": "Named plaintiff in Godfrey v. NCAA (Superior Court of Cobb County, Ga.). Interlocutory injunction granted 2026-08-05, STAYED by the Georgia Court of Appeals 2026-09-09 pending appeal. Temporarily ineligible. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Still stayed by the Georgia Court of Appeals; no ruling since 2026-09-09. Still contested."
   },
   {
-    "name": "Taeshaud Jackson",
-    "current_team": "Fairleigh Dickinson",
-    "status": "granted",
-    "reason": "injunction",
-    "case": "Glancey v. NCAA",
-    "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
-  },
-  {
     "name": "Takai Simpkins",
     "current_team": "Oregon",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Lipscomb",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Also named in: Okpara v. NCAA. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Also named in: Okpara v. NCAA. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Lipscomb's official 2026-27 roster (listed previous school: Oregon) and absent from Oregon's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Tamin Lipsey",
@@ -1960,9 +1807,10 @@
     "current_team": "Nevada",
     "status": "granted",
     "reason": "injunction",
+    "destination": "Washington",
     "case": "Glancey v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
-    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival)."
+    "note": "Named plaintiff in Glancey v. NCAA (Santa Clara Superior Court, Cal.). TRO granted 2026-08-18; preliminary-injunction show-cause hearing 2026-09-29. Not covered by the Tenth Circuit's stay. Update 2026-10-25: Preliminary injunction granted from the bench 2026-10-20 (Judge McGowen) through 2026-27; NCAA says it will appeal, no stay on record. Granted: an in-force order, so he projects as an ordinary returner (or arrival). Update 2026-10-28: on Washington's official 2026-27 roster (listed previous school: Eastern Kentucky/Evansville/Nevada) and absent from Nevada's, so the row is a move the 247 portal feed never recorded."
   },
   {
     "name": "Tom House",
@@ -2096,5 +1944,117 @@
     "case": "Borovicanin v. NCAA",
     "source": "https://www.collegesportslitigationtracker.com/tracker",
     "note": "Named plaintiff in Borovicanin v. NCAA (Hamilton County Court of Common Pleas, Ohio). Preliminary injunction granted 2026-07-09, STAYED by the Ohio First District Court of Appeals 2026-08-17 pending appeal; appellate argument 2026-09-22; plaintiffs noticed an appeal to the Ohio Supreme Court 2026-09-17. Temporarily ineligible. Contested, not granted: in the ceiling, out of the floor, shown as ?. Update 2026-10-25: Ohio First District REVERSED the injunction 2026-10-02 (2026-Ohio-3885); the Ohio Supreme Court stayed that judgment 2026-10-14 and is weighing Gov. DeWine's EO 2026-04D. Whether the trial-court injunction is revived is disputed by the NCAA, so still contested. Still contested."
+  },
+  {
+    "name": "Elijah Mahi",
+    "current_team": "Santa Clara",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://santaclarabroncos.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"5th\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Riley Kugel",
+    "current_team": "UCF",
+    "status": "granted",
+    "reason": "injunction",
+    "source": "https://ucfknights.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"Fifth Year\"; Indiana (Monroe Circuit) temporary injunction, NCAA stay motion pending), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Tarence Guinyard",
+    "current_team": "Duquesne",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://goduquesne.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"R-Sr.\"; announced his return 2026-08-11), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Josh Reed",
+    "current_team": "Penn St.",
+    "status": "granted",
+    "reason": "injunction",
+    "source": "https://gopsusports.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"?\" class label; preliminary injunction in an Ohio suit, Penn State announced his return), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Ilias Kamardine",
+    "current_team": "Mississippi",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://olemisssports.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"Sr.\"; announced his return in March with a year of eligibility left), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Derrian Ford",
+    "current_team": "Temple",
+    "status": "granted",
+    "reason": "injunction",
+    "source": "https://owlsports.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"5th\"; granted a fifth year in a lawsuit-based ruling (Inquirer, 2026-09-10)), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Damien Mayo",
+    "current_team": "Southern Illinois",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://siusalukis.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"5th\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Dawson Baker",
+    "current_team": "BYU",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://byucougars.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"5th\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Jun Seok Yeo",
+    "current_team": "Seattle",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://goseattleu.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"Fifth Year\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Clyde Bailey",
+    "current_team": "UNC Greensboro",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://uncgspartans.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"Gr.\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Brandon Hall",
+    "current_team": "Duquesne",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://goduquesne.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"R-Sr.\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Jack Collins",
+    "current_team": "Monmouth",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://monmouthhawks.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"Gr.\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Chase Martin",
+    "current_team": "Oral Roberts",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://oruathletics.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"R-Sr.\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
+  },
+  {
+    "name": "Sami Pissis",
+    "current_team": "Alabama A&M",
+    "status": "granted",
+    "reason": "other",
+    "source": "https://aamusports.com/sports/mens-basketball/roster",
+    "note": "Senior-labelled in 2025-26 but listed on the school's official 2026-27 roster (\"Sr.\"), fetched 2026-10-28. On the roster is the school asserting he is eligible, so granted."
   }
 ]

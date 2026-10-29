@@ -124,6 +124,57 @@ pub enum DepartureReason {
         /// `None` when unknown or inapplicable (a retirement).
         destination: Option<String>,
     },
+    /// In the `player_absences` table — on this team for the target season but
+    /// out for all of it (issue #217: a torn Achilles, a medical redshirt).
+    /// Not a departure from the program; he is expected back the season after.
+    /// Listed here because the scored roster excludes him and this is the list
+    /// the team page shows for "who isn't playing".
+    ///
+    /// Reached from three places, so `player_id` is not always a base-season
+    /// player of THIS team: a returner (his own base-season id), a portal
+    /// arrival (his base-season id at his SOURCE team) or an incoming recruit
+    /// (the `recruits.id`, as on [`RecruitMeta::recruit_id`]). Only the
+    /// returner case counts toward the departure sums — the other two were
+    /// never on this team's base roster, so they are not turnover.
+    OutForSeason {
+        player_id: Uuid,
+        name: String,
+        /// Display-only ("torn ACL").
+        injury: String,
+        /// Which roster channel he was removed from. Decides whether he is
+        /// turnover (only a returner is) and whether `player_id` has a player
+        /// page behind it (a recruit's does not).
+        origin: AbsenceOrigin,
+    },
+}
+
+/// Where an [`DepartureReason::OutForSeason`] player would otherwise have been
+/// on the projected roster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbsenceOrigin {
+    /// On this team's base-season roster. Counts toward the departure sums.
+    Returner,
+    /// A portal arrival. `player_id` is his base-season id at his source team.
+    Arrival,
+    /// An incoming recruit. `player_id` is a `recruits.id`.
+    Recruit,
+}
+
+impl DepartureReason {
+    /// Whether this entry is a player the team's BASE roster loses — every
+    /// kind except an absent arrival or recruit, who were never on it. The
+    /// departure sums (`departures_cam_v3_sum` and its O/D splits) cover
+    /// exactly these.
+    pub fn is_base_roster_loss(&self) -> bool {
+        !matches!(
+            self,
+            Self::OutForSeason {
+                origin: AbsenceOrigin::Arrival | AbsenceOrigin::Recruit,
+                ..
+            }
+        )
+    }
 }
 
 impl DepartureReason {
@@ -133,7 +184,8 @@ impl DepartureReason {
             Self::GraduatedSenior { player_id, .. }
             | Self::Transferred { player_id, .. }
             | Self::DraftGone { player_id, .. }
-            | Self::LeftProgram { player_id, .. } => *player_id,
+            | Self::LeftProgram { player_id, .. }
+            | Self::OutForSeason { player_id, .. } => *player_id,
         }
     }
 }
@@ -629,6 +681,16 @@ pub struct PlayerReturn {
     /// Display-only: `5in5`, `waiver`, `injunction`, `medical`, `other`.
     #[serde(default = "default_return_reason")]
     pub reason: String,
+    /// The school he is playing for in the target season when it is NOT
+    /// `current_team` and no 247 portal row says so. Out-of-eligibility players
+    /// who signed after a court order often never enter the portal (Jordan
+    /// Pope, Texas -> Texas A&M), and without this the row asserted he was
+    /// back at the school he left. When set and resolvable, the row is treated
+    /// as an observed portal commit to this school: he departs `current_team`
+    /// and arrives here, with `status` following him as it does for any mover.
+    /// A 247 `Committed` destination still wins over it.
+    #[serde(default)]
+    pub destination: Option<String>,
     /// Provenance for the capture — a URL or outlet slug. Not served.
     #[serde(default)]
     pub source: Option<String>,
@@ -673,8 +735,57 @@ pub async fn fetch_player_returns(
     year: i32,
 ) -> Result<Vec<PlayerReturn>, sqlx::Error> {
     sqlx::query_as::<_, PlayerReturn>(
-        "SELECT player_name AS name, current_team, status, reason, source, note \
+        "SELECT player_name AS name, current_team, status, reason, destination, source, note \
          FROM player_returns WHERE year = $1",
+    )
+    .bind(year)
+    .fetch_all(pool)
+    .await
+}
+
+/// One curated season-long absence (issue #217) — a player on a target-season
+/// roster who will not play in that season. Deserializes from
+/// `data/absences/{year}_absences.json` AND maps from a `player_absences` row
+/// (the `player_name` column aliases to `name`).
+///
+/// `current_team` is the team he would play FOR in the target season: his base
+/// team for a returner, his destination for a portal arrival, his committed
+/// school for a recruit. Every row is firm — an injury with a return timeline
+/// inside the season does not belong here.
+#[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
+pub struct PlayerAbsence {
+    pub name: String,
+    pub current_team: String,
+    /// Display-only ("torn ACL").
+    pub injury: String,
+    /// Provenance — a URL (RotoWire player page preferred). Not served.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Free-text human note. Not served.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Load + parse `data/absences/{year}_absences.json`. The version-controlled
+/// capture; `cstat-ingest absences` loads it into `player_absences`, which is
+/// what the projection reads (see [`fetch_player_absences`]).
+pub fn load_player_absences(path: &Path) -> Result<Vec<PlayerAbsence>, std::io::Error> {
+    let content = std::fs::read_to_string(path)?;
+    let parsed: Vec<PlayerAbsence> = serde_json::from_str(&content)
+        .map_err(|e| std::io::Error::other(format!("parse {}: {e}", path.display())))?;
+    Ok(parsed)
+}
+
+/// DB-backed sibling of [`load_player_absences`] — the curated absences for one
+/// base season. Empty vec when nothing is loaded for `year`, which degrades to
+/// the pre-#217 behaviour (every rostered player assumed available).
+pub async fn fetch_player_absences(
+    pool: &PgPool,
+    year: i32,
+) -> Result<Vec<PlayerAbsence>, sqlx::Error> {
+    sqlx::query_as::<_, PlayerAbsence>(
+        "SELECT player_name AS name, current_team, injury, source, note \
+         FROM player_absences WHERE year = $1",
     )
     .bind(year)
     .fetch_all(pool)
@@ -1176,7 +1287,7 @@ pub async fn compose_all_projections(
     .fetch_all(pool)
     .await?;
 
-    let transfers: Vec<TransferLink> = sqlx::query_as::<_, TransferLink>(
+    let mut transfers: Vec<TransferLink> = sqlx::query_as::<_, TransferLink>(
         r#"
         SELECT cstat_player_id, destination_institution
         FROM transfers
@@ -1232,6 +1343,10 @@ pub async fn compose_all_projections(
     // it. Same trap shape as the `--seasons` default in the archetype trainer:
     // the wrong thing succeeds quietly.
     let returns_rows = fetch_player_returns(pool, base_season).await?;
+    // Curated season-long absences (issue #217). Fetched here for the same
+    // reason as the returns: a parameter is something a call site can pass
+    // `&[]` for, and that would silently score an injured player at full value.
+    let absence_rows = fetch_player_absences(pool, base_season).await?;
 
     // Recruits: HS class year = `base_season` (the spring of HS
     // graduation; class-of-2026 first plays in cstat-season 2027 = N+1).
@@ -1572,6 +1687,64 @@ pub async fn compose_all_projections(
         })
         .collect();
 
+    // A curated return with a `destination` is a move the portal feed never
+    // saw. Fold it in as a transfer link so every downstream rule — outbound
+    // from the base team, arrival at the destination, a `contested` status
+    // following him there, the portal sums — applies exactly as it does for a
+    // 247 commit, rather than re-implementing them for a second kind of mover.
+    // A 247 row WITH a destination is an observed commit and wins; a 247 entry
+    // with none is superseded (the row is the newer, more specific assertion).
+    for r in &returns_rows {
+        let Some(dest) = r.destination.as_deref().filter(|d| !d.trim().is_empty()) else {
+            continue;
+        };
+        let Some(pid) = match_player_return(r, &players_by_name, &teams) else {
+            continue;
+        };
+        if resolve_team_id(&teams, dest).is_none() {
+            tracing::warn!(
+                player = %r.name,
+                destination = dest,
+                "curated return destination does not resolve to a team; treating as a stay"
+            );
+            continue;
+        }
+        let has_observed_commit = transfers.iter().any(|t| {
+            t.cstat_player_id == Some(pid)
+                && t.destination_institution
+                    .as_deref()
+                    .is_some_and(|d| !d.trim().is_empty())
+        });
+        if has_observed_commit {
+            continue;
+        }
+        transfers.retain(|t| t.cstat_player_id != Some(pid));
+        transfers.push(TransferLink {
+            cstat_player_id: Some(pid),
+            destination_institution: Some(dest.to_string()),
+        });
+    }
+
+    // Season-long absences keyed by (target-season team, normalized name). The
+    // team is the one he would play for, so the same key catches a returner, a
+    // portal arrival and a recruit. Unmatched rows are warned about after the
+    // per-team loop, mirroring how a dead returns row is surfaced.
+    let absences: HashMap<(Uuid, String), &PlayerAbsence> = absence_rows
+        .iter()
+        .filter_map(|a| {
+            let Some(team_id) = resolve_team_id(&teams, &a.current_team) else {
+                tracing::warn!(
+                    player = %a.name,
+                    team = %a.current_team,
+                    "season-long absence names a team that does not resolve"
+                );
+                return None;
+            };
+            Some(((team_id, normalize_player_name(&a.name)), a))
+        })
+        .collect();
+    let mut absences_matched: HashSet<(Uuid, String)> = HashSet::new();
+
     // Transfers: bucket outbound by source_team_id (= which team is
     // losing a player) and incoming by destination_team_id (= which
     // team is gaining one). The route's existing ingestion populated
@@ -1759,6 +1932,28 @@ pub async fn compose_all_projections(
                 departure_cam.add(row.cam_v3);
                 continue;
             }
+            // Out for the whole target season (issue #217)? Checked after the
+            // curated exit and the portal, both of which say he is not on this
+            // roster at all — a stale absence row keyed to a team he has left
+            // must not list him here while the portal delivers him elsewhere;
+            // it goes unmatched and is warned about instead. Ahead of every
+            // other channel: whatever bucket he would have reached — returning,
+            // a granted or contested eligibility return, a declared draftee —
+            // he is not playing. Counts toward the departure sums like any
+            // other player the base roster loses for the season; the turnover
+            // weight should see it.
+            let absence_key = (team.id, normalize_player_name(name));
+            if let Some(a) = absences.get(&absence_key) {
+                absences_matched.insert(absence_key);
+                departures.push(DepartureReason::OutForSeason {
+                    player_id: pid,
+                    name: name.clone(),
+                    injury: a.injury.clone(),
+                    origin: AbsenceOrigin::Returner,
+                });
+                departure_cam.add(row.cam_v3);
+                continue;
+            }
             // --- Eligibility overrides on the senior inference (issue #220).
             // Two of them, and they straddle the draft check below: both sit
             // above the `Sr` inference, because a player who is STAYING must
@@ -1898,6 +2093,25 @@ pub async fn compose_all_projections(
             let Some(row) = player_row_lookup.get(pid).cloned() else {
                 continue;
             };
+            // Out for the season at his new school (Donnie Freeman, Syracuse ->
+            // St. John's, Achilles). Listed on the destination but kept out of
+            // the departure sums: he was never on its base roster, so he is not
+            // turnover there. He stays in `inbound_cam_v3_sum` for the same
+            // reason a contested arrival does — that feature measures what the
+            // portal moved, and he did move.
+            if let Some(name) = name_by_pid.get(pid) {
+                let absence_key = (team.id, normalize_player_name(name));
+                if let Some(a) = absences.get(&absence_key) {
+                    absences_matched.insert(absence_key);
+                    departures.push(DepartureReason::OutForSeason {
+                        player_id: *pid,
+                        name: (*name).to_string(),
+                        injury: a.injury.clone(),
+                        origin: AbsenceOrigin::Arrival,
+                    });
+                    continue;
+                }
+            }
             match (eligibility_returns.get(pid), name_by_pid.get(pid)) {
                 (Some((ReturnStatus::Contested, reason)), Some(name)) => {
                     uncertain.push((
@@ -1915,8 +2129,26 @@ pub async fn compose_all_projections(
             }
         }
 
-        let recruits: Vec<(PlayerRow, RecruitMeta)> =
+        // An incoming freshman out for the season (Brandon McCoy Jr., Michigan,
+        // torn ACL) leaves the recruit list for the departures list, so he is
+        // shown once, as out, and is in neither the scored roster nor the
+        // recruit counts. Not turnover, same as an absent arrival.
+        let mut recruits: Vec<(PlayerRow, RecruitMeta)> =
             recruits_by_team.remove(&team.id).unwrap_or_default();
+        recruits.retain(|(_, meta)| {
+            let absence_key = (team.id, normalize_player_name(&meta.name));
+            let Some(a) = absences.get(&absence_key) else {
+                return true;
+            };
+            absences_matched.insert(absence_key);
+            departures.push(DepartureReason::OutForSeason {
+                player_id: meta.recruit_id,
+                name: meta.name.clone(),
+                injury: a.injury.clone(),
+                origin: AbsenceOrigin::Recruit,
+            });
+            false
+        });
 
         // Σ base-season cam_v3 across players who left/arrived in the
         // portal cycle. The outbound + incoming lists already live in
@@ -1969,6 +2201,19 @@ pub async fn compose_all_projections(
             program_level_o: program_level.get(&team.id).and_then(|(_, o, _)| *o),
             program_level_d: program_level.get(&team.id).and_then(|(_, _, d)| *d),
         });
+    }
+
+    // A row that matched nobody is a silent no-op — a misspelt name, or a
+    // player below the projection's GP/MPG gate. Surface it the way the
+    // returns capture's dead rows are surfaced.
+    for (key, a) in &absences {
+        if !absences_matched.contains(key) {
+            tracing::warn!(
+                player = %a.name,
+                team = %a.current_team,
+                "season-long absence matched no projected player"
+            );
+        }
     }
 
     Ok(out)

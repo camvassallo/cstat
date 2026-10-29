@@ -847,8 +847,16 @@ fn predict_team(
         od_sum(&mut p.returning.iter().map(|r| r.player_id));
     let (arrivals_cam_o_sum, arrivals_cam_d_sum) =
         od_sum(&mut p.arrivals.iter().map(|a| a.player_id));
-    let (departures_cam_o_sum, departures_cam_d_sum) =
-        od_sum(&mut p.departures.iter().map(|d| d.player_id()));
+    // Base-roster losses only, the same population as `departures_cam_v3_sum`:
+    // an absent arrival or recruit is listed under departures but was never
+    // on this roster, so his split must not land in these sums either.
+    let (departures_cam_o_sum, departures_cam_d_sum) = od_sum(
+        &mut p
+            .departures
+            .iter()
+            .filter(|d| d.is_base_roster_loss())
+            .map(|d| d.player_id()),
+    );
 
     // Top 5 recruits by composite_rank (NULL ranks last). Cloned so the
     // closure capture is move-friendly.
@@ -1800,6 +1808,13 @@ async fn projection_team_detail(
             // sub-vocabulary ('pro_overseas' / 'retired' / …) that lets the UI
             // distinguish a pro signing (has a destination) from a retirement
             // (doesn't). The other kinds carry their reason in `kind` itself.
+            let is_recruit = matches!(
+                d,
+                cstat_core::roster_projection::DepartureReason::OutForSeason {
+                    origin: cstat_core::roster_projection::AbsenceOrigin::Recruit,
+                    ..
+                }
+            );
             let (pid, kind, name, destination, destination_team_id, reason) = match d {
                 cstat_core::roster_projection::DepartureReason::GraduatedSenior {
                     player_id,
@@ -1834,12 +1849,29 @@ async fn projection_team_detail(
                     None,
                     Some(reason.clone()),
                 ),
+                // `reason` carries the injury text for the chip's tooltip.
+                cstat_core::roster_projection::DepartureReason::OutForSeason {
+                    player_id,
+                    name,
+                    injury,
+                    ..
+                } => (
+                    *player_id,
+                    "out_for_season",
+                    name.clone(),
+                    None,
+                    None,
+                    Some(injury.clone()),
+                ),
             };
             let meta = departure_meta.get(&pid);
             let (mean, lower, upper) = serialize_proj(&pid);
             json!({
                 "kind": kind,
                 "reason": reason,
+                // An incoming recruit out for the season: `player_id` is a
+                // recruit id with no player page behind it.
+                "is_recruit": is_recruit,
                 "player_id": pid,
                 "name": name,
                 "prior_season": base_season,

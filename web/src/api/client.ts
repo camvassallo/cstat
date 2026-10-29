@@ -898,11 +898,17 @@ export interface ProjectedRecruitDetail {
 export interface ProjectedDeparture {
   /// `left_program` covers the exits no feed reports — signed professionally
   /// abroad, retired, dismissed. Curated by hand in `player_departures`.
-  kind: 'senior' | 'transferred' | 'draft_gone' | 'left_program';
-  /// Sub-vocabulary for `left_program` only ('pro_overseas', 'pro_other',
-  /// 'retired', 'dismissed', 'left_program'). Null on every other kind — they
-  /// carry their reason in `kind` itself. Display-only.
+  /// `out_for_season` is on the roster but will not play this season (a torn
+  /// ACL, a medical redshirt) — curated in `player_absences`, and may be a
+  /// returner, an incoming transfer or an incoming recruit.
+  kind: 'senior' | 'transferred' | 'draft_gone' | 'left_program' | 'out_for_season';
+  /// Sub-vocabulary for `left_program` ('pro_overseas', 'pro_other',
+  /// 'retired', 'dismissed', 'left_program'), and the injury text for
+  /// `out_for_season` ("torn ACL"). Null on every other kind — they carry
+  /// their reason in `kind` itself. Display-only.
   reason?: string | null;
+  /// `out_for_season` only: `player_id` is a recruit id with no player page.
+  is_recruit?: boolean;
   player_id: string;
   name: string;
   /// Base-season the player played for the source team. UI uses this to

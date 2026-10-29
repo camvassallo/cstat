@@ -1,3 +1,4 @@
+pub mod absences;
 pub mod bootstrap_csv;
 pub mod coaches;
 pub mod departures;

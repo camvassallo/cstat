@@ -68,8 +68,9 @@ change to the served 27-feature roster-impact vector**.
 
 | # | Channel | Kind | Outcome |
 | --- | --- | --- | --- |
+| 0 | `player_absences` (keyed to this team) | curated | `OutForSeason` — off the scored roster for the season |
 | 1 | `player_departures` | curated | `LeftProgram` departure |
-| 2 | 247 portal, non-withdrawn | observed | `Transferred` departure |
+| 2 | 247 portal, non-withdrawn, or a `player_returns` row with a `destination` | observed / curated | `Transferred` departure |
 | 3 | `player_returns` = `granted` | curated | **returning** |
 | 4 | `player_returns` = `contested` | curated | **uncertain** |
 | 5 | draft list `gone` | observed | `DraftGone` departure |
@@ -81,6 +82,16 @@ change to the served 27-feature roster-impact vector**.
 The principle: **observations beat inferences, and curation beats both.** The
 senior check moved from position 2 to position 7 as part of this work; it is the
 only inferred channel and now sits below everything it can be checked against.
+
+Row 0 is not an eligibility channel at all — a season-long injury (#217) — but
+it sits first because whatever bucket the player would have reached, he is not
+playing. The same row also removes a portal arrival or a recruit at the team it
+names; see `data/absences/README.md`.
+
+Row 2's curated half is a returns row naming a `destination`: a player who took
+his extra year at a new school without appearing in the 247 feed. It is folded
+in as a synthetic portal link, so everything below about portal moves applies to
+it unchanged; a 247 `Committed` destination still wins over it.
 
 Two refinements to row 2, both about what a portal row actually observes:
 
