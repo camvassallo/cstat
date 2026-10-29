@@ -619,7 +619,8 @@ fn departure_name(d: &DepartureReason) -> &str {
         DepartureReason::GraduatedSenior { name, .. }
         | DepartureReason::Transferred { name, .. }
         | DepartureReason::DraftGone { name, .. }
-        | DepartureReason::LeftProgram { name, .. } => name,
+        | DepartureReason::LeftProgram { name, .. }
+        | DepartureReason::OutForSeason { name, .. } => name,
     }
 }
 

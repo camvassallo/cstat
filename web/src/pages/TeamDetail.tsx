@@ -1934,7 +1934,9 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                       ? 'text-amber-300 border-amber-500/40'
                       : d.kind === 'left_program'
                         ? 'text-violet-300 border-violet-500/40'
-                        : 'text-rose-300 border-rose-500/40';
+                        : d.kind === 'out_for_season'
+                          ? 'text-orange-300 border-orange-500/40'
+                          : 'text-rose-300 border-rose-500/40';
                 // `left_program` is the curated non-portal, non-draft exit. It
                 // reads as a destination chip when we know where they went
                 // ("→ Valencia (ACB)") and falls back to the reason vocabulary
@@ -1953,7 +1955,9 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                       ? 'NBA draft'
                       : d.kind === 'left_program'
                         ? leftProgramLabel
-                        : `→ ${d.destination ?? 'portal'}`;
+                        : d.kind === 'out_for_season'
+                          ? 'out for season'
+                          : `→ ${d.destination ?? 'portal'}`;
                 return (
                   <div
                     key={d.player_id}
@@ -1961,12 +1965,18 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                   >
                     <div className="flex items-center gap-2 flex-1 min-w-0">
                       <div className="truncate">
-                        <SeasonLink
-                          to={`/players/${d.player_id}?season=${d.prior_season}`}
-                          className="text-blue-400 hover:underline"
-                        >
-                          {d.name}
-                        </SeasonLink>
+                        {d.is_recruit ? (
+                          // An incoming recruit out for the season has never
+                          // played, so there is no player page to link to.
+                          <span className="text-gray-200">{d.name}</span>
+                        ) : (
+                          <SeasonLink
+                            to={`/players/${d.player_id}?season=${d.prior_season}`}
+                            className="text-blue-400 hover:underline"
+                          >
+                            {d.name}
+                          </SeasonLink>
+                        )}
                       </div>
                       {d.primary_class && (
                         <span
@@ -2040,7 +2050,9 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
                                         ? ' — signed professionally'
                                         : ''
                                   }${d.destination ? ` (${d.destination})` : ''}.`
-                                : undefined
+                                : d.kind === 'out_for_season'
+                                  ? `On the roster but out for the season${d.reason ? ` (${d.reason})` : ''}. Not counted in the projection.`
+                                  : undefined
                           }
                         >
                           {statusLabel}

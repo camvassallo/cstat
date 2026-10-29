@@ -156,11 +156,12 @@ async fn bootstrap_year(
         sqlx::query(
             r#"
             INSERT INTO player_returns
-                (year, player_name, current_team, status, reason, source, note)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (year, player_name, current_team, status, reason, destination, source, note)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (year, player_name, current_team)
             DO UPDATE SET status = EXCLUDED.status,
                           reason = EXCLUDED.reason,
+                          destination = EXCLUDED.destination,
                           source = EXCLUDED.source,
                           note = EXCLUDED.note
             "#,
@@ -170,6 +171,7 @@ async fn bootstrap_year(
         .bind(&r.current_team)
         .bind(&status)
         .bind(&r.reason)
+        .bind(&r.destination)
         .bind(&r.source)
         .bind(&r.note)
         .execute(&mut *tx)
@@ -201,6 +203,7 @@ const RETURN_KEY_ORDER: &[&str] = &[
     "current_team",
     "status",
     "reason",
+    "destination",
     "case",
     "source",
     "note",

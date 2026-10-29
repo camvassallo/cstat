@@ -17,6 +17,15 @@ its `status` follows him wherever the portal sends him:
 * **Stays put** (no portal row, or a withdrawal) — `granted` projects him as
   an ordinary returner, `contested` puts him in his team's uncertain bucket.
   No feed reports a stay-put, so every one of these needs a row.
+* **Moved without a portal row** — out-of-eligibility players who signed after
+  a court order often never appear in the 247 feed (Jordan Pope, Texas ->
+  Texas A&M). Set `destination` and the row becomes the move: he departs
+  `current_team` and arrives at `destination`, where `status` applies exactly
+  as it does for a portal commit. A 247 `Committed` destination still wins.
+  The official rosters (`cstat-ingest rosters`) are how these turn up: a
+  `granted` player missing from his old school's roster is either at a new one
+  (search the other rosters for him, `previous_school` usually names the old
+  team) or gone, and a row for a player who is gone should be removed.
 * **Committed elsewhere** in the portal — `contested` puts him in his
   **destination's** uncertain bucket instead of its firm arrivals (`?` at the
   new school, in its ceiling, out of its floor). `granted` changes nothing:
@@ -59,6 +68,7 @@ of it once his eligibility is settled.
 | `current_team` | yes | The school he is returning to (= the one he played for in `year`). |
 | `status` | no, defaults `contested` | `granted` → projected as an ordinary returner. `contested` → uncertain bucket: present in the ceiling, absent from the floor, shown as `?`. |
 | `reason` | no, defaults `5in5` | Display only: `5in5`, `waiver`, `injunction`, `medical`, `other`. `injunction` covers every row that rests on a court — order granted, stayed, or still pending. |
+| `destination` | no | The school he plays for in the target season when it is not `current_team` and no 247 portal row records the move. See "Moved without a portal row" above. |
 | `case` | no | Which suit the row rides on, as the tracker names it (`Godfrey v. NCAA`). JSON-only: not loaded into the table, not served. It exists so one court's ruling can be applied to exactly that court's plaintiffs (`--resolve-reason injunction --case "Godfrey v. NCAA"`). |
 | `source` | no | URL or outlet slug for the report. |
 | `note` | no | Anything the columns don't carry. |

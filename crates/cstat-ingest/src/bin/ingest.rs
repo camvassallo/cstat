@@ -493,6 +493,16 @@ enum Commands {
         dir: std::path::PathBuf,
     },
 
+    /// Load the hand-curated season-long absences into `player_absences` —
+    /// players on a roster for the target season who will not play in it
+    /// (issue #217: a torn ACL, a medical redshirt). The projection drops them
+    /// from the scored roster and lists them as out for the season.
+    Absences {
+        /// Directory of `{year}_absences.json` files.
+        #[arg(long, default_value = "data/absences")]
+        dir: std::path::PathBuf,
+    },
+
     /// Load the hand-curated eligibility returns into `player_returns` —
     /// players whose `class_year` says they graduated but who are coming back
     /// under the NCAA 5-in-5 rule (issue #220). `granted` rows project as
@@ -1383,6 +1393,23 @@ async fn main() -> Result<()> {
             );
         }
 
+        Commands::Absences { dir } => {
+            let reports =
+                cstat_ingest::ingest::absences::bootstrap_from_dir(&db.pool, &dir).await?;
+            let total: usize = reports.iter().map(|r| r.rows).sum();
+            for r in &reports {
+                println!(
+                    "absences {}: {} player(s) out for the season",
+                    r.year, r.rows
+                );
+            }
+            println!(
+                "absences: {} row(s) across {} year(s) loaded into player_absences. \
+                 A row that matches no projected player is warned about by compute-projections.",
+                total,
+                reports.len()
+            );
+        }
         Commands::Departures { dir } => {
             let reports =
                 cstat_ingest::ingest::departures::bootstrap_from_dir(&db.pool, &dir).await?;

@@ -101,6 +101,9 @@ async fn portal_departure_outranks_senior_graduation() {
                 // the portal and the draft list is a real ambiguity, not this
                 // bug. Not asserted either way.
                 DepartureReason::DraftGone { .. } => {}
+                // An absence row is keyed by the team he would play for, so it
+                // never names a player leaving through the portal.
+                DepartureReason::OutForSeason { .. } => {}
             }
         }
     }

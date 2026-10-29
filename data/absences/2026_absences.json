@@ -1,0 +1,44 @@
+[
+  {
+    "name": "Solo Ball",
+    "current_team": "Connecticut",
+    "injury": "wrist surgery, medical redshirt",
+    "source": "https://www.rotowire.com/cbasketball/player/solo-ball-22332",
+    "note": "UConn announced 2026-04-20 that he will medically redshirt 2026-27 and return for 2027-28 (https://uconnhuskies.com/news/2026/4/20/mens-basketball-solo-ball-to-medical-redshirt-in-2026-27)."
+  },
+  {
+    "name": "Donnie Freeman",
+    "current_team": "St. John's",
+    "injury": "torn right Achilles",
+    "source": "https://www.rotowire.com/cbasketball/player/donnie-freeman-23581",
+    "note": "Syracuse transfer. Non-contact tear in a summer workout, surgery done, announced about 2026-07-01 (https://www.cbssports.com/college-basketball/news/donnie-freeman-st-johns-season-ending-achilles-injury-rick-pitino/). Keyed to St. John's because that is the roster he is missing from."
+  },
+  {
+    "name": "Brandon McCoy Jr.",
+    "current_team": "Michigan",
+    "injury": "torn ACL",
+    "source": "https://www.rotowire.com/cbasketball/player/brandon-mccoy-28060",
+    "note": "Incoming five-star freshman. Tore the ACL in an exhibition in Croatia in late August (https://www.cbssports.com/college-basketball/news/brandon-mccoy-jr-injury-michigan-freshman-miss-2026-27-season/)."
+  },
+  {
+    "name": "L.J. Cason",
+    "current_team": "Miami FL",
+    "injury": "torn ACL",
+    "source": "https://www.rotowire.com/cbasketball/player/lj-cason-23789",
+    "note": "Tore the ACL at Michigan in February 2026 with surgery delayed, out for all of 2026-27 (https://www.espn.com/mens-college-basketball/story/_/id/48066469/michigan-loses-lj-cason-rest-season-torn-acl). The 247 portal feed has him committing to Miami on 2026-07-21, so the projection places him there; keyed to Miami FL for that reason."
+  },
+  {
+    "name": "Christian Wiggins",
+    "current_team": "Iowa St.",
+    "injury": "torn Achilles",
+    "source": "https://www.rotowire.com/cbasketball/player/christian-wiggins-28042",
+    "note": "Incoming freshman. Surgery for a torn Achilles in late June; T.J. Otzelberger confirmed he will miss 2026-27."
+  },
+  {
+    "name": "Jordan McCullum",
+    "current_team": "East Tennessee St.",
+    "injury": "torn ACL and meniscus",
+    "source": "https://sports.yahoo.com/articles/bucs-basketball-mccullum-season-torn-203214484.html",
+    "note": "RotoWire player page (https://www.rotowire.com/cbasketball/player/jordan-mccullum-24656) carries no injury entry yet; the report is from the local beat."
+  }
+]
