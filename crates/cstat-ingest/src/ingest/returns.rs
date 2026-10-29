@@ -48,6 +48,16 @@ pub enum ReturnIngestError {
         team: String,
         status: String,
     },
+    #[error(
+        "{year}_returns.json: {name} ({team}) has probability {probability}; \
+         expected a value strictly between 0 and 1, on a \"contested\" row only"
+    )]
+    BadProbability {
+        year: i32,
+        name: String,
+        team: String,
+        probability: f32,
+    },
 }
 
 /// Per-file load result for the CLI summary.
@@ -123,6 +133,18 @@ async fn bootstrap_year(
                 status: r.status.clone(),
             });
         }
+        // A probability is a contested player's weight; on a granted row it
+        // would be silently ignored, which reads as applied.
+        if let Some(probability) = r.probability
+            && (s != "contested" || !(probability > 0.0 && probability < 1.0))
+        {
+            return Err(ReturnIngestError::BadProbability {
+                year,
+                name: r.name.clone(),
+                team: r.current_team.clone(),
+                probability,
+            });
+        }
     }
 
     // Replace the year wholesale rather than upserting into it.
@@ -156,12 +178,14 @@ async fn bootstrap_year(
         sqlx::query(
             r#"
             INSERT INTO player_returns
-                (year, player_name, current_team, status, reason, destination, source, note)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (year, player_name, current_team, status, reason, destination, probability,
+                 source, note)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (year, player_name, current_team)
             DO UPDATE SET status = EXCLUDED.status,
                           reason = EXCLUDED.reason,
                           destination = EXCLUDED.destination,
+                          probability = EXCLUDED.probability,
                           source = EXCLUDED.source,
                           note = EXCLUDED.note
             "#,
@@ -172,6 +196,7 @@ async fn bootstrap_year(
         .bind(&status)
         .bind(&r.reason)
         .bind(&r.destination)
+        .bind(r.probability)
         .bind(&r.source)
         .bind(&r.note)
         .execute(&mut *tx)
@@ -204,6 +229,7 @@ const RETURN_KEY_ORDER: &[&str] = &[
     "status",
     "reason",
     "destination",
+    "probability",
     "case",
     "source",
     "note",

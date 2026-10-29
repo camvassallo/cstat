@@ -984,7 +984,9 @@ export interface ProjectedUncertain {
   /// NBA team code from the same snapshot (e.g. "WAS"). Surfaces in the
   /// tooltip alongside mock_pick.
   mock_team?: string | null;
-  /// `partial_availability` only: expected share of the season played (0–1).
+  /// `partial_availability`: expected share of the season played (0–1).
+  /// `eligibility_unsettled`: chance he is cleared to play, when the curated
+  /// row records one. Shown only for `partial_availability`.
   availability?: number | null;
 }
 
