@@ -106,7 +106,17 @@ async fn curated_returns_place_their_player() {
     // coexist with), and the departing player's id.
     let mut moved: HashMap<(Uuid, String), (Uuid, Uuid)> = HashMap::new();
     for p in &projections {
-        for (_, u) in &p.uncertain {
+        for (row, u) in &p.uncertain {
+            // A partial-season absence (#219) is not an eligibility question:
+            // a granted player who is also hurt for part of the season is a
+            // returner (or an arrival) blended by availability, so count him
+            // where his eligibility row put him.
+            if u.cause == cstat_core::roster_projection::UncertainCause::PartialAvailability {
+                if u.incoming_from.is_some() {
+                    arrivals.entry(p.team_id).or_default().insert(row.player_id);
+                }
+                continue;
+            }
             uncertain
                 .entry(p.team_id)
                 .or_default()

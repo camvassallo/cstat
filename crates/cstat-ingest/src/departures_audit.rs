@@ -45,8 +45,9 @@ use anyhow::Result;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_features::{QUAL_MIN_GAMES_PLAYED, QUAL_MIN_MPG};
 use cstat_core::roster_projection::{
-    DepartureReason, PlayerDeparture, PlayerReturn, ReturnStatus, compose_all_projections,
-    fetch_draft_entrants, fetch_player_departures, fetch_player_returns, normalize_player_name,
+    DepartureReason, PlayerDeparture, PlayerReturn, ReturnStatus, UncertainCause,
+    compose_all_projections, fetch_draft_entrants, fetch_player_departures, fetch_player_returns,
+    normalize_player_name,
 };
 use cstat_core::team_name_match::team_match_score;
 use sqlx::PgPool;
@@ -279,7 +280,18 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, opts: &AuditOptions) -> R
             departed.insert(key);
         }
         for (_, u) in &p.uncertain {
-            uncertain.insert((team, normalize_player_name(&u.name)));
+            let key = (team, normalize_player_name(&u.name));
+            // A partial-season absence (#219) is still on the roster: place it
+            // where an eligibility row would expect a granted player.
+            if u.cause == UncertainCause::PartialAvailability {
+                if u.incoming_from.is_some() {
+                    arrivals.insert(key);
+                } else {
+                    returning.insert(key);
+                }
+                continue;
+            }
+            uncertain.insert(key);
         }
         for r in &p.returning {
             if let Some(m) = meta_by_id.get(&r.player_id) {

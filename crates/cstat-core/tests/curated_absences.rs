@@ -26,9 +26,9 @@ use std::path::PathBuf;
 use cstat_core::inference::Predictor;
 use cstat_core::roster_projection::TeamRow;
 use cstat_core::roster_projection::{
-    DepartureReason, DraftScenario, ProjectedRoster, ReturnStatus, compose_all_projections,
-    fetch_draft_entrants, fetch_player_absences, fetch_player_departures, fetch_player_returns,
-    normalize_player_name, resolve_team_id,
+    DepartureReason, DraftScenario, ProjectedRoster, ReturnStatus, UncertainCause,
+    compose_all_projections, fetch_draft_entrants, fetch_player_absences, fetch_player_departures,
+    fetch_player_returns, normalize_player_name, resolve_team_id,
 };
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -101,6 +101,42 @@ async fn absences_remove_their_player_from_the_scored_roster() {
             continue;
         };
         let key = normalize_player_name(&a.name);
+        // A partial absence (#219) keeps the player: he must be in the
+        // uncertain bucket at his curated share, in the ceiling only, and in
+        // no departures list.
+        if let Some(share) = a.availability {
+            let hit = p
+                .uncertain
+                .iter()
+                .find(|(_, u)| normalize_player_name(&u.name) == key);
+            match hit {
+                None => failures.push(format!(
+                    "{} ({}) — partial absence not in the uncertain bucket",
+                    a.name, a.current_team
+                )),
+                Some((row, u)) => {
+                    if u.cause != UncertainCause::PartialAvailability
+                        || u.availability.is_none_or(|x| (x - share).abs() > 1e-6)
+                    {
+                        failures.push(format!("{} — wrong cause or share", a.name));
+                    }
+                    let floor: Vec<Uuid> = p
+                        .for_scenario(DraftScenario::Floor)
+                        .iter()
+                        .map(|r| r.player_id)
+                        .collect();
+                    if floor.contains(&row.player_id) {
+                        failures.push(format!("{} — in the floor roster", a.name));
+                    }
+                }
+            }
+            if p.departures.iter().any(|d| {
+                matches!(d, DepartureReason::OutForSeason { name, .. } if normalize_player_name(name) == key)
+            }) {
+                failures.push(format!("{} — partial absence listed as out for the season", a.name));
+            }
+            continue;
+        }
         let hit = p.departures.iter().find_map(|d| match d {
             DepartureReason::OutForSeason {
                 player_id, name, ..

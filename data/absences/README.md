@@ -27,8 +27,29 @@ row shape covers all three ways onto a roster:
 | A portal arrival | his destination | out of `arrivals`; not turnover at the destination, and still in `inbound_cam_v3_sum` (the portal did move him) |
 | An incoming recruit | his committed school | out of `recruits` and the recruit counts |
 
-In every case the player is out of both the floor and the ceiling — an absence
-is firm. An injury with a return date inside the season does not belong here.
+In every case the player is out of both the floor and the ceiling.
+
+## Partial-season absences (`availability`)
+
+A player out for **part** of the season with a reported return (#219: JT Toppin,
+Texas Tech, ACL) carries `availability`, the share of the regular season he is
+expected to play, strictly between 0 and 1. He stays on the roster, in the
+uncertain bucket with cause `partial_availability`. The team then scores as
+the availability-weighted mix of its rosters with him (the ceiling) and without
+him (the floor), the same machinery as the draft and eligibility cohorts. The
+eligibility toggle does not switch him. The team page lists him under "Out part
+of the season" as `out · ~59% of season`.
+
+**Derive the share from the schedule, not from a guess:**
+
+    availability = scheduled regular-season games on or after the return date
+                   / all scheduled regular-season games
+
+The return date is the most specific report available: a coach's stated window
+or the player's own target. Where reports disagree, take the later date the
+reports support, and record the range in `note`. Rust on return is not
+modelled. A recruit cannot carry `availability`; he has no player row the
+uncertain bucket can project.
 
 ## Schema
 
@@ -49,6 +70,7 @@ is firm. An injury with a return date inside the season does not belong here.
 | `name` | yes | Matched by normalized name against the team's projected returners, arrivals and recruits. |
 | `current_team` | yes | The team he would play for in the target season. |
 | `injury` | yes | Display only — shown in the chip's tooltip. |
+| `availability` | no | Share of the season he is expected to play, strictly between 0 and 1. Omit for a whole-season absence. See "Partial-season absences" above. |
 | `source` | no | URL for the report. A RotoWire player page is preferred: its status line ("Out for 2026-27 season") is the claim this row records. |
 | `note` | no | Anything else, including a second source. |
 

@@ -75,6 +75,19 @@ async fn bootstrap_year(
     year: i32,
     absences: &[PlayerAbsence],
 ) -> Result<usize, AbsenceIngestError> {
+    // Validate before touching the table, so a typo cannot half-apply a year.
+    for a in absences {
+        if let Some(share) = a.availability
+            && !(share > 0.0 && share < 1.0)
+        {
+            return Err(std::io::Error::other(format!(
+                "{} ({}): availability {share} must be strictly between 0 and 1 \
+                 (omit it for a whole-season absence)",
+                a.name, a.current_team
+            ))
+            .into());
+        }
+    }
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM player_absences WHERE year = $1")
         .bind(year)
@@ -84,10 +97,11 @@ async fn bootstrap_year(
         sqlx::query(
             r#"
             INSERT INTO player_absences
-                (year, player_name, current_team, injury, source, note)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (year, player_name, current_team, injury, availability, source, note)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (year, player_name, current_team)
             DO UPDATE SET injury = EXCLUDED.injury,
+                          availability = EXCLUDED.availability,
                           source = EXCLUDED.source,
                           note = EXCLUDED.note
             "#,
@@ -96,6 +110,7 @@ async fn bootstrap_year(
         .bind(&a.name)
         .bind(&a.current_team)
         .bind(&a.injury)
+        .bind(a.availability)
         .bind(&a.source)
         .bind(&a.note)
         .execute(&mut *tx)

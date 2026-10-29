@@ -1679,6 +1679,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   // Departures, where "might leave" is the honest framing.
   const eligibilityPending = uncertainSorted.filter((u) => u.cause === 'eligibility_unsettled');
   const draftPending = uncertainSorted.filter((u) => u.cause === 'draft_declared');
+  const partiallyOut = uncertainSorted.filter((u) => u.cause === 'partial_availability');
 
   // Proj AdjEM chip color tier — mirrors `adjEmTone` on Projected but
   // duplicated here rather than promoted to a shared module so the
@@ -1891,6 +1892,17 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
             recruitsSorted.map((r) => <RecruitCard key={r.recruit_id} r={r} />)
           )}
         </RosterCard>
+
+        {partiallyOut.length > 0 && (
+          <RosterCard
+            title={`Out part of the season (${partiallyOut.length})`}
+            hint="Expected back during the season. The projection counts each for the share of the season he is expected to play."
+          >
+            {partiallyOut.map((u) => (
+              <UncertainRow key={u.player_id} u={u} base_season={base_season} />
+            ))}
+          </RosterCard>
+        )}
 
         <RosterCard
           title={`Eligibility pending (${eligibilityPending.length})`}
@@ -2242,9 +2254,12 @@ function UncertainRow({ u, base_season }: { u: ProjectedUncertain; base_season: 
           : `Mock pick #${u.mock_pick}${u.mock_team ? ` (${u.mock_team})` : ''} — second-round projection. Real draft consideration but second-rounders withdraw more often than lottery picks.`;
     // What has to happen for him to be on next season's roster —
     // the premise behind the projected-CAM number beside it.
+    const isPartial = u.cause === 'partial_availability';
     const returnClause = isDraft
       ? 'If they withdraw and return'
-      : 'If they are ruled eligible';
+      : isPartial
+        ? 'Once back'
+        : 'If they are ruled eligible';
     return (
       <div className="flex items-center justify-between py-1.5 px-2 hover:bg-gray-800/60 rounded gap-2">
         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -2329,7 +2344,13 @@ function UncertainRow({ u, base_season }: { u: ProjectedUncertain; base_season: 
             {/* The eligibility rows sit under an "Eligibility pending" header,
                 so the chip says which half of the cohort he is in rather
                 than repeating the header. */}
-            {isDraft ? '? draft (TBD)' : u.source_team_id ? 'arriving' : 'staying'}
+            {isDraft
+              ? '? draft (TBD)'
+              : isPartial
+                ? `out · ~${Math.round((u.availability ?? 0.5) * 100)}% of season`
+                : u.source_team_id
+                  ? 'arriving'
+                  : 'staying'}
           </span>
         </div>
       </div>
