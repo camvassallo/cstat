@@ -303,6 +303,14 @@ mix only `w·slope` and `1 − w` are identified, so "the right slope" is a
 property of the pair, and the two regimes legitimately disagree about it.
 Numbers in the blend schedule section below.
 
+**What that measurement covers.** It replays the completed-game path
+(`BlendClock::AsOf`: the point-in-time leg that `game_projections` and
+`as_of_date` requests blend). Unplayed games — TeamDetail's upcoming rows, the
+ScoreTicker, the Predict page by default — blend on `BlendClock::Live` over the
+prod bundle fed that morning's season-aggregate tables, which cannot be
+replayed without per-day table snapshots. Slope 1.0 on the live path is an
+inference, not a measurement.
+
 `PRESEASON_ONLY_SIGMA` is the one Layer 4 constant that is not a margin
 parameter: it is the residual stddev feeding `margin_to_win_prob`, fit by
 minimising log loss rather than set to the residual RMSE (12.18), because the
@@ -425,9 +433,9 @@ on seasons < S and scored on S, S = 2018..2026, 22,411 games:
 | schedule refit, leg held at shipped | 8.932 (w 0.60, end 56) | 9.024 | +0.002, z +0.6 |
 | leg-alone calibration (0.59 / 3.2), shipped schedule | 9.083 | | +0.146 pooled, z +12.6 |
 | schedule refit around the 0.59 / 3.2 leg | 8.981 (w 1.00, end 63) | 9.073 | +0.050, z +5.3 |
-| free joint fit (slope × HCA × w × end) | 8.932 (slope 1.0) | 9.029 | +0.006, z +1.8 |
+| free joint fit (slope 0.40–1.30 × HCA × w × end) | 8.932 (slope 1.0) | 9.029 | +0.007, z +1.9 |
 
-Every constant stays. The free joint fit keeps slope 1.0 pooled; the 0.60/56
+Every constant stays. The free joint fit keeps slope 1.0 pooled, with the grid running to 1.30 so a stretch would show (per fold it wanders 0.85–1.25 with no trend, and that refit loses walk-forward); the 0.60/56
 schedule wins pooled by 0.006 (z −1.6) and loses walk-forward, so it is noise.
 A per-week regression with free coefficients on both legs, fit walk-forward,
 ties shipped too (−0.009, z −0.4), so this family has no headroom left. Run the

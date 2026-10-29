@@ -680,7 +680,7 @@ pub const PRESEASON_HCA: f32 = 3.5;
 /// unbiased (−0.16 pooled, −0.5 on 15-point gaps). Shrinking the leg to 0.59
 /// takes the wide-gap bias to −4.6, and the best schedule around a 0.59 leg
 /// loses to this one walk-forward by +0.050 MAE (z +5.3, 8 of 9 seasons).
-/// With the slope free, the joint grid keeps 1.0, and a per-week regression
+/// With the slope free (searched to 1.30), the joint grid keeps 1.0, and a per-week regression
 /// with free coefficients on both legs only ties (−0.009, z −0.4). In a
 /// two-leg mix what is identified is `w·slope` and `1 − w`, not the slope
 /// alone. Measured over 27,960 games, seasons 2016–2026, first 84 days.
@@ -688,12 +688,24 @@ pub const PRESEASON_HCA: f32 = 3.5;
 /// So the two regimes disagree about "the preseason margin" on purpose: the
 /// preseason-only path needs a margin that is right by itself, and the blend
 /// needs a leg that is right in combination.
+///
+/// **Scope: the completed-game leg only.** The measurement replays
+/// `BlendClock::AsOf` — the point-in-time model leg that the nightly
+/// `game_projections` sweep and `as_of_date` requests blend. Unplayed games
+/// (TeamDetail's upcoming rows, the ScoreTicker, the Predict page by default)
+/// blend on `BlendClock::Live`, over the prod bundle fed whatever the
+/// season-aggregate tables held that morning, and no replay can reconstruct
+/// that without per-day table snapshots. 1.0 there is an inference — its
+/// inputs are thinner still in November, so it is unlikely to want *less*
+/// stretch — not a measurement.
 pub const PRESEASON_SLOPE: f32 = 1.0;
 
 /// Peak weight on the PRESEASON leg, at the season open (Nov 1). Calibrated by
 /// `measure-blend-accuracy` pooled over 2024–2026: a 0.70/0.30 preseason/pit
 /// mix at tip-off beats pure preseason — the two imperfect, partly-uncorrelated
 /// legs ensemble (opening-week blended MAE 9.84 vs preseason-only 10.91).
+/// Re-confirmed with the slope axis over 2016–2026 (#390): a walk-forward
+/// schedule refit ties it (+0.002, z +0.6).
 pub const PRESEASON_PEAK_WEIGHT: f32 = 0.70;
 
 /// Days after Nov 1 over which the preseason weight decays linearly to 0.
@@ -706,8 +718,9 @@ pub const PRESEASON_DECAY_DAYS: i64 = 42;
 /// Weight on the PRESEASON projection in the early-season blend: `PEAK` at the
 /// Nov 1 open, linear decay to 0.0 over `DECAY_DAYS`, then 0.0 (pure pit).
 /// cstat-season `S` runs Nov (S−1) → Apr S, so the open is `(S−1)-11-01`.
-/// Calibrated v2 (ROADMAP §6) — see the two consts above; re-tune with
-/// `cstat-ingest measure-blend-accuracy --years 2024,2025,2026`.
+/// Calibrated v2 (ROADMAP §6), re-confirmed in #390 — see the consts above;
+/// re-tune with `cstat-ingest measure-blend-accuracy` (no `--years`: the
+/// default is every season with projections, which the walk-forward needs).
 pub fn preseason_blend_weight(as_of: NaiveDate, season: i32) -> f32 {
     let Some(open) = NaiveDate::from_ymd_opt(season - 1, 11, 1) else {
         return 0.0;

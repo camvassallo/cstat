@@ -50,7 +50,7 @@ use cstat_core::projection::{
     predict_from_features, preseason_leg_margin, summarize_with_preseason,
 };
 use sqlx::PgPool;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -465,45 +465,90 @@ async fn explain_cutoff(
     Ok((legs, roster_failed))
 }
 
-/// The un-blended model margin (home perspective) for every completed game
-/// played on or before `through`, keyed by game id.
+/// Every distinct team in `games`.
+fn teams_of(games: &[GameRow]) -> Vec<Uuid> {
+    games
+        .iter()
+        .flat_map(|g| [g.home_team_id, g.away_team_id])
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Group games by point-in-time cutoff (`game_date − 1`), in date order, plus
+/// the count of games with no cutoff at all.
+///
+/// Group by cutoff, not by game date: the cutoff is what the point-in-time
+/// cohort is keyed on, and it is the one thing worth paying for once. A game
+/// on the first representable date has no "day before" and is dropped,
+/// matching the API's rule that such a game is not labelled pre-game.
+///
+/// Shared by the sweep and [`model_legs`] so the calibration tool scores the
+/// same games against the same cohorts the nightly writes.
+fn group_by_cutoff(games: &[GameRow]) -> (BTreeMap<NaiveDate, Vec<&GameRow>>, usize) {
+    let mut by_cutoff: BTreeMap<NaiveDate, Vec<&GameRow>> = BTreeMap::new();
+    let mut no_cutoff = 0;
+    for g in games {
+        match g.game_date.pred_opt() {
+            Some(cutoff) => by_cutoff.entry(cutoff).or_default().push(g),
+            None => no_cutoff += 1,
+        }
+    }
+    (by_cutoff, no_cutoff)
+}
+
+/// The model leg for each projectable game, and what could not be projected.
+#[derive(Debug, Default)]
+pub struct ModelLegs {
+    /// Un-blended model margin (home perspective), keyed by game id.
+    pub margins: HashMap<Uuid, f32>,
+    /// Completed games in the window with no margin — absent data (a team
+    /// with no stats row) or a failed fetch.
+    pub skipped: usize,
+    /// Feature fetches that FAILED rather than found nothing. Non-zero means
+    /// the sample is short for a reason unrelated to the data, and a caller
+    /// scoring the legs should say so.
+    pub fetch_failures: usize,
+}
+
+/// The un-blended model margin for every completed game played on or before
+/// `through`.
 ///
 /// For `measure-blend-accuracy`, which has to hold the two legs of the blend
 /// apart to fit the mix — the sweep itself only ever stores the blended
 /// result. Same cohort, same features, same neutral symmetrisation as the
 /// rows the nightly writes, so the tool calibrates against the leg that is
-/// actually served. Nothing is written.
+/// actually served on the completed-game path. Nothing is written.
 pub async fn model_legs(
     pool: &PgPool,
     predictor: &Predictor,
     season: i32,
     through: NaiveDate,
-) -> Result<HashMap<Uuid, f32>> {
+) -> Result<ModelLegs> {
     let games: Vec<GameRow> = fetch_completed_games(pool, season)
         .await?
         .into_iter()
         .filter(|g| g.game_date <= through)
         .collect();
-    let teams: Vec<Uuid> = games
-        .iter()
-        .flat_map(|g| [g.home_team_id, g.away_team_id])
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let (cache, _) = SeasonCache::load(pool, season, &teams).await?;
+    let (cache, stats_failed) = SeasonCache::load(pool, season, &teams_of(&games)).await?;
+    let (by_cutoff, no_cutoff) = group_by_cutoff(&games);
 
-    let mut by_cutoff: std::collections::BTreeMap<NaiveDate, Vec<&GameRow>> = Default::default();
-    for g in &games {
-        if let Some(cutoff) = g.game_date.pred_opt() {
-            by_cutoff.entry(cutoff).or_default().push(g);
-        }
-    }
-    let mut out = HashMap::with_capacity(games.len());
+    let mut out = ModelLegs {
+        margins: HashMap::with_capacity(games.len()),
+        skipped: no_cutoff,
+        fetch_failures: stats_failed,
+    };
     for (&cutoff, day) in &by_cutoff {
-        let (legs, _) = explain_cutoff(pool, predictor, &cache, season, cutoff, day).await?;
+        let (legs, roster_failed) =
+            explain_cutoff(pool, predictor, &cache, season, cutoff, day).await?;
+        out.fetch_failures += roster_failed;
         for (g, leg) in day.iter().zip(legs) {
-            if let Some(explained) = leg {
-                out.insert(g.id, explained.prediction.predicted_margin);
+            match leg {
+                Some(explained) => {
+                    out.margins
+                        .insert(g.id, explained.prediction.predicted_margin);
+                }
+                None => out.skipped += 1,
             }
         }
     }
@@ -520,33 +565,14 @@ pub async fn run_season(pool: &PgPool, predictor: &Predictor, season: i32) -> Re
         return Ok(report);
     }
 
-    let teams: Vec<Uuid> = games
-        .iter()
-        .flat_map(|g| [g.home_team_id, g.away_team_id])
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let (cache, fetch_failures) = SeasonCache::load(pool, season, &teams).await?;
+    let (cache, fetch_failures) = SeasonCache::load(pool, season, &teams_of(&games)).await?;
     report.fetch_failures = fetch_failures;
 
-    // Group by cutoff, not by game date: the cutoff is what the point-in-time
-    // cohort is keyed on, and it is the one thing worth paying for once.
-    // A game on the first representable date has no "day before" and is
-    // dropped, matching the API's rule that such a game is not labelled
-    // pre-game.
-    let mut by_cutoff: HashMap<NaiveDate, Vec<&GameRow>> = HashMap::new();
-    for g in &games {
-        match g.game_date.pred_opt() {
-            Some(cutoff) => by_cutoff.entry(cutoff).or_default().push(g),
-            None => report.skipped += 1,
-        }
-    }
-    let mut cutoffs: Vec<NaiveDate> = by_cutoff.keys().copied().collect();
-    cutoffs.sort_unstable();
-    report.dates = cutoffs.len();
+    let (by_cutoff, no_cutoff) = group_by_cutoff(&games);
+    report.skipped += no_cutoff;
+    report.dates = by_cutoff.len();
 
-    for cutoff in cutoffs {
-        let day = &by_cutoff[&cutoff];
+    for (&cutoff, day) in &by_cutoff {
         let (legs, roster_failed) =
             explain_cutoff(pool, predictor, &cache, season, cutoff, day).await?;
         report.fetch_failures += roster_failed;

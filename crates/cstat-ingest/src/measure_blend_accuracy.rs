@@ -43,6 +43,11 @@
 //!    the preseason leg looks somewhat better than it will live, biasing the
 //!    weight **up**. The two caveats push in opposite directions.
 //!  - Needs `compute-projections --years …` to have run for each season.
+//!  - **Completed-game path only.** The model leg replayed here is the
+//!    `BlendClock::AsOf` one. Unplayed games blend on `BlendClock::Live` over
+//!    the prod bundle and that morning's season-aggregate tables, which this
+//!    replay cannot reconstruct; the fitted constants are applied there by
+//!    inference.
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -184,39 +189,65 @@ fn paired(games: &[&GamePred], a: &Schedule, b: &Schedule) -> (f64, f64) {
     (mean, mean / (var / n).sqrt())
 }
 
-/// Every schedule on the grid. Slope 0.40 … 1.00, HCA 1.0 … 4.0, peak weight
-/// 0.35 … 1.00, decay end 14 … 84 days.
-fn grid() -> Vec<Schedule> {
-    let mut out = Vec::new();
-    for si in 8..=20 {
-        for hi in 2..=8 {
-            for wi in 7..=20 {
-                for end_day in (14..=HORIZON_DAYS).step_by(7) {
-                    out.push(Schedule {
-                        slope: si as f64 * 0.05,
-                        hca: hi as f64 * 0.5,
-                        w_max: wi as f64 * 0.05,
-                        end_day,
-                    });
-                }
-            }
-        }
-    }
-    out
+/// The grid. Slope runs past 1.0 on purpose: the early-season model leg is
+/// compressed, so a blend that wanted to *stretch* the preseason leg is a
+/// real possibility, and a grid capped at 1.0 would report 1.00 whatever the
+/// optimum was — the same blind spot #390 was about, one step over.
+fn slopes() -> Vec<f64> {
+    (8..=26).map(|i| i as f64 * 0.05).collect() // 0.40 … 1.30
+}
+fn hcas() -> Vec<f64> {
+    (2..=8).map(|i| i as f64 * 0.5).collect() // 1.0 … 4.0
+}
+fn w_maxes() -> Vec<f64> {
+    (7..=20).map(|i| i as f64 * 0.05).collect() // 0.35 … 1.00
+}
+fn end_days() -> Vec<i64> {
+    (14..=HORIZON_DAYS).step_by(7).collect() // 14 … 84
 }
 
 /// The grid point with the lowest MAE on `games`, optionally holding the leg
 /// (slope, HCA) fixed so only the schedule is fit.
-fn best(games: &[&GamePred], candidates: &[Schedule], leg: Option<(f64, f64)>) -> Schedule {
+///
+/// The blended margin is linear in slope and HCA once the weight is known, so
+/// each game is reduced, per `(w_max, end_day)`, to three numbers —
+/// `w·diff`, `w·home` and `(1 − w)·pit − actual` — and every (slope, HCA) pair
+/// then costs two multiply-adds and an `abs` per game. Iteration order is
+/// fixed and ties keep the first point, so the fit is deterministic.
+fn best(games: &[&GamePred], leg: Option<(f64, f64)>) -> Schedule {
+    let (slopes, hcas) = match leg {
+        Some((slope, hca)) => (vec![slope], vec![hca]),
+        None => (slopes(), hcas()),
+    };
+    let n = games.len();
+    let (mut a, mut b, mut r) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
     let mut best = (shipped(), f64::MAX);
-    for s in candidates {
-        let s = match leg {
-            Some((slope, hca)) => Schedule { slope, hca, ..*s },
-            None => *s,
-        };
-        let m = mae(games, &s);
-        if m < best.1 {
-            best = (s, m);
+    for w_max in w_maxes() {
+        for end_day in end_days() {
+            for (i, g) in games.iter().enumerate() {
+                let w = schedule_weight(g.day_offset, w_max, end_day);
+                a[i] = w * g.pre_diff;
+                b[i] = if g.is_neutral { 0.0 } else { w };
+                r[i] = (1.0 - w) * g.pit_margin - g.actual;
+            }
+            for &slope in &slopes {
+                for &hca in &hcas {
+                    let sum: f64 = (0..n)
+                        .map(|i| (slope * a[i] + hca * b[i] + r[i]).abs())
+                        .sum();
+                    if sum < best.1 {
+                        best = (
+                            Schedule {
+                                slope,
+                                hca,
+                                w_max,
+                                end_day,
+                            },
+                            sum,
+                        );
+                    }
+                }
+            }
         }
     }
     best.0
@@ -262,7 +293,7 @@ async fn analyze_season(pool: &PgPool, predictor: &Predictor, year: i32) -> Resu
     let preds: Vec<GamePred> = games
         .iter()
         .filter_map(|g| {
-            let pit = *legs.get(&g.id)?;
+            let pit = *legs.margins.get(&g.id)?;
             let pre_diff = proj.get(&g.home_team_id)? - proj.get(&g.away_team_id)?;
             Some(GamePred {
                 season: year,
@@ -275,11 +306,22 @@ async fn analyze_season(pool: &PgPool, predictor: &Predictor, year: i32) -> Resu
         })
         .collect();
     println!(
-        "  season {year}: {} projection rows, {} early-window games, {} with both legs",
+        "  season {year}: {} projection rows, {} early-window games, {} with both legs \
+         ({} without a model leg)",
         proj.len(),
         games.len(),
         preds.len(),
+        legs.skipped,
     );
+    if legs.fetch_failures > 0 {
+        // A failed fetch drops every game of the team it was for, so the
+        // sample is short for a reason that has nothing to do with the data.
+        anyhow::bail!(
+            "season {year}: {} feature fetch(es) failed — the sample would be silently \
+             short; re-run once the database is healthy",
+            legs.fetch_failures
+        );
+    }
     Ok(preds)
 }
 
@@ -372,12 +414,43 @@ fn write_dump(path: &std::path::Path, games: &[GamePred]) -> Result<()> {
     std::fs::write(path, out).with_context(|| format!("writing {}", path.display()))
 }
 
+/// Every season that has both a preseason projection and a completed game —
+/// the default, because the walk-forward needs history: with three seasons it
+/// scores one fold.
+async fn calibratable_seasons(pool: &PgPool) -> Result<Vec<i32>> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT p.season FROM team_preseason_projection p \
+         WHERE EXISTS (SELECT 1 FROM games g WHERE g.season = p.season \
+                       AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL) \
+         ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
+    .context("listing seasons with projections and results")
+}
+
 pub async fn run(
     pool: &PgPool,
     predictor: &Predictor,
     years: &[i32],
     dump: Option<&std::path::Path>,
 ) -> Result<()> {
+    // The walk-forward folds read `years` in order and train on everything
+    // earlier, so the list must be ascending and unique whatever was typed.
+    let mut years = years.to_vec();
+    if years.is_empty() {
+        years = calibratable_seasons(pool).await?;
+    }
+    years.sort_unstable();
+    years.dedup();
+    let years = years.as_slice();
+    if years.len() < 3 {
+        println!(
+            "  note: {} season(s) leaves {} walk-forward fold(s); pass more seasons for a usable z",
+            years.len(),
+            years.len().saturating_sub(2)
+        );
+    }
     println!("{}", "=".repeat(78));
     println!("preseason × pit blend calibration — seasons {years:?}");
     println!("{}", "=".repeat(78));
@@ -395,7 +468,6 @@ pub async fn run(
         anyhow::bail!("no games had both legs — nothing to calibrate");
     }
     let cur = shipped();
-    let candidates = grid();
 
     // ---- 1. The preseason leg on its own ----
     println!(
@@ -407,9 +479,9 @@ pub async fn run(
         format!("bias |gap|≥{WIDE_GAP:.0}"),
     );
     let mut leg_best = (cur.slope, cur.hca, f64::MAX);
-    for si in 8..=20 {
+    for slope in slopes() {
         for hi in 0..=10 {
-            let (slope, hca) = (si as f64 * 0.05, hi as f64 * 0.5);
+            let hca = hi as f64 * 0.5;
             let (m, ..) = leg_report(&all, slope, hca);
             if m < leg_best.2 {
                 leg_best = (slope, hca, m);
@@ -429,9 +501,9 @@ pub async fn run(
     }
 
     // ---- 2. Joint fit, pooled ----
-    let joint = best(&all, &candidates, None);
-    let fixed_leg = best(&all, &candidates, Some((cur.slope, cur.hca)));
-    let alone_leg = best(&all, &candidates, Some(LEG_ALONE));
+    let joint = best(&all, None);
+    let fixed_leg = best(&all, Some((cur.slope, cur.hca)));
+    let alone_leg = best(&all, Some(LEG_ALONE));
     let pit_only = all
         .iter()
         .map(|g| (g.pit_margin - g.actual).abs())
@@ -442,8 +514,13 @@ pub async fn run(
         all.len()
     );
     println!("  {:<44} {:>7}", "model leg only", format!("{pit_only:.3}"));
+    println!(
+        "  {:<44} {:>7.3}   (reference)                [{}]",
+        "shipped",
+        mae(&all, &cur),
+        cur.label()
+    );
     for (name, s) in [
-        ("shipped", cur),
         (
             "leg-alone calibration, shipped schedule",
             leg_alone_at_shipped(),
@@ -476,9 +553,9 @@ pub async fn run(
             continue;
         }
         let fits = [
-            best(&train, &candidates, Some((cur.slope, cur.hca))),
-            best(&train, &candidates, Some(LEG_ALONE)),
-            best(&train, &candidates, None),
+            best(&train, Some((cur.slope, cur.hca))),
+            best(&train, Some(LEG_ALONE)),
+            best(&train, None),
         ];
         println!(
             "  {s:<6} {:>6}  {:>8.3} {:>8.3} {:>8.3} {:>8.3}   [{}] / [{}] / [{}]",
@@ -548,6 +625,10 @@ pub async fn run(
         "  Shipped: PRESEASON_SLOPE {:.2}, PRESEASON_HCA {:.1}, PRESEASON_PEAK_WEIGHT {:.2}, \
          PRESEASON_DECAY_DAYS {} (projection.rs).",
         cur.slope, cur.hca, cur.w_max, cur.end_day
+    );
+    println!(
+        "  Scope: completed-game (as-of) path only; unplayed games blend over the live model \
+         leg, which this replay cannot reconstruct."
     );
     println!(
         "  Caveats: the model leg's non-CamPom features are season aggregates (#274), which \

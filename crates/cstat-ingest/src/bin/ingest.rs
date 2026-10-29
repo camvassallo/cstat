@@ -410,10 +410,12 @@ enum Commands {
     /// the currently-scheduled blend's MAE, the crossover week, and an HCA
     /// sweep. Needs `compute-projections --years YEAR` to have run first.
     MeasureBlendAccuracy {
-        /// Seasons to pool for the calibration (comma-separated). Each must be a
-        /// played season with preseason projections materialized — 2024–2026
-        /// today. Pooling all three gives the schedule grid-search more signal.
-        #[arg(long, value_delimiter = ',', default_values_t = [2024, 2025, 2026])]
+        /// Seasons to pool for the calibration (comma-separated, any order).
+        /// Each must be a played season with preseason projections
+        /// materialized. Default: every such season (2016–2026 today) — the
+        /// walk-forward trains on all earlier seasons, so a short list leaves
+        /// it with one or two folds.
+        #[arg(long, value_delimiter = ',')]
         years: Vec<i32>,
 
         /// Also write every scored game's two legs and actual margin to this
