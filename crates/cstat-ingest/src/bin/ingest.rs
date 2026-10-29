@@ -404,11 +404,6 @@ enum Commands {
         years: Option<Vec<i32>>,
     },
 
-    /// Per-week crossover calibration for the preseason × pit early-season
-    /// blend (ROADMAP §6). Replays a played season's games week by week and
-    /// reports preseason-only / pit-only / best-blend MAE on the shared subset,
-    /// the currently-scheduled blend's MAE, the crossover week, and an HCA
-    /// sweep. Needs `compute-projections --years YEAR` to have run first.
     /// Rescore every past team that had a projected player who never played,
     /// under four ways of pricing his minutes (#420). Report only; writes
     /// nothing.
@@ -418,6 +413,11 @@ enum Commands {
         years: Vec<i32>,
     },
 
+    /// Per-week crossover calibration for the preseason × pit early-season
+    /// blend (ROADMAP §6). Replays a played season's games week by week and
+    /// reports preseason-only / pit-only / best-blend MAE on the shared subset,
+    /// the currently-scheduled blend's MAE, the crossover week, and an HCA
+    /// sweep. Needs `compute-projections --years YEAR` to have run first.
     MeasureBlendAccuracy {
         /// Seasons to pool for the calibration (comma-separated, any order).
         /// Each must be a played season with preseason projections
