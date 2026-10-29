@@ -69,12 +69,42 @@ of it once his eligibility is settled.
 | `status` | no, defaults `contested` | `granted` → projected as an ordinary returner. `contested` → uncertain bucket: present in the ceiling, absent from the floor, shown as `?`. |
 | `reason` | no, defaults `5in5` | Display only: `5in5`, `waiver`, `injunction`, `medical`, `other`. `injunction` covers every row that rests on a court — order granted, stayed, or still pending. |
 | `destination` | no | The school he plays for in the target season when it is not `current_team` and no 247 portal row records the move. See "Moved without a portal row" above. |
+| `probability` | no | `contested` rows only: his chance of playing, strictly between 0 and 1, from his current legal state. Omit for the neutral 0.5. See "Weighting a contested row" below. |
 | `case` | no | Which suit the row rides on, as the tracker names it (`Godfrey v. NCAA`). JSON-only: not loaded into the table, not served. It exists so one court's ruling can be applied to exactly that court's plaintiffs (`--resolve-reason injunction --case "Godfrey v. NCAA"`). |
 | `source` | no | URL or outlet slug for the report. |
 | `note` | no | Anything the columns don't carry. |
 
 An unrecognized `status` is rejected by the loader before anything is written,
-so a typo can't half-apply a capture.
+so a typo can't half-apply a capture. So is a `probability` outside (0, 1) or
+on a `granted` row.
+
+## Weighting a contested row
+
+A `contested` row is blended into its team at `probability`, or 0.5 without
+one. Set it from the player's **legal state today**, not from how the case
+might end. Whether a player can take the floor right now is observable, and it
+is what decides most of a season:
+
+| Today | `probability` |
+| --- | --- |
+| Playing under an order the court refused to pause, or an NCAA waiver, confirmed by the school or a box score | → `granted` instead |
+| Eligible under an order in force, no individual confirmation | 0.85 |
+| Eligible, but the order behind it is under active challenge (the Ohio group: reversed on appeal, mandate stayed, resting on an executive order the NCAA is suing over) | 0.7 |
+| Not eligible today: his injunction was stayed, he is sitting out, or he has only a pending motion | 0.2 |
+| No report either way, but on the school's official roster | omit (0.5) |
+| No report and on no `status = 'ok'` official roster | delete the row |
+
+The numbers come from the fall 2026 record, which is thin and stated as such.
+Appellate courts sided with the NCAA in most rulings (Tenth Circuit, Georgia,
+Tennessee, the Ohio First District), so an order in force is not a certainty.
+About a third of players ruled ineligible this fall regained eligibility within
+two months (the Ohio group, Keyshawn Hall, Skyy Clark), and a late win only
+counts for the games left. The first weeks of the season replace all of this
+with box scores: a contested player who plays is `granted`, and one who sits
+out the opening games under a stayed order is gone.
+
+The 2026-10-29 pass that set these is
+`research/2026-10-29_contested_status.json`.
 
 ## Check that a row did something
 

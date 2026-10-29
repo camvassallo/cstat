@@ -1,0 +1,69 @@
+availability-convention rescoring (#420) — target seasons [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+  2016: 300 affected teams
+  2017: 296 affected teams
+  2018: 309 affected teams
+  2019: 288 affected teams
+  2020: 315 affected teams
+  2021: 255 affected teams
+  2022: 271 affected teams
+  2023: 268 affected teams
+  2024: 275 affected teams
+  2025: 263 affected teams
+  2026: 265 affected teams
+== SERVED (blend + program anchor, weight held at the ex-ante value) ==
+  every affected team (n=3105)
+    variant          MAE    bias         vs B (z)
+    A count        5.410  -0.072    +0.078 (+4.0)
+    B drop         5.333  -0.027                —
+    C depth        5.433  -0.833    +0.101 (+4.2)
+    D team-mean    5.352  -0.357    +0.019 (+1.4)
+  lost a player above the team mean (n=1130)
+    variant          MAE    bias         vs B (z)
+    A count        5.620  +1.348    +0.163 (+4.0)
+    B drop         5.457  +0.482                —
+    C depth        5.506  +0.009    +0.048 (+1.3)
+    D team-mean    5.459  +0.565    +0.002 (+0.1)
+  lost only below-mean players (the #420 case) (n=1975)
+    variant          MAE    bias         vs B (z)
+    A count        5.290  -0.884    +0.029 (+1.5)
+    B drop         5.262  -0.319                —
+    C depth        5.392  -1.315    +0.130 (+4.2)
+    D team-mean    5.290  -0.884    +0.029 (+1.5)
+  lost a recruit (redshirt / no-show) (n=1397)
+    variant          MAE    bias         vs B (z)
+    A count        5.307  -0.496    +0.073 (+2.4)
+    B drop         5.234  -0.280                —
+    C depth        5.431  -1.452    +0.198 (+4.6)
+    D team-mean    5.260  -0.746    +0.027 (+1.1)
+  lost >= 5.0 projected CAM (n=350)
+    variant          MAE    bias         vs B (z)
+    A count        5.593  +2.182    +0.454 (+4.4)
+    B drop         5.139  +1.092                —
+    C depth        5.395  -1.117    +0.256 (+2.0)
+    D team-mean    5.170  +1.101    +0.031 (+0.7)
+== RAW calibrator ==
+  every affected team (n=3105)
+    variant          MAE    bias         vs B (z)
+    A count        5.450  -0.002    +0.072 (+2.6)
+    B drop         5.378  +0.087                —
+    C depth        5.535  -1.177    +0.157 (+4.4)
+    D team-mean    5.360  -0.423    -0.018 (-0.9)
+  lost only below-mean players (n=1975)
+    variant          MAE    bias         vs B (z)
+    A count        5.308  -0.899    -0.028 (-0.9)
+    B drop         5.336  -0.018                —
+    C depth        5.467  -1.556    +0.131 (+2.9)
+    D team-mean    5.308  -0.899    -0.028 (-0.9)
+== per season, served MAE (A / B / C / D) and best ==
+  2016: n=300  5.103 / 5.045 / 5.162 / 5.040   best D team-mean
+  2017: n=296  5.321 / 5.198 / 5.288 / 5.218   best B drop
+  2018: n=309  5.583 / 5.415 / 5.477 / 5.474   best B drop
+  2019: n=288  5.605 / 5.524 / 5.583 / 5.525   best B drop
+  2020: n=315  5.013 / 5.023 / 5.066 / 4.981   best D team-mean
+  2021: n=255  5.810 / 5.637 / 5.638 / 5.664   best B drop
+  2022: n=271  5.426 / 5.516 / 5.501 / 5.447   best A count
+  2023: n=268  5.430 / 5.378 / 5.470 / 5.369   best D team-mean
+  2024: n=275  5.374 / 5.293 / 5.511 / 5.345   best B drop
+  2025: n=263  5.378 / 5.309 / 5.506 / 5.371   best B drop
+  2026: n=265  5.568 / 5.412 / 5.671 / 5.537   best B drop
+  3105 affected team-seasons, 7553 projected players who did not play

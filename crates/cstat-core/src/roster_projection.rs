@@ -210,9 +210,11 @@ pub struct UncertainPlayer {
     /// "last season's value" nor under a Departures heading — the serving
     /// layer needs this to keep him out of both.
     pub incoming_from: Option<Uuid>,
-    /// [`UncertainCause::PartialAvailability`] only: the share of the target
-    /// season he is expected to play, which is also the weight his team's
-    /// with/without blend gives the "with" roster. `None` on every other cause.
+    /// The weight his team's with/without blend gives the "with" roster.
+    /// [`UncertainCause::PartialAvailability`]: the share of the target season
+    /// he is expected to play. [`UncertainCause::EligibilityUnsettled`]: the
+    /// curated row's `probability`, `None` for the neutral 0.5. Always `None`
+    /// for a draft declarant, whose weight is the mock board's.
     pub availability: Option<f32>,
 }
 
@@ -249,8 +251,9 @@ pub enum UncertainCause {
 }
 
 /// Return probability for an uncertain player whose cause carries its own
-/// weight: `0.5` for unsettled eligibility (a genuine coin flip with no feed),
-/// the curated availability for a partial absence. `None` for a draft
+/// weight: for unsettled eligibility, the curated row's `probability` (his
+/// current legal state) or the neutral `0.5` when the row has none; the
+/// curated availability for a partial absence. `None` for a draft
 /// declarant, whose weight comes from the mock board the caller holds.
 ///
 /// Shared by `/api/projections` and `compute-projections` so the served
@@ -258,13 +261,16 @@ pub enum UncertainCause {
 pub fn intrinsic_return_probability(u: &UncertainPlayer) -> Option<f32> {
     match u.cause {
         UncertainCause::DraftDeclared => None,
-        UncertainCause::EligibilityUnsettled => Some(ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY),
+        UncertainCause::EligibilityUnsettled => Some(
+            u.availability
+                .unwrap_or(ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY),
+        ),
         UncertainCause::PartialAvailability => Some(u.availability.unwrap_or(0.5)),
     }
 }
 
-/// See [`intrinsic_return_probability`]. Deliberately the neutral 0.5: a waiver
-/// decision or an injunction is a coin flip we have no feed for.
+/// See [`intrinsic_return_probability`]. The neutral 0.5 for a contested case
+/// whose curated row records no current legal state.
 pub const ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY: f32 = 0.5;
 
 /// Audit-trail metadata for one incoming HS recruit. The synthesized
@@ -723,6 +729,12 @@ pub struct PlayerReturn {
     /// A 247 `Committed` destination still wins over it.
     #[serde(default)]
     pub destination: Option<String>,
+    /// A `contested` player's chance of playing, strictly between 0 and 1,
+    /// from his current legal state (`data/returns/README.md`). `None` is the
+    /// neutral [`ELIGIBILITY_UNSETTLED_RETURN_PROBABILITY`]. Ignored on a
+    /// `granted` row.
+    #[serde(default)]
+    pub probability: Option<f32>,
     /// Provenance for the capture — a URL or outlet slug. Not served.
     #[serde(default)]
     pub source: Option<String>,
@@ -767,7 +779,8 @@ pub async fn fetch_player_returns(
     year: i32,
 ) -> Result<Vec<PlayerReturn>, sqlx::Error> {
     sqlx::query_as::<_, PlayerReturn>(
-        "SELECT player_name AS name, current_team, status, reason, destination, source, note \
+        "SELECT player_name AS name, current_team, status, reason, destination, probability, \
+         source, note \
          FROM player_returns WHERE year = $1",
     )
     .bind(year)
@@ -1744,13 +1757,14 @@ pub async fn compose_all_projections(
         .collect();
 
     // --- Curated eligibility returns (issue #220, NCAA 5-in-5). -----------
-    // Resolved the same way as the curated exits above. `(status, reason)` —
-    // status selects the bucket, reason is display vocabulary.
-    let eligibility_returns: HashMap<Uuid, (ReturnStatus, String)> = returns_rows
+    // Resolved the same way as the curated exits above. `(status, reason,
+    // probability)` — status selects the bucket, reason is display vocabulary,
+    // probability weights a contested player (None → the neutral 0.5).
+    let eligibility_returns: HashMap<Uuid, (ReturnStatus, String, Option<f32>)> = returns_rows
         .iter()
         .filter_map(|r| {
             match_player_return(r, &players_by_name, &teams)
-                .map(|pid| (pid, (r.parsed_status(), r.reason.clone())))
+                .map(|pid| (pid, (r.parsed_status(), r.reason.clone(), r.probability)))
         })
         .collect();
 
@@ -2045,7 +2059,7 @@ pub async fn compose_all_projections(
             // further down. Reached by stay-puts, withdrawals, and — since the
             // bucketing above skips them — players who entered the portal with
             // no destination and have a row naming this team.
-            if let Some((status, reason)) = eligibility_returns.get(&pid) {
+            if let Some((status, reason, probability)) = eligibility_returns.get(&pid) {
                 match status {
                     ReturnStatus::Granted => {
                         returning.push(row.clone().into_player_row());
@@ -2059,7 +2073,7 @@ pub async fn compose_all_projections(
                                 reason: format!("eligibility contested ({reason})"),
                                 cause: UncertainCause::EligibilityUnsettled,
                                 incoming_from: None,
-                                availability: None,
+                                availability: *probability,
                             },
                         ));
                     }
@@ -2208,7 +2222,7 @@ pub async fn compose_all_projections(
                 }
             }
             match (eligibility_returns.get(pid), name_by_pid.get(pid)) {
-                (Some((ReturnStatus::Contested, reason)), Some(name)) => {
+                (Some((ReturnStatus::Contested, reason, probability)), Some(name)) => {
                     uncertain.push((
                         row,
                         UncertainPlayer {
@@ -2217,7 +2231,7 @@ pub async fn compose_all_projections(
                             reason: format!("eligibility contested ({reason})"),
                             cause: UncertainCause::EligibilityUnsettled,
                             incoming_from: player_team.get(pid).copied(),
-                            availability: None,
+                            availability: *probability,
                         },
                     ));
                 }
@@ -3002,7 +3016,11 @@ mod tests {
         assert!(has(p.materialize(false, true)) && !has(p.materialize(true, false)));
         // Weighted by his availability, not the 0.5 coin flip.
         assert!((intrinsic_return_probability(&u).unwrap() - 0.55).abs() < 1e-6);
+        // An eligibility case reads the same field as its curated probability,
+        // and falls back to the neutral 0.5 without one.
         u.cause = UncertainCause::EligibilityUnsettled;
+        assert!((intrinsic_return_probability(&u).unwrap() - 0.55).abs() < 1e-6);
+        u.availability = None;
         assert!((intrinsic_return_probability(&u).unwrap() - 0.5).abs() < 1e-6);
         u.cause = UncertainCause::DraftDeclared;
         assert!(intrinsic_return_probability(&u).is_none());

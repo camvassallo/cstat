@@ -48,6 +48,16 @@ pub enum ReturnIngestError {
         team: String,
         status: String,
     },
+    #[error(
+        "{year}_returns.json: {name} ({team}) has probability {probability}; \
+         expected a value strictly between 0 and 1, on a \"contested\" row only"
+    )]
+    BadProbability {
+        year: i32,
+        name: String,
+        team: String,
+        probability: f32,
+    },
 }
 
 /// Per-file load result for the CLI summary.
@@ -123,6 +133,18 @@ async fn bootstrap_year(
                 status: r.status.clone(),
             });
         }
+        // A probability is a contested player's weight; on a granted row it
+        // would be silently ignored, which reads as applied.
+        if let Some(probability) = r.probability
+            && (s != "contested" || !(probability > 0.0 && probability < 1.0))
+        {
+            return Err(ReturnIngestError::BadProbability {
+                year,
+                name: r.name.clone(),
+                team: r.current_team.clone(),
+                probability,
+            });
+        }
     }
 
     // Replace the year wholesale rather than upserting into it.
@@ -156,12 +178,14 @@ async fn bootstrap_year(
         sqlx::query(
             r#"
             INSERT INTO player_returns
-                (year, player_name, current_team, status, reason, destination, source, note)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (year, player_name, current_team, status, reason, destination, probability,
+                 source, note)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (year, player_name, current_team)
             DO UPDATE SET status = EXCLUDED.status,
                           reason = EXCLUDED.reason,
                           destination = EXCLUDED.destination,
+                          probability = EXCLUDED.probability,
                           source = EXCLUDED.source,
                           note = EXCLUDED.note
             "#,
@@ -172,6 +196,7 @@ async fn bootstrap_year(
         .bind(&status)
         .bind(&r.reason)
         .bind(&r.destination)
+        .bind(r.probability)
         .bind(&r.source)
         .bind(&r.note)
         .execute(&mut *tx)
@@ -204,6 +229,7 @@ const RETURN_KEY_ORDER: &[&str] = &[
     "status",
     "reason",
     "destination",
+    "probability",
     "case",
     "source",
     "note",
@@ -354,6 +380,9 @@ pub fn resolve_reason(
                 for v in rows.iter_mut().filter(|v| hits(v)) {
                     if let Some(obj) = v.as_object_mut() {
                         obj.insert("status".into(), serde_json::Value::from("granted"));
+                        // A contested player's weight means nothing once he is
+                        // granted, and the loader rejects it on a granted row.
+                        obj.remove("probability");
                         let note = obj
                             .get("note")
                             .and_then(|n| n.as_str())
@@ -470,6 +499,40 @@ mod tests {
             first_key.starts_with("\"name\""),
             "identity key must lead each row, got {first_key:?}"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn granting_drops_the_contested_weight() {
+        // Otherwise a ruling applied with `--as granted` leaves a file the
+        // loader refuses (a probability on a granted row).
+        let dir = scratch("weight");
+        let mut parsed: Vec<serde_json::Value> = serde_json::from_str(FILE).unwrap();
+        for v in parsed.iter_mut().filter(|v| v["status"] == "contested") {
+            v.as_object_mut()
+                .unwrap()
+                .insert("probability".into(), serde_json::Value::from(0.2));
+        }
+        // One contested row outside the cohort keeps its weight.
+        parsed.push(serde_json::json!({"name": "D Four", "current_team": "Yale",
+            "status": "contested", "reason": "5in5", "probability": 0.2}));
+        std::fs::write(
+            dir.join("2026_returns.json"),
+            render_returns(&parsed).unwrap(),
+        )
+        .unwrap();
+
+        resolve_reason(&dir, "injunction", None, Resolution::Granted, "R.").unwrap();
+        let out = rows(&dir);
+        assert!(out.iter().any(|v| v["name"] == "D Four"));
+        for v in out {
+            let granted = v["status"] == "granted";
+            assert_eq!(
+                v.get("probability").is_some(),
+                !granted,
+                "only rows left contested keep their weight: {v}"
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
