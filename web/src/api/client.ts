@@ -1764,6 +1764,8 @@ export interface ScheduleGame {
   game_date: string;
   /** ET wall-clock tipoff, `HH:MM:SS`; null when no time is set yet. */
   tip_time: string | null;
+  /** Every outlet carrying the game, " / "-joined; null when none is listed. */
+  network: string | null;
   season: number;
   home_team_id: string | null;
   home_team_name: string | null;

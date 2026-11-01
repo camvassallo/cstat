@@ -42,6 +42,13 @@ const SOURCES: Source[] = [
       'Composite high-school recruit rankings and transfer-portal entries, commitments, and destinations — the roster inputs for every preseason projection.',
   },
   {
+    name: 'ESPN',
+    href: 'https://www.espn.com/mens-college-basketball/schedule',
+    role: 'TV listings and tip times',
+    detail:
+      'The network for each game on the schedule, and the tipoff time for games the main schedule has not timed yet.',
+  },
+  {
     name: 'Tankathon',
     href: 'https://www.tankathon.com/',
     role: 'NBA draft order and mock draft',

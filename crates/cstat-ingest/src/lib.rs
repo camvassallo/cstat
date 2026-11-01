@@ -1,4 +1,5 @@
 pub mod availability_experiment;
+pub mod broadcasts;
 pub mod cache;
 pub mod campom_parity;
 pub mod client;
@@ -173,12 +174,17 @@ pub fn today_eastern() -> NaiveDate {
 }
 
 /// The US Eastern calendar date at instant `now`.
+fn eastern_date(now: chrono::DateTime<Utc>) -> NaiveDate {
+    eastern_datetime(now).date()
+}
+
+/// The US Eastern wall clock at instant `now`.
 ///
 /// Implements the US daylight-saving rule directly rather than pulling in a
 /// time-zone database for one zone: EDT (UTC−4) from 2:00 local on the second
 /// Sunday of March to 2:00 local on the first Sunday of November, EST (UTC−5)
 /// otherwise. Those transitions are 07:00 and 06:00 UTC respectively.
-fn eastern_date(now: chrono::DateTime<Utc>) -> NaiveDate {
+pub fn eastern_datetime(now: chrono::DateTime<Utc>) -> chrono::NaiveDateTime {
     let year = now.year();
     let nth_sunday = |month: u32, n: u32| {
         let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
@@ -193,7 +199,7 @@ fn eastern_date(now: chrono::DateTime<Utc>) -> NaiveDate {
     } else {
         5
     };
-    (utc - chrono::Duration::hours(offset_hours)).date()
+    utc - chrono::Duration::hours(offset_hours)
 }
 
 /// Season the NCAA basketball calendar is currently in. November rolls

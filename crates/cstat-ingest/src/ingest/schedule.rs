@@ -26,8 +26,8 @@ use tracing::{info, warn};
 
 /// Tables whose rows block deleting a `games` row: every non-cascading
 /// foreign key onto `games` except `schedules`, which the prune clears itself
-/// (`compute_schedules` rebuilds it from `games` anyway). `game_projections`
-/// and `upcoming_game_projections` cascade. A test checks this list against the catalog, so a new table
+/// (`compute_schedules` rebuilds it from `games` anyway). `game_projections`,
+/// `upcoming_game_projections` and `game_broadcasts` cascade. A test checks this list against the catalog, so a new table
 /// referencing `games` fails the build rather than the nightly.
 pub const PRUNE_BLOCKERS: [&str; 7] = [
     "game_forecasts",

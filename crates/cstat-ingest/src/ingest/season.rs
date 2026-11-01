@@ -1723,6 +1723,10 @@ impl<'a> SeasonIngester<'a> {
         // which rebuilds `schedules` from the games it adds.
         schedule_refresh_step(self.client, self.pool, self.season, &ledger, &mut failures).await;
 
+        // TV networks and the missing tip times (#430); see `broadcasts_step`.
+        // After the schedule refresh so tonight's newly listed games match.
+        broadcasts_step(self.pool, &ledger).await;
+
         // --- 8. compute (load-bearing — recomputes every derived metric) ---
         if run_compute {
             let t0 = Utc::now();
@@ -2912,6 +2916,47 @@ pub async fn transfer_resolve_step(
         .await;
     if let Some(msg) = resolve_err {
         failures.push(format!("transfer_resolve: {msg}"));
+    }
+}
+
+/// The Schedule tab's second source (#430): outlets for each game, and a time
+/// for the games the primary feed lists as TBA, over today..+14 days Eastern.
+///
+/// Records a ledger row either way, with the unmatched-game count in its notes,
+/// but never degrades the run: it feeds two display columns, from a source we
+/// do not control, and an outage leaves last night's rows serving.
+pub async fn broadcasts_step(pool: &PgPool, ledger: &RunLedger<'_>) {
+    let t0 = Utc::now();
+    let step = "broadcasts";
+    let from = crate::today_eastern();
+    let to = from + chrono::Duration::days(crate::broadcasts::NIGHTLY_WINDOW_DAYS);
+    let result = match crate::broadcasts::BroadcastClient::new() {
+        Ok(client) => crate::broadcasts::run(pool, &client, from, to).await,
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(r) => {
+            let summary = r.summary();
+            info!(step, %summary, "broadcast listings refreshed");
+            ledger
+                .record_with_notes(
+                    step,
+                    StepStatus::Ok,
+                    Some(r.matched as i64),
+                    t0,
+                    None,
+                    Some(&summary),
+                )
+                .await;
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            warn!(step, error = %msg, "broadcast listings refresh failed; the schedule keeps \
+                  last night's networks and times");
+            ledger
+                .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                .await;
+        }
     }
 }
 

@@ -2306,8 +2306,10 @@ pub async fn get_games(
 pub struct ScheduleGame {
     pub game_id: Uuid,
     pub game_date: NaiveDate,
-    /// ET wall-clock tipoff; `None` when the feed has no time yet.
+    /// ET wall-clock tipoff; `None` when neither source has a time yet.
     pub tip_time: Option<NaiveTime>,
+    /// Every outlet carrying the game, " / "-joined; `None` when unknown.
+    pub network: Option<String>,
     pub season: i32,
     pub home_team_id: Option<Uuid>,
     pub home_team_name: Option<String>,
@@ -2324,6 +2326,13 @@ pub struct ScheduleGame {
 }
 
 /// Every game on `date`, earliest tip first (unscheduled times last).
+///
+/// The tip time is the broadcast listing's when it has a confirmed one, else
+/// the schedule feed's (#430). The listing wins a disagreement because it
+/// carries an unambiguous UTC instant, while the feed's wall clock is meant to
+/// be Eastern but is sometimes a school's local time: of the games both list,
+/// about one in twenty differ, mostly by exactly an hour, and a few feed times
+/// are impossible (a 1am or 4am tip).
 pub async fn get_schedule_games(
     pool: &PgPool,
     season: i32,
@@ -2334,7 +2343,8 @@ pub async fn get_schedule_games(
         SELECT
             g.id AS game_id,
             g.game_date,
-            g.tip_time,
+            COALESCE(b.tip_time, g.tip_time) AS tip_time,
+            b.network,
             g.season,
             g.home_team_id,
             COALESCE(ht.short_name, ht.name) AS home_team_name,
@@ -2351,8 +2361,9 @@ pub async fn get_schedule_games(
         FROM games g
         LEFT JOIN teams ht ON ht.id = g.home_team_id AND ht.season = g.season
         LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
+        LEFT JOIN game_broadcasts b ON b.game_id = g.id
         WHERE g.season = $1 AND g.game_date = $2
-        ORDER BY g.tip_time NULLS LAST, home_team_name, g.id
+        ORDER BY COALESCE(b.tip_time, g.tip_time) NULLS LAST, home_team_name, g.id
         "#,
     )
     .bind(season)

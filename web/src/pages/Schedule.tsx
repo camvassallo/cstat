@@ -127,6 +127,13 @@ function TimeCell({ g }: { g: ScheduleGame }) {
   return <span className="whitespace-nowrap tabular-nums">{clock(g.tip_time)}</span>;
 }
 
+/** Where to watch. Blank when no outlet is listed, which is common for games
+ *  a week or more out: networks are announced late. */
+function NetworkCell({ g }: { g: ScheduleGame }) {
+  if (!g.network) return null;
+  return <span className="text-gray-400">{g.network}</span>;
+}
+
 function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
   const played = g.home_score != null && g.away_score != null;
   const homeWon = played && g.home_score! > g.away_score!;
@@ -184,6 +191,12 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
             <PredictionCell g={g} />
             <span>·</span>
             <TimeCell g={g} />
+            {g.network && (
+              <>
+                <span>·</span>
+                <NetworkCell g={g} />
+              </>
+            )}
           </div>
         </div>
       </td>
@@ -192,6 +205,9 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
       </td>
       <td className="py-2 px-2 hidden sm:table-cell">
         <TimeCell g={g} />
+        <div className="text-xs max-w-[11rem]">
+          <NetworkCell g={g} />
+        </div>
       </td>
       <td className="py-2 px-2 hidden md:table-cell text-gray-400">
         {g.venue_location && <div className="text-gray-300">{g.venue_location}</div>}
@@ -360,7 +376,7 @@ export default function Schedule() {
                 <th className="py-2 px-2 text-left font-medium hidden sm:table-cell">
                   Projection
                 </th>
-                <th className="py-2 px-2 text-left font-medium hidden sm:table-cell">Time</th>
+                <th className="py-2 px-2 text-left font-medium hidden sm:table-cell">Time / TV</th>
                 <th className="py-2 px-2 text-left font-medium hidden md:table-cell">Location</th>
               </tr>
             </thead>
