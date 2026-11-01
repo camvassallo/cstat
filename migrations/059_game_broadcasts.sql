@@ -8,8 +8,8 @@
 -- feed's) in one place, `queries::get_schedule_games`.
 --
 -- One row per matched game. Written by the nightly `broadcasts` step over a
--- forward window; a game the source stops listing keeps its last row, which
--- is harmless (a network does not go stale in a way that misleads), and a
+-- forward window. A row is pruned when its listing disappears from a day the
+-- step fetched or now matches a different game (see `broadcasts.rs`), and a
 -- deleted game takes its row with it.
 CREATE TABLE IF NOT EXISTS game_broadcasts (
     game_id         UUID PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,
