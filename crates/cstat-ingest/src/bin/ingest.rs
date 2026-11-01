@@ -407,6 +407,21 @@ enum Commands {
         years: Option<Vec<i32>>,
     },
 
+    /// Refresh TV networks, and the tip times the schedule feed lists as TBA,
+    /// from the second schedule source into `game_broadcasts` (#430).
+    ///
+    /// The nightly covers today through two weeks out. Use this to backfill a
+    /// wider window (times are published months ahead; networks only weeks).
+    /// Reports how many of our games went unmatched.
+    Broadcasts {
+        /// First Eastern day (YYYY-MM-DD). Defaults to today, Eastern.
+        #[arg(long)]
+        from: Option<chrono::NaiveDate>,
+        /// Last Eastern day, inclusive. Defaults to `from` plus two weeks.
+        #[arg(long)]
+        to: Option<chrono::NaiveDate>,
+    },
+
     /// Rescore every past team that had a projected player who never played,
     /// under four ways of pricing his minutes (#420). Report only; writes
     /// nothing.
@@ -1276,6 +1291,16 @@ async fn main() -> Result<()> {
             .await?;
         }
 
+        Commands::Broadcasts { from, to } => {
+            let from = from.unwrap_or_else(cstat_ingest::today_eastern);
+            let to = to.unwrap_or(
+                from + chrono::Duration::days(cstat_ingest::broadcasts::NIGHTLY_WINDOW_DAYS),
+            );
+            let client = cstat_ingest::broadcasts::BroadcastClient::new()?;
+            let report = cstat_ingest::broadcasts::run(&db.pool, &client, from, to).await?;
+            println!("broadcasts {from}..{to}: {}", report.summary());
+            println!("  {} rows written", report.written);
+        }
         Commands::GameProjections { years } => {
             let years = years.unwrap_or_else(|| vec![cstat_ingest::current_natstat_season()]);
             let model_dir = cstat_ingest::model_dir_from_env();

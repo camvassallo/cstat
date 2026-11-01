@@ -11,11 +11,18 @@ import { usePageTitle } from '../components/usePageTitle';
 
 type SortKey = 'watch' | 'time';
 
-/** Today's date in US Eastern time, as `YYYY-MM-DD`. Game dates are Eastern,
- *  so a viewer in London at 1:30 AM is still on tonight's slate. `en-CA`
- *  formats as ISO year-month-day. */
+/** Hour (Eastern) the default day rolls over at. Mirrors the API's
+ *  `SCHEDULE_ROLLOVER_HOUR`: a late West Coast or Hawaii tip ends after
+ *  midnight Eastern, and checking on it should not land on tomorrow. */
+const ROLLOVER_HOUR = 6;
+
+/** The day the page opens on, as `YYYY-MM-DD`: the US Eastern date six hours
+ *  ago, so it rolls over at 6 AM Eastern. Game dates are Eastern, so a viewer
+ *  in London at 1:30 AM is still on tonight's slate. `en-CA` formats as ISO
+ *  year-month-day. */
 function easternToday(): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+  const shifted = new Date(Date.now() - ROLLOVER_HOUR * 3_600_000);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(shifted);
 }
 
 /** `2026-11-02` → `Monday, November 2`. Parsed as a calendar date, not an
@@ -127,6 +134,13 @@ function TimeCell({ g }: { g: ScheduleGame }) {
   return <span className="whitespace-nowrap tabular-nums">{clock(g.tip_time)}</span>;
 }
 
+/** Where to watch. Blank when no outlet is listed, which is common for games
+ *  a week or more out: networks are announced late. */
+function NetworkCell({ g }: { g: ScheduleGame }) {
+  if (!g.network) return null;
+  return <span className="text-gray-400">{g.network}</span>;
+}
+
 function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
   const played = g.home_score != null && g.away_score != null;
   const homeWon = played && g.home_score! > g.away_score!;
@@ -184,6 +198,12 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
             <PredictionCell g={g} />
             <span>·</span>
             <TimeCell g={g} />
+            {g.network && (
+              <>
+                <span>·</span>
+                <NetworkCell g={g} />
+              </>
+            )}
           </div>
         </div>
       </td>
@@ -192,6 +212,9 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
       </td>
       <td className="py-2 px-2 hidden sm:table-cell">
         <TimeCell g={g} />
+        <div className="text-xs max-w-[11rem]">
+          <NetworkCell g={g} />
+        </div>
       </td>
       <td className="py-2 px-2 hidden md:table-cell text-gray-400">
         {g.venue_location && <div className="text-gray-300">{g.venue_location}</div>}
@@ -201,9 +224,13 @@ function GameRow({ g, season }: { g: ScheduleGame; season: number }) {
   );
 }
 
-/** Tip-time sort key: scheduled games by time, unscheduled after them. */
+/** Tip-time sort key: scheduled games by time, unscheduled after them. A tip
+ *  before the rollover hour belongs to the end of the night (a 3 AM game is
+ *  the day's last, not its first), so its hour is pushed past 24. */
 function timeKey(g: ScheduleGame): string {
-  return g.tip_time ?? '99';
+  if (!g.tip_time) return '99';
+  const hour = Number(g.tip_time.slice(0, 2));
+  return hour < ROLLOVER_HOUR ? `${hour + 24}${g.tip_time.slice(2)}` : g.tip_time;
 }
 
 export default function Schedule() {
@@ -360,7 +387,7 @@ export default function Schedule() {
                 <th className="py-2 px-2 text-left font-medium hidden sm:table-cell">
                   Projection
                 </th>
-                <th className="py-2 px-2 text-left font-medium hidden sm:table-cell">Time</th>
+                <th className="py-2 px-2 text-left font-medium hidden sm:table-cell">Time / TV</th>
                 <th className="py-2 px-2 text-left font-medium hidden md:table-cell">Location</th>
               </tr>
             </thead>

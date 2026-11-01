@@ -1,4 +1,5 @@
 pub mod availability_experiment;
+pub mod broadcasts;
 pub mod cache;
 pub mod campom_parity;
 pub mod client;
@@ -172,13 +173,41 @@ pub fn today_eastern() -> NaiveDate {
     eastern_date(Utc::now())
 }
 
+/// Hour (Eastern) at which the Schedule tab's default day rolls over.
+///
+/// Not midnight: a West Coast late tip ends around 1am Eastern and a Hawaii
+/// home game later still, and someone checking it then should still land on
+/// last night's slate rather than tomorrow's. By 6am nothing from the night
+/// before is still being played. The frontend mirrors this constant.
+pub const SCHEDULE_ROLLOVER_HOUR: i64 = 6;
+
+/// The day the Schedule tab opens on: the Eastern date, rolling over at
+/// [`SCHEDULE_ROLLOVER_HOUR`] rather than midnight. A simulated clock is
+/// returned as-is, like [`today_eastern`].
+pub fn schedule_today() -> NaiveDate {
+    let days = SIMULATED_TODAY.load(Ordering::Relaxed);
+    if let Some(d) = simulated_override(days, env_simulated_date()) {
+        return d;
+    }
+    schedule_day(Utc::now())
+}
+
+fn schedule_day(now: chrono::DateTime<Utc>) -> NaiveDate {
+    (eastern_datetime(now) - chrono::Duration::hours(SCHEDULE_ROLLOVER_HOUR)).date()
+}
+
 /// The US Eastern calendar date at instant `now`.
+fn eastern_date(now: chrono::DateTime<Utc>) -> NaiveDate {
+    eastern_datetime(now).date()
+}
+
+/// The US Eastern wall clock at instant `now`.
 ///
 /// Implements the US daylight-saving rule directly rather than pulling in a
 /// time-zone database for one zone: EDT (UTC−4) from 2:00 local on the second
 /// Sunday of March to 2:00 local on the first Sunday of November, EST (UTC−5)
 /// otherwise. Those transitions are 07:00 and 06:00 UTC respectively.
-fn eastern_date(now: chrono::DateTime<Utc>) -> NaiveDate {
+pub fn eastern_datetime(now: chrono::DateTime<Utc>) -> chrono::NaiveDateTime {
     let year = now.year();
     let nth_sunday = |month: u32, n: u32| {
         let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
@@ -193,7 +222,7 @@ fn eastern_date(now: chrono::DateTime<Utc>) -> NaiveDate {
     } else {
         5
     };
-    (utc - chrono::Duration::hours(offset_hours)).date()
+    utc - chrono::Duration::hours(offset_hours)
 }
 
 /// Season the NCAA basketball calendar is currently in. November rolls
@@ -501,6 +530,21 @@ mod tests {
         set_simulated_today(None);
         // Real clock again — just sanity-check it's nowhere near the override.
         assert_ne!(today_utc(), sim);
+    }
+
+    #[test]
+    fn schedule_day_rolls_over_at_six_eastern() {
+        let at = |s: &str| {
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M")
+                .unwrap()
+                .and_utc()
+        };
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        // 1:30am EST on Dec 2 is still the Dec 1 slate.
+        assert_eq!(schedule_day(at("2026-12-02 06:30")), d("2026-12-01"));
+        // 5:59am EST: still the night before; 6:00am: the new day.
+        assert_eq!(schedule_day(at("2026-12-02 10:59")), d("2026-12-01"));
+        assert_eq!(schedule_day(at("2026-12-02 11:00")), d("2026-12-02"));
     }
 
     #[test]

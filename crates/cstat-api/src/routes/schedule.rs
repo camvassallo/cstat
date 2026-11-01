@@ -146,9 +146,10 @@ async fn schedule(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ScheduleParams>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Game dates are Eastern, so "today's games" is today in Eastern: from 8pm
-    // ET the UTC date is already tomorrow.
-    let date = params.date.unwrap_or_else(cstat_ingest::today_eastern);
+    // Game dates are Eastern, so "today's games" is today in Eastern (from 8pm
+    // ET the UTC date is already tomorrow), rolling over at 6am rather than
+    // midnight so a late West Coast or Hawaii tip stays on the default view.
+    let date = params.date.unwrap_or_else(cstat_ingest::schedule_today);
     let season = cstat_ingest::season_for_date(date);
     let pool = &state.db.pool;
 

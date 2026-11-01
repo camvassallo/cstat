@@ -107,6 +107,25 @@ preseason anchors. Best-effort on the same terms: a failure leaves last
 night's rows serving, and the route projects at most 24 missing games live.
 Its `rows` shrinks across the season by design, so it is not row-count gated.
 
+`broadcasts` (#430) runs right after `schedule_refresh`. It reads ESPN's public
+scoreboard JSON (one unauthenticated call per Eastern day, today through 14
+days out) and writes `game_broadcasts`: every outlet for each game, and a
+confirmed tip time. The Schedule tab serves that time ahead of NatStat's, whose
+wall clock is sometimes a school's local time rather than Eastern; NatStat's
+time is the fallback. Listings are matched to `games` by date plus whichever
+teams resolve by name, and a one-sided match teaches the other team's id, so no
+name crosswalk is kept. Its `rows` is games matched; `notes` carries the full
+summary, including **unmatched games**, which normally sit around 2% of the
+window (games one source does not list, or NatStat duplicates). A jump there
+means matching broke. A row is pruned only when its listing has disappeared
+from a successfully fetched day or now matches another game; one still listed
+but unresolved tonight is kept, since the sliding window changes how much the
+matcher can resolve. **Never degrades the run**: a failure is a `failed`
+ledger row and last night's networks keep serving. Skipped under a simulated
+clock (`simulate`), which would otherwise make live requests every window. Backfill a wider window
+with `cstat-ingest broadcasts --from YYYY-MM-DD --to YYYY-MM-DD`; times are
+published months ahead, networks only a couple of weeks.
+
 Window defaults to **yesterday..today (UTC)** so NatStat's overnight stat
 corrections are picked up. Torvik + `/elo` refresh **before** `compute_all`, so
 `cam_gbpm_v3` / `pit_cam_v3` and the served `diff_elo_rating` feature don't
