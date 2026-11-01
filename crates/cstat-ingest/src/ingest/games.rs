@@ -2,7 +2,7 @@ use super::utils::{decode_html_entities, get_f64, get_i32, parse_i32};
 use crate::NatStatClient;
 use crate::client::NatStatError;
 use crate::{extract_results, team_id_by_code_and_season};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -290,6 +290,10 @@ pub struct GameRow {
     pub is_postseason: Option<bool>,
     pub venue: Option<String>,
     pub venue_code: Option<String>,
+    /// City and state (or country) of the venue, from `venue.location`.
+    pub venue_location: Option<String>,
+    /// ET wall-clock tipoff from `gamedate`. `None` when the feed has no time.
+    pub tip_time: Option<NaiveTime>,
     pub overtime: Option<String>,
     pub attendance: Option<i32>,
     pub status: Option<String>,
@@ -392,6 +396,18 @@ pub fn parse_game(game: &Value) -> Result<GameRow, SkipReason> {
         .or_else(|| game.get("venue").and_then(|v| v.get("code")))
         .and_then(|c| c.as_str());
 
+    let venue_location = game
+        .get("venue")
+        .and_then(|v| v.get("location"))
+        .and_then(|l| l.as_str())
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+
+    let tip_time = game
+        .get("gamedate")
+        .and_then(|d| d.as_str())
+        .and_then(parse_tip_time);
+
     let overtime = game
         .get("overtime")
         .and_then(|o| o.as_str())
@@ -443,6 +459,8 @@ pub fn parse_game(game: &Value) -> Result<GameRow, SkipReason> {
         is_postseason,
         venue: venue.map(String::from),
         venue_code: venue_code.map(String::from),
+        venue_location: venue_location.map(String::from),
+        tip_time,
         overtime: overtime.map(String::from),
         attendance,
         status: status.map(String::from),
@@ -451,6 +469,19 @@ pub fn parse_game(game: &Value) -> Result<GameRow, SkipReason> {
         away_half1,
         away_half2,
     })
+}
+
+/// The tipoff time in a NatStat `gamedate` (`2026-11-02 19:00:00`, ET).
+///
+/// `00:00:00` is NatStat's "time not set", not a midnight tip, so it is `None`:
+/// 2,023 of the 5,510 games on the 2026-27 schedule carry it, Duke–Army and
+/// Kansas–Fordham on opening night among them. Real midnight tips do not occur
+/// in a D-I schedule; reading the sentinel as one would put a third of the
+/// season at 12:00 AM. A bare date (no time part) is also `None`.
+pub fn parse_tip_time(gamedate: &str) -> Option<NaiveTime> {
+    let dt = NaiveDateTime::parse_from_str(gamedate.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+    let t = dt.time();
+    (t != NaiveTime::MIN).then_some(t)
 }
 
 async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
@@ -465,9 +496,9 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
         "INSERT INTO games (id, natstat_id, season, game_date, home_team_id, away_team_id,
          home_score, away_score, is_neutral_site, is_conference, is_postseason, venue,
          venue_code, overtime, attendance, status,
-         home_half1, home_half2, away_half1, away_half2)
+         home_half1, home_half2, away_half1, away_half2, venue_location, tip_time)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 $13, $14, $15, $16, $17, $18, $19, $20)
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
          ON CONFLICT (natstat_id) DO UPDATE
          SET home_score = COALESCE(EXCLUDED.home_score, games.home_score),
              away_score = COALESCE(EXCLUDED.away_score, games.away_score),
@@ -483,6 +514,8 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
              home_half2 = COALESCE(EXCLUDED.home_half2, games.home_half2),
              away_half1 = COALESCE(EXCLUDED.away_half1, games.away_half1),
              away_half2 = COALESCE(EXCLUDED.away_half2, games.away_half2),
+             venue_location = COALESCE(EXCLUDED.venue_location, games.venue_location),
+             tip_time = COALESCE(EXCLUDED.tip_time, games.tip_time),
              updated_at = now()",
     )
     .bind(Uuid::new_v4())
@@ -505,6 +538,8 @@ async fn upsert_game(game: &Value, pool: &PgPool, season: i32) -> UpsertResult {
     .bind(g.home_half2)
     .bind(g.away_half1)
     .bind(g.away_half2)
+    .bind(&g.venue_location)
+    .bind(g.tip_time)
     .execute(pool)
     .await?;
 
@@ -1028,6 +1063,34 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tip_time_reads_the_clock_and_treats_midnight_as_unset() {
+        assert_eq!(
+            parse_tip_time("2026-11-02 19:30:00"),
+            NaiveTime::from_hms_opt(19, 30, 0)
+        );
+        // NatStat's "time not set" sentinel, not a midnight tip.
+        assert_eq!(parse_tip_time("2026-11-02 00:00:00"), None);
+        assert_eq!(parse_tip_time("2026-11-02"), None);
+        assert_eq!(parse_tip_time(""), None);
+    }
+
+    #[test]
+    fn parse_game_carries_tip_time_and_venue_location() {
+        let game = serde_json::json!({
+            "id": "1511105",
+            "gameday": "2026-11-02",
+            "gamedate": "2026-11-02 18:00:00",
+            "home-code": "MICH",
+            "visitor-code": "OAK",
+            "venue": { "code": "789", "name": "Crisler Center", "location": "Ann Arbor, MI" },
+        });
+        let row = parse_game(&game).unwrap();
+        assert_eq!(row.tip_time, NaiveTime::from_hms_opt(18, 0, 0));
+        assert_eq!(row.venue_location.as_deref(), Some("Ann Arbor, MI"));
+        assert_eq!(row.venue.as_deref(), Some("Crisler Center"));
+    }
 
     #[test]
     fn silent_loop_reports_nothing() {

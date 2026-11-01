@@ -290,3 +290,115 @@ async fn sweep_is_idempotent() {
         );
     }
 }
+
+/// The upcoming-game sweep (#429) against the live path, the same exactness
+/// check as above on the other regime: season-aggregate features, the prod
+/// bundle, and the LIVE blend clock.
+///
+/// A played season has no unplayed games, so this inserts two synthetic ones
+/// between real teams — one home, one neutral — sweeps, compares, and deletes
+/// them (the projection rows cascade). The blend date sits inside the decay
+/// window so the preseason leg is exercised too.
+#[tokio::test]
+#[ignore = "requires a local DB with a played season and the ONNX bundles"]
+async fn upcoming_projections_match_the_live_path() {
+    let pool = pool().await;
+    let predictor = predictor();
+    let season = season();
+    let blend_date = NaiveDate::from_ymd_opt(season - 1, 11, 20).unwrap();
+
+    // Four distinct teams that played, so both synthetic games qualify.
+    let teams: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT home_team_id FROM games \
+         WHERE season = $1 AND home_score IS NOT NULL AND home_team_id IS NOT NULL \
+         ORDER BY home_team_id LIMIT 4",
+    )
+    .bind(season)
+    .fetch_all(&pool)
+    .await
+    .expect("pick teams");
+    assert_eq!(teams.len(), 4, "season {season} needs played teams");
+
+    let tag = Uuid::new_v4();
+    let fixtures = [(teams[0], teams[1], false), (teams[2], teams[3], true)];
+    let mut ids = Vec::new();
+    for (i, (home, away, neutral)) in fixtures.iter().enumerate() {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO games (natstat_id, season, game_date, home_team_id, away_team_id, \
+                                is_neutral_site, is_conference) \
+             VALUES ($1, $2, $3, $4, $5, $6, false) RETURNING id",
+        )
+        .bind(format!("parity-upcoming-{tag}-{i}"))
+        .bind(season)
+        .bind(NaiveDate::from_ymd_opt(season, 4, 30).unwrap())
+        .bind(home)
+        .bind(away)
+        .bind(neutral)
+        .fetch_one(&pool)
+        .await
+        .expect("insert synthetic game");
+        ids.push(id);
+    }
+
+    let task_pool = pool.clone();
+    let outcome = async move {
+        let pool = task_pool;
+        let report = cstat_ingest::game_projections::run_upcoming_season(
+            &pool, &predictor, season, blend_date,
+        )
+        .await
+        .expect("sweep upcoming games");
+        assert!(report.written >= fixtures.len(), "sweep wrote {report:?}");
+
+        for (id, (home, away, neutral)) in ids.iter().zip(fixtures) {
+            let row = sqlx::query(
+                "SELECT projected_margin, home_win_prob, projected_home_score, \
+                        projected_away_score \
+                 FROM upcoming_game_projections WHERE game_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("stored upcoming row");
+            let live = predict_projection(
+                &pool,
+                &predictor,
+                home,
+                away,
+                season,
+                neutral,
+                false,
+                BlendClock::Live(blend_date),
+            )
+            .await
+            .expect("live projection");
+            let margin: f64 = row.get("projected_margin");
+            let p: f64 = row.get("home_win_prob");
+            assert!(
+                (live.margin as f64 - margin).abs() < 1e-6,
+                "margin drift (neutral={neutral}): stored {margin} vs live {}",
+                live.margin
+            );
+            assert!((live.home_win_prob - p).abs() < 1e-9, "win-prob drift");
+            assert_eq!(
+                (live.home_score, live.away_score),
+                (
+                    row.get::<i32, _>("projected_home_score"),
+                    row.get::<i32, _>("projected_away_score")
+                ),
+                "score drift"
+            );
+        }
+    };
+    // Clean up even when an assertion fails, so a red run does not leave
+    // synthetic games in the season.
+    let result = tokio::spawn(outcome).await;
+    sqlx::query("DELETE FROM games WHERE natstat_id LIKE $1")
+        .bind(format!("parity-upcoming-{tag}-%"))
+        .execute(&pool)
+        .await
+        .expect("remove synthetic games");
+    if let Err(e) = result {
+        std::panic::resume_unwind(e.into_panic());
+    }
+}

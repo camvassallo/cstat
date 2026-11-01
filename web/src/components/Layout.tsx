@@ -26,7 +26,8 @@ type NavItem = { to: string; label: string };
 
 // Grouped nav — the players pod (roster + its mode tabs + the two player-level
 // analysis pages), the forecast pod (game predictor + preseason projections),
-// and the just-for-fun games. Rankings / Lineups / Coaches stay top-level.
+// and the just-for-fun games. Rankings / Schedule / Lineups / Coaches stay
+// top-level.
 const PLAYERS_ITEMS: NavItem[] = [
   { to: '/players', label: 'Player Rankings' },
   { to: '/players/compare', label: 'Compare' },
@@ -244,6 +245,9 @@ export default function Layout() {
       <NavLink to="/" end className={({ isActive }) => navLinkClass(isActive)}>
         Rankings
       </NavLink>
+      <NavLink to="/schedule" className={({ isActive }) => navLinkClass(isActive)}>
+        Schedule
+      </NavLink>
       <NavDropdown
         label="Players"
         active={playersActive}
@@ -359,6 +363,9 @@ export default function Layout() {
         <div className="brand-chrome md:hidden border-b px-3 py-2 flex flex-col gap-1">
           <NavLink to="/" end onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Rankings
+          </NavLink>
+          <NavLink to="/schedule" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
+            Schedule
           </NavLink>
           {mobileGroup('Players', PLAYERS_ITEMS)}
           <NavLink to="/lineups" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>

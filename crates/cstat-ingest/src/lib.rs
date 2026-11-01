@@ -156,6 +156,45 @@ pub fn today_utc() -> NaiveDate {
     d
 }
 
+/// Today's date in US Eastern time — the calendar every game date is in.
+///
+/// NatStat stamps `gameday` in Eastern, so "tonight's games" is an Eastern
+/// date: from 8pm ET onward the UTC date is already tomorrow, and a day picker
+/// defaulting to [`today_utc`] would open on the wrong slate for the whole US
+/// evening. A simulated clock (see [`today_utc`]) is returned as-is: it is
+/// already a calendar date, with no time of day to convert.
+pub fn today_eastern() -> NaiveDate {
+    let days = SIMULATED_TODAY.load(Ordering::Relaxed);
+    if let Some(d) = simulated_override(days, env_simulated_date()) {
+        return d;
+    }
+    eastern_date(Utc::now())
+}
+
+/// The US Eastern calendar date at instant `now`.
+///
+/// Implements the US daylight-saving rule directly rather than pulling in a
+/// time-zone database for one zone: EDT (UTC−4) from 2:00 local on the second
+/// Sunday of March to 2:00 local on the first Sunday of November, EST (UTC−5)
+/// otherwise. Those transitions are 07:00 and 06:00 UTC respectively.
+fn eastern_date(now: chrono::DateTime<Utc>) -> NaiveDate {
+    let year = now.year();
+    let nth_sunday = |month: u32, n: u32| {
+        let first = NaiveDate::from_ymd_opt(year, month, 1).expect("valid month");
+        let to_sunday = (7 - first.weekday().num_days_from_sunday()) % 7;
+        first + chrono::Duration::days((to_sunday + 7 * (n - 1)) as i64)
+    };
+    let dst_start = nth_sunday(3, 2).and_hms_opt(7, 0, 0).expect("valid time");
+    let dst_end = nth_sunday(11, 1).and_hms_opt(6, 0, 0).expect("valid time");
+    let utc = now.naive_utc();
+    let offset_hours = if utc >= dst_start && utc < dst_end {
+        4
+    } else {
+        5
+    };
+    (utc - chrono::Duration::hours(offset_hours)).date()
+}
+
 /// Season the NCAA basketball calendar is currently in. November rolls
 /// forward to the next year's season (e.g. November 2025 → 2026 season).
 /// Used as the default for CLI commands so the binary doesn't go stale at
@@ -164,8 +203,10 @@ pub fn current_natstat_season() -> i32 {
     season_for_date(today_utc())
 }
 
-/// [`current_natstat_season`]'s date→season rule, factored out for testing.
-fn season_for_date(today: NaiveDate) -> i32 {
+/// [`current_natstat_season`]'s date→season rule: the season a calendar date
+/// belongs to. Public for callers that hold a date rather than "today" (the
+/// Schedule tab's day picker).
+pub fn season_for_date(today: NaiveDate) -> i32 {
     if today.month() >= 11 {
         today.year() + 1
     } else {
@@ -459,6 +500,27 @@ mod tests {
         set_simulated_today(None);
         // Real clock again — just sanity-check it's nowhere near the override.
         assert_ne!(today_utc(), sim);
+    }
+
+    #[test]
+    fn eastern_date_follows_the_us_dst_rule() {
+        let at = |s: &str| {
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M")
+                .unwrap()
+                .and_utc()
+        };
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        // 9pm EST on a December night is already the next UTC day.
+        assert_eq!(eastern_date(at("2026-12-02 02:00")), d("2026-12-01"));
+        assert_eq!(eastern_date(at("2026-12-02 05:30")), d("2026-12-02"));
+        // EDT in October: midnight Eastern is 04:00 UTC.
+        assert_eq!(eastern_date(at("2026-10-15 03:59")), d("2026-10-14"));
+        assert_eq!(eastern_date(at("2026-10-15 04:00")), d("2026-10-15"));
+        // 2026 transitions: Sun Mar 8 07:00 UTC and Sun Nov 1 06:00 UTC.
+        assert_eq!(eastern_date(at("2026-03-08 06:59")), d("2026-03-08"));
+        assert_eq!(eastern_date(at("2026-03-09 03:30")), d("2026-03-08"));
+        assert_eq!(eastern_date(at("2026-03-09 04:30")), d("2026-03-09"));
+        assert_eq!(eastern_date(at("2026-11-02 04:30")), d("2026-11-01"));
     }
 
     #[test]

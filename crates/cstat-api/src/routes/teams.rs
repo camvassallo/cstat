@@ -169,7 +169,7 @@ async fn rankings(
 /// same game from whichever side the viewer is looking at. Margin negates, the
 /// win probability mirrors around 0.5, and the two scores swap — the same
 /// transform the live fan-out applies to a `ProjectionSummary`.
-fn stored_in_team_frame(
+pub(crate) fn stored_in_team_frame(
     p: &queries::StoredGameProjection,
     requested_is_home: bool,
 ) -> (f64, f64, i32, i32) {

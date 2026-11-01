@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, types::JsonValue};
 use std::collections::HashMap;
@@ -2293,6 +2293,175 @@ pub async fn get_games(
     .bind(team_id)
     .bind(limit)
     .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Schedule tab (#429)
+// ---------------------------------------------------------------------------
+
+/// One game on a day's slate, played or not.
+#[derive(Debug, Serialize, FromRow)]
+pub struct ScheduleGame {
+    pub game_id: Uuid,
+    pub game_date: NaiveDate,
+    /// ET wall-clock tipoff; `None` when the feed has no time yet.
+    pub tip_time: Option<NaiveTime>,
+    pub season: i32,
+    pub home_team_id: Option<Uuid>,
+    pub home_team_name: Option<String>,
+    pub away_team_id: Option<Uuid>,
+    pub away_team_name: Option<String>,
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
+    pub is_neutral_site: bool,
+    pub is_conference: Option<bool>,
+    pub is_postseason: Option<bool>,
+    pub venue: Option<String>,
+    pub venue_location: Option<String>,
+    pub overtime: Option<String>,
+}
+
+/// Every game on `date`, earliest tip first (unscheduled times last).
+pub async fn get_schedule_games(
+    pool: &PgPool,
+    season: i32,
+    date: NaiveDate,
+) -> Result<Vec<ScheduleGame>, sqlx::Error> {
+    sqlx::query_as::<_, ScheduleGame>(
+        r#"
+        SELECT
+            g.id AS game_id,
+            g.game_date,
+            g.tip_time,
+            g.season,
+            g.home_team_id,
+            COALESCE(ht.short_name, ht.name) AS home_team_name,
+            g.away_team_id,
+            COALESCE(at.short_name, at.name) AS away_team_name,
+            g.home_score,
+            g.away_score,
+            g.is_neutral_site,
+            g.is_conference,
+            g.is_postseason,
+            g.venue,
+            g.venue_location,
+            g.overtime
+        FROM games g
+        LEFT JOIN teams ht ON ht.id = g.home_team_id AND ht.season = g.season
+        LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
+        WHERE g.season = $1 AND g.game_date = $2
+        ORDER BY g.tip_time NULLS LAST, home_team_name, g.id
+        "#,
+    )
+    .bind(season)
+    .bind(date)
+    .fetch_all(pool)
+    .await
+}
+
+/// The nearest dates before and after `date` that have any game, across
+/// seasons, so the day picker can skip empty days (and the offseason).
+pub async fn get_adjacent_game_dates(
+    pool: &PgPool,
+    date: NaiveDate,
+) -> Result<(Option<NaiveDate>, Option<NaiveDate>), sqlx::Error> {
+    sqlx::query_as(
+        r#"
+        SELECT
+            (SELECT max(game_date) FROM games WHERE game_date < $1),
+            (SELECT min(game_date) FROM games WHERE game_date > $1)
+        "#,
+    )
+    .bind(date)
+    .fetch_one(pool)
+    .await
+}
+
+/// Materialized pre-game projections for one day's games, keyed by `game_id`.
+/// The date-scoped twin of [`get_team_game_projections`].
+pub async fn get_date_game_projections(
+    pool: &PgPool,
+    season: i32,
+    date: NaiveDate,
+) -> Result<HashMap<Uuid, StoredGameProjection>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, StoredGameProjection>(
+        r#"
+        SELECT game_id, home_team_id, projected_margin, home_win_prob,
+               projected_home_score, projected_away_score
+        FROM game_projections
+        WHERE season = $1 AND game_date = $2
+        "#,
+    )
+    .bind(season)
+    .bind(date)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
+/// Materialized projections for one day's UPCOMING games (#429), keyed by
+/// `game_id`, in the same home-frame shape as [`StoredGameProjection`]. A row
+/// can outlive its game's tipoff until the next nightly moves the game into
+/// `game_projections`; read in that window it is the pre-game projection.
+pub async fn get_date_upcoming_projections(
+    pool: &PgPool,
+    season: i32,
+    date: NaiveDate,
+) -> Result<HashMap<Uuid, StoredGameProjection>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, StoredGameProjection>(
+        r#"
+        SELECT game_id, home_team_id, projected_margin, home_win_prob,
+               projected_home_score, projected_away_score
+        FROM upcoming_game_projections
+        WHERE season = $1 AND game_date = $2
+        "#,
+    )
+    .bind(season)
+    .bind(date)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.game_id, r)).collect())
+}
+
+/// The inputs to a team's schedule rating: its current adjusted efficiency
+/// margin, its preseason projection, and whether it has played yet.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct TeamRatingInputs {
+    pub team_id: Uuid,
+    pub adj_em: Option<f64>,
+    pub preseason_adj_em: Option<f32>,
+    pub has_played: bool,
+}
+
+/// [`TeamRatingInputs`] for every team in a season, in one query.
+pub async fn get_team_rating_inputs(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<TeamRatingInputs>, sqlx::Error> {
+    sqlx::query_as::<_, TeamRatingInputs>(
+        r#"
+        WITH played AS (
+            SELECT home_team_id AS team_id FROM games
+             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+            UNION
+            SELECT away_team_id FROM games
+             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+        )
+        SELECT
+            t.id AS team_id,
+            tss.adj_efficiency_margin AS adj_em,
+            tpp.projected_adj_em AS preseason_adj_em,
+            (p.team_id IS NOT NULL) AS has_played
+        FROM teams t
+        LEFT JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
+        LEFT JOIN team_preseason_projection tpp ON tpp.team_id = t.id AND tpp.season = t.season
+        LEFT JOIN played p ON p.team_id = t.id
+        WHERE t.season = $1
+        "#,
+    )
+    .bind(season)
     .fetch_all(pool)
     .await
 }

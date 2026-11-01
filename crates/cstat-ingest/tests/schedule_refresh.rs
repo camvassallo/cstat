@@ -11,7 +11,7 @@
 //! unset. The one exception is `prune_blockers_cover_every_foreign_key`, which
 //! reads the catalog of its own throwaway, freshly migrated database.
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveTime};
 use cstat_core::Database;
 use cstat_ingest::ingest::games::GameRow;
 use cstat_ingest::ingest::schedule::{PRUNE_BLOCKERS, ScheduleRefresh, apply_season_schedule};
@@ -53,6 +53,8 @@ const GAMES_DDL: &str = "
         home_half2 integer,
         away_half1 integer,
         away_half2 integer,
+        venue_location text,
+        tip_time time,
         updated_at timestamp NOT NULL DEFAULT now()
     )";
 
@@ -123,6 +125,8 @@ fn scheduled(id: &str, date: NaiveDate) -> GameRow {
         is_postseason: None,
         venue: None,
         venue_code: None,
+        venue_location: None,
+        tip_time: None,
         overtime: None,
         attendance: None,
         status: None,
@@ -296,6 +300,54 @@ async fn an_unplayed_game_follows_a_reschedule_and_fills_new_fields() {
     );
 }
 
+/// A tip time fills in and follows a change, but a feed that reverts to "time
+/// not set" keeps the last published time rather than going back to TBA.
+#[tokio::test]
+async fn tip_time_follows_changes_but_a_tba_cannot_blank_it() {
+    let Some(pool) = isolated_pool().await else {
+        return;
+    };
+    let tip = |row: &mut GameRow, h: u32| row.tip_time = NaiveTime::from_hms_opt(h, 0, 0);
+    let read = |pool: PgPool| async move {
+        sqlx::query_as::<_, (Option<NaiveTime>, Option<String>)>(
+            "SELECT tip_time, venue_location FROM games WHERE natstat_id = 'g1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    let mut row = scheduled("g1", d(12, 3));
+    tip(&mut row, 19);
+    row.venue_location = Some("Ann Arbor, MI".into());
+    assert_eq!(apply(&pool, &[row.clone()], true).await.inserted, 1);
+    assert_eq!(
+        read(pool.clone()).await,
+        (
+            NaiveTime::from_hms_opt(19, 0, 0),
+            Some("Ann Arbor, MI".into())
+        )
+    );
+
+    tip(&mut row, 21);
+    assert_eq!(apply(&pool, &[row.clone()], true).await.updated, 1);
+    assert_eq!(
+        read(pool.clone()).await.0,
+        NaiveTime::from_hms_opt(21, 0, 0)
+    );
+
+    row.tip_time = None;
+    row.venue_location = None;
+    assert_eq!(apply(&pool, &[row], true).await.written(), 0);
+    assert_eq!(
+        read(pool.clone()).await,
+        (
+            NaiveTime::from_hms_opt(21, 0, 0),
+            Some("Ann Arbor, MI".into())
+        )
+    );
+}
+
 #[tokio::test]
 async fn a_game_stored_under_another_season_is_left_alone() {
     let Some(pool) = isolated_pool().await else {
@@ -457,7 +509,11 @@ async fn prune_blockers_cover_every_foreign_key() {
     let mut expected: Vec<String> = PRUNE_BLOCKERS
         .iter()
         .map(|s| s.to_string())
-        .chain(["schedules".to_string(), "game_projections".to_string()])
+        .chain([
+            "schedules".to_string(),
+            "game_projections".to_string(),
+            "upcoming_game_projections".to_string(),
+        ])
         .collect();
     expected.sort();
     assert_eq!(referencing, expected);

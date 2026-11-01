@@ -282,6 +282,7 @@ fn explain_game(
     cache: &SeasonCache,
     rosters: &HashMap<Uuid, RosterAgg>,
     game: &GameRow,
+    is_pit: bool,
 ) -> Option<Explained> {
     let (home_ts, home_roster, home_form) = parts(cache, rosters, game.home_team_id)?;
     let (away_ts, away_roster, away_form) = parts(cache, rosters, game.away_team_id)?;
@@ -311,7 +312,7 @@ fn explain_game(
     );
     // Attribution is skipped throughout: `game_projections` stores margin,
     // win probability and scores, none of which TreeSHAP touches.
-    let fwd = predict_from_features(predictor, &fwd_features, true, Attribution::Skip).ok()?;
+    let fwd = predict_from_features(predictor, &fwd_features, is_pit, Attribution::Skip).ok()?;
 
     let explained: Explained = if is_neutral {
         let rev_features = build(
@@ -322,8 +323,9 @@ fn explain_game(
             home_roster,
             home_form,
         );
-        let rev = predict_from_features(predictor, &rev_features, true, Attribution::Skip).ok()?;
-        combine_neutral(fwd, rev, true)
+        let rev =
+            predict_from_features(predictor, &rev_features, is_pit, Attribution::Skip).ok()?;
+        combine_neutral(fwd, rev, is_pit)
     } else {
         fwd
     };
@@ -339,12 +341,22 @@ fn project_game(
     as_of_date: NaiveDate,
     season: i32,
 ) -> ProjectionSummary {
+    blend_game(cache, game, explained, BlendClock::AsOf(as_of_date), season)
+}
+
+/// The preseason blend for one game's model leg, on `clock`.
+fn blend_game(
+    cache: &SeasonCache,
+    game: &GameRow,
+    explained: &Explained,
+    clock: BlendClock,
+    season: i32,
+) -> ProjectionSummary {
     let venue = if game.is_neutral_site {
         Venue::Neutral
     } else {
         Venue::Home
     };
-    let clock = BlendClock::AsOf(as_of_date);
     let pre_margin = if clock.blend_weight(season) > 0.0 {
         cache.preseason_margin(game.home_team_id, game.away_team_id, venue)
     } else {
@@ -460,7 +472,7 @@ async fn explain_cutoff(
 
     let legs = day
         .iter()
-        .map(|g| explain_game(predictor, cache, &rosters, g))
+        .map(|g| explain_game(predictor, cache, &rosters, g, true))
         .collect();
     Ok((legs, roster_failed))
 }
@@ -669,4 +681,206 @@ pub async fn run(pool: &PgPool, predictor: &Predictor, seasons: &[i32]) -> Resul
         total.fetch_failures += r.fetch_failures;
     }
     Ok(total)
+}
+
+// ---------------------------------------------------------------------------
+// Upcoming games (#429)
+// ---------------------------------------------------------------------------
+
+/// What one season's upcoming-game sweep did.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UpcomingReport {
+    /// Rows written (inserted or updated).
+    pub written: usize,
+    /// Upcoming games that could not be projected (a feature part missing).
+    pub skipped: usize,
+    /// Rows deleted: games now covered by `game_projections`, or whose teams,
+    /// venue or conference flag changed under them.
+    pub pruned: usize,
+    /// Per-team feature fetches that FAILED rather than found nothing.
+    pub fetch_failures: usize,
+}
+
+/// Every unplayed game in the season whose two teams have both played.
+///
+/// "Both played" is the line between the model and the preseason projection,
+/// the same one the Schedule tab draws: a team with no completed game has no
+/// season stats worth feeding the model — at most the blank row the `/teams`
+/// ingest writes, which would yield an all-default vector and a confident
+/// garbage margin. The API answers those games from the preseason anchors.
+async fn fetch_upcoming_games(pool: &PgPool, season: i32) -> Result<Vec<GameRow>> {
+    let rows = sqlx::query_as::<_, GameRow>(
+        r#"
+        WITH played AS (
+            SELECT home_team_id AS team_id FROM games
+             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+            UNION
+            SELECT away_team_id FROM games
+             WHERE season = $1 AND home_score IS NOT NULL AND away_score IS NOT NULL
+        )
+        SELECT g.id, g.game_date, g.home_team_id, g.away_team_id,
+               g.is_neutral_site, g.is_conference
+        FROM games g
+        JOIN played ph ON ph.team_id = g.home_team_id
+        JOIN played pa ON pa.team_id = g.away_team_id
+        WHERE g.season = $1
+          AND (g.home_score IS NULL OR g.away_score IS NULL)
+        ORDER BY g.game_date, g.id
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .context("fetching upcoming games")?;
+    Ok(rows)
+}
+
+/// Project every upcoming game of `season` and persist it to
+/// `upcoming_game_projections`, with the preseason blend weighted for
+/// `blend_date` (the nightly's today).
+///
+/// Cheap where the completed-game sweep is not: an upcoming game reads only
+/// season-aggregate features, so every part is fetched once per TEAM — three
+/// reads for each of ~360 teams — and each game is then a vector assembly and
+/// an ONNX run. The result equals the live `predict_projection` on the same
+/// inputs (same assembly, same neutral symmetrisation, same blend), and those
+/// inputs only move when the nightly recomputes them.
+pub async fn run_upcoming_season(
+    pool: &PgPool,
+    predictor: &Predictor,
+    season: i32,
+    blend_date: NaiveDate,
+) -> Result<UpcomingReport> {
+    let games = fetch_upcoming_games(pool, season).await?;
+    let mut report = UpcomingReport::default();
+
+    if !games.is_empty() {
+        let teams = teams_of(&games);
+        let (cache, stats_failed) = SeasonCache::load(pool, season, &teams).await?;
+        let (rosters, roster_failed) = fetch_map(pool, "roster_agg", &teams, |p, id| async move {
+            features::get_roster_agg(&p, id, season).await
+        })
+        .await;
+        report.fetch_failures = stats_failed + roster_failed;
+
+        let clock = BlendClock::Live(blend_date);
+        let mut out = Vec::with_capacity(games.len());
+        for g in &games {
+            match explain_game(predictor, &cache, &rosters, g, false) {
+                Some(explained) => out.push(OutRow {
+                    game_id: g.id,
+                    game_date: g.game_date,
+                    as_of_date: blend_date,
+                    home_team_id: g.home_team_id,
+                    away_team_id: g.away_team_id,
+                    is_neutral: g.is_neutral_site,
+                    is_conference: g.is_conference.unwrap_or(false),
+                    summary: blend_game(&cache, g, &explained, clock, season),
+                }),
+                None => report.skipped += 1,
+            }
+        }
+        report.written = write_upcoming_rows(pool, season, &out).await?;
+    }
+
+    // Content-keyed, like the completed-game prune: a game skipped tonight by
+    // a transient failure keeps last night's row. A row goes when the game is
+    // gone from what it describes, or once `game_projections` holds the game —
+    // until then a game played since this run still reads its row here, which
+    // is its pre-game projection.
+    let pruned = sqlx::query(
+        r#"
+        DELETE FROM upcoming_game_projections u
+        WHERE u.season = $1
+          AND (
+              EXISTS (SELECT 1 FROM game_projections gp WHERE gp.game_id = u.game_id)
+              OR NOT EXISTS (
+                  SELECT 1 FROM games g
+                  WHERE g.id = u.game_id
+                    AND g.season = u.season
+                    AND g.home_team_id = u.home_team_id
+                    AND g.away_team_id = u.away_team_id
+                    AND g.is_neutral_site = u.is_neutral
+                    AND COALESCE(g.is_conference, false) = u.is_conference
+              )
+          )
+        "#,
+    )
+    .bind(season)
+    .execute(pool)
+    .await
+    .context("pruning stale upcoming_game_projections rows")?;
+    report.pruned = pruned.rows_affected() as usize;
+
+    info!(
+        season,
+        written = report.written,
+        skipped = report.skipped,
+        pruned = report.pruned,
+        fetch_failures = report.fetch_failures,
+        "materialized upcoming-game projections"
+    );
+    Ok(report)
+}
+
+/// Upsert upcoming rows in one statement. `as_of_date` on [`OutRow`] carries
+/// the blend date here.
+async fn write_upcoming_rows(pool: &PgPool, season: i32, rows: &[OutRow]) -> Result<usize> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let game_ids: Vec<Uuid> = rows.iter().map(|r| r.game_id).collect();
+    let game_dates: Vec<NaiveDate> = rows.iter().map(|r| r.game_date).collect();
+    let blend_dates: Vec<NaiveDate> = rows.iter().map(|r| r.as_of_date).collect();
+    let home_ids: Vec<Uuid> = rows.iter().map(|r| r.home_team_id).collect();
+    let away_ids: Vec<Uuid> = rows.iter().map(|r| r.away_team_id).collect();
+    let neutrals: Vec<bool> = rows.iter().map(|r| r.is_neutral).collect();
+    let conferences: Vec<bool> = rows.iter().map(|r| r.is_conference).collect();
+    let margins: Vec<f64> = rows.iter().map(|r| r.summary.margin as f64).collect();
+    let win_probs: Vec<f64> = rows.iter().map(|r| r.summary.home_win_prob).collect();
+    let home_scores: Vec<i32> = rows.iter().map(|r| r.summary.home_score).collect();
+    let away_scores: Vec<i32> = rows.iter().map(|r| r.summary.away_score).collect();
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO upcoming_game_projections
+            (game_id, season, game_date, blend_date, home_team_id, away_team_id,
+             is_neutral, is_conference, projected_margin, home_win_prob,
+             projected_home_score, projected_away_score, computed_at)
+        SELECT g, $2, gd, bd, h, a, n, c, m, p, hs, aws, now()
+        FROM UNNEST(
+            $1::uuid[], $3::date[], $4::date[], $5::uuid[], $6::uuid[],
+            $7::bool[], $8::bool[], $9::float8[], $10::float8[], $11::int[], $12::int[]
+        ) AS t(g, gd, bd, h, a, n, c, m, p, hs, aws)
+        ON CONFLICT (game_id) DO UPDATE SET
+            season               = EXCLUDED.season,
+            game_date            = EXCLUDED.game_date,
+            blend_date           = EXCLUDED.blend_date,
+            home_team_id         = EXCLUDED.home_team_id,
+            away_team_id         = EXCLUDED.away_team_id,
+            is_neutral           = EXCLUDED.is_neutral,
+            is_conference        = EXCLUDED.is_conference,
+            projected_margin     = EXCLUDED.projected_margin,
+            home_win_prob        = EXCLUDED.home_win_prob,
+            projected_home_score = EXCLUDED.projected_home_score,
+            projected_away_score = EXCLUDED.projected_away_score,
+            computed_at          = now()
+        "#,
+    )
+    .bind(&game_ids)
+    .bind(season)
+    .bind(&game_dates)
+    .bind(&blend_dates)
+    .bind(&home_ids)
+    .bind(&away_ids)
+    .bind(&neutrals)
+    .bind(&conferences)
+    .bind(&margins)
+    .bind(&win_probs)
+    .bind(&home_scores)
+    .bind(&away_scores)
+    .execute(pool)
+    .await
+    .context("writing upcoming_game_projections rows")?;
+    Ok(result.rows_affected() as usize)
 }

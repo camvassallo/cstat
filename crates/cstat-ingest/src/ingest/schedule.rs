@@ -27,7 +27,7 @@ use tracing::{info, warn};
 /// Tables whose rows block deleting a `games` row: every non-cascading
 /// foreign key onto `games` except `schedules`, which the prune clears itself
 /// (`compute_schedules` rebuilds it from `games` anyway). `game_projections`
-/// cascades. A test checks this list against the catalog, so a new table
+/// and `upcoming_game_projections` cascade. A test checks this list against the catalog, so a new table
 /// referencing `games` fails the build rather than the nightly.
 pub const PRUNE_BLOCKERS: [&str; 7] = [
     "game_forecasts",
@@ -126,7 +126,9 @@ pub async fn fetch_season(
 ///   detector would find nothing to undo it. A stored game still awaiting a
 ///   result can take one from the feed, exactly as the window step would.
 /// - Everything else only fills in (`COALESCE`), so a schedule row carrying
-///   no venue or status cannot blank one.
+///   no venue or status cannot blank one. That includes `tip_time`: a changed
+///   time overwrites the stored one, but a game the feed reverts to "time not
+///   set" keeps the last time it published rather than going back to TBA.
 /// - `is_neutral_site` is promote-only and `is_conference` fills only when
 ///   unknown: `compute_all` derives both, and resetting them would rewrite
 ///   thousands of rows a night for compute to flip back.
@@ -167,17 +169,20 @@ pub async fn apply_season_schedule(
             "INSERT INTO games AS g (id, natstat_id, season, game_date, home_team_id, away_team_id,
                  home_score, away_score, is_neutral_site, is_conference, is_postseason, venue,
                  venue_code, overtime, attendance, status,
-                 home_half1, home_half2, away_half1, away_half2)
+                 home_half1, home_half2, away_half1, away_half2, venue_location, tip_time)
              SELECT gen_random_uuid(), s.natstat_id, $1, s.game_date, s.home_team_id, s.away_team_id,
                     s.home_score, s.away_score, s.is_neutral, s.is_conference, s.is_postseason,
                     s.venue, s.venue_code, s.overtime, s.attendance, s.status,
-                    s.home_half1, s.home_half2, s.away_half1, s.away_half2
+                    s.home_half1, s.home_half2, s.away_half1, s.away_half2,
+                    s.venue_location, s.tip_time
              FROM UNNEST($2::text[], $3::date[], $4::uuid[], $5::uuid[], $6::int[], $7::int[],
                          $8::bool[], $9::bool[], $10::bool[], $11::text[], $12::text[], $13::text[],
-                         $14::int[], $15::text[], $16::int[], $17::int[], $18::int[], $19::int[])
+                         $14::int[], $15::text[], $16::int[], $17::int[], $18::int[], $19::int[],
+                         $20::text[], $21::time[])
                   AS s(natstat_id, game_date, home_team_id, away_team_id, home_score, away_score,
                        is_neutral, is_conference, is_postseason, venue, venue_code, overtime,
-                       attendance, status, home_half1, home_half2, away_half1, away_half2)
+                       attendance, status, home_half1, home_half2, away_half1, away_half2,
+                       venue_location, tip_time)
              ON CONFLICT (natstat_id) DO UPDATE SET
                  game_date = EXCLUDED.game_date,
                  home_team_id = COALESCE(EXCLUDED.home_team_id, g.home_team_id),
@@ -196,6 +201,8 @@ pub async fn apply_season_schedule(
                  home_half2 = COALESCE(EXCLUDED.home_half2, g.home_half2),
                  away_half1 = COALESCE(EXCLUDED.away_half1, g.away_half1),
                  away_half2 = COALESCE(EXCLUDED.away_half2, g.away_half2),
+                 venue_location = COALESCE(EXCLUDED.venue_location, g.venue_location),
+                 tip_time = COALESCE(EXCLUDED.tip_time, g.tip_time),
                  updated_at = now()
              WHERE g.season = EXCLUDED.season
                AND g.home_score IS NULL AND g.away_score IS NULL
@@ -215,12 +222,15 @@ pub async fn apply_season_schedule(
                     COALESCE(EXCLUDED.home_half1, g.home_half1),
                     COALESCE(EXCLUDED.home_half2, g.home_half2),
                     COALESCE(EXCLUDED.away_half1, g.away_half1),
-                    COALESCE(EXCLUDED.away_half2, g.away_half2))
+                    COALESCE(EXCLUDED.away_half2, g.away_half2),
+                    COALESCE(EXCLUDED.venue_location, g.venue_location),
+                    COALESCE(EXCLUDED.tip_time, g.tip_time))
                    IS DISTINCT FROM
                    (g.game_date, g.home_team_id, g.away_team_id, g.home_score, g.away_score,
                     g.is_neutral_site, g.is_conference, g.is_postseason, g.venue, g.venue_code,
                     g.overtime, g.attendance, g.status,
-                    g.home_half1, g.home_half2, g.away_half1, g.away_half2)
+                    g.home_half1, g.home_half2, g.away_half1, g.away_half2,
+                    g.venue_location, g.tip_time)
              RETURNING (xmax = 0)",
         )
         .bind(season)
@@ -242,6 +252,8 @@ pub async fn apply_season_schedule(
         .bind(int(|r| r.home_half2))
         .bind(int(|r| r.away_half1))
         .bind(int(|r| r.away_half2))
+        .bind(col(|r| r.venue_location.clone()))
+        .bind(unique.iter().map(|r| r.tip_time).collect::<Vec<_>>())
         .fetch_all(&mut *tx)
         .await?;
         out.inserted = inserted.iter().filter(|&&i| i).count() as u64;

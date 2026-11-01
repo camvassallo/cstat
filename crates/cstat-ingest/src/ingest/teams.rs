@@ -548,7 +548,7 @@ mod tests {
         // from a from-scratch bootstrap.
         let sfpa = json!({"code": "SFPA", "name": "Saint Francis (PA)", "active": "N"});
         let sept = day("2026-09-28");
-        assert_eq!(crate::current_natstat_season(), 2026);
+        assert_eq!(crate::season_for_date(sept), 2026);
         assert!(
             !skip_departed_program(&sfpa, 2026, sept),
             "2026 opened in Nov 2025 and has been played; it is history"

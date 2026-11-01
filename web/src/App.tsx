@@ -13,6 +13,7 @@ const PlayerDetail = lazy(() => import('./pages/PlayerDetail'));
 const PlayerProgression = lazy(() => import('./pages/PlayerProgression'));
 const PlayerCompare = lazy(() => import('./pages/PlayerCompare'));
 const Predict = lazy(() => import('./pages/Predict'));
+const Schedule = lazy(() => import('./pages/Schedule'));
 const Archetypes = lazy(() => import('./pages/Archetypes'));
 const Projected = lazy(() => import('./pages/Projected'));
 // Named export, so map it onto the default `lazy` expects. It shares Projected's
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/players/compare" element={<PlayerCompare />} />
           <Route path="/players/:id" element={<PlayerDetail />} />
           <Route path="/players/:id/progression" element={<PlayerProgression />} />
+          <Route path="/schedule" element={<Schedule />} />
           <Route path="/predict" element={<Predict />} />
           <Route path="/archetypes" element={<Archetypes />} />
           <Route path="/conferences/:code" element={<Conference />} />

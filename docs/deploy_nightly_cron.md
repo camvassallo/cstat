@@ -26,6 +26,7 @@ compute_all   (load-bearing)
 projections   (forecast-season roster projections, plus the current season when it has
                no anchor at all — best-effort, needs the ONNX models)
 game_projections   (completed-game projections for the current season — best-effort, same models)
+upcoming_projections   (unplayed-game projections for the Schedule tab — best-effort, same models)
 invariants → row_counts   (post-compute quality gates — degrade, never abort)
 ```
 
@@ -93,6 +94,18 @@ Its `rows` is the number of games materialized. A **0 on a night with played
 games** is the alarming reading, not a quiet one: it means the sweep completed
 over nothing, and the row-count gate tracks `game_projections` for exactly that
 shape.
+
+`upcoming_projections` does the same for every **unplayed** game whose two
+teams have both played, into `upcoming_game_projections`, which the Schedule
+tab (`GET /api/schedule`) reads instead of running the model for a whole day's
+slate per view (#429). An upcoming game reads only season-aggregate features,
+so the sweep fetches each team's parts once and is seconds, not tens of them.
+A row outlives its game's tipoff until the next night's `game_projections`
+covers the game — in that window it is the pre-game projection. Games with a
+team that has not played are not stored; the API answers them from the
+preseason anchors. Best-effort on the same terms: a failure leaves last
+night's rows serving, and the route projects at most 24 missing games live.
+Its `rows` shrinks across the season by design, so it is not row-count gated.
 
 Window defaults to **yesterday..today (UTC)** so NatStat's overnight stat
 corrections are picked up. Torvik + `/elo` refresh **before** `compute_all`, so
