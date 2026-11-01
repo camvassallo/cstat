@@ -404,6 +404,15 @@ enum Commands {
         years: Option<Vec<i32>>,
     },
 
+    /// Rescore every past team that had a projected player who never played,
+    /// under four ways of pricing his minutes (#420). Report only; writes
+    /// nothing.
+    AvailabilityExperiment {
+        /// Target seasons (comma-separated). Default: 2016-2026.
+        #[arg(long, value_delimiter = ',')]
+        years: Vec<i32>,
+    },
+
     /// Per-week crossover calibration for the preseason × pit early-season
     /// blend (ROADMAP §6). Replays a played season's games week by week and
     /// reports preseason-only / pit-only / best-blend MAE on the shared subset,
@@ -1288,6 +1297,24 @@ async fn main() -> Result<()> {
             }
         }
 
+        Commands::AvailabilityExperiment { years } => {
+            let model_dir = cstat_ingest::model_dir_from_env();
+            let predictor =
+                cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
+                    .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
+            let years = if years.is_empty() {
+                (2016..=2026).collect()
+            } else {
+                years
+            };
+            cstat_ingest::availability_experiment::run(
+                &db.pool,
+                &predictor,
+                std::path::Path::new(&model_dir),
+                &years,
+            )
+            .await?;
+        }
         Commands::MeasureBlendAccuracy { years, dump } => {
             let model_dir = cstat_ingest::model_dir_from_env();
             let predictor =

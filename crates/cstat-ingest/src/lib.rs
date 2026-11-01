@@ -1,3 +1,4 @@
+pub mod availability_experiment;
 pub mod cache;
 pub mod campom_parity;
 pub mod client;

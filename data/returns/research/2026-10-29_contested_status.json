@@ -1,0 +1,1285 @@
+{
+  "as_of": "2026-10-29",
+  "base_season": 2026,
+  "scope": "the 127 `contested` rows in data/returns/2026_returns.json",
+  "method": "Individual dated evidence (RotoWire player news, school releases, beat writers, exhibition appearances) for the top 40 by 2025-26 CAM; the rest by the ruling status of the suit in their `case` field, at low confidence. Not yet applied to 2026_returns.json.",
+  "statuses": {
+    "CLEARED": "eligible and expected to play",
+    "PENDING": "with a team, eligibility unresolved",
+    "INELIGIBLE": "stay or ruling in force, not playing",
+    "GONE": "not playing college basketball",
+    "UNKNOWN": "no evidence"
+  },
+  "players": [
+    {
+      "name": "Tamin Lipsey",
+      "base_team_2025_26": "Iowa St.",
+      "status": "CLEARED",
+      "school_2026_27": "Iowa St.",
+      "evidence": "2026-09-29 Iowa State announced his return after Indiana (Daley) TRO/PI; Ind. Ct. App. denied NCAA stay 2026-10-16",
+      "source": "https://www.rotowire.com/cbasketball/player/tamin-lipsey-20414",
+      "confidence": "high",
+      "basis": "individual"
+    },
+    {
+      "name": "Keyshawn Hall",
+      "base_team_2025_26": "Auburn",
+      "status": "CLEARED",
+      "school_2026_27": "St. John's",
+      "evidence": "2026-10-13 New York TRO upheld; eligible for St. John's (amNY); earlier Ohio injunction stayed Aug 17",
+      "source": "https://www.amny.com/sports/st-johns-quinn-ellis-keyshawn-hall-10-13-26/",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Cade Tyson",
+      "base_team_2025_26": "Minnesota",
+      "status": "PENDING",
+      "school_2026_27": "Minnesota",
+      "evidence": "2026-10-23 out of Creighton exhibition (not injury); enrolled and practicing, awaiting a court order; Medved says he cannot play in a regular-season game yet",
+      "source": "https://www.rotowire.com/cbasketball/player/cade-tyson-20936",
+      "confidence": "high",
+      "basis": "individual"
+    },
+    {
+      "name": "Ven-Allen Lubin",
+      "base_team_2025_26": "N.C. State",
+      "status": "CLEARED",
+      "school_2026_27": "N.C. State",
+      "evidence": "2026-08-15 returning to NC State on extra year; Daley (Indiana) PI 2026-09-23, stay denied 2026-10-16; no individual post-Sept confirmation found",
+      "source": "https://www.rotowire.com/cbasketball/player/ven-allen-lubin-20493",
+      "confidence": "low",
+      "basis": "individual"
+    },
+    {
+      "name": "RJ Godfrey",
+      "base_team_2025_26": "Clemson",
+      "status": "PENDING",
+      "school_2026_27": "Arizona",
+      "evidence": "2026-10-28 joined a Texas suit to try to play Arizona opener; Georgia injunction stayed 2026-09-09; practicing",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "high",
+      "basis": "individual"
+    },
+    {
+      "name": "BJ Edwards",
+      "base_team_2025_26": "SMU",
+      "status": "INELIGIBLE",
+      "school_2026_27": "Oklahoma",
+      "evidence": "2026-10-27 remains ineligible for 2026-27 (can practice); Tennessee CoA stayed injunction 2026-08-26; no other path found",
+      "source": "https://www.rotowire.com/cbasketball/player/bj-edwards-20601",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "MJ Collins",
+      "base_team_2025_26": "Utah St.",
+      "status": "CLEARED",
+      "school_2026_27": "Cincinnati",
+      "evidence": "2026-10-13 eligible for 2026-27 per Cincinnati Enquirer; Ohio Supreme Court stayed appellate mandate 2026-10-14",
+      "source": "https://www.rotowire.com/cbasketball/player/mj-collins-20509",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Rylan Griffen",
+      "base_team_2025_26": "Texas A&M",
+      "status": "PENDING",
+      "school_2026_27": "Texas A&M",
+      "evidence": "2026-10-28 remains ineligible per On3 despite 2026-09-14 Brazos Co. TRO; played 4 pts in 2026-10-26 preseason game",
+      "source": "https://www.rotowire.com/cbasketball/player/rylan-griffen-20378",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Kenyon Giles",
+      "base_team_2025_26": "Wichita St.",
+      "status": "CLEARED",
+      "school_2026_27": "Wichita St.",
+      "evidence": "Named in Indiana (Daley) injunction plaintiff list (Cyclone Fanatic, Sept 2026); WSU confirmed return 2026-08-19; missed 2026-10 exhibition with ankle sprain",
+      "source": "https://www.rotowire.com/cbasketball/player/kenyon-giles-25758",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Jalen Washington",
+      "base_team_2025_26": "Vanderbilt",
+      "status": "INELIGIBLE",
+      "school_2026_27": "Tennessee",
+      "evidence": "2026-10-16 remains ineligible; Tennessee Court of Appeals denied his temporary injunction",
+      "source": "https://www.rotowire.com/cbasketball/player/jalen-washington-20369",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "AJ Storr",
+      "base_team_2025_26": "Mississippi",
+      "status": "PENDING",
+      "school_2026_27": "UNLV",
+      "evidence": "2026-10-08 currently not eligible; seeking a Tennessee court path (Tennessee injunction stayed 2026-08-26)",
+      "source": "https://www.rotowire.com/cbasketball/player/aj-storr-20535",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Jamichael Stillwell",
+      "base_team_2025_26": "UCF",
+      "status": "INELIGIBLE",
+      "school_2026_27": "Texas Tech",
+      "evidence": "2026-09-09 deemed ineligible after NCAA won stay of Georgia injunction; no later clearance found",
+      "source": "https://roundtable.io/sports/ncaa/texas-tech/news/ncaa-wins-another-stay-texas-techs-stillwell-now-ineligible",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Tavari Johnson",
+      "base_team_2025_26": "Akron",
+      "status": "CLEARED",
+      "school_2026_27": "College of Charleston",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Filip Borovicanin",
+      "base_team_2025_26": "Xavier",
+      "status": "CLEARED",
+      "school_2026_27": "Xavier",
+      "evidence": "2026-10-13 eligible for 2026-27 per Cincinnati Enquirer; Ohio Supreme Court stayed mandate 2026-10-14",
+      "source": "https://www.rotowire.com/cbasketball/player/filip-borovicanin-20453",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "NJ Benson",
+      "base_team_2025_26": "DePaul",
+      "status": "PENDING",
+      "school_2026_27": "Georgetown",
+      "evidence": "2026-10-04 still awaiting eligibility and not on Georgetown roster (The Hoya)",
+      "source": "https://www.rotowire.com/cbasketball/player/nj-benson-21195",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Micah Handlogten",
+      "base_team_2025_26": "Florida",
+      "status": "PENDING",
+      "school_2026_27": "Ole Miss",
+      "evidence": "2026-10-15 out of Alabama preseason game awaiting eligibility ruling",
+      "source": "https://www.rotowire.com/cbasketball/player/micah-handlogten-20774",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Chauncey Wiggins",
+      "base_team_2025_26": "Florida St.",
+      "status": "INELIGIBLE",
+      "school_2026_27": "Gonzaga",
+      "evidence": "2026-09-09 ineligible after NCAA won stay of Georgia injunction; no later clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/chauncey-wiggins-20475",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Javontae Campbell",
+      "base_team_2025_26": "Bowling Green",
+      "status": "CLEARED",
+      "school_2026_27": "Cincinnati",
+      "evidence": "RotoWire lists him eligible with fifth year (Sept 5 commitment); Daley PI; missed 2026-10-17 exhibition vs Illinois with injury",
+      "source": "https://www.rotowire.com/cbasketball/player/javontae-campbell-25799",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Caden Powell",
+      "base_team_2025_26": "Baylor",
+      "status": "CLEARED",
+      "school_2026_27": "Baylor",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Kolby King",
+      "base_team_2025_26": "Utah St.",
+      "status": "CLEARED",
+      "school_2026_27": "Auburn",
+      "evidence": "2026-10-14 eligible to play for the time being (Auburn Observer); missed exhibitions with wisdom-teeth procedure",
+      "source": "https://www.rotowire.com/cbasketball/player/kolby-king-20536",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Skyy Clark",
+      "base_team_2025_26": "UCLA",
+      "status": "CLEARED",
+      "school_2026_27": "LSU",
+      "evidence": "2026-10-20 granted temporary eligibility (CBS); California state injunction",
+      "source": "https://www.rotowire.com/cbasketball/player/skyy-clark-20391",
+      "confidence": "high",
+      "basis": "individual"
+    },
+    {
+      "name": "Derek Simpson",
+      "base_team_2025_26": "Saint Joseph's",
+      "status": "PENDING",
+      "school_2026_27": "Providence",
+      "evidence": "2026-10-06 sat out BC exhibition, eligibility up in the air; 2026-10-08 filed federal suit after TRO denial; practicing, not on roster (contradicts Daley label)",
+      "source": "https://www.rotowire.com/cbasketball/player/derek-simpson-20395",
+      "confidence": "high",
+      "basis": "individual"
+    },
+    {
+      "name": "Fredrick King",
+      "base_team_2025_26": "Murray St.",
+      "status": "CLEARED",
+      "school_2026_27": "Creighton",
+      "evidence": "2026-10-16 eligible for 2026-27 per CBS Sports (Rothstein)",
+      "source": "https://www.rotowire.com/cbasketball/player/fredrick-king-20519",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Vincent Iwuchukwu",
+      "base_team_2025_26": "Georgetown",
+      "status": "PENDING",
+      "school_2026_27": "Georgetown",
+      "evidence": "2026-10-16 warmed up but not expected to play due to eligibility issues; returned to Georgetown 2026-08-27",
+      "source": "https://www.rotowire.com/cbasketball/player/vince-iwuchukwu-20557",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Dillon Hunter",
+      "base_team_2025_26": "Clemson",
+      "status": "INELIGIBLE",
+      "school_2026_27": "Clemson",
+      "evidence": "2026-10-07 cannot play in 2026-27 after Georgia injunction stayed; enrolled and practicing",
+      "source": "https://www.rotowire.com/cbasketball/player/dillon-hunter-20474",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Ethan Potter",
+      "base_team_2025_26": "Utah Tech",
+      "status": "PENDING",
+      "school_2026_27": "Utah Tech",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Donovan Oday",
+      "base_team_2025_26": "Northern Kentucky",
+      "status": "PENDING",
+      "school_2026_27": "Troy",
+      "evidence": "Wells (Kentucky TRO) status unclear, Kentucky appeals court dissolved sister injunction; at school, no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/colin-porter-21121",
+      "confidence": "low",
+      "basis": "case:Wells v. NCAA"
+    },
+    {
+      "name": "Pharrel Payne",
+      "base_team_2025_26": "Maryland",
+      "status": "CLEARED",
+      "school_2026_27": "Maryland",
+      "evidence": "2026-10-02 cleared for all basketball activities; NCAA waiver granted 2026-06-24 (not litigation-dependent)",
+      "source": "https://www.rotowire.com/cbasketball/player/pharrel-payne-20427",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Amani Lyles",
+      "base_team_2025_26": "Akron",
+      "status": "CLEARED",
+      "school_2026_27": "Cincinnati",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Javon Bennett",
+      "base_team_2025_26": "Dayton",
+      "status": "CLEARED",
+      "school_2026_27": "Gonzaga",
+      "evidence": "2026-10-14 eligible again after Ohio Supreme Court stayed appellate decision (Spokesman-Review)",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Chendall Weaver",
+      "base_team_2025_26": "Texas",
+      "status": "PENDING",
+      "school_2026_27": "Houston",
+      "evidence": "2026-10-14 sat out exhibition opener, eligibility unresolved",
+      "source": "https://www.rotowire.com/cbasketball/player/chendall-weaver-21406",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Tre Holloman",
+      "base_team_2025_26": "N.C. State",
+      "status": "CLEARED",
+      "school_2026_27": "Grand Canyon",
+      "evidence": "California judge issued injunction/TRO covering Holloman (ABC, Sept 2026); also Daley case; committed 2026-08-27",
+      "source": "https://www.rotowire.com/cbasketball/player/tre-holloman-20425",
+      "confidence": "low",
+      "basis": "individual"
+    },
+    {
+      "name": "Evan Mahaffey",
+      "base_team_2025_26": "Akron",
+      "status": "CLEARED",
+      "school_2026_27": "Akron",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Treysen Eaglestaff",
+      "base_team_2025_26": "West Virginia",
+      "status": "PENDING",
+      "school_2026_27": "UC San Diego",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Stephon Payne",
+      "base_team_2025_26": "Seton Hall",
+      "status": "PENDING",
+      "school_2026_27": "New Mexico St.",
+      "evidence": "Committed to NMSU 2026-08-18; Georgia case stayed 2026-09-09; no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/stephon-payne-21613",
+      "confidence": "low",
+      "basis": "individual"
+    },
+    {
+      "name": "Michael Eley",
+      "base_team_2025_26": "Hampton",
+      "status": "CLEARED",
+      "school_2026_27": "Prairie View A&M",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Dan Skillings",
+      "base_team_2025_26": "Baylor",
+      "status": "INELIGIBLE",
+      "school_2026_27": "Grand Canyon",
+      "evidence": "2026-09-09 ineligible after NCAA won stay of Georgia injunction; no later clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/dan-skillings-20626",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "David Dixon",
+      "base_team_2025_26": "Duquesne",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Damoni Harrison",
+      "base_team_2025_26": "Charlotte",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Amaree Abram",
+      "base_team_2025_26": "Tennessee",
+      "status": "PENDING",
+      "school_2026_27": "Drexel",
+      "evidence": "2026-10-08 committed to Drexel; no eligibility ruling found",
+      "source": "https://www.rotowire.com/cbasketball/player/amaree-abram-20581",
+      "confidence": "low",
+      "basis": "individual"
+    },
+    {
+      "name": "Lee Dort",
+      "base_team_2025_26": "California",
+      "status": "PENDING",
+      "school_2026_27": "California",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Kenny Noland",
+      "base_team_2025_26": "Columbia",
+      "status": "CLEARED",
+      "school_2026_27": "Michigan",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Jerald Colonel",
+      "base_team_2025_26": "Stephen F. Austin",
+      "status": "PENDING",
+      "school_2026_27": "FIU",
+      "evidence": "Georgia injunction stayed 2026-09-09; at school but no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "AJ Casey",
+      "base_team_2025_26": "Evansville",
+      "status": "PENDING",
+      "school_2026_27": "Evansville",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Emmanuel Okorafor",
+      "base_team_2025_26": "Wichita St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Owen Aquino",
+      "base_team_2025_26": "High Point",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Cris Carroll",
+      "base_team_2025_26": "Youngstown St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Jordan Derkack",
+      "base_team_2025_26": "Dayton",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Koonin v. NCAA"
+    },
+    {
+      "name": "Danilo Jovanovich",
+      "base_team_2025_26": "Milwaukee",
+      "status": "PENDING",
+      "school_2026_27": "Milwaukee",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Isaac Jack",
+      "base_team_2025_26": "Pacific",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Hudson v. NCAA"
+    },
+    {
+      "name": "Kamari Lands",
+      "base_team_2025_26": "Middle Tennessee",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Antwone Woolfolk",
+      "base_team_2025_26": "Miami OH",
+      "status": "CLEARED",
+      "school_2026_27": "Miami OH",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Cayden Charles",
+      "base_team_2025_26": "St. Bonaventure",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Patterson v. NCAA"
+    },
+    {
+      "name": "Rashad King",
+      "base_team_2025_26": "LSU",
+      "status": "CLEARED",
+      "school_2026_27": "Northeastern",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Po'Boigh King",
+      "base_team_2025_26": "Sam Houston St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Aidan Shaw",
+      "base_team_2025_26": "Boston College",
+      "status": "PENDING",
+      "school_2026_27": "George Washington",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Shawn Phillips",
+      "base_team_2025_26": "Missouri",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Malik Messina-Moore",
+      "base_team_2025_26": "Xavier",
+      "status": "CLEARED",
+      "school_2026_27": "Illinois St.",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Jalen Quinn",
+      "base_team_2025_26": "Drake",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Karon Boyd",
+      "base_team_2025_26": "Wichita St.",
+      "status": "CLEARED",
+      "school_2026_27": "Mercer",
+      "evidence": "Case spelled Dalley in tracker, treated as Daley (Indiana PI 2026-09-23, stay denied 2026-10-16); has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Dalley v. NCAA"
+    },
+    {
+      "name": "Romad Dean",
+      "base_team_2025_26": "Tulsa",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Lamar Washington",
+      "base_team_2025_26": "Georgia Tech",
+      "status": "PENDING",
+      "school_2026_27": "Boise St.",
+      "evidence": "2026-10-08 still waiting to be officially eligible (247Sports)",
+      "source": "https://www.rotowire.com/cbasketball/player/lamar-washington-20402",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Chris Howell",
+      "base_team_2025_26": "New Mexico",
+      "status": "PENDING",
+      "school_2026_27": "New Mexico",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Jackson Paveletzke",
+      "base_team_2025_26": "Ohio",
+      "status": "CLEARED",
+      "school_2026_27": "Ohio",
+      "evidence": "Case spelled Dalley in tracker, treated as Daley (Indiana PI 2026-09-23, stay denied 2026-10-16); has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Dalley v. NCAA"
+    },
+    {
+      "name": "Ziare Wells",
+      "base_team_2025_26": "Oakland",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Orlando Lovejoy",
+      "base_team_2025_26": "Detroit Mercy",
+      "status": "CLEARED",
+      "school_2026_27": "Green Bay",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Alonzo Dodd",
+      "base_team_2025_26": "Appalachian St.",
+      "status": "CLEARED",
+      "school_2026_27": "East Texas A&M",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Cameron Fens",
+      "base_team_2025_26": "South Dakota",
+      "status": "PENDING",
+      "school_2026_27": "North Carolina",
+      "evidence": "2026-10-18 out of exhibition vs Indiana, still awaiting eligibility; Tennessee stay 2026-08-26",
+      "source": "https://www.rotowire.com/cbasketball/player/cameron-fens-21404",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "DeJuan Campbell",
+      "base_team_2025_26": "California",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Campbell v. NCAA"
+    },
+    {
+      "name": "Kareem Rozier",
+      "base_team_2025_26": "Winthrop",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Kaleb Banks",
+      "base_team_2025_26": "DePaul",
+      "status": "PENDING",
+      "school_2026_27": "Tulsa",
+      "evidence": "Georgia injunction stayed 2026-09-09; at school but no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Chandler Jackson",
+      "base_team_2025_26": "Arkansas St.",
+      "status": "CLEARED",
+      "school_2026_27": "Milwaukee",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Masai Troutman",
+      "base_team_2025_26": "George Mason",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Koonin v. NCAA"
+    },
+    {
+      "name": "Kamrin Oriol",
+      "base_team_2025_26": "North Florida",
+      "status": "PENDING",
+      "school_2026_27": "Akron",
+      "evidence": "Georgia injunction stayed 2026-09-09; at school but no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Jalen Jackson",
+      "base_team_2025_26": "Butler",
+      "status": "PENDING",
+      "school_2026_27": "Butler",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Mason Nicholson",
+      "base_team_2025_26": "Vanderbilt",
+      "status": "PENDING",
+      "school_2026_27": "Georgia State",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Jayden Brewer",
+      "base_team_2025_26": "Western Michigan",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Troy Glover",
+      "base_team_2025_26": "Bowling Green",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "George Marshall",
+      "base_team_2025_26": "Morehead St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "CJ Jones",
+      "base_team_2025_26": "Kansas St.",
+      "status": "CLEARED",
+      "school_2026_27": "Pacific",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Chas Kelley",
+      "base_team_2025_26": "Georgia Tech",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Aaron Price",
+      "base_team_2025_26": "Cal Poly",
+      "status": "PENDING",
+      "school_2026_27": "Cal Poly",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Colin Porter",
+      "base_team_2025_26": "Liberty",
+      "status": "CLEARED",
+      "school_2026_27": "Marquette",
+      "evidence": "2026-10-19 suited up and cleared to play in exhibition vs Green Bay (Journal Sentinel via RotoWire)",
+      "source": "https://www.rotowire.com/cbasketball/player/colin-porter-21121",
+      "confidence": "med",
+      "basis": "individual"
+    },
+    {
+      "name": "Michael Zanoni",
+      "base_team_2025_26": "Penn",
+      "status": "PENDING",
+      "school_2026_27": "Penn",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Christian May",
+      "base_team_2025_26": "UNC Wilmington",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Dalley v. NCAA"
+    },
+    {
+      "name": "Mouhamed Sow",
+      "base_team_2025_26": "Rhode Island",
+      "status": "PENDING",
+      "school_2026_27": "Rhode Island",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Brit Harris",
+      "base_team_2025_26": "FIU",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Justin Allen",
+      "base_team_2025_26": "Green Bay",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Wells v. NCAA"
+    },
+    {
+      "name": "Bowen Hardman",
+      "base_team_2025_26": "Akron",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Major Freeman",
+      "base_team_2025_26": "Charlotte",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Jamil Muttilib",
+      "base_team_2025_26": "Grambling St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Noah Ross",
+      "base_team_2025_26": "UNC Wilmington",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Dalley v. NCAA"
+    },
+    {
+      "name": "Jefferson De La Cruz Monegro",
+      "base_team_2025_26": "Cal St. Fullerton",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "AJ Barnes",
+      "base_team_2025_26": "Southern",
+      "status": "PENDING",
+      "school_2026_27": "Grambling St.",
+      "evidence": "Georgia injunction stayed 2026-09-09; at school but no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Cam Haffner",
+      "base_team_2025_26": "Western Kentucky",
+      "status": "PENDING",
+      "school_2026_27": "Oral Roberts",
+      "evidence": "Georgia injunction stayed 2026-09-09; at school but no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Ose Okojie",
+      "base_team_2025_26": "Howard",
+      "status": "PENDING",
+      "school_2026_27": "Howard",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Greedy Williams",
+      "base_team_2025_26": "UNC Wilmington",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Perry Smith",
+      "base_team_2025_26": "Kennesaw St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Asher Woods",
+      "base_team_2025_26": "Tulane",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Luke Jungers",
+      "base_team_2025_26": "Iona",
+      "status": "PENDING",
+      "school_2026_27": "Iona",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Christian Winborne",
+      "base_team_2025_26": "Nicholls St.",
+      "status": "PENDING",
+      "school_2026_27": "Nicholls St.",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Rickey Ballard",
+      "base_team_2025_26": "Grambling St.",
+      "status": "PENDING",
+      "school_2026_27": "Queens",
+      "evidence": "Georgia injunction stayed 2026-09-09; at school but no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Donovan Brown",
+      "base_team_2025_26": "Massachusetts",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Jaehshon Thomas",
+      "base_team_2025_26": "Drake",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Harris v. NCAA"
+    },
+    {
+      "name": "Demetrius Lilley",
+      "base_team_2025_26": "Binghamton",
+      "status": "PENDING",
+      "school_2026_27": "Binghamton",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Elijah Jamison",
+      "base_team_2025_26": "Norfolk St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Michael Jacobs",
+      "base_team_2025_26": "Southern",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Vincent Brady",
+      "base_team_2025_26": "High Point",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Tom House",
+      "base_team_2025_26": "Furman",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Louie Jordan",
+      "base_team_2025_26": "Radford",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Christian Henry",
+      "base_team_2025_26": "Fordham",
+      "status": "CLEARED",
+      "school_2026_27": "Kent State",
+      "evidence": "Ohio Supreme Court stayed appellate mandate 2026-10-14 and plaintiffs reported eligible again; NCAA disputes; has 2026-27 school",
+      "source": "https://www.rotowire.com/cbasketball/player/javon-bennett-21732",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Valentino Pinedo",
+      "base_team_2025_26": "UNC Greensboro",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Patterson v. NCAA"
+    },
+    {
+      "name": "Cardell Bailey",
+      "base_team_2025_26": "Southern Indiana",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Braxton Stacker",
+      "base_team_2025_26": "Southeast Missouri St.",
+      "status": "PENDING",
+      "school_2026_27": "UNC Greensboro",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Elijah Perkins",
+      "base_team_2025_26": "Saint Peter's",
+      "status": "PENDING",
+      "school_2026_27": "Saint Peter's",
+      "evidence": "Wisne class injunction stayed by 10th Cir 2026-08-21, argued 2026-10-13, undecided; at school but no individual clearance found",
+      "source": "https://www.bipc.com/tenth-circuit-stays-nationwide-eligibility-injunction-for-class-of-2022-in-wisne-v.-ncaa",
+      "confidence": "low",
+      "basis": "case:Wisne v. NCAA"
+    },
+    {
+      "name": "Albert Vargas",
+      "base_team_2025_26": "Robert Morris",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Wells v. NCAA"
+    },
+    {
+      "name": "Kasheem Grady",
+      "base_team_2025_26": "UMKC",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Bryson Ogletree",
+      "base_team_2025_26": "North Carolina A&T",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Prince Aligbe",
+      "base_team_2025_26": "Southern Illinois",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Anthony McComb",
+      "base_team_2025_26": "Norfolk St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Jaquan Sanders",
+      "base_team_2025_26": "Florida A&M",
+      "status": "PENDING",
+      "school_2026_27": "Florida A&M",
+      "evidence": "Georgia injunction stayed 2026-09-09; at school but no individual clearance found",
+      "source": "https://www.rotowire.com/cbasketball/player/rj-godfrey-20473",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    },
+    {
+      "name": "Achile Spadone",
+      "base_team_2025_26": "Bucknell",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Noah Otshudi",
+      "base_team_2025_26": "Marshall",
+      "status": "CLEARED",
+      "school_2026_27": "Marshall",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Jordan Johnson",
+      "base_team_2025_26": "Bethune Cookman",
+      "status": "CLEARED",
+      "school_2026_27": "UC San Diego",
+      "evidence": "Indiana (Daley) PI 2026-09-23, Ind. Ct. App. denied NCAA stay 2026-10-16; has 2026-27 school; no individual confirmation",
+      "source": "https://www.essentiallysports.com/ncaa-college-football-news-indiana-gets-good-news-alongside-dozens-of-athletes-as-appeals-court-denies-ncaas-stay-request-stephen-daley-kellan-wyatt/",
+      "confidence": "low",
+      "basis": "case:Daley v. NCAA"
+    },
+    {
+      "name": "Chevalier Emery",
+      "base_team_2025_26": "Cleveland St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Elmore James",
+      "base_team_2025_26": "Ball St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Borovicanin v. NCAA"
+    },
+    {
+      "name": "Devin Ree",
+      "base_team_2025_26": "Jackson St.",
+      "status": "UNKNOWN",
+      "school_2026_27": null,
+      "evidence": "No 2026-27 school or eligibility news found as of 2026-10-29",
+      "source": "https://www.espn.com/mens-college-basketball/",
+      "confidence": "low",
+      "basis": "case:Godfrey v. NCAA"
+    }
+  ]
+}

@@ -204,21 +204,19 @@ splits the two:
 | Cause | Weighted by | Rationale |
 | --- | --- | --- |
 | `draft_declared` | mock pick (≤30 → 0.05, 31-60 → 0.50, unlisted → 0.85) | The draft is what resolves him, so board position is evidence. |
-| `eligibility_unsettled` | flat 0.5 | A waiver desk or a court resolves him. The draft board says nothing. |
+| `eligibility_unsettled` | the row's `probability` (current legal state), else 0.5 | A waiver desk or a court resolves him. The draft board says nothing. Ladder in `data/returns/README.md`. |
 
 Without the split the error runs the wrong way and concentrates on the players
 who matter: a contested-eligibility senior good enough to appear on a mock board
 would score 0.05, collapsing his team's midpoint onto the floor that assumes he
 is absent — on the strength of scouts rating a good senior.
 
-The flat 0.5 is also load-bearing downstream. `compute_projections.rs` hard-codes
-`IN_SEASON_P_RETURN = 0.5` on the argument that the uncertain bucket empties once
-a season starts. That argument covers draft declarants and does **not** cover
-contested eligibility, which can stay open into the season and which the new
-in-season portal refresh can add to on any night. Weighting the eligibility
-cohort at 0.5 is what keeps the materialized `team_preseason_projection` equal to
-the served `/api/projections` midpoint — a parity that feeds the preseason × pit
-predict blend. If either constant moves, both must.
+The weight is also load-bearing downstream. `compute_projections.rs` derives the
+materialized `team_preseason_projection` midpoint from the same
+`intrinsic_return_probability` the `/api/projections` route uses, so a curated
+`probability` moves both together — a parity that feeds the preseason × pit
+predict blend. Contested eligibility can stay open into the season, so the
+weight cannot assume the bucket empties once games start.
 
 The same discriminator gates presentation: the API withholds `mock_pick` /
 `mock_team` for the eligibility cohort and the UI renders no mock chip, because

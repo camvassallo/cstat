@@ -2535,6 +2535,11 @@ mod tests {
         let mut partial = uncertain(UncertainCause::PartialAvailability);
         partial.availability = Some(0.55);
         assert!((player_return_probability(&partial, &mock) - 0.55).abs() < 1e-6);
+        // A contested case whose curated row records his current legal state
+        // is weighted by it; the 0.5 above is only the no-information default.
+        let mut stayed = uncertain(UncertainCause::EligibilityUnsettled);
+        stayed.availability = Some(0.2);
+        assert!((player_return_probability(&stayed, &mock) - 0.2).abs() < 1e-6);
     }
 
     #[test]
