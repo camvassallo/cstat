@@ -4,9 +4,9 @@ import type { ProjectedTeam } from '../api/client';
 
 // The Roster AdjEM column has to follow the eligibility toggle (#381).
 //
-// `roster_raw_adj_em` is the roster model's number for the 50/50 roster. In a
+// `roster_raw_adj_em` is the roster model's number for the weighted roster. In a
 // what-if view the headline is a DIFFERENT roster, so pairing it with the
-// 50/50 raw would fold the eligibility swing into history's share and make
+// weighted raw would fold the eligibility swing into history's share and make
 // "recent form added X" wrong. This used to be handled by blanking the column
 // — for 53% of the board and 31 of the top 50, since a pending 5-in-5 case is
 // the norm among good teams. The API now serves the raw for each what-if
@@ -57,7 +57,7 @@ describe('applyEligibilityMode', () => {
 
   it('falls back to the weighted raw for a team with no pending case', () => {
     // No case means no what-if roster: the server sends nulls and the headline
-    // does not move, so the 50/50 raw is the right answer in every mode.
+    // does not move, so the weighted raw is the right answer in every mode.
     const t = team({
       eligibility_pending_count: 0,
       roster_raw_eligibility_in: null,

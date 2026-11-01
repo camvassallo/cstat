@@ -1,8 +1,9 @@
 import type { ProjectedTeam } from '../api/client';
 
 // How the eligibility-pending cohort enters the projected columns (#346).
-// `weighted` ("50/50" on screen) is the served midpoint — every case at
-// its 50/50 — and the default: it is the site's forecast, the number the team
+// `weighted` ("Weighted" on screen) is the served midpoint — every case at
+// its own chance of playing (`player_returns.probability`, 0.5 when unset) —
+// and the default: it is the site's forecast, the number the team
 // page headline and the game predictor's preseason anchor use, so the grid
 // must agree with them until the reader asks a what-if. `in` / `out`
 // swap in the server's "every case clears" / "none do" headlines; the draft
@@ -15,14 +16,14 @@ export type EligibilityMode = 'weighted' | 'in' | 'out';
 // chips — reads the swapped value without knowing a toggle exists.
 export function applyEligibilityMode(t: ProjectedTeam, mode: EligibilityMode): ProjectedTeam {
   if (mode === 'weighted') return t;
-  // `roster_raw_adj_em` is the roster model's number for the 50/50 roster
+  // `roster_raw_adj_em` is the roster model's number for the weighted roster
   // only — the server derives one anchor per team from it and does not
   // swap the raw along with the headline. For a team with a pending case the
   // swapped headline is a different roster, so "recent form adds X" computed
-  // against the 50/50 raw would fold the eligibility swing into history's
+  // against the weighted raw would fold the eligibility swing into history's
   // share — which is why this used to null the column instead (#381). The API
   // now serves the raw for each what-if roster, so the pairing stays honest
-  // and the column follows the toggle. A team with no case has no what-if
+  // and the Proj AdjEM tooltip's "roster model alone" line follows the toggle. A team with no case has no what-if
   // raw and needs none: its headline does not move.
   const raw =
     (mode === 'in' ? t.roster_raw_eligibility_in : t.roster_raw_eligibility_out) ??

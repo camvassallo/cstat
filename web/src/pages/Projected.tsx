@@ -13,7 +13,6 @@ import {
 } from '../components/season';
 import { useIsMobile } from '../components/useIsMobile';
 import { caeColor, fmtCae } from '../components/cae';
-import { camTier, camTierColor } from '../components/cam';
 import { pctileTextColor } from '../components/pctile';
 import { BAND_CHIP_CLASS, BAND_CHIP_TOP_STRONG } from '../components/scale';
 import { recruitTooltipLine } from '../lib/recruitDisplay';
@@ -271,6 +270,56 @@ function buildColumns(
       ]
     : [];
 
+  // At phone width the Conf column is what pushes Proj AdjEM, the number
+  // the page exists to show, off the right edge (#421). It moves behind
+  // Proj AdjEM there rather than leaving: still a scroll away, and search
+  // still filters on it.
+  const confCol: ColDef<ProjectedTeam> = {
+    // The conference for the season being *projected*, which for the upcoming
+    // forecast is not the one in the base-season `teams` row: 30 programs
+    // changed conference for 2026-27 and one left Division I. The server
+    // resolves that (ingested season first, else last season plus the curated
+    // realignment diff) and sets `prev_conference` only on the teams that
+    // actually moved, so this cell just renders what it's given.
+    headerName: 'Conf',
+    colId: 'conference',
+    // 126 rather than the ~100 the label alone needs: the second line has to
+    // fit "\u2190 Mountain West", the longest thing this cell ever renders.
+    ...flexCol(1.2, 126),
+    headerTooltip: `The conference each team plays in for ${seasonLabel(year)} — realignment applied, so a team that changed leagues shows its new one with the league it left beneath. Searchable: type a conference name or code to filter the board to it.`,
+    valueGetter: (p) => {
+      const t = p.data as ProjectedTeam | undefined;
+      if (!t) return null;
+      return projectedConferenceLabel(t);
+    },
+    cellRenderer: (p: { value: string | null; data?: ProjectedTeam }) => {
+      const t = p.data;
+      if (!t) return dashCell;
+      const from = t.prev_conference;
+      const tip = t.left_division_i
+        ? `No longer plays Division I basketball in ${seasonLabel(year)}${from ? ` — left the ${conferenceLabel(from)}` : ''}. Still projected because it has a ${seasonLabel(year - 1)} roster.`
+        : from
+          ? `Moved from the ${conferenceLabel(from)} to the ${conferenceLabel(t.conference)} for ${seasonLabel(year)}`
+          : `${conferenceLabel(t.conference)} in ${seasonLabel(year)}`;
+      return (
+        <div className="leading-tight flex flex-col justify-center h-full" title={tip}>
+          <div
+            className={`text-[11px] truncate ${t.left_division_i ? 'text-slate-500 italic' : 'text-slate-200'}`}
+          >
+            {p.value}
+          </div>
+          {/* Present only on teams that changed leagues — the server sets
+              `prev_conference` for exactly that set. */}
+          {from && (
+            <div className="text-[10px] text-amber-400/90 truncate">
+              ← {conferenceLabel(from)}
+            </div>
+          )}
+        </div>
+      );
+    },
+  };
+
   return [
     {
       headerName: 'Rank',
@@ -311,51 +360,7 @@ function buildColumns(
         </SeasonLink>
       ),
     },
-    {
-      // The conference for the season being *projected*, which for the upcoming
-      // forecast is not the one in the base-season `teams` row: 30 programs
-      // changed conference for 2026-27 and one left Division I. The server
-      // resolves that (ingested season first, else last season plus the curated
-      // realignment diff) and sets `prev_conference` only on the teams that
-      // actually moved, so this cell just renders what it's given.
-      headerName: 'Conf',
-      colId: 'conference',
-      // 126 rather than the ~100 the label alone needs: the second line has to
-      // fit "\u2190 Mountain West", the longest thing this cell ever renders.
-      ...flexCol(1.2, 126),
-      headerTooltip: `The conference each team plays in for ${seasonLabel(year)} — realignment applied, so a team that changed leagues shows its new one with the league it left beneath. Searchable: type a conference name or code to filter the board to it.`,
-      valueGetter: (p) => {
-        const t = p.data as ProjectedTeam | undefined;
-        if (!t) return null;
-        return projectedConferenceLabel(t);
-      },
-      cellRenderer: (p: { value: string | null; data?: ProjectedTeam }) => {
-        const t = p.data;
-        if (!t) return dashCell;
-        const from = t.prev_conference;
-        const tip = t.left_division_i
-          ? `No longer plays Division I basketball in ${seasonLabel(year)}${from ? ` — left the ${conferenceLabel(from)}` : ''}. Still projected because it has a ${seasonLabel(year - 1)} roster.`
-          : from
-            ? `Moved from the ${conferenceLabel(from)} to the ${conferenceLabel(t.conference)} for ${seasonLabel(year)}`
-            : `${conferenceLabel(t.conference)} in ${seasonLabel(year)}`;
-        return (
-          <div className="leading-tight flex flex-col justify-center h-full" title={tip}>
-            <div
-              className={`text-[11px] truncate ${t.left_division_i ? 'text-slate-500 italic' : 'text-slate-200'}`}
-            >
-              {p.value}
-            </div>
-            {/* Present only on teams that changed leagues — the server sets
-                `prev_conference` for exactly that set. */}
-            {from && (
-              <div className="text-[10px] text-amber-400/90 truncate">
-                ← {conferenceLabel(from)}
-              </div>
-            )}
-          </div>
-        );
-      },
-    },
+    ...(isMobile ? [] : [confCol]),
     {
       headerName: 'Proj AdjEM',
       field: 'midpoint_adj_em',
@@ -410,32 +415,7 @@ function buildColumns(
         );
       },
     },
-    {
-      // The roster model's own verdict, before any history is blended in.
-      // Proj AdjEM minus this is exactly what the program anchor contributed
-      // (0 for a roster that projects inside its program's recent range,
-      // up to ~70% of the gap otherwise) — so the two columns side by side
-      // are the audit of how much of a ranking is roster and how much is
-      // pedigree. Same field the Proj AdjEM tooltip quotes.
-      headerName: 'Roster AdjEM',
-      field: 'roster_raw_adj_em',
-      ...flexCol(1, 100),
-      headerTooltip:
-        "What this roster projects to on its own — the roster model's AdjEM from the projected players, with no weight on last season or the program's history. Compare with Proj AdjEM: the difference is what recent form added or took away. A team whose Roster AdjEM sits well below its Proj AdjEM is being held up by its history; one where they match is being ranked purely on its players. Follows the eligibility toggle: in a what-if view this is the roster model on that same what-if roster, so the gap to Proj AdjEM always describes the roster being shown.",
-      comparator: nullsLast,
-      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
-        const chip = adjEmChip(p.value);
-        const served = p.data?.midpoint_adj_em;
-        if (p.value == null || served == null) return chip;
-        const gap = served - p.value;
-        const tip =
-          `Roster model alone: ${fmtSigned(p.value)}` +
-          (Math.abs(gap) < 0.05
-            ? '\nMatches Proj AdjEM — this ranking is entirely the roster.'
-            : `\nRecent form ${gap > 0 ? 'adds' : 'takes'} ${Math.abs(gap).toFixed(1)} to reach Proj AdjEM ${fmtSigned(served)}.`);
-        return <span title={tip}>{chip}</span>;
-      },
-    },
+    ...(isMobile ? [confCol] : []),
     projEffCol('o'),
     projEffCol('d'),
     ...actualColumns,
@@ -517,40 +497,10 @@ function buildColumns(
       },
     },
     {
-      // The roster's talent as the model reads it. Read off the same feature
-      // vector the projection is scored from (the minutes-weighted mean CAM
-      // of the 13-man rotation), so this column and Proj AdjEM can never
-      // disagree about what the roster is — it is the answer to "how good
-      // are the players, before any history is blended in".
-      headerName: 'Roster CAM',
-      colId: 'roster_cam',
-      ...flexCol(1, 110),
-      ...divider,
-      headerTooltip:
-        "How much talent is on the projected roster, on the same scale as a player's CAM: the projected next-season CAM of the 13-man rotation, weighted by the minutes each rotation slot plays. Read straight off what the roster model scores, before last season's result is blended in — so a team with a high Roster CAM and a lower Proj AdjEM is one whose roster outruns its recent history, and vice versa. Pending eligibility cases count at 50/50 regardless of the toggle. Hover for the rotation's CAM total.",
-      valueGetter: (p) => (p.data as ProjectedTeam | undefined)?.roster_cam_wmean ?? null,
-      comparator: nullsLast,
-      cellRenderer: (p: { value: number | null; data?: ProjectedTeam }) => {
-        const t = p.data;
-        if (!t || p.value == null) return dashCell;
-        const tier = camTier(p.value);
-        const sum = t.roster_cam_sum;
-        const tip =
-          `Rotation CAM ${fmtSigned(p.value)} (minutes-weighted mean, ${tier ?? '—'})` +
-          (sum != null ? `\nΣ CAM over the 13-man rotation: ${fmtSigned(sum)}` : '');
-        return (
-          <span title={tip} className="inline-flex items-baseline gap-1 whitespace-nowrap">
-            <span className={`px-1.5 rounded border text-xs font-semibold ${camTierColor(tier)}`}>
-              {fmtSigned(p.value)}
-            </span>
-          </span>
-        );
-      },
-    },
-    {
       headerName: 'Returning',
       colId: 'returning',
       ...flexCol(1, 120),
+      ...divider,
       headerTooltip:
         "Returning players, shown as their *projected* next-season CAM (trajectory forecast) with the share of last season's roster value retained beneath — i.e. roster continuity. 51% kept = a stable veteran core; 20% = a near-total rebuild. Excludes graduating seniors, outbound portal, and firm draft departures.",
       comparator: (_a, _b, na, nb) =>
@@ -868,19 +818,23 @@ export function ProjectionView({
           placeholder="Search teams…"
           className="px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder:text-gray-500 w-full sm:w-64"
         />
-        <span className="text-xs text-gray-500">
-          {scoredCount} teams scored · {thinCount} flagged thin roster
-          {realignedCount > 0 && ` · ${realignedCount} changing conference`}
-          {leftDivisionICount > 0 &&
-            ` · ${leftDivisionICount} leaving Division I`}
-          {baseSeason != null &&
-            ` · based on ${seasonLabel(baseSeason)} → projecting ${seasonLabel(year)}`}
-        </span>
+        {/* Nothing to count until the fetch lands: "0 teams scored" over an
+            empty grid reads as a broken ranking, not a slow one (#422). */}
+        {teams && (
+          <span className="text-xs text-gray-500">
+            {scoredCount} teams scored · {thinCount} flagged thin roster
+            {realignedCount > 0 && ` · ${realignedCount} changing conference`}
+            {leftDivisionICount > 0 &&
+              ` · ${leftDivisionICount} leaving Division I`}
+            {baseSeason != null &&
+              ` · based on ${seasonLabel(baseSeason)} → projecting ${seasonLabel(year)}`}
+          </span>
+        )}
         {pendingTeams > 0 && (
           <span className="ml-auto flex items-center gap-2">
             <span
               className="text-xs text-gray-500"
-              title={`${pendingTeams} teams have players whose eligibility for next season is before a court or waiver desk (the Pending column). 50/50: each case counted at even odds — the site's forecast, and the number the team pages and the game predictor use. Included: every case clears. Excluded: none do. Declared draft entrants stay at their own probability in all three; the rank, the O/D split and Roster AdjEM follow the choice.`}
+              title={`${pendingTeams} teams have players whose eligibility for next season is before a court or waiver desk (the Pending column). Weighted: each case counted at its chance of playing, from where it stands in court today — the site's forecast, and the number the team pages and the game predictor use. Included: every case clears. Excluded: none do. Declared draft entrants stay at their own probability in all three; the rank and the O/D split follow the choice.`}
             >
               Pending eligibility
             </span>
@@ -889,7 +843,7 @@ export function ProjectionView({
               value={eligibilityMode}
               onChange={setEligibilityMode}
               options={[
-                { value: 'weighted', label: '50/50' },
+                { value: 'weighted', label: 'Weighted' },
                 { value: 'in', label: 'Included' },
                 { value: 'out', label: 'Excluded' },
               ]}
@@ -911,6 +865,7 @@ export function ProjectionView({
           theme={gridTheme}
           columnDefs={columns}
           rowData={filtered ?? []}
+          loading={teams == null}
           rowHeight={48}
           defaultColDef={{
             sortable: true,
