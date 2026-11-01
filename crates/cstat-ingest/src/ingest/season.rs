@@ -951,6 +951,7 @@ impl<'a> SeasonIngester<'a> {
             projections_years: Vec::new(),
             game_projections: None,
             game_projection_fetch_failures: 0,
+            upcoming_projections: None,
             run_id: ledger.run_id(),
         };
 
@@ -1922,6 +1923,41 @@ impl<'a> SeasonIngester<'a> {
                             failures.push(format!("{step}: {msg}"));
                         }
                     }
+
+                    // --- upcoming-game projections (#429) ---
+                    // The Schedule tab reads one row per upcoming game rather
+                    // than running the model for a whole day's slate per page
+                    // view. After `compute_all` for the same reason as the
+                    // sweep above, and after the sweep so that games it just
+                    // covered are pruned from this table. Best-effort on the
+                    // same terms: a failure leaves last night's rows serving.
+                    let t0 = Utc::now();
+                    let step = "upcoming_projections";
+                    match crate::game_projections::run_upcoming_season(
+                        self.pool,
+                        &predictor,
+                        self.season,
+                        crate::today_utc(),
+                    )
+                    .await
+                    {
+                        Ok(r) => {
+                            ledger
+                                .record(step, StepStatus::Ok, Some(r.written as i64), t0, None)
+                                .await;
+                            report.upcoming_projections = Some(r.written);
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            warn!(season = self.season, error = %msg,
+                                  "upcoming-game projection sweep failed; the schedule serves \
+                                   the previous night's rows");
+                            ledger
+                                .record(step, StepStatus::Failed, None, t0, Some(&msg))
+                                .await;
+                            failures.push(format!("{step}: {msg}"));
+                        }
+                    }
                 }
                 Err(e) => {
                     let msg = format!("failed to load models from {model_dir}: {e}");
@@ -1933,7 +1969,7 @@ impl<'a> SeasonIngester<'a> {
                     // reads as "not attempted" rather than "could not run" —
                     // and the freshness view would have nothing to show for a
                     // night that silently stopped refreshing the team pages.
-                    for step in ["projections", "game_projections"] {
+                    for step in ["projections", "game_projections", "upcoming_projections"] {
                         ledger
                             .record(step, StepStatus::Failed, None, t0, Some(&msg))
                             .await;
@@ -2440,7 +2476,7 @@ impl<'a> SeasonIngester<'a> {
              {torvik_line}\n\
              *PBP/lineups:*  {pbp} play rows · {lu} lineup games\n\
              *Compute:*  {compute_str}{repair_line}\n\
-             *Projections:*  {projections_line}   ·   *Game projections:*  {game_proj_line}\n\
+             *Projections:*  {projections_line}   ·   *Game projections:*  {game_proj_line}   ·   *Upcoming:*  {upcoming_line}\n\
              *Rate budget:*  {remaining}/{budget}",
             games = report.ingest.games,
             pp = report.ingest.player_performances,
@@ -2470,6 +2506,10 @@ impl<'a> SeasonIngester<'a> {
                     "{n} games, {} fetches FAILED",
                     report.game_projection_fetch_failures
                 ),
+                Some(n) => format!("{n} games"),
+                None => "not run".to_string(),
+            },
+            upcoming_line = match report.upcoming_projections {
                 Some(n) => format!("{n} games"),
                 None => "not run".to_string(),
             },
@@ -2728,6 +2768,9 @@ pub struct NightlyReport {
     /// the sweep's own failure mode is quiet by construction — it keeps the
     /// previous rows, so neither the row-count gate nor the page notices.
     pub game_projection_fetch_failures: usize,
+    /// Upcoming-game projection rows written this run (#429), or `None` when
+    /// the sweep was skipped or failed.
+    pub upcoming_projections: Option<usize>,
     /// Grouping id for this run's rows in the `ingest_runs` ledger.
     pub run_id: Uuid,
 }
@@ -2785,6 +2828,10 @@ impl std::fmt::Display for NightlyReport {
                 writeln!(f)?;
             }
             None => writeln!(f, "Game projections: not run")?,
+        }
+        match self.upcoming_projections {
+            Some(n) => writeln!(f, "Upcoming projections: {n} games materialized")?,
+            None => writeln!(f, "Upcoming projections: not run")?,
         }
         if let Some(c) = &self.compute {
             writeln!(f, "{c}")?;
@@ -3007,6 +3054,7 @@ mod tests {
             projections_years: Vec::new(),
             game_projections: None,
             game_projection_fetch_failures: 0,
+            upcoming_projections: None,
             run_id: uuid::Uuid::nil(),
         };
         assert!(report.projections_years.is_empty());

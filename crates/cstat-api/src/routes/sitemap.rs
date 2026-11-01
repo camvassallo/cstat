@@ -105,6 +105,7 @@ pub async fn static_pages(State(_state): State<Arc<AppState>>) -> Response {
     // omitted — no SEO value). Kept in sync with `web/src/App.tsx`.
     let paths = [
         "/",
+        "/schedule",
         "/players",
         "/predict",
         "/archetypes",

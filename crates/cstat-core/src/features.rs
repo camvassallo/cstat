@@ -213,7 +213,7 @@ pub async fn build_pit_by_player(
     compute_pit_campom(pool, season, as_of_date).await
 }
 
-async fn get_roster_agg(
+pub async fn get_roster_agg(
     pool: &PgPool,
     team_id: Uuid,
     season: i32,

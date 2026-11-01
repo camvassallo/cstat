@@ -1756,6 +1756,53 @@ export function fetchTicker(params: { season?: number; past?: number; future?: n
   });
 }
 
+// Schedule — one day's slate with projections and a pregame watchability score.
+export type SchedulePredictionBasis = 'pregame' | 'model' | 'preseason';
+
+export interface ScheduleGame {
+  game_id: string;
+  game_date: string;
+  /** ET wall-clock tipoff, `HH:MM:SS`; null when no time is set yet. */
+  tip_time: string | null;
+  season: number;
+  home_team_id: string | null;
+  home_team_name: string | null;
+  away_team_id: string | null;
+  away_team_name: string | null;
+  home_score: number | null;
+  away_score: number | null;
+  is_neutral_site: boolean;
+  is_conference: boolean | null;
+  is_postseason: boolean | null;
+  venue: string | null;
+  venue_location: string | null;
+  overtime: string | null;
+  home_rank: number | null;
+  away_rank: number | null;
+  /** Home perspective: positive means the home side is favored. */
+  predicted_margin: number | null;
+  home_win_probability: number | null;
+  /** Null under the `preseason` basis, which carries no score. */
+  predicted_home_score: number | null;
+  predicted_away_score: number | null;
+  prediction_basis: SchedulePredictionBasis | null;
+  /** 0–100, absolute scale (not normalized to the day's best game). */
+  watchability: number | null;
+}
+
+export interface ScheduleResponse {
+  date: string;
+  season: number;
+  prev_date: string | null;
+  next_date: string | null;
+  ranked_teams: number;
+  games: ScheduleGame[];
+}
+
+export function fetchSchedule(date?: string) {
+  return fetchJson<ScheduleResponse>('/schedule', { date });
+}
+
 // Coaches — Coach-Above-Expectation (CAE). Descriptive grade: how much a team
 // out/under-performs the talent on its roster, attributed to the coach,
 // aggregated across their career with empirical-Bayes shrinkage. Headline =

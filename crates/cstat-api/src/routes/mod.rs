@@ -15,6 +15,7 @@ pub mod predict;
 pub mod projected_players;
 pub mod projections;
 pub mod recruits;
+pub mod schedule;
 pub mod seasons;
 pub mod sitemap;
 pub mod teams;
@@ -38,6 +39,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(conferences::router())
         .merge(seasons::router())
         .merge(ticker::router())
+        .merge(schedule::router())
         .merge(transfers::router())
         .merge(projections::router())
         .merge(projected_players::router())

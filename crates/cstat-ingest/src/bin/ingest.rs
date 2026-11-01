@@ -394,6 +394,9 @@ enum Commands {
     /// `game_projections`, so `GET /api/teams/{id}` reads a row per schedule
     /// game instead of running the model per game per page view (#266).
     ///
+    /// Also materializes `upcoming_game_projections` (the Schedule tab's
+    /// unplayed games, #429) for the same seasons — a no-op for a played one.
+    ///
     /// The nightly runs this for the current season; use it directly to
     /// backfill historical seasons, or to re-materialize after a retrain.
     /// Batches by cutoff date — every game on a date shares one point-in-time
@@ -1280,6 +1283,21 @@ async fn main() -> Result<()> {
                 cstat_core::inference::Predictor::load(std::path::Path::new(&model_dir))
                     .map_err(|e| anyhow::anyhow!("failed to load models from {model_dir}: {e}"))?;
             let report = cstat_ingest::game_projections::run(&db.pool, &predictor, &years).await?;
+            // Upcoming games too (#429): the same models, and a played season
+            // has none, so a historical backfill pays nothing for it.
+            for &year in &years {
+                let up = cstat_ingest::game_projections::run_upcoming_season(
+                    &db.pool,
+                    &predictor,
+                    year,
+                    cstat_ingest::today_utc(),
+                )
+                .await?;
+                println!(
+                    "upcoming_game_projections {year}: {} rows written ({} skipped, {} pruned)",
+                    up.written, up.skipped, up.pruned
+                );
+            }
             println!(
                 "game_projections: {} rows written across {} cutoff dates ({} skipped, {} pruned)",
                 report.written, report.dates, report.skipped, report.pruned
