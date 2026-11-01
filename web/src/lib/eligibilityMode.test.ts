@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { applyEligibilityMode } from '../lib/eligibilityMode';
 import type { ProjectedTeam } from '../api/client';
 
-// The Roster AdjEM column has to follow the eligibility toggle (#381).
+// The roster model's raw AdjEM has to follow the eligibility toggle (#381) —
+// the Proj AdjEM tooltip quotes it as "roster model alone".
 //
 // `roster_raw_adj_em` is the roster model's number for the weighted roster. In a
 // what-if view the headline is a DIFFERENT roster, so pairing it with the
