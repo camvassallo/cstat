@@ -111,24 +111,29 @@ async fn did_not_play(pool: &PgPool, ids: &[Uuid], target: i32) -> Result<HashSe
     // A player id: played if any target-season player row sharing his
     // natstat_id or torvik_pid has a box score. A recruit id: played if his
     // resolved cstat player has one.
+    //
+    // The torvik joins key on `player_id` deliberately: a human with two
+    // Torvik profiles yields one row per profile, which only widens the set
+    // of ids he can match on, and the `SELECT DISTINCT` / `EXISTS` collapse
+    // the rows. Membership, not aggregation, so nothing is multiplied.
     let played: Vec<Uuid> = sqlx::query_scalar(
         r#"
         WITH me AS (
             SELECT p.id, p.natstat_id, tp.torvik_pid
             FROM players p
-            LEFT JOIN torvik_player_stats tp ON tp.player_id = p.id AND tp.season = p.season
+            LEFT JOIN torvik_player_stats tp ON tp.player_id = p.id AND tp.season = p.season -- ALLOW_TORVIK_PLAYER_ID_JOIN (membership only)
             WHERE p.id = ANY($1)
             UNION ALL
             SELECT r.id, p.natstat_id, tp.torvik_pid
             FROM recruits r
             JOIN players p ON p.id = r.cstat_player_id
-            LEFT JOIN torvik_player_stats tp ON tp.player_id = p.id AND tp.season = p.season
+            LEFT JOIN torvik_player_stats tp ON tp.player_id = p.id AND tp.season = p.season -- ALLOW_TORVIK_PLAYER_ID_JOIN (membership only)
             WHERE r.id = ANY($1)
         ),
         target AS (
             SELECT p.natstat_id, tp.torvik_pid
             FROM players p
-            LEFT JOIN torvik_player_stats tp ON tp.player_id = p.id AND tp.season = p.season
+            LEFT JOIN torvik_player_stats tp ON tp.player_id = p.id AND tp.season = p.season -- ALLOW_TORVIK_PLAYER_ID_JOIN (membership only)
             WHERE p.season = $2
               AND EXISTS (SELECT 1 FROM player_game_stats g WHERE g.player_id = p.id)
         )
