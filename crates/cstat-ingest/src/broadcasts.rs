@@ -25,6 +25,14 @@
 //! game shows "TBA" and no network, which is what it showed before; a wrong
 //! match would show another game's time.
 //!
+//! **A stale row is pruned, but only on evidence.** On a day fetched
+//! successfully, a row goes when its listing is no longer there (the source
+//! withdrew it) or now matches a different game. A row whose listing is still
+//! listed but went unmatched this run is kept: how much the teaching pass can
+//! resolve depends on the window, and the nightly's window slides, so "not
+//! matched tonight" alone would flap rows in and out. A day whose fetch failed
+//! is left untouched.
+//!
 //! Best-effort throughout: the nightly records a failure here in the ledger and
 //! moves on, and nothing served depends on it beyond two display columns.
 
@@ -92,8 +100,11 @@ struct RawTeam {
     display_name: String,
     #[serde(default)]
     location: String,
-    #[serde(rename = "shortDisplayName", default)]
-    short_display_name: String,
+    // `shortDisplayName` is deliberately not read. It is abbreviated to fit a
+    // scoreboard tile, and the abbreviations collide with real programs:
+    // Saint Mary-of-the-Woods is "St Mary's", which keys to Saint Mary's
+    // (CA). Dropping it matched more games, not fewer (799 of 811 against 797
+    // over two weeks), because the teaching pass covers what it used to.
 }
 
 #[derive(Deserialize)]
@@ -114,7 +125,7 @@ pub struct SourceTeam {
     /// The source's team id, stable across listings; the key a one-sided
     /// match teaches.
     pub id: String,
-    /// Every spelling the source gives, most specific first.
+    /// The source's full name and its location name, in that order.
     pub names: Vec<String>,
 }
 
@@ -159,7 +170,7 @@ fn network_label(broadcasts: &[Broadcast]) -> Option<String> {
 }
 
 fn source_team(t: RawTeam) -> SourceTeam {
-    let names = [t.display_name, t.location, t.short_display_name]
+    let names = [t.display_name, t.location]
         .into_iter()
         .filter(|n| !n.trim().is_empty())
         .collect();
@@ -408,7 +419,8 @@ impl BroadcastClient {
 #[derive(Debug, Default)]
 pub struct BroadcastReport {
     pub days: usize,
-    /// Days whose fetch failed; their games simply go unmatched this run.
+    /// Days whose fetch failed. Their games are left out of every count below
+    /// and keep whatever rows they had.
     pub failed_days: usize,
     pub listings: usize,
     pub games_in_window: usize,
@@ -421,6 +433,8 @@ pub struct BroadcastReport {
     /// Matched games the primary feed has as TBA that now have a time.
     pub times_filled: usize,
     pub written: usize,
+    /// Rows removed because their listing is gone or now matches another game.
+    pub pruned: usize,
 }
 
 impl BroadcastReport {
@@ -428,13 +442,14 @@ impl BroadcastReport {
     pub fn summary(&self) -> String {
         format!(
             "{} of {} games matched ({} unmatched, {} conflicts), {} with a network, \
-             {} TBA times filled; {} listings over {} days ({} failed)",
+             {} TBA times filled, {} stale rows pruned; {} listings over {} days ({} failed)",
             self.matched,
             self.games_in_window,
             self.unmatched_games,
             self.conflicts,
             self.with_network,
             self.times_filled,
+            self.pruned,
             self.listings,
             self.days,
             self.failed_days,
@@ -524,6 +539,36 @@ async fn write_rows(pool: &PgPool, season: i32, rows: &[(Uuid, &Listing)]) -> Re
     Ok(res.rows_affected() as usize)
 }
 
+/// Delete the rows of `games` (all on successfully fetched days) that this
+/// run did not match, unless their listing is among `unmatched_events`: still
+/// listed, just not resolved tonight. A listing that matched another game is
+/// not in that set, so its old row goes.
+async fn prune_unmatched(
+    pool: &PgPool,
+    games: &[OurGame],
+    matched: &HashSet<Uuid>,
+    unmatched_events: &[String],
+) -> Result<usize> {
+    let stale: Vec<Uuid> = games
+        .iter()
+        .map(|g| g.game_id)
+        .filter(|id| !matched.contains(id))
+        .collect();
+    if stale.is_empty() {
+        return Ok(0);
+    }
+    let res = sqlx::query(
+        "DELETE FROM game_broadcasts \
+         WHERE game_id = ANY($1) AND NOT (source_event_id = ANY($2))",
+    )
+    .bind(&stale)
+    .bind(unmatched_events)
+    .execute(pool)
+    .await
+    .context("pruning unmatched game_broadcasts rows")?;
+    Ok(res.rows_affected() as usize)
+}
+
 /// Fetch, match and write every Eastern day in `from..=to`.
 ///
 /// Days are grouped by season so each is matched against that season's
@@ -541,6 +586,7 @@ pub async fn run(
     }
     let mut report = BroadcastReport::default();
     let mut by_season: HashMap<i32, Vec<Listing>> = HashMap::new();
+    let mut fetched: HashSet<NaiveDate> = HashSet::new();
     let mut seasons: Vec<i32> = Vec::new();
     let mut last_error = None;
     for date in from.iter_days().take_while(|d| *d <= to) {
@@ -551,6 +597,7 @@ pub async fn run(
         }
         match client.fetch_day(date).await {
             Ok(listings) => {
+                fetched.insert(date);
                 report.listings += listings.len();
                 by_season.entry(season).or_default().extend(listings);
             }
@@ -571,7 +618,8 @@ pub async fn run(
     for season in seasons {
         let season_from = from.max(season_start(season));
         let season_to = to.min(season_start(season + 1).pred_opt().expect("valid date"));
-        let games = load_games(pool, season, season_from, season_to).await?;
+        let mut games = load_games(pool, season, season_from, season_to).await?;
+        games.retain(|g| fetched.contains(&g.date));
         let teams = load_teams(pool, season).await?;
         let listings = by_season.remove(&season).unwrap_or_default();
         let outcome = match_listings(&listings, &games, &teams);
@@ -599,6 +647,14 @@ pub async fn run(
             unmatched_labels.push(format!("{} {}", g.date, g.label));
         }
         report.written += write_rows(pool, season, &rows).await?;
+        let matched_listings: HashSet<usize> = outcome.matched.iter().map(|&(_, i)| i).collect();
+        let still_listed: Vec<String> = listings
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !matched_listings.contains(i))
+            .map(|(_, l)| l.event_id.clone())
+            .collect();
+        report.pruned += prune_unmatched(pool, &games, &matched_ids, &still_listed).await?;
     }
 
     unmatched_labels.sort();

@@ -2325,7 +2325,8 @@ pub struct ScheduleGame {
     pub overtime: Option<String>,
 }
 
-/// Every game on `date`, earliest tip first (unscheduled times last).
+/// Every game on `date`, earliest tip first, then any after-midnight tips (the
+/// end of that night), then unscheduled times.
 ///
 /// The tip time is the broadcast listing's when it has a confirmed one, else
 /// the schedule feed's (#430). The listing wins a disagreement because it
@@ -2363,7 +2364,10 @@ pub async fn get_schedule_games(
         LEFT JOIN teams at ON at.id = g.away_team_id AND at.season = g.season
         LEFT JOIN game_broadcasts b ON b.game_id = g.id
         WHERE g.season = $1 AND g.game_date = $2
-        ORDER BY COALESCE(b.tip_time, g.tip_time) NULLS LAST, home_team_name, g.id
+        -- A tip before 6am is the end of the night, not its start.
+        ORDER BY COALESCE(b.tip_time, g.tip_time) IS NULL,
+                 COALESCE(b.tip_time, g.tip_time) < TIME '06:00',
+                 COALESCE(b.tip_time, g.tip_time), home_team_name, g.id
         "#,
     )
     .bind(season)

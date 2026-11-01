@@ -2928,6 +2928,16 @@ pub async fn transfer_resolve_step(
 pub async fn broadcasts_step(pool: &PgPool, ledger: &RunLedger<'_>) {
     let t0 = Utc::now();
     let step = "broadcasts";
+    // A simulated replay runs the nightly once per simulated day, and this
+    // step is not served from fixtures: it would make ~15 live requests per
+    // window, ~2,000 for a replayed season, to verify nothing the replay
+    // checks.
+    if crate::simulated_today().is_some() {
+        ledger
+            .record(step, StepStatus::Skipped, None, t0, Some("simulated clock"))
+            .await;
+        return;
+    }
     let from = crate::today_eastern();
     let to = from + chrono::Duration::days(crate::broadcasts::NIGHTLY_WINDOW_DAYS);
     let result = match crate::broadcasts::BroadcastClient::new() {
