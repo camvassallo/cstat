@@ -866,7 +866,11 @@ async fn upsert_player_game_stats(perf: &Value, pool: &PgPool, season: i32) -> U
              team_fta = COALESCE(EXCLUDED.team_fta, player_game_stats.team_fta),
              team_turnovers = COALESCE(EXCLUDED.team_turnovers, player_game_stats.team_turnovers),
              team_fgm = COALESCE(EXCLUDED.team_fgm, player_game_stats.team_fgm),
-             is_home = COALESCE(EXCLUDED.is_home, player_game_stats.is_home)",
+             is_home = COALESCE(EXCLUDED.is_home, player_game_stats.is_home),
+             -- Repairs a line first written without one: before the live
+             -- shape was read, every player line landed with no opponent,
+             -- and player SOS joins on it.
+             opponent_id = COALESCE(EXCLUDED.opponent_id, player_game_stats.opponent_id)",
     )
     .bind(Uuid::new_v4())
     .bind(player_id)
@@ -1113,7 +1117,8 @@ async fn upsert_team_game_stats(perf: &Value, pool: &PgPool, season: i32) -> Ups
             turnovers = COALESCE(EXCLUDED.turnovers, team_game_stats.turnovers),
             fouls = COALESCE(EXCLUDED.fouls, team_game_stats.fouls),
             is_home = COALESCE(EXCLUDED.is_home, team_game_stats.is_home),
-            win = COALESCE(EXCLUDED.win, team_game_stats.win)",
+            win = COALESCE(EXCLUDED.win, team_game_stats.win),
+            opponent_id = COALESCE(EXCLUDED.opponent_id, team_game_stats.opponent_id)",
     )
     .bind(Uuid::new_v4())
     .bind(team_id)
