@@ -2938,8 +2938,12 @@ pub async fn broadcasts_step(pool: &PgPool, ledger: &RunLedger<'_>) {
             .await;
         return;
     }
-    let from = crate::today_eastern();
-    let to = from + chrono::Duration::days(crate::broadcasts::NIGHTLY_WINDOW_DAYS);
+    // From yesterday: the nightly runs before the 6 AM rollover, while last
+    // night is still the slate on screen, and its after-midnight tips are
+    // filed under today.
+    let from = crate::today_eastern() - chrono::Duration::days(1);
+    let to =
+        crate::today_eastern() + chrono::Duration::days(crate::broadcasts::NIGHTLY_WINDOW_DAYS);
     let result = match crate::broadcasts::BroadcastClient::new() {
         Ok(client) => crate::broadcasts::run(pool, &client, from, to).await,
         Err(e) => Err(e),

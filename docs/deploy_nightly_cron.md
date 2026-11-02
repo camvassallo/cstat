@@ -108,8 +108,8 @@ night's rows serving, and the route projects at most 24 missing games live.
 Its `rows` shrinks across the season by design, so it is not row-count gated.
 
 `broadcasts` (#430) runs right after `schedule_refresh`. It reads ESPN's public
-scoreboard JSON (one unauthenticated call per Eastern day, today through 14
-days out) and writes `game_broadcasts`: every outlet for each game, and a
+scoreboard JSON (one unauthenticated call per Eastern day, yesterday through
+14 days out; yesterday because the nightly runs before the tab's 6 AM rollover) and writes `game_broadcasts`: every outlet for each game, and a
 confirmed tip time. The Schedule tab serves that time ahead of NatStat's, whose
 wall clock is sometimes a school's local time rather than Eastern; NatStat's
 time is the fallback. Listings are matched to `games` by date plus whichever
@@ -120,7 +120,12 @@ window (games one source does not list, or NatStat duplicates). A jump there
 means matching broke. A row is pruned only when its listing has disappeared
 from a successfully fetched day or now matches another game; one still listed
 but unresolved tonight is kept, since the sliding window changes how much the
-matcher can resolve. **Never degrades the run**: a failure is a `failed`
+matcher can resolve. Midnight is a boundary: ESPN writes a midnight tip as
+11:59 PM the night before while NatStat dates it the next day, so a listing
+near midnight with no game on its own day is retried on the neighbouring one,
+and its Eastern date is stored with its time (`tip_date`, migration 060). The
+tab files every game under the night it tips (6 AM to 6 AM Eastern), so an
+after-midnight tip is listed at the end of the night before. **Never degrades the run**: a failure is a `failed`
 ledger row and last night's networks keep serving. Skipped under a simulated
 clock (`simulate`), which would otherwise make live requests every window. Backfill a wider window
 with `cstat-ingest broadcasts --from YYYY-MM-DD --to YYYY-MM-DD`; times are
