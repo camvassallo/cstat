@@ -14,7 +14,7 @@ import {
 
 export default function WhichClass() {
   usePageTitle('Which Archetype Are You?');
-  const { season } = useSeason();
+  const { season } = useSeason({ defaultTo: 'stats' });
 
   const [answers, setAnswers] = useState<Array<number | null>>(() =>
     QUIZ.map(() => null),

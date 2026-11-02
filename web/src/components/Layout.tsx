@@ -21,7 +21,7 @@ const mobileNavLinkClass = (active: boolean) =>
   }`;
 
 // One nav destination. `to` may carry a query (e.g. `/players?mode=draft`,
-// `/projected?season=2027`) — the active-matching below is query-aware.
+// `/projected?season=2028`) — the active-matching below is query-aware.
 type NavItem = { to: string; label: string };
 
 // Grouped nav — the players pod (roster + its mode tabs + the two player-level
@@ -36,10 +36,15 @@ const PLAYERS_ITEMS: NavItem[] = [
   { to: '/players?mode=recruits', label: 'Recruits' },
   { to: '/players?mode=draft', label: 'Draft' },
 ];
-const FORECAST_ITEMS: NavItem[] = [
-  { to: '/predict', label: 'Predict' },
-  { to: '/projected?season=2027', label: 'Future' },
-];
+// Built per render: the Future link names the upcoming projection season,
+// which `/api/seasons` owns. It was a hardcoded `?season=2027`, which someone
+// had to remember to edit every November.
+function forecastItems(upcoming: Season): NavItem[] {
+  return [
+    { to: '/predict', label: 'Predict' },
+    { to: `/projected?season=${upcoming}`, label: 'Future' },
+  ];
+}
 const PLAY_ITEMS: NavItem[] = [
   { to: '/portle', label: 'Portle' },
   { to: '/which-class', label: 'Archetype Quiz' },
@@ -210,6 +215,7 @@ export default function Layout() {
   const { pathname, search } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const currentMode = new URLSearchParams(search).get('mode');
+  const { upcoming } = useAvailableSeasons();
 
   // Per-item active state (query-aware). The Players group shares the
   // `/players` pathname across its mode tabs, so Player Rankings vs Transfers/…/Draft
@@ -260,7 +266,7 @@ export default function Layout() {
       <NavDropdown
         label="Forecast"
         active={forecastActive}
-        items={FORECAST_ITEMS}
+        items={forecastItems(upcoming)}
         isItemActive={itemActive}
       />
       <NavLink to="/coaches" className={({ isActive }) => navLinkClass(isActive)}>
@@ -371,7 +377,7 @@ export default function Layout() {
           <NavLink to="/lineups" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Lineups
           </NavLink>
-          {mobileGroup('Forecast', FORECAST_ITEMS)}
+          {mobileGroup('Forecast', forecastItems(upcoming))}
           <NavLink to="/coaches" onClick={closeMenu} className={({ isActive }) => mobileNavLinkClass(isActive)}>
             Coaches
           </NavLink>

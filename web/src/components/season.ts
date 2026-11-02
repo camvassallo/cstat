@@ -11,7 +11,7 @@ import { resolveUpcomingSeason } from '../lib/upcomingSeason';
 // File-shape note: keep this module .ts (no JSX), separate from
 // `SeasonLink.tsx`. Vite's `react-refresh/only-export-components` lint rule
 // rejects mixing component + non-component exports in a `.tsx` file.
-export const AVAILABLE_SEASONS_FALLBACK: readonly number[] = [2026, 2025, 2024];
+export const AVAILABLE_SEASONS_FALLBACK: readonly number[] = [2027, 2026, 2025];
 
 export type Season = number;
 
@@ -34,6 +34,8 @@ export const EARLIEST_PROJECTABLE_YEAR = 2016;
 let cachedSeasons: number[] | null = null;
 let cachedDefault: number | null = null;
 let cachedUpcoming: number | null = null;
+let cachedOpening = false;
+let cachedStatsSeason: number | null = null;
 
 /** The upcoming (not-yet-played) projection target, e.g. 2027 during 2026.
  *
@@ -140,8 +142,7 @@ export function seasonHref(path: string, season: Season): string {
  *  copy-pasted link to a season the API knows about (but the static fallback
  *  doesn't) still works on cold render. The dropdown still constrains
  *  user-facing choice to the API list once it loads. */
-export function parseSeason(raw: string | null): Season {
-  const def = cachedDefault ?? DEFAULT_SEASON;
+export function parseSeason(raw: string | null, def: Season = cachedDefault ?? DEFAULT_SEASON): Season {
   if (!raw) return def;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 2000 || n > 2100) return def;
@@ -151,18 +152,26 @@ export function parseSeason(raw: string | null): Season {
 /** Read the current season from `?season=` (URL is the source of truth so
  *  links and refreshes carry it) and expose a setter that preserves all other
  *  search params. Falls back to the default when the param is missing or
- *  unrecognized. */
-export function useSeason(): {
+ *  unrecognized.
+ *
+ *  `defaultTo: 'stats'` is for the surfaces that have no projection to fall
+ *  back on (archetypes, lineups, Which Class): with no `?season=` they land on
+ *  `stats_season`, which holds the previous season while the newest one is
+ *  `opening`, rather than on a season whose tables are still empty. */
+export function useSeason(opts: { defaultTo?: 'site' | 'stats' } = {}): {
   season: Season;
   setSeason: (s: Season) => void;
 } {
   const [params, setParams] = useSearchParams();
-  const season = parseSeason(params.get('season'));
+  // Re-render when `/api/seasons` lands so a stats-defaulted page moves off
+  // the first-paint guess. Cheap: the request is shared and TTL-cached.
+  const { defaultSeason, statsSeason } = useAvailableSeasons();
+  const def = opts.defaultTo === 'stats' ? statsSeason : defaultSeason;
+  const season = parseSeason(params.get('season'), def);
 
   const setSeason = useCallback(
     (next: Season) => {
       const newParams = new URLSearchParams(params);
-      const def = cachedDefault ?? DEFAULT_SEASON;
       if (next === def) {
         // Keep URLs clean for the current season — no `?season=2026` clutter.
         newParams.delete('season');
@@ -171,7 +180,7 @@ export function useSeason(): {
       }
       setParams(newParams, { replace: false });
     },
-    [params, setParams],
+    [params, setParams, def],
   );
 
   return { season, setSeason };
@@ -252,6 +261,13 @@ export function useAvailableSeasons(): {
    *  swap under the reader. It flips on failure too, so an unreachable API
    *  degrades to the fallback instead of hanging. */
   settled: boolean;
+  /** The newest played season has started but its actuals are too thin to
+   *  lead with. Results-driven pages show that season's projection while
+   *  this is true (Rankings, Players, the team page). */
+  opening: boolean;
+  /** Newest season with complete-enough actuals: `newestPlayed`, or the one
+   *  before it while `opening`. */
+  statsSeason: number;
 } {
   const [seasons, setSeasons] = useState<readonly number[]>(
     cachedSeasons ?? AVAILABLE_SEASONS_FALLBACK,
@@ -259,6 +275,8 @@ export function useAvailableSeasons(): {
   const [def, setDef] = useState<number>(cachedDefault ?? DEFAULT_SEASON);
   const [upcoming, setUpcoming] = useState<number>(upcomingProjectionSeason());
   const [settled, setSettled] = useState<boolean>(cachedSeasons != null);
+  const [opening, setOpening] = useState<boolean>(cachedOpening);
+  const [statsSeason, setStatsSeason] = useState<number | null>(cachedStatsSeason);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,13 +286,17 @@ export function useAvailableSeasons(): {
         if (res.seasons.length === 0) return; // empty DB, keep fallback
         cachedSeasons = res.seasons;
         cachedDefault = res.default ?? res.seasons[0];
+        cachedOpening = res.opening ?? false;
+        cachedStatsSeason = res.stats_season ?? null;
         setSeasons(res.seasons);
         setDef(cachedDefault);
+        setOpening(cachedOpening);
+        setStatsSeason(cachedStatsSeason);
         // `upcoming` is legitimately null — nothing projected beyond the
-        // newest played season — so fall back to `default + 1` rather than
-        // blanking the Future tab. Recomputed from the response's own default
-        // rather than left at the first-paint value, which was derived from
-        // the hardcoded array and can be a season behind.
+        // newest played season — so fall back to the default (the season
+        // being played, which is projected) rather than blanking the Future
+        // tab. Recomputed from the response's own default rather than left at
+        // the first-paint value, which was derived from the hardcoded array.
         cachedUpcoming = res.upcoming;
         setUpcoming(
           resolveUpcomingSeason(res.upcoming, cachedDefault, AVAILABLE_SEASONS_FALLBACK[0]),
@@ -300,6 +322,8 @@ export function useAvailableSeasons(): {
     newestPlayed: seasons[0] ?? DEFAULT_SEASON,
     upcoming,
     settled,
+    opening,
+    statsSeason: statsSeason ?? seasons[0] ?? DEFAULT_SEASON,
   };
 }
 

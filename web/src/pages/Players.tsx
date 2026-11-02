@@ -314,8 +314,24 @@ export default function Players() {
   // CAM) rather than the observed-stat grid. Off the same hook, so it tracks
   // `/api/seasons`'s `upcoming` instead of arithmetic on a hand-edited
   // constant.
-  const { seasons: availableSeasons, upcoming } = useAvailableSeasons();
-  const isProjected = season === upcoming;
+  //
+  // Also the view for the first weeks of a season (`opening`): the night 2027
+  // got its first final score this page became an empty 2027 grid, and it
+  // stays thin until players clear the games floor. The projection for that
+  // season is the useful table until then; `?view=actual` opts out.
+  const { seasons: availableSeasons, upcoming, opening } = useAvailableSeasons();
+  const newestPlayed = availableSeasons[0];
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isProjected =
+    season > newestPlayed ||
+    (opening && season === newestPlayed && searchParams.get('view') !== 'actual');
+  // Transfer-portal and recruit classes are keyed by the year they ENTER
+  // FROM, one less than the season they play in (`/transfers/2026` rows link
+  // their destination to 2027; `/recruits/2026` answers `base_season: 2027`).
+  // The picker names the season being played, so map it here. Passing the
+  // season straight through 404'd the default view as soon as the default
+  // moved to 2027.
+  const classYear = season - 1;
 
   // Publish the season list to the navbar picker WITH the upcoming projected
   // year prepended, so `/players` surfaces it. `/api/seasons` deliberately
@@ -327,7 +343,6 @@ export default function Players() {
     setPageSeasons([upcoming, ...availableSeasons.filter((s) => s !== upcoming)]);
     return () => setPageSeasons(null);
   }, [availableSeasons, upcoming]);
-  const [searchParams, setSearchParams] = useSearchParams();
   // Multi-archetype filter (shared with the transfer portal) — URL-backed
   // selection + OR/AND mode, applied client-side via `filterRows`.
   const {
@@ -487,25 +502,23 @@ export default function Players() {
   );
 
   if (mode === 'transfers') {
-    // The transfer portal is per-season — surface the current site-selected
-    // year so switching seasons in the nav repoints the list at the right
-    // portal class.
+    // The transfer portal is per class — the one that moved players INTO the
+    // site-selected season.
     return (
       <div>
         {modeTabs}
-        <TransferPortal year={season} />
+        <TransferPortal year={classYear} />
       </div>
     );
   }
 
   if (mode === 'recruits') {
-    // Recruiting class year = spring of HS graduation. We anchor it to the
-    // current site-selected season so navigating "2026" in the dropdown
-    // shows the class-of-2026 entering cstat-season 2027.
+    // Recruiting class year = spring of HS graduation, so the freshmen
+    // playing in season S are the class of S - 1.
     return (
       <div>
         {modeTabs}
-        <RecruitClass year={season} />
+        <RecruitClass year={classYear} />
       </div>
     );
   }
@@ -517,7 +530,7 @@ export default function Players() {
     return (
       <div>
         {modeTabs}
-        <DraftBoard year={season} />
+        <DraftBoard year={season} fallbackToPrevious={season >= newestPlayed} />
       </div>
     );
   }
@@ -525,9 +538,29 @@ export default function Players() {
   if (isProjected) {
     // Upcoming season has no observed stats — swap the box-score grid for the
     // projected-CAM ranking (returners + transfers + freshmen).
+    const openingSeason = availableSeasons.includes(season);
     return (
       <div>
         {modeTabs}
+        {openingSeason && (
+          <p className="mb-3 rounded-lg bg-gray-800 px-3 py-2 text-sm text-gray-300">
+            The season has just tipped off, so this is the preseason projection until players have a
+            few games behind them.{' '}
+            <button
+              type="button"
+              className="text-blue-400 hover:underline"
+              onClick={() =>
+                setSearchParams((prev) => {
+                  const p = new URLSearchParams(prev);
+                  p.set('view', 'actual');
+                  return p;
+                })
+              }
+            >
+              Show this season&rsquo;s stats so far
+            </button>
+          </p>
+        )}
         <ProjectedPlayers year={season} />
       </div>
     );

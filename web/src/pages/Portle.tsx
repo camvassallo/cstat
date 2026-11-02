@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Radar,
   RadarChart,
@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { fetchPlayers, fetchPlayerDetail, fetchPortleDaily, type PlayerRow } from '../api/client';
-import { useSeason } from '../components/season';
+import { useAvailableSeasons, useSeason } from '../components/season';
 import { usePageTitle } from '../components/usePageTitle';
 import { useIsMobile } from '../components/useIsMobile';
 import { PlayerPicker } from '../components/PlayerPicker';
@@ -131,7 +131,13 @@ export default function Portle() {
     };
   }, [practice, mode, season, dateKey, dailyKey]);
 
-  const poolReady = poolSeason === season && pool.length > 0;
+  const poolLoaded = poolSeason === season;
+  const poolReady = poolLoaded && pool.length > 0;
+  // A season that has tipped off but whose players have not yet cleared the
+  // pool's games floor and settled into an archetype. Portle stays on the new
+  // season and says so, rather than quietly serving last season's players.
+  const { seasons: playedSeasons, opening } = useAvailableSeasons();
+  const archetypesPending = opening && season === playedSeasons[0];
   // The daily answer is resolved by `natstat_id`, so the pool must carry it. If
   // the API is mid-deploy and hasn't started serving it (issue #181), fail closed
   // rather than render off an inconsistent pool.
@@ -240,7 +246,22 @@ export default function Portle() {
         )}
       </div>
 
-      {!poolReady ? (
+      {archetypesPending && poolLoaded && (!poolReady || (dailyReady && !answer)) ? (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-300">
+          <p>
+            Waiting on {season} archetypes to establish. Portle draws from players with a few games
+            behind them and a settled archetype, so the {season} puzzles start a couple of weeks
+            into the season.
+          </p>
+          <p className="mt-2 text-gray-400">
+            In the meantime,{' '}
+            <Link to={`/portle?season=${season - 1}`} className="text-blue-400 hover:underline">
+              play today&rsquo;s {season - 1} puzzle
+            </Link>
+            .
+          </p>
+        </div>
+      ) : !poolReady ? (
         <div className="text-sm text-gray-500">Loading players…</div>
       ) : !seedReady ? (
         <div className="rounded-lg border border-gray-700 bg-gray-800/60 p-6 text-sm text-gray-400">

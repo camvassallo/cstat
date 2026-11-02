@@ -16,7 +16,7 @@ import { usePageTitle } from '../components/usePageTitle';
 /// record.
 export default function Conference() {
   const { code = '' } = useParams<{ code: string }>();
-  const { season } = useSeason();
+  const { season } = useSeason({ defaultTo: 'stats' });
   // Distinguishes the two reasons a league can have no table, which are not
   // the same statement and must not share copy.
   const { seasons: playedSeasons } = useAvailableSeasons();

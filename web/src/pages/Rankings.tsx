@@ -324,7 +324,7 @@ function buildColumns(
 
 export default function Rankings() {
   const { season } = useSeason();
-  const { seasons: playedSeasons, upcoming, settled } = useAvailableSeasons();
+  const { seasons: playedSeasons, upcoming, settled, opening } = useAvailableSeasons();
 
   // Own the navbar picker for this route, offering the upcoming projected
   // year alongside the played ones — the same shape `/players` publishes, and
@@ -344,7 +344,14 @@ export default function Rankings() {
   // the reader find the Forecast tab (#394). `/api/seasons` decides when that
   // is: `default` follows the projection while the last season is over and
   // snaps back to real rankings on the night of the first result.
-  const isProjectedSeason = !playedSeasons.includes(season);
+  //
+  // The same board also covers the first weeks of a season (`opening`). One
+  // final score makes a season "played", and the night that happened the
+  // landing page became an empty 2027 table; a few days later it would have
+  // ranked single-game margins. Until teams have a handful of games each the
+  // projection is the better ranking, so it stays.
+  const isOpeningSeason = opening && season === playedSeasons[0];
+  const isProjectedSeason = !playedSeasons.includes(season) || isOpeningSeason;
 
   usePageTitle(isProjectedSeason ? 'Projected Rankings' : 'Team Rankings');
   const isMobile = useIsMobile();
@@ -396,6 +403,21 @@ export default function Rankings() {
     }
     // `key` remounts on a year switch so the view resets to loading rather
     // than showing the previous year's rows, matching `/projected`.
+    if (isOpeningSeason) {
+      return (
+        <div>
+          <div className="mb-4">
+            <ScoreTicker />
+          </div>
+          <p className="mb-4 rounded border border-gray-700 bg-gray-800/60 px-3 py-2 text-sm text-gray-300">
+            The season has just tipped off. Until teams have played a handful of games, these
+            rankings are the preseason projection; ratings from this season's results take over
+            after that.
+          </p>
+          <ProjectionView key={season} year={season} publishSeasons={false} />
+        </div>
+      );
+    }
     return <ProjectionView key={season} year={season} publishSeasons={false} />;
   }
 

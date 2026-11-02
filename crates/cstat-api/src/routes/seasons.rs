@@ -12,8 +12,9 @@ pub fn router() -> Router<Arc<AppState>> {
 
 /// Seasons the site can show, so the frontend doesn't have to hardcode them.
 ///
-/// Returns `{ seasons: [int], default: int, upcoming: int | null }`, and the
-/// three answer genuinely different questions. Conflating the first two is
+/// Returns `{ seasons: [int], default: int, upcoming: int | null,
+/// opening: bool, stats_season: int | null }`, and they answer genuinely
+/// different questions. Conflating the first two is
 /// what #386 was:
 ///
 /// - **`seasons`** — every season with a **played** game, newest first. The
@@ -25,6 +26,15 @@ pub fn router() -> Router<Arc<AppState>> {
 /// - **`upcoming`** — the next season that is *projected* but not yet played,
 ///   for the Future tab and the team projection ledger. `null` when there is
 ///   none.
+/// - **`opening`** — the newest played season has *started* but its actuals
+///   are not yet worth leading with (see [`OPENING_MEDIAN_GAMES`]). One game
+///   is enough to make a season "played", and the night that happened every
+///   page with no `?season=` switched to an empty 2027. While this is true the
+///   results-driven pages lead with the season's projection instead.
+/// - **`stats_season`** — the newest season whose player/team actuals are
+///   complete enough to serve as a default: the newest played season, or the
+///   one before it while `opening`. For the surfaces with no projection to
+///   fall back on (Portle, archetypes, lineups).
 ///
 /// The distinction only starts to matter the day a schedule is ingested ahead
 /// of tip-off, and then it matters immediately. A scheduled-but-unplayed game
@@ -75,11 +85,65 @@ async fn list_seasons(
         newest_played
     };
 
+    let median_games = match newest_played {
+        Some(s) => median_team_games(pool, s).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("median-games query failed: {e}") })),
+            )
+        })?,
+        None => None,
+    };
+    let opening = is_opening(median_games);
+    let stats_season = if opening {
+        // The previous played season, not `newest - 1`: the list is the
+        // authority on which seasons exist.
+        seasons.get(1).copied()
+    } else {
+        newest_played
+    };
+
     Ok(Json(json!({
         "seasons": seasons,
         "default": default,
         "upcoming": upcoming,
+        "opening": opening,
+        "stats_season": stats_season,
     })))
+}
+
+/// Median games played, per team that has played, below which the newest
+/// season is still `opening`.
+///
+/// Five because it is the first point at which every opening-phase surface
+/// has something to show: Portle's pool and the player tables gate on
+/// `games_played >= 5` (`queries::pick_or_pin_daily_puzzle`), so below a
+/// median of five most players are absent from them by construction. Raw
+/// AdjEM at five games is still noisy; that is what the preseason blend
+/// (docs/season_rollover_pages.md, P2) is for, not a reason to hold the
+/// default back further.
+///
+/// Median rather than minimum: openers are staggered and a few teams start a
+/// week late, which must not hold the whole site on the projection.
+const OPENING_MEDIAN_GAMES: f64 = 5.0;
+
+/// Is the newest played season still opening? `None` — no box score has
+/// landed for any team yet, which is the state the night of the first final
+/// score (the score arrives before the box) — counts as opening.
+fn is_opening(median_games: Option<f64>) -> bool {
+    median_games.is_none_or(|m| m < OPENING_MEDIAN_GAMES)
+}
+
+/// Median box-score games per team in a season, over teams with at least one.
+async fn median_team_games(pool: &PgPool, season: i32) -> Result<Option<f64>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<f64>>(
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY n) \
+         FROM (SELECT count(*)::float8 AS n FROM team_game_stats \
+               WHERE season = $1 GROUP BY team_id) per_team",
+    )
+    .bind(season)
+    .fetch_one(pool)
+    .await
 }
 
 /// Seasons with at least one game played to a final score, newest first.
@@ -332,6 +396,19 @@ mod tests {
         // And the boundary is a boundary: past the threshold it flips.
         let last = mid_season - chrono::Duration::days(SEASON_DORMANT_AFTER_DAYS + 1);
         assert!(prefer_upcoming(Some(last), mid_season, Some(2028)));
+    }
+
+    #[test]
+    fn a_season_is_opening_until_teams_have_played_enough_games() {
+        // The night of the first final score: the score lands before any box
+        // score, so there is no per-team count at all.
+        assert!(is_opening(None));
+        // Opening day and the first week.
+        assert!(is_opening(Some(1.0)));
+        assert!(is_opening(Some(4.5)));
+        // The boundary is inclusive on the ready side.
+        assert!(!is_opening(Some(OPENING_MEDIAN_GAMES)));
+        assert!(!is_opening(Some(30.0)));
     }
 
     #[tokio::test]

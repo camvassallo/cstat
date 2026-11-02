@@ -1700,6 +1700,13 @@ export interface SeasonsResponse {
   /// target. Null when there is none. Read this rather than computing
   /// `newest + 1`, which asserts the season exists instead of checking.
   upcoming: number | null;
+  /// The newest played season has started but its actuals are too thin to
+  /// lead with (median team games below a floor). Results-driven pages lead
+  /// with that season's projection while this is true.
+  opening: boolean;
+  /// Newest season whose actuals are complete enough to default to: the
+  /// newest played one, or the one before it while `opening`.
+  stats_season: number | null;
 }
 
 export function fetchSeasons() {

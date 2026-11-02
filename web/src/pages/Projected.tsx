@@ -626,8 +626,8 @@ function buildColumns(
 /// so the two can't disagree — crucially, when the user selects the
 /// default season the picker drops the param, and `useSeason()` resolves
 /// the absent param right back to that default. The `Future` nav link
-/// carries `?season=2027`, so the page still *lands* on the upcoming
-/// forecast. A non-projectable season (e.g. one carried over from
+/// carries `?season=<upcoming>` (from `/api/seasons`), so the page still
+/// *lands* on the upcoming forecast. A non-projectable season (e.g. one carried over from
 /// elsewhere) redirects to the forecast instead of 400-ing the API.
 export default function Projected() {
   const { season: year } = useSeason();

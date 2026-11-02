@@ -233,8 +233,21 @@ function buildColumns(isMobile: boolean): ColDef<RankedProspect>[] {
 // The NBA Draft big board for a single draft-cycle year — a mode tab on the
 // Players page (mirrors TransferPortal / RecruitClass). `year` is the
 // site-selected season, plumbed from the Players page.
-export default function DraftBoard({ year }: { year: number }) {
+//
+// `fallbackToPrevious`: the draft for a season follows it, so the season being
+// played (and the upcoming one) has no board yet. With this set, a missing
+// board for `year` shows the newest one before it, labelled as such, rather
+// than an error on the default view. Off for past seasons, where a missing
+// board is a real gap and should say so.
+export default function DraftBoard({
+  year,
+  fallbackToPrevious = false,
+}: {
+  year: number;
+  fallbackToPrevious?: boolean;
+}) {
   const [rows, setRows] = useState<DraftProspect[] | null>(null);
+  const [shownYear, setShownYear] = useState(year);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const isMobile = useIsMobile();
@@ -245,9 +258,15 @@ export default function DraftBoard({ year }: { year: number }) {
   useEffect(() => {
     let canceled = false;
     fetchDraft(year)
-      .then((r) => {
+      .then((r) => ({ r, y: year }))
+      .catch((e) => {
+        if (!fallbackToPrevious) throw e;
+        return fetchDraft(year - 1).then((r) => ({ r, y: year - 1 }));
+      })
+      .then(({ r, y }) => {
         if (canceled) return;
         setRows(r.prospects);
+        setShownYear(y);
         setError(null);
       })
       .catch((e) => {
@@ -256,7 +275,7 @@ export default function DraftBoard({ year }: { year: number }) {
     return () => {
       canceled = true;
     };
-  }, [year]);
+  }, [year, fallbackToPrevious]);
 
   // Decorate each prospect with its CAM rank and the headline Δ. The
   // CAM rank only ranks prospects that have BOTH a draft rank and a CAM
@@ -307,7 +326,8 @@ export default function DraftBoard({ year }: { year: number }) {
   return (
     <div>
       <p className="text-sm text-gray-400 mb-3">
-        {year} draft, in pick order — joined to each player's CAM value and archetype.
+        {shownYear !== year && <>No {year} draft board yet, so this is the last one. </>}
+        {shownYear} draft, in pick order — joined to each player's CAM value and archetype.
       </p>
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <input
