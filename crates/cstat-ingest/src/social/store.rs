@@ -1,5 +1,5 @@
 //! `social_drafts` (what was already sent) and `pregame_snapshots` (what we
-//! expected before tipoff). Migration 061.
+//! expected before tipoff). Migration 062.
 
 use std::collections::HashMap;
 
@@ -30,19 +30,22 @@ pub struct Record<'a> {
     pub model: Option<&'a str>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
+    /// The Slack payload, kept only when the post failed so it can be resent.
+    pub slack_blocks: Option<Value>,
 }
 
 /// Insert, or overwrite on a forced rerun of the same key.
 pub async fn record(pool: &PgPool, r: Record<'_>) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO social_drafts \
-           (kind, source_key, status, facts, drafts, image_urls, model, input_tokens, output_tokens) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+           (kind, source_key, status, facts, drafts, image_urls, model, input_tokens, \
+            output_tokens, slack_blocks, post_attempts) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1) \
          ON CONFLICT (kind, source_key) DO UPDATE SET \
            status = EXCLUDED.status, facts = EXCLUDED.facts, drafts = EXCLUDED.drafts, \
            image_urls = EXCLUDED.image_urls, model = EXCLUDED.model, \
            input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens, \
-           created_at = now()",
+           slack_blocks = EXCLUDED.slack_blocks, post_attempts = 1, created_at = now()",
     )
     .bind(r.kind)
     .bind(r.source_key)
@@ -53,9 +56,50 @@ pub async fn record(pool: &PgPool, r: Record<'_>) -> sqlx::Result<()> {
     .bind(r.model)
     .bind(r.input_tokens.map(|n| n as i32))
     .bind(r.output_tokens.map(|n| n as i32))
+    .bind(r.slack_blocks)
     .execute(pool)
     .await
     .map(|_| ())
+}
+
+/// A drafted message Slack refused, waiting to be resent.
+#[derive(Debug, sqlx::FromRow)]
+pub struct Unsent {
+    pub kind: String,
+    pub source_key: String,
+    pub slack_blocks: Value,
+    pub title: Option<String>,
+}
+
+/// Failed posts still under the retry cap, oldest first.
+pub async fn unsent(pool: &PgPool, max_attempts: i32) -> sqlx::Result<Vec<Unsent>> {
+    sqlx::query_as(
+        "SELECT kind, source_key, slack_blocks, facts->>'title' AS title \
+         FROM social_drafts \
+         WHERE status = 'slack_failed' AND slack_blocks IS NOT NULL AND post_attempts < $1 \
+         ORDER BY created_at",
+    )
+    .bind(max_attempts)
+    .fetch_all(pool)
+    .await
+}
+
+/// After a resend: `posted` clears the stored payload, anything else counts
+/// one more attempt.
+pub async fn resend_result(pool: &PgPool, kind: &str, key: &str, sent: bool) -> sqlx::Result<()> {
+    let sql = if sent {
+        "UPDATE social_drafts SET status = 'posted', slack_blocks = NULL, \
+           post_attempts = post_attempts + 1 WHERE kind = $1 AND source_key = $2"
+    } else {
+        "UPDATE social_drafts SET post_attempts = post_attempts + 1 \
+         WHERE kind = $1 AND source_key = $2"
+    };
+    sqlx::query(sql)
+        .bind(kind)
+        .bind(key)
+        .execute(pool)
+        .await
+        .map(|_| ())
 }
 
 /// Keep the slate's pregame numbers. The first capture wins: a later run the

@@ -82,6 +82,13 @@ impl SlackChannel {
     }
 }
 
+/// Whether `channel` has a webhook to post to (and notifications are not
+/// muted). For callers that should not do expensive work for a post that has
+/// nowhere to go.
+pub fn is_configured(channel: SlackChannel) -> bool {
+    channel.webhook().is_some()
+}
+
 /// Outcome of a Slack post, for callers that must know whether it actually
 /// landed rather than fire-and-forget (the alert self-test endpoint). Ordinary
 /// alert call sites use [`post_slack`] and ignore this.

@@ -47,6 +47,7 @@ fn walk(v: &Value, out: &mut HashSet<String>) {
                 add_spellings(x, out);
             }
         }
+        Value::String(s) if uuid::Uuid::parse_str(s).is_ok() => {}
         Value::String(s) => {
             for m in NUMBER.find_iter(s) {
                 out.insert(m.as_str().to_string());
@@ -56,7 +57,12 @@ fn walk(v: &Value, out: &mut HashSet<String>) {
             }
         }
         Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
-        Value::Object(o) => o.values().for_each(|x| walk(x, out)),
+        // Ids are not stats: digit runs inside a UUID ("44209968", "555")
+        // would otherwise vouch for whatever number a draft made up.
+        Value::Object(o) => o
+            .iter()
+            .filter(|(k, _)| !(k.as_str() == "id" || k.ends_with("_id")))
+            .for_each(|(_, x)| walk(x, out)),
         _ => {}
     }
 }
@@ -104,6 +110,18 @@ mod tests {
     fn signs_do_not_matter() {
         let facts = json!({"predicted_margin": -7.5});
         assert!(unverified_numbers("favored by 7.5", &facts).is_empty());
+    }
+
+    #[test]
+    fn ids_do_not_vouch_for_numbers() {
+        let facts = json!({
+            "team_id": "44209968-e320-4655-a7e1-d30188ae78ab",
+            "lineup": ["e6dfdbd0-555c-4b43-88af-9bb80bf28005"]
+        });
+        assert_eq!(
+            unverified_numbers("a 555-point night, 44209968 fans", &facts),
+            vec!["555".to_string(), "44209968".to_string()]
+        );
     }
 
     #[test]

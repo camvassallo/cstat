@@ -122,8 +122,15 @@ impl Research<'_> {
     /// Run one tool. The result is what the model sees, already trimmed.
     pub async fn call(&self, name: &str, input: &Value) -> anyhow::Result<Value> {
         let s = |k: &str| input[k].as_str().map(str::trim).filter(|v| !v.is_empty());
-        let id = |k: &str| -> anyhow::Result<&str> {
+        let text = |k: &str| -> anyhow::Result<&str> {
             s(k).with_context(|| format!("`{k}` is required"))
+        };
+        // Ids go into URL paths, so they must be exactly a UUID.
+        let id = |k: &str| -> anyhow::Result<String> {
+            let v = text(k)?;
+            uuid::Uuid::parse_str(v)
+                .map(|u| u.to_string())
+                .with_context(|| format!("`{k}` must be a UUID from the facts or a tool result"))
         };
         let season = input["season"]
             .as_i64()
@@ -131,7 +138,7 @@ impl Research<'_> {
             .unwrap_or(self.season);
         let out = match name {
             "search_players" => {
-                let q = id("name")?;
+                let q = text("name")?;
                 let v: Value = self
                     .site
                     .get_json(&format!(
@@ -294,7 +301,7 @@ impl Research<'_> {
                 json!({ "season": season, "sort": sort, "teams": teams })
             }
             "predict_matchup" => {
-                let mut q = format!("home={}&away={}", enc(id("home")?), enc(id("away")?));
+                let mut q = format!("home={}&away={}", enc(text("home")?), enc(text("away")?));
                 q.push_str(&format!("&venue={}", s("venue").unwrap_or("home")));
                 q.push_str(&format!("&season={season}"));
                 for k in ["home_season", "away_season"] {
@@ -310,7 +317,7 @@ impl Research<'_> {
                     .site
                     .get_json(&format!(
                         "/api/conferences/{}?season={season}",
-                        enc(&id("code")?.to_uppercase())
+                        enc(&text("code")?.to_uppercase())
                     ))
                     .await?;
                 let mut out = pick(

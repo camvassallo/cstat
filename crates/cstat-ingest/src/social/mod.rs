@@ -128,10 +128,23 @@ pub async fn run(
         opts,
     };
 
+    // Drafting costs money; drafting for a channel that cannot receive it
+    // would spend it every hour for nothing.
+    if !ctx.opts.dry_run && !notify::is_configured(SlackChannel::SocialDrafts) {
+        anyhow::bail!(
+            "{} is unset, so there is nowhere to post; use --dry-run to preview",
+            SlackChannel::SocialDrafts.env_var()
+        );
+    }
+
     let now_et = crate::eastern_datetime(Utc::now());
     let today = crate::today_eastern();
     let ledger = RunLedger::start(pool, crate::season_for_date(today));
     let mut failures = 0;
+
+    if !ctx.opts.dry_run {
+        resend_unsent(&ctx).await;
+    }
 
     for &job in &ctx.opts.jobs {
         let started = Utc::now();
@@ -152,16 +165,23 @@ pub async fn run(
         let (status, posted, error) = match result {
             Ok(items) => {
                 let mut posted = 0;
+                let mut errors = Vec::new();
                 for item in &items {
                     match publish(&ctx, item).await {
                         Ok(true) => posted += 1,
                         Ok(false) => {}
                         Err(e) => {
                             warn!(kind = item.kind, key = %item.source_key, error = %e, "publish failed");
+                            errors.push(format!("{} {}: {e:#}", item.kind, item.source_key));
                         }
                     }
                 }
-                (StepStatus::Ok, posted, None)
+                if errors.is_empty() {
+                    (StepStatus::Ok, posted, None)
+                } else {
+                    failures += 1;
+                    (StepStatus::Failed, posted, Some(errors.join("; ")))
+                }
             }
             Err(e) => {
                 failures += 1;
@@ -267,31 +287,64 @@ async fn publish(ctx: &Ctx<'_>, item: &Item) -> anyhow::Result<bool> {
         return Ok(false);
     }
 
-    match notify::post_slack_blocks(SlackChannel::SocialDrafts, &item.title, blocks).await {
-        SlackPostOutcome::Sent => {}
-        // Nothing reached a person, so leave it unrecorded and let the next
-        // run try again.
-        SlackPostOutcome::NotConfigured | SlackPostOutcome::Failed => return Ok(false),
-    }
+    let sent = matches!(
+        notify::post_slack_blocks(SlackChannel::SocialDrafts, &item.title, blocks.clone()).await,
+        SlackPostOutcome::Sent
+    );
     let model = ctx.drafter.as_ref().map(|d| d.model.as_str());
     store::record(
         ctx.pool,
         store::Record {
             kind: item.kind,
             source_key: &item.source_key,
-            status: "posted",
+            status: if sent { "posted" } else { "slack_failed" },
             // The trail, not the raw tool results: those run to tens of KB an
             // item and can be fetched again from the trail.
-            facts: Some(&json!({ "facts": item.facts, "research_trail": trail })),
+            facts: Some(&json!({
+                "title": item.title,
+                "facts": item.facts,
+                "research_trail": trail,
+            })),
             drafts: Some(serde_json::to_value(&drafts)?),
             image_urls: item.images.iter().map(|i| i.url.clone()).collect(),
             model,
             input_tokens: usage.map(|u| u.input_tokens),
             output_tokens: usage.map(|u| u.output_tokens),
+            // Kept so the next run resends this message rather than paying to
+            // draft it again (`resend_unsent`).
+            slack_blocks: (!sent).then_some(blocks),
         },
     )
     .await?;
+    anyhow::ensure!(sent, "Slack did not take the post; the next run resends it");
     Ok(true)
+}
+
+/// Resends to Slack before giving up on a failed post. Each attempt is one
+/// hourly run, so this is about six hours of a Slack outage.
+const MAX_POST_ATTEMPTS: i32 = 6;
+
+/// Resend drafted messages Slack refused on an earlier run, from their stored
+/// payload, so an outage costs retries rather than fresh drafts.
+async fn resend_unsent(ctx: &Ctx<'_>) {
+    let rows = match store::unsent(ctx.pool, MAX_POST_ATTEMPTS).await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "could not read unsent drafts");
+            return;
+        }
+    };
+    for r in rows {
+        let title = r.title.as_deref().unwrap_or("Social draft");
+        let sent = matches!(
+            notify::post_slack_blocks(SlackChannel::SocialDrafts, title, r.slack_blocks).await,
+            SlackPostOutcome::Sent
+        );
+        info!(kind = %r.kind, key = %r.source_key, sent, "resent a failed post");
+        if let Err(e) = store::resend_result(ctx.pool, &r.kind, &r.source_key, sent).await {
+            warn!(error = %e, "could not record a resend");
+        }
+    }
 }
 
 struct Outcome {
@@ -363,6 +416,7 @@ pub(crate) async fn record_skip(ctx: &Ctx<'_>, kind: &str, key: &str, facts: &Va
         model: None,
         input_tokens: None,
         output_tokens: None,
+        slack_blocks: None,
     };
     if let Err(e) = store::record(ctx.pool, r).await {
         warn!(kind, key, error = %e, "failed to record a skipped item");

@@ -10,7 +10,8 @@
 -- key (a date for the daily posts, a NatStat id for a headline), so a rerun or
 -- an overlapping cron run never posts the same idea twice. A headline the
 -- triage passed on is recorded too (`status = 'skipped'`) so it is not
--- reconsidered every hour.
+-- reconsidered every hour. Status is `posted`, `skipped`, or `slack_failed`
+-- (drafted but Slack refused it; retried from `slack_blocks`).
 CREATE TABLE IF NOT EXISTS social_drafts (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     kind          TEXT NOT NULL,
@@ -22,6 +23,10 @@ CREATE TABLE IF NOT EXISTS social_drafts (
     drafts        JSONB,
     image_urls    TEXT[] NOT NULL DEFAULT '{}',
     model         TEXT,
+    -- The finished Slack message, kept when the post fails (`slack_failed`)
+    -- so the next run resends it as is instead of paying to draft it again.
+    slack_blocks  JSONB,
+    post_attempts INTEGER NOT NULL DEFAULT 0,
     input_tokens  INTEGER,
     output_tokens INTEGER,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
