@@ -61,9 +61,9 @@ Each job records a `social_*` step to `ingest_runs`. None is served-critical, so
 
 ## Cost
 
-Each item is one research loop on `claude-opus-5-5` at medium effort (`SOCIAL_MODEL` overrides it), plus one news triage call per run with new headlines. Every round of a loop resends the conversation, but most of that is served from the prompt cache at a tenth of the input rate. Measured on 2026-03-20 replays: 16k to 42k input tokens per item (60 to 95% cache reads) and 1.4k to 2.9k output, about **$0.06 to $0.12 an item**.
+Each item is one research loop on `claude-opus-5-5` at medium effort (`SOCIAL_MODEL` overrides it), plus one news triage call per run with new headlines. Every round of a loop resends the conversation, but most of that is served from the prompt cache at a tenth of the input rate. Measured on the first live batch (2026-11-02, seven items): 16k to 68k input tokens per item (20 to 65% cache reads; a slate preview with 8 to 10 lookups is the expensive end) and 1.6k to 3.7k output, about **$0.14 an item** on average.
 
-A typical in-season day is about 13 items (2 games of the day, 2 lines, up to 3 recaps, up to 6 news), so roughly $1 to $1.60 a day, or **$30 to $50 a month**. News is the lever: `SOCIAL_NEWS_MAX_PER_DAY` (default 6) and `SOCIAL_NEWS_MAX_PER_RUN` (default 3). `claude-sonnet-5-5` costs half as much per token. `social_drafts` logs tokens per item:
+A typical in-season day is about 13 items (2 games of the day, 2 lines, up to 3 recaps, up to 6 news), so roughly $1.80 a day, or **about $55 a month**. News is the lever: `SOCIAL_NEWS_MAX_PER_DAY` (default 6) and `SOCIAL_NEWS_MAX_PER_RUN` (default 3). `claude-sonnet-5-5` costs half as much per token. `social_drafts` logs tokens per item:
 
 ```sql
 SELECT date_trunc('day', created_at) AS day, model,
