@@ -49,6 +49,9 @@ export interface TeamRanking {
   adj_defense: number | null;
   adj_defense_rank: number | null;
   adj_efficiency_margin: number | null;
+  /// The preseason projection's weight in the three ratings above, under the
+  /// `blended` basis; null under `raw` or when the team has no projection.
+  preseason_weight: number | null;
   adj_tempo: number | null;
   adj_tempo_rank: number | null;
   sos: number | null;
@@ -246,10 +249,19 @@ export interface TeamProfile {
   opp_ft_rate_rank: number | null;
 }
 
-export function fetchTeamRankings(season?: number) {
-  return fetchJson<{ season: number; teams: TeamRanking[] }>('/teams/rankings', {
-    season: season?.toString(),
-  });
+/// `raw`: opponent-adjusted ratings from results alone. `blended`: the same
+/// with the preseason projection as a prior worth six games (only populated
+/// for seasons computed since it existed; falls back to raw per team).
+export type RatingBasis = 'raw' | 'blended';
+
+export function fetchTeamRankings(season?: number, basis: RatingBasis = 'raw') {
+  return fetchJson<{ season: number; basis: RatingBasis; teams: TeamRanking[] }>(
+    '/teams/rankings',
+    {
+      season: season?.toString(),
+      basis: basis === 'raw' ? undefined : basis,
+    },
+  );
 }
 
 export function fetchTeamDetail(id: string, season?: number) {
@@ -1700,6 +1712,13 @@ export interface SeasonsResponse {
   /// target. Null when there is none. Read this rather than computing
   /// `newest + 1`, which asserts the season exists instead of checking.
   upcoming: number | null;
+  /// The newest played season has started but its actuals are too thin to
+  /// lead with (median team games below a floor). Results-driven pages lead
+  /// with that season's projection while this is true.
+  opening: boolean;
+  /// Newest season whose actuals are complete enough to default to: the
+  /// newest played one, or the one before it while `opening`.
+  stats_season: number | null;
 }
 
 export function fetchSeasons() {

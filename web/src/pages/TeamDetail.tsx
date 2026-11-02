@@ -175,7 +175,9 @@ function TeamViewToggle({
 ///   - season > maxPlayed (upcoming) → Projected only (no actual yet).
 ///   - 2016 ≤ season ≤ maxPlayed (played + projectable) → defaults to
 ///     Actual; `?view=projected` shows the held-out projection + a
-///     report-card comparison. Toggle switches between them.
+///     report-card comparison. Toggle switches between them. Exception: the
+///     newest season while `opening` defaults to Projected, and
+///     `?view=actual` opts in.
 ///   - season < 2016 → Actual only (no projection composable).
 /// The Projected grid deep-links team names with `&view=projected`, so a
 /// click *from the projections context* lands on the forecast even for a
@@ -193,20 +195,28 @@ export default function TeamDetail() {
   // upcoming projection between seasons, so reading it here made
   // `season > maxPlayed` false for the upcoming season and rendered the empty
   // actual view instead of the projection ledger (#388).
-  const { newestPlayed: maxPlayed } = useAvailableSeasons();
+  const { newestPlayed: maxPlayed, opening } = useAvailableSeasons();
 
   const isUpcoming = season > maxPlayed;
   const projectablePlayed =
     season >= EARLIEST_PROJECTABLE_YEAR && season <= maxPlayed;
-  const wantsProjected = searchParams.get('view') === 'projected';
+  // In the first weeks of a season (`opening`) the newest played season's
+  // Actual view is a handful of box scores at best, so the projection leads
+  // and Actual is the opt-in, the reverse of every other played season.
+  const defaultMode: 'actual' | 'projected' =
+    opening && season === maxPlayed ? 'projected' : 'actual';
+  const view = searchParams.get('view');
+  const requested = view === 'projected' || view === 'actual' ? view : defaultMode;
 
   const mode: 'actual' | 'projected' =
-    isUpcoming || (projectablePlayed && wantsProjected) ? 'projected' : 'actual';
+    isUpcoming || (projectablePlayed && requested === 'projected') ? 'projected' : 'actual';
 
+  // The URL carries a view only when it departs from this season's default,
+  // so a shared default link keeps following the default as it moves.
   const setMode = (m: 'actual' | 'projected') => {
     const next = new URLSearchParams(searchParams);
-    if (m === 'projected') next.set('view', 'projected');
-    else next.delete('view');
+    if (m === defaultMode) next.delete('view');
+    else next.set('view', m);
     setSearchParams(next);
   };
 
@@ -1543,7 +1553,7 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   // Same reason as the wrapper above: "has this season been played" is the
   // API's answer, not a constant's — and it is `newestPlayed`, not the
   // default, which now follows the upcoming projection.
-  const { newestPlayed: maxPlayed } = useAvailableSeasons();
+  const { newestPlayed: maxPlayed, opening } = useAvailableSeasons();
   const [data, setData] = useState<{
     team: { id: string; name: string | null; short_name: string | null };
     projection: ProjectedTeam;
@@ -1700,7 +1710,9 @@ function ProjectedTeamView({ id, year }: ProjectedTeamViewProps) {
   // projection for (the route serves OOF predictions + the actual
   // result). `hasActual` drives the Actual / Miss stat boxes + the
   // backtest honesty copy.
-  const isPlayedSeason = year <= maxPlayed;
+  // The season being played is not a backtest while it is still `opening`:
+  // there is no result to grade the projection against yet, it is the forecast.
+  const isPlayedSeason = year < maxPlayed || (year === maxPlayed && !opening);
   const hasActual = p.actual_adj_em != null;
   const miss =
     hasActual && p.midpoint_adj_em != null

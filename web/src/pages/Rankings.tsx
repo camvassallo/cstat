@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef } from 'ag-grid-community';
-import { fetchTeamRankings, type TeamRanking } from '../api/client';
+import { fetchTeamRankings, type RatingBasis, type TeamRanking } from '../api/client';
 import { conferenceLabel, conferenceSearchText } from '../lib/conferences';
 import { gridTheme } from '../theme';
 import { TableToolbar, TableSearchInput } from '../components/TableToolbar';
@@ -324,7 +324,8 @@ function buildColumns(
 
 export default function Rankings() {
   const { season } = useSeason();
-  const { seasons: playedSeasons, upcoming, settled } = useAvailableSeasons();
+  const { seasons: playedSeasons, upcoming, settled, defaultSeason } = useAvailableSeasons();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // Own the navbar picker for this route, offering the upcoming projected
   // year alongside the played ones — the same shape `/players` publishes, and
@@ -344,12 +345,34 @@ export default function Rankings() {
   // the reader find the Forecast tab (#394). `/api/seasons` decides when that
   // is: `default` follows the projection while the last season is over and
   // snaps back to real rankings on the night of the first result.
+  //
   const isProjectedSeason = !playedSeasons.includes(season);
+
+  // The season being played reads BLENDED ratings: the preseason projection
+  // as a prior worth six games, inside the opponent adjustment. Raw ratings
+  // rank single-game margins the morning after opening night, and the blend
+  // predicts the next game better at every point of the season (MAE 14.4 ->
+  // 10.1 before a team's first game, 9.02 -> 8.83 past twenty; see
+  // `compute::PRESEASON_PRIOR_GAMES`). `?ratings=results` opts out. A finished
+  // season keeps its results-only table: that is the record of what happened.
+  const inProgress = season === playedSeasons[0] && defaultSeason === playedSeasons[0];
+  const resultsOnly = searchParams.get('ratings') === 'results';
+  const basis: RatingBasis = inProgress && !resultsOnly ? 'blended' : 'raw';
+  const setResultsOnly = (on: boolean) => {
+    const next = new URLSearchParams(searchParams);
+    if (on) next.set('ratings', 'results');
+    else next.delete('ratings');
+    setSearchParams(next);
+  };
 
   usePageTitle(isProjectedSeason ? 'Projected Rankings' : 'Team Rankings');
   const isMobile = useIsMobile();
-  const [teams, setTeams] = useState<TeamRanking[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Tagged with the request it answers, so an empty answer is only read as
+  // "nothing rated yet" for the season and basis on screen.
+  const fetchKey = `${season}:${basis}`;
+  const [fetched, setFetched] = useState<{ key: string; teams: TeamRanking[] } | null>(null);
+  const teams = useMemo(() => fetched?.teams ?? [], [fetched]);
+  const loading = fetched?.key !== fetchKey;
   const [search, setSearch] = useState('');
   const [view, setView] = useState<RankingsView>('standard');
   const columns = useMemo(
@@ -368,10 +391,18 @@ export default function Rankings() {
     // response would cost a whole rankings payload for a year we are about to
     // navigate away from.
     if (!settled || isProjectedSeason) return;
-    fetchTeamRankings(season)
-      .then((r) => setTeams(r.teams))
-      .finally(() => setLoading(false));
-  }, [season, isProjectedSeason, settled]);
+    let cancelled = false;
+    fetchTeamRankings(season, basis)
+      .then((r) => {
+        if (!cancelled) setFetched({ key: fetchKey, teams: r.teams });
+      })
+      .catch(() => {
+        if (!cancelled) setFetched({ key: fetchKey, teams: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [season, basis, fetchKey, isProjectedSeason, settled]);
 
   // Which of the two boards this route shows depends on a value the API owns,
   // so wait for it rather than commit to the hardcoded fallback and swap under
@@ -399,11 +430,59 @@ export default function Rankings() {
     return <ProjectionView key={season} year={season} publishSeasons={false} />;
   }
 
+  // The season has a final score but no box score yet — the night of its
+  // first game, before the nightly has the box. Nothing is rated, so lead
+  // with the projection the blended ratings will start from.
+  if (inProgress && !loading && teams.length === 0) {
+    return (
+      <div>
+        <div className="mb-4">
+          <ScoreTicker />
+        </div>
+        <p className="mb-4 rounded-lg bg-gray-800 px-3 py-2 text-sm text-gray-300">
+          The season has just tipped off. These are the preseason projections until the first
+          results are in, usually the morning after opening night.
+        </p>
+        <ProjectionView key={season} year={season} publishSeasons={false} />
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="mb-4">
         <ScoreTicker />
       </div>
+      {inProgress && (
+        <p className="mb-3 rounded-lg bg-gray-800 px-3 py-2 text-sm text-gray-300">
+          {basis === 'blended' ? (
+            <>
+              Ratings blend this season&rsquo;s results with the preseason projection, weighted by
+              games played: the projection counts for about half after six games and a sixth by
+              season&rsquo;s end.{' '}
+              <button
+                type="button"
+                className="text-blue-400 hover:underline"
+                onClick={() => setResultsOnly(true)}
+              >
+                Show results only
+              </button>
+            </>
+          ) : (
+            <>
+              Ratings from this season&rsquo;s results alone, which swing hard while teams have
+              played only a few games.{' '}
+              <button
+                type="button"
+                className="text-blue-400 hover:underline"
+                onClick={() => setResultsOnly(false)}
+              >
+                Include the preseason projection
+              </button>
+            </>
+          )}
+        </p>
+      )}
       <TableToolbar
         title="Team Rankings"
         count={teams.length || null}

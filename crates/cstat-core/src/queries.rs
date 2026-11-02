@@ -42,6 +42,43 @@ impl TeamSortField {
     }
 }
 
+/// Which adjusted ratings a rankings request reads.
+///
+/// `Raw` is the opponent-adjusted solve from results alone — what the game
+/// model, CamPom and SOS consume. `Blended` adds the preseason projection as
+/// a prior worth `compute::PRESEASON_PRIOR_GAMES` games, which predicts the
+/// next game better at every point of the season and is the only readable
+/// table in its first weeks. A season computed before the blended columns
+/// existed has them NULL, and `Blended` falls back to raw per team; its
+/// `preseason_weight` is then NULL, which is how a caller tells the two apart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RatingBasis {
+    #[default]
+    Raw,
+    Blended,
+}
+
+impl RatingBasis {
+    /// The SQL expression for one of the three adjusted rating columns.
+    fn rating(&self, raw_col: &str) -> String {
+        match self {
+            Self::Raw => format!("tss.{raw_col}"),
+            Self::Blended => format!("COALESCE(tss.blended_{raw_col}, tss.{raw_col})"),
+        }
+    }
+
+    /// A sort column, with the adjusted ratings swapped for this basis.
+    fn sort_expr(&self, sort: TeamSortField) -> String {
+        match sort {
+            TeamSortField::AdjEfficiencyMargin => self.rating("adj_efficiency_margin"),
+            TeamSortField::AdjOffense => self.rating("adj_offense"),
+            TeamSortField::AdjDefense => self.rating("adj_defense"),
+            other => other.column().to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlayerSortField {
@@ -133,6 +170,10 @@ pub struct TeamRanking {
     pub adj_defense: Option<f64>,
     pub adj_defense_rank: Option<i64>,
     pub adj_efficiency_margin: Option<f64>,
+    /// The preseason projection's weight in the ratings above under
+    /// `RatingBasis::Blended`; NULL under `Raw`, or when the team has no
+    /// projection.
+    pub preseason_weight: Option<f64>,
     pub adj_tempo: Option<f64>,
     pub adj_tempo_rank: Option<i64>,
     pub sos: Option<f64>,
@@ -553,6 +594,7 @@ pub async fn get_team_rankings(
     season: i32,
     sort: TeamSortField,
     order: Option<SortOrder>,
+    basis: RatingBasis,
 ) -> Result<Vec<TeamRanking>, sqlx::Error> {
     let order = order.unwrap_or_else(|| {
         if sort.default_desc() {
@@ -562,20 +604,28 @@ pub async fn get_team_rankings(
         }
     });
 
+    let off = basis.rating("adj_offense");
+    let def = basis.rating("adj_defense");
+    let em = basis.rating("adj_efficiency_margin");
+    let weight = match basis {
+        RatingBasis::Raw => "NULL::float8",
+        RatingBasis::Blended => "tss.preseason_weight",
+    };
     let query = format!(
         r#"
         SELECT
-            ROW_NUMBER() OVER (ORDER BY tss.adj_efficiency_margin DESC NULLS LAST) AS rank,
+            ROW_NUMBER() OVER (ORDER BY {em} DESC NULLS LAST) AS rank,
             t.id AS team_id,
             COALESCE(t.short_name, t.name) AS name,
             t.conference,
             tss.wins,
             tss.losses,
-            tss.adj_offense,
-            RANK() OVER (ORDER BY tss.adj_offense DESC NULLS LAST) AS adj_offense_rank,
-            tss.adj_defense,
-            RANK() OVER (ORDER BY tss.adj_defense ASC NULLS LAST) AS adj_defense_rank,
-            tss.adj_efficiency_margin,
+            {off} AS adj_offense,
+            RANK() OVER (ORDER BY {off} DESC NULLS LAST) AS adj_offense_rank,
+            {def} AS adj_defense,
+            RANK() OVER (ORDER BY {def} ASC NULLS LAST) AS adj_defense_rank,
+            {em} AS adj_efficiency_margin,
+            {weight} AS preseason_weight,
             tss.adj_tempo,
             RANK() OVER (ORDER BY tss.adj_tempo DESC NULLS LAST) AS adj_tempo_rank,
             tss.sos,
@@ -604,11 +654,11 @@ pub async fn get_team_rankings(
         FROM teams t
         JOIN team_season_stats tss ON tss.team_id = t.id AND tss.season = t.season
         WHERE t.season = $1
-          AND tss.adj_efficiency_margin IS NOT NULL
-        ORDER BY {} {} NULLS LAST
+          AND {em} IS NOT NULL
+        ORDER BY {sort_col} {dir} NULLS LAST
         "#,
-        sort.column(),
-        order.sql(),
+        sort_col = basis.sort_expr(sort),
+        dir = order.sql(),
     );
 
     sqlx::query_as::<_, TeamRanking>(&query)

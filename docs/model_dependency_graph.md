@@ -87,6 +87,11 @@ LAYER 4  hand-tuned serving constants             [NOT in the chain runner]
   cstat-ingest measure-blend-accuracy  reads team_preseason_projection
       -> PRESEASON_PEAK_WEIGHT / _DECAY_DAYS / _HOME_COURT_ADVANTAGE
                                                 (predict.rs, Rust const)
+  experiments/experiment_rankings_preseason_prior.py  reads team_preseason_projection
+      -> PRESEASON_PRIOR_GAMES                  (compute.rs, Rust const)
+      the prior in team_season_stats.blended_*, which compute_all writes
+      from the CURRENT team_preseason_projection: a stale projection table
+      moves the blended rankings, never the raw columns the models read
       these are READ OUT of a diagnostic and typed into source by a human;
       nothing re-derives or re-validates them on a retrain — see §3
 ```

@@ -547,12 +547,7 @@ async fn projection_list(
         })?;
     let league_mean_o = fetch_league_mean_adj_o(&state.db.pool, base_season)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
-            )
-        })?;
+        .map_err(|e| league_mean_error(e, year, base_season))?;
     // The AdjD half's anchor and add-back (#378), same shape as the O half's.
     let baseline_d_map = fetch_baseline_adj_d(&state.db.pool, base_season)
         .await
@@ -1285,12 +1280,7 @@ async fn projection_team_detail(
         .copied();
     let league_mean_o = fetch_league_mean_adj_o(pool, base_season)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
-            )
-        })?;
+        .map_err(|e| league_mean_error(e, year, base_season))?;
     let baseline_d = fetch_baseline_adj_d(pool, base_season)
         .await
         .map_err(|e| {
@@ -2037,6 +2027,30 @@ async fn fetch_league_mean_adj_d(
 /// its per-season values into the meta (`league_mean_adjo_by_season`) so
 /// the two definitions can be compared. An error, not a default: a base
 /// season with no AdjO rows cannot be projected from at all.
+/// Map a [`fetch_league_mean_adj_o`] failure to a response.
+///
+/// `RowNotFound` there means the base season has no rated team at all — a
+/// target one season past the one being played (2028 the night 2027 tips
+/// off). That is "nothing to project yet", a 404 like any other missing
+/// season, not a server fault; the season pickers can offer such a year for
+/// a while, and a 500 there paged `#errors-api` for a routine click.
+fn league_mean_error(e: sqlx::Error, year: i32, base_season: i32) -> (StatusCode, Json<Value>) {
+    if matches!(e, sqlx::Error::RowNotFound) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!(
+                    "no projection for {year} yet: base season {base_season} has no team ratings"
+                )
+            })),
+        );
+    }
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": format!("league mean AdjO fetch failed: {e}") })),
+    )
+}
+
 async fn fetch_league_mean_adj_o(
     pool: &sqlx::PgPool,
     base_season: i32,

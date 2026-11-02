@@ -17,20 +17,18 @@ describe('resolveUpcomingSeason', () => {
     expect(resolveUpcomingSeason(2028, 2027, 2026)).toBe(2028);
   });
 
-  it('falls back to the API default + 1 when nothing is projected ahead', () => {
+  it('falls back to the API default when nothing is projected ahead', () => {
     // Legitimately null: the current season is under way and the nightly has
-    // not yet written next season's projections.
-    expect(resolveUpcomingSeason(null, 2027, 2026)).toBe(2028);
+    // not yet written next season's projections. The season being played is
+    // the newest one with a projection.
+    expect(resolveUpcomingSeason(null, 2027, 2026)).toBe(2027);
   });
 
-  it('does not point the Future tab at a season already being played', () => {
-    // The regression this ordering exists for. With `upcoming` null and the
-    // hardcoded array a year stale, going straight to `fallback + 1` gives
-    // 2027 — the season currently in progress. The API's default carries the
-    // truth that 2027 has started, so the answer must be 2028.
-    const stale = 2026;
-    expect(resolveUpcomingSeason(null, 2027, stale)).not.toBe(2027);
-    expect(resolveUpcomingSeason(null, 2027, stale)).toBe(2028);
+  it('never invents a season with no projection rows', () => {
+    // The regression this replaced: `default + 1` named 2028 the night 2027
+    // tipped off, and every picker that prepends `upcoming` offered an empty
+    // 2028 whose projection endpoint 500'd.
+    expect(resolveUpcomingSeason(null, 2027, 2026)).not.toBe(2028);
   });
 
   it('uses the hardcoded array only when the API has said nothing', () => {

@@ -218,7 +218,7 @@ Data flow: **NatStat API → cstat-ingest → Postgres → cstat-core (compute) 
 - `backfill_game_stats` — defensive rebounds, assist-to-turnover ratio, game score
 - `compute_player_season_stats` — aggregates game stats into per-season averages, including rate stats (AST%, TOV%, ORB%, DRB%, STL%, BLK%, FT Rate) using possession-based Basketball Reference formulas
 - `compute_team_season_stats` — four factors, raw efficiency
-- `compute_adjusted_efficiency` — KenPom-style iterative regression for ADJO/ADJD
+- `compute_adjusted_efficiency` — KenPom-style iterative regression for ADJO/ADJD. Solves twice: raw (the `adj_*` columns every model, CamPom SOS and player SOS read — never change these for a display reason) and with `team_preseason_projection` as a prior worth `PRESEASON_PRIOR_GAMES` = 6 games inside the opponent adjustment, into `blended_*` + `preseason_weight` (#436). The rankings table reads the blend for the season in progress (`/api/teams/rankings?basis=blended`); fitted walk-forward by `training/experiments/experiment_rankings_preseason_prior.py`
 - `compute_player_percentiles` — PERCENT_RANK across all players (including rate stat percentiles)
 - `compute_rolling_averages` — last-5-game rolling stats
 - `compute_individual_ratings` — populates `pss.offensive_rating` / `defensive_rating` / `net_rating` from `torvik_player_stats.o_rtg` / `d_rtg` (passthrough; cstat's prior heuristic was broken — see ROADMAP "Compute Pipeline Audit")

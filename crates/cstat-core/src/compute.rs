@@ -1351,51 +1351,76 @@ type GameRow = (
     Option<i32>,
 );
 
-pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
-    // Fetch all team game stats: team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
-    let games: Vec<GameRow> = sqlx::query_as(
-        "SELECT team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
-             FROM team_game_stats
-             WHERE season = $1 AND points IS NOT NULL AND fga IS NOT NULL",
-    )
-    .bind(season)
-    .fetch_all(pool)
-    .await?;
+/// How many games of evidence the preseason projection is worth in the
+/// blended ratings (`team_season_stats.blended_*`). A team's prior weight is
+/// `K / (K + games played)`: 0.86 before its second game, 0.5 at six games,
+/// 0.16 by the end of a 32-game season.
+///
+/// Fitted walk-forward (#361) over 2021-2026 on next-game margin by
+/// `training/experiments/experiment_rankings_preseason_prior.py`: K = 6 was
+/// selected in every fold, and the curve is flat from 5 to 10. Against the raw
+/// rating the blend is better in every games-played bucket — MAE 14.41 → 10.12
+/// before a team's first game, 10.99 → 9.48 at two to four games, and still
+/// 9.02 → 8.83 past twenty (z −8.2) — so the prior is not only an opening-week
+/// patch, and it is not faded to zero on a calendar.
+pub const PRESEASON_PRIOR_GAMES: f64 = 6.0;
 
-    if games.is_empty() {
-        return Ok(0);
+/// One team-game for the opponent adjustment: `team_id`'s offense against
+/// `opponent_id`'s defense.
+struct AdjGame {
+    team_id: Uuid,
+    opponent_id: Uuid,
+    points: f64,
+    possessions: f64,
+}
+
+/// The preseason projection as a prior on the adjusted ratings.
+struct RatingPrior<'a> {
+    /// `team_preseason_projection.projected_adj_em`, keyed by team.
+    em: &'a HashMap<Uuid, f64>,
+    /// Games played per team in the solve's input.
+    games: HashMap<Uuid, f64>,
+    k: f64,
+}
+
+impl RatingPrior<'_> {
+    /// The prior's weight for a team, or `None` when it has no projection.
+    fn weight(&self, team: &Uuid) -> Option<f64> {
+        self.em.get(team)?;
+        let g = self.games.get(team).copied().unwrap_or(0.0);
+        Some(self.k / (self.k + g))
     }
 
-    // Build per-game data: (team_id, opponent_id, off_efficiency, def_efficiency)
-    struct GameEff {
-        team_id: Uuid,
-        opponent_id: Uuid,
-        points: f64,
-        possessions: f64,
-    }
-
-    let mut game_data: Vec<GameEff> = Vec::new();
-
-    for (team_id, opponent_id, points, fga, oreb, tov, fta) in &games {
-        let Some(opp_id) = opponent_id else { continue };
-        let pts = *points.as_ref().unwrap_or(&0) as f64;
-        let fga = *fga.as_ref().unwrap_or(&0) as f64;
-        let oreb = *oreb.as_ref().unwrap_or(&0) as f64;
-        let tov = *tov.as_ref().unwrap_or(&0) as f64;
-        let fta = *fta.as_ref().unwrap_or(&0) as f64;
-        let poss = fga - oreb + tov + 0.44 * fta;
-        if poss <= 0.0 {
-            continue;
+    /// Blend an adjusted offense/defense pair toward the prior. The
+    /// projection carries only a margin, so it is split symmetrically around
+    /// the league average.
+    fn blend(&self, team: &Uuid, off: f64, def: f64, league_avg: f64) -> (f64, f64) {
+        match (self.weight(team), self.em.get(team)) {
+            (Some(w), Some(em)) => (
+                w * (league_avg + em / 2.0) + (1.0 - w) * off,
+                w * (league_avg - em / 2.0) + (1.0 - w) * def,
+            ),
+            _ => (off, def),
         }
-
-        game_data.push(GameEff {
-            team_id: *team_id,
-            opponent_id: *opp_id,
-            points: pts,
-            possessions: poss,
-        });
     }
+}
 
+struct AdjustedRatings {
+    off: HashMap<Uuid, f64>,
+    def: HashMap<Uuid, f64>,
+    league_avg: f64,
+}
+
+/// The opponent-adjustment iteration.
+///
+/// With no prior this is the raw KenPom-style solve, arithmetic unchanged.
+/// With one, every opponent adjustment reads the opponent's BLENDED rating
+/// instead of its raw one: a team that has played one game against a team
+/// that has played one game is otherwise being adjusted against noise, and
+/// on the morning after opening night that is every team. The returned
+/// ratings are the adjusted ones before the team's own blend; callers blend
+/// once at the end with [`RatingPrior::blend`].
+fn solve_adjusted(game_data: &[AdjGame], prior: Option<&RatingPrior>) -> AdjustedRatings {
     // Compute raw season averages per team
     struct TeamRaw {
         total_off_pts: f64,
@@ -1405,7 +1430,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
     }
 
     let mut raw: HashMap<Uuid, TeamRaw> = HashMap::new();
-    for g in &game_data {
+    for g in game_data {
         let entry = raw.entry(g.team_id).or_insert(TeamRaw {
             total_off_pts: 0.0,
             total_off_poss: 0.0,
@@ -1416,7 +1441,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         entry.total_off_poss += g.possessions;
     }
     // Defensive: what opponents scored against this team
-    for g in &game_data {
+    for g in game_data {
         if let Some(entry) = raw.get_mut(&g.opponent_id) {
             entry.total_def_pts += g.points;
             entry.total_def_poss += g.possessions;
@@ -1450,6 +1475,17 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         adj_def.insert(*team_id, def);
     }
 
+    // The rating an opponent adjustment reads: the adjusted one, or with a
+    // prior, the blended one.
+    let rating = |adj_off: &HashMap<Uuid, f64>, adj_def: &HashMap<Uuid, f64>, team: &Uuid| {
+        let off = adj_off.get(team).copied().unwrap_or(league_avg);
+        let def = adj_def.get(team).copied().unwrap_or(league_avg);
+        match prior {
+            Some(p) => p.blend(team, off, def, league_avg),
+            None => (off, def),
+        }
+    };
+
     // Iterative adjustment
     let max_iterations = 50;
     let convergence_threshold = 0.01;
@@ -1469,8 +1505,8 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         let mut opp_def_sum: HashMap<Uuid, (f64, f64)> = HashMap::new();
         let mut opp_off_sum: HashMap<Uuid, (f64, f64)> = HashMap::new();
 
-        for g in &game_data {
-            let opp_def = adj_def.get(&g.opponent_id).copied().unwrap_or(league_avg);
+        for g in game_data {
+            let (_, opp_def) = rating(&adj_off, &adj_def, &g.opponent_id);
 
             // team_id's offense faced opponent_id's defense
             let e = opp_def_sum.entry(g.team_id).or_insert((0.0, 0.0));
@@ -1479,7 +1515,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
 
             // opponent_id's defense faced team_id's offense
             // So for opponent_id's defensive adjustment, accumulate team_id's adj_off
-            let team_off = adj_off.get(&g.team_id).copied().unwrap_or(league_avg);
+            let (team_off, _) = rating(&adj_off, &adj_def, &g.team_id);
             let e = opp_off_sum.entry(g.opponent_id).or_insert((0.0, 0.0));
             e.0 += team_off * g.possessions;
             e.1 += g.possessions;
@@ -1524,11 +1560,89 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         if max_change < convergence_threshold {
             info!(
                 iteration = iteration + 1,
-                max_change, "adjusted efficiency converged"
+                max_change,
+                with_prior = prior.is_some(),
+                "adjusted efficiency converged"
             );
             break;
         }
     }
+
+    AdjustedRatings {
+        off: adj_off,
+        def: adj_def,
+        league_avg,
+    }
+}
+
+pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u64, sqlx::Error> {
+    // Fetch all team game stats: team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
+    let games: Vec<GameRow> = sqlx::query_as(
+        "SELECT team_id, opponent_id, points, fga, off_rebounds, turnovers, fta
+             FROM team_game_stats
+             WHERE season = $1 AND points IS NOT NULL AND fga IS NOT NULL",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+
+    if games.is_empty() {
+        return Ok(0);
+    }
+
+    // Build per-game data: (team_id, opponent_id, off_efficiency, def_efficiency)
+    let mut game_data: Vec<AdjGame> = Vec::new();
+
+    for (team_id, opponent_id, points, fga, oreb, tov, fta) in &games {
+        let Some(opp_id) = opponent_id else { continue };
+        let pts = *points.as_ref().unwrap_or(&0) as f64;
+        let fga = *fga.as_ref().unwrap_or(&0) as f64;
+        let oreb = *oreb.as_ref().unwrap_or(&0) as f64;
+        let tov = *tov.as_ref().unwrap_or(&0) as f64;
+        let fta = *fta.as_ref().unwrap_or(&0) as f64;
+        let poss = fga - oreb + tov + 0.44 * fta;
+        if poss <= 0.0 {
+            continue;
+        }
+
+        game_data.push(AdjGame {
+            team_id: *team_id,
+            opponent_id: *opp_id,
+            points: pts,
+            possessions: poss,
+        });
+    }
+
+    let AdjustedRatings {
+        off: adj_off,
+        def: adj_def,
+        league_avg,
+    } = solve_adjusted(&game_data, None);
+
+    // The blended product: the same solve with the preseason projection as a
+    // prior. An empty projection table (a season before 2016, or one whose
+    // projection has not been materialized) makes this the raw solve again,
+    // with `preseason_weight` NULL throughout.
+    let prior_rows: Vec<(Uuid, f32)> = sqlx::query_as(
+        "SELECT team_id, projected_adj_em FROM team_preseason_projection WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await?;
+    let prior_em: HashMap<Uuid, f64> = prior_rows
+        .into_iter()
+        .map(|(t, em)| (t, em as f64))
+        .collect();
+    let mut games_played: HashMap<Uuid, f64> = HashMap::new();
+    for g in &game_data {
+        *games_played.entry(g.team_id).or_insert(0.0) += 1.0;
+    }
+    let prior = RatingPrior {
+        em: &prior_em,
+        games: games_played,
+        k: PRESEASON_PRIOR_GAMES,
+    };
+    let blended = solve_adjusted(&game_data, Some(&prior));
 
     // Compute SOS: average of opponents' adjusted efficiency margin
     let mut sos: HashMap<Uuid, f64> = HashMap::new();
@@ -1562,6 +1676,20 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         let margin = off - def;
         let team_sos = sos.get(team_id).copied();
         let team_sos_rank = sos_ranks.get(team_id).copied();
+        let (b_off, b_def) = prior.blend(
+            team_id,
+            blended
+                .off
+                .get(team_id)
+                .copied()
+                .unwrap_or(blended.league_avg),
+            blended
+                .def
+                .get(team_id)
+                .copied()
+                .unwrap_or(blended.league_avg),
+            blended.league_avg,
+        );
 
         let result = sqlx::query(
             "UPDATE team_season_stats SET
@@ -1570,6 +1698,10 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
                 adj_efficiency_margin = ROUND($3::numeric, 1),
                 sos = ROUND($4::numeric, 1),
                 sos_rank = $5,
+                blended_adj_offense = ROUND($8::numeric, 1),
+                blended_adj_defense = ROUND($9::numeric, 1),
+                blended_adj_efficiency_margin = ROUND($10::numeric, 1),
+                preseason_weight = ROUND($11::numeric, 3),
                 updated_at = now()
              WHERE team_id = $6 AND season = $7",
         )
@@ -1580,6 +1712,10 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         .bind(team_sos_rank)
         .bind(team_id)
         .bind(season)
+        .bind(b_off)
+        .bind(b_def)
+        .bind(b_off - b_def)
+        .bind(prior.weight(team_id))
         .execute(pool)
         .await?;
 
@@ -1590,6 +1726,7 @@ pub async fn compute_adjusted_efficiency(pool: &PgPool, season: i32) -> Result<u
         updated,
         league_avg = format!("{:.1}", league_avg),
         season,
+        priors = prior_em.len(),
         "computed adjusted efficiency"
     );
     Ok(updated)
@@ -4428,6 +4565,98 @@ impl std::fmt::Display for ComputeReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One game between `a` and `b`, both directions, at 70 possessions.
+    fn game(a: Uuid, b: Uuid, a_pts: f64, b_pts: f64) -> [AdjGame; 2] {
+        [
+            AdjGame {
+                team_id: a,
+                opponent_id: b,
+                points: a_pts,
+                possessions: 70.0,
+            },
+            AdjGame {
+                team_id: b,
+                opponent_id: a,
+                points: b_pts,
+                possessions: 70.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn opening_night_ratings_lean_on_the_prior_not_one_margin() {
+        // The morning after opening night: two disconnected pairs. A strong
+        // team (prior +25) wins by 10 over a weak one (prior -15); an
+        // average team (prior 0) wins by 40 over an equally average one.
+        // Raw ratings put the 40-point winner first; that is the table this
+        // exists to replace.
+        let (strong, weak, avg1, avg2) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let games: Vec<AdjGame> = [game(strong, weak, 80.0, 73.0), game(avg1, avg2, 98.0, 70.0)]
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let raw = solve_adjusted(&games, None);
+        let em = |r: &AdjustedRatings, t: &Uuid| r.off[t] - r.def[t];
+        assert!(
+            em(&raw, &avg1) > em(&raw, &strong),
+            "raw ranks the blowout first"
+        );
+
+        let priors: HashMap<Uuid, f64> =
+            [(strong, 25.0), (weak, -15.0), (avg1, 0.0), (avg2, 0.0)].into();
+        let mut played = HashMap::new();
+        for g in &games {
+            *played.entry(g.team_id).or_insert(0.0) += 1.0;
+        }
+        let prior = RatingPrior {
+            em: &priors,
+            games: played,
+            k: PRESEASON_PRIOR_GAMES,
+        };
+        let blended = solve_adjusted(&games, Some(&prior));
+        let final_em = |t: &Uuid| {
+            let (o, d) = prior.blend(t, blended.off[t], blended.def[t], blended.league_avg);
+            o - d
+        };
+        assert!(
+            (prior.weight(&strong).unwrap() - 6.0 / 7.0).abs() < 1e-12,
+            "one game in, the prior carries K / (K + 1)"
+        );
+        assert!(
+            final_em(&strong) > final_em(&avg1),
+            "the blend keeps the strong team ahead of a one-game blowout"
+        );
+        assert!(
+            final_em(&avg1) > final_em(&avg2),
+            "but results still move teams: the 40-point winner is above its victim"
+        );
+    }
+
+    #[test]
+    fn a_team_without_a_projection_is_rated_on_results_alone() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let games: Vec<AdjGame> = game(a, b, 75.0, 65.0).into_iter().collect();
+        let empty = HashMap::new();
+        let prior = RatingPrior {
+            em: &empty,
+            games: HashMap::new(),
+            k: PRESEASON_PRIOR_GAMES,
+        };
+        let raw = solve_adjusted(&games, None);
+        let blended = solve_adjusted(&games, Some(&prior));
+        // With nothing to blend toward, the prior solve is the raw solve.
+        assert_eq!(raw.off[&a], blended.off[&a]);
+        assert_eq!(raw.def[&b], blended.def[&b]);
+        assert_eq!(prior.weight(&a), None);
+        assert_eq!(prior.blend(&a, 1.0, 2.0, 100.0), (1.0, 2.0));
+    }
 
     #[test]
     fn compute_report_display() {

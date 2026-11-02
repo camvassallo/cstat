@@ -81,7 +81,15 @@ const rankingsBySeason = new Map<number, Promise<TeamRanking[]>>();
 function loadRankings(season: number): Promise<TeamRanking[]> {
   const cached = rankingsBySeason.get(season);
   if (cached) return cached;
-  const pending = fetchTeamRankings(season).then((r) => r.teams);
+  // A season that has tipped off but has no rated team yet (the night of its
+  // first final score, before any box score) answers with an empty list, and
+  // the pickers had nothing to offer. Borrow the previous season's names: the
+  // prediction itself resolves the name within `season`, and the comparison
+  // panels key on the new season's ids, so they render nothing rather than
+  // last season's numbers.
+  const pending = fetchTeamRankings(season).then((r) =>
+    r.teams.length > 0 ? r.teams : fetchTeamRankings(season - 1).then((p) => p.teams),
+  );
   pending.catch(() => rankingsBySeason.delete(season));
   rankingsBySeason.set(season, pending);
   return pending;
