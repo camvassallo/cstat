@@ -277,7 +277,7 @@ like the commits-feed cohort. Exact match on "G League" only — Overtime Elite
 and the NBL Next Stars programs are filed under the same field and their
 players demonstrably enrol and play.
 
-## The Future page toggle: 50/50 / Included / Excluded (#346)
+## The Future page toggle: Weighted / Included / Excluded (#346)
 
 "What is this team if every case clears / if none do" sounds like the
 ceiling and the floor, and it is not, as soon as a team also has a declared
@@ -300,8 +300,8 @@ AdjO and AdjD are built the same way, so the split stays coherent. Served as
 `adj_{em,o,d}_eligibility_{in,out}`; equal to the midpoint for a team with no
 case, which also skips the extra model calls.
 
-**50/50 stays the default and is not optional.** It is the served
-midpoint — each case at 50/50 — and it is the number the team page headline,
+**Weighted stays the default and is not optional.** It is the served
+midpoint — each case at its own `probability` (0.5 when unset) — and it is the number the team page headline,
 `team_preseason_projection`, and the game predictor's preseason anchor all
 use. A grid that defaulted to Included or Excluded would disagree with the
 team's own page by up to ~2.5 AdjEM for exactly the teams the toggle is
